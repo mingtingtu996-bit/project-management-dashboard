@@ -1,9 +1,10 @@
 // 权限类型定义
 // 第三阶段：安全与测试 - 权限体系完善
 
-import { getProjectRoleLabel, normalizeProjectPermissionLevel, type ProjectPermissionLevel } from '@/lib/roleLabels'
+import { getProjectRoleLabel, normalizeProjectAccessLevel, type ProjectAccessLevel } from '@/lib/roleLabels'
+import { isPermissionSystemDisabled } from '@/lib/permissionBypass'
 
-export type PermissionLevel = ProjectPermissionLevel
+export type PermissionLevel = ProjectAccessLevel
 
 export type PermissionAction = 
   | 'view:project'
@@ -29,16 +30,8 @@ export type PermissionAction =
   | 'view:audit'
   | 'manage:settings'
 
-// 角色权限映射
 export const ROLE_PERMISSIONS: Record<PermissionLevel, PermissionAction[]> = {
-  viewer: [
-    'view:project',
-    'view:task',
-    'view:risk',
-    'view:milestone',
-    'view:team',
-    'view:reports',
-  ],
+  none: [],
   editor: [
     'view:project',
     'edit:project',
@@ -86,6 +79,10 @@ export function hasPermission(
   role: PermissionLevel,
   action: PermissionAction
 ): boolean {
+  if (isPermissionSystemDisabled()) {
+    return true
+  }
+
   return ROLE_PERMISSIONS[role]?.includes(action) ?? false
 }
 
@@ -113,9 +110,9 @@ export function getRoleDisplayName(role: PermissionLevel): string {
 // 获取角色的描述
 export function getRoleDescription(role: PermissionLevel): string {
   const descriptions: Record<PermissionLevel, string> = {
-    viewer: '只能查看项目内容，不能发起编辑或提交流程',
+    none: '当前账号没有此项目的成员权限',
     editor: '可以进行日常编辑和提交流程，但不能转让负责人或管理团队',
     owner: '拥有项目完整管理权限，可转让负责人、管理成员和执行强制操作',
   }
-  return descriptions[normalizeProjectPermissionLevel(role)] || ''
+  return descriptions[normalizeProjectAccessLevel(role)] || ''
 }

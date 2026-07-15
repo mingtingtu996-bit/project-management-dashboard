@@ -83,7 +83,7 @@ function buildFallbackLayout(): CriticalPathLayout {
 
 function getTaskTitle(taskMap: Map<string, Task>, taskId: string, snapshotTask?: CriticalTaskSnapshot) {
   const task = taskMap.get(taskId)
-  return task?.title || task?.name || snapshotTask?.title || taskId
+  return task?.title || snapshotTask?.title || taskId
 }
 
 function getTaskSubtitle(snapshotTask?: CriticalTaskSnapshot) {

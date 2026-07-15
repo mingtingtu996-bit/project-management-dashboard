@@ -112,16 +112,16 @@ export function getMaterialStatusLabel(status: MaterialPrimaryStatus) {
 export function getMaterialStatusTone(status: MaterialPrimaryStatus) {
   switch (status) {
     case 'pending_sample':
-      return 'bg-amber-50 text-amber-700 ring-1 ring-amber-200'
+      return 'bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200'
     case 'pending_arrival':
-      return 'bg-slate-100 text-slate-700 ring-1 ring-slate-200'
+      return 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200'
     case 'overdue_arrival':
-      return 'bg-red-50 text-red-700 ring-1 ring-red-200'
+      return 'bg-red-50 text-red-700 ring-1 ring-inset ring-red-200'
     case 'pending_inspection':
-      return 'bg-sky-50 text-sky-700 ring-1 ring-sky-200'
+      return 'bg-sky-50 text-sky-700 ring-1 ring-inset ring-sky-200'
     case 'completed':
-      return 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+      return 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
     default:
-      return 'bg-slate-100 text-slate-700 ring-1 ring-slate-200'
+      return 'bg-slate-100 text-slate-700 ring-1 ring-inset ring-slate-200'
   }
 }

@@ -8,6 +8,27 @@ import type {
   TaskCondition,
   TaskObstacle
 } from '../types/db.js'
+import { deriveTaskUnifiedStatus, TASK_STATUS_RULE_REGISTRY } from './taskStatusDerivationService.js'
+
+const TASK_OBSTACLE_BUSINESS_STATUS_COLUMNS = [
+  'id',
+  'task_id',
+  'project_id',
+  'description',
+  'obstacle_type',
+  'severity',
+  'status',
+  'resolution',
+  'resolved_at',
+  'resolved_by',
+  'estimated_resolve_date',
+  'notes',
+  'is_resolved',
+  'severity_escalated_at',
+  'severity_manually_overridden',
+  'created_at',
+  'updated_at',
+].join(', ')
 
 // 业务状态类型定义
 export interface BusinessStatus {
@@ -16,12 +37,23 @@ export interface BusinessStatus {
   priority: number
 }
 
+export interface BusinessStatusFacts {
+  taskStatus: string
+  taskProgress: number | string
+  conditions?: TaskCondition[]
+  obstacles?: TaskObstacle[]
+  task?: Partial<Task> & Record<string, unknown>
+}
+
 // 业务状态枚举
 export enum BusinessStatusType {
   PENDING_CONDITIONS = '待开工',
   READY_TO_START = '可开工',
   IN_PROGRESS = '进行中',
   IN_PROGRESS_BLOCKED = '进行中(有阻碍)',
+  PROGRESS_WARNING = '执行预警',
+  PARTIAL_BLOCKED = '部分受影响',
+  BLOCKED = '受阻',
   COMPLETED = '已完成'
 }
 
@@ -29,6 +61,7 @@ export enum BusinessStatusType {
 export interface ConditionCompleteInput {
   id: string
   confirmed_by: string
+  project_id?: string | null
   user_id?: string
 }
 
@@ -37,6 +70,7 @@ export interface ObstacleResolveInput {
   id: string
   resolution: string
   resolved_by: string
+  project_id?: string | null
   user_id?: string
 }
 
@@ -54,12 +88,18 @@ export class BusinessStatusService {
   /**
    * 计算任务的业务状态
    */
-  static async calculateBusinessStatus(taskId: string): Promise<BusinessStatus> {
+  static async calculateBusinessStatus(taskId: string, projectId: string): Promise<BusinessStatus> {
     try {
       // 1. 获取任务基础信息
       const task = await executeSQLOne(
-        'SELECT id, status, progress FROM tasks WHERE id = ? LIMIT 1',
-        [taskId]
+        `SELECT id, project_id, status, progress,
+                ready_for_start, dependency_status, condition_status,
+                obstacle_status, progress_impact_level, blocked_for_progress,
+                readiness_summary, planned_start_date, planned_end_date, start_date, end_date
+           FROM tasks
+          WHERE id = ? AND project_id = ?
+          LIMIT 1`,
+        [taskId, projectId]
       )
 
       if (!task) {
@@ -69,14 +109,14 @@ export class BusinessStatusService {
 
       // 2. 获取任务的条件
       const conditions = await executeSQL(
-        'SELECT id, is_satisfied FROM task_conditions WHERE task_id = ?',
-        [taskId]
+        'SELECT id, is_satisfied FROM task_conditions WHERE task_id = ? AND project_id = ?',
+        [taskId, (task as any).project_id]
       )
 
       // 3. 获取任务的阻碍
       const obstacles = await executeSQL(
-        'SELECT id, status FROM task_obstacles WHERE task_id = ?',
-        [taskId]
+        'SELECT id, status FROM task_obstacles WHERE task_id = ? AND project_id = ?',
+        [taskId, (task as any).project_id]
       )
 
       // PostgreSQL boolean 字段返回值标准化
@@ -86,15 +126,41 @@ export class BusinessStatusService {
       }))
 
       // 4. 根据优先级规则计算业务状态
-      return this.evaluateBusinessStatus(
-        task.status,
-        task.progress,
-        normalizedConditions,
-        obstacles || []
-      )
+      return this.evaluateBusinessStatusFromFacts({
+        taskStatus: task.status,
+        taskProgress: task.progress,
+        conditions: normalizedConditions,
+        obstacles: obstacles || [],
+        task: task as any,
+      })
     } catch (error) {
       logger.error('Failed to calculate business status', { taskId, error })
       throw error
+    }
+  }
+
+  /**
+   * 根据已加载事实评估业务状态
+   */
+  static evaluateBusinessStatusFromFacts(input: BusinessStatusFacts): BusinessStatus {
+    const unsatisfiedCount = (input.conditions ?? []).filter((condition) => !condition.is_satisfied).length
+    const activeCount = (input.obstacles ?? []).filter(
+      (obstacle) => (obstacle as any).status === 'active'
+        || (obstacle as any).status === 'resolving'
+        || (obstacle as any).status === '待处理'
+        || (obstacle as any).status === '处理中',
+    ).length
+    const unified = deriveTaskUnifiedStatus({
+      ...(input.task ?? {}),
+      status: input.taskStatus,
+      progress: input.taskProgress,
+      conditions_unmet: unsatisfiedCount,
+      obstacles_active: activeCount,
+    })
+    return {
+      display: this.mapUnifiedBusinessDisplay(unified.businessStatus.status, unified.businessStatus.label),
+      reason: unified.businessStatus.reason,
+      priority: this.mapUnifiedBusinessPriority(unified.businessStatus.status),
     }
   }
 
@@ -105,75 +171,100 @@ export class BusinessStatusService {
     taskStatus: string,
     taskProgress: number,
     conditions: TaskCondition[],
-    obstacles: TaskObstacle[]
+    obstacles: TaskObstacle[],
+    task?: Partial<Task> & Record<string, unknown>
   ): BusinessStatus {
-    // 规则5：已完成
-    if (taskStatus === '已完成' || taskProgress === 100) {
-      return {
-        display: BusinessStatusType.COMPLETED,
-        reason: '任务已完成',
-        priority: 5
-      }
+    return this.evaluateBusinessStatusFromFacts({
+      taskStatus,
+      taskProgress,
+      conditions,
+      obstacles,
+      task,
+    })
+  }
+
+  private static mapUnifiedBusinessDisplay(status: string, fallbackLabel: string): string {
+    switch (status) {
+      case 'completed':
+        return BusinessStatusType.COMPLETED
+      case 'blocked_by_obstacle':
+        return BusinessStatusType.BLOCKED
+      case 'partial_blocked':
+        return BusinessStatusType.PARTIAL_BLOCKED
+      case 'progress_warning':
+        return BusinessStatusType.PROGRESS_WARNING
+      case 'pending_conditions':
+        return BusinessStatusType.PENDING_CONDITIONS
+      case 'ready':
+        return BusinessStatusType.READY_TO_START
+      case 'in_progress':
+        return BusinessStatusType.IN_PROGRESS
+      default:
+        return fallbackLabel
+    }
+  }
+
+  private static mapUnifiedBusinessPriority(status: string): number {
+    const priorityIndex = TASK_STATUS_RULE_REGISTRY.business.priority.indexOf(status as any)
+    return priorityIndex >= 0 ? priorityIndex + 1 : TASK_STATUS_RULE_REGISTRY.business.priority.length
+  }
+
+  static async evaluateBusinessStatusForTaskFromLoadedFact(
+    taskId: string | null | undefined,
+    loadedFacts: {
+      task?: (Partial<Task> & Record<string, unknown>) | null
+      conditions?: TaskCondition[]
+      obstacles?: TaskObstacle[]
+      projectId?: string | null
+    } = {},
+  ): Promise<BusinessStatus> {
+    const normalizedTaskId = String(taskId ?? '').trim()
+    if (!normalizedTaskId) {
+      throw new Error('任务ID不能为空')
     }
 
-    // 规则1：待开工 - 基础状态='未开始'，且存在未满足的task_conditions
-    if (taskStatus === '未开始') {
-      const hasUnsatisfiedConditions = conditions.some(
-        c => !c.is_satisfied
+    const requestedProjectId = String(loadedFacts.projectId ?? loadedFacts.task?.project_id ?? '').trim()
+    if (!requestedProjectId) {
+      throw new Error('项目ID不能为空')
+    }
+
+    const task = loadedFacts.task ?? await executeSQLOne(
+      `SELECT id, project_id, status, progress,
+              ready_for_start, dependency_status, condition_status,
+              obstacle_status, progress_impact_level, blocked_for_progress,
+              readiness_summary, planned_start_date, planned_end_date, start_date, end_date
+         FROM tasks
+        WHERE id = ? AND project_id = ?
+        LIMIT 1`,
+      [normalizedTaskId, requestedProjectId],
+    ) as (Partial<Task> & Record<string, unknown>) | null
+
+    if (!task) {
+      throw new Error('任务不存在')
+    }
+
+    const projectId = String(task.project_id ?? requestedProjectId).trim()
+    if (projectId !== requestedProjectId) {
+      throw new Error('任务不属于当前项目')
+    }
+    const conditions = loadedFacts.conditions
+      ?? await executeSQL<TaskCondition>(
+        'SELECT id, task_id, is_satisfied, status FROM task_conditions WHERE task_id = ? AND project_id = ?',
+        [normalizedTaskId, projectId],
+      )
+    const obstacles = loadedFacts.obstacles
+      ?? await executeSQL<TaskObstacle>(
+        'SELECT id, task_id, status, is_resolved FROM task_obstacles WHERE task_id = ? AND project_id = ?',
+        [normalizedTaskId, projectId],
       )
 
-      if (hasUnsatisfiedConditions && conditions.length > 0) {
-        const unsatisfiedCount = conditions.filter(
-          c => !c.is_satisfied
-        ).length
-        return {
-          display: BusinessStatusType.PENDING_CONDITIONS,
-          reason: `有${unsatisfiedCount}项开工条件未满足`,
-          priority: 1
-        }
-      }
-
-      // 规则2：可开工 - 基础状态='未开始'，且无开工条件或条件已满足
-      return {
-        display: BusinessStatusType.READY_TO_START,
-        reason: conditions.length === 0 ? '无开工条件' : '开工条件已满足',
-        priority: 2
-      }
-    }
-
-    // 规则3/4：进行中
-    if (taskStatus === '进行中') {
-      const hasActiveObstacles = obstacles.some(
-        o => (o as any).status === 'active' || (o as any).status === 'resolving' ||
-             (o as any).status === '待处理' || (o as any).status === '处理中'
-      )
-
-      if (hasActiveObstacles) {
-        const activeCount = obstacles.filter(
-          o => (o as any).status === 'active' || (o as any).status === 'resolving' ||
-               (o as any).status === '待处理' || (o as any).status === '处理中'
-        ).length
-        return {
-          display: BusinessStatusType.IN_PROGRESS_BLOCKED,
-          reason: `有${activeCount}项阻碍未解决`,
-          priority: 4
-        }
-      }
-
-      // 规则3：正常进行中
-      return {
-        display: BusinessStatusType.IN_PROGRESS,
-        reason: '正常进行中',
-        priority: 3
-      }
-    }
-
-    // 默认：返回基础状态
-    return {
-      display: taskStatus,
-      reason: '根据任务状态显示',
-      priority: 5
-    }
+    return this.evaluateBusinessStatusFromFacts({
+      taskStatus: String(task.status ?? ''),
+      taskProgress: task.progress as number | string,
+      conditions,
+      obstacles,
+      task,
+    })
   }
 
   /**
@@ -184,14 +275,18 @@ export class BusinessStatusService {
     try {
       logger.info('Completing task condition', { id: input.id })
 
-      // 获取当前条件
-      const current = await executeSQLOne(
-        'SELECT * FROM task_conditions WHERE id = ? LIMIT 1',
-        [input.id]
-      )
+      const requestedProjectId = input.project_id ? String(input.project_id) : null
+      // 获取当前条件；旧调用未传 project_id 时，先解析记录所属项目，再用项目范围执行后续写入
+      const current = requestedProjectId
+        ? await executeSQLOne('SELECT * FROM task_conditions WHERE id = ? AND project_id = ? LIMIT 1', [input.id, requestedProjectId])
+        : await executeSQLOne('SELECT * FROM task_conditions WHERE id = ? LIMIT 1', [input.id])
 
       if (!current) {
         throw new Error('开工条件不存在')
+      }
+      const projectId = String((current as any).project_id ?? requestedProjectId ?? '')
+      if (!projectId) {
+        throw new Error('开工条件缺少项目归属')
       }
 
       // 验证：只有未满足的条件才需要完成
@@ -203,13 +298,13 @@ export class BusinessStatusService {
       // 更新条件状态
       const now = new Date().toISOString().replace('T', ' ').replace('Z', '')
       await executeSQL(
-        'UPDATE task_conditions SET is_satisfied = 1, confirmed_by = ?, confirmed_at = ? WHERE id = ?',
-        [input.confirmed_by, now, input.id]
+        'UPDATE task_conditions SET is_satisfied = ?, confirmed_by = ?, confirmed_at = ? WHERE id = ? AND project_id = ?',
+        [true, input.confirmed_by, now, input.id, projectId]
       )
 
       const updated = await executeSQLOne(
-        'SELECT * FROM task_conditions WHERE id = ? LIMIT 1',
-        [input.id]
+        'SELECT * FROM task_conditions WHERE id = ? AND project_id = ? LIMIT 1',
+        [input.id, projectId]
       )
 
       logger.info('Task condition completed', { id: input.id })
@@ -233,14 +328,18 @@ export class BusinessStatusService {
         throw new Error('解决方案不能为空')
       }
 
-      // 获取当前阻碍
-      const current = await executeSQLOne(
-        'SELECT * FROM task_obstacles WHERE id = ? LIMIT 1',
-        [input.id]
-      )
+      const requestedProjectId = input.project_id ? String(input.project_id) : null
+      // 获取当前阻碍；旧调用未传 project_id 时，先解析记录所属项目，再用项目范围执行后续写入
+      const current = requestedProjectId
+        ? await executeSQLOne(`SELECT ${TASK_OBSTACLE_BUSINESS_STATUS_COLUMNS} FROM task_obstacles WHERE id = ? AND project_id = ? LIMIT 1`, [input.id, requestedProjectId])
+        : await executeSQLOne(`SELECT ${TASK_OBSTACLE_BUSINESS_STATUS_COLUMNS} FROM task_obstacles WHERE id = ? LIMIT 1`, [input.id])
 
       if (!current) {
         throw new Error('阻碍记录不存在')
+      }
+      const projectId = String((current as any).project_id ?? requestedProjectId ?? '')
+      if (!projectId) {
+        throw new Error('阻碍记录缺少项目归属')
       }
 
       // 如果已经是"已解决"状态，不允许重复解决
@@ -251,13 +350,13 @@ export class BusinessStatusService {
       // 更新阻碍状态
       const now = new Date().toISOString().replace('T', ' ').replace('Z', '')
       await executeSQL(
-        'UPDATE task_obstacles SET status = ?, resolution = ?, resolved_by = ?, resolved_at = ? WHERE id = ?',
-        ['已解决', input.resolution, input.resolved_by, now, input.id]
+        'UPDATE task_obstacles SET status = ?, resolution = ?, resolved_by = ?, resolved_at = ? WHERE id = ? AND project_id = ?',
+        ['已解决', input.resolution, input.resolved_by, now, input.id, projectId]
       )
 
       const updated = await executeSQLOne(
-        'SELECT * FROM task_obstacles WHERE id = ? LIMIT 1',
-        [input.id]
+        `SELECT ${TASK_OBSTACLE_BUSINESS_STATUS_COLUMNS} FROM task_obstacles WHERE id = ? AND project_id = ? LIMIT 1`,
+        [input.id, projectId]
       )
 
       logger.info('Task obstacle resolved', { id: input.id })
@@ -272,22 +371,112 @@ export class BusinessStatusService {
    * 批量计算多个任务的业务状态
    */
   static async calculateBatchBusinessStatus(
+    projectId: string,
     taskIds: string[]
   ): Promise<Map<string, BusinessStatus>> {
     const results = new Map<string, BusinessStatus>()
+    const normalizedProjectId = String(projectId ?? '').trim()
+    if (!normalizedProjectId) throw new Error('projectId is required for batch business status')
+    const uniqueTaskIds = [...new Set(taskIds.map((taskId) => String(taskId ?? '').trim()).filter(Boolean))]
+    if (uniqueTaskIds.length === 0) return results
 
-    // 并行计算所有任务的业务状态
-    await Promise.all(
-      taskIds.map(async (taskId) => {
-        try {
-          const status = await this.calculateBusinessStatus(taskId)
-          results.set(taskId, status)
-        } catch (error) {
-          logger.error('Failed to calculate business status for task', { taskId, error })
-          // 失败的任务不添加到结果中
-        }
-      })
+    const buildPlaceholders = (count: number) => Array.from({ length: count }, () => '?').join(', ')
+    const chunkSize = 200
+    const taskRows: Array<Record<string, unknown>> = []
+    const conditionRows: Array<Record<string, unknown>> = []
+    const obstacleRows: Array<Record<string, unknown>> = []
+
+    for (let index = 0; index < uniqueTaskIds.length; index += chunkSize) {
+      const chunk = uniqueTaskIds.slice(index, index + chunkSize)
+      const placeholders = buildPlaceholders(chunk.length)
+      const tasks = await executeSQL(
+        `SELECT id, project_id, status, progress,
+                ready_for_start, dependency_status, condition_status,
+                obstacle_status, progress_impact_level, blocked_for_progress,
+                readiness_summary, planned_start_date, planned_end_date, start_date, end_date
+           FROM tasks
+          WHERE project_id = ?
+            AND id IN (${placeholders})`,
+        [normalizedProjectId, ...chunk],
+      )
+      taskRows.push(...tasks)
+
+      const scopedTaskIds = tasks
+        .map((task: any) => String(task.id ?? '').trim())
+        .filter(Boolean)
+      if (scopedTaskIds.length === 0) continue
+      const scopedPlaceholders = buildPlaceholders(scopedTaskIds.length)
+
+      const conditions = await executeSQL(
+        `SELECT task_id, is_satisfied
+           FROM task_conditions
+          WHERE task_id IN (${scopedPlaceholders})`,
+        scopedTaskIds,
+      )
+      conditionRows.push(...conditions)
+
+      const obstacles = await executeSQL(
+        `SELECT task_id, status
+           FROM task_obstacles
+          WHERE task_id IN (${scopedPlaceholders})`,
+        scopedTaskIds,
+      )
+      obstacleRows.push(...obstacles)
+    }
+
+    const taskById = new Map<string, Record<string, unknown>>(
+      taskRows
+        .map((task: any) => [String(task.id ?? '').trim(), task] as const)
+        .filter(([taskId]) => Boolean(taskId)),
     )
+    const conditionsByTaskId = new Map<string, TaskCondition[]>()
+    for (const row of conditionRows as any[]) {
+      const taskId = String(row.task_id ?? '').trim()
+      if (!taskId) continue
+      const existing = conditionsByTaskId.get(taskId) ?? []
+      existing.push({
+        id: String(row.id ?? taskId),
+        task_id: taskId,
+        is_satisfied: row.is_satisfied === 1 || row.is_satisfied === true,
+      } as TaskCondition)
+      conditionsByTaskId.set(taskId, existing)
+    }
+    const obstaclesByTaskId = new Map<string, TaskObstacle[]>()
+    for (const row of obstacleRows as any[]) {
+      const taskId = String(row.task_id ?? '').trim()
+      if (!taskId) continue
+      const existing = obstaclesByTaskId.get(taskId) ?? []
+      existing.push({
+        id: String(row.id ?? taskId),
+        task_id: taskId,
+        description: '',
+        obstacle_type: '',
+        is_resolved: ['resolved', 'closed', '已解决', '已关闭'].includes(String(row.status ?? '').trim().toLowerCase()),
+        severity: 'medium',
+        status: String(row.status ?? ''),
+        created_at: '',
+        updated_at: '',
+        title: '',
+      } as unknown as TaskObstacle)
+      obstaclesByTaskId.set(taskId, existing)
+    }
+
+    for (const taskId of uniqueTaskIds) {
+      const task = taskById.get(taskId)
+      if (!task) continue
+      try {
+        const status = this.evaluateBusinessStatusFromFacts({
+          taskStatus: String(task.status ?? ''),
+          taskProgress: Number(task.progress ?? 0),
+          conditions: conditionsByTaskId.get(taskId) ?? [],
+          obstacles: obstaclesByTaskId.get(taskId) ?? [],
+          task: task as any,
+        })
+        results.set(taskId, status)
+      } catch (error) {
+        logger.error('Failed to calculate business status for task', { taskId, error })
+      }
+    }
 
     return results
   }

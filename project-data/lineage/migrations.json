@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "workbuddy-data-migration-ledger/v1",
+  "mutationBoundary": "migration_ledger_only_no_db_mutation_no_runtime_write",
+  "entries": [
+    {
+      "id": "project_daily_snapshot_initial",
+      "path": "server/migrations/115_create_project_daily_snapshot.sql",
+      "domain": "bi_snapshot",
+      "requiresContract": true
+    },
+    {
+      "id": "progress_knowledge_assets",
+      "path": "server/migrations/226_v14225_progress_knowledge_assets.sql",
+      "domain": "external_knowledge_governance",
+      "requiresContract": true
+    }
+  ]
+}

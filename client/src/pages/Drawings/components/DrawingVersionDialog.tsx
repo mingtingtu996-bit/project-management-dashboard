@@ -143,11 +143,14 @@ export function DrawingVersionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl border-slate-200">
+      <DialogContent className="max-w-[var(--dialog-lg-width)] border-slate-200">
         <DialogHeader>
           <DialogTitle className="text-slate-900">
             {packageCard?.packageName ? `${packageCard.packageName} 版本窗口` : '版本变更窗口'}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            查看图纸包版本记录，新增版本或设置当前有效版本。
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
@@ -165,10 +168,10 @@ export function DrawingVersionDialog({
             </div>
           )}
 
-          <div className="grid gap-4 md:grid-cols-[1fr_280px]">
+          <div className="grid gap-4 md:grid-cols-[1fr_17.5rem]">
             <div className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
               {versions.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-sm text-slate-500">
+                <div className="rounded-2xl empty-state-frame border-slate-200 p-6 text-center text-sm text-slate-500">
                   暂无版本记录。
                 </div>
               ) : (
@@ -178,7 +181,7 @@ export function DrawingVersionDialog({
                     data-testid={`drawing-version-row-${version.versionId}`}
                     className={`flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition-colors ${selectedVersionId === version.versionId ? 'border-blue-300 bg-blue-50' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}
                   >
-                    <button
+                    <Button variant="ghost"
                       type="button"
                       onClick={() => toggleSelectedVersion(version.versionId)}
                       className="flex min-w-0 flex-1 items-start text-left"
@@ -193,12 +196,12 @@ export function DrawingVersionDialog({
                         </div>
                         <div className="text-xs text-slate-500">{version.drawingName}</div>
                         {version.changeReason && <div className="text-sm leading-6 text-slate-600">{version.changeReason}</div>}
-                        <div className="text-xs text-slate-400">
+                        <div className="text-xs text-slate-500">
                           {version.createdBy}
                           {version.createdAt ? ` · ${version.createdAt}` : ''}
                         </div>
                       </div>
-                    </button>
+                    </Button>
 
                     {!version.isCurrentVersion && canEdit ? (
                       <Button size="sm" variant="outline" onClick={() => onSetCurrentVersion(version.versionId)}>
@@ -224,7 +227,7 @@ export function DrawingVersionDialog({
                       placeholder="例如：主体结构施工图"
                     />
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label htmlFor="drawing-version-create-code">图号</Label>
                       <Input
@@ -298,7 +301,7 @@ export function DrawingVersionDialog({
                           const Icon = cfg.icon
                           const canNavigate = Boolean(projectId)
                           return (
-                            <button
+                            <Button variant="ghost"
                               key={item.id}
                               type="button"
                               disabled={!canNavigate}
@@ -317,8 +320,8 @@ export function DrawingVersionDialog({
                               {item.status && (
                                 <span className="ml-auto shrink-0 opacity-70">{item.status}</span>
                               )}
-                              {canNavigate && <ExternalLink className="ml-auto h-3 w-3 shrink-0 opacity-50" />}
-                            </button>
+                              {canNavigate && <ExternalLink className="ml-auto h-3.5 w-3.5 shrink-0 opacity-50" />}
+                            </Button>
                           )
                         })}
                       </div>
@@ -326,7 +329,7 @@ export function DrawingVersionDialog({
                   )}
                 </div>
               ) : (
-                <div className="flex h-full min-h-[120px] items-center justify-center text-sm text-slate-500">
+                <div className="flex h-full min-h-32 items-center justify-center text-sm text-slate-500">
                   未选择版本
                 </div>
               )}

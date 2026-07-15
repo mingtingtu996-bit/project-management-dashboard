@@ -18,7 +18,7 @@ export function DeviationTabs({
   return (
     <div
       data-testid="deviation-tabs"
-      className="rounded-2xl border border-slate-200 bg-white p-2 shadow-sm"
+      className="rounded-2xl border border-slate-100 bg-white p-2 shadow-[var(--el-1)]"
       role="tablist"
       aria-label="三视角切换"
     >
@@ -36,7 +36,7 @@ export function DeviationTabs({
               aria-pressed={active}
               onClick={() => onValueChange(tab.value)}
             >
-              <span className="text-xs font-medium uppercase tracking-[0.12em] opacity-70">{tab.helper}</span>
+              <span className="text-xs font-medium uppercase tracking-wider opacity-70">{tab.helper}</span>
               <span className="text-sm font-semibold">{tab.label}</span>
             </Button>
           )

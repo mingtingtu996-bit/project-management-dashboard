@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildProjectTaskProgressSnapshot,
-  calculateProjectHealthScore,
+  getTaskDisplayStatus,
+  isActiveObstacle,
+  isActiveRisk,
+  isCompletedTask,
+  isPendingCondition,
   getTaskBusinessStatus,
   getTaskLagLevel,
   getTaskLagStatus,
@@ -10,6 +14,10 @@ import {
 } from '../taskBusinessStatus'
 
 describe('taskBusinessStatus', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('builds a unified project progress snapshot from tasks, conditions, and obstacles', () => {
     const tasks = [
       { id: 'parent', status: 'todo', progress: 0 },
@@ -77,6 +85,74 @@ describe('taskBusinessStatus', () => {
     ).toEqual(TASK_STATUS_THEME.ready)
   })
 
+  it('prefers backend-derived task business status codes when present', () => {
+    expect(
+      getTaskBusinessStatus({ id: 'warning', status: 'in_progress', progress: 40, businessStatus: { status: 'progress_warning', label: '执行预警' } }),
+    ).toEqual(TASK_STATUS_THEME.progress_warning)
+
+    expect(
+      getTaskBusinessStatus({ id: 'partial', status: 'in_progress', progress: 40, businessStatus: { status: 'partial_blocked', label: '部分受影响' } }),
+    ).toEqual(TASK_STATUS_THEME.partial_blocked)
+
+    expect(
+      getTaskBusinessStatus({ id: 'blocked', status: 'in_progress', progress: 40, businessStatus: { status: 'blocked_by_obstacle', label: '受阻' } }),
+    ).toEqual(TASK_STATUS_THEME.blocked_by_obstacle)
+  })
+
+  it('prefers backend business status over local lag fallback when both are present', () => {
+    expect(
+      getTaskBusinessStatus({
+        id: 'backend-status',
+        status: 'in_progress',
+        progress: 40,
+        businessStatus: { status: 'progress_warning', label: '执行预警' },
+        lagLevel: 'severe',
+        lagStatus: '严重滞后',
+      }),
+    ).toEqual(TASK_STATUS_THEME.progress_warning)
+  })
+
+  it('prefers unified statusDerivation business status before compatibility fields', () => {
+    expect(
+      getTaskBusinessStatus({
+        id: 'unified-status',
+        status: 'in_progress',
+        progress: 40,
+        statusDerivation: {
+          businessStatus: { status: 'blocked_by_obstacle', label: '受阻' },
+        },
+        businessStatus: { status: 'progress_warning', label: '执行预警' },
+        lagLevel: 'severe',
+      } as any),
+    ).toEqual(TASK_STATUS_THEME.blocked_by_obstacle)
+  })
+
+  it('maps task display status for dashboard and recent tasks cards', () => {
+    expect(getTaskDisplayStatus({ id: 'done', status: 'completed', progress: 100 })).toBe('completed')
+    expect(getTaskDisplayStatus({ id: 'blocked', status: 'blocked', progress: 20 })).toBe('blocked')
+    expect(getTaskDisplayStatus({ id: 'running', status: 'in_progress', progress: 20 })).toBe('in_progress')
+    expect(getTaskDisplayStatus({ id: 'todo', status: 'todo', progress: 0 })).toBe('pending')
+  })
+
+  it('uses the BI v1.2 canonical status sets for frontend-only display helpers', () => {
+    expect(isCompletedTask({ id: 'done', status: 'done', progress: 0 })).toBe(true)
+    expect(isCompletedTask({ id: 'cn-done', status: '已完成', progress: 0 })).toBe(true)
+    expect(isCompletedTask({ id: 'full-progress', status: 'in_progress', progress: 100 })).toBe(true)
+
+    expect(isPendingCondition({ status: 'completed' })).toBe(false)
+    expect(isPendingCondition({ status: 'confirmed' })).toBe(false)
+    expect(isPendingCondition({ status: '已确认' })).toBe(false)
+
+    expect(isActiveObstacle({ status: 'resolved' })).toBe(false)
+    expect(isActiveObstacle({ status: 'closed' })).toBe(false)
+    expect(isActiveObstacle({ is_resolved: 0, status: 'resolved' })).toBe(true)
+
+    expect(isActiveRisk({ status: 'resolved' })).toBe(true)
+    expect(isActiveRisk({ status: 'mitigated' })).toBe(true)
+    expect(isActiveRisk({ status: 'closed' })).toBe(false)
+    expect(isActiveRisk({ status: '已关闭' })).toBe(false)
+  })
+
   it('derives lag labels and snapshot counts from explicit lag fields', () => {
     expect(
       getTaskLagLevel({ id: 'lag-mild', status: 'todo', progress: 0, lagLevel: 'mild' }),
@@ -106,14 +182,19 @@ describe('taskBusinessStatus', () => {
     expect(snapshot.laggedTaskCount).toBe(2)
   })
 
-  it('matches the fallback health score formula used by the unified project summary', () => {
-    const healthScore = calculateProjectHealthScore({
-      completedTaskCount: 3,
-      completedMilestones: 1,
-      delayDays: 6,
-      activeRisks: [{ level: 'high' }, { level: 'low' }],
-    })
+  it('does not reconstruct lag status from dates when backend derivation is absent', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-03T23:30:00.000Z'))
 
-    expect(healthScore).toBe(43)
+    const legacyTaskPayload = {
+      id: 'ending-today',
+      status: 'in_progress',
+      progress: 0,
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-03',
+    } as unknown as Parameters<typeof getTaskLagLevel>[0]
+
+    expect(getTaskLagLevel(legacyTaskPayload)).toBeNull()
   })
+
 })

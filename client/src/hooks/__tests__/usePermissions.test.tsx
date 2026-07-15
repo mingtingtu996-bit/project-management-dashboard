@@ -31,12 +31,12 @@ function flush() {
 
 function Probe() {
   const permissions = usePermissions({
-    projectId: 'project-1',
+    projectId: projectState.project.id,
   })
 
   return (
     <div data-testid="result">
-      {permissions.permissionLevel}:{permissions.canEdit ? 'edit' : 'read'}
+      {permissions.permissionLevel}:{permissions.canEdit ? 'edit' : 'read'}:{permissions.canManageTeam ? 'manage' : 'no-manage'}
     </div>
   )
 }
@@ -55,6 +55,7 @@ function renderProbe(root: Root | null) {
         register: vi.fn(),
         changePassword: vi.fn(),
         updateProfile: vi.fn(),
+        syncCurrentCompanyContext: vi.fn(),
       }}
     >
       <Probe />
@@ -67,10 +68,12 @@ describe('usePermissions', () => {
   let root: Root | null = null
 
   beforeEach(() => {
+    vi.stubEnv('VITE_DISABLE_PERMISSION_SYSTEM', 'false')
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
     vi.stubGlobal('fetch', vi.fn())
+    projectState.project.id = 'project-1'
     projectState.project.owner_id = 'user-2'
   })
 
@@ -81,6 +84,7 @@ describe('usePermissions', () => {
     root = null
     container.remove()
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
     vi.clearAllMocks()
   })
 
@@ -111,6 +115,31 @@ describe('usePermissions', () => {
       }),
     )
     expect(container.textContent).toContain('editor:edit')
+  })
+
+  it('keeps API-returned project owner membership even when project owner_id differs', async () => {
+    projectState.project.id = 'project-owner-member'
+    projectState.project.owner_id = 'user-2'
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        data: {
+          permissionLevel: 'owner',
+          globalRole: 'company_admin',
+          canManageTeam: true,
+          canEdit: true,
+        },
+      }),
+    } as Response)
+
+    await act(async () => {
+      renderProbe(root)
+      await flush()
+      await flush()
+    })
+
+    expect(container.textContent).toContain('owner:edit:manage')
   })
 
   it('falls back to owner access without a membership lookup when the current user owns the project', async () => {

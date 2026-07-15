@@ -1,9 +1,12 @@
-import { useState, type ReactNode } from 'react'
+﻿import { useState, type ReactNode } from 'react'
 import { AlertTriangle, BarChart3, Bug, Clock, Zap } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 import { localMonitor } from '@/lib/monitoring'
+import { Button } from '@/components/ui/button'
 
 type MonitoringTab = 'api' | 'performance' | 'errors'
 
@@ -62,31 +65,36 @@ export default function MonitoringDashboard() {
         />
       </div>
 
-      <section className="shell-surface overflow-hidden" data-testid="monitoring-dashboard-panel">
-        <div className="border-b border-slate-100 px-6 pt-5">
+      <section className="surface-card overflow-hidden" data-testid="monitoring-dashboard-panel">
+        <div className="px-6 pt-5">
           <nav className="flex flex-wrap gap-2">
             {tabs.map((tab) => (
-              <button
+              <Button variant="ghost"
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 data-testid={`monitoring-tab-${tab.id}`}
                 className={`flex items-center gap-2 rounded-t-xl border border-b-0 px-4 py-2 text-sm transition-colors ${
                   activeTab === tab.id
-                    ? 'border-slate-200 bg-white text-slate-900 shadow-sm'
+                    ? 'border-slate-100 bg-white text-slate-900 shadow-[var(--el-1)]'
                     : 'border-transparent text-slate-500 hover:bg-slate-50 hover:text-slate-900'
                 }`}
               >
                 <tab.icon className="h-4 w-4" />
                 {tab.label}
-              </button>
+              </Button>
             ))}
           </nav>
         </div>
+        <Separator />
 
         <div className="p-6 md:p-7">
           {activeTab === 'api' && (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-8 text-center text-slate-500" data-testid="monitoring-tabpanel-api">
-              接口监控暂时由本地监控数据提供
+            <div data-testid="monitoring-tabpanel-api">
+              <EmptyState
+                title="接口监控由本地数据提供"
+                description="当前没有远端接口监控事件。"
+                className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 py-10"
+              />
             </div>
           )}
 
@@ -114,13 +122,13 @@ function StatCard({
 }) {
   const colorClasses = {
     blue: 'bg-blue-50 border-blue-200 text-blue-600',
-    green: 'bg-green-50 border-green-200 text-green-600',
+    green: 'bg-emerald-50 border-emerald-200 text-emerald-600',
     red: 'bg-red-50 border-red-200 text-red-600',
     orange: 'bg-orange-50 border-orange-200 text-orange-600',
   }
 
   return (
-    <div className={`border rounded-2xl p-4 shadow-sm ${colorClasses[color]}`} data-testid={testId}>
+    <div className={`border rounded-2xl p-4 shadow-[var(--el-1)] ${colorClasses[color]}`} data-testid={testId}>
       <div className="flex items-center gap-2">
         {icon}
         <span className="text-sm opacity-70">{label}</span>
@@ -135,20 +143,23 @@ function PerformanceMetrics() {
 
   if (metrics.length === 0) {
     return (
-      <div className="py-12 text-center text-slate-500" data-testid="monitoring-tabpanel-performance-empty">
-        <Zap className="mx-auto mb-4 h-12 w-12 opacity-50" />
-        <p>暂无性能指标</p>
-        <p className="mt-1 text-sm">使用系统后会自动采集性能记录</p>
-      </div>
+      <EmptyState
+        icon={Zap}
+        title="暂无性能指标"
+        description="使用系统后会自动采集性能记录。"
+        className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 py-10"
+        testId="monitoring-tabpanel-performance-empty"
+      />
     )
   }
 
   return (
     <div className="space-y-4">
-      <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-performance">
-        <div className="border-b border-slate-100 px-4 py-3">
+      <div className="surface-card overflow-hidden" data-testid="monitoring-tabpanel-performance">
+        <div className="px-4 py-3">
           <span className="text-sm font-medium text-slate-700">性能记录</span>
         </div>
+        <Separator />
         <div className="divide-y divide-slate-100">
           {metrics.slice(-20).map((m) => (
             <div key={`${m.name}-${m.timestamp}`} className="flex items-center justify-between px-4 py-3">
@@ -174,21 +185,24 @@ function ErrorTracker() {
 
   if (errorMetrics.length === 0) {
     return (
-      <div className="py-12 text-center text-slate-500" data-testid="monitoring-tabpanel-errors-empty">
-        <Bug className="mx-auto mb-4 h-12 w-12 opacity-50" />
-        <p>暂无错误记录</p>
-        <p className="mt-1 text-sm">出现异常时会自动进入错误追踪</p>
-      </div>
+      <EmptyState
+        icon={Bug}
+        title="暂无错误记录"
+        description="出现异常时会自动进入错误追踪。"
+        className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50/70 py-10"
+        testId="monitoring-tabpanel-errors-empty"
+      />
     )
   }
 
   return (
     <div className="space-y-4">
-      <div className="shell-surface overflow-hidden" data-testid="monitoring-tabpanel-errors">
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+      <div className="surface-card overflow-hidden" data-testid="monitoring-tabpanel-errors">
+        <div className="flex items-center justify-between px-4 py-3">
           <span className="text-sm font-medium text-slate-700">错误记录</span>
           <span className="text-sm text-red-500">{errorMetrics.length} 条</span>
         </div>
+        <Separator />
         <div className="divide-y divide-slate-100">
           {errorMetrics.slice(-20).map((m, i) => (
             <div key={i} className="px-4 py-3">

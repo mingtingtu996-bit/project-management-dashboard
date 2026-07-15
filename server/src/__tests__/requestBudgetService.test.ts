@@ -41,4 +41,34 @@ describe('requestBudgetService', () => {
       }),
     })
   })
+
+  it('observes late runner failures after the request budget has already timed out', async () => {
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+
+    try {
+      await expect(
+        runWithRequestBudget(
+          {
+            operation: 'demo.late_failure',
+            timeoutMs: 5,
+          },
+          async () => {
+            await new Promise((resolve) => setTimeout(resolve, 20))
+            throw new Error('late database timeout')
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: 'REQUEST_BUDGET_EXCEEDED',
+      })
+
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
 })

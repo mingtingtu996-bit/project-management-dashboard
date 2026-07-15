@@ -1,0 +1,77 @@
+{
+  "schemaVersion": "workbuddy-data-column-catalog/v1",
+  "mutationBoundary": "catalog_only_no_db_mutation_no_runtime_write",
+  "status": "initial_seed_partial_catalog",
+  "columnSets": [
+    {
+      "tableId": "tasks",
+      "requiredConcepts": [
+        "id",
+        "project_id",
+        "title",
+        "status",
+        "planned_start_date",
+        "planned_end_date",
+        "actual_start_date",
+        "actual_end_date",
+        "progress"
+      ]
+    },
+    {
+      "tableId": "task_baselines",
+      "requiredConcepts": [
+        "id",
+        "project_id",
+        "version",
+        "status",
+        "title"
+      ]
+    },
+    {
+      "tableId": "task_baseline_items",
+      "requiredConcepts": [
+        "id",
+        "project_id",
+        "baseline_version_id",
+        "source_task_id",
+        "title",
+        "planned_start_date",
+        "planned_end_date"
+      ]
+    },
+    {
+      "tableId": "project_daily_snapshot",
+      "requiredConcepts": [
+        "project_id",
+        "snapshot_date",
+        "overall_progress",
+        "task_progress",
+        "planned_cumulative",
+        "health_score"
+      ]
+    },
+    {
+      "tableId": "progress_knowledge_sources",
+      "requiredConcepts": [
+        "source_key",
+        "source_name",
+        "source_url",
+        "connector_type",
+        "access_level",
+        "source_trust_level",
+        "governance_status",
+        "source_metadata"
+      ]
+    },
+    {
+      "tableId": "progress_knowledge_documents",
+      "requiredConcepts": [
+        "source_id",
+        "document_key",
+        "document_type",
+        "content_hash",
+        "extraction_status"
+      ]
+    }
+  ]
+}

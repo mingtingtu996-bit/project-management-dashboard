@@ -2,26 +2,30 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LoadingState } from '@/components/ui/loading-state'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Separator } from '@/components/ui/separator'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { ToastAction } from '@/components/ui/toast'
 import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { useConfirmDialog } from '@/hooks/useConfirmDialog'
 import { useUpdateProject } from '@/hooks/useStore'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
 import { dispatchProjectAccessOverride } from '@/lib/projectAccessEvents'
 import { toast } from '@/hooks/use-toast'
-import { getGlobalRoleLabel, getProjectRoleLabel, normalizeGlobalRole, normalizeProjectPermissionLevel, type GlobalRole, type ProjectPermissionLevel } from '@/lib/roleLabels'
+import { getGlobalRoleLabel, getProjectRoleLabel, normalizeGlobalRole, normalizeProjectAccessLevel, normalizeProjectPermissionLevel, type GlobalRole, type ProjectAccessLevel, type ProjectPermissionLevel } from '@/lib/roleLabels'
 import { CheckCircle2, Copy, Crown, KeyRound, Link2, Trash2, UserPlus, Users } from 'lucide-react'
 
 interface AccessSummary {
   projectId: string
-  permissionLevel: ProjectPermissionLevel
+  permissionLevel: ProjectAccessLevel
   globalRole: GlobalRole
   canManageTeam: boolean
   canEdit: boolean
@@ -85,7 +89,7 @@ function readInvitationCode(item: InvitationInfo) {
 }
 
 function readInvitationPermission(item: InvitationInfo) {
-  return normalizeProjectPermissionLevel(item.permissionLevel || item.permission_level)
+  return normalizeProjectAccessLevel(item.permissionLevel || item.permission_level)
 }
 
 function readInvitationRevoked(item: InvitationInfo) {
@@ -159,7 +163,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       const accessResponse = await requestJson<{ success: boolean; data: AccessSummary }>(`/api/members/${projectId}/me`)
       const nextAccess = {
         ...accessResponse.data,
-        permissionLevel: normalizeProjectPermissionLevel(accessResponse.data.permissionLevel),
+        permissionLevel: normalizeProjectAccessLevel(accessResponse.data.permissionLevel),
         globalRole: normalizeGlobalRole(accessResponse.data.globalRole),
       }
       setAccess(nextAccess)
@@ -167,7 +171,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       const membersResponse = await requestJson<{ success: boolean; members: MemberInfo[] }>(`/api/members/${projectId}`)
       const nextMembers = (membersResponse.members || []).map((item) => ({
         ...item,
-        permissionLevel: normalizeProjectPermissionLevel(item.permissionLevel),
+        permissionLevel: normalizeProjectAccessLevel(item.permissionLevel),
         globalRole: normalizeGlobalRole(item.globalRole),
       }))
       setMembers(nextMembers)
@@ -421,15 +425,15 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
   }
 
   if (loading) {
-    return <LoadingState label="团队信息加载中" description="" className={layout === 'drawer' ? 'min-h-[320px] border-0 bg-transparent shadow-none' : undefined} />
+    return <LoadingState label="团队信息加载中" description="" className={layout === 'drawer' ? 'min-h-80 border-0 bg-transparent shadow-none' : undefined} />
   }
 
   return (
     <div className="space-y-6" data-testid="team-management-panel">
-      <div className="rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-blue-50 p-5">
+      <div className="surface-card p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
-            <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-400">团队管理</div>
+            <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">团队管理</div>
             <div className="text-2xl font-semibold tracking-tight text-slate-900">{projectName || '当前项目'} 的成员与权限</div>
             <div className="flex flex-wrap gap-2">
               <Badge variant={access?.globalRole === 'company_admin' ? 'default' : 'secondary'}>{getGlobalRoleLabel(access?.globalRole)}</Badge>
@@ -443,10 +447,10 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             </div>
           ) : null}
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">公司级角色</CardTitle></CardHeader><CardContent className="text-sm text-slate-700">{getGlobalRoleLabel(access?.globalRole)}</CardContent></Card>
-          <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">项目级角色</CardTitle></CardHeader><CardContent className="text-sm text-slate-700">{getProjectRoleLabel(access?.permissionLevel)}</CardContent></Card>
-          <Card className="rounded-2xl border-slate-200 shadow-none"><CardHeader className="pb-2"><CardTitle className="text-sm text-slate-500">当前状态</CardTitle></CardHeader><CardContent className="space-y-1 text-sm text-slate-700"><div>项目成员 {members.length} 人</div><div>有效邀请码 {activeInvitationCount} 个</div><div>密码重置 {canResetPassword ? '已启用' : '未启用'}</div></CardContent></Card>
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <Card className="rounded-2xl border-slate-200 shadow-none"><CardContent padding="md"><CardHead eyebrow="ROLE" title="公司级角色" /></CardContent><CardContent className="text-sm text-slate-700">{getGlobalRoleLabel(access?.globalRole)}</CardContent></Card>
+          <Card className="rounded-2xl border-slate-200 shadow-none"><CardContent padding="md"><CardHead eyebrow="ROLE" title="项目级角色" /></CardContent><CardContent className="text-sm text-slate-700">{getProjectRoleLabel(access?.permissionLevel)}</CardContent></Card>
+          <Card className="rounded-2xl border-slate-200 shadow-none"><CardContent padding="md"><CardHead eyebrow="STATUS" title="当前状态" /></CardContent><CardContent className="space-y-1 text-sm text-slate-700"><div>项目成员 {members.length} 人</div><div>有效邀请码 {activeInvitationCount} 个</div><div>密码重置 {canResetPassword ? '已启用' : '未启用'}</div></CardContent></Card>
         </div>
       </div>
 
@@ -457,22 +461,32 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
       ) : null}
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as typeof activeTab)} className="space-y-4">
-        <TabsList className="grid h-auto w-full grid-cols-1 gap-2 rounded-2xl bg-slate-100 p-2 sm:grid-cols-3">
-          <TabsTrigger value="members" data-testid="team-management-tab-members">团队成员</TabsTrigger>
-          <TabsTrigger value="pending-links" data-testid="team-management-tab-pending-links">待关联责任人</TabsTrigger>
-          <TabsTrigger value="invitations" disabled={!canManageTeam} data-testid="team-management-tab-invitations">邀请码</TabsTrigger>
-        </TabsList>
+        <SegmentedControl
+          value={activeTab}
+          onChange={(value) => setActiveTab(value as typeof activeTab)}
+          className="grid w-full grid-cols-1 gap-1 sm:grid-cols-3"
+          options={[
+            { value: 'members', label: '团队成员', testId: 'team-management-tab-members' },
+            { value: 'pending-links', label: '待关联责任人', testId: 'team-management-tab-pending-links' },
+            { value: 'invitations', label: '邀请码', testId: 'team-management-tab-invitations', disabled: !canManageTeam },
+          ]}
+        />
 
         <TabsContent value="members" className="mt-0">
-          <Card className="rounded-3xl border-slate-200 shadow-none">
-            <CardHeader className="border-b border-slate-100 pb-4">
-              <CardTitle className="text-base text-slate-900">成员列表</CardTitle>
-            </CardHeader>
+          <Card className="rounded-2xl border-slate-200 shadow-none">
+            <CardContent padding="md">
+              <CardHead eyebrow="MEMBERS" title="成员列表" />
+            </CardContent>
+            <Separator />
             <CardContent className="space-y-3 pt-6">
               {members.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无项目成员</div>
+                <EmptyState
+                  title="暂无项目成员"
+                  description="成员加入项目后，会在这里显示权限与最近活跃信息。"
+                  className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+                />
               ) : members.map((member) => {
-                const memberPermission = normalizeProjectPermissionLevel(member.permissionLevel)
+                const memberPermission = normalizeProjectAccessLevel(member.permissionLevel)
                 const rowBusyPrefix = `member:${member.userId}`
 
                 return (
@@ -482,7 +496,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                     </div>
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-semibold text-slate-900">{member.displayName || member.username}</div>
+                        <div className="max-w-full truncate text-sm font-semibold text-slate-900" title={member.displayName || member.username}>{member.displayName || member.username}</div>
                         <Badge variant={memberPermission === 'owner' ? 'default' : memberPermission === 'editor' ? 'secondary' : 'outline'}>
                           {getProjectRoleLabel(memberPermission)}
                         </Badge>
@@ -490,7 +504,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                           {getGlobalRoleLabel(member.globalRole)}
                         </Badge>
                       </div>
-                      <div className="text-sm text-slate-500">
+                      <div className="line-clamp-2 text-sm text-slate-500" title={`${member.username}${member.email ? ` · ${member.email}` : ''}`}>
                         {member.username}
                         {member.email ? ` · ${member.email}` : ''}
                       </div>
@@ -506,11 +520,9 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                               设为编辑
                             </Button>
                           ) : null}
-                          {memberPermission !== 'viewer' ? (
-                            <Button variant="outline" size="sm" loading={busyKey === `${rowBusyPrefix}:permission`} onClick={() => updateMemberPermission(member, 'viewer')}>
-                              设为只读
-                            </Button>
-                          ) : null}
+                          <Button variant="outline" size="sm" loading={busyKey === `${rowBusyPrefix}:permission`} onClick={() => updateMemberPermission(member, 'owner')}>
+                            设为负责人
+                          </Button>
                           <Button variant="outline" size="sm" loading={busyKey === `${rowBusyPrefix}:transfer`} onClick={() => transferOwner(member)}>
                             <Crown className="h-4 w-4" />
                             转让负责人
@@ -536,10 +548,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
         </TabsContent>
 
         <TabsContent value="pending-links" className="mt-0">
-          <Card className="rounded-3xl border-slate-200 shadow-none">
-            <CardHeader className="border-b border-slate-100 pb-4">
-              <CardTitle className="text-base text-slate-900">待关联责任人</CardTitle>
-            </CardHeader>
+          <Card className="rounded-2xl border-slate-200 shadow-none">
+            <CardContent padding="md">
+              <CardHead eyebrow="ASSIGNEE LINK" title="待关联责任人" />
+            </CardContent>
+            <Separator />
             <CardContent className="space-y-3 pt-6">
               {unlinkedAssignees.length === 0 ? (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-8 text-sm text-emerald-800">
@@ -566,7 +579,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
                             示例任务：{item.sampleTaskTitles.length > 0 ? item.sampleTaskTitles.join('、') : '暂无标题样例'}
                           </div>
                         </div>
-                        <div className="flex w-full flex-col gap-2 lg:w-[320px]">
+                        <div className="flex w-full flex-col gap-2 lg:w-80">
                           <Select
                             value={selectedUserId}
                             onValueChange={(value) => setLinkSelections((current) => ({ ...current, [item.assigneeName]: value }))}
@@ -602,13 +615,18 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
 
         <TabsContent value="invitations" className="mt-0">
           {canManageTeam ? (
-            <Card className="rounded-3xl border-slate-200 shadow-none">
-              <CardHeader className="border-b border-slate-100 pb-4">
-                <CardTitle className="text-base text-slate-900">邀请码管理</CardTitle>
-              </CardHeader>
+            <Card className="rounded-2xl border-slate-200 shadow-none">
+              <CardContent padding="md">
+                <CardHead eyebrow="INVITATION" title="邀请码管理" />
+              </CardContent>
+              <Separator />
               <CardContent className="space-y-3 pt-6">
                 {invitations.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">暂无邀请码，创建后即可通过链接邀请成员加入项目。</div>
+                  <EmptyState
+                    title="暂无邀请码"
+                    description="创建后即可通过链接邀请成员加入项目。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-10"
+                  />
                 ) : invitations.map((item) => {
                   const revoked = readInvitationRevoked(item)
                   return (
@@ -664,11 +682,11 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             </div>
             <div className="space-y-2">
               <Label>项目角色</Label>
-              <Select value={memberForm.permissionLevel} onValueChange={(value) => setMemberForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) }))}>
+              <Select value={memberForm.permissionLevel} onValueChange={(value) => setMemberForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) ?? current.permissionLevel }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="editor">编辑成员</SelectItem>
-                  <SelectItem value="viewer">只读成员</SelectItem>
+                  <SelectItem value="owner">项目负责人</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -689,11 +707,10 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
           <div className="space-y-4 py-2">
             <div className="space-y-2">
               <Label>项目角色</Label>
-              <Select value={invitationForm.permissionLevel} onValueChange={(value) => setInvitationForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) }))}>
+              <Select value={invitationForm.permissionLevel} onValueChange={(value) => setInvitationForm((current) => ({ ...current, permissionLevel: normalizeProjectPermissionLevel(value) ?? current.permissionLevel }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="editor">编辑成员</SelectItem>
-                  <SelectItem value="viewer">只读成员</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -723,7 +740,7 @@ export function ProjectTeamManagementPanel({ projectId, projectName, layout = 'd
             <div className="text-sm text-slate-500">目标账号</div>
             <div className="mt-1 text-sm font-medium text-slate-900">{passwordReveal?.username}</div>
             <div className="mt-4 text-sm text-slate-500">临时密码</div>
-            <div className="mt-1 font-mono text-lg font-semibold tracking-[0.24em] text-slate-900">{passwordReveal?.temporaryPassword}</div>
+            <div className="mt-1 font-mono text-lg font-semibold tracking-wider text-slate-900">{passwordReveal?.temporaryPassword}</div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPasswordReveal(null)}>关闭</Button>

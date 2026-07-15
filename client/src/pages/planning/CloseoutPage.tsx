@@ -1,26 +1,30 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
-import { PlanningWorkspaceLayers } from '@/components/planning/PlanningWorkspaceLayers'
+import { PlanningPageLayout } from '@/components/planning/PlanningPageLayout'
 import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
+import { EmptyState } from '@/components/EmptyState'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Input } from '@/components/ui/input'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
 import { usePlanningStore } from '@/hooks/usePlanningStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useStore } from '@/hooks/useStore'
 import { useToast } from '@/hooks/use-toast'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import { safeJsonParse, safeStorageGet, safeStorageRemove, safeStorageSet } from '@/lib/browserStorage'
+import { daysUntilLocalDate } from '@/lib/dateDistance'
 import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
 import type { Task } from '@/pages/GanttViewTypes'
 import type { MonthlyPlanVersion } from '@/types/planning'
-import { AlertTriangle, Clock, MoreHorizontal, RefreshCw, Search } from 'lucide-react'
+import { AlertTriangle, Clock, RefreshCw, Search } from 'lucide-react'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 
 import { CloseoutBatchBar } from './components/CloseoutBatchBar'
 import {
@@ -51,12 +55,21 @@ type CloseoutOverviewSummary = {
   processedCount: number
   remainingCount: number
   autoAdoptableCount: number
+  completedCount?: number
+  carryoverCount?: number
+  cancelledCount?: number
+  attentionCount?: number
 }
 type CloseoutConfirmSummaryResponse = {
   rolledInCount: number
   closedCount: number
   manualOverrideCount: number
-  forcedCount: number
+  archiveConfirmationCount: number
+  attentionCount?: number
+}
+
+export interface CloseoutWorkspaceProps {
+  embedded?: boolean
 }
 
 function getProcessedStorageKey(planId: string) {
@@ -87,9 +100,8 @@ function clearProcessedState(planId: string) {
 
 function getOverdueDays(month: string) {
   const due = new Date(`${shiftMonth(month, 1)}-01T00:00:00`)
-  const now = new Date()
-  const diff = now.getTime() - due.getTime()
-  return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)))
+  const daysUntilDue = daysUntilLocalDate(due)
+  return Math.max(0, -(daysUntilDue ?? 0))
 }
 
 function buildCloseoutItems(plan: MonthlyPlanDetail | null, tasks: Task[]): CloseoutItem[] {
@@ -104,7 +116,7 @@ function buildCloseoutItems(plan: MonthlyPlanDetail | null, tasks: Task[]): Clos
       const done = item.commitment_status === 'completed' || (item.current_progress ?? 0) >= (item.target_progress ?? 100)
       const carried = item.commitment_status === 'carried_over'
       const cancelled = item.commitment_status === 'cancelled'
-      const suggestion = done ? '建议关闭处理' : carried ? '建议滚入下月' : '需要人工判断'
+      const suggestion = done ? '建议直接关闭' : carried ? '建议滚入下月' : '需要人工判断'
       const groupId = done ? 'closeout-close' : carried ? 'closeout-carry' : 'closeout-manual'
       const sourceHierarchyLabel = item.carryover_from_item_id
         ? '上月承接 / 月计划条目'
@@ -127,7 +139,7 @@ function buildCloseoutItems(plan: MonthlyPlanDetail | null, tasks: Task[]): Clos
         !done && overdueDays >= 5 ? 'overdue' : !done && overdueDays >= 3 ? 'stale' : 'normal'
       const escalationLabel =
         !done && overdueDays >= 7
-          ? '第 7 日强制关账窗口'
+          ? '第 7 日确认归档窗口'
           : !done && overdueDays >= 5
             ? '第 5 日升级催办'
             : !done && overdueDays >= 3
@@ -148,7 +160,7 @@ function buildCloseoutItems(plan: MonthlyPlanDetail | null, tasks: Task[]): Clos
         sourceHierarchyLabel,
         sourceEntityLabel,
         closeReasonLabel,
-        taskTitle: task?.title ?? task?.name ?? undefined,
+        taskTitle: task?.title ?? undefined,
         planStartLabel: formatDate(item.planned_start_date) ?? undefined,
         planEndLabel: formatDate(item.planned_end_date) ?? undefined,
         planProgressLabel:
@@ -214,7 +226,7 @@ function buildCloseoutGroups(items: CloseoutItem[], mode: CloseoutGroupingMode):
           ] as const)
         : ([
             { id: 'closeout-manual', title: '需要人工判断', description: '', badge: '人工判断' },
-            { id: 'closeout-close', title: '建议关闭处理', description: '', badge: '关闭优先' },
+            { id: 'closeout-close', title: '确认关闭', description: '', badge: '关闭优先' },
             { id: 'closeout-carry', title: '建议滚入下月', description: '', badge: '滚入下月' },
           ] as const)
 
@@ -241,19 +253,24 @@ function buildCloseoutGroups(items: CloseoutItem[], mode: CloseoutGroupingMode):
     .filter((group) => group.items.length > 0)
 }
 
-export default function CloseoutPage() {
+export function CloseoutWorkspace({ embedded = false }: CloseoutWorkspaceProps) {
+  useEffect(() => {
+    document.title = embedded ? '月度计划 | WorkBuddy' : '月末关账 | WorkBuddy'
+  }, [embedded])
+
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
-  const { canEdit, globalRole, isOwner, permissionLevel } = usePermissions({ projectId: currentProject?.id ?? id })
-  const canManagePlanning = canEdit || isOwner || globalRole === 'company_admin'
+  const { canEdit } = usePermissions({ projectId: currentProject?.id ?? id })
   const selectedItemIds = usePlanningStore((state) => state.selectedItemIds)
   const setSelectedItemIds = usePlanningStore((state) => state.setSelectedItemIds)
   const clearSelection = usePlanningStore((state) => state.clearSelection)
-  const setActiveWorkspace = usePlanningStore((state) => state.setActiveWorkspace)
 
   const projectId = id ?? ''
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search])
+  const requestedMonth = searchParams.get('month')?.trim() || ''
   const [planVersions, setPlanVersions] = useState<MonthlyPlanVersion[]>([])
   const [activePlan, setActivePlan] = useState<MonthlyPlanDetail | null>(null)
   const [tasks, setTasks] = useState<Task[]>([])
@@ -261,7 +278,7 @@ export default function CloseoutPage() {
   const [activeItemId, setActiveItemId] = useState<string | null>(null)
   const [batchLayerOpen, setBatchLayerOpen] = useState(false)
   const [reasonBranch, setReasonBranch] = useState<CloseoutReasonBranch>('system')
-  const [reasonLeaf, setReasonLeaf] = useState('采纳系统建议')
+  const [reasonLeaf, setReasonLeaf] = useState('确认已完成')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmMode, setConfirmMode] = useState<CloseoutConfirmMode>('single')
   const [confirmState, setConfirmState] = useState<CloseoutConfirmState>('ready')
@@ -322,7 +339,7 @@ export default function CloseoutPage() {
   const autoAdoptableBaseCount = closeoutOverviewSummary?.autoAdoptableCount ?? 0
   const autoAdoptableCount = Math.max(autoAdoptableBaseCount - processedAutoAdoptableCount, 0)
   const overdueDays = activePlan ? getOverdueDays(activePlan.month) : 0
-  const forceCloseUnlocked = overdueDays >= 7
+  const closeoutAttentionRequired = overdueDays >= 7
   const readOnly = !canEdit
   const tabs = useMemo(
     () => buildPlanningTabs({ navigate, projectId, activeKey: 'monthly' }),
@@ -334,7 +351,7 @@ export default function CloseoutPage() {
       rolledInCount: closeoutConfirmSummary?.rolledInCount ?? 0,
       closedCount: closeoutConfirmSummary?.closedCount ?? 0,
       manualOverrideCount: closeoutConfirmSummary?.manualOverrideCount ?? 0,
-      forcedCount: closeoutConfirmSummary?.forcedCount ?? 0,
+      archiveConfirmationCount: closeoutConfirmSummary?.archiveConfirmationCount ?? 0,
       remainingCount,
     }),
     [closeoutConfirmSummary, remainingCount],
@@ -360,10 +377,11 @@ export default function CloseoutPage() {
       const versions = sortMonthlyPlanVersions(
         await apiGet<MonthlyPlanVersion[]>(`/api/monthly-plans?project_id=${encodeURIComponent(projectId)}`, { signal }),
       )
-      const currentPlan =
-        versions.find((item) => item.status === 'confirmed' && !item.closeout_at) ??
-        versions.find((item) => item.status === 'confirmed') ??
-        null
+      const confirmedVersions = versions.filter((item) => item.status === 'confirmed')
+      const requestedPlan = requestedMonth
+        ? confirmedVersions.find((item) => item.month === requestedMonth) ?? null
+        : null
+      const currentPlan = requestedPlan ?? confirmedVersions[0] ?? null
 
       const [detail, taskList] = await Promise.all([
         currentPlan
@@ -413,15 +431,14 @@ export default function CloseoutPage() {
     } finally {
       setPageLoading(false)
     }
-  }, [projectId])
+  }, [projectId, requestedMonth])
 
   useEffect(() => {
-    setActiveWorkspace('monthly')
     clearSelection()
     const controller = new AbortController()
     void loadCloseoutContext(controller.signal)
     return () => { controller.abort() }
-  }, [clearSelection, loadCloseoutContext, setActiveWorkspace])
+  }, [clearSelection, loadCloseoutContext])
 
   useEffect(() => {
     setActiveFilter('pending')
@@ -472,8 +489,8 @@ export default function CloseoutPage() {
           markProcessed(adoptedIds)
         }
         toast({
-          title: '已一键采纳系统建议',
-          description: `已采纳 ${adoptedIds.length} 条建议关闭事项。`,
+          title: '已采纳系统建议',
+          description: `已采纳 ${adoptedIds.length} 条收口建议。`,
         })
       })
       .catch((error) => {
@@ -490,13 +507,11 @@ export default function CloseoutPage() {
 
   const handleCloseoutConfirm = async () => {
     if (!activePlan) return
-    if (confirmMode === 'force' && (!forceCloseUnlocked || !canManagePlanning)) return
-    if (confirmMode !== 'force' && readOnly) return
+    if (readOnly) return
 
     setActionLoading('close')
     try {
-      const endpoint = confirmMode === 'force' ? 'force-close' : 'close'
-      await apiPost<MonthlyPlanDetail>(`/api/monthly-plans/${activePlan.id}/${endpoint}`, {
+      await apiPost<MonthlyPlanDetail>(`/api/monthly-plans/${activePlan.id}/close`, {
         version: activePlan.version,
         month: activePlan.month,
       })
@@ -507,11 +522,8 @@ export default function CloseoutPage() {
       setConfirmState('ready')
       setConfirmMode('single')
       toast({
-        title: confirmMode === 'force' ? '本月已完成强制关账' : '本月已完成关账',
-        description:
-          confirmMode === 'force'
-            ? `${formatMonthLabel(activePlan.month)} 已写入强制关账结果。`
-            : `${formatMonthLabel(activePlan.month)} 已写入真实关账结果。`,
+        title: '本月已完成关账',
+        description: `${formatMonthLabel(activePlan.month)} 已写入真实关账结果。`,
       })
       navigate(`/projects/${projectId}/planning/monthly?closeout_complete=1&month=${encodeURIComponent(shiftMonth(activePlan.month, 1))}`)
     } catch (error) {
@@ -538,104 +550,119 @@ export default function CloseoutPage() {
     )
   }
 
+  const autoAdoptDisabledReason = readOnly
+    ? '当前为只读状态，无法自动采纳系统建议。'
+    : autoAdoptableCount === 0
+      ? '当前没有可自动采纳的待处理事项。'
+      : actionLoading === 'auto_adopt'
+        ? '系统建议采纳中，请稍候。'
+        : null
+  const closeoutClassificationStats = [
+    { key: 'completed', label: '已完成', value: closeoutOverviewSummary?.completedCount ?? 0 },
+    { key: 'carryover', label: '滚入下月', value: closeoutOverviewSummary?.carryoverCount ?? 0 },
+    { key: 'cancelled', label: '不再执行', value: closeoutOverviewSummary?.cancelledCount ?? 0 },
+    { key: 'attention', label: '需关注', value: closeoutOverviewSummary?.attentionCount ?? 0 },
+  ]
+
   const summary = (
-    <Card variant="detail">
-      <CardContent className="space-y-4 p-4 sm:p-5">
+    <Card className="surface-card">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="secondary">月末关账工作台</Badge>
               <Badge variant="outline">{activePlan ? getMonthlyPlanStatusLabel(activePlan.status) : '暂无可关账月份'}</Badge>
             </div>
-            <h2 className="text-lg font-semibold text-slate-900">月末待处理事项</h2>
+            <CardHead eyebrow="CLOSEOUT" title="月末待处理事项" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {forceCloseUnlocked ? <Badge variant="secondary">已到第 7 日，可强制发起关账</Badge> : null}
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              loading={actionLoading === 'auto_adopt'}
-              onClick={handleAutoAdopt}
-              disabled={readOnly || autoAdoptableCount === 0 || actionLoading === 'auto_adopt'}
-            >
-              一键采纳系统建议
-            </Button>
+            {closeoutAttentionRequired ? <Badge variant="secondary">已到第 7 日，需负责人关注</Badge> : null}
+            <DisabledReasonTooltip reason={autoAdoptDisabledReason}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                loading={actionLoading === 'auto_adopt'}
+                onClick={handleAutoAdopt}
+                disabled={Boolean(autoAdoptDisabledReason)}
+              >
+                一键采纳系统建议
+              </Button>
+            </DisabledReasonTooltip>
           </div>
         </div>
 
         <div
-          data-testid="closeout-escalation-ladder"
-          className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-3"
+          data-testid="closeout-classification-summary"
+          className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
         >
-          {[
-            {
-              day: 3,
-              title: '+3 天提醒',
-            },
-            {
-              day: 5,
-              title: '+5 天升级',
-            },
-            {
-              day: 7,
-              title: '+7 天强制关账窗口',
-            },
-          ].map((step) => {
-            const active = overdueDays >= step.day
-            return (
-              <div
-                key={step.day}
-                className={`rounded-2xl border px-4 py-3 ${
-                  active ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-white/80 bg-white text-slate-600'
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm font-semibold">{step.title}</div>
-                  <Badge variant={active ? 'secondary' : 'outline'}>{active ? '当前已触发' : '未触发'}</Badge>
-                </div>
-              </div>
-            )
-          })}
+          {closeoutClassificationStats.map((item) => (
+            <div key={item.key} className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+              <div className="text-xs font-medium text-slate-500">{item.label}</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-slate-950">{item.value}</div>
+            </div>
+          ))}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-5">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="text-xs text-slate-500">关账月份</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{activePlan ? formatMonthLabel(activePlan.month) : '暂无'}</div>
+        <div
+          data-testid="closeout-escalation-ladder"
+          className="space-y-3 rounded-2xl bg-slate-50 p-3 ring-1 ring-inset ring-slate-200"
+        >
+          <div className="grid gap-5 lg:grid-cols-3">
+            {[
+              {
+                day: 3,
+                title: '+3 日历天提醒',
+              },
+              {
+                day: 5,
+                title: '+5 日历天升级',
+              },
+              {
+                day: 7,
+                title: '+7 日历天确认归档窗口',
+              },
+            ].map((step) => {
+              const active = overdueDays >= step.day
+              return (
+                <div
+                  key={step.day}
+                  className={`rounded-2xl px-4 py-3 ring-1 ring-inset ${
+                    active ? 'bg-amber-50 text-amber-900 ring-amber-200' : 'bg-white text-slate-600 ring-white/80'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold">{step.title}</div>
+                    <Badge variant={active ? 'secondary' : 'outline'}>{active ? '当前已触发' : '未触发'}</Badge>
+                  </div>
+                </div>
+              )
+            })}
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="text-xs text-slate-500">总待处理数</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{totalCount}</div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-            <div className="text-xs text-slate-500">已处理</div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{processedCount}</div>
-          </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-            <div className="text-xs text-amber-700">剩余未处理</div>
-            <div className="mt-1 text-lg font-semibold text-amber-900">{remainingCount}</div>
-          </div>
-          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3">
-            <div className="text-xs text-cyan-700">建议可一键采纳数</div>
-            <div className="mt-1 text-lg font-semibold text-cyan-900">{autoAdoptableCount}</div>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <span>逾期 3 日历天系统提醒</span>
+            <span>→</span>
+            <span>5 日历天通知上级</span>
+            <span>→</span>
+            <span>7 日历天确认归档窗口</span>
           </div>
         </div>
+
         {dataQualitySummary ? (
           <div
             data-testid="closeout-data-quality-card"
-            className={`rounded-2xl border px-4 py-4 ${
+            className={`surface-card px-5 py-5 ring-1 ring-inset ${
               dataQualitySummary.confidence.flag === 'low'
-                ? 'border-amber-200 bg-amber-50'
-                : 'border-sky-200 bg-sky-50'
+                ? 'bg-amber-50 ring-amber-200'
+                : 'bg-sky-50 ring-sky-200'
             }`}
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">数据质量留痕</div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">数据质量留痕</div>
                 <div className="text-lg font-semibold text-slate-900">
-                  当前月份数据置信度 {Math.round(dataQualitySummary.confidence.score)}%
+                  当前月份数据可靠性 {Math.round(dataQualitySummary.confidence.score)}%
                 </div>
               </div>
               {activePlan?.data_confidence_score ? (
@@ -650,7 +677,7 @@ export default function CloseoutPage() {
             <div className="mt-4">
               <DataConfidenceBreakdown
                 confidence={dataQualitySummary.confidence}
-                title="本月置信度降分贡献"
+                title="本月可靠性降分贡献"
                 compact
                 testId="closeout-data-quality-breakdown"
               />
@@ -659,16 +686,17 @@ export default function CloseoutPage() {
         ) : null}
         <div
           data-testid="closeout-filter-bar"
-          className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_auto]"
+          className="surface-card grid gap-5 p-5 lg:grid-cols-[minmax(0,1fr)_auto]"
         >
           <div className="space-y-2">
-            <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">筛选与搜索</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-slate-500">筛选与搜索</div>
             <div className="flex items-center gap-2 rounded-2xl border border-white/80 bg-white px-3 py-2">
-              <Search className="h-4 w-4 text-slate-400" />
+              <Search className="h-4 w-4 text-slate-500" />
               <Input
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="搜索关账条目、摘要或系统建议"
+                aria-label="搜索关账条目"
+                placeholder="搜索条目摘要或系统建议"
                 className="border-0 px-0 shadow-none focus-visible:ring-0"
                 data-testid="closeout-search-input"
               />
@@ -706,11 +734,11 @@ export default function CloseoutPage() {
   )
 
   const sectionHeader = (
-    <Card variant="detail">
-      <CardContent className="space-y-4 p-4">
+    <Card className="surface-card">
+      <CardContent className="space-y-4 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-1">
-            <div className="text-sm font-medium text-slate-900">关账分组与状态</div>
+            <CardHead eyebrow="CLOSEOUT" title="关账分组与状态" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{processedCount}/{items.length} 已处理</Badge>
@@ -720,8 +748,8 @@ export default function CloseoutPage() {
         <div className="flex flex-wrap gap-2">
           {([
             { key: 'processing', label: '按变更类型' },
-            { key: 'commitment', label: '按范围维度' },
-            { key: 'suggestion', label: '按系统建议' },
+            { key: 'commitment', label: '按工程对象' },
+            { key: 'suggestion', label: '系统建议' },
           ] as Array<{ key: CloseoutGroupingMode; label: string }>).map((option) => (
             <Button
               key={option.key}
@@ -764,9 +792,13 @@ export default function CloseoutPage() {
         }}
       />
     ) : (
-      <Card data-testid="closeout-empty-state" className="border-dashed border-slate-300 bg-slate-50">
-        <CardContent className="space-y-3 p-6">
-          <div className="text-lg font-semibold text-slate-900">当前筛选下没有匹配条目</div>
+      <EmptyState
+        icon={Search}
+        title="当前筛选下没有匹配条目"
+        description="调整办理状态、分组或搜索关键词后再查看。"
+        testId="closeout-empty-state"
+        className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 p-6"
+        action={(
           <div className="flex flex-wrap gap-2">
             <Button type="button" variant="outline" onClick={() => setActiveFilter('all')}>
               显示全部
@@ -775,18 +807,22 @@ export default function CloseoutPage() {
               清空搜索
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        )}
+      />
     )
   ) : (
-    <Card className="border-dashed border-slate-300 bg-slate-50">
-      <CardContent className="space-y-3 p-6">
-        <div className="text-lg font-semibold text-slate-900">当前没有可关账的已确认月份</div>
+    <EmptyState
+      icon={Clock}
+      title="当前没有可关账的已确认月份"
+      description="请先确认月度计划，再进入关账办理。"
+      testId="closeout-empty-state"
+      className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 p-6"
+      action={(
         <Button type="button" onClick={() => navigate(`/projects/${projectId}/planning/monthly`)}>
           去月度计划
         </Button>
-      </CardContent>
-    </Card>
+      )}
+    />
   )
 
   const aside = (
@@ -810,7 +846,7 @@ export default function CloseoutPage() {
         item={activeItem}
         selectedItems={selectedItems}
         batchLayerOpen={batchLayerOpen}
-        forceCloseUnlocked={forceCloseUnlocked}
+        closeoutAttentionRequired={closeoutAttentionRequired}
         reasonBranch={reasonBranch}
         reasonLeaf={reasonLeaf}
         readOnly={readOnly}
@@ -844,17 +880,37 @@ export default function CloseoutPage() {
 
   return (
     <PlanningPageShell
-      projectName={currentProject.name ?? '未命名项目'}
-      title="任务列表 / 月末关账"
+      projectName={currentProject.name ?? '项目'}
+      title={embedded ? '月度计划' : '关闭管理'}
       description="收口当月待处理事项，并把结果带回月度计划。"
       tabs={tabs}
-      actions={
+      metrics={
         <>
+        <MetricCard eyebrow="TOTAL" title="总待处理" value={totalCount} hint={activePlan ? formatMonthLabel(activePlan.month) : '暂无可关账月份'} tone="primary" />
+        <MetricCard eyebrow="DONE" title="已处理" value={processedCount} hint={`${selectedItemIds.length} 项已选`} tone="success" />
+        <MetricCard eyebrow="LEFT" title="剩余未处理" value={remainingCount} hint={`逾期 ${overdueDays} 日历天`} tone={remainingCount > 0 ? 'warning' : 'slate'} />
+          <MetricCard eyebrow="AUTO" title="可一键采纳" value={autoAdoptableCount} hint="系统建议" tone={autoAdoptableCount > 0 ? 'info' : 'slate'} />
+        </>
+      }
+      className="pb-20"
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          {embedded ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              data-testid="closeout-back-to-monthly"
+              onClick={() => navigate(`/projects/${projectId}/planning/monthly${activePlan ? `?month=${encodeURIComponent(activePlan.month)}` : ''}`)}
+            >
+              返回月度计划
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
+            className="gap-2 border-slate-700 bg-slate-800 text-white hover:bg-slate-700"
             data-testid="closeout-refresh-entry"
             onClick={() => {
               setActionLoading('refresh')
@@ -871,40 +927,11 @@ export default function CloseoutPage() {
             {actionLoading !== 'refresh' ? <RefreshCw className="h-4 w-4" /> : null}
             重新生成清单
           </Button>
-          {canManagePlanning ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="gap-2 border-slate-600 bg-transparent text-white hover:bg-white/10"
-                  data-testid="closeout-more-actions"
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                  ...
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
-                <DropdownMenuItem
-                  data-testid="closeout-force-close-entry"
-                  disabled={!forceCloseUnlocked}
-                  onSelect={() => {
-                    setConfirmMode('force')
-                    setConfirmState('ready')
-                    setConfirmOpen(true)
-                  }}
-                >
-                  强制发起关账
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : null}
-        </>
+        </div>
       }
     >
       <div className="space-y-4 pb-24">
-        <PlanningWorkspaceLayers summary={summary} sectionHeader={sectionHeader} main={main} aside={aside} />
+        <PlanningPageLayout summary={summary} sectionHeader={sectionHeader} main={main} aside={aside} />
       </div>
 
       <CloseoutBatchBar
@@ -926,4 +953,8 @@ export default function CloseoutPage() {
       />
     </PlanningPageShell>
   )
+}
+
+export default function CloseoutPage() {
+  return <CloseoutWorkspace />
 }

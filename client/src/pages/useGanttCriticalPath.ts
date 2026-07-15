@@ -19,6 +19,14 @@ interface UseGanttCriticalPathOptions {
   summaryDelayMs?: number
 }
 
+function getReadableErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function isExpectedBackendReadUnavailable(error: unknown): boolean {
+  return getReadableErrorMessage(error).includes('timed out after')
+}
+
 export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGanttCriticalPathOptions) {
   const [criticalPathSummary, setCriticalPathSummary] = useState<CriticalPathSummaryModel | null>(null)
   const [criticalPathDialogOpen, setCriticalPathDialogOpen] = useState(false)
@@ -56,24 +64,24 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
 
     setCriticalPathSummaryLoading(true)
     try {
-      const [snapshot, overrides] = await Promise.all([
-        options?.refresh
-          ? refreshCriticalPathSnapshot(projectId, { signal: controller.signal })
-          : fetchCriticalPathSnapshot(projectId, { signal: controller.signal }),
-        listCriticalPathOverrides(projectId, { signal: controller.signal }),
-      ])
+      const snapshot = options?.refresh
+        ? await refreshCriticalPathSnapshot(projectId, { signal: controller.signal })
+        : await fetchCriticalPathSnapshot(projectId, { signal: controller.signal })
       if (controller.signal.aborted) return null
 
       const nextSummary = buildCriticalPathSummaryModel(snapshot)
       setCriticalPathSummary(nextSummary)
-      setCriticalPathOverrides(overrides)
       setCriticalPathError(null)
       return nextSummary
     } catch (error) {
       if (isAbortError(error)) return null
 
       const message = getApiErrorMessage(error, '加载关键路径失败')
-      console.error('加载关键路径失败:', error)
+      if (isExpectedBackendReadUnavailable(error)) {
+        console.warn(`[GanttView] critical path unavailable: ${message}`)
+      } else {
+        console.error('加载关键路径失败:', error)
+      }
       setCriticalPathError(message)
       return null
     } finally {
@@ -118,7 +126,11 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
       if (isAbortError(error)) return null
 
       const message = getApiErrorMessage(error, '加载关键路径失败')
-      console.error('加载关键路径弹窗数据失败:', error)
+      if (isExpectedBackendReadUnavailable(error)) {
+        console.warn(`[GanttView] critical path dialog unavailable: ${message}`)
+      } else {
+        console.error('加载关键路径弹窗数据失败:', error)
+      }
       setCriticalPathError(message)
       return null
     } finally {
@@ -146,8 +158,9 @@ export function useGanttCriticalPath({ projectId, summaryDelayMs = 800 }: UseGan
   const handleOpenCriticalPathDialog = useCallback((taskId?: string | null) => {
     setCriticalPathFocusTaskId(taskId ?? null)
     setCriticalPathDialogOpen(true)
+    abortSummaryRequest()
     void loadCriticalPathDialogData()
-  }, [loadCriticalPathDialogData])
+  }, [abortSummaryRequest, loadCriticalPathDialogData])
 
   const handleRefreshCriticalPath = useCallback(async () => {
     const result = await loadCriticalPathDialogData({ refresh: true })

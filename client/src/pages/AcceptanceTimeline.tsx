@@ -1,17 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
-import { CheckCircle2, List, Network, Palette, Plus } from 'lucide-react'
+import { useLocation, useParams } from 'react-router-dom'
+import { CheckCircle2, FileCheck2, List, Loader2, Network, Palette, Plus, Wand2 } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { EmptyState } from '@/components/EmptyState'
 import { PageHeader } from '@/components/PageHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { MetricCard } from '@/components/ui/metric-card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -20,7 +28,9 @@ import { useStore } from '@/hooks/useStore'
 import { cn } from '@/lib/utils'
 import { CHART_PALETTE } from '@/lib/chartPalette'
 import { acceptanceApi } from '@/services/acceptanceApi'
-import type { AcceptanceNode, AcceptancePlan, AcceptancePlanRelationBundle, AcceptanceProjectSummary, AcceptanceStatus, AcceptanceType } from '@/types/acceptance'
+import { listEngineeringObjects, type EngineeringObject } from '@/services/engineeringObjectsApi'
+import { MaterialsApiService, type ParticipantUnitSummary } from '@/services/materialsApi'
+import type { AcceptanceNode, AcceptancePlan, AcceptancePlanRelationBundle, AcceptanceProjectSummary, AcceptanceStatus, AcceptanceTemplatePreview, AcceptanceType, ApplyAcceptanceTemplateResult } from '@/types/acceptance'
 import { DEFAULT_ACCEPTANCE_TYPES, groupAcceptanceByPhase, isAcceptanceBlocked, normalizeAcceptanceStatus } from '@/types/acceptance'
 
 import AcceptanceDetailDrawer from './AcceptanceTimeline/components/AcceptanceDetailDrawer'
@@ -43,16 +53,50 @@ const NAME_TO_TYPE: Record<string, string> = {
 }
 const ACCEPTANCE_STATUS_OPTIONS: AcceptanceStatus[] = ['draft', 'preparing', 'ready_to_submit', 'submitted', 'inspecting', 'rectifying', 'passed', 'archived']
 const ACCEPTANCE_STATUS_LABELS: Record<AcceptanceStatus, string> = {
-  draft: '草稿',
-  preparing: '准备中',
-  ready_to_submit: '待申报',
-  submitted: '已申报',
-  inspecting: '验收中',
-  rectifying: '整改中',
-  passed: '已通过',
-  archived: '已归档',
+  draft: '草稿', preparing: '准备中', ready_to_submit: '待申报', submitted: '已申报',
+  inspecting: '验收中', rectifying: '整改中', passed: '已通过', archived: '已归档',
+}
+// v1.4.5: visual tone for backend status DTO compatibility
+const ACCEPTANCE_STATUS_TONES: Record<AcceptanceStatus, string> = {
+  draft: 'slate', preparing: 'blue', ready_to_submit: 'amber', submitted: 'amber',
+  inspecting: 'blue', rectifying: 'red', passed: 'green', archived: 'green',
 }
 const SCOPE_LEVEL_ORDER = ['project', 'building', 'unit', 'specialty'] as const
+const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
+type AcceptanceStageKey = 'foundation' | 'main' | 'completion' | 'special'
+
+const ACCEPTANCE_STAGE_DEFINITIONS: Array<{
+  key: AcceptanceStageKey
+  label: string
+  description: string
+  progressClass: string
+}> = [
+  {
+    key: 'foundation',
+    label: '基础验收',
+    description: '地基、基础与预验收',
+    progressClass: 'bg-emerald-500',
+  },
+  {
+    key: 'main',
+    label: '主体验收',
+    description: '主体、单位工程与四方验收',
+    progressClass: 'bg-blue-600',
+  },
+  {
+    key: 'completion',
+    label: '竣工验收',
+    description: '备案、归档与交付收口',
+    progressClass: 'bg-slate-600',
+  },
+  {
+    key: 'special',
+    label: '专项验收',
+    description: '消防、规划、人防、电梯、防雷等',
+    progressClass: 'bg-blue-600',
+  },
+]
+
 const SCOPE_LEVEL_LABELS: Record<(typeof SCOPE_LEVEL_ORDER)[number], string> = {
   project: '项目级',
   building: '楼栋级',
@@ -96,6 +140,61 @@ function getBuildingLabel(buildingId?: string | null) {
   return normalized || '全部楼栋'
 }
 
+function normalizePhaseFilter(value: string | null) {
+  const normalized = String(value ?? '').trim()
+  return normalized || 'all'
+}
+
+function getAcceptancePhaseLabel(value: string) {
+  if (value === 'all') return '全部阶段'
+  return ACCEPTANCE_PHASE_OPTIONS.find((phase) => phase.value === value)?.label || value
+}
+
+function getAcceptanceStageKey(plan: AcceptancePlan): AcceptanceStageKey {
+  const typeId = String(plan.type_id ?? '').toLowerCase()
+  const phaseCode = String(plan.phase_code ?? '').toLowerCase()
+  const category = String(plan.category ?? '').toLowerCase()
+  const name = `${plan.name ?? ''} ${plan.type_name ?? ''} ${plan.acceptance_name ?? ''} ${plan.acceptance_type ?? ''}`.toLowerCase()
+  const searchText = `${typeId} ${phaseCode} ${category} ${name}`
+
+  if (searchText.includes('completion_record') || searchText.includes('filing') || searchText.includes('archive') || searchText.includes('delivery') || searchText.includes('竣工') || searchText.includes('备案') || searchText.includes('归档') || searchText.includes('交付')) {
+    return 'completion'
+  }
+
+  if (typeId === 'pre_acceptance' || searchText.includes('foundation') || searchText.includes('基础') || searchText.includes('地基') || searchText.includes('预验收')) {
+    return 'foundation'
+  }
+
+  if (typeId === 'four_party' || searchText.includes('main') || searchText.includes('主体') || searchText.includes('单位工程') || searchText.includes('四方')) {
+    return 'main'
+  }
+
+  return 'special'
+}
+
+function buildAcceptanceStageSummaries(plans: AcceptancePlan[]) {
+  const buckets = new Map<AcceptanceStageKey, AcceptancePlan[]>()
+  ACCEPTANCE_STAGE_DEFINITIONS.forEach((stage) => buckets.set(stage.key, []))
+
+  plans.forEach((plan) => {
+    buckets.get(getAcceptanceStageKey(plan))?.push(plan)
+  })
+
+  return ACCEPTANCE_STAGE_DEFINITIONS.map((stage) => {
+    const stagePlans = buckets.get(stage.key) || []
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
+    const passed = stagePlans.filter((plan) => ['passed', 'archived'].includes(normalizeAcceptanceStatus(plan.status))).length
+    const total = stagePlans.length
+
+    return {
+      ...stage,
+      passed,
+      total,
+      percent: total > 0 ? Math.round((passed / total) * 100) : 0,
+    }
+  })
+}
+
 const ACCEPTANCE_TIMELINE_BUCKET_DAY_SPAN: Record<AcceptanceTimelineScale, number> = {
   month: 30,
   biweek: 14,
@@ -114,7 +213,12 @@ function shiftIsoDate(value: string, days: number) {
 }
 
 export default function AcceptanceTimeline() {
+  useEffect(() => {
+    document.title = '验收流程 | WorkBuddy'
+  }, [])
+
   const { id } = useParams<{ id: string }>()
+  const location = useLocation()
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
   const projectId = id || currentProject?.id || ''
@@ -122,21 +226,29 @@ export default function AcceptanceTimeline() {
   const { canEdit } = usePermissions({ projectId: currentProject?.id ?? id })
 
   const [plans, setPlans] = useState<AcceptancePlan[]>([])
+  const [participantUnits, setParticipantUnits] = useState<ParticipantUnitSummary[]>([])
   const [customTypes, setCustomTypes] = useState<AcceptanceType[]>([])
   const [projectSummary, setProjectSummary] = useState<AcceptanceProjectSummary>(EMPTY_ACCEPTANCE_SUMMARY)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailContext, setDetailContext] = useState<AcceptancePlanRelationBundle | null>(null)
   const [typeManagerOpen, setTypeManagerOpen] = useState(false)
   const [addPlanOpen, setAddPlanOpen] = useState(false)
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [templatePreview, setTemplatePreview] = useState<AcceptanceTemplatePreview | null>(null)
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [templateApplying, setTemplateApplying] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | AcceptanceStatus>('all')
   const [blockedOnly, setBlockedOnly] = useState(false)
   const [upcomingOnly, setUpcomingOnly] = useState(false)
   const [timeScale, setTimeScale] = useState<AcceptanceTimelineScale>('month')
   const [scopeFilter, setScopeFilter] = useState<'all' | (typeof SCOPE_LEVEL_ORDER)[number]>('all')
   const [buildingFilter, setBuildingFilter] = useState('all')
+  const [phaseFilter, setPhaseFilter] = useState('all')
   const [viewMode, setViewMode] = useState<AcceptanceTimelineViewMode>(() => {
     if (typeof window === 'undefined' || !projectId) return 'graph'
     const persisted = safeStorageGet(window.sessionStorage, `acceptanceView:${projectId}`)
@@ -149,17 +261,21 @@ export default function AcceptanceTimeline() {
       return
     }
     setLoading(true)
+    setLoadError(null)
     try {
-      const [snapshot, typeRows, summary] = await Promise.all([
-        acceptanceApi.getFlowSnapshot(projectId),
-        acceptanceApi.getCustomTypes(projectId),
+      const snapshot = await acceptanceApi.getFlowSnapshot(projectId)
+      const [summary, unitRows] = await Promise.all([
         acceptanceApi.getProjectSummary(projectId),
+        MaterialsApiService.listParticipantUnits(projectId),
       ])
       setPlans(snapshot.plans)
-      setCustomTypes(typeRows)
+      setCustomTypes(acceptanceApi.mapCatalogRowsToTypes(snapshot.catalogs))
       setProjectSummary(summary)
+      setParticipantUnits(unitRows)
     } catch (error) {
-      toast({ title: '加载失败', description: error instanceof Error ? error.message : '无法加载验收时间轴', variant: 'destructive' })
+      const message = error instanceof Error ? error.message : '无法加载验收时间轴'
+      setLoadError(message)
+      toast({ title: '加载失败', description: message, variant: 'destructive' })
     } finally {
       setLoading(false)
     }
@@ -174,8 +290,39 @@ export default function AcceptanceTimeline() {
     safeStorageSet(window.sessionStorage, `acceptanceView:${projectId}`, viewMode)
   }, [projectId, viewMode])
 
+  useEffect(() => {
+    const query = new URLSearchParams(location.search)
+    const nextStatusFilter = query.get('status')
+    const nextPhaseFilter = normalizePhaseFilter(query.get('phase'))
+
+    if (nextStatusFilter && ACCEPTANCE_STATUS_OPTIONS.includes(nextStatusFilter as AcceptanceStatus)) {
+      setStatusFilter(nextStatusFilter as AcceptanceStatus)
+    } else if (nextStatusFilter === 'all' || nextStatusFilter === '') {
+      setStatusFilter('all')
+    }
+
+    setPhaseFilter(nextPhaseFilter)
+  }, [location.search])
+
   const allTypes = useMemo(() => [...DEFAULT_ACCEPTANCE_TYPES, ...customTypes], [customTypes])
   const buildingOptions = useMemo(() => [...new Set(plans.map((plan) => String(plan.building_id ?? '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh-CN')), [plans])
+  const phaseOptions = useMemo(() => {
+    const knownOptions = new Map<string, { value: string; label: string }>()
+    for (const option of ACCEPTANCE_PHASE_OPTIONS) {
+      knownOptions.set(option.value, option)
+    }
+
+    const planPhaseCodes = [...new Set(plans.map((plan) => String(plan.phase_code ?? '').trim()).filter(Boolean))]
+    const extraPhaseCodes = planPhaseCodes.filter((code) => !knownOptions.has(code))
+    if (phaseFilter !== 'all' && !knownOptions.has(phaseFilter) && !extraPhaseCodes.includes(phaseFilter)) {
+      extraPhaseCodes.unshift(phaseFilter)
+    }
+
+    return [
+      ...ACCEPTANCE_PHASE_OPTIONS,
+      ...extraPhaseCodes.map((value) => ({ value, label: value })),
+    ]
+  }, [phaseFilter, plans])
   const scopeOptions = useMemo(() => {
     const values = [...new Set(plans.map((plan) => normalizeScopeLevel(plan.scope_level)))]
     return values.sort((a, b) => SCOPE_LEVEL_ORDER.indexOf(a) - SCOPE_LEVEL_ORDER.indexOf(b))
@@ -183,6 +330,7 @@ export default function AcceptanceTimeline() {
   const visiblePlans = useMemo(() => plans.filter((plan) => {
     if (scopeFilter !== 'all' && normalizeScopeLevel(plan.scope_level) !== scopeFilter) return false
     if (buildingFilter !== 'all' && String(plan.building_id ?? '').trim() !== buildingFilter) return false
+    if (phaseFilter !== 'all' && String(plan.phase_code ?? '').trim() !== phaseFilter) return false
     if (statusFilter !== 'all' && normalizeAcceptanceStatus(plan.status) !== statusFilter) return false
     if (blockedOnly && !isAcceptanceBlocked(plan, plans)) return false
     if (upcomingOnly) {
@@ -193,10 +341,16 @@ export default function AcceptanceTimeline() {
       if (diff < 0 || diff > 30 * 24 * 60 * 60 * 1000) return false
     }
     return true
-  }), [blockedOnly, buildingFilter, plans, scopeFilter, statusFilter, upcomingOnly])
+  }), [blockedOnly, buildingFilter, phaseFilter, plans, scopeFilter, statusFilter, upcomingOnly])
   const visiblePhaseGroups = useMemo(() => groupAcceptanceByPhase(visiblePlans), [visiblePlans])
   const flowLayout = useMemo(() => buildAcceptanceFlowLayout(visiblePlans, timeScale), [timeScale, visiblePlans])
   const selectedNode = useMemo(() => flowLayout.nodes.find((node) => node.id === selectedNodeId) || null, [flowLayout.nodes, selectedNodeId])
+  const stageSummaries = useMemo(() => buildAcceptanceStageSummaries(visiblePlans), [visiblePlans])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
+  const totalStageCount = useMemo(() => stageSummaries.reduce((sum, stage) => sum + stage.total, 0), [stageSummaries])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
+  const totalPassedStageCount = useMemo(() => stageSummaries.reduce((sum, stage) => sum + stage.passed, 0), [stageSummaries])
+  const totalPercent = totalStageCount > 0 ? Math.round((totalPassedStageCount / totalStageCount) * 100) : 0
 
   const refreshBundle = useCallback(async (planId: string) => {
     if (!projectId) return
@@ -328,8 +482,8 @@ export default function AcceptanceTimeline() {
     await handleBatchPlanUpdate(planIds, { planned_date: plannedDate }, '批量日期已更新', `已调整 ${planIds.length} 项计划日期。`, '批量日期更新失败')
   }, [handleBatchPlanUpdate])
 
-  const handleBatchResponsibleUnitUpdate = useCallback(async (planIds: string[], responsibleUnit: string) => {
-    await handleBatchPlanUpdate(planIds, { responsible_unit: responsibleUnit }, '批量责任单位已更新', `已更新 ${planIds.length} 项责任单位。`, '批量责任单位更新失败')
+  const handleBatchResponsibleUnitUpdate = useCallback(async (planIds: string[], participantUnitId: string | null) => {
+    await handleBatchPlanUpdate(planIds, { participant_unit_id: participantUnitId }, '批量责任单位已更新', `已更新 ${planIds.length} 项责任单位。`, '批量责任单位更新失败')
   }, [handleBatchPlanUpdate])
 
   const handleBatchPhaseUpdate = useCallback(async (planIds: string[], phaseCode: string) => {
@@ -352,8 +506,6 @@ export default function AcceptanceTimeline() {
     nodeId: string,
     input: {
       requirement_type: string
-      source_entity_type: string
-      source_entity_id: string
       description?: string | null
       status?: string | null
     },
@@ -386,187 +538,277 @@ export default function AcceptanceTimeline() {
   }, [])
 
   const handleAddPlan = useCallback(async (plan: Partial<AcceptancePlan>) => {
-    await acceptanceApi.createPlan({ ...plan, project_id: projectId, milestone_id: plan.milestone_id, status: plan.status || 'draft', scope_level: plan.scope_level || 'project' })
+    await acceptanceApi.createPlan({ ...plan, project_id: projectId, status: plan.status || 'draft', scope_level: plan.scope_level || 'project' })
     await reloadPlans()
   }, [projectId, reloadPlans])
 
+  const openTemplateDialog = useCallback(async () => {
+    if (!projectId) return
+    setTemplateDialogOpen(true)
+    setTemplateLoading(true)
+    setTemplateError(null)
+    try {
+      setTemplatePreview(await acceptanceApi.previewSystemTemplate(projectId))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法加载验收模板'
+      setTemplateError(message)
+      toast({ title: '模板加载失败', description: message, variant: 'destructive' })
+    } finally {
+      setTemplateLoading(false)
+    }
+  }, [projectId, toast])
+
+  const handleApplyTemplate = useCallback(async (preview: AcceptanceTemplatePreview): Promise<ApplyAcceptanceTemplateResult | null> => {
+    if (!canEdit || !projectId) return null
+    setTemplateApplying(true)
+    try {
+      const result = await acceptanceApi.applySystemTemplate(projectId, {
+        templateCode: preview.templateCode,
+        seedVersion: preview.seedVersion,
+        selectedItemCodes: preview.items.filter((item) => item.selected).map((item) => item.itemCode),
+        selectedDependencyCodes: preview.dependencies.filter((dependency) => dependency.selected).map((dependency) => dependency.dependencyCode),
+        selectedRequirementCodes: preview.requirements.filter((requirement) => requirement.selected).map((requirement) => requirement.requirementCode),
+        duplicatePolicy: 'skip_existing',
+      })
+      await reloadPlans()
+      setTemplateDialogOpen(false)
+      toast({
+        title: '验收模板已应用',
+        description: `已生成 ${result.createdPlanIds.length} 个验收事项，挂接 ${result.createdRequirementIds.length} 条资料/结果要求。`,
+      })
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '请稍后重试。'
+      toast({ title: '模板应用失败', description: message, variant: 'destructive' })
+      return null
+    } finally {
+      setTemplateApplying(false)
+    }
+  }, [canEdit, projectId, reloadPlans, toast])
+
   if (loading) {
     return (
-      <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-6 shadow-sm" data-testid="acceptance-loading-skeleton">
-        <div className="flex items-center justify-between gap-4">
-          <div className="space-y-2">
-            <Skeleton className="h-6 w-40" />
-            <Skeleton className="h-4 w-64" />
+      <div className="page-shell page-enter" data-testid="acceptance-loading-skeleton">
+        <div className="space-y-4 rounded-xl border border-slate-100 bg-white p-6 shadow-[var(--el-1)]">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-2">
+              <Skeleton className="h-6 w-40" />
+              <Skeleton className="h-4 w-64" />
+            </div>
+            <div className="flex gap-2">
+              <Skeleton className="h-9 w-24 rounded-full" />
+              <Skeleton className="h-9 w-24 rounded-full" />
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Skeleton className="h-9 w-24 rounded-full" />
-            <Skeleton className="h-9 w-24 rounded-full" />
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+            {[1, 2, 3, 4].map((item) => <div key={item} className="rounded-xl border border-slate-100 bg-slate-50 p-4"><Skeleton className="h-4 w-20" /><Skeleton className="mt-3 h-8 w-16" /></div>)}
           </div>
-        </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
-          {[1, 2, 3, 4, 5, 6, 7].map((item) => <div key={item} className="rounded-2xl border border-slate-100 bg-slate-50 p-4"><Skeleton className="h-4 w-20" /><Skeleton className="mt-3 h-8 w-16" /></div>)}
         </div>
       </div>
     )
   }
 
   return (
-    <div className="page-enter space-y-6">
+    <div className="page-shell page-enter">
       {currentProject && (
         <Breadcrumb
           items={[
-            { label: '公司驾驶舱', href: '/company' },
-            { label: projectName, href: `/projects/${id}` },
-            { label: '专项管理', href: `/projects/${id}/pre-milestones` },
-            { label: '验收时间轴' },
+            { label: projectName, href: `/projects/${id}/dashboard` },
+            { label: '验收流程' },
           ]}
         />
       )}
 
-      <PageHeader eyebrow="专项管理" title="验收时间轴">
-        <div className="flex items-center rounded-full border border-slate-200 bg-white p-1 shadow-sm">
-          <button
-            type="button"
-            onClick={() => setViewMode('graph')}
-            className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors', viewMode === 'graph' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900')}
-            data-testid="acceptance-view-graph"
-          >
-            <Network className="h-4 w-4" />
-            流程板
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('list')}
-            className={cn('inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm transition-colors', viewMode === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:text-slate-900')}
-            data-testid="acceptance-view-list"
-          >
-            <List className="h-4 w-4" />
-            台账
-          </button>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2" disabled={!canEdit}>
-          <Palette className="h-4 w-4" />
-          类型管理
-        </Button>
-        <Button size="sm" onClick={() => setAddPlanOpen(true)} className="gap-2" disabled={!canEdit}>
-          <Plus className="h-4 w-4" />
-          新增验收
-        </Button>
+      <PageHeader eyebrow="专项管理" title="验收流程">
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={openTemplateDialog} className="gap-2" disabled={!canEdit}>
+            <Wand2 className="h-4 w-4" />
+            应用系统模板
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2" disabled={!canEdit}>
+            <Palette className="h-4 w-4" />
+            类型管理
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button size="sm" onClick={() => setAddPlanOpen(true)} className="gap-2" disabled={!canEdit}>
+            <Plus className="h-4 w-4" />
+            新增验收
+          </Button>
+        </DisabledReasonTooltip>
       </PageHeader>
 
-      <section data-testid="acceptance-summary-panel" className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <section data-testid="acceptance-summary-panel" className="surface-card space-y-5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-slate-900">摘要区</div>
-            <div className="text-xs text-slate-500">当前视图 {visiblePlans.length} / 全部 {plans.length}</div>
-          </div>
+          <CardHead
+            eyebrow="SUMMARY"
+            title="验收摘要"
+            pill={{ label: `${visiblePlans.length}/${projectSummary.totalCount || plans.length}`, variant: 'neutral' }}
+          />
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">范围：{scopeFilter === 'all' ? '全部范围' : getScopeLevelLabel(scopeFilter)}</Badge>
+            <Badge variant="outline" className="rounded-full px-3 py-1">阶段：{getAcceptancePhaseLabel(phaseFilter)}</Badge>
           </div>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-7">
-          <StatCard label="验收总数" value={projectSummary.totalCount} tone="slate" />
-          <StatCard label="已通过" value={projectSummary.passedCount} tone="green" />
-          <StatCard label="推进中" value={projectSummary.inProgressCount} tone="blue" />
-          <StatCard label="未启动" value={projectSummary.notStartedCount} tone="amber" />
-          <StatCard label="受阻" value={projectSummary.blockedCount} tone="red" />
-          <StatCard label="近30天临期" value={projectSummary.dueSoon30dCount} tone="emerald" />
-          <StatCard label="预计完成关键节点" value={projectSummary.keyMilestoneCount} tone="violet" />
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          {stageSummaries.map((stage) => (
+            <MetricCard
+              key={stage.key}
+              eyebrow="ACCEPT"
+              title={stage.label}
+              value={`${stage.percent}%`}
+              hint={`${stage.description} · ${stage.passed}/${stage.total}`}
+              tone={
+                stage.key === 'foundation'
+                  ? 'success'
+                  : stage.key === 'completion'
+                    ? 'slate'
+                    : 'primary'
+              }
+              testId={`acceptance-stage-card-${stage.key}`}
+            />
+          ))}
+        </div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5" data-testid="acceptance-progress-overview">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <span className="text-lg font-semibold text-slate-900">验收总进度</span>
+            <span className="num-display text-2xl font-semibold text-slate-900">{totalPercent}%</span>
+          </div>
+          <div className="h-[3px] w-full overflow-hidden rounded-full bg-slate-100" aria-label={`验收总进度 ${totalPercent}%`}>
+            <div className="flex h-full w-full">
+              {stageSummaries.map((stage) => (
+                <div
+                  key={stage.key}
+                  className={cn('h-full motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-out', stage.progressClass)}
+                  style={{ width: `${totalStageCount > 0 ? (stage.passed / totalStageCount) * 100 : 0}%` }}
+                  data-testid={`acceptance-progress-segment-${stage.key}`}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-500">
+            {stageSummaries.map((stage) => (
+              <span key={stage.key} className="num-mono">
+                {stage.label} {stage.percent}% ({stage.passed}/{stage.total})
+              </span>
+            ))}
+          </div>
         </div>
       </section>
 
-      <section data-testid="acceptance-filter-panel" className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+      <section data-testid="acceptance-filter-panel" className="surface-card p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-slate-900">筛选区</div>
-          </div>
+          <CardHead eyebrow="FILTER" title="筛选区" />
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline" className="rounded-full px-3 py-1">项目：{projectName}</Badge>
             <Badge variant="outline" className="rounded-full px-3 py-1">楼栋：{getBuildingLabel(buildingFilter === 'all' ? null : buildingFilter)}</Badge>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 lg:grid-cols-2 2xl:grid-cols-5">
+        <div className="mt-4 grid gap-5 lg:grid-cols-2 2xl:grid-cols-4">
           <div className="space-y-1">
             <Label htmlFor="acceptance-scope-select" className="text-xs text-slate-500">范围</Label>
-            <select
-              id="acceptance-scope-select"
-              value={scopeFilter}
-              onChange={(event) => setScopeFilter(event.target.value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-scope-select"
-            >
-              <option value="all">全部范围</option>
-              {scopeOptions.map((scopeLevel) => <option key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</option>)}
-            </select>
+            <Select value={scopeFilter} onValueChange={(value) => setScopeFilter(value as 'all' | (typeof SCOPE_LEVEL_ORDER)[number])}>
+              <SelectTrigger id="acceptance-scope-select" data-testid="acceptance-scope-select" data-value={scopeFilter}>
+                <SelectValue placeholder="全部范围" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部范围</SelectItem>
+                {scopeOptions.map((scopeLevel) => <SelectItem key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1">
             <Label htmlFor="acceptance-building-select" className="text-xs text-slate-500">楼栋</Label>
-            <select
-              id="acceptance-building-select"
-              value={buildingFilter}
-              onChange={(event) => setBuildingFilter(event.target.value)}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-building-select"
-            >
-              <option value="all">全部楼栋</option>
-              {buildingOptions.map((buildingId) => <option key={buildingId} value={buildingId}>{buildingId}</option>)}
-            </select>
+            <Select value={buildingFilter} onValueChange={setBuildingFilter}>
+              <SelectTrigger id="acceptance-building-select" data-testid="acceptance-building-select" data-value={buildingFilter}>
+                <SelectValue placeholder="全部楼栋" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部楼栋</SelectItem>
+                {buildingOptions.map((buildingId) => <SelectItem key={buildingId} value={buildingId}>{buildingId}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="acceptance-phase-select" className="text-xs text-slate-500">阶段</Label>
+            <Select value={phaseFilter} onValueChange={setPhaseFilter}>
+              <SelectTrigger id="acceptance-phase-select" data-testid="acceptance-phase-select" data-value={phaseFilter}>
+                <SelectValue placeholder="全部阶段" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部阶段</SelectItem>
+                {phaseOptions.map((phase) => <SelectItem key={phase.value} value={phase.value}>{phase.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1">
             <Label htmlFor="acceptance-status-select" className="text-xs text-slate-500">状态筛选</Label>
-            <select
-              id="acceptance-status-select"
-              value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value as 'all' | AcceptanceStatus)}
-              className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
-              data-testid="acceptance-status-select"
-            >
-              <option value="all">全部状态</option>
-              {ACCEPTANCE_STATUS_OPTIONS.map((status) => <option key={status} value={status}>{ACCEPTANCE_STATUS_LABELS[status]}</option>)}
-            </select>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as 'all' | AcceptanceStatus)}>
+              <SelectTrigger id="acceptance-status-select" data-testid="acceptance-status-select" data-value={statusFilter}>
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="all">全部状态</SelectItem>
+                {ACCEPTANCE_STATUS_OPTIONS.map((status) => <SelectItem key={status} value={status}>{ACCEPTANCE_STATUS_LABELS[status]}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-slate-500">仅看阻塞</Label>
-            <button
-              type="button"
-              onClick={() => setBlockedOnly((current) => !current)}
-              className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', blockedOnly ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600')}
-              data-testid="acceptance-blocked-toggle"
-            >
-              <span>只看阻塞项</span>
-              <span>{blockedOnly ? '已启用' : '关闭'}</span>
-            </button>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-slate-500">仅看临期</Label>
-            <button
-              type="button"
-              onClick={() => setUpcomingOnly((current) => !current)}
-              className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', upcomingOnly ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600')}
-              data-testid="acceptance-upcoming-toggle"
-            >
-              <span>30天内到期</span>
-              <span>{upcomingOnly ? '已启用' : '关闭'}</span>
-            </button>
-          </div>
-          <div className="space-y-1">
-            <Label className="text-xs text-slate-500">时间尺度</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {[{ value: 'month', label: '月' }, { value: 'biweek', label: '双周' }, { value: 'week', label: '周' }].map((item) => (
-                <button
-                  key={item.value}
+        </div>
+        <div className="mt-3">
+          <CollapsibleSection title="更多筛选" count={3} defaultOpen={false}>
+            <div className="grid gap-5 pt-2 lg:grid-cols-3">
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">仅看阻塞</Label>
+                <Button variant="ghost"
                   type="button"
-                  onClick={() => setTimeScale(item.value as AcceptanceTimelineScale)}
-                  className={cn('rounded-md border px-3 py-2 text-sm transition-colors', timeScale === item.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600')}
-                  data-testid={`acceptance-time-scale-${item.value}`}
+                  onClick={() => setBlockedOnly((current) => !current)}
+                  className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', blockedOnly ? 'border-amber-300 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600')}
+                  data-testid="acceptance-blocked-toggle"
                 >
-                  {item.label}
-                </button>
-              ))}
+                  <span>只看阻塞项</span>
+                  <span>{blockedOnly ? '已启用' : '关闭'}</span>
+                </Button>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">仅看临期</Label>
+                <Button variant="ghost"
+                  type="button"
+                  onClick={() => setUpcomingOnly((current) => !current)}
+                  className={cn('inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm transition-colors', upcomingOnly ? 'border-blue-300 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600')}
+                  data-testid="acceptance-upcoming-toggle"
+                >
+                  <span>30天内到期</span>
+                  <span>{upcomingOnly ? '已启用' : '关闭'}</span>
+                </Button>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-slate-500">时间尺度</Label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[{ value: 'month', label: '月' }, { value: 'biweek', label: '双周' }, { value: 'week', label: '周' }].map((item) => (
+                    <Button variant="ghost"
+                      key={item.value}
+                      type="button"
+                      onClick={() => setTimeScale(item.value as AcceptanceTimelineScale)}
+                      className={cn('rounded-md border px-3 py-2 text-sm transition-colors', timeScale === item.value ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-slate-200 bg-white text-slate-600')}
+                      data-testid={`acceptance-time-scale-${item.value}`}
+                    >
+                      {item.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
+          </CollapsibleSection>
         </div>
       </section>
 
@@ -576,31 +818,90 @@ export default function AcceptanceTimeline() {
         </div>
       )}
 
-      {visiblePlans.length === 0 ? (
-        <EmptyState
-          icon={CheckCircle2}
-          title="暂无验收记录"
-          description=""
-          action={<Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}><Plus className="h-4 w-4" />添加验收</Button>}
-        />
-      ) : viewMode === 'graph' ? (
-        <AcceptanceFlowBoard layout={flowLayout} plans={visiblePlans} customTypes={allTypes} selectedNodeId={selectedNode?.id} onNodeClick={handleNodeSelect} onNodeDragEnd={canEdit ? handleNodeDragEnd : undefined} />
-      ) : (
-        <AcceptanceLedger
-          plans={visiblePlans}
-          nodes={flowLayout.nodes}
-          customTypes={allTypes}
-          onNodeClick={handleNodeSelect}
-          onStatusChange={canEdit ? handleStatusChange : undefined}
-          onDateUpdate={canEdit ? handleDateUpdate : undefined}
-          onBatchStatusChange={canEdit ? handleBatchStatusChange : undefined}
-          onBatchDateUpdate={canEdit ? handleBatchDateUpdate : undefined}
-          onBatchResponsibleUnitUpdate={canEdit ? handleBatchResponsibleUnitUpdate : undefined}
-          onBatchPhaseUpdate={canEdit ? handleBatchPhaseUpdate : undefined}
-          timeScale={timeScale}
-          canEdit={canEdit}
-        />
-      )}
+      <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as AcceptanceTimelineViewMode)} className="space-y-5">
+        <TabsList className="flex h-auto w-full max-w-md justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+          <TabsTrigger
+            value="graph"
+            className="relative gap-2 rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
+            onClick={() => setViewMode('graph')}
+            data-testid="acceptance-view-graph"
+          >
+            <Network className="h-4 w-4" />
+            流程图({visiblePlans.length})
+          </TabsTrigger>
+          <TabsTrigger
+            value="list"
+            className="relative gap-2 rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
+            onClick={() => setViewMode('list')}
+            data-testid="acceptance-view-list"
+          >
+            <List className="h-4 w-4" />
+            台账({visiblePlans.length})
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="graph" forceMount className="mt-0">
+          {visiblePlans.length === 0 ? (
+            <EmptyState
+              icon={CheckCircle2}
+              title="暂无验收记录"
+              description=""
+              action={
+                <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
+                      <Plus className="h-4 w-4" />添加验收
+                    </Button>
+                    <Button variant="outline" className="gap-2" onClick={openTemplateDialog} disabled={!canEdit}>
+                      <Wand2 className="h-4 w-4" />应用系统模板
+                    </Button>
+                  </div>
+                </DisabledReasonTooltip>
+              }
+            />
+          ) : (
+            <AcceptanceFlowBoard layout={flowLayout} plans={visiblePlans} customTypes={allTypes} selectedNodeId={selectedNode?.id} onNodeClick={handleNodeSelect} onNodeDragEnd={canEdit ? handleNodeDragEnd : undefined} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="list" forceMount className="mt-0">
+          {visiblePlans.length === 0 ? (
+            <EmptyState
+              icon={CheckCircle2}
+              title="暂无验收记录"
+              description=""
+              action={
+                <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
+                      <Plus className="h-4 w-4" />添加验收
+                    </Button>
+                    <Button variant="outline" className="gap-2" onClick={openTemplateDialog} disabled={!canEdit}>
+                      <Wand2 className="h-4 w-4" />应用系统模板
+                    </Button>
+                  </div>
+                </DisabledReasonTooltip>
+              }
+            />
+          ) : (
+            <AcceptanceLedger
+              plans={visiblePlans}
+              nodes={flowLayout.nodes}
+              customTypes={allTypes}
+              onNodeClick={handleNodeSelect}
+              onStatusChange={canEdit ? handleStatusChange : undefined}
+              onDateUpdate={canEdit ? handleDateUpdate : undefined}
+              onBatchStatusChange={canEdit ? handleBatchStatusChange : undefined}
+              onBatchDateUpdate={canEdit ? handleBatchDateUpdate : undefined}
+              onBatchResponsibleUnitUpdate={canEdit ? handleBatchResponsibleUnitUpdate : undefined}
+              onBatchPhaseUpdate={canEdit ? handleBatchPhaseUpdate : undefined}
+              timeScale={timeScale}
+              participantUnits={participantUnits}
+              canEdit={canEdit}
+            />
+          )}
+        </TabsContent>
+      </Tabs>
 
       <AcceptanceDetailDrawer
         node={selectedNode}
@@ -624,23 +925,20 @@ export default function AcceptanceTimeline() {
         canEdit={canEdit}
       />
 
+      <AcceptanceTemplateDialog
+        open={templateDialogOpen}
+        canEdit={canEdit}
+        preview={templatePreview}
+        loading={templateLoading}
+        applying={templateApplying}
+        error={templateError}
+        onClose={() => setTemplateDialogOpen(false)}
+        onApply={handleApplyTemplate}
+      />
       <TypeManagerDialog open={typeManagerOpen} customTypes={customTypes} canEdit={canEdit} onClose={() => setTypeManagerOpen(false)} onAddType={handleAddType} onDeleteType={handleDeleteType} />
-      <AddPlanDialog open={addPlanOpen} acceptanceTypes={allTypes} canEdit={canEdit} onClose={() => setAddPlanOpen(false)} onSubmit={handleAddPlan} />
+      <AddPlanDialog open={addPlanOpen} acceptanceTypes={allTypes} participantUnits={participantUnits} canEdit={canEdit} onClose={() => setAddPlanOpen(false)} onSubmit={handleAddPlan} />
     </div>
   )
-}
-
-function StatCard({ label, value, tone }: { label: string; value: number | string; tone: 'slate' | 'green' | 'blue' | 'amber' | 'emerald' | 'red' | 'violet' }) {
-  const toneClass: Record<typeof tone, string> = {
-    slate: 'bg-slate-50 text-slate-800',
-    green: 'bg-green-50 text-green-700',
-    blue: 'bg-blue-50 text-blue-700',
-    amber: 'bg-amber-50 text-amber-700',
-    emerald: 'bg-emerald-50 text-emerald-700',
-    red: 'bg-red-50 text-red-700',
-    violet: 'bg-violet-50 text-violet-700',
-  }
-  return <Card className={cn('border-0 shadow-sm', toneClass[tone])}><CardContent className="p-5"><div className="text-2xl font-semibold">{value}</div><div className="mt-1 text-sm text-slate-500">{label}</div></CardContent></Card>
 }
 
 function TypeManagerDialog({
@@ -708,7 +1006,7 @@ function TypeManagerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
-      <DialogContent className="max-h-[80vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[80vh] max-w-[var(--dialog-md-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Palette className="h-5 w-5" />
@@ -716,7 +1014,7 @@ function TypeManagerDialog({
           </DialogTitle>
           <DialogDescription className="sr-only">管理系统默认类型和自定义验收类型。</DialogDescription>
         </DialogHeader>
-        <div className="mt-4 space-y-6">
+        <div className="mt-4 space-y-8">
           <div>
             <h4 className="mb-3 text-sm font-medium text-slate-700">系统默认类型</h4>
             <div className="flex flex-wrap gap-2">
@@ -737,16 +1035,17 @@ function TypeManagerDialog({
                   <div key={type.id} className="group flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm" style={{ backgroundColor: `${type.color}20`, color: type.color }}>
                     <span>{type.icon}</span>
                     <span>{type.name}</span>
-                    <button type="button" onClick={() => onDeleteType(type.id)} disabled={!canEdit} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30">
+                    <Button variant="ghost" type="button" onClick={() => onDeleteType(type.id)} disabled={!canEdit} className="ml-1 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-50">
                       <CheckCircle2 className="h-4 w-4" />
-                    </button>
+                    </Button>
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          <div className="border-t border-slate-100 pt-4">
+          <Separator />
+          <div className="pt-4">
             <h4 className="mb-3 text-sm font-medium text-slate-700">新增类型</h4>
             <div className="space-y-3">
               <div>
@@ -759,27 +1058,35 @@ function TypeManagerDialog({
               </div>
               <div>
                 <Label>阶段</Label>
-                <select
+                <Select
                   value={newTypePhaseCode}
-                  onChange={(event) => setNewTypePhaseCode(event.target.value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])}
-                  className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onValueChange={(value) => setNewTypePhaseCode(value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])}
                 >
-                  {ACCEPTANCE_PHASE_OPTIONS.map((phase) => (
-                    <option key={phase.value} value={phase.value}>{phase.label}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="选择阶段" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    {ACCEPTANCE_PHASE_OPTIONS.map((phase) => (
+                      <SelectItem key={phase.value} value={phase.value}>{phase.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>范围层级</Label>
-                <select
+                <Select
                   value={newTypeScopeLevel}
-                  onChange={(event) => setNewTypeScopeLevel(event.target.value as (typeof SCOPE_LEVEL_ORDER)[number])}
-                  className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onValueChange={(value) => setNewTypeScopeLevel(value as (typeof SCOPE_LEVEL_ORDER)[number])}
                 >
-                  {SCOPE_LEVEL_ORDER.map((scopeLevel) => (
-                    <option key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</option>
-                  ))}
-                </select>
+                  <SelectTrigger className="mt-1">
+                    <SelectValue placeholder="选择范围层级" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    {SCOPE_LEVEL_ORDER.map((scopeLevel) => (
+                      <SelectItem key={scopeLevel} value={scopeLevel}>{getScopeLevelLabel(scopeLevel)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div>
                 <Label>分类</Label>
@@ -801,14 +1108,16 @@ function TypeManagerDialog({
                 <Label>颜色</Label>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {CHART_PALETTE.map((color) => (
-                    <button key={color} type="button" onClick={() => setNewTypeColor(color)} className={cn('h-8 w-8 rounded-full transition-all', newTypeColor === color && 'ring-2 ring-slate-400 ring-offset-2')} style={{ backgroundColor: color }} />
+                    <Button variant="ghost" key={color} type="button" onClick={() => setNewTypeColor(color)} className={cn('h-8 w-8 rounded-full transition-all', newTypeColor === color && 'ring-2 ring-slate-400 ring-offset-2')} style={{ backgroundColor: color }} />
                   ))}
                 </div>
               </div>
-              <Button onClick={handleSubmit} disabled={!canEdit || !newTypeName.trim()} className="w-full gap-2">
-                <Plus className="h-4 w-4" />
-                添加类型
-              </Button>
+              <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : !newTypeName.trim() ? '请输入类型名称。' : null}>
+                <Button onClick={handleSubmit} disabled={!canEdit || !newTypeName.trim()} className="w-full gap-2">
+                  <Plus className="h-4 w-4" />
+                  添加类型
+                </Button>
+              </DisabledReasonTooltip>
             </div>
           </div>
         </div>
@@ -817,15 +1126,188 @@ function TypeManagerDialog({
   )
 }
 
+function sourceLabel(value?: string | null) {
+  if (value === 'project_static_profile') return '项目画像'
+  if (value === 'project_generation_facts') return '项目画像'
+  if (value === 'project_metadata') return '项目资料'
+  if (value === 'project_field') return '项目字段'
+  if (value === 'project_location') return '项目地址'
+  return '通用模板'
+}
+
+function requirementCountByItem(preview: AcceptanceTemplatePreview | null) {
+  const counts = new Map<string, number>()
+  for (const requirement of preview?.requirements ?? []) {
+    counts.set(requirement.itemCode, (counts.get(requirement.itemCode) ?? 0) + 1)
+  }
+  return counts
+}
+
+function AcceptanceTemplateDialog({
+  open,
+  canEdit,
+  preview,
+  loading,
+  applying,
+  error,
+  onClose,
+  onApply,
+}: {
+  open: boolean
+  canEdit: boolean
+  preview: AcceptanceTemplatePreview | null
+  loading: boolean
+  applying: boolean
+  error: string | null
+  onClose: () => void
+  onApply: (preview: AcceptanceTemplatePreview) => Promise<ApplyAcceptanceTemplateResult | null>
+}) {
+  const requirementCounts = useMemo(() => requirementCountByItem(preview), [preview])
+  const selectedItems = preview?.items.filter((item) => item.selected) ?? []
+  const topItems = selectedItems.slice(0, 8)
+  const remainingCount = Math.max(0, selectedItems.length - topItems.length)
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[86vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Wand2 className="h-5 w-5 text-blue-600" />
+            应用竣工交付验收模板
+          </DialogTitle>
+          <DialogDescription>
+            按项目地区和业态生成竣工交付验收事项，结果会进入当前验收流程板和台账。
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="space-y-4 py-6">
+            <div className="grid gap-4 md:grid-cols-3">
+              {[1, 2, 3].map((item) => <Skeleton key={item} className="h-24 rounded-xl" />)}
+            </div>
+            <Skeleton className="h-48 rounded-xl" />
+          </div>
+        ) : error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : preview ? (
+          <div className="mt-4 space-y-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">交付目标</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{preview.deliveryGoal.targetName}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{preview.deliveryGoal.explanation}</p>
+                </CardContent>
+              </Card>
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">地区规则</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                    {preview.regionProfile.cityName || preview.regionProfile.provinceName}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{sourceLabel(preview.regionProfile.source)}识别</p>
+                </CardContent>
+              </Card>
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">业态规则</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{preview.businessProfile.businessTypeName}</p>
+                  <p className="mt-1 text-xs text-slate-500">{sourceLabel(preview.businessProfile.source)}识别 · {preview.industryProfile.labels.join('、')}</p>
+                </CardContent>
+              </Card>
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">本次生成</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                    {preview.summary.itemCreateCount} 个事项 / {preview.summary.requirementCreateCount} 条资料要求
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">含地区规则、业态规则和已确认适用条件</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">生成事项预览</p>
+                  <p className="mt-1 text-xs text-slate-500">事项进入主时间轴；资料和结果文件作为事项内部前置要求挂接。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="rounded-full px-3 py-1">依赖 {preview.summary.dependencyCreateCount}</Badge>
+                  <Badge variant="outline" className="rounded-full px-3 py-1">跳过 {preview.summary.skippedExistingCount}</Badge>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {topItems.map((item) => (
+                  <div key={item.itemCode} className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{item.itemName}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.authority}</p>
+                      </div>
+                      <Badge variant="secondary" className="rounded-full">{item.scopeLevel}</Badge>
+                    </div>
+                    <div className="mt-3 space-y-2 text-xs text-slate-600">
+                      <div className="flex gap-2">
+                        <FileCheck2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                        <span>{item.resultDocuments.slice(0, 2).join('、')}</span>
+                      </div>
+                      <div className="text-slate-500">资料门槛 {requirementCounts.get(item.itemCode) ?? 0} 项：{item.materialNames.slice(0, 3).join('、')}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {remainingCount > 0 ? (
+                <p className="mt-3 text-xs text-slate-500">另有 {remainingCount} 个事项将在应用后进入验收台账。</p>
+              ) : null}
+            </div>
+
+            {preview.regionProfile.policySources.length > 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <p className="text-sm font-semibold text-slate-900">地区规则来源</p>
+                <div className="mt-3 space-y-2">
+                  {preview.regionProfile.policySources.slice(0, 2).map((source) => (
+                    <div key={`${source.sourceName}-${source.checkedAt}`} className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                      <span>{source.sourceName}</span>
+                      <span className="num-mono text-slate-500">核验 {source.checkedAt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <DialogFooter className="mt-6">
+          <Button variant="outline" onClick={onClose} disabled={applying}>取消</Button>
+          <Button
+            onClick={() => preview && void onApply(preview)}
+            disabled={!canEdit || !preview || loading || applying || selectedItems.length === 0}
+            loading={applying}
+            className="gap-2"
+          >
+            {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            应用到验收时间轴
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function AddPlanDialog({
   open,
   acceptanceTypes,
+  participantUnits,
   canEdit = true,
   onClose,
   onSubmit,
 }: {
   open: boolean
   acceptanceTypes: AcceptanceType[]
+  participantUnits: ParticipantUnitSummary[]
   canEdit?: boolean
   onClose: () => void
   onSubmit: (plan: Partial<AcceptancePlan>) => Promise<void>
@@ -837,10 +1319,20 @@ function AddPlanDialog({
   const [phaseCode, setPhaseCode] = useState<(typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value']>('special_acceptance')
   const [scopeLevel, setScopeLevel] = useState<'project' | 'building' | 'unit' | 'specialty'>('project')
   const [buildingId, setBuildingId] = useState('')
-  const [responsibleUnit, setResponsibleUnit] = useState('')
+  const [buildingObjectId, setBuildingObjectId] = useState('')
+  const [buildingObjects, setBuildingObjects] = useState<EngineeringObject[]>([])
+  const [participantUnitId, setParticipantUnitId] = useState('__none__')
   const [isHardPrerequisite, setIsHardPrerequisite] = useState(false)
   const [category, setCategory] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const { id: dialogProjectId = '' } = useParams<{ id: string }>()
+  useEffect(() => {
+    if (!dialogProjectId) return
+    listEngineeringObjects(dialogProjectId)
+      .then((objs) => setBuildingObjects(objs.filter((o) => o.objectType === 'building' && o.status === 'active')))
+      .catch(() => {})
+  }, [dialogProjectId])
 
   useEffect(() => {
     if (!open) {
@@ -851,7 +1343,8 @@ function AddPlanDialog({
       setPhaseCode('special_acceptance')
       setScopeLevel('project')
       setBuildingId('')
-      setResponsibleUnit('')
+      setBuildingObjectId('')
+      setParticipantUnitId('__none__')
       setIsHardPrerequisite(false)
       setCategory('')
       setSubmitting(false)
@@ -862,6 +1355,7 @@ function AddPlanDialog({
 
   const handleSubmit = async () => {
     if (!name.trim()) return
+    if (scopeLevel === 'building' && !buildingObjectId) return
     setSubmitting(true)
     try {
       const resolvedTypeId = typeId || defaultType?.id || 'pre_acceptance'
@@ -881,7 +1375,8 @@ function AddPlanDialog({
         display_badges: ['自定义'],
         scope_level: scopeLevel,
         building_id: buildingId.trim() || null,
-        responsible_unit: responsibleUnit.trim() || null,
+        building_object_id: buildingObjectId || null,
+        participant_unit_id: participantUnitId === '__none__' ? null : participantUnitId,
         is_hard_prerequisite: isHardPrerequisite,
         category: category.trim() || null,
         is_system: false,
@@ -901,7 +1396,7 @@ function AddPlanDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-[var(--dialog-md-width)]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />
@@ -929,9 +1424,9 @@ function AddPlanDialog({
             </datalist>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {PLAN_PRESETS.map((preset) => (
-                <button key={preset} type="button" onClick={() => handlePickPreset(preset)} className={cn('rounded-full border px-2 py-1 text-xs transition-colors', name === preset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300')}>
+                <Button variant="ghost" key={preset} type="button" onClick={() => handlePickPreset(preset)} className={cn('rounded-full border px-2 py-1 text-xs transition-colors', name === preset ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-white text-slate-600 hover:border-blue-300')}>
                   {preset}
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -941,17 +1436,49 @@ function AddPlanDialog({
             <Input type="date" value={plannedDate} onChange={(event) => setPlannedDate(event.target.value)} className="mt-1" />
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-5 sm:grid-cols-2">
             <div>
               <Label>范围层级</Label>
-              <select value={scopeLevel} onChange={(event) => setScopeLevel(event.target.value as 'project' | 'building' | 'unit' | 'specialty')} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-                {SCOPE_LEVEL_ORDER.map((level) => <option key={level} value={level}>{SCOPE_LEVEL_LABELS[level]}</option>)}
+              <Select value={scopeLevel} onValueChange={(value) => {
+                const nextScopeLevel = value as 'project' | 'building' | 'unit' | 'specialty'
+                setScopeLevel(nextScopeLevel)
+                if (nextScopeLevel !== 'building') {
+                  setBuildingId('')
+                  setBuildingObjectId('')
+                }
+              }}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="选择范围层级" />
+                </SelectTrigger>
+                <SelectContent align="start" side="bottom">
+                  {SCOPE_LEVEL_ORDER.map((level) => <SelectItem key={level} value={level}>{SCOPE_LEVEL_LABELS[level]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            {scopeLevel === 'building' ? (
+            <div>
+              <Label>楼栋</Label>
+              <select
+                value={buildingObjectId}
+                onChange={(event) => {
+                  const val = event.target.value
+                  setBuildingObjectId(val)
+                  if (val) {
+                    const obj = buildingObjects.find((o) => o.id === val)
+                    setBuildingId(obj?.objectName ?? '')
+                  } else {
+                    setBuildingId('')
+                  }
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="">-- 未选择 --</option>
+                {buildingObjects.map((obj) => (
+                  <option key={obj.id} value={obj.id}>{obj.objectName} ({obj.objectCode})</option>
+                ))}
               </select>
             </div>
-            <div>
-              <Label>楼栋编号</Label>
-              <Input value={buildingId} onChange={(event) => setBuildingId(event.target.value)} placeholder="可选" className="mt-1" />
-            </div>
+            ) : null}
           </div>
 
           <div>
@@ -961,14 +1488,31 @@ function AddPlanDialog({
 
           <div>
             <Label>阶段归属</Label>
-            <select value={phaseCode} onChange={(event) => setPhaseCode(event.target.value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])} className="mt-1 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm">
-              {ACCEPTANCE_PHASE_OPTIONS.map((phase) => <option key={phase.value} value={phase.value}>{phase.label}</option>)}
-            </select>
+            <Select value={phaseCode} onValueChange={(value) => setPhaseCode(value as (typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value'])}>
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="选择阶段" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                {ACCEPTANCE_PHASE_OPTIONS.map((phase) => <SelectItem key={phase.value} value={phase.value}>{phase.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
             <Label>责任单位</Label>
-            <Input value={responsibleUnit} onChange={(event) => setResponsibleUnit(event.target.value)} placeholder="可选，填写参建单位名称" className="mt-1" />
+            <Select value={participantUnitId} onValueChange={setParticipantUnitId}>
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="选择参建单位" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="__none__">未指定责任单位</SelectItem>
+                {participantUnits.map((unit) => (
+                  <SelectItem key={unit.id} value={unit.id}>
+                    {unit.unit_type ? `${unit.unit_name} · ${unit.unit_type}` : unit.unit_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
@@ -989,10 +1533,12 @@ function AddPlanDialog({
         </div>
         <DialogFooter className="mt-6">
           <Button variant="outline" onClick={onClose} disabled={submitting}>取消</Button>
-          <Button onClick={handleSubmit} loading={submitting} disabled={!canEdit || !name.trim()} className="gap-2">
-            <Plus className="h-4 w-4" />
-            确认创建
-          </Button>
+          <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : !name.trim() ? '请输入验收名称。' : scopeLevel === 'building' && !buildingObjectId ? '请选择楼栋工程对象。' : null}>
+            <Button onClick={handleSubmit} loading={submitting} disabled={!canEdit || !name.trim() || (scopeLevel === 'building' && !buildingObjectId)} className="gap-2">
+              <Plus className="h-4 w-4" />
+              确认创建
+            </Button>
+          </DisabledReasonTooltip>
         </DialogFooter>
       </DialogContent>
     </Dialog>

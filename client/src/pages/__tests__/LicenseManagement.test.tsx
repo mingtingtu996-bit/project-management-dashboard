@@ -373,7 +373,8 @@ describe('License management presentation layer', () => {
     await waitForText(container, ['专项管理', '前期证照'])
     await waitForText(container, ['开工准入总览', '四证推进看板', '办理台账', '详情抽屉'])
 
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(0)
+    expect(container.querySelector('[data-testid="pre-milestones-tab-board"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="pre-milestones-tab-ledger"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="pre-milestones-go-drawings"]')).toBeTruthy()
     expect(container.textContent).not.toContain('construction-drawings')
     expect(container.textContent).not.toContain('图纸类型')

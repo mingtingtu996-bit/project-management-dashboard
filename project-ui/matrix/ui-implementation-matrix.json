@@ -1,0 +1,281 @@
+{
+  "schemaVersion": "workbuddy-ui-implementation-matrix.v1",
+  "generatedAt": "2026-07-14T00:00:00.000Z",
+  "purpose": "Unified UI implementation coordination for WorkBuddy.",
+  "artifactRoots": {
+    "current": "project-ui/artifacts",
+    "reports": "project-ui/reports",
+    "legacy": [
+      "artifacts/figma-design-data",
+      "artifacts/uiux-*",
+      "client/visual-check"
+    ]
+  },
+  "authoritativeSources": [
+    {
+      "id": "agents-rules",
+      "path": "AGENTS.md",
+      "role": "project rules and default UI guardrails",
+      "movePolicy": "do-not-move"
+    },
+    {
+      "id": "claude-rules",
+      "path": "CLAUDE.md",
+      "role": "legacy agent rules and local continuity",
+      "movePolicy": "do-not-move"
+    },
+    {
+      "id": "uiux-v13",
+      "path": "docs/plans/UI_UX商业级全面优化方案_v1.3.md",
+      "role": "commercial-grade UI/UX long-term source",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "uiux-requirements",
+      "path": "docs/plans/UI_UX需求清单.md",
+      "role": "UI/UX requirement inventory",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "uiux-v131-fixes",
+      "path": "docs/plans/UI_UX精细化修复方案_v1.3.1.md",
+      "role": "fine-grained UI repair plan",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "uiux-execution-plan",
+      "path": "docs/plans/UI_UX优化执行方案.md",
+      "role": "R001-R295 execution and acceptance source",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "v14231-capability-fact",
+      "path": "docs/plans/v1.4.23.1体系收口台账与验收门禁矩阵.md",
+      "role": "capability fact layer consumed before product-definition and execution-sequence decisions",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "design-system-master",
+      "path": "design-system/workbuddy/MASTER.md",
+      "role": "design-system reference; verify against AGENTS.md before treating tokens as current",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "risk-page-design-system",
+      "path": "design-system/workbuddy/pages/risk-management.md",
+      "role": "page-level design-system reference",
+      "movePolicy": "index-only"
+    },
+    {
+      "id": "uiux-295-historical-evidence",
+      "path": "docs/reports/uiux-295-release-evidence.md",
+      "role": "historical release evidence; rerun commands for current proof",
+      "movePolicy": "index-only"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "design-audit",
+      "description": "Read UI rules, source map, and design-system sources before UI edits.",
+      "sourceIds": [
+        "agents-rules",
+        "uiux-v13",
+        "uiux-requirements",
+        "design-system-master"
+      ],
+      "commandIds": [
+        "ui-center-check"
+      ]
+    },
+    {
+      "id": "figma-assets",
+      "description": "Collect, clean, and bundle browser-extracted Figma design data.",
+      "sourceIds": [
+        "design-system-master"
+      ],
+      "commandIds": [
+        "figma-extract-design",
+        "figma-clean-design",
+        "figma-bundle-design"
+      ]
+    },
+    {
+      "id": "component-library",
+      "description": "Work on shared UI primitives, component contracts, tokens, and interaction states.",
+      "sourceIds": [
+        "agents-rules",
+        "design-system-master",
+        "uiux-v13"
+      ],
+      "commandIds": [
+        "client-typecheck",
+        "client-tests",
+        "verify-uiux-component",
+        "verify-uiux-token-audit",
+        "verify-uiux-contrast"
+      ]
+    },
+    {
+      "id": "page-implementation",
+      "description": "Implement or polish a page using current WorkBuddy components, capability facts, and release guards.",
+      "sourceIds": [
+        "agents-rules",
+        "uiux-v13",
+        "v14231-capability-fact"
+      ],
+      "commandIds": [
+        "client-typecheck",
+        "client-tests",
+        "client-build",
+        "frontend-bi-aggregation-guard",
+        "verify-uiux-overlap",
+        "verify-uiux-a11y"
+      ]
+    },
+    {
+      "id": "uiux-verify",
+      "description": "Coordinate current UI release verification through project-testing.",
+      "sourceIds": [
+        "uiux-295-historical-evidence"
+      ],
+      "commandIds": [
+        "testing-uiux-dashboard"
+      ]
+    },
+    {
+      "id": "tool-readiness",
+      "description": "Inspect installed, external, and recommended UI implementation tools.",
+      "sourceIds": [
+        "agents-rules"
+      ],
+      "commandIds": [
+        "ui-center-check"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "id": "ui-center-check",
+      "command": "npm run ui:center:check",
+      "execution": "safe"
+    },
+    {
+      "id": "testing-uiux-dashboard",
+      "command": "node project-testing/tools/run-release-dashboard.mjs --profile uiux",
+      "execution": "delegated"
+    },
+    {
+      "id": "client-typecheck",
+      "command": "npm run typecheck --workspace=client",
+      "execution": "local"
+    },
+    {
+      "id": "client-tests",
+      "command": "npm run test:run --workspace=client",
+      "execution": "local"
+    },
+    {
+      "id": "client-build",
+      "command": "npm run build --workspace=client",
+      "execution": "local"
+    },
+    {
+      "id": "frontend-bi-aggregation-guard",
+      "command": "npm run guard:frontend-bi-aggregation --workspace=client",
+      "execution": "local"
+    },
+    {
+      "id": "verify-uiux-visual",
+      "command": "npm run verify:uiux-visual",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-overlap",
+      "command": "npm run verify:uiux-overlap",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-a11y",
+      "command": "npm run verify:uiux-a11y",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-performance",
+      "command": "npm run verify:uiux-performance",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-release-smoke",
+      "command": "npm run verify:uiux-release-smoke",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-predeploy-gates",
+      "command": "npm run verify:uiux-predeploy-gates",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-component",
+      "command": "npm run verify:uiux-component",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-token-audit",
+      "command": "npm run verify:uiux-token-audit",
+      "execution": "browser"
+    },
+    {
+      "id": "verify-uiux-contrast",
+      "command": "npm run verify:uiux-contrast",
+      "execution": "browser"
+    },
+    {
+      "id": "figma-extract-design",
+      "command": "npm run figma:extract-design",
+      "execution": "browser"
+    },
+    {
+      "id": "figma-clean-design",
+      "command": "npm run figma:clean-design",
+      "execution": "local"
+    },
+    {
+      "id": "figma-bundle-design",
+      "command": "npm run figma:bundle-design",
+      "execution": "local"
+    }
+  ],
+  "mutationBoundary": {
+    "allowedUiArtifactWrites": [
+      "project-ui/artifacts/**",
+      "project-ui/reports/**",
+      "project-ui/governance/**",
+      "client/src/mocks/**"
+    ],
+    "forbiddenProductionWrites": [
+      "tasks",
+      "task_baselines",
+      "monthly_plans",
+      "monthly_plan_items",
+      "task_dependencies",
+      "project_daily_snapshot",
+      "published runtime overlay",
+      "production seed data"
+    ],
+    "rule": "UI research, screenshots, Figma extracts, and visual audit outputs can produce reports and candidates only; they cannot directly mutate production runtime data."
+  },
+  "physicalMovePolicy": {
+    "safeToMoveNow": [
+      "generated Figma extraction outputs",
+      "generated UIUX visual/a11y/performance/predeploy evidence",
+      "ad hoc visual-check screenshots"
+    ],
+    "indexOnlyUntilCompatibilityUpdate": [
+      "docs/plans/UI_UX*.md",
+      "design-system/workbuddy/**",
+      "scripts/verify-uiux-*.mjs",
+      "scripts/*figma-design-data*.mjs",
+      "client/src/**"
+    ]
+  }
+}

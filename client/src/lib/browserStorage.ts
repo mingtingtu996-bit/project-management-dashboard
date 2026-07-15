@@ -3,19 +3,33 @@ import { toast } from '@/hooks/use-toast'
 const STORAGE_WARNING_EVENT = 'workbuddy:storage-warning'
 
 export const APP_STORAGE_KEY_PREFIXES = [
-  'pm_',
   'workbuddy_',
   'auth_',
   'access_token',
-  'device_id',
-  'storage_mode',
-  'pending_sync_ops',
   'modal_manager_',
   'user_feedback',
   'gantt_',
   'wbs_template_',
   'wbs-template',
 ] as const
+
+const RECLAIMABLE_STORAGE_KEY_PREFIXES = [
+  'workbuddy_',
+  'modal_manager_',
+  'user_feedback',
+  'gantt_',
+  'wbs_template_',
+  'wbs-template',
+  'tab_persist_',
+  'onboarding_',
+  'acceptanceView:',
+] as const
+
+const PROTECTED_STORAGE_KEYS = new Set([
+  'auth_token',
+  'access_token',
+  'current_company_id',
+])
 
 type StorageWarningDetail = {
   key: string
@@ -40,6 +54,19 @@ function dispatchStorageWarning(key: string, message: string) {
       detail: { key, message },
     }),
   )
+}
+
+function getStorageKeySize(storage: Storage, key: string): number {
+  try {
+    return key.length + (storage.getItem(key)?.length ?? 0)
+  } catch {
+    return key.length
+  }
+}
+
+function isReclaimableStorageKey(key: string, preserveKeys: Set<string>): boolean {
+  if (preserveKeys.has(key) || PROTECTED_STORAGE_KEYS.has(key)) return false
+  return RECLAIMABLE_STORAGE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))
 }
 
 export function getBrowserStorage(storage?: Storage): Storage | null {
@@ -67,7 +94,23 @@ export function safeStorageSet(storage: Storage | null | undefined, key: string,
     return true
   } catch (error) {
     if (isQuotaExceededError(error)) {
-      dispatchStorageWarning(key, '本地缓存空间已满，请清理旧数据或切换到后端同步模式后再试。')
+      const reclaimedCount = clearReclaimableAppStorage({
+        storage: resolvedStorage,
+        preserveKeys: [key],
+      })
+      if (reclaimedCount > 0) {
+        try {
+          resolvedStorage.setItem(key, value)
+          return true
+        } catch (retryError) {
+          if (!isQuotaExceededError(retryError)) {
+            console.error(`[storage] failed to write ${key} after reclaiming app cache`, retryError)
+            return false
+          }
+        }
+      }
+
+      dispatchStorageWarning(key, '本地缓存空间已满，已尝试清理可重建缓存，请刷新或切换到后端同步模式后再试。')
       return false
     }
 
@@ -115,6 +158,45 @@ export function listAppStorageKeys(storage?: Storage): string[] {
   }
 
   return keys
+}
+
+export function listReclaimableAppStorageKeys(options?: {
+  storage?: Storage
+  preserveKeys?: string[]
+}): string[] {
+  const resolvedStorage = getBrowserStorage(options?.storage)
+  if (!resolvedStorage) return []
+  const preserveKeys = new Set(options?.preserveKeys ?? [])
+  const keys: string[] = []
+
+  for (let index = 0; index < resolvedStorage.length; index += 1) {
+    const key = resolvedStorage.key(index)
+    if (!key) continue
+    if (isReclaimableStorageKey(key, preserveKeys)) {
+      keys.push(key)
+    }
+  }
+
+  return keys.sort((left, right) => (
+    getStorageKeySize(resolvedStorage, right) - getStorageKeySize(resolvedStorage, left)
+  ))
+}
+
+export function clearReclaimableAppStorage(options?: {
+  storage?: Storage
+  preserveKeys?: string[]
+}): number {
+  const storage = getBrowserStorage(options?.storage)
+  if (!storage) return 0
+  const keys = listReclaimableAppStorageKeys({
+    storage,
+    preserveKeys: options?.preserveKeys,
+  })
+  keys.forEach((key) => {
+    safeStorageRemove(storage, key)
+  })
+
+  return keys.length
 }
 
 export function clearAppStorage(options?: {

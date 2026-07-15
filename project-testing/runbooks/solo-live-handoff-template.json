@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "workbuddy-solo-live-handoff/v1",
+  "notes": [
+    "Template only. Do not write raw JWTs, database URLs, service-role keys, passwords, or Supabase secret keys into this file.",
+    "This handoff is for personal real-environment testing. It can close soloLiveReady, not company-grade productionReady."
+  ],
+  "target": {
+    "environment": "staging",
+    "baseUrl": "",
+    "supabaseProjectRef": "",
+    "deploymentRef": ""
+  },
+  "approvals": {
+    "selfApprovalRef": ""
+  },
+  "owner": {
+    "operator": "",
+    "rollbackOwner": "",
+    "monitoringOwner": ""
+  },
+  "plans": {
+    "rollbackPlanRef": "",
+    "monitoringPlanRef": ""
+  },
+  "evidence": {
+    "apiHealthRef": "",
+    "apiReadSmokeRef": "",
+    "uiSmokeRef": ""
+  },
+  "claims": {
+    "productionReady": false
+  }
+}

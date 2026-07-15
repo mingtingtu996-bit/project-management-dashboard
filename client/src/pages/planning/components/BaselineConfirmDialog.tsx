@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -11,10 +12,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Card, CardContent } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, CheckCircle2, FileDiff, FolderGit2, RotateCcw, ShieldAlert } from 'lucide-react'
-
-import { BaselineDiffView, type BaselineDiffItem, type BaselineDiffKind } from './BaselineDiffView'
+import { BaselineDiffView, type BaselineDiffItem, type BaselineDiffKind } from '@/components/planning/baseline'
 
 export type BaselineConfirmState = 'ready' | 'stale' | 'failed'
 
@@ -40,6 +41,7 @@ export interface BaselineConfirmDialogProps {
   confirming?: boolean
   onConfirm?: () => void
   onRetry?: () => void
+  onBackToPlanTable?: () => void
   canQueueRealignment?: boolean
   onQueueRealignment?: () => void
   onOpenRevisionPool?: () => void
@@ -120,9 +122,7 @@ export function BaselineConfirmDialog({
   confirming = false,
   onConfirm,
   onRetry,
-  canQueueRealignment = false,
-  onQueueRealignment,
-  onOpenRevisionPool,
+  onBackToPlanTable,
 }: BaselineConfirmDialogProps) {
   const [showDiff, setShowDiff] = useState(false)
 
@@ -136,6 +136,20 @@ export function BaselineConfirmDialog({
   const criticalPathChangeCount = summary.criticalPathChangeCount ?? 0
   const mappingAffectedCount = summary.mappingAffectedCount ?? 0
   const noDiff = counts.total === 0
+  const changePercent = Math.min(100, Math.max(0, counts.total * 5))
+  const impactLabel =
+    changePercent < 5
+      ? '小幅调整'
+      : changePercent > 20
+        ? '较大调整，请复核关键节点'
+        : '常规调整'
+  const impactClass =
+    changePercent < 5
+      ? 'bg-emerald-50 text-emerald-700'
+      : changePercent > 20
+        ? 'bg-orange-50 text-orange-700'
+        : 'bg-amber-50 text-amber-700'
+  const topChanges = summary.items.slice(0, 3)
   const isRealignmentFailure = state === 'failed' && failureCode === 'REQUIRES_REALIGNMENT'
   const realignmentSummary = useMemo(
     () => (isRealignmentFailure ? parseRealignmentFailureSummary(failureMessage) : null),
@@ -172,14 +186,13 @@ export function BaselineConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
-            <FileDiff className="h-4 w-4 text-cyan-500" />
-            基线确认弹窗
+            <FileDiff className="h-4 w-4 text-blue-500" />
+            保存发布项目基线
           </DialogTitle>
           <DialogDescription className="sr-only">
-            查看当前基线版本摘要、变更分类计数和完整差异视图，再决定是否确认发布。
           </DialogDescription>
         </DialogHeader>
 
@@ -208,7 +221,7 @@ export function BaselineConfirmDialog({
                   {realignmentSummary ? (
                     <div
                       data-testid="baseline-confirm-realignment-summary"
-                      className="space-y-3 rounded-2xl border border-amber-200/80 bg-white/85 p-3 shadow-sm"
+                      className="space-y-3 rounded-2xl border border-amber-200/80 bg-white/85 p-3 shadow-[var(--el-1)]"
                     >
                       <div>
                         <div className="text-sm font-medium text-slate-900">触发摘要</div>
@@ -224,7 +237,7 @@ export function BaselineConfirmDialog({
                                 metric.emphasis === 'warning' ? 'ring-1 ring-amber-200' : '',
                               )}
                             >
-                              <CardContent className="space-y-1 p-3">
+                              <CardContent className="space-y-1 p-5">
                                 <div className="text-xs text-slate-500">{metric.label}</div>
                                 <div className="text-base font-semibold text-slate-900">{metric.value}</div>
                               </CardContent>
@@ -234,7 +247,7 @@ export function BaselineConfirmDialog({
                       ) : null}
                       {realignmentSummary.triggeredRules.length ? (
                         <div className="space-y-2">
-                          <div className="text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                          <div className="text-xs font-medium uppercase tracking-wider text-slate-500">
                             触发规则
                           </div>
                           <div className="flex flex-wrap gap-2">
@@ -250,29 +263,17 @@ export function BaselineConfirmDialog({
                   ) : null}
                   {isRealignmentFailure ? (
                     <div className="flex flex-wrap gap-2">
-                      {onOpenRevisionPool ? (
+                      {onBackToPlanTable ? (
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
                           className="gap-2 border-amber-300 bg-white/80 text-amber-900 hover:bg-amber-100"
-                          data-testid="baseline-confirm-open-revision-pool"
-                          onClick={onOpenRevisionPool}
+                          data-testid="baseline-confirm-back-to-plan-table"
+                          onClick={onBackToPlanTable}
                         >
                           <FolderGit2 className="h-4 w-4" />
-                          打开计划修订候选
-                        </Button>
-                      ) : null}
-                      {canQueueRealignment && onQueueRealignment ? (
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="gap-2"
-                          data-testid="baseline-confirm-queue-realignment"
-                          onClick={onQueueRealignment}
-                        >
-                          <RotateCcw className="h-4 w-4" />
-                          声明开始重排
+                          回到总进度计划表
                         </Button>
                       ) : null}
                     </div>
@@ -289,51 +290,52 @@ export function BaselineConfirmDialog({
             </Alert>
           ) : null}
 
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">当前版本</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.fromVersionLabel}</div>
-              </CardContent>
-            </Card>
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">目标版本</div>
-                <div className="text-2xl font-semibold text-slate-900">{summary.toVersionLabel}</div>
-              </CardContent>
-            </Card>
-            {(['新增', '修改', '移除', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
-              <Card key={kind} className="border-slate-200 shadow-sm">
-                <CardContent className="space-y-1 p-4">
+          <div className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="num-display text-2xl font-semibold text-slate-900">{counts.total}</span>
+              <span className="text-sm text-slate-500">项变更</span>
+              <span className={cn('rounded-full px-2 py-0.5 text-xs font-medium', impactClass)}>
+                {impactLabel}
+              </span>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-xl border border-white bg-white px-3 py-2">
+                <div className="text-xs text-slate-500">基准版本</div>
+                <div className="mt-1 text-lg font-semibold text-slate-900">{summary.fromVersionLabel}</div>
+              </div>
+              <div className="rounded-xl border border-white bg-white px-3 py-2">
+                <div className="text-xs text-slate-500">发布版本</div>
+                <div className="mt-1 text-lg font-semibold text-slate-900">{summary.toVersionLabel}</div>
+              </div>
+              {(['新增', '修改', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
+                <div key={kind} className="rounded-xl border border-white bg-white px-3 py-2">
                   <div className="text-xs text-slate-500">{kindMeta[kind].label}</div>
-                  <div className="text-2xl font-semibold text-slate-900">{counts[kind]}</div>
-                </CardContent>
-              </Card>
-            ))}
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">影响条目</div>
-                <div className="text-2xl font-semibold text-slate-900">{modifiedItemCount}</div>
-              </CardContent>
-            </Card>
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">关键路径</div>
-                <div className="text-2xl font-semibold text-slate-900">{criticalPathChangeCount}</div>
-              </CardContent>
-            </Card>
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-1 p-4">
-                <div className="text-xs text-slate-500">映射影响</div>
-                <div className="text-2xl font-semibold text-slate-900">{mappingAffectedCount}</div>
-              </CardContent>
-            </Card>
+                  <div className="num-display mt-1 text-lg font-semibold text-slate-900">{counts[kind]}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+              <Badge variant="outline">调整条目 {modifiedItemCount}</Badge>
+              <Badge variant="outline">关键线路 {criticalPathChangeCount}</Badge>
+              <Badge variant="outline">结构校核 {mappingAffectedCount}</Badge>
+              <Badge variant="outline">调整占比 {changePercent}%</Badge>
+            </div>
+            {topChanges.length ? (
+              <div className="space-y-2">
+                {topChanges.map((item) => (
+                  <div key={item.id} className="rounded-xl border border-white bg-white px-3 py-2 text-sm text-slate-700">
+                    <span className="font-medium text-slate-900">{item.title}</span>
+                    <span className="ml-2 text-xs text-slate-500">{item.kind}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {noDiff ? (
             <Alert className="border-slate-200 bg-slate-50 text-slate-700">
               <FileDiff className="h-4 w-4" />
-              <AlertDescription>当前版本与对比版本没有差异，可直接关闭弹窗或回到草稿继续整理。</AlertDescription>
+              <AlertDescription>当前版本与对比版本没有差异，可直接关闭弹窗或回到总进度计划表继续整理。</AlertDescription>
             </Alert>
           ) : null}
 
@@ -349,17 +351,18 @@ export function BaselineConfirmDialog({
             </div>
           </div>
 
-          {showDiff ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <CollapsibleSection key={showDiff ? 'open-diff' : 'closed-diff'} title="查看详情" defaultOpen={showDiff}>
+            <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]">
               <BaselineDiffView
                 fromVersionLabel={summary.fromVersionLabel}
                 toVersionLabel={summary.toVersionLabel}
                 items={summary.items}
               />
             </div>
-          ) : null}
+          </CollapsibleSection>
 
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-100 pt-2">
+          <Separator />
+          <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
             {state === 'failed' && !isRealignmentFailure ? (
               <Button type="button" variant="destructive" className="gap-2" onClick={onRetry}>
                 <RotateCcw className="h-4 w-4" />
@@ -371,14 +374,15 @@ export function BaselineConfirmDialog({
               variant="outline"
               onClick={() => onOpenChange(false)}
             >
-              {isRealignmentFailure ? '回到草稿继续处理' : '关闭'}
+              {isRealignmentFailure ? '回到计划表继续处理' : '关闭'}
             </Button>
             <Button
               type="button"
               onClick={onConfirm}
               disabled={!canConfirmNow}
+              loading={confirming}
             >
-              {confirming ? '发布中...' : state === 'failed' && !isRealignmentFailure ? '继续重试发布' : '确认发布'}
+              {state === 'failed' && !isRealignmentFailure ? '继续重试发布' : '确认发布'}
             </Button>
           </div>
         </div>

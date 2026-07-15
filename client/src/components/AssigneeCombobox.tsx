@@ -4,7 +4,9 @@ import { Check, Search } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 export type AssigneeComboboxOption = {
   userId: string
@@ -23,6 +25,7 @@ interface AssigneeComboboxProps {
   valueUserId: string | null
   placeholder?: string
   testId?: string
+  className?: string
   onChange: (value: AssigneeComboboxValue) => void
 }
 
@@ -32,6 +35,7 @@ export function AssigneeCombobox({
   valueUserId,
   placeholder = '输入责任人或搜索项目成员',
   testId = 'gantt-assignee-combobox',
+  className,
   onChange,
 }: AssigneeComboboxProps) {
   const [open, setOpen] = useState(false)
@@ -95,21 +99,23 @@ export function AssigneeCombobox({
           placeholder={placeholder}
           aria-autocomplete="list"
           aria-expanded={open}
+          className={className}
         />
       </PopoverAnchor>
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-        <div className="border-b px-3 py-2">
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start" side="bottom">
+        <div className="px-3 py-2">
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Search className="h-3.5 w-3.5" />
             <span>可搜索项目成员，也可直接保留自由文本责任人。</span>
           </div>
         </div>
+        <Separator />
         <div className="max-h-64 overflow-y-auto py-1">
           {filteredMembers.length > 0 ? (
             filteredMembers.map((member) => {
               const selected = valueUserId === member.userId
               return (
-                <button
+                <Button variant="ghost"
                   key={member.userId}
                   type="button"
                   className={cn(
@@ -128,7 +134,7 @@ export function AssigneeCombobox({
                     </div>
                   </div>
                   {selected && <Check className="h-4 w-4 shrink-0 text-blue-600" />}
-                </button>
+                </Button>
               )
             })
           ) : (
@@ -137,7 +143,8 @@ export function AssigneeCombobox({
             </div>
           )}
         </div>
-        <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+        <Separator />
+        <div className="px-3 py-2 text-xs text-muted-foreground">
           直接输入即可保存外部责任人；选中成员后会自动关联账号。
         </div>
       </PopoverContent>

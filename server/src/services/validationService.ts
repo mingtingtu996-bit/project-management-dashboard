@@ -11,6 +11,7 @@ import {
   acceptanceStatusLabel,
   parseAcceptanceStatus,
 } from '../utils/acceptanceStatus.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
 
 export class ValidationService {
   static validateTaskCondition(data: Partial<TaskCondition>): { valid: boolean; errors: string[] } {
@@ -151,9 +152,7 @@ export class ValidationService {
     }
 
     if (data.original_date && data.delayed_date && data.delay_days) {
-      const original = new Date(data.original_date)
-      const delayed = new Date(data.delayed_date)
-      const actualDays = Math.ceil((delayed.getTime() - original.getTime()) / (1000 * 60 * 60 * 24))
+      const actualDays = signedDurationDayDelta(data.original_date, data.delayed_date) ?? 0
 
       if (actualDays !== data.delay_days) {
         errors.push(`延期天数计算错误，应为${actualDays}天`)

@@ -24,6 +24,8 @@ export interface CriticalPathEdge {
   toTaskId: string
   source: 'dependency' | 'manual_link'
   isPrimary: boolean
+  dependencyType?: 'FS' | 'SS' | 'FF' | 'SF'
+  lagDays?: number
 }
 
 export interface CriticalTaskSnapshot {
@@ -57,6 +59,7 @@ export interface CriticalPathSnapshot {
   tasks: CriticalTaskSnapshot[]
   projectDurationDays: number
   calculatedAt?: string
+  lastSuccessfulCalculatedAt?: string | null
   calculationStatus?: 'fresh' | 'cached_after_failure' | 'empty_after_failure'
   calculationFailureMessage?: string | null
   calculationFailedAt?: string | null

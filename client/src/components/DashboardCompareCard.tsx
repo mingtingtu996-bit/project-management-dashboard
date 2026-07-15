@@ -1,45 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  Activity,
-  ArrowRight,
-  BarChart3,
-  CalendarDays,
-  ChevronDown,
-  ChevronUp,
-  TrendingUp,
-} from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { LoadingState } from '@/components/ui/loading-state'
+import { CardHead } from '@/components/ui/card-head'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { apiGet, isAbortError } from '@/lib/apiClient'
+import { cn } from '@/lib/utils'
 
 type CompareGranularity = 'day' | 'week' | 'month'
-
-interface SnapshotSummary {
-  conditions_added: number
-  conditions_closed: number
-  obstacles_added: number
-  obstacles_closed: number
-  delayed_tasks: number
-}
-
-interface DailyProgress {
-  date: string
-  progress_change: number
-  tasks_updated: number
-  tasks_completed: number
-  snapshot_summary?: SnapshotSummary | null
-  details: Array<{
-    task_id: string
-    task_title: string
-    progress_before: number
-    progress_after: number
-    progress_delta: number
-    assignee: string
-  }>
-}
 
 interface ComparePeriod {
   label: string
@@ -75,6 +43,17 @@ interface CompareResult {
     is_on_time: boolean
   }>
 }
+
+interface DashboardCompareCardProps {
+  projectId?: string
+  embedded?: boolean
+}
+
+const GRANULARITY_OPTIONS = [
+  { value: 'day', label: '日' },
+  { value: 'week', label: '周' },
+  { value: 'month', label: '月' },
+] as const
 
 const fmt = (date: Date) => {
   const year = date.getFullYear()
@@ -129,434 +108,174 @@ function createComparePeriods(granularity: CompareGranularity): ComparePeriod[] 
   ]
 }
 
-function normalizeDailyProgress(payload: DailyProgress | null | undefined): DailyProgress | null {
-  if (!payload || typeof payload !== 'object') return null
-
-  return {
-    date: String(payload.date ?? ''),
-    progress_change: Number(payload.progress_change ?? 0),
-    tasks_updated: Number(payload.tasks_updated ?? 0),
-    tasks_completed: Number(payload.tasks_completed ?? 0),
-    snapshot_summary:
-      payload.snapshot_summary && typeof payload.snapshot_summary === 'object'
-        ? {
-            conditions_added: Number(payload.snapshot_summary.conditions_added ?? 0),
-            conditions_closed: Number(payload.snapshot_summary.conditions_closed ?? 0),
-            obstacles_added: Number(payload.snapshot_summary.obstacles_added ?? 0),
-            obstacles_closed: Number(payload.snapshot_summary.obstacles_closed ?? 0),
-            delayed_tasks: Number(payload.snapshot_summary.delayed_tasks ?? 0),
-          }
-        : null,
-    details: Array.isArray(payload.details) ? payload.details : [],
-  }
-}
-
 function normalizeCompareResults(payload: CompareResult[] | null | undefined): CompareResult[] {
   return Array.isArray(payload) ? payload : []
 }
 
-type CompareBlockConfig = {
-  granularity: CompareGranularity
-  title: string
-  subtitle: string
+function deltaTone(value: number | null, inverse = false) {
+  if (value == null || value === 0) return 'text-slate-400'
+  const isPositive = value > 0
+  const isGood = inverse ? !isPositive : isPositive
+  return isGood ? 'text-emerald-600' : 'text-rose-600'
 }
 
-const COMPARE_BLOCKS: CompareBlockConfig[] = [
-  { granularity: 'day', title: '日对比', subtitle: '昨日 / 今日' },
-  { granularity: 'week', title: '周对比', subtitle: '上周 / 本周' },
-  { granularity: 'month', title: '月对比', subtitle: '上月 / 本月' },
-]
-
-function DailyProgressSection({ projectId }: { projectId?: string }) {
-  const [data, setData] = useState<DailyProgress | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [expanded, setExpanded] = useState(false)
-
-  useEffect(() => {
-    if (!projectId) return
-
-    const controller = new AbortController()
-    setLoading(true)
-
-    apiGet<DailyProgress | null>(`/api/task-summaries/projects/${projectId}/daily-progress?date=${fmt(new Date())}`, {
-      signal: controller.signal,
-    })
-      .then((payload) => {
-        if (!controller.signal.aborted) {
-          setData(normalizeDailyProgress(payload))
-        }
-      })
-      .catch((error) => {
-        if (!isAbortError(error)) {
-          console.error(error)
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) {
-          setLoading(false)
-        }
-      })
-
-    return () => {
-      controller.abort()
-    }
-  }, [projectId])
-
-  if (loading) {
-    return <LoadingState label="每日进度加载中" description="" className="min-h-20" />
-  }
-
-  if (!data) {
-    return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-        今天暂无进度更新，周边变化会在有快照后自动出现。
-      </div>
-    )
-  }
-
-  const progressTone =
-    data.progress_change > 0
-      ? 'text-emerald-600 bg-emerald-50'
-      : data.progress_change < 0
-        ? 'text-red-600 bg-red-50'
-        : 'text-slate-600 bg-slate-50'
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 to-indigo-50 p-3">
-          <div className="mb-1 flex items-center gap-2">
-            <Activity className="h-4 w-4 text-blue-500" />
-            <span className="text-xs text-slate-500">进度变化</span>
-          </div>
-          <p className={`text-2xl font-bold ${progressTone.split(' ')[0]}`}>
-            {data.progress_change > 0 ? '+' : ''}{data.progress_change.toFixed(1)}%
-          </p>
-        </div>
-        <div className="rounded-2xl border border-emerald-100 bg-gradient-to-br from-emerald-50 to-teal-50 p-3">
-          <div className="mb-1 flex items-center gap-2">
-            <TrendingUp className="h-4 w-4 text-emerald-500" />
-            <span className="text-xs text-slate-500">更新任务</span>
-          </div>
-          <p className="text-2xl font-bold text-emerald-600">{data.tasks_updated}</p>
-        </div>
-        <div className="rounded-2xl border border-violet-100 bg-gradient-to-br from-violet-50 to-purple-50 p-3">
-          <div className="mb-1 flex items-center gap-2">
-            <BarChart3 className="h-4 w-4 text-violet-500" />
-            <span className="text-xs text-slate-500">完成任务</span>
-          </div>
-          <p className="text-2xl font-bold text-violet-600">{data.tasks_completed}</p>
-        </div>
-      </div>
-
-      {data.snapshot_summary && (
-        <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="text-sm font-medium text-slate-900">状态变化指标摘要</div>
-            <div className="text-xs text-slate-500">基于当日快照差值</div>
-          </div>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-            <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">条件新增</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.conditions_added}</div>
-            </div>
-            <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">条件关闭</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.conditions_closed}</div>
-            </div>
-            <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">阻碍新增</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.obstacles_added}</div>
-            </div>
-            <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">阻碍关闭</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.obstacles_closed}</div>
-            </div>
-            <div className="rounded-lg bg-white px-3 py-2">
-              <div className="text-[11px] text-slate-500">延期任务</div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">{data.snapshot_summary.delayed_tasks}</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {data.details.length > 0 && (
-        <div className="border-t border-slate-100 pt-3">
-          <button
-            className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-            {expanded ? '收起详情' : `查看 ${data.details.length} 个任务详情`}
-          </button>
-
-          {expanded && (
-            <div className="mt-3 space-y-2">
-              {data.details.map((item) => (
-                <div key={item.task_id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm">
-                  <div className="min-w-0 flex-1 truncate">
-                    <span className="font-medium text-slate-700">{item.task_title}</span>
-                    <span className="ml-2 text-xs text-slate-400">{item.assignee}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400">
-                      {item.progress_before}% → {item.progress_after}%
-                    </span>
-                    <span className={`font-bold ${item.progress_delta > 0 ? 'text-emerald-600' : 'text-red-500'}`}>
-                      {item.progress_delta > 0 ? '+' : ''}{item.progress_delta}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
+function formatNumberDelta(value: number | null, suffix = '') {
+  if (value == null) return '--'
+  if (value === 0) return '持平'
+  return `${value > 0 ? '+' : ''}${value}${suffix}`
 }
 
-function ComparePeriodCard({
-  result,
-  expanded,
-  onToggle,
-  showTaskDetails = true,
-}: {
-  result: CompareResult
-  expanded: boolean
-  onToggle: () => void
-  showTaskDetails?: boolean
-}) {
-  const progressChange = result.summary?.total_progress_change ?? 0
-  const changeTone =
-    progressChange > 0
-      ? 'text-emerald-600 bg-emerald-50 border-emerald-100'
-      : progressChange < 0
-        ? 'text-red-600 bg-red-50 border-red-100'
-        : 'text-slate-600 bg-slate-50 border-slate-200'
-
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="text-sm font-medium text-slate-900">{result.period_label}</div>
-          <div className="mt-1 text-xs text-slate-500">
-            {result.from.length === 7 ? result.from : `${result.from.slice(5)} ~ ${result.to.slice(5)}`}
-          </div>
-        </div>
-        <div className={`rounded-2xl border px-3 py-2 text-right ${changeTone}`}>
-          <div className="text-lg font-semibold">
-            {progressChange > 0 ? '+' : ''}{progressChange.toFixed(1)}%
-          </div>
-          <div className="text-[11px]">进度变化</div>
-        </div>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-3 text-xs md:grid-cols-4">
-        <div className="rounded-xl bg-slate-50 px-3 py-2">
-          <div className="text-slate-500">更新任务</div>
-          <div className="mt-1 text-base font-semibold text-slate-900">{result.summary?.tasks_updated ?? 0}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 px-3 py-2">
-          <div className="text-slate-500">正向进展</div>
-          <div className="mt-1 text-base font-semibold text-slate-900">{result.summary?.tasks_progressed ?? 0}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 px-3 py-2">
-          <div className="text-slate-500">完成任务</div>
-          <div className="mt-1 text-base font-semibold text-slate-900">{result.summary?.tasks_completed ?? 0}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 px-3 py-2">
-          <div className="text-slate-500">按时率</div>
-          <div className="mt-1 text-base font-semibold text-slate-900">{result.summary?.on_time_rate ?? 0}%</div>
-        </div>
-      </div>
-
-      {showTaskDetails && result.task_details.length > 0 && (
-        <div className="mt-4 border-t border-slate-100 pt-3">
-          <button
-            className="flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
-            onClick={onToggle}
-          >
-            {expanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-            {expanded ? '收起任务明细' : `展开 ${result.task_details.length} 条任务明细`}
-          </button>
-
-          {expanded && (
-            <div className="mt-3 space-y-2">
-              {result.task_details.slice(0, 4).map((task) => (
-                <div key={task.id} className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-xs">
-                  <div className="min-w-0 flex-1 truncate">
-                    <span className="font-medium text-slate-700">{task.title}</span>
-                    <span className="ml-2 text-slate-400">{task.assignee}</span>
-                  </div>
-                  <span className={task.progress_delta > 0 ? 'text-emerald-600' : 'text-red-500'}>
-                    {task.progress_delta > 0 ? '+' : ''}{task.progress_delta}%
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
+function formatProgressValue(value: number) {
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`
 }
 
-interface DashboardCompareCardProps {
-  projectId?: string
-}
-
-export default function DashboardCompareCard({ projectId }: DashboardCompareCardProps) {
-  const [blocks, setBlocks] = useState<Record<CompareGranularity, { loading: boolean; results: CompareResult[] }>>({
-    day: { loading: true, results: [] },
-    week: { loading: true, results: [] },
-    month: { loading: true, results: [] },
+export default function DashboardCompareCard({ projectId, embedded = false }: DashboardCompareCardProps) {
+  const [granularity, setGranularity] = useState<CompareGranularity>('day')
+  const [resultsByGranularity, setResultsByGranularity] = useState<Record<CompareGranularity, CompareResult[]>>({
+    day: [],
+    week: [],
+    month: [],
+  })
+  const [loadingByGranularity, setLoadingByGranularity] = useState<Record<CompareGranularity, boolean>>({
+    day: false,
+    week: false,
+    month: false,
   })
 
   useEffect(() => {
     if (!projectId) return
 
     const controller = new AbortController()
-    setBlocks({
-      day: { loading: true, results: [] },
-      week: { loading: true, results: [] },
-      month: { loading: true, results: [] },
+    const periods = createComparePeriods(granularity)
+    const params = new URLSearchParams({
+      periods: JSON.stringify(periods),
+      granularity,
+      summaryOnly: 'true',
     })
 
-    for (const block of COMPARE_BLOCKS) {
-      const periods = createComparePeriods(block.granularity)
-      const params = new URLSearchParams({
-        periods: JSON.stringify(periods),
-        granularity: block.granularity,
+    setLoadingByGranularity((current) => ({ ...current, [granularity]: true }))
+    apiGet<CompareResult[]>(`/api/task-summaries/projects/${projectId}/task-summary/compare?${params}`, {
+      signal: controller.signal,
+    })
+      .then((payload) => {
+        if (!controller.signal.aborted) {
+          setResultsByGranularity((current) => ({ ...current, [granularity]: normalizeCompareResults(payload) }))
+        }
       })
-
-      apiGet<CompareResult[]>(`/api/task-summaries/projects/${projectId}/task-summary/compare?${params}`, {
-        signal: controller.signal,
+      .catch((error) => {
+        if (!isAbortError(error) && !controller.signal.aborted) {
+          console.error(error)
+          setResultsByGranularity((current) => ({ ...current, [granularity]: [] }))
+        }
       })
-        .then((payload) => {
-          if (!controller.signal.aborted) {
-            const nextResults = normalizeCompareResults(payload)
-            setBlocks((current) => ({
-              ...current,
-              [block.granularity]: {
-                loading: false,
-                results: nextResults,
-              },
-            }))
-          }
-        })
-        .catch((error) => {
-          if (!isAbortError(error) && !controller.signal.aborted) {
-            console.error(error)
-            setBlocks((current) => ({
-              ...current,
-              [block.granularity]: {
-                loading: false,
-                results: [],
-              },
-            }))
-          }
-        })
-    }
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingByGranularity((current) => ({ ...current, [granularity]: false }))
+        }
+      })
 
     return () => {
       controller.abort()
     }
-  }, [projectId])
+  }, [granularity, projectId])
+
+  const rows = resultsByGranularity[granularity]
+  const loading = loadingByGranularity[granularity]
+  const currentRow = rows[rows.length - 1] ?? null
+  const previousRow = rows.length > 1 ? rows[rows.length - 2] : null
+  const hasCurrentSummary = Boolean(currentRow?.summary)
+  const compareMetrics = useMemo(() => {
+    const current = currentRow?.summary
+    const previous = previousRow?.summary
+    return [
+      {
+        label: '总进度变化',
+        value: current ? formatProgressValue(current.total_progress_change ?? 0) : '--',
+        delta: current && previous ? current.total_progress_change - previous.total_progress_change : null,
+        suffix: '%',
+      },
+      {
+        label: '更新任务数',
+        value: current?.tasks_updated ?? '--',
+        delta: current && previous ? current.tasks_updated - previous.tasks_updated : null,
+      },
+      {
+        label: '完成任务数',
+        value: current?.tasks_completed ?? '--',
+        delta: current && previous ? current.tasks_completed - previous.tasks_completed : null,
+      },
+      {
+        label: '延期任务数',
+        value: current?.delayed ?? '--',
+        delta: current && previous ? current.delayed - previous.delayed : null,
+        inverse: true,
+      },
+    ]
+  }, [currentRow, previousRow])
+  const panelClassName = embedded ? '' : 'surface-card p-5'
+  const previousPeriodLabel = granularity === 'day' ? '较昨日' : granularity === 'week' ? '较上周' : '较上月'
 
   return (
-    <Card className="border-slate-100 shadow-sm">
-      <CardHeader className="pb-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
-            <TrendingUp className="h-5 w-5 text-blue-500" />
-            现场快照与对比
-          </CardTitle>
-
-          <div className="flex items-center gap-2">
-            <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600">
-              日 / 周 / 月固定对比
-            </div>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-5">
-        <div className="space-y-3 rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">当日进度</div>
-              <div className="mt-1 text-sm text-slate-600">今日进度与状态变化指标</div>
-            </div>
-          </div>
-          <DailyProgressSection projectId={projectId} />
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">固定对比</div>
-            <h3 className="mt-2 text-[22px] font-semibold tracking-tight text-slate-900">日 / 周 / 月对比</h3>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-            {COMPARE_BLOCKS.map((block) => {
-              const blockState = blocks[block.granularity]
-              return (
-                <Card key={block.granularity} className="border-slate-100 bg-white shadow-sm">
-                  <CardHeader className="pb-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <CardTitle className="flex items-center gap-2 text-base font-semibold text-slate-900">
-                          <CalendarDays className="h-4 w-4 text-slate-400" />
-                          {block.title}
-                        </CardTitle>
-                        <div className="mt-1 text-xs text-slate-500">{block.subtitle}</div>
-                      </div>
-                      <div className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-500">
-                        固定
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {blockState.loading ? (
-                      <LoadingState label={`${block.title}加载中`} description="" className="min-h-24" />
-                    ) : blockState.results.length === 0 ? (
-                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                        暂无{block.title}数据，稍后有任务快照后会自动补齐。
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        {blockState.results.map((result, index) => (
-                          <ComparePeriodCard
-                            key={`${block.granularity}-${result.period_label}-${index}`}
-                            result={result}
-                            expanded={false}
-                            onToggle={() => undefined}
-                            showTaskDetails={false}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )
-            })}
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-3 text-xs text-slate-500">
-          <div className="flex items-center gap-2">
-            <BarChart3 className="h-4 w-4 text-blue-500" />
-            <span>日 / 周 / 月对比与状态变化已固定收口</span>
-          </div>
-          <Button asChild variant="outline" size="sm" className="h-8 rounded-full border-slate-200 bg-white px-3">
-            <Link to={projectId ? `/projects/${projectId}/reports?view=progress&tab=project_review` : '/reports'}>
+    <section className={panelClassName} aria-busy={loading}>
+      <CardHead
+        eyebrow="COMPARE"
+        title="现场快照与对比"
+        action={
+          <div className="flex items-center gap-3">
+            <SegmentedControl
+              options={GRANULARITY_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+              value={granularity}
+              onChange={(value) => setGranularity(value as CompareGranularity)}
+            />
+            <Link
+              data-testid="dashboard-compare-reports-link"
+              to={projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation'}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
+            >
               查看详情
-              <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+              <ArrowRight className="h-3.5 w-3.5" />
             </Link>
-          </Button>
+          </div>
+        }
+      />
+
+      {loading ? (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-5 text-sm text-slate-600">
+          对比数据加载中
         </div>
-      </CardContent>
-    </Card>
+      ) : !hasCurrentSummary ? (
+        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-5">
+          <div className="text-sm font-medium text-slate-900">暂无对比数据</div>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            当前周期还没有形成可比较的现场快照；录入进度或切换周期后再查看。
+          </p>
+          <Link
+            to={projectId ? `/projects/${projectId}/reports?view=progress_deviation` : '/reports?view=progress_deviation'}
+            className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-600 transition-colors hover:text-blue-800"
+          >
+            查看报表
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      ) : (
+        <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {compareMetrics.map((item) => (
+            <div key={item.label} className="rounded-xl border border-slate-200/60 bg-slate-50/60 px-4 py-3">
+              <div className="meta-text">{item.label}</div>
+              <div className={cn('num-mono mt-1 text-lg font-semibold text-slate-900', item.value === 0 && 'text-slate-400')}>
+                {item.value}
+              </div>
+              <div className={cn('meta-muted mt-1', deltaTone(item.delta, item.inverse))}>
+                {previousPeriodLabel} {formatNumberDelta(item.delta, item.suffix)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <span className="sr-only" aria-live="polite">
+        {loading ? '对比数据加载中' : ''}
+      </span>
+    </section>
   )
 }

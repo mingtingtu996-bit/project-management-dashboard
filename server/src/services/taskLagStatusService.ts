@@ -1,4 +1,5 @@
 import type { Task } from '../types/db.js'
+import { inclusiveDurationDays, normalizeDurationDateUtc } from '../utils/durationDays.js'
 
 export type TaskLagLevel = 'none' | 'mild' | 'moderate' | 'severe'
 export type TaskLagStatus = '正常' | '轻度滞后' | '中度滞后' | '严重滞后'
@@ -16,7 +17,6 @@ type TaskLagSource = Pick<
   | 'end_date'
   | 'planned_start_date'
   | 'planned_end_date'
-  | 'is_critical'
 > & {
   lagLevel?: unknown
   lagStatus?: unknown
@@ -86,24 +86,25 @@ function calculateLegacyLagLevel(task: TaskLagSource): TaskLagLevel {
   const plannedEnd = getPlannedEndDate(task)
   if (!plannedStart || !plannedEnd) return 'none'
 
-  const start = new Date(plannedStart).getTime()
-  const end = new Date(plannedEnd).getTime()
-  if (Number.isNaN(start) || Number.isNaN(end)) return 'none'
+  const start = normalizeDurationDateUtc(plannedStart)
+  const end = normalizeDurationDateUtc(plannedEnd)
+  if (!start || !end) return 'none'
 
-  const duration = Math.round((end - start) / 86400000)
-  if (duration <= 3) return 'none'
+  const duration = inclusiveDurationDays(start, end)
+  if (!duration) return 'none'
 
-  const now = Date.now()
-  if (now >= end) return 'none'
+  const now = normalizeDurationDateUtc(new Date(Date.now()))
+  if (!now || now.getTime() > end.getTime()) return 'none'
+  if (now.getTime() <= start.getTime()) return 'none'
 
-  const elapsed = Math.max(0, Math.round((now - start) / 86400000))
+  const elapsed = Math.min(duration, inclusiveDurationDays(start, now) ?? 0)
   const timeRatio = elapsed / duration
   if (timeRatio <= 0) return 'none'
 
   const progress = Number(task.progress ?? 0)
   const biasRatio = (progress / 100) / timeRatio
-  const remaining = Math.round((end - now) / 86400000)
-  const threshold = task.is_critical ? 0.8 : 0.7
+  const remaining = inclusiveDurationDays(now, end) ?? 0
+  const threshold = 0.7
 
   if (biasRatio < 0.5 && remaining < 3) return 'severe'
   if (biasRatio < 0.5) return 'moderate'

@@ -2,15 +2,16 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle2, LogIn, Users, XCircle } from 'lucide-react'
 
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { LoadingState } from '@/components/ui/loading-state'
 import { getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
-import { syncProjectCacheFromApi } from '@/lib/projectPersistence'
+import { fetchProjectsFromApi } from '@/lib/projectApi'
 import { toast } from '@/hooks/use-toast'
-import { getProjectRoleLabel, normalizeProjectPermissionLevel } from '@/lib/roleLabels'
+import { getProjectRoleLabel, normalizeProjectPermissionLevel, type ProjectPermissionLevel } from '@/lib/roleLabels'
 import { useSetProjects } from '@/hooks/useStore'
 
 type JoinStatus = 'loading' | 'valid' | 'invalid' | 'joined' | 'error'
@@ -19,7 +20,7 @@ interface InvitationInfo {
   id: string
   projectId: string
   projectName?: string | null
-  permissionLevel: string
+  permissionLevel: ProjectPermissionLevel
   alreadyJoined?: boolean
 }
 
@@ -62,7 +63,7 @@ export default function JoinProject() {
       const response = await requestJson<{ success: boolean; data: InvitationInfo }>(`/api/invitations/validate/${inviteCode}`)
       const normalizedInvitation = {
         ...response.data,
-        permissionLevel: normalizeProjectPermissionLevel(response.data.permissionLevel),
+        permissionLevel: normalizeProjectPermissionLevel(response.data.permissionLevel) ?? 'editor',
         alreadyJoined: Boolean(response.data.alreadyJoined),
       }
       setInvitation(normalizedInvitation)
@@ -87,7 +88,7 @@ export default function JoinProject() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       })
-      const projects = await syncProjectCacheFromApi({ allowEmptyReplace: true })
+      const projects = await fetchProjectsFromApi()
       setProjects(projects)
       setStatus('joined')
       toast({ title: '加入成功', description: `已加入项目「${invitation.projectName || '当前项目'}」` })
@@ -100,13 +101,10 @@ export default function JoinProject() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4" data-testid="join-project-page">
-      <Card className="w-full max-w-md rounded-3xl border-slate-200 shadow-lg">
-        <CardHeader className="text-center">
-          <CardTitle className="flex items-center justify-center gap-2 text-xl">
-            <Users className="h-6 w-6" />
-            加入项目
-          </CardTitle>
-        </CardHeader>
+      <Card className="surface-card w-full max-w-md">
+        <CardContent padding="md">
+          <CardHead eyebrow="INVITATION" title="加入项目" action={<Users className="h-5 w-5 text-blue-600" strokeWidth={1.5} />} />
+        </CardContent>
         <CardContent>
           {status === 'loading' ? (
             <LoadingState label="正在验证邀请码" className="min-h-48 border-0 bg-transparent shadow-none" />
@@ -114,7 +112,7 @@ export default function JoinProject() {
 
           {status === 'invalid' ? (
             <div className="flex flex-col items-center justify-center py-12 text-center" data-testid="join-project-invalid-state">
-              <XCircle className="mb-4 h-16 w-16 text-rose-500" />
+              <XCircle className="mb-4 h-16 w-16 text-rose-500" strokeWidth={1.5} />
               <h2 className="text-xl font-semibold text-slate-900">邀请码无效或已过期</h2>
               <Button variant="outline" className="mt-6" onClick={() => navigate('/')}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
@@ -125,7 +123,7 @@ export default function JoinProject() {
 
           {status === 'error' ? (
             <div className="flex flex-col items-center justify-center py-12 text-center" data-testid="join-project-error-state">
-              <XCircle className="mb-4 h-16 w-16 text-rose-500" />
+              <XCircle className="mb-4 h-16 w-16 text-rose-500" strokeWidth={1.5} />
               <h2 className="text-xl font-semibold text-slate-900">验证失败</h2>
               <div className="mt-6 flex gap-3">
                 <Button variant="outline" onClick={() => code && validateCode(code)}>重新验证</Button>
@@ -136,7 +134,7 @@ export default function JoinProject() {
 
           {status === 'joined' ? (
             <div className="flex flex-col items-center justify-center py-12 text-center" data-testid="join-project-joined-state">
-              <CheckCircle2 className="mb-4 h-16 w-16 text-emerald-500" />
+              <CheckCircle2 className="mb-4 h-16 w-16 text-emerald-500" strokeWidth={1.5} />
               <h2 className="text-xl font-semibold text-slate-900">{invitation?.alreadyJoined ? '你已加入该项目' : '加入成功'}</h2>
               <Button className="mt-6" onClick={() => navigate(`/projects/${invitation?.projectId}/dashboard`)} data-testid="join-project-enter-project">
                 进入项目
@@ -146,12 +144,12 @@ export default function JoinProject() {
 
           {status === 'valid' && invitation ? (
             <div className="flex flex-col items-center justify-center py-10 text-center" data-testid="join-project-valid-state">
-              <Users className="mb-4 h-16 w-16 text-blue-600" />
+              <Users className="mb-4 h-16 w-16 text-blue-600" strokeWidth={1.5} />
               <h2 className="text-xl font-semibold text-slate-900">你被邀请加入「{invitation.projectName || '当前项目'}」</h2>
-              <p className="mt-2 text-sm text-slate-500">加入后角色：{getProjectRoleLabel(invitation.permissionLevel)}</p>
+              <p className="meta-text mt-2">加入后角色：{getProjectRoleLabel(invitation.permissionLevel)}</p>
               {isAuthenticated ? (
                 <>
-                  <p className="mt-2 text-sm text-slate-500">当前账号：{user?.display_name || user?.username}</p>
+                  <p className="meta-muted mt-2">当前账号：{user?.display_name || user?.username}</p>
                   <Button className="mt-6" loading={joining} onClick={handleJoin} data-testid="join-project-accept">
                     <CheckCircle2 className="mr-2 h-4 w-4" />
                     接受邀请并加入

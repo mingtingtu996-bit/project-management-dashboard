@@ -20,10 +20,14 @@ const LOG_FILE_PATH = process.env.LOG_FILE_PATH
   ? path.resolve(process.env.LOG_FILE_PATH)
   : path.join(LOG_DIR, 'server.log')
 const MEMORY_LOG_LIMIT = Number(process.env.LOG_MEMORY_LIMIT ?? 1000)
-const ENABLE_PERSISTED_LOGS =
+const SLOW_API_REQUEST_THRESHOLD_MS = Number(process.env.SLOW_API_REQUEST_THRESHOLD_MS ?? 1200)
+const PERSISTED_LOGS_REQUESTED =
   process.env.LOG_PERSIST === 'false'
     ? false
     : process.env.NODE_ENV !== 'test' || process.env.LOG_PERSIST_IN_TEST === 'true'
+const PERSISTED_LOG_ROTATION_MANAGED = process.env.LOG_PERSIST_ROTATION_MANAGED === 'true'
+const ENABLE_PERSISTED_LOGS = PERSISTED_LOGS_REQUESTED
+  && (process.env.NODE_ENV !== 'production' || PERSISTED_LOG_ROTATION_MANAGED)
 
 if (ENABLE_PERSISTED_LOGS) {
   mkdirSync(LOG_DIR, { recursive: true })
@@ -31,6 +35,7 @@ if (ENABLE_PERSISTED_LOGS) {
 
 function createPinoLogger(): PinoLogger {
   const streams: StreamEntry[] = [{ stream: process.stdout }]
+  const defaultLogLevel = process.env.NODE_ENV === 'test' ? 'warn' : 'info'
 
   if (ENABLE_PERSISTED_LOGS) {
     streams.push({
@@ -44,7 +49,7 @@ function createPinoLogger(): PinoLogger {
 
   return pino(
     {
-      level: process.env.LOG_LEVEL || 'info',
+      level: process.env.LOG_LEVEL || defaultLogLevel,
       timestamp: pino.stdTimeFunctions.isoTime,
       base: {
         service: 'project-management-api',
@@ -55,19 +60,54 @@ function createPinoLogger(): PinoLogger {
   )
 }
 
+function isSensitiveLogKey(key: string) {
+  const compact = key.replace(/[^a-z0-9]/gi, '').toLowerCase()
+  return /password|passphrase|secret|token|authorization|cookie|apikey|privatekey|servicekey|credential|connectionstring|databaseurl/.test(compact)
+}
+
+function redactSensitiveString(value: string) {
+  return value
+    .replace(/(bearer\s+)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/((?:password|passphrase|secret|token|api[_-]?key|service[_-]?key)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/(postgres(?:ql)?:\/\/[^:\s]+:)[^@\s]+@/gi, '$1[REDACTED]@')
+}
+
+export function redactSensitiveData(value: unknown, key = '', seen = new WeakSet<object>()): unknown {
+  if (key && isSensitiveLogKey(key)) return '[REDACTED]'
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'string') return redactSensitiveString(value)
+  if (value instanceof Date) return value.toISOString()
+  if (value instanceof Error) {
+    return {
+      errorName: value.name,
+      errorMessage: value.message,
+    }
+  }
+  if (typeof value !== 'object') return String(value)
+  if (seen.has(value)) return '[CIRCULAR]'
+  seen.add(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSensitiveData(item, '', seen))
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .map(([entryKey, entryValue]) => [entryKey, redactSensitiveData(entryValue, entryKey, seen)]),
+  )
+}
+
 function normalizeContext(context?: LogContext): Record<string, unknown> | undefined {
   if (context == null) return undefined
   if (context instanceof Error) {
-    return {
+    return redactSensitiveData({
       errorName: context.name,
       errorMessage: context.message,
-      stack: context.stack,
-    }
+    }) as Record<string, unknown>
   }
   if (typeof context === 'string') {
-    return { detail: context }
+    return { detail: redactSensitiveString(context) }
   }
-  return context
+  return redactSensitiveData(context) as Record<string, unknown>
 }
 
 class PersistentLogger {
@@ -142,19 +182,31 @@ export function requestLogger(req: Request, res: Response, next: NextFunction) {
     requestId,
     method: req.method,
     path: req.path,
-    query: req.query,
+    queryKeys: Object.keys(req.query ?? {}).sort().slice(0, 50),
     ip: req.ip,
     userAgent: req.headers['user-agent'] || null,
   })
 
   res.on('finish', () => {
+    const durationMs = Date.now() - start
     logger.info('Request completed', {
       requestId,
       method: req.method,
       path: req.path,
       status: res.statusCode,
-      durationMs: Date.now() - start,
+      durationMs,
     })
+
+    if (req.path.startsWith('/api/') && durationMs >= SLOW_API_REQUEST_THRESHOLD_MS) {
+      logger.warn('Slow API request detected', {
+        requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        durationMs,
+        thresholdMs: SLOW_API_REQUEST_THRESHOLD_MS,
+      })
+    }
   })
 
   next()

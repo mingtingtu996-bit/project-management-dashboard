@@ -20,7 +20,7 @@ describe('acceptanceApi canonical contract', () => {
       {
         id: 'plan-1',
         project_id: 'project-1',
-        task_id: 'milestone-1',
+        covered_task_ids: ['task-1'],
         catalog_id: 'catalog-1',
         plan_name: '消防专项验收',
         acceptance_type: '消防验收',
@@ -46,7 +46,7 @@ describe('acceptanceApi canonical contract', () => {
     expect(plans[0]).toMatchObject({
       id: 'plan-1',
       project_id: 'project-1',
-      milestone_id: 'milestone-1',
+      covered_task_ids: ['task-1'],
       catalog_id: 'catalog-1',
       name: '消防专项验收',
       acceptance_type: '消防验收',
@@ -56,6 +56,63 @@ describe('acceptanceApi canonical contract', () => {
       successor_plan_ids: [],
       display_badges: expect.arrayContaining(['受阻', '前置未满足']),
     })
+  })
+
+  it('serializes acceptance plan writes with participant_unit_id as the sole unit field', async () => {
+    mocks.authFetch
+      .mockResolvedValueOnce({
+        id: 'plan-1',
+        project_id: 'project-1',
+        plan_name: 'Plan 1',
+        participant_unit_id: 'unit-1',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-02T00:00:00.000Z',
+      })
+      .mockResolvedValueOnce({
+        id: 'plan-1',
+        project_id: 'project-1',
+        plan_name: 'Plan 1',
+        participant_unit_id: null,
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-03T00:00:00.000Z',
+      })
+
+    await acceptanceApi.createPlan({
+      project_id: 'project-1',
+      name: 'Plan 1',
+      participant_unit_id: 'unit-1',
+    })
+    await acceptanceApi.updatePlan('plan-1', {
+      participant_unit_id: null,
+    })
+
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/acceptance-plans',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    expect(JSON.parse(String(mocks.authFetch.mock.calls[0][1]?.body))).toMatchObject({
+      project_id: 'project-1',
+      acceptance_name: 'Plan 1',
+      participant_unit_id: 'unit-1',
+    })
+    expect(JSON.parse(String(mocks.authFetch.mock.calls[0][1]?.body))).not.toHaveProperty('responsible_unit')
+
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/acceptance-plans/plan-1',
+      expect.objectContaining({
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    expect(JSON.parse(String(mocks.authFetch.mock.calls[1][1]?.body))).toMatchObject({
+      participant_unit_id: null,
+    })
+    expect(JSON.parse(String(mocks.authFetch.mock.calls[1][1]?.body))).not.toHaveProperty('responsible_unit')
   })
 
   it('uses the dedicated PATCH status endpoint for state migration', async () => {
@@ -296,5 +353,112 @@ describe('acceptanceApi canonical contract', () => {
       defaultDependsOn: ['four_party'],
       sortOrder: 7,
     })
+  })
+
+  it('loads and applies the system acceptance template through project-scoped endpoints', async () => {
+    mocks.authFetch
+      .mockResolvedValueOnce({
+        templateCode: 'general_delivery_acceptance_v1',
+        templateName: '竣工交付验收事项模板',
+        seedVersion: 'v1.4.22.5',
+        projectId: 'project-1',
+        summary: {
+          itemCreateCount: 12,
+          dependencyCreateCount: 5,
+          requirementCreateCount: 36,
+          skippedExistingCount: 0,
+        },
+        deliveryGoal: {
+          targetName: '竣工验收备案和交付条件确认',
+          explanation: '系统按竣工交付目标倒推需要取得的验收结果文件。',
+        },
+        regionProfile: {
+          provinceCode: 'GD',
+          provinceName: '广东省',
+          cityName: '广州市',
+          profileVersion: 'v1.4.22.5-policy-auto-20260901',
+          source: 'project_static_profile',
+          deliveryTargetName: '综合验收通过',
+          updateMode: 'trusted_official_source_auto_publish',
+          policySources: [],
+        },
+        industryProfile: {
+          codes: ['general_building', 'residential'],
+          labels: ['通用房建', '商品住宅'],
+        },
+        applicabilityConditions: [
+          {
+            conditionCode: 'public_assembly_place',
+            conditionName: '公众聚集场所',
+            description: '商业综合体等营业前消防安全检查',
+            groupCode: 'operation',
+            groupName: '运营准入',
+            affectedItemCodes: ['public_assembly_fire_safety_check'],
+            triggerKeywords: ['公众聚集场所'],
+            applicableIndustryCodes: ['commercial_office'],
+            selected: false,
+            suggested: false,
+            confirmationRequired: true,
+            source: 'candidate',
+            confirmationQuestion: '是否属于公众聚集场所？',
+            sourcePolicyHint: '由后端 seed 返回，不在前端硬编码。',
+          },
+        ],
+        items: [],
+        dependencies: [],
+        requirements: [],
+        warnings: [],
+      })
+      .mockResolvedValueOnce({
+        templateCode: 'general_delivery_acceptance_v1',
+        seedVersion: 'v1.4.22.5',
+        projectId: 'project-1',
+        createdCatalogIds: ['catalog-1'],
+        createdPlanIds: ['plan-1'],
+        createdDependencyIds: [],
+        createdRequirementIds: ['req-1'],
+        skippedExisting: [],
+      })
+
+    const preview = await acceptanceApi.previewSystemTemplate('project-1')
+    const result = await acceptanceApi.applySystemTemplate('project-1', {
+      templateCode: preview.templateCode,
+      seedVersion: preview.seedVersion,
+      selectedItemCodes: ['fire_acceptance'],
+      selectedDependencyCodes: [],
+      selectedRequirementCodes: ['FIRE-ACCEPTANCE-REQ-01'],
+      duplicatePolicy: 'skip_existing',
+    })
+
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      1,
+      '/api/projects/project-1/acceptance-templates/system/preview',
+      {
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+      },
+    )
+    expect(mocks.authFetch).toHaveBeenNthCalledWith(
+      2,
+      '/api/projects/project-1/acceptance-templates/system/apply',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    expect(JSON.parse(String(mocks.authFetch.mock.calls[1][1]?.body))).toMatchObject({
+      templateCode: 'general_delivery_acceptance_v1',
+      seedVersion: 'v1.4.22.5',
+      selectedItemCodes: ['fire_acceptance'],
+      selectedDependencyCodes: [],
+      selectedRequirementCodes: ['FIRE-ACCEPTANCE-REQ-01'],
+      duplicatePolicy: 'skip_existing',
+    })
+    expect(preview.applicabilityConditions[0]).toMatchObject({
+      conditionCode: 'public_assembly_place',
+      confirmationRequired: true,
+      affectedItemCodes: ['public_assembly_fire_safety_check'],
+    })
+    expect(result.createdPlanIds).toEqual(['plan-1'])
   })
 })

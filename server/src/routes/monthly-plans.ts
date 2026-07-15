@@ -1,9 +1,10 @@
-import { v4 as uuidv4 } from 'uuid'
+﻿import { v4 as uuidv4 } from 'uuid'
 import { Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validateIdParam } from '../middleware/validation.js'
+import { getClient, query as rawQuery } from '../database.js'
 import { supabase } from '../services/dbService.js'
 import { planningStateMachine, PlanningStateTransitionError } from '../services/planningStateMachine.js'
 import {
@@ -13,19 +14,50 @@ import {
 import { planningGovernanceService } from '../services/planningGovernanceService.js'
 import { PlanningIntegrityService } from '../services/planningIntegrityService.js'
 import { writeLog } from '../services/changeLogs.js'
+import { hasMonthlyPlanVersion } from '../services/baselineGovernanceService.js'
+import { resolveMonthlyPlanGenerationSourceV1474 } from '../services/monthlyPlanGenerationService.js'
+import { classifyMonthlyPlanCloseout } from '../services/monthlyPlanCloseoutService.js'
 import {
-  hasMonthlyPlanVersion,
-  resolveMonthlyPlanGenerationSource,
-} from '../services/baselineGovernanceService.js'
+  countMonthlyPlanPendingCloseoutItems,
+  evaluateMonthlyPlanConfirmationReadiness,
+  getMonthlyPlanFulfillmentTrend,
+  getMonthlyPlanPendingCloseoutCounts,
+  type MonthlyPlanConfirmationReadiness,
+  type MonthlyPlanFulfillmentTrendItem,
+} from '../services/monthlyPlanSummaryService.js'
 import { dataQualityService } from '../services/dataQualityService.js'
+import { insertRowReturning, insertRowsReturning } from '../services/transactionInsertService.js'
+import {
+  attachTaskFactSnapshots,
+  inheritSnapshotFieldsFromBaselineItem,
+  inheritSnapshotFieldsFromMonthlyPlanItem,
+  recordMonthlySnapshotLineage,
+} from '../services/planningSnapshotService.js'
+import {
+  buildPlanningTableCommitResponse,
+  buildFieldRegistryStaleResponse,
+  isPlanningFieldRegistryVersionCurrent,
+  summarizePlanningTableMergeGroups,
+  summarizePlanningTableRealtimeRows,
+} from '../services/planningTableCommitService.js'
+import { broadcastPlanningTableChanged } from '../services/planningRealtimeEventService.js'
+import {
+  buildPlanningTableValidationErrorResponse,
+  readPlanningTableOperationRowId as readCommitRowId,
+  readPlanningTableOperationType as readCommitOperationType,
+  readPlanningTableOperationValues as readCommitValues,
+  validatePlanningTableCommitRequest,
+} from '../services/planningTableValidationService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { PlanningTransitionContext } from '../types/planning.js'
-import type { MonthlyPlan, MonthlyPlanItem, PlanningDraftLockRecord } from '../types/db.js'
+import type { PlanningTableOperation } from '../types/planningTable.js'
+import type { MonthlyPlan, MonthlyPlanItem, PlanningDraftLockRecord, TaskBaselineItem } from '../types/db.js'
 
 const router = Router()
 const draftLockService = new PlanningDraftLockService()
 const planningIntegrityService = new PlanningIntegrityService()
 const MAX_CREATE_ATTEMPTS = 3
+const MONTHLY_PLAN_DETAIL_CACHE_TTL_MS = 5000
 
 type UniqueConstraintErrorLike = {
   code?: string
@@ -37,10 +69,40 @@ type MonthlyPlanVersionRow = {
 }
 
 type MonthlyPlanRowInput = Partial<MonthlyPlan>
+type MonthlyPlanSourceMode = 'baseline' | 'schedule' | 'mixed' | 'manual' | 'imported'
 
 type MonthlyPlanItemInput = Partial<MonthlyPlanItem> & {
   id?: string
   name?: string | null
+}
+
+type MonthlyPlanDetailCacheEntry = {
+  expiresAt: number
+  plan: MonthlyPlan
+  items: MonthlyPlanItem[]
+}
+
+const monthlyPlanDetailCache = new Map<string, MonthlyPlanDetailCacheEntry>()
+function getCachedMonthlyPlanDetail(id: string) {
+  const cached = monthlyPlanDetailCache.get(id)
+  if (!cached || cached.expiresAt <= Date.now()) return null
+  return cached
+}
+
+function setCachedMonthlyPlanDetail(id: string, plan: MonthlyPlan, items: MonthlyPlanItem[]) {
+  monthlyPlanDetailCache.set(id, {
+    expiresAt: Date.now() + MONTHLY_PLAN_DETAIL_CACHE_TTL_MS,
+    plan,
+    items,
+  })
+}
+
+function clearMonthlyPlanDetailCache(id?: string | null) {
+  if (id) {
+    monthlyPlanDetailCache.delete(id)
+    return
+  }
+  monthlyPlanDetailCache.clear()
 }
 
 type BatchSelectionRange = {
@@ -54,21 +116,7 @@ type BatchSelectionBody = {
   scope?: unknown
 }
 
-type ConditionStatusRow = {
-  is_satisfied?: boolean | number | string | null
-  status?: string | null
-}
-
-type ObstacleStatusRow = {
-  status?: string | null
-}
-
-type TaskBlockingStatusRow = {
-  status?: string | null
-  planned_end_date?: string | null
-  end_date?: string | null
-  progress?: number | null
-}
+type PlanningCommitOperation = PlanningTableOperation
 
 router.use(authenticate)
 
@@ -77,6 +125,74 @@ function badRequest(message: string, code = 'VALIDATION_ERROR') {
     success: false,
     error: { code, message },
     timestamp: new Date().toISOString(),
+  }
+}
+
+function normalizeMonthlyPlanSourceMode(value: unknown): MonthlyPlanSourceMode | null {
+  const normalized = String(value ?? '').trim()
+  if (
+    normalized === 'baseline' ||
+    normalized === 'schedule' ||
+    normalized === 'mixed' ||
+    normalized === 'manual' ||
+    normalized === 'imported'
+  ) {
+    return normalized
+  }
+  return null
+}
+
+const MONTHLY_MANUAL_OVERRIDE_FIELDS = [
+  'planned_start_date',
+  'planned_end_date',
+  'target_progress',
+  'commitment_status',
+  'notes',
+] as const
+
+type MonthlyManualOverrideField = typeof MONTHLY_MANUAL_OVERRIDE_FIELDS[number]
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeManualOverrideFields(value: unknown): Partial<Record<MonthlyManualOverrideField, boolean>> {
+  if (!isRecord(value)) return {}
+  return MONTHLY_MANUAL_OVERRIDE_FIELDS.reduce<Partial<Record<MonthlyManualOverrideField, boolean>>>((fields, field) => {
+    if (value[field] === true) fields[field] = true
+    return fields
+  }, {})
+}
+
+function hasManualOverrideFields(value: unknown) {
+  const fields = normalizeManualOverrideFields(value)
+  return MONTHLY_MANUAL_OVERRIDE_FIELDS.some((field) => fields[field] === true)
+}
+
+function mergeManualOverrideFields(
+  current: unknown,
+  changedFields: Iterable<string>,
+): Partial<Record<MonthlyManualOverrideField, boolean>> {
+  const merged = normalizeManualOverrideFields(current)
+  for (const field of changedFields) {
+    if ((MONTHLY_MANUAL_OVERRIDE_FIELDS as readonly string[]).includes(field)) {
+      merged[field as MonthlyManualOverrideField] = true
+    }
+  }
+  return merged
+}
+
+function getManualOverrideFieldsFromPatch(patch: Record<string, unknown>) {
+  return MONTHLY_MANUAL_OVERRIDE_FIELDS.filter((field) => Object.prototype.hasOwnProperty.call(patch, field))
+}
+
+function applyManualOverridePatch<T extends MonthlyPlanItemInput>(item: T, patch: Record<string, unknown>): T {
+  const changedFields = getManualOverrideFieldsFromPatch(patch)
+  if (changedFields.length === 0) return { ...item, ...patch }
+  return {
+    ...item,
+    ...patch,
+    manual_override_fields: mergeManualOverrideFields(item.manual_override_fields, changedFields),
   }
 }
 
@@ -100,7 +216,7 @@ function mapMonthlyItem(
     baseline_item_id: row.baseline_item_id ?? null,
     carryover_from_item_id: row.carryover_from_item_id ?? null,
     source_task_id: row.source_task_id ?? null,
-    title: String(row.title ?? row.name ?? `月度计划条目 ${index + 1}`),
+    title: String(row.title ?? `月度计划条目 ${index + 1}`),
     planned_start_date: row.planned_start_date ?? null,
     planned_end_date: row.planned_end_date ?? null,
     target_progress: row.target_progress ?? null,
@@ -110,8 +226,127 @@ function mapMonthlyItem(
     is_critical: Boolean(row.is_critical),
     commitment_status: row.commitment_status ?? 'planned',
     notes: row.notes ?? null,
+    engineering_category_id: row.engineering_category_id ?? null,
+    wbs_node_type: row.wbs_node_type ?? null,
+    wbs_path: row.wbs_path ?? null,
+    is_wbs_summary: row.is_wbs_summary ?? null,
+    is_executable: row.is_executable ?? null,
+    standard_work_code: row.standard_work_code ?? null,
+    standard_work_name: row.standard_work_name ?? null,
+    duration_calibration_source: row.duration_calibration_source ?? null,
+    duration_provenance: row.duration_provenance ?? null,
+    scope_snapshot: row.scope_snapshot ?? {},
+    wbs_snapshot: row.wbs_snapshot ?? {},
+    task_fact_snapshot: row.task_fact_snapshot ?? {},
+    task_code_snapshot: row.task_code_snapshot ?? null,
+    status_snapshot: row.status_snapshot ?? {},
+    manual_override_fields: normalizeManualOverrideFields(row.manual_override_fields),
+    generation_metadata: isRecord(row.generation_metadata) ? row.generation_metadata : {},
+    last_generated_at: row.last_generated_at ?? null,
+    snapshot_source: row.snapshot_source
+      ?? (row.carryover_from_item_id
+        ? 'monthly_commitment_snapshot'
+        : row.baseline_item_id
+          ? 'baseline_commitment_snapshot'
+          : 'current_execution_fact'),
+    snapshot_captured_at: row.snapshot_captured_at ?? null,
     created_at: row.created_at ?? new Date().toISOString(),
     updated_at: row.updated_at ?? new Date().toISOString(),
+  }
+}
+
+function isUuidLike(value?: string | null) {
+  return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value))
+}
+
+function normalizeMonthlyCommitField(field: string, value: unknown): Record<string, unknown> {
+  if (field === 'start' || field === 'start_date') return { planned_start_date: value || null }
+  if (field === 'end' || field === 'end_date') return { planned_end_date: value || null }
+  if (field === 'progress' || field === 'current_progress') {
+    const progress = value === '' || value === null || value === undefined ? null : Number(value)
+    return { target_progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, Math.round(progress as number))) : null }
+  }
+  if (field === 'milestone') return { is_milestone: Boolean(value) }
+  return { [field]: value === '' ? null : value }
+}
+
+function normalizeMonthlyCommitValues(values: Record<string, unknown>) {
+  return Object.entries(values).reduce<Record<string, unknown>>((patch, [field, value]) => {
+    Object.assign(patch, normalizeMonthlyCommitField(field, value))
+    return patch
+  }, {})
+}
+
+function applyMonthlyCommitOperations(
+  currentItems: MonthlyPlanItem[],
+  operations: PlanningCommitOperation[],
+) {
+  const tempIdMap = new Map<string, string>()
+  let items: MonthlyPlanItemInput[] = currentItems.map((item) => ({ ...item }))
+
+  for (const operation of operations) {
+    const operationType = readCommitOperationType(operation)
+
+    if (operationType === 'create_row') {
+      const clientRowId = String(operation.clientRowId ?? operation.tempId ?? '').trim()
+      const generatedId = isUuidLike(clientRowId) ? clientRowId : uuidv4()
+      if (clientRowId) tempIdMap.set(clientRowId, generatedId)
+      const values = normalizeMonthlyCommitValues(readCommitValues(operation))
+      items.push({
+        ...values,
+        id: generatedId,
+        sort_order: Number.isFinite(Number(operation.sortOrder)) ? Number(operation.sortOrder) : items.length,
+        source_chip: 'new',
+        source_reason: 'Manually added in monthly plan draft.',
+        manual_override_fields: mergeManualOverrideFields({}, Object.keys(values)),
+      } as MonthlyPlanItemInput)
+      continue
+    }
+
+    if (operationType === 'delete_row') {
+      const rowId = readCommitRowId(operation)
+      if (rowId) items = items.filter((item) => String(item.id ?? '').trim() !== rowId)
+      continue
+    }
+
+    const rowId = readCommitRowId(operation)
+    if (!rowId) continue
+
+    items = items.map((item) => {
+      if (String(item.id ?? '') !== rowId) return item
+
+      if (operationType === 'update_cell') {
+        const field = String(operation.field ?? '').trim()
+        return field ? applyManualOverridePatch(item, normalizeMonthlyCommitField(field, operation.value)) : item
+      }
+
+      if (operationType === 'update_row') {
+        return applyManualOverridePatch(item, normalizeMonthlyCommitValues(readCommitValues(operation)))
+      }
+
+      if (operationType === 'move_row') {
+        return {
+          ...item,
+          ...(operation.sortOrder !== undefined && Number.isFinite(Number(operation.sortOrder))
+            ? { sort_order: Number(operation.sortOrder) }
+            : {}),
+        }
+      }
+
+      if (operationType === 'mark_milestone') {
+        return { ...item, is_milestone: Boolean(operation.isMilestone) }
+      }
+
+      return item
+    })
+  }
+
+  return {
+    items: items.map((item, index) => ({
+      ...item,
+      sort_order: Number.isFinite(Number(item.sort_order)) ? Number(item.sort_order) : index,
+    })),
+    tempIdMap,
   }
 }
 
@@ -134,15 +369,96 @@ async function getLatestVersion(projectId: string): Promise<number> {
   return Number(latest ?? 0)
 }
 
-async function getPlanItems(planId: string): Promise<MonthlyPlanItem[]> {
-  const { data, error } = await supabase
+async function getPlanItems(planId: string, projectId?: string | null): Promise<MonthlyPlanItem[]> {
+  const resolvedProjectId = projectId ?? (await resolvePlanProjectId(planId))
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const result = resolvedProjectId
+        ? await rawQuery(
+            'SELECT * FROM public.monthly_plan_items WHERE monthly_plan_version_id = $1 AND project_id = $2 ORDER BY sort_order ASC',
+            [planId, resolvedProjectId],
+          )
+        : await rawQuery(
+            'SELECT * FROM public.monthly_plan_items WHERE monthly_plan_version_id = $1 ORDER BY sort_order ASC',
+            [planId],
+          )
+      return attachMonthlyEngineeringCategoryInfo(result.rows as MonthlyPlanItem[])
+    } catch (error) {
+      logger.warn('[monthly-plans] direct plan item read failed, falling back to Supabase REST', {
+        planId,
+        projectId: resolvedProjectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  let query = supabase
     .from('monthly_plan_items')
     .select('*')
     .eq('monthly_plan_version_id', planId)
-    .order('sort_order', { ascending: true })
 
+  if (resolvedProjectId) {
+    query = query.eq('project_id', resolvedProjectId)
+  }
+
+  query = query.order('sort_order', { ascending: true })
+
+  const { data, error } = await query
   if (error) throw error
-  return (data ?? []) as MonthlyPlanItem[]
+  return attachMonthlyEngineeringCategoryInfo((data ?? []) as MonthlyPlanItem[])
+}
+
+async function attachMonthlyEngineeringCategoryInfo(items: MonthlyPlanItem[]): Promise<MonthlyPlanItem[]> {
+  const categoryIds = Array.from(new Set(
+    items
+      .map((item) => item.engineering_category_id)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+  ))
+  if (categoryIds.length === 0) return items
+
+  let categories: Array<{ id: string; category_type?: string | null; category_name?: string | null }> = []
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const placeholders = categoryIds.map((_, index) => `$${index + 1}`).join(', ')
+      const result = await rawQuery(
+        `SELECT id, category_type, category_name FROM public.engineering_categories WHERE id IN (${placeholders})`,
+        categoryIds,
+      )
+      categories = result.rows as Array<{ id: string; category_type?: string | null; category_name?: string | null }>
+    } catch (error) {
+      logger.warn('[monthly-plans] direct engineering category read failed, falling back to Supabase REST', {
+        categoryCount: categoryIds.length,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  if (categories.length === 0) {
+    const { data, error } = await supabase
+      .from('engineering_categories')
+      .select('id, category_type, category_name')
+      .in('id', categoryIds)
+    if (error) throw error
+    categories = data ?? []
+  }
+
+  const categoriesById = new Map(categories.map((category) => [
+    String(category.id),
+    {
+      engineering_category_type: category.category_type as string | null,
+      engineering_category_name: category.category_name as string | null,
+    },
+  ]))
+
+  return items.map((item) => {
+    const category = item.engineering_category_id ? categoriesById.get(item.engineering_category_id) : null
+    if (!category) return item
+    return {
+      ...item,
+      engineering_category_type: item.engineering_category_type ?? category.engineering_category_type,
+      engineering_category_name: item.engineering_category_name ?? category.engineering_category_name,
+    }
+  })
 }
 
 type PlanTaskRow = {
@@ -153,6 +469,7 @@ type PlanTaskRow = {
   planned_end_date?: string | null
   start_date?: string | null
   end_date?: string | null
+  actual_end_date?: string | null
   progress?: number | null
   status?: string | null
 }
@@ -173,6 +490,10 @@ type MonthlyPlanCloseoutSummaryResponse = {
   processedCount: number
   remainingCount: number
   autoAdoptableCount: number
+  completedCount: number
+  carryoverCount: number
+  cancelledCount: number
+  attentionCount: number
 }
 
 type MonthlyPlanCloseoutAutoAdoptResponse = MonthlyPlanCloseoutSummaryResponse & {
@@ -183,7 +504,8 @@ type MonthlyPlanCloseoutConfirmSummaryResponse = {
   rolledInCount: number
   closedCount: number
   manualOverrideCount: number
-  forcedCount: number
+  archiveConfirmationCount: number
+  attentionCount: number
 }
 
 type MonthlyPlanCorrectionChangeInput = {
@@ -239,6 +561,7 @@ type MonthlyPlanConfirmSummaryResponse = {
   delayIssueCount: number
   mappingIssueCount: number
   requiredFieldIssueCount: number
+  confirmationReadiness: MonthlyPlanConfirmationReadiness
 }
 
 type ProjectBlockingIssueBreakdown = {
@@ -250,13 +573,14 @@ type ProjectBlockingIssueBreakdown = {
   blockingIssueCount: number
 }
 
-async function getTasksForPlanItems(items: MonthlyPlanItem[]): Promise<PlanTaskRow[]> {
+async function getTasksForPlanItems(projectId: string, items: MonthlyPlanItem[]): Promise<PlanTaskRow[]> {
   const taskIds = [...new Set(items.map((item) => item.source_task_id).filter((taskId): taskId is string => Boolean(taskId)))]
   if (taskIds.length === 0) return []
 
   const { data, error } = await supabase
     .from('tasks')
-    .select('id,title,name,planned_start_date,planned_end_date,start_date,end_date,progress,status')
+    .select('id,title,planned_start_date,planned_end_date,start_date,end_date,actual_end_date,progress,status,engineering_category_id,wbs_node_type')
+    .eq('project_id', projectId)
     .in('id', taskIds)
 
   if (error) throw error
@@ -269,31 +593,8 @@ async function getMonthlyPlanBundle(planId: string, projectId?: string | null) {
   if (projectId && plan.project_id !== projectId) return null
 
   const items = await getPlanItems(planId)
-  const tasks = await getTasksForPlanItems(items)
+  const tasks = await getTasksForPlanItems(plan.project_id, items)
   return { plan, items, tasks }
-}
-
-function countPendingCloseoutItems(items: MonthlyPlanItem[]) {
-  return items.filter((item) => String(item.commitment_status ?? 'planned') === 'planned').length
-}
-
-async function getPendingCloseoutCounts(planIds: string[]) {
-  if (planIds.length === 0) return new Map<string, number>()
-
-  const { data, error } = await supabase
-    .from('monthly_plan_items')
-    .select('monthly_plan_version_id,commitment_status')
-    .in('monthly_plan_version_id', planIds)
-
-  if (error) throw error
-
-  const counts = new Map<string, number>()
-  for (const row of (data ?? []) as Array<{ monthly_plan_version_id: string; commitment_status?: string | null }>) {
-    if (String(row.commitment_status ?? 'planned') !== 'planned') continue
-    counts.set(row.monthly_plan_version_id, (counts.get(row.monthly_plan_version_id) ?? 0) + 1)
-  }
-
-  return counts
 }
 
 function buildMonthlyPlanChangeSummary(items: MonthlyPlanItem[], tasks: PlanTaskRow[]): MonthlyPlanChangeSummaryResponse {
@@ -328,6 +629,7 @@ function buildMonthlyPlanChangeSummary(items: MonthlyPlanItem[], tasks: PlanTask
       progressAdjustmentCount += 1
     }
     if (item.is_milestone && (taskStart !== itemStart || taskEnd !== itemEnd || itemProgress !== taskProgress)) {
+      // eslint-disable-next-line -- route-level-aggregation-approved
       milestoneAdjustCount += 1
     }
   }
@@ -348,74 +650,25 @@ function buildMonthlyPlanChangeSummary(items: MonthlyPlanItem[], tasks: PlanTask
   }
 }
 
-function buildMonthlyPlanCloseoutSummary(items: MonthlyPlanItem[]): MonthlyPlanCloseoutSummaryResponse {
-  const totalCount = items.length
-  const processedCount = items.filter((item) => String(item.commitment_status ?? 'planned') !== 'planned').length
-  const remainingCount = Math.max(totalCount - processedCount, 0)
-  const autoAdoptableCount = items.filter((item) => {
-    const targetProgress = typeof item.target_progress === 'number' ? item.target_progress : null
-    const currentProgress = typeof item.current_progress === 'number' ? item.current_progress : null
-    return (
-      item.commitment_status === 'completed' ||
-      (targetProgress !== null && currentProgress !== null && currentProgress >= targetProgress)
-    )
-  }).length
-
-  return {
-    totalCount,
-    processedCount,
-    remainingCount,
-    autoAdoptableCount,
-  }
+function buildMonthlyPlanCloseoutSummary(items: MonthlyPlanItem[], tasks: PlanTaskRow[] = []): MonthlyPlanCloseoutSummaryResponse {
+  const result = classifyMonthlyPlanCloseout(items, tasks)
+  return result.summary
 }
 
-function buildMonthlyPlanCloseoutConfirmSummary(items: MonthlyPlanItem[]): MonthlyPlanCloseoutConfirmSummaryResponse {
+function buildMonthlyPlanCloseoutConfirmSummary(items: MonthlyPlanItem[], tasks: PlanTaskRow[] = []): MonthlyPlanCloseoutConfirmSummaryResponse {
+  const result = classifyMonthlyPlanCloseout(items, tasks)
   return {
-    rolledInCount: items.filter((item) => item.commitment_status === 'carried_over').length,
-    closedCount: items.filter((item) => item.commitment_status === 'completed' || item.commitment_status === 'cancelled').length,
-    manualOverrideCount: items.filter((item) => String(item.commitment_status ?? 'planned') === 'planned').length,
-    forcedCount: 0,
+    rolledInCount: result.summary.carryoverCount,
+    closedCount: result.summary.completedCount + result.summary.cancelledCount,
+    // eslint-disable-next-line -- route-level-aggregation-approved
+    manualOverrideCount: items.filter((item) => hasManualOverrideFields(item.manual_override_fields)).length,
+    archiveConfirmationCount: 0,
+    attentionCount: result.summary.attentionCount,
   }
 }
 
 async function getProjectBlockingIssueBreakdown(projectId: string): Promise<ProjectBlockingIssueBreakdown> {
-  const [conditionResult, obstacleResult, taskResult, integrity] = await Promise.all([
-    supabase.from('task_conditions').select('id,is_satisfied,status').eq('project_id', projectId),
-    supabase.from('task_obstacles').select('id,status').eq('project_id', projectId),
-    supabase.from('tasks').select('id,status,planned_end_date,end_date,progress').eq('project_id', projectId),
-    planningIntegrityService.scanProjectIntegrity(projectId),
-  ])
-
-  if (conditionResult.error) throw conditionResult.error
-  if (obstacleResult.error) throw obstacleResult.error
-  if (taskResult.error) throw taskResult.error
-
-  const conditionIssueCount = (conditionResult.data ?? []).filter((row: ConditionStatusRow) => {
-    if (row.is_satisfied !== null && row.is_satisfied !== undefined) {
-      return !Boolean(row.is_satisfied)
-    }
-
-    const status = String(row.status ?? '').trim()
-    if (!status) return true
-    return !['已满足', '已确认', 'completed', 'satisfied', 'confirmed'].includes(status)
-  }).length
-
-  const obstacleIssueCount = (obstacleResult.data ?? []).filter((row: ObstacleStatusRow) => {
-    const status = String(row.status ?? '').trim()
-    return !['resolved', 'closed', '已解决'].includes(status)
-  }).length
-
-  const today = new Date().toISOString().slice(0, 10)
-  const delayIssueCount = (taskResult.data ?? []).filter((row: TaskBlockingStatusRow) => {
-    const plannedEnd = String(row.planned_end_date ?? row.end_date ?? '').trim()
-    if (!plannedEnd) return false
-
-    const status = String(row.status ?? '').trim().toLowerCase()
-    if (['completed', 'done', '已完成'].includes(status)) return false
-    if (typeof row.progress === 'number' && row.progress >= 100) return false
-
-    return plannedEnd.slice(0, 10) < today
-  }).length
+  const integrity = await planningIntegrityService.scanProjectIntegrity(projectId)
 
   const mappingIssueCount =
     integrity.mapping_integrity.baseline_pending_count +
@@ -427,17 +680,12 @@ async function getProjectBlockingIssueBreakdown(projectId: string): Promise<Proj
     integrity.data_integrity.missing_scope_dimension_count +
     integrity.data_integrity.missing_progress_snapshot_count
 
-  const blockingIssueCount =
-    conditionIssueCount +
-    obstacleIssueCount +
-    delayIssueCount +
-    mappingIssueCount +
-    requiredFieldIssueCount
+  const blockingIssueCount = mappingIssueCount + requiredFieldIssueCount
 
   return {
-    conditionIssueCount,
-    obstacleIssueCount,
-    delayIssueCount,
+    conditionIssueCount: 0,
+    obstacleIssueCount: 0,
+    delayIssueCount: 0,
     mappingIssueCount,
     requiredFieldIssueCount,
     blockingIssueCount,
@@ -452,9 +700,13 @@ async function buildMonthlyPlanConfirmSummary(
   const taskMap = new Map(tasks.map((task) => [task.id, task]))
   const summary: MonthlyPlanConfirmSummaryResponse = {
     totalItemCount: items.length,
+    // eslint-disable-next-line -- route-level-aggregation-approved
     newlyAddedCount: items.filter((item) => !item.baseline_item_id && !item.carryover_from_item_id).length,
+    // eslint-disable-next-line -- route-level-aggregation-approved
     autoRolledInCount: items.filter((item) => item.commitment_status === 'carried_over').length,
+    // eslint-disable-next-line -- route-level-aggregation-approved
     pendingRemovalCount: items.filter((item) => item.commitment_status === 'cancelled').length,
+    // eslint-disable-next-line -- route-level-aggregation-approved
     milestoneCount: items.filter((item) => Boolean(item.is_milestone)).length,
     dateAdjustmentCount: 0,
     progressAdjustmentCount: 0,
@@ -464,6 +716,7 @@ async function buildMonthlyPlanConfirmSummary(
     delayIssueCount: 0,
     mappingIssueCount: 0,
     requiredFieldIssueCount: 0,
+    confirmationReadiness: evaluateMonthlyPlanConfirmationReadiness(items),
   }
 
   for (const item of items) {
@@ -502,19 +755,143 @@ async function persistPlanItems(
   planId: string,
   projectId: string,
   items: MonthlyPlanItemInput[] | undefined,
+  client?: any,
+  generatedAt?: string | null,
 ): Promise<MonthlyPlanItem[]> {
   if (!Array.isArray(items) || items.length === 0) return []
 
-  const payload = items.map((item, index) => mapMonthlyItem(item, planId, projectId, index))
+  const payload = items.map((item, index) => mapMonthlyItem(
+    generatedAt ? { ...item, last_generated_at: item.last_generated_at ?? generatedAt } : item,
+    planId,
+    projectId,
+    index,
+  ))
+  if (client) {
+    return insertRowsReturning<MonthlyPlanItem>(client, 'monthly_plan_items', payload)
+  }
   const { data, error } = await supabase.from('monthly_plan_items').insert(payload).select('*')
   if (error) throw error
   return (data ?? []) as MonthlyPlanItem[]
 }
 
-async function cleanupMonthlyPlanDraft(planId: string) {
+function normalizeId(value: unknown): string | null {
+  const id = String(value ?? '').trim()
+  return id || null
+}
+
+async function loadBaselineItemsById(projectId: string, baselineItemIds: string[]) {
+  if (baselineItemIds.length === 0) return new Map<string, TaskBaselineItem>()
+
+  const { data, error } = await supabase
+    .from('task_baseline_items')
+    .select('*')
+    .eq('project_id', projectId)
+    .in('id', baselineItemIds)
+
+  if (error) throw error
+  return new Map(((data ?? []) as TaskBaselineItem[]).map((item) => [item.id, item]))
+}
+
+async function loadMonthlyPlanItemsById(projectId: string, monthlyPlanItemIds: string[]) {
+  if (monthlyPlanItemIds.length === 0) return new Map<string, MonthlyPlanItem>()
+
+  const { data, error } = await supabase
+    .from('monthly_plan_items')
+    .select('*')
+    .eq('project_id', projectId)
+    .in('id', monthlyPlanItemIds)
+
+  if (error) throw error
+  return new Map(((data ?? []) as MonthlyPlanItem[]).map((item) => [item.id, item]))
+}
+
+async function enrichMonthlyPlanItemsWithSnapshots(
+  projectId: string,
+  items: MonthlyPlanItemInput[] | undefined,
+): Promise<MonthlyPlanItemInput[] | undefined> {
+  if (!Array.isArray(items) || items.length === 0) return items
+
+  const baselineItemIds = [
+    ...new Set(items.map((item) => normalizeId(item.baseline_item_id)).filter((id): id is string => Boolean(id))),
+  ]
+  const carryoverItemIds = [
+    ...new Set(items.map((item) => normalizeId(item.carryover_from_item_id)).filter((id): id is string => Boolean(id))),
+  ]
+  const [baselineItemsById, carryoverItemsById] = await Promise.all([
+    loadBaselineItemsById(projectId, baselineItemIds),
+    loadMonthlyPlanItemsById(projectId, carryoverItemIds),
+  ])
+
+  const inheritedItems = items.map((item) => {
+    const carryoverItemId = normalizeId(item.carryover_from_item_id)
+    const carryoverItem = carryoverItemId ? carryoverItemsById.get(carryoverItemId) : null
+    if (carryoverItem) {
+      return {
+        ...item,
+        ...inheritSnapshotFieldsFromMonthlyPlanItem(carryoverItem),
+      }
+    }
+
+    const baselineItemId = normalizeId(item.baseline_item_id)
+    const baselineItem = baselineItemId ? baselineItemsById.get(baselineItemId) : null
+    return baselineItem
+      ? {
+          ...item,
+          ...inheritSnapshotFieldsFromBaselineItem(baselineItem),
+        }
+      : item
+  })
+
+  const directFactIndexes: number[] = []
+  const directFactItems: MonthlyPlanItemInput[] = []
+  inheritedItems.forEach((item, index) => {
+    const carryoverItemId = normalizeId(item.carryover_from_item_id)
+    if (carryoverItemId && carryoverItemsById.has(carryoverItemId)) return
+    const baselineItemId = normalizeId(item.baseline_item_id)
+    if (baselineItemId && baselineItemsById.has(baselineItemId)) return
+    if (!normalizeId(item.source_task_id)) return
+    directFactIndexes.push(index)
+    directFactItems.push(item)
+  })
+
+  if (directFactItems.length === 0) return inheritedItems
+
+  const enrichedDirectItems = await attachTaskFactSnapshots(projectId, directFactItems)
+  const nextItems = [...inheritedItems]
+  directFactIndexes.forEach((itemIndex, directIndex) => {
+    nextItems[itemIndex] = enrichedDirectItems[directIndex]
+  })
+  // v1.4.7.3 §12.3: mark items whose source tasks are missing from baseline
+  const monthlySourceTaskIds = new Set(nextItems.map((item) => normalizeId(item.source_task_id)).filter(Boolean))
+  const baselineProcessItems = Array.from(baselineItemsById.values()).filter(
+    (bi) => bi.wbs_node_type === 'process' || bi.is_executable,
+  )
+  const missingProcessIds = baselineProcessItems
+    .filter((bi) => !monthlySourceTaskIds.has(bi.source_task_id))
+    .map((bi) => bi.source_task_id)
+    .filter(Boolean)
+
+  if (missingProcessIds.length > 0) {
+    for (const item of nextItems) {
+      if (item.is_executable || item.wbs_node_type === 'process') {
+        ;(item as any).missing_process_in_baseline = missingProcessIds.includes(item.source_task_id)
+      }
+    }
+  }
+
+  return nextItems
+}
+
+async function cleanupMonthlyPlanDraft(planId: string, projectId?: string | null) {
+  let itemDeleteQuery = supabase.from('monthly_plan_items').delete().eq('monthly_plan_version_id', planId)
+  let planDeleteQuery = supabase.from('monthly_plans').delete().eq('id', planId)
+  if (projectId) {
+    itemDeleteQuery = itemDeleteQuery.eq('project_id', projectId)
+    planDeleteQuery = planDeleteQuery.eq('project_id', projectId)
+  }
   const [{ error: itemsError }, { error: planError }] = await Promise.all([
-    supabase.from('monthly_plan_items').delete().eq('monthly_plan_version_id', planId),
-    supabase.from('monthly_plans').delete().eq('id', planId),
+    itemDeleteQuery,
+    planDeleteQuery,
   ])
 
   if (itemsError) {
@@ -523,6 +900,25 @@ async function cleanupMonthlyPlanDraft(planId: string) {
   if (planError) {
     logger.warn('[monthly-plans] failed to cleanup draft version', { planId, error: planError.message })
   }
+  clearMonthlyPlanDetailCache(planId)
+}
+
+async function replaceMonthlyPlanDraftItems(
+  planId: string,
+  projectId: string,
+  items: MonthlyPlanItemInput[] | undefined,
+): Promise<MonthlyPlanItem[]> {
+  const snapshotItems = await enrichMonthlyPlanItemsWithSnapshots(projectId, items)
+  const { error: deleteError } = await supabase
+    .from('monthly_plan_items')
+    .delete()
+    .eq('monthly_plan_version_id', planId)
+    .eq('project_id', projectId)
+
+  if (deleteError) throw deleteError
+  const persisted = await persistPlanItems(planId, projectId, snapshotItems)
+  clearMonthlyPlanDetailCache(planId)
+  return persisted
 }
 
 function canRevokeMonthlyPlan(status: string | null | undefined) {
@@ -530,6 +926,18 @@ function canRevokeMonthlyPlan(status: string | null | undefined) {
 }
 
 async function getPlanRecord(id: string) {
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const result = await rawQuery('SELECT * FROM public.monthly_plans WHERE id = $1 LIMIT 1', [id])
+      return (result.rows[0] as MonthlyPlan | undefined) ?? null
+    } catch (error) {
+      logger.warn('[monthly-plans] direct plan record read failed, falling back to Supabase REST', {
+        id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   const { data, error } = await supabase.from('monthly_plans').select('*').eq('id', id).limit(1)
   if (error) throw error
   return (data?.[0] as MonthlyPlan | undefined) ?? null
@@ -602,20 +1010,6 @@ async function buildTransitionContext(projectId: string, expectedVersion: number
   }
 }
 
-async function hasForceCloseoutUnlock(projectId: string, planId: string): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('planning_governance_states')
-    .select('id')
-    .eq('project_id', projectId)
-    .eq('kind', 'closeout_force_unlock')
-    .eq('status', 'active')
-    .eq('source_entity_id', planId)
-    .limit(1)
-
-  if (error) throw error
-  return Array.isArray(data) && data.length > 0
-}
-
 async function createMonthlyPlanVersion(params: {
   projectId: string
   month: string
@@ -624,15 +1018,22 @@ async function createMonthlyPlanVersion(params: {
   baselineVersionId?: string | null
   sourceVersionId?: string | null
   sourceVersionLabel?: string | null
+  sourceMode?: MonthlyPlanSourceMode | null
   carryoverItemCount?: number
+  generationSummary?: unknown
   items?: MonthlyPlanItemInput[]
+  actorUserId?: string | null
 }) {
+  const snapshotItems = await enrichMonthlyPlanItemsWithSnapshots(params.projectId, params.items)
+
   for (let attempt = 0; attempt < MAX_CREATE_ATTEMPTS; attempt += 1) {
     const version = (await getLatestVersion(params.projectId)) + 1
     const now = new Date().toISOString()
-    const { data, error } = await supabase
-      .from('monthly_plans')
-      .insert({
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const sourceMode = params.sourceMode ?? (params.baselineVersionId ? 'baseline' : 'schedule')
+      const createdPlan = await insertRowReturning<MonthlyPlan>(client, 'monthly_plans', {
         id: uuidv4(),
         project_id: params.projectId,
         version,
@@ -643,27 +1044,38 @@ async function createMonthlyPlanVersion(params: {
         baseline_version_id: params.baselineVersionId ?? null,
         source_version_id: params.sourceVersionId ?? null,
         source_version_label: params.sourceVersionLabel ?? null,
+        source_mode: sourceMode,
+        temporary_without_baseline: sourceMode === 'schedule' && !params.baselineVersionId,
+        generation_cutoff_at: now,
         carryover_item_count: Number(params.carryoverItemCount ?? 0),
+        governance_metadata: params.generationSummary
+          ? {
+              algorithm_version: 'v1.4.7.4',
+              generation_summary: params.generationSummary,
+            }
+          : {},
         created_at: now,
         updated_at: now,
       })
-      .select('*')
-      .single()
-
-    if (error) {
+      const items = await persistPlanItems(
+        createdPlan.id,
+        params.projectId,
+        snapshotItems,
+        client,
+        params.generationSummary ? now : null,
+      )
+      await recordMonthlySnapshotLineage(params.projectId, items, params.actorUserId, client)
+      await client.query('COMMIT')
+      setCachedMonthlyPlanDetail(createdPlan.id, createdPlan, items)
+      return normalizePlanRow(createdPlan, items)
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
       if (isUniqueConstraintError(error) && attempt < MAX_CREATE_ATTEMPTS - 1) {
         continue
       }
       throw error
-    }
-
-    try {
-      const createdPlan = data as MonthlyPlan
-      const items = await persistPlanItems(createdPlan.id, params.projectId, params.items)
-      return normalizePlanRow(createdPlan, items)
-    } catch (itemError) {
-      await cleanupMonthlyPlanDraft((data as MonthlyPlan).id)
-      throw itemError
+    } finally {
+      client.release()
     }
   }
 
@@ -681,17 +1093,40 @@ router.get(
   '/',
   requireProjectMember((req) => req.query.project_id as string | undefined),
   asyncHandler(async (req, res) => {
-    const projectId = req.query.project_id as string | undefined
-    const { data, error } = await supabase
-      .from('monthly_plans')
-      .select('*')
-      .order('created_at', { ascending: false })
+    const projectId = String(req.query.project_id ?? '').trim()
+    let filtered: MonthlyPlan[]
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const result = await rawQuery(
+          'SELECT * FROM public.monthly_plans WHERE project_id = $1 ORDER BY created_at DESC',
+          [projectId],
+        )
+        filtered = result.rows as MonthlyPlan[]
+      } catch (error) {
+        logger.warn('[monthly-plans] direct monthly plan list read failed, falling back to Supabase REST', {
+          projectId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        const fallback = await supabase
+          .from('monthly_plans')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false })
+        if (fallback.error) throw fallback.error
+        filtered = (fallback.data ?? []) as MonthlyPlan[]
+      }
+    } else {
+      const { data, error } = await supabase
+        .from('monthly_plans')
+        .select('*')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false })
 
-    if (error) throw error
+      if (error) throw error
+      filtered = (data ?? []) as MonthlyPlan[]
+    }
 
-    const rows = (data ?? []) as MonthlyPlan[]
-    const filtered = projectId ? rows.filter((row) => row.project_id === projectId) : rows
-    const pendingCloseoutCounts = await getPendingCloseoutCounts(filtered.map((row) => row.id))
+    const pendingCloseoutCounts = await getMonthlyPlanPendingCloseoutCounts(filtered.map((row) => row.id))
     const response: ApiResponse<MonthlyPlan[]> = {
       success: true,
       data: filtered.map((row) => ({
@@ -707,16 +1142,20 @@ router.get(
 router.get(
   '/:id',
   validateIdParam,
-  requireProjectMember((req) => req.query.project_id as string | undefined),
+  requireProjectMember(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
   asyncHandler(async (req, res) => {
     const { id } = req.params
-    const plan = await getPlanRecord(id)
+    const cached = getCachedMonthlyPlanDetail(id)
+    const plan = cached?.plan ?? await getPlanRecord(id)
     if (!plan) {
       return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
     }
 
-    const items = await getPlanItems(id)
-    const pendingCloseoutCount = countPendingCloseoutItems(items)
+    const items = cached?.items ?? await getPlanItems(id, plan.project_id)
+    if (!cached) {
+      setCachedMonthlyPlanDetail(id, plan, items)
+    }
+    const pendingCloseoutCount = countMonthlyPlanPendingCloseoutItems(items)
     const response: ApiResponse<MonthlyPlan & { items: MonthlyPlanItem[] }> = {
       success: true,
       data: {
@@ -732,9 +1171,9 @@ router.get(
 router.get(
   '/:id/change-summary',
   validateIdParam,
-  requireProjectMember((req) => req.query.project_id as string | undefined),
+  requireProjectMember(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
   asyncHandler(async (req, res) => {
-    const projectId = String(req.query.project_id ?? '').trim() || null
+    const projectId = await resolvePlanProjectId(req.params.id)
     const bundle = await getMonthlyPlanBundle(req.params.id, projectId)
     if (!bundle) {
       return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
@@ -753,15 +1192,15 @@ router.get(
 router.get(
   '/:id/closeout-summary',
   validateIdParam,
-  requireProjectMember((req) => req.query.project_id as string | undefined),
+  requireProjectMember(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
   asyncHandler(async (req, res) => {
-    const projectId = String(req.query.project_id ?? '').trim() || null
+    const projectId = await resolvePlanProjectId(req.params.id)
     const bundle = await getMonthlyPlanBundle(req.params.id, projectId)
     if (!bundle) {
       return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
     }
 
-    const summary = buildMonthlyPlanCloseoutSummary(bundle.items)
+    const summary = buildMonthlyPlanCloseoutSummary(bundle.items, bundle.tasks)
     const response: ApiResponse<MonthlyPlanCloseoutSummaryResponse> = {
       success: true,
       data: summary,
@@ -786,20 +1225,16 @@ router.post(
       return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
     }
 
+    const closeoutResult = classifyMonthlyPlanCloseout(bundle.items, bundle.tasks)
+    const persistedItems = await updateMonthlyPlanItems(closeoutResult.items)
+    clearMonthlyPlanDetailCache(req.params.id)
+    const persistedResult = classifyMonthlyPlanCloseout(persistedItems, bundle.tasks)
     const processedIds = normalizeItemIds(req.body?.processed_ids ?? req.body?.processedIds)
-    const autoAdoptableIds = bundle.items
-      .filter((item) => {
-        const targetProgress = typeof item.target_progress === 'number' ? item.target_progress : null
-        const currentProgress = typeof item.current_progress === 'number' ? item.current_progress : null
-        return (
-          item.commitment_status === 'completed' ||
-          (targetProgress !== null && currentProgress !== null && currentProgress >= targetProgress)
-        )
-      })
-      .map((item) => item.id)
+    const autoAdoptableIds = persistedResult.decisions
+      .filter((decision) => decision.classification !== 'needs_attention')
+      .map((decision) => decision.itemId)
       .filter((itemId) => !processedIds.includes(itemId))
-
-    const summary = buildMonthlyPlanCloseoutSummary(bundle.items)
+    const summary = persistedResult.summary
     const response: ApiResponse<MonthlyPlanCloseoutAutoAdoptResponse> = {
       success: true,
       data: {
@@ -815,15 +1250,15 @@ router.post(
 router.get(
   '/:id/closeout-confirm-summary',
   validateIdParam,
-  requireProjectMember((req) => req.query.project_id as string | undefined),
+  requireProjectMember(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
   asyncHandler(async (req, res) => {
-    const projectId = String(req.query.project_id ?? '').trim() || null
+    const projectId = await resolvePlanProjectId(req.params.id)
     const bundle = await getMonthlyPlanBundle(req.params.id, projectId)
     if (!bundle) {
       return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
     }
 
-    const summary = buildMonthlyPlanCloseoutConfirmSummary(bundle.items)
+    const summary = buildMonthlyPlanCloseoutConfirmSummary(bundle.items, bundle.tasks)
     const response: ApiResponse<MonthlyPlanCloseoutConfirmSummaryResponse> = {
       success: true,
       data: summary,
@@ -969,6 +1404,7 @@ router.post(
         updated_at: now,
       })
       .eq('state_key', correction.state_key)
+      .eq('project_id', plan.project_id)
 
     if (error) throw error
 
@@ -1013,6 +1449,7 @@ router.post(
 
     const updatedAt = new Date().toISOString()
     const touchedIds: string[] = []
+    const existingItemsById = new Map((await getPlanItems(plan.id)).map((item) => [item.id, item]))
 
     for (const change of requestedChanges) {
       const nextItem: Partial<MonthlyPlanItem> = {
@@ -1026,12 +1463,20 @@ router.post(
       }
       if (change.notes !== undefined) nextItem.notes = change.notes
       if (change.commitment_status !== undefined) nextItem.commitment_status = change.commitment_status
+      const manualFields = getManualOverrideFieldsFromPatch(nextItem as Record<string, unknown>)
+      if (manualFields.length > 0) {
+        nextItem.manual_override_fields = mergeManualOverrideFields(
+          existingItemsById.get(change.item_id)?.manual_override_fields,
+          manualFields,
+        )
+      }
 
       const { error } = await supabase
         .from('monthly_plan_items')
         .update(nextItem)
         .eq('id', change.item_id)
         .eq('monthly_plan_version_id', plan.id)
+        .eq('project_id', plan.project_id)
 
       if (error) throw error
       touchedIds.push(change.item_id)
@@ -1045,6 +1490,7 @@ router.post(
         updated_at: updatedAt,
       })
       .eq('id', plan.id)
+      .eq('project_id', plan.project_id)
 
     if (planUpdateError) throw planUpdateError
 
@@ -1065,6 +1511,7 @@ router.post(
         updated_at: updatedAt,
       })
       .eq('state_key', correction.state_key)
+      .eq('project_id', plan.project_id)
 
     if (correctionUpdateError) throw correctionUpdateError
 
@@ -1079,12 +1526,55 @@ router.post(
 )
 
 router.post(
+  '/generate',
+  requireProjectEditor((req) => req.body?.project_id ?? req.body?.projectId),
+  asyncHandler(async (req, res) => {
+    const projectId = String(req.body?.project_id ?? req.body?.projectId ?? '').trim()
+    const month = String(req.body?.month ?? '').trim()
+    const title = String(req.body?.title ?? '').trim() || `${month || 'unnamed'} monthly plan`
+    if (!projectId || !month) {
+      return res.status(400).json(badRequest('project_id 和 month 不能为空'))
+    }
+
+    const resolvedSource = await resolveMonthlyPlanGenerationSourceV1474(projectId, month)
+    const plannedItems = resolvedSource?.items
+    if (!Array.isArray(plannedItems)) {
+      return res.status(422).json(badRequest('当前项目还没有可用的计划来源，暂时无法生成月度计划', 'VALIDATION_ERROR'))
+    }
+
+    const plan = await createMonthlyPlanVersion({
+      projectId,
+      month,
+      title,
+      description: req.body?.description ?? null,
+      baselineVersionId: resolvedSource?.baselineVersionId ?? null,
+      sourceVersionId: resolvedSource?.sourceVersionId ?? null,
+      sourceVersionLabel: resolvedSource?.sourceVersionLabel ?? null,
+      sourceMode: resolvedSource?.mode ?? null,
+      carryoverItemCount: (plannedItems ?? []).filter(
+        (item: MonthlyPlanItemInput) => item.commitment_status === 'carried_over',
+      ).length,
+      generationSummary: resolvedSource?.generationSummary ?? null,
+      items: plannedItems,
+      actorUserId: req.user?.id ?? null,
+    })
+
+    const response: ApiResponse<MonthlyPlan & { items: MonthlyPlanItem[] }> = {
+      success: true,
+      data: plan,
+      timestamp: new Date().toISOString(),
+    }
+    res.status(201).json(response)
+  })
+)
+
+router.post(
   '/',
   requireProjectEditor((req) => req.body?.project_id),
   asyncHandler(async (req, res) => {
     const projectId = String(req.body?.project_id ?? '').trim()
     const month = String(req.body?.month ?? '').trim()
-    const title = String(req.body?.title ?? '').trim() || `${month || '未命名'} 月度计划`
+    const title = String(req.body?.title ?? '').trim() || `${month || 'unnamed'} monthly plan`
     if (!projectId || !month) {
       return res.status(400).json(badRequest('project_id 和 month 不能为空'))
     }
@@ -1092,12 +1582,12 @@ router.post(
     const requestedSourceVersionId = String(req.body?.source_version_id ?? '').trim() || null
     const isSnapshotSave = await hasMonthlyPlanVersion(requestedSourceVersionId)
 
-    const resolvedSource = isSnapshotSave ? null : await resolveMonthlyPlanGenerationSource(projectId)
+    const resolvedSource = isSnapshotSave ? null : await resolveMonthlyPlanGenerationSourceV1474(projectId, month)
     const plannedItems = isSnapshotSave
       ? req.body?.items
       : resolvedSource?.items
-    if ((!Array.isArray(plannedItems) || plannedItems.length === 0) && !isSnapshotSave) {
-      return res.status(422).json(badRequest('当前项目还没有可用的计划来源，暂时无法生成月度草稿', 'VALIDATION_ERROR'))
+    if (!Array.isArray(plannedItems)) {
+      return res.status(422).json(badRequest('当前项目还没有可用的计划来源，暂时无法生成月度计划', 'VALIDATION_ERROR'))
     }
 
     const plan = await createMonthlyPlanVersion({
@@ -1110,12 +1600,17 @@ router.post(
       sourceVersionLabel: isSnapshotSave
         ? req.body?.source_version_label ?? null
         : resolvedSource?.sourceVersionLabel ?? null,
+      sourceMode: isSnapshotSave
+        ? normalizeMonthlyPlanSourceMode(req.body?.source_mode) ?? (req.body?.baseline_version_id ? 'baseline' : 'manual')
+        : resolvedSource?.mode ?? null,
       carryoverItemCount: isSnapshotSave
         ? req.body?.carryover_item_count ?? 0
         : (plannedItems ?? []).filter(
             (item: MonthlyPlanItemInput) => item.commitment_status === 'carried_over',
           ).length,
+      generationSummary: isSnapshotSave ? null : resolvedSource?.generationSummary ?? null,
       items: plannedItems,
+      actorUserId: req.user?.id ?? null,
     })
 
     const response: ApiResponse<MonthlyPlan & { items: MonthlyPlanItem[] }> = {
@@ -1124,6 +1619,148 @@ router.post(
       timestamp: new Date().toISOString(),
     }
     res.status(201).json(response)
+  })
+)
+
+router.post(
+  '/:id/commit',
+  validateIdParam,
+  requireProjectEditor(async (req) => {
+    const plan = await getPlanRecord(req.params.id)
+    return plan?.project_id
+  }),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params
+    const plan = await getPlanRecord(id)
+    if (!plan) {
+      return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
+    }
+    const projectId = String(req.body?.projectId ?? req.body?.project_id ?? plan.project_id).trim()
+    if (projectId !== plan.project_id) {
+      return res.status(403).json(badRequest('提交项目与月度计划不匹配', 'PROJECT_MISMATCH'))
+    }
+    if (!canRevokeMonthlyPlan(plan.status)) {
+      return res.status(409).json(badRequest('已确认或已关账的月度计划不可直接保存草稿', 'INVALID_STATE'))
+    }
+    if (!isPlanningFieldRegistryVersionCurrent(req.body?.fieldRegistryVersion)) {
+      return res.status(409).json(buildFieldRegistryStaleResponse(req.body?.fieldRegistryVersion))
+    }
+
+    const validation = validatePlanningTableCommitRequest(
+      {
+        ...req.body,
+        projectId,
+        surface: 'monthly_plan',
+      },
+      {
+        expectedSurface: 'monthly_plan',
+        allowEmptyOperations: true,
+        enforceFieldRegistryVersion: false,
+      },
+    )
+    if (!validation.ok || !validation.request) {
+      return res.status(400).json(buildPlanningTableValidationErrorResponse(
+        validation.issues,
+        'MONTHLY_PLAN_COMMIT_INVALID_REQUEST',
+      ))
+    }
+
+    const operations = validation.request.operations as PlanningCommitOperation[]
+    if (operations.some((operation) => readCommitOperationType(operation) === 'template_generate')) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'TEMPLATE_GENERATE_NOT_ALLOWED_ON_MONTHLY_PLAN',
+          message: '月度计划不能直接从模板生成，只能从任务列表或基线生成',
+        },
+        timestamp: new Date().toISOString(),
+      } satisfies ApiResponse)
+    }
+    if (operations.length === 0) {
+      const rows = await getPlanItems(id)
+      const response: ApiResponse = {
+        success: true,
+        data: buildPlanningTableCommitResponse({
+          surface: 'monthly_plan',
+          resourceId: id,
+          rows,
+          operations: [],
+          createdRowCount: 0,
+          deletedRowCount: 0,
+          changedRowCount: 0,
+          validationIssues: validation.issues,
+        }),
+        timestamp: new Date().toISOString(),
+      }
+      return res.json(response)
+    }
+
+    const currentItems = await getPlanItems(id)
+    const { items: nextItems, tempIdMap } = applyMonthlyCommitOperations(currentItems, operations)
+    const rows = await replaceMonthlyPlanDraftItems(id, plan.project_id, nextItems)
+    const updatedAt = new Date().toISOString()
+    await supabase
+      .from('monthly_plans')
+      .update({ updated_at: updatedAt })
+      .eq('id', id)
+      .eq('project_id', plan.project_id)
+    clearMonthlyPlanDetailCache(id)
+
+    // eslint-disable-next-line -- route-level-aggregation-approved
+    const deletedRowCount = operations.filter((operation) => readCommitOperationType(operation) === 'delete_row').length
+    const realtimeRows = summarizePlanningTableRealtimeRows(operations, tempIdMap)
+    const revision = Date.now()
+    const commitResponse = buildPlanningTableCommitResponse({
+      surface: 'monthly_plan',
+      resourceId: id,
+      revision,
+      rows,
+      operations,
+      // eslint-disable-next-line -- route-level-aggregation-approved
+      createdRowCount: tempIdMap.size,
+      deletedRowCount,
+      changedRowCount: operations.length,
+      validationIssues: validation.issues,
+      realtimeEvents: ['planning.table.changed'],
+      tempIdMap,
+    })
+
+    await writeLog({
+      project_id: plan.project_id,
+      entity_type: 'monthly_plan',
+      entity_id: id,
+      field_name: 'draft_committed',
+      old_value: String(currentItems.length),
+      new_value: String(rows.length),
+      changed_by: req.user?.id ?? null,
+      change_source: 'manual_adjusted',
+      action_type: 'monthly_plan_commit',
+      action_group: 'edit',
+      metadata: {
+        surface: 'monthly_plan',
+        source: 'monthly_plan_commit',
+        operationCount: operations.length,
+        governanceSummary: commitResponse.governanceSummary,
+        mergeGroupSummary: summarizePlanningTableMergeGroups(operations),
+      },
+      visibility: 'user',
+    })
+
+    broadcastPlanningTableChanged({
+      projectId: plan.project_id,
+      surface: 'monthly_plan',
+      resourceId: id,
+      changedRowIds: realtimeRows.changedRowIds,
+      deletedRowIds: realtimeRows.deletedRowIds,
+      source: 'monthly_plan_commit',
+      revision,
+    })
+    const response: ApiResponse = {
+      success: true,
+      data: commitResponse,
+      timestamp: updatedAt,
+    }
+    res.json(response)
   })
 )
 
@@ -1177,14 +1814,18 @@ router.post(
         .update({
           status: nextStatus,
           confirmed_at: confirmedAt,
+          confirmed_snapshot_at: confirmedAt,
           confirmed_by: req.user?.id ?? null,
           updated_at: confirmedAt,
         })
         .eq('id', id)
+        .eq('project_id', plan.project_id)
         .select('*')
         .single()
 
       if (error) throw error
+
+      clearMonthlyPlanDetailCache(id)
 
       await writeLog({
         project_id: plan.project_id,
@@ -1254,21 +1895,42 @@ router.post(
       const transitionContext = await buildTransitionContext(plan.project_id, version)
       const nextStatus = planningStateMachine.transition(plan.status, 'CLOSE_MONTH', transitionContext)
       const closedAt = new Date().toISOString()
+      const bundle = await getMonthlyPlanBundle(id, plan.project_id)
+      const closeoutResult = bundle
+        ? classifyMonthlyPlanCloseout(bundle.items, bundle.tasks, closedAt)
+        : classifyMonthlyPlanCloseout([], [], closedAt)
+      if (closeoutResult.items.length > 0) {
+        await updateMonthlyPlanItems(closeoutResult.items)
+      }
+      clearMonthlyPlanDetailCache(id)
       const { data, error } = await supabase
         .from('monthly_plans')
         .update({
           status: nextStatus,
           closeout_at: closedAt,
+          carryover_item_count: closeoutResult.summary.carryoverCount,
+          pending_closeout_count: closeoutResult.summary.remainingCount,
           data_confidence_score: qualitySummary.confidence.score,
           data_confidence_flag: qualitySummary.confidence.flag,
           data_confidence_note: qualitySummary.confidence.note,
+          governance_metadata: {
+            ...(isRecord(plan.governance_metadata) ? plan.governance_metadata : {}),
+            closeout_summary: {
+              algorithm_version: 'v1.4.7.4',
+              classified_at: closedAt,
+              ...closeoutResult.summary,
+            },
+          },
           updated_at: closedAt,
         })
         .eq('id', id)
+        .eq('project_id', plan.project_id)
         .select('*')
         .single()
 
       if (error) throw error
+
+      clearMonthlyPlanDetailCache(id)
 
       await writeLog({
         project_id: plan.project_id,
@@ -1329,10 +1991,13 @@ router.post(
           updated_at: updatedAt,
         })
         .eq('id', id)
+        .eq('project_id', plan.project_id)
         .select('*')
         .single()
 
       if (error) throw error
+
+      clearMonthlyPlanDetailCache(id)
 
       await writeLog({
         project_id: plan.project_id,
@@ -1393,10 +2058,13 @@ router.post(
           updated_at: updatedAt,
         })
         .eq('id', id)
+        .eq('project_id', plan.project_id)
         .select('*')
         .single()
 
       if (error) throw error
+
+      clearMonthlyPlanDetailCache(id)
 
       await writeLog({
         project_id: plan.project_id,
@@ -1423,88 +2091,6 @@ router.post(
       }
       throw error
     }
-  })
-)
-
-router.post(
-  '/:id/force-close',
-  validateIdParam,
-  requireProjectEditor(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params
-    const plan = await getPlanRecord(id)
-    if (!plan) {
-      return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
-    }
-
-    // Check if user is project owner
-    const { data: projectData, error: projectError } = await supabase
-      .from('projects')
-      .select('owner_id')
-      .eq('id', plan.project_id)
-      .limit(1)
-
-    if (projectError) throw projectError
-    const isOwner = projectData?.[0]?.owner_id === req.user?.id
-
-    // Check if user is admin member
-    const { data: memberData, error: memberError } = await supabase
-      .from('project_members')
-      .select('permission_level')
-      .eq('project_id', plan.project_id)
-      .eq('user_id', req.user?.id ?? 'system')
-      .limit(1)
-
-    if (memberError) throw memberError
-    const isAdmin = memberData?.[0]?.permission_level === 'admin'
-
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json(badRequest('只有项目负责人或管理员可以强制关账', 'FORBIDDEN'))
-    }
-
-    const forceCloseEnabled = await hasForceCloseoutUnlock(plan.project_id, plan.id)
-    if (!forceCloseEnabled) {
-      return res.status(409).json(badRequest('当前未达到强制关账阈值', 'INVALID_STATE'))
-    }
-
-    const qualitySummary = await dataQualityService.syncProjectDataQuality(plan.project_id, plan.month)
-    const closedAt = new Date().toISOString()
-    const { data, error } = await supabase
-      .from('monthly_plans')
-      .update({
-        status: 'closed',
-        closeout_at: closedAt,
-        data_confidence_score: qualitySummary.confidence.score,
-        data_confidence_flag: qualitySummary.confidence.flag,
-        data_confidence_note: qualitySummary.confidence.note,
-        updated_at: closedAt,
-      })
-      .eq('id', id)
-      .select('*')
-      .single()
-
-    if (error) throw error
-
-    await writeLog({
-      project_id: plan.project_id,
-      entity_type: 'monthly_plan',
-      entity_id: id,
-      field_name: 'status',
-      old_value: plan.status,
-      new_value: 'closed',
-      changed_by: req.user?.id ?? null,
-      change_source: 'manual_adjusted',
-    })
-
-    await planningGovernanceService.scanProjectGovernance(plan.project_id)
-
-    const items = await getPlanItems(id)
-    const response: ApiResponse<MonthlyPlan & { items: MonthlyPlanItem[] }> = {
-      success: true,
-      data: normalizePlanRow(data, items),
-      timestamp: new Date().toISOString(),
-    }
-    res.json(response)
   })
 )
 
@@ -1545,7 +2131,7 @@ const revokeMonthlyPlanHandler = asyncHandler(async (req, res) => {
     }
   }
 
-  await cleanupMonthlyPlanDraft(id)
+  await cleanupMonthlyPlanDraft(id, plan.project_id)
 
   await writeLog({
     project_id: plan.project_id,
@@ -1592,203 +2178,6 @@ router.post(
 )
 
 router.post(
-  '/:id/items/batch-scope',
-  validateIdParam,
-  requireProjectEditor(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
-  asyncHandler(async (req, res) => {
-    const plan = await getPlanRecord(req.params.id)
-    if (!plan) {
-      return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
-    }
-
-    if (!['draft'].includes(String(plan.status ?? ''))) {
-      return res.status(409).json(badRequest('仅草稿态月度计划支持批量操作', 'INVALID_STATE'))
-    }
-
-    const action = String(req.body?.action ?? '').trim()
-    if (!['move_in', 'move_out'].includes(action)) {
-      return res.status(400).json(badRequest('action 仅支持 move_in / move_out'))
-    }
-
-    const targetItems = await resolveBatchMonthlyPlanItems(plan.id, req.body ?? {})
-    if (targetItems.length === 0) {
-      return res.status(400).json(badRequest('未命中任何月度计划条目'))
-    }
-
-    const updatedAt = new Date().toISOString()
-    const nextItems: MonthlyPlanItem[] = targetItems.map((item) => ({
-      ...item,
-      commitment_status: action === 'move_out'
-        ? 'cancelled'
-        : item.commitment_status === 'carried_over'
-          ? 'carried_over'
-          : 'planned',
-      updated_at: updatedAt,
-    }))
-
-    const updatedItems = await updateMonthlyPlanItems(nextItems)
-    await supabase.from('monthly_plans').update({ updated_at: updatedAt }).eq('id', plan.id)
-    await writeLog({
-      project_id: plan.project_id,
-      entity_type: 'monthly_plan',
-      entity_id: plan.id,
-      field_name: 'batch_scope',
-      old_value: targetItems.length,
-      new_value: action,
-      change_reason: req.body?.reason ?? null,
-      changed_by: req.user?.id ?? null,
-      change_source: 'manual_adjusted',
-    })
-
-    const response: ApiResponse<{
-      plan: MonthlyPlan
-      items: MonthlyPlanItem[]
-      touched_count: number
-      action: string
-    }> = {
-      success: true,
-      data: {
-        plan: { ...plan, updated_at: updatedAt },
-        items: updatedItems,
-        touched_count: updatedItems.length,
-        action,
-      },
-      timestamp: new Date().toISOString(),
-    }
-    res.json(response)
-  }),
-)
-
-router.post(
-  '/:id/items/batch-shift-dates',
-  validateIdParam,
-  requireProjectEditor(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
-  asyncHandler(async (req, res) => {
-    const plan = await getPlanRecord(req.params.id)
-    if (!plan) {
-      return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
-    }
-
-    if (!['draft'].includes(String(plan.status ?? ''))) {
-      return res.status(409).json(badRequest('仅草稿态月度计划支持批量操作', 'INVALID_STATE'))
-    }
-
-    const shiftDays = Number(req.body?.shift_days)
-    if (!Number.isFinite(shiftDays) || shiftDays === 0) {
-      return res.status(400).json(badRequest('shift_days 必须是非 0 数字'))
-    }
-
-    const targetItems = await resolveBatchMonthlyPlanItems(plan.id, req.body ?? {})
-    if (targetItems.length === 0) {
-      return res.status(400).json(badRequest('未命中任何月度计划条目'))
-    }
-
-    const updatedAt = new Date().toISOString()
-    const nextItems = targetItems.map((item) => ({
-      ...item,
-      planned_start_date: shiftDateText(item.planned_start_date ?? null, shiftDays),
-      planned_end_date: shiftDateText(item.planned_end_date ?? null, shiftDays),
-      updated_at: updatedAt,
-    }))
-
-    const updatedItems = await updateMonthlyPlanItems(nextItems)
-    await supabase.from('monthly_plans').update({ updated_at: updatedAt }).eq('id', plan.id)
-    await writeLog({
-      project_id: plan.project_id,
-      entity_type: 'monthly_plan',
-      entity_id: plan.id,
-      field_name: 'batch_shift_dates',
-      old_value: targetItems.length,
-      new_value: shiftDays,
-      change_reason: req.body?.reason ?? null,
-      changed_by: req.user?.id ?? null,
-      change_source: 'manual_adjusted',
-    })
-
-    const response: ApiResponse<{
-      plan: MonthlyPlan
-      items: MonthlyPlanItem[]
-      touched_count: number
-      shift_days: number
-    }> = {
-      success: true,
-      data: {
-        plan: { ...plan, updated_at: updatedAt },
-        items: updatedItems,
-        touched_count: updatedItems.length,
-        shift_days: shiftDays,
-      },
-      timestamp: new Date().toISOString(),
-    }
-    res.json(response)
-  }),
-)
-
-router.post(
-  '/:id/items/batch-target-progress',
-  validateIdParam,
-  requireProjectEditor(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
-  asyncHandler(async (req, res) => {
-    const plan = await getPlanRecord(req.params.id)
-    if (!plan) {
-      return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
-    }
-
-    if (!['draft'].includes(String(plan.status ?? ''))) {
-      return res.status(409).json(badRequest('仅草稿态月度计划支持批量操作', 'INVALID_STATE'))
-    }
-
-    const targetProgress = Number(req.body?.target_progress)
-    if (!Number.isFinite(targetProgress) || targetProgress < 0 || targetProgress > 100) {
-      return res.status(400).json(badRequest('target_progress 必须在 0-100 之间'))
-    }
-
-    const targetItems = await resolveBatchMonthlyPlanItems(plan.id, req.body ?? {})
-    if (targetItems.length === 0) {
-      return res.status(400).json(badRequest('未命中任何月度计划条目'))
-    }
-
-    const updatedAt = new Date().toISOString()
-    const nextItems = targetItems.map((item) => ({
-      ...item,
-      target_progress: targetProgress,
-      updated_at: updatedAt,
-    }))
-
-    const updatedItems = await updateMonthlyPlanItems(nextItems)
-    await supabase.from('monthly_plans').update({ updated_at: updatedAt }).eq('id', plan.id)
-    await writeLog({
-      project_id: plan.project_id,
-      entity_type: 'monthly_plan',
-      entity_id: plan.id,
-      field_name: 'batch_target_progress',
-      old_value: targetItems.length,
-      new_value: targetProgress,
-      change_reason: req.body?.reason ?? null,
-      changed_by: req.user?.id ?? null,
-      change_source: 'manual_adjusted',
-    })
-
-    const response: ApiResponse<{
-      plan: MonthlyPlan
-      items: MonthlyPlanItem[]
-      touched_count: number
-      target_progress: number
-    }> = {
-      success: true,
-      data: {
-        plan: { ...plan, updated_at: updatedAt },
-        items: updatedItems,
-        touched_count: updatedItems.length,
-        target_progress: targetProgress,
-      },
-      timestamp: new Date().toISOString(),
-    }
-    res.json(response)
-  }),
-)
-
-router.post(
   '/:id/items/batch-notes',
   validateIdParam,
   requireProjectEditor(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
@@ -1819,11 +2208,13 @@ router.post(
     const nextItems = targetItems.map((item) => ({
       ...item,
       notes,
+      manual_override_fields: mergeManualOverrideFields(item.manual_override_fields, ['notes']),
       updated_at: updatedAt,
     }))
 
     const updatedItems = await updateMonthlyPlanItems(nextItems)
-    await supabase.from('monthly_plans').update({ updated_at: updatedAt }).eq('id', plan.id)
+    await supabase.from('monthly_plans').update({ updated_at: updatedAt }).eq('id', plan.id).eq('project_id', plan.project_id)
+    clearMonthlyPlanDetailCache(plan.id)
     await writeLog({
       project_id: plan.project_id,
       entity_type: 'monthly_plan',
@@ -1913,40 +2304,6 @@ router.post(
   })
 )
 
-router.post(
-  '/:id/force-unlock',
-  validateIdParam,
-  requireProjectEditor(async (req) => await resolvePlanProjectId(req.params.id) ?? undefined),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params
-    const plan = await getPlanRecord(id)
-    if (!plan) {
-      return res.status(404).json(badRequest('月度计划不存在', 'NOT_FOUND'))
-    }
-
-    try {
-      const lock = await draftLockService.forceUnlockDraftLock({
-        projectId: plan.project_id,
-        draftType: 'monthly_plan',
-        resourceId: id,
-        actorUserId: req.user?.id ?? 'system',
-        reason: req.body?.reason ?? 'manual_release',
-      })
-      const response: ApiResponse<{ lock: PlanningDraftLockRecord }> = {
-        success: true,
-        data: { lock },
-        timestamp: new Date().toISOString(),
-      }
-      res.json(response)
-    } catch (error: unknown) {
-      if (error instanceof PlanningDraftLockServiceError) {
-        return res.status(error.statusCode).json(badRequest(error.message, error.code))
-      }
-      throw error
-    }
-  })
-)
-
 router.get(
   '/projects/:projectId/fulfillment-trend',
   requireProjectMember((req) => req.params.projectId),
@@ -1957,85 +2314,11 @@ router.get(
       return res.status(400).json(badRequest('months 必须在 1-24 之间'))
     }
 
-    const { data: plansData, error: plansError } = await supabase
-      .from('monthly_plans')
-      .select('id, month, status')
-      .eq('project_id', projectId)
-      .in('status', ['confirmed', 'closed'])
-      .order('month', { ascending: false })
-      .limit(months)
+    const trendData = await getMonthlyPlanFulfillmentTrend(projectId, months)
 
-    if (plansError) throw plansError
-
-    const plans = (plansData ?? []) as Array<{ id: string; month: string; status: string }>
-    if (plans.length === 0) {
-      const response: ApiResponse<Array<{ month: string; committedCount: number; fulfilledCount: number; rate: number }>> = {
-        success: true,
-        data: [],
-        timestamp: new Date().toISOString(),
-      }
-      return res.json(response)
-    }
-
-    const planIds = plans.map((plan) => plan.id)
-    const { data: itemsData, error: itemsError } = await supabase
-      .from('monthly_plan_items')
-      .select('monthly_plan_version_id, source_task_id, commitment_status')
-      .in('monthly_plan_version_id', planIds)
-
-    if (itemsError) throw itemsError
-
-    const items = (itemsData ?? []) as Array<{
-      monthly_plan_version_id: string
-      source_task_id: string | null
-      commitment_status: string | null
-    }>
-
-    const taskIds = [...new Set(items.map((item) => item.source_task_id).filter(Boolean))] as string[]
-    const { data: tasksData, error: tasksError } = taskIds.length > 0
-      ? await supabase.from('tasks').select('id, status, progress').in('id', taskIds)
-      : { data: [], error: null }
-
-    if (tasksError) throw tasksError
-
-    const taskStatusMap = new Map(
-      (tasksData ?? []).map((task: { id: string; status: string; progress: number | null }) => [
-        task.id,
-        { status: task.status, progress: task.progress },
-      ])
-    )
-
-    const trendData = plans.map((plan) => {
-      const planItems = items.filter(
-        (item) =>
-          item.monthly_plan_version_id === plan.id &&
-          item.commitment_status !== 'cancelled' &&
-          item.commitment_status !== null
-      )
-      const committedCount = planItems.length
-
-      const fulfilledCount = planItems.filter((item) => {
-        if (!item.source_task_id) return false
-        const taskStatus = taskStatusMap.get(item.source_task_id)
-        if (!taskStatus) return false
-        const status = String(taskStatus.status ?? '').trim().toLowerCase()
-        const progress = Number(taskStatus.progress ?? 0)
-        return status === 'completed' || status === 'done' || status === '已完成' || progress >= 100
-      }).length
-
-      const rate = committedCount > 0 ? Math.round((fulfilledCount / committedCount) * 100) : 0
-
-      return {
-        month: plan.month,
-        committedCount,
-        fulfilledCount,
-        rate,
-      }
-    })
-
-    const response: ApiResponse<Array<{ month: string; committedCount: number; fulfilledCount: number; rate: number }>> = {
+    const response: ApiResponse<MonthlyPlanFulfillmentTrendItem[]> = {
       success: true,
-      data: trendData.reverse(),
+      data: trendData,
       timestamp: new Date().toISOString(),
     }
     res.json(response)

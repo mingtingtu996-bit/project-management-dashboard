@@ -9,6 +9,16 @@ function flush() {
   return Promise.resolve()
 }
 
+function jsonResponse(payload: unknown) {
+  const body = JSON.stringify(payload)
+  return {
+    ok: true,
+    status: 200,
+    text: async () => body,
+    json: async () => payload,
+  } as Response
+}
+
 async function waitForText(container: HTMLElement, expected: string[]) {
   for (let attempt = 0; attempt < 25; attempt += 1) {
     await act(async () => {
@@ -57,9 +67,7 @@ describe('DashboardCompareCard', () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/daily-progress')) {
-        return {
-          ok: true,
-          json: async () => ({
+        return jsonResponse({
             success: true,
             data: {
               date: '2026-04-19',
@@ -75,8 +83,7 @@ describe('DashboardCompareCard', () => {
               },
               details: [],
             },
-          }),
-        } as never
+          })
       }
 
       if (url.includes('/task-summary/compare')) {
@@ -97,19 +104,13 @@ describe('DashboardCompareCard', () => {
                 { period_label: '今天', from: '2026-04-19', to: '2026-04-19' },
               ]
 
-        return {
-          ok: true,
-          json: async () => ({
+        return jsonResponse({
             success: true,
             data: buildCompareResults(periods),
-          }),
-        } as never
+          })
       }
 
-      return {
-        ok: true,
-        json: async () => ({ success: true }),
-      } as never
+      return jsonResponse({ success: true })
     })
 
     vi.stubGlobal('fetch', fetchMock)
@@ -125,7 +126,7 @@ describe('DashboardCompareCard', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders fixed day, week, and month compare blocks with report link', async () => {
+  it('renders the segmented compare metrics and loads each granularity on demand', async () => {
     await act(async () => {
       root?.render(
         <MemoryRouter initialEntries={['/projects/project-1/dashboard']}>
@@ -135,34 +136,76 @@ describe('DashboardCompareCard', () => {
       await flush()
     })
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/api/task-summaries/projects/project-1/daily-progress'),
-      expect.anything(),
-    )
+    await waitForText(container, ['现场快照与对比', '日', '周', '月', '更新任务', '完成任务'])
 
-    await waitForText(container, ['现场快照与对比', '日对比', '周对比', '月对比', '状态变化指标摘要'])
-
-    const compareCalls = fetchMock.mock.calls
+    let compareCalls = fetchMock.mock.calls
       .map(([url]) => String(url))
       .filter((url) => url.includes('/task-summary/compare?'))
 
-    expect(compareCalls).toHaveLength(3)
+    expect(compareCalls).toHaveLength(1)
+    expect(new URL(compareCalls[0], 'http://localhost').searchParams.get('granularity')).toBe('day')
+    expect(new URL(compareCalls[0], 'http://localhost').searchParams.get('summaryOnly')).toBe('true')
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/daily-progress'))).toBe(false)
+
+    expect(container.textContent).toContain('现场快照与对比')
+    expect(container.textContent).toContain('总进度变化')
+    expect(container.textContent).toContain('延期任务数')
+    expect(container.textContent).toContain('较昨日')
+    expect(container.textContent).not.toContain('昨天')
+    expect(container.textContent).not.toContain('今天')
+    expect(container.textContent).toContain('查看详情')
+
+    const clickSegment = async (label: string) => {
+      const button = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((item) => item.textContent === label)
+      expect(button).toBeTruthy()
+      await act(async () => {
+        button!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        await flush()
+      })
+    }
+
+    await clickSegment('周')
+    await waitForText(container, ['较上周'])
+    await clickSegment('月')
+    await waitForText(container, ['较上月'])
+
+    compareCalls = fetchMock.mock.calls
+      .map(([url]) => String(url))
+      .filter((url) => url.includes('/task-summary/compare?'))
     expect(new Set(compareCalls.map((url) => new URL(url, 'http://localhost').searchParams.get('granularity')))).toEqual(
       new Set(['day', 'week', 'month']),
     )
 
-    expect(container.textContent).toContain('现场快照与对比')
-    expect(container.textContent).toContain('日 / 周 / 月固定对比')
-    expect(container.textContent).toContain('日对比')
-    expect(container.textContent).toContain('周对比')
-    expect(container.textContent).toContain('月对比')
-    expect(container.textContent).toContain('状态变化指标摘要')
-    expect(container.textContent).toContain('条件新增')
-    expect(container.textContent).toContain('查看详情')
-
     const detailsLink = Array.from(container.querySelectorAll('a')).find((link) =>
-      link.getAttribute('href')?.includes('/projects/project-1/reports?view=progress&tab=project_review'),
+      link.getAttribute('href')?.includes('/projects/project-1/reports?view=progress_deviation'),
     )
     expect(detailsLink).toBeTruthy()
+  })
+
+  it('renders one empty state instead of metric cards when compare data is unavailable', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/task-summary/compare')) {
+        return jsonResponse({ success: true, data: [] })
+      }
+
+      return jsonResponse({ success: true })
+    })
+
+    await act(async () => {
+      root?.render(
+        <MemoryRouter initialEntries={['/projects/project-1/dashboard']}>
+          <DashboardCompareCard projectId="project-1" />
+        </MemoryRouter>,
+      )
+      await flush()
+    })
+
+    await waitForText(container, ['暂无对比数据', '查看报表'])
+
+    expect(container.textContent).not.toContain('总进度变化')
+    expect(container.textContent).not.toContain('延期任务数')
+    expect(container.textContent).not.toContain('--')
   })
 })

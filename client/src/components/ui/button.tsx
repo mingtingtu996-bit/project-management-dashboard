@@ -6,11 +6,11 @@ import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-2xl text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-xl text-sm font-medium ring-offset-background transition-colors active:scale-[0.98] transition-transform duration-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        default: "bg-blue-600 text-white shadow-sm hover:bg-blue-500",
+        default: "bg-blue-600 text-white shadow-sm hover:bg-[var(--brand-primary-hover)]",
         destructive:
           "bg-rose-600 text-white shadow-sm hover:bg-rose-500",
         outline:
@@ -36,6 +36,7 @@ const buttonVariants = cva(
 
 type ButtonBaseProps = VariantProps<typeof buttonVariants> & {
   className?: string
+  unstyled?: boolean
 }
 
 type ButtonNativeProps = React.ButtonHTMLAttributes<HTMLButtonElement> &
@@ -64,6 +65,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       children,
       onClick,
       style,
+      unstyled = false,
       ...rest
     } = props
     const Comp = asChild ? Slot : "button"
@@ -79,6 +81,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ) : (
       children
     )
+    const renderedContent = unstyled ? (
+      content
+    ) : (
+      <span className="inline-flex min-w-0 items-center justify-center gap-2">{content}</span>
+    )
 
     const handleClick: React.MouseEventHandler<HTMLButtonElement> = (event) => {
       if (isDisabled) {
@@ -93,7 +100,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     if (asChild) {
       return (
         <Comp
-          className={cn(buttonVariants({ variant, size, className }))}
+          className={unstyled ? className : cn(buttonVariants({ variant, size, className }))}
           aria-busy={loading || undefined}
           aria-disabled={isDisabled || undefined}
           data-disabled={isDisabled ? "" : undefined}
@@ -114,7 +121,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 
     return (
       <Comp
-        className={cn(buttonVariants({ variant, size, className }), loading && "relative")}
+        className={cn(unstyled ? className : buttonVariants({ variant, size, className }), loading && "relative")}
         aria-busy={loading || undefined}
         disabled={isDisabled}
         onClick={handleClick}
@@ -122,7 +129,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         style={style}
         {...rest}
       >
-        <span className="inline-flex items-center justify-center gap-2">{content}</span>
+        {renderedContent}
       </Comp>
     )
   }

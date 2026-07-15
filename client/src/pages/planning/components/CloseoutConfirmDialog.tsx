@@ -10,14 +10,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { RefreshCw } from 'lucide-react'
-export type CloseoutConfirmMode = 'batch' | 'single' | 'force'
+export type CloseoutConfirmMode = 'batch' | 'single'
 export type CloseoutConfirmState = 'ready' | 'failed'
 
 export interface CloseoutConfirmSummary {
   rolledInCount: number
   closedCount: number
   manualOverrideCount: number
-  forcedCount: number
+  archiveConfirmationCount: number
   remainingCount?: number
 }
 
@@ -40,16 +40,15 @@ export function CloseoutConfirmDialog({
   onConfirm,
   onRetry,
 }: CloseoutConfirmDialogProps) {
-  const modeLabel =
-    mode === 'force' ? '强制发起关账确认' : mode === 'batch' ? '批量关账确认' : '逐条关账确认'
+  const displayModeLabel = mode === 'batch' ? '批量关账确认' : '逐条关账确认'
   const canConfirm = state !== 'failed'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="closeout-confirm-dialog" className="max-w-2xl">
+      <DialogContent data-testid="closeout-confirm-dialog" className="max-w-[var(--dialog-lg-width)]">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
-            <DialogTitle>{modeLabel}</DialogTitle>
+            <DialogTitle>{displayModeLabel}</DialogTitle>
             <Badge variant={state === 'failed' ? 'destructive' : 'secondary'}>
               {state === 'failed' ? '生成失败' : '确认待续'}
             </Badge>
@@ -59,29 +58,29 @@ export function CloseoutConfirmDialog({
         </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">滚入数</div>
+        <div className="grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-4">
+          <Card className="surface-card">
+            <CardContent className="space-y-1 p-5">
+              <div className="text-xs uppercase tracking-wider text-slate-500">滚入数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.rolledInCount}</div>
             </CardContent>
           </Card>
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">关闭数</div>
+          <Card className="surface-card">
+            <CardContent className="space-y-1 p-5">
+              <div className="text-xs uppercase tracking-wider text-slate-500">关闭数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.closedCount}</div>
             </CardContent>
           </Card>
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">人工改判数</div>
+          <Card className="surface-card">
+            <CardContent className="space-y-1 p-5">
+              <div className="text-xs uppercase tracking-wider text-slate-500">人工改判数</div>
               <div className="text-2xl font-semibold text-slate-900">{summary.manualOverrideCount}</div>
             </CardContent>
           </Card>
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardContent className="space-y-1 p-4">
-              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">强制处理数</div>
-              <div className="text-2xl font-semibold text-slate-900">{summary.forcedCount}</div>
+          <Card className="surface-card">
+            <CardContent className="space-y-1 p-5">
+              <div className="text-xs uppercase tracking-wider text-slate-500">归档确认数</div>
+              <div className="text-2xl font-semibold text-slate-900">{summary.archiveConfirmationCount}</div>
             </CardContent>
           </Card>
         </div>

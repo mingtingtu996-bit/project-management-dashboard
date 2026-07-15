@@ -100,20 +100,40 @@ const mocks = vi.hoisted(() => {
         return { affectedRows: 1 }
       }
 
-      if (sql.includes('update task_conditions set')) {
-        const id = params[params.length - 1]
+      if (sql.replace(/\s+/g, ' ').includes('update task_conditions set')) {
+        const id = params[params.length - 2]
         const current = conditionStore.get(id)
         if (current) {
-          let p = 1
-          if (sql.includes('name = ?')) current.name = params[p++]
-          if (sql.includes('condition_type = ?')) current.condition_type = params[p++]
-          if (sql.includes('description = ?')) current.description = params[p++]
-          if (sql.includes('target_date = ?')) current.target_date = params[p++]
-          if (sql.includes('is_satisfied = ?')) current.is_satisfied = Boolean(params[p++])
-          if (sql.includes('attachments = ?')) current.attachments = params[p++]
-          if (sql.includes('confirmed_by = ?')) current.confirmed_by = params[p++]
-          if (sql.includes('confirmed_at = ?')) current.confirmed_at = params[p++]
-          current.updated_at = params[0]
+          const [
+            name,
+            conditionType,
+            description,
+            drawingPackageId,
+            drawingPackageCode,
+            participantUnitId,
+            targetDate,
+            isSatisfied,
+            satisfiedReason,
+            satisfiedReasonNote,
+            attachments,
+            confirmedBy,
+            confirmedAt,
+            updatedAt,
+          ] = params
+          current.name = name
+          current.condition_type = conditionType
+          current.description = description
+          current.drawing_package_id = drawingPackageId
+          current.drawing_package_code = drawingPackageCode
+          current.participant_unit_id = participantUnitId
+          current.target_date = targetDate
+          current.is_satisfied = Boolean(isSatisfied)
+          current.satisfied_reason = satisfiedReason
+          current.satisfied_reason_note = satisfiedReasonNote
+          current.attachments = attachments
+          current.confirmed_by = confirmedBy
+          current.confirmed_at = confirmedAt
+          current.updated_at = updatedAt
           conditionStore.set(id, current)
         }
         return { affectedRows: 1 }
@@ -167,21 +187,34 @@ const mocks = vi.hoisted(() => {
         return { affectedRows: 1 }
       }
 
-      if (sql.includes('update task_obstacles set')) {
-        const id = params[params.length - 1]
+      if (sql.replace(/\s+/g, ' ').includes('update task_obstacles set')) {
+        const id = params[params.length - 2]
         const current = obstacleStore.get(id)
         if (current) {
-          let p = 1
-          if (sql.includes('obstacle_type = ?')) current.obstacle_type = params[p++]
-          if (sql.includes('description = ?')) current.description = params[p++]
-          if (sql.includes('status = ?')) current.status = params[p++]
-          if (sql.includes('severity = ?')) current.severity = params[p++]
-          if (sql.includes('estimated_resolve_date = ?')) current.estimated_resolve_date = params[p++]
-          if (sql.includes('notes = ?')) current.notes = params[p++]
-          if (sql.includes('resolution = ?')) current.resolution = params[p++]
-          if (sql.includes('resolved_by = ?')) current.resolved_by = params[p++]
-          if (sql.includes('resolved_at = ?')) current.resolved_at = params[p++]
-          current.updated_at = params[0]
+          const [
+            obstacleType,
+            description,
+            status,
+            severity,
+            severityManuallyOverridden,
+            estimatedResolveDate,
+            notes,
+            resolution,
+            resolvedBy,
+            resolvedAt,
+            updatedAt,
+          ] = params
+          current.obstacle_type = obstacleType
+          current.description = description
+          current.status = status
+          current.severity = severity
+          current.severity_manually_overridden = severityManuallyOverridden
+          current.estimated_resolve_date = estimatedResolveDate
+          current.notes = notes
+          current.resolution = resolution
+          current.resolved_by = resolvedBy
+          current.resolved_at = resolvedAt
+          current.updated_at = updatedAt
           obstacleStore.set(id, current)
         }
         return { affectedRows: 1 }
@@ -226,14 +259,14 @@ const mocks = vi.hoisted(() => {
         return current ? { project_id: current.project_id } : null
       }
 
-      if (sql.includes('select * from task_obstacles')) {
-        const current = obstacleStore.get(id)
-        return current ? { ...current } : null
-      }
-
       if (sql.includes('select id, project_id, status from task_obstacles')) {
         const current = obstacleStore.get(id)
         return current ? { id: current.id, project_id: current.project_id, status: current.status } : null
+      }
+
+      if (sql.includes('from task_obstacles where id = ?')) {
+        const current = obstacleStore.get(id)
+        return current ? { ...current } : null
       }
 
       if (sql.includes('select project_id from task_obstacles')) {
@@ -274,6 +307,8 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('../services/dbService.js', () => ({
+  registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+  assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
   executeSQL: mocks.executeSQL,
   executeSQLOne: mocks.executeSQLOne,
   supabase: mocks.supabase,
@@ -339,6 +374,10 @@ vi.mock('../services/projectHealthService.js', () => ({
   enqueueProjectHealthUpdate: vi.fn(),
 }))
 
+vi.mock('../services/taskConstraintGovernanceService.js', () => ({
+  evaluateTaskConstraint: vi.fn(async () => null),
+}))
+
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: any, next: () => void) => {
     req.user = { id: 'test-user-id', role: 'owner', globalRole: 'company_admin' }
@@ -348,6 +387,7 @@ vi.mock('../middleware/auth.js', () => ({
   requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
   requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
   requireProjectOwner: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  getAuthorizedRequestProjectId: vi.fn(() => '33333333-3333-4333-8333-333333333333'),
   checkResourceAccess: vi.fn((_req: any, _res: any, next: () => void) => next()),
 }))
 
@@ -380,9 +420,18 @@ describe('phase 6 stability smoke', () => {
       description: '钢筋已全部到场',
       target_date: '2026-05-02',
       is_satisfied: true,
+      evil_column: 'should-not-be-a-column',
     })
     expect(conditionUpdate.status).toBe(200)
     expect(conditionUpdate.body.success).toBe(true)
+    const conditionUpdateCall = mocks.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).replace(/\s+/g, ' ').trim().toLowerCase().includes('update task_conditions set')
+    ))
+    expect(conditionUpdateCall).toBeTruthy()
+    expect(String(conditionUpdateCall?.[0])).not.toContain('evil_column')
+    expect(String(conditionUpdateCall?.[0])).toContain('name = ?')
+    expect(String(conditionUpdateCall?.[0])).toContain('participant_unit_id = ?')
+    expect(String(conditionUpdateCall?.[0])).toContain('updated_at = ?')
     expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
       entity_type: 'task_condition',
       field_name: 'lifecycle',
@@ -397,7 +446,7 @@ describe('phase 6 stability smoke', () => {
     const obstacleCreate = await request.post('/api/task-obstacles').send({
       project_id: projectId,
       task_id: taskId,
-      title: '材料未到',
+      description: '材料未到',
       obstacle_type: 'material',
       severity: '中',
       status: 'pending',
@@ -415,11 +464,20 @@ describe('phase 6 stability smoke', () => {
       resolved_by: 'test-user-id',
       expected_resolution_date: '2026-04-09',
       resolution_notes: '现场已完成协调',
+      evil_column: 'should-not-be-a-column',
     })
     expect(obstacleUpdate.status).toBe(200)
     expect(obstacleUpdate.body.success).toBe(true)
     expect(obstacleUpdate.body.data.expected_resolution_date).toBe('2026-04-09')
     expect(obstacleUpdate.body.data.resolution_notes).toBe('现场已完成协调')
+    const obstacleUpdateCall = mocks.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).replace(/\s+/g, ' ').trim().toLowerCase().includes('update task_obstacles set')
+    ))
+    expect(obstacleUpdateCall).toBeTruthy()
+    expect(String(obstacleUpdateCall?.[0])).not.toContain('evil_column')
+    expect(String(obstacleUpdateCall?.[0])).toContain('status = ?')
+    expect(String(obstacleUpdateCall?.[0])).toContain('estimated_resolve_date = ?')
+    expect(String(obstacleUpdateCall?.[0])).toContain('updated_at = ?')
     expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
       entity_type: 'task_obstacle',
       field_name: 'lifecycle',

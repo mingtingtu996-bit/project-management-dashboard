@@ -1,6 +1,7 @@
 import type { Dispatch, SetStateAction } from 'react'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { CertificateBoardItem, CertificateWorkItem, CertificateWorkItemFormData } from '../types'
 import { CERTIFICATE_ORDER, CERTIFICATE_STAGE_SEQUENCE } from '../constants'
 
@@ -29,7 +30,7 @@ export function CertificateWorkItemDialog({
 }: CertificateWorkItemDialogProps) {
   return (
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{mode === 'create' ? '新增办理事项' : '编辑办理事项'}</DialogTitle>
         </DialogHeader>
@@ -40,7 +41,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.item_name}
               onChange={(event) => setFormData((previous) => ({ ...previous, item_name: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="例如：共享资料收集"
             />
           </label>
@@ -50,39 +51,47 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.item_code}
               onChange={(event) => setFormData((previous) => ({ ...previous, item_code: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="可选"
             />
           </label>
 
           <label className="grid gap-2 text-sm">
             <span className="font-medium text-slate-700">当前阶段</span>
-            <select
+            <Select
               value={formData.item_stage}
-              onChange={(event) => setFormData((previous) => ({ ...previous, item_stage: event.target.value as CertificateWorkItemFormData['item_stage'] }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              onValueChange={(value) => setFormData((previous) => ({ ...previous, item_stage: value as CertificateWorkItemFormData['item_stage'] }))}
             >
-              {CERTIFICATE_STAGE_SEQUENCE.map((stage) => (
-                <option key={stage} value={stage}>{stage}</option>
-              ))}
-            </select>
+              <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CERTIFICATE_STAGE_SEQUENCE.map((stage) => (
+                  <SelectItem key={stage} value={stage}>{stage}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
 
           <label className="grid gap-2 text-sm">
             <span className="font-medium text-slate-700">当前状态</span>
-            <select
+            <Select
               value={formData.status}
-              onChange={(event) => setFormData((previous) => ({ ...previous, status: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              onValueChange={(value) => setFormData((previous) => ({ ...previous, status: value }))}
             >
-              <option value="pending">待启动</option>
-              <option value="in_progress">进行中</option>
-              <option value="submitted">已申报</option>
-              <option value="supplement_required">待补正</option>
-              <option value="completed">已完成</option>
-              <option value="blocked">已阻塞</option>
-              <option value="cancelled">已取消</option>
-            </select>
+              <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pending">待启动</SelectItem>
+                <SelectItem value="in_progress">进行中</SelectItem>
+                <SelectItem value="submitted">已申报</SelectItem>
+                <SelectItem value="supplement_required">待补正</SelectItem>
+                <SelectItem value="completed">已完成</SelectItem>
+                <SelectItem value="blocked">已阻塞</SelectItem>
+                <SelectItem value="cancelled">已取消</SelectItem>
+              </SelectContent>
+            </Select>
           </label>
 
           <label className="grid gap-2 text-sm">
@@ -91,7 +100,7 @@ export function CertificateWorkItemDialog({
               type="date"
               value={formData.planned_finish_date}
               onChange={(event) => setFormData((previous) => ({ ...previous, planned_finish_date: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
             />
           </label>
 
@@ -101,7 +110,7 @@ export function CertificateWorkItemDialog({
               type="date"
               value={formData.actual_finish_date}
               onChange={(event) => setFormData((previous) => ({ ...previous, actual_finish_date: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
             />
           </label>
 
@@ -110,7 +119,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.approving_authority}
               onChange={(event) => setFormData((previous) => ({ ...previous, approving_authority: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="例如：规划局"
             />
           </label>
@@ -120,7 +129,7 @@ export function CertificateWorkItemDialog({
             <input
               value={formData.next_action}
               onChange={(event) => setFormData((previous) => ({ ...previous, next_action: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="例如：补齐盖章资料"
             />
           </label>
@@ -131,7 +140,7 @@ export function CertificateWorkItemDialog({
               type="date"
               value={formData.next_action_due_date}
               onChange={(event) => setFormData((previous) => ({ ...previous, next_action_due_date: event.target.value }))}
-              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
             />
           </label>
 
@@ -140,7 +149,7 @@ export function CertificateWorkItemDialog({
             <textarea
               value={formData.block_reason}
               onChange={(event) => setFormData((previous) => ({ ...previous, block_reason: event.target.value }))}
-              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="阻塞来源"
             />
           </label>
@@ -150,12 +159,12 @@ export function CertificateWorkItemDialog({
             <textarea
               value={formData.notes}
               onChange={(event) => setFormData((previous) => ({ ...previous, notes: event.target.value }))}
-              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-100"
+              className="min-h-20 rounded-xl border border-slate-200 px-3 py-2 outline-none focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-100"
               placeholder="跟进备注"
             />
           </label>
 
-          <div className="md:col-span-2 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <div className="md:col-span-2 grid gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="text-sm font-medium text-slate-700">关联证件</div>
             <div className="flex flex-wrap gap-2">
               {CERTIFICATE_ORDER.map((entry) => {
@@ -164,21 +173,21 @@ export function CertificateWorkItemDialog({
                 const active = certificateId ? formData.certificate_ids.includes(certificateId) : false
                 const disabled = !certificateId
                 return (
-                  <button
+                  <Button variant="ghost"
                     key={entry.id}
                     type="button"
                     onClick={() => certificateId && onToggleCertificate(certificateId)}
                     disabled={disabled}
                     className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
                       disabled
-                        ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-400'
+                        ? 'cursor-not-allowed border-slate-100 bg-slate-100 text-slate-500'
                         : active
                         ? 'border-blue-300 bg-blue-100 text-blue-700'
                         : 'border-slate-200 bg-white text-slate-600'
                     }`}
                   >
                     {entry.label}
-                  </button>
+                  </Button>
                 )
               })}
             </div>

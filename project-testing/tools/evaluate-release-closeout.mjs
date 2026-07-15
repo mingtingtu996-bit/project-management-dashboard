@@ -86,16 +86,16 @@ export async function evaluateReleaseCloseout({
       matrixPath,
       now,
     });
-
+    const validationOutput = `${gateId}-evidence-validation.json`;
     gates.push({
       id: gateId,
       tier: matrixGate.tier,
       matrixStatus: matrixGate.status,
       closeoutTargets: matrixGate.closeoutTargets ?? [],
-      validationOutput: `${gateId}-evidence-validation.json`,
+      validationOutput,
       validationStatus: validation.status,
       mayClose: validation.status === 'pass',
-      closeoutMode: validation.checks?.alternateCloseout?.mode ?? 'standard',
+      closeoutMode: deriveCloseoutMode(validation),
       mutationSummary: summarizeMutationEvidence(validation),
       alternateCloseout: validation.checks?.alternateCloseout ?? null,
       failureCount: validation.counts.failures,
@@ -110,8 +110,17 @@ export async function evaluateReleaseCloseout({
   }
 
   const openGates = gates.filter((gate) => !gate.mayClose);
+
   return {
     schemaVersion: 'workbuddy-release-closeout-decision/v1',
+    decisionScope: 'live-db-closeout-gates',
+    decisionAuthority: {
+      level: 'closeout',
+      authoritativeForCloseout: true,
+      authoritativeForRelease: false,
+      authoritativeForProduction: false,
+      releaseDecisionArtifact: 'v1424-release-decision.json',
+    },
     evidenceRoot: root,
     evaluatedAt: now.toISOString(),
     status: openGates.length === 0 ? 'pass' : 'fail',
@@ -121,14 +130,17 @@ export async function evaluateReleaseCloseout({
     openGateCount: openGates.length,
     gates,
     decision: {
-      mayCloseWhen: 'All selected gates have validationStatus=pass and mayClose=true.',
-      mustRemainOpenWhen: 'Any selected gate validation fails, is missing artifacts, has reject markers, or lacks required live/DB metadata.',
+      mayCloseWhen: 'All gates have validationStatus=pass and mayClose=true.',
+      mustRemainOpenWhen: 'Any gate validation fails, is missing artifacts, has reject markers, or lacks required live/DB metadata.',
       openGateIds: openGates.map((gate) => gate.id),
     },
   };
 }
 
-export async function writeCloseoutDecision({ decision, outputPath }) {
+export async function writeCloseoutDecision({
+  decision,
+  outputPath,
+}) {
   const jsonPath = outputPath
     ? path.resolve(outputPath)
     : path.join(decision.evidenceRoot, 'closeout-decision.json');
@@ -145,7 +157,10 @@ export async function writeCloseoutDecision({ decision, outputPath }) {
     await writeFile(validationPath, `${JSON.stringify(gate.validation, null, 2)}\n`, 'utf8');
   }
 
-  return { jsonPath, markdownPath };
+  return {
+    jsonPath,
+    markdownPath,
+  };
 }
 
 function stripEmbeddedValidations(decision) {
@@ -158,29 +173,13 @@ function stripEmbeddedValidations(decision) {
   };
 }
 
-function summarizeMutationEvidence(validation) {
-  const documents = (validation.checks?.jsonArtifacts?.documents ?? [])
-    .map((item) => item.document)
-    .filter((item) => item && typeof item === 'object');
-  return {
-    hasLiveMutationEvidence: documents.some((document) => document.liveMutation === true || document.boundary?.liveMutation === true),
-    hasDbMutationEvidence: documents.some((document) => document.dbMutation === true || document.boundary?.dbMutation === true),
-    physicalDropExecuted: documents.some((document) => document.physicalDropExecuted === true || document.boundary?.physicalDropExecuted === true),
-    noMutationBoundaryCount: documents.filter((document) => {
-      return document.liveMutation === false
-        || document.dbMutation === false
-        || document.boundary?.liveMutation === false
-        || document.boundary?.dbMutation === false
-        || document.physicalDropExecuted === false
-        || document.boundary?.physicalDropExecuted === false;
-    }).length,
-  };
-}
-
 function renderMarkdown(decision) {
   const lines = [
     '# WorkBuddy Release Closeout Decision',
     '',
+    '- Decision scope: live/DB closeout gates only',
+    '- Release authority: no; see v1424-release-decision.json',
+    '- Production-ready authority: no',
     `- Status: ${decision.status}`,
     `- May close all: ${decision.mayCloseAll ? 'yes' : 'no'}`,
     `- Gates: ${decision.gateCount}`,
@@ -221,6 +220,10 @@ function renderOpenGates(gates) {
     '',
     `- Validation output: ${gate.validationOutput}`,
     `- Failure count: ${gate.failureCount}`,
+    `- Expected artifacts present: ${gate.expectedArtifactsPresent}`,
+    `- Required patterns matched: ${gate.requiredPatternsMatched}`,
+    `- Required metadata present: ${gate.requiredMetadataPresent}`,
+    `- Reject markers matched: ${gate.rejectMarkersMatched}`,
     '',
     'Top failures:',
     ...gate.topFailures.map((failure) => {
@@ -231,17 +234,44 @@ function renderOpenGates(gates) {
   ]);
 }
 
+function deriveCloseoutMode(validation) {
+  return validation.checks?.alternateCloseout?.mode ?? 'standard';
+}
+
+function summarizeMutationEvidence(validation) {
+  const docs = validation.checks?.jsonArtifacts?.documents ?? [];
+  const documents = docs.map((item) => item.document).filter((item) => item && typeof item === 'object');
+  const hasLiveMutationEvidence = documents.some((document) => document.liveMutation === true || document.boundary?.liveMutation === true);
+  const hasDbMutationEvidence = documents.some((document) => document.dbMutation === true || document.boundary?.dbMutation === true);
+  const physicalDropExecuted = documents.some((document) => document.physicalDropExecuted === true || document.boundary?.physicalDropExecuted === true);
+  const noMutationBoundaryCount = documents.filter((document) => {
+    return document.liveMutation === false
+      || document.dbMutation === false
+      || document.boundary?.liveMutation === false
+      || document.boundary?.dbMutation === false
+      || document.physicalDropExecuted === false
+      || document.boundary?.physicalDropExecuted === false;
+  }).length;
+
+  return {
+    hasLiveMutationEvidence,
+    hasDbMutationEvidence,
+    physicalDropExecuted,
+    noMutationBoundaryCount,
+  };
+}
+
 function renderHelp() {
   return `
 Usage:
   node project-testing/tools/evaluate-release-closeout.mjs --evidence-root <release-report-dir>
 
 Options:
-  --gate <id>       Evaluate a specific gate. Repeatable. Defaults to the real closeout gates.
+  --gate <id>       Evaluate a specific gate. Repeatable. Defaults to the four real closeout gates.
   --output <path>   Output JSON path. Markdown is written beside it.
   --matrix <path>   Override matrix path.
 
-This tool reads evidence artifacts only. It does not run live commands or mutate DB state.
+This tool reads evidence artifacts and writes decision summaries only. It does not run live commands, mutate DB state, or execute release scripts.
 `.trim();
 }
 

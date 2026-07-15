@@ -16,6 +16,9 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { AssigneeCombobox } from '@/components/AssigneeCombobox'
+import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
+import { NewConditionForm, type NewConditionFormValue } from '@/components/planning/conditions/NewConditionForm'
+import { PredecessorSelector } from '@/components/planning/PredecessorSelector'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -35,23 +38,29 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ConflictDialog } from '@/components/ConflictDialog'
+import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
 import type { ConfirmDialogState } from '@/hooks/useConfirmDialog'
 import { zhCN } from '@/i18n/zh-CN'
+import { daysUntilLocalDate } from '@/lib/dateDistance'
+import { inclusiveDurationDays } from '@/lib/durationDays'
 import { getStatusTheme } from '@/lib/statusTheme'
 import { useState } from 'react'
-import { ChevronDown, ChevronUp } from 'lucide-react'
 import type { DataQualityLiveCheckSummary } from '@/services/dataQualityApi'
 import type { ParticipantUnitRecord } from './GanttView/ParticipantUnitsDialog'
 import {
   CONDITION_TYPES,
   MILESTONE_LEVEL_CONFIG,
-  SPECIALTY_TYPES,
   type Task,
   type TaskCondition,
   type TaskObstacle,
 } from './GanttViewTypes'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Card } from '@/components/ui/card'
+import type { EngineeringObject } from '@/services/engineeringObjectsApi'
 
 type TaskFormState = {
   name: string
@@ -60,17 +69,31 @@ type TaskFormState = {
   priority: string
   start_date: string
   end_date: string
-  actual_start_date: string
   progress: number
   assignee_name: string
   assignee_user_id: string | null
   participant_unit_id: string | null
-  responsible_unit: string
+  participant_unit_name: string
   dependencies: string[]
   parent_id: string | null
   milestone_id: string | null
   specialty_type: string
-  reference_duration: string
+  template_node_id: string | null
+  wbs_node_type: string | null
+  engineering_category_id: string | null
+  engineering_category_name: string | null
+  engineering_category_type: string | null
+  standard_work_code: string | null
+  standard_work_name: string | null
+  engineering_object_id: string | null
+  phase_object_id: string | null
+  section_object_id: string | null
+  building_object_id: string | null
+  basement_object_id: string | null
+  floor_object_id: string | null
+  physical_zone_object_id: string | null
+  functional_area_object_id: string | null
+  standard_task_metadata: Record<string, unknown> | null
 }
 
 type ProjectMemberOption = {
@@ -81,13 +104,6 @@ type ProjectMemberOption = {
 
 type ParticipantUnitOption = Pick<ParticipantUnitRecord, 'id' | 'unit_name' | 'unit_type'>
 
-type AiDurationSuggestion = {
-  estimated_duration: number
-  confidence_level: string
-  confidence_score: number
-  factors: Record<string, unknown>
-} | null
-
 type ConflictState = {
   localVersion: Task
   serverVersion: Task
@@ -96,7 +112,6 @@ type ConflictState = {
 type ConditionPrecedingTask = {
   task_id: string
   title?: string
-  name?: string
   status?: string
 }
 
@@ -104,10 +119,23 @@ type TaskFormErrors = {
   name?: string
   start_date?: string
   end_date?: string
+  scope?: string
 }
 
 function hasStringId<T extends { id?: string | null }>(item: T): item is T & { id: string } {
   return typeof item.id === 'string' && item.id.length > 0
+}
+
+function getEngineeringObjectField(object: EngineeringObject, camelKey: keyof EngineeringObject, snakeKey: string): string {
+  const record = object as unknown as Record<string, unknown>
+  return String(record[camelKey as string] ?? record[snakeKey] ?? '').trim()
+}
+
+function getEngineeringObjectLabel(object: EngineeringObject) {
+  const name = getEngineeringObjectField(object, 'objectName', 'object_name')
+  const code = getEngineeringObjectField(object, 'objectCode', 'object_code')
+  const type = getEngineeringObjectField(object, 'objectType', 'object_type')
+  return [name, code ? `#${code}` : '', type ? `(${type})` : ''].filter(Boolean).join(' ')
 }
 
 function getTaskStatusThemeKey(status?: string | null) {
@@ -126,7 +154,30 @@ function getTaskStatusThemeKey(status?: string | null) {
   }
 }
 
+type ObstacleSeverityCode = 'low' | 'medium' | 'high'
+
+function normalizeObstacleSeverity(value?: string | null): ObstacleSeverityCode {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (['high', 'critical', 'urgent', 'serious', '高', '严重'].includes(normalized)) return 'high'
+  if (['low', 'minor', '低'].includes(normalized)) return 'low'
+  return 'medium'
+}
+
+function getObstacleSeverityLabel(value?: string | null) {
+  const labels: Record<ObstacleSeverityCode, string> = {
+    low: '低',
+    medium: '中',
+    high: '高',
+  }
+  return labels[normalizeObstacleSeverity(value)]
+}
+
+function getObstacleAgeDays(createdAt?: string | null) {
+  return Math.max(0, -(daysUntilLocalDate(createdAt) ?? 0))
+}
+
 export interface GanttViewDialogsProps {
+  projectId?: string | null
   dialogOpen: boolean
   setDialogOpen: Dispatch<SetStateAction<boolean>>
   editingTask: Task | null
@@ -139,10 +190,9 @@ export interface GanttViewDialogsProps {
   projectMembers: ProjectMemberOption[]
   participantUnits: ParticipantUnitOption[]
   onOpenParticipantUnits: () => void
-  aiDurationLoading: boolean
-  aiDurationSuggestion: AiDurationSuggestion
-  fetchAiDurationSuggestion: () => void
-  applyAiDuration: () => void
+  engineeringObjects: EngineeringObject[]
+  engineeringObjectsLoading: boolean
+  onOpenEngineeringObjects: () => void
   handleDependencyChange: (taskId: string, checked: boolean) => void
   handleSaveTask: () => void
   taskSaving: boolean
@@ -181,16 +231,17 @@ export interface GanttViewDialogsProps {
   newConditionPrecedingTaskIds: string[]
   setNewConditionPrecedingTaskIds: Dispatch<SetStateAction<string[]>>
   handleAddCondition: () => void
+  handleAddConditionValue: (value: NewConditionFormValue) => void
   handleToggleCondition: (condition: TaskCondition) => void
   handleDeleteCondition: (conditionId: string) => void
-  handleAdminForceSatisfyCondition: (condition: TaskCondition) => void
-  forceSatisfyDialogOpen: boolean
-  setForceSatisfyDialogOpen: Dispatch<SetStateAction<boolean>>
-  forceSatisfyCondition: TaskCondition | null
-  forceSatisfyReason: string
-  setForceSatisfyReason: Dispatch<SetStateAction<string>>
-  confirmAdminForceSatisfyCondition: () => void
-  canAdminForceSatisfyCondition: boolean
+  handleConfirmConditionSatisfied: (condition: TaskCondition) => void
+  confirmConditionDialogOpen: boolean
+  setConfirmConditionDialogOpen: Dispatch<SetStateAction<boolean>>
+  confirmCondition: TaskCondition | null
+  confirmConditionReason: string
+  setConfirmConditionReason: Dispatch<SetStateAction<string>>
+  confirmConditionSatisfied: () => void
+  canConfirmConditionSatisfied: boolean
   obstacleDialogOpen: boolean
   setObstacleDialogOpen: Dispatch<SetStateAction<boolean>>
   obstacleTask: Task | null
@@ -218,7 +269,6 @@ export interface GanttViewDialogsProps {
   handleResolveObstacle: (obstacle: TaskObstacle) => void
   handleDeleteObstacle: (obstacleId: string) => void
   handleSaveObstacleEdit: (obstacleId: string) => void
-  onOpenRiskWorkspaceForObstacle: (obstacle: TaskObstacle) => void
   newTaskConditionPromptId: string | null
   setNewTaskConditionPromptId: Dispatch<SetStateAction<string | null>>
   openConditionDialogByTaskId: (taskId: string) => void
@@ -227,21 +277,27 @@ export interface GanttViewDialogsProps {
 }
 
 export function GanttViewDialogs(props: GanttViewDialogsProps) {
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [taskFormTab, setTaskFormTab] = useState<'basic' | 'advanced'>('basic')
+  const advancedOpen = taskFormTab === 'advanced'
   const selectedParticipantUnit = props.participantUnits.find((unit) => unit.id === props.formData.participant_unit_id) ?? null
+  const engineeringObjectOptions = props.engineeringObjects.filter((object) => {
+    const status = getEngineeringObjectField(object, 'status', 'status')
+    return !status || status === 'active'
+  })
   const parentTaskName = props.newTaskParentId
     ? props.tasks.find((task) => task.id === props.newTaskParentId)?.title
-      || props.tasks.find((task) => task.id === props.newTaskParentId)?.name
       || ''
     : ''
+  const planDurationDays = inclusiveDurationDays(props.formData.start_date, props.formData.end_date)
+  const planDurationLabel = planDurationDays == null ? '-' : `${planDurationDays} 天`
 
   return (
     <>
       <Dialog open={props.dialogOpen} onOpenChange={props.setDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-md-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle>
-              {props.editingTask ? '编辑任务' : props.newTaskParentId ? '添加子任务' : '新建任务'}
+              {props.editingTask ? '编辑任务' : props.newTaskParentId ? '添加子任务' : '新增首行'}
             </DialogTitle>
             <DialogDescription className="sr-only">
               {props.editingTask ? '修改任务的名称、日期和属性' : '填写新任务的基本信息'}
@@ -250,6 +306,15 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               <p className="text-xs text-muted-foreground">上级任务：{parentTaskName}</p>
             )}
           </DialogHeader>
+          <SegmentedControl
+            value={taskFormTab}
+            onChange={(value) => setTaskFormTab(value as 'basic' | 'advanced')}
+            className="grid w-full grid-cols-2"
+            options={[
+              { value: 'basic', label: '基础信息' },
+              { value: 'advanced', label: '高级选项' },
+            ]}
+          />
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label>任务名称 <span className="text-red-500">*</span></Label>
@@ -263,6 +328,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               />
               {props.taskFormErrors.name && <p className="text-xs text-red-600">{props.taskFormErrors.name}</p>}
             </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>开始日期 <span className="text-red-500">*</span></Label>
@@ -290,59 +356,15 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                 />
                 {props.taskFormErrors.end_date && <p className="text-xs text-red-600">{props.taskFormErrors.end_date}</p>}
               </div>
-              <div className={advancedOpen ? "space-y-2" : "hidden"}>
-                <Label>实际开始日期</Label>
-                <Input
-                  type="date"
-                  data-testid="task-actual-start-date-input"
-                  value={props.formData.actual_start_date}
-                  onChange={(event) => props.setFormData({ ...props.formData, actual_start_date: event.target.value })}
-                />
-              </div>
             </div>
 
-            {advancedOpen && props.editingTask && (
-              <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/60 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-xs font-medium text-blue-700">AI 工期建议</p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-6 border-blue-200 px-2 text-xs text-blue-600 hover:bg-blue-100"
-                    onClick={props.fetchAiDurationSuggestion}
-                    disabled={props.aiDurationLoading}
-                  >
-                    {props.aiDurationLoading ? '计算中...' : '获取建议'}
-                  </Button>
-                </div>
-                {props.aiDurationSuggestion ? (
-                  <div className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-blue-800">
-                        建议工期：{props.aiDurationSuggestion.estimated_duration} 天
-                      </span>
-                      <span
-                        className={`rounded-full px-1.5 py-0.5 text-xs ${
-                          props.aiDurationSuggestion.confidence_level === 'high'
-                            ? getStatusTheme('completed').className
-                            : props.aiDurationSuggestion.confidence_level === 'medium'
-                              ? getStatusTheme('medium').className
-                              : getStatusTheme('open').className
-                        }`}
-                      >
-                        置信度 {Math.round((props.aiDurationSuggestion.confidence_score || 0) * 100)}%
-                      </span>
-                    </div>
-                    <Button type="button" size="sm" className="h-6 px-2 text-xs" onClick={props.applyAiDuration}>
-                      应用此工期
-                    </Button>
-                  </div>
-                ) : (
-                  !props.aiDurationLoading && <div className="h-1" />
-                )}
-              </div>
-            )}
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <span className="inline-flex items-center gap-1.5">
+                <DurationBasisBadge basis="plan" compact variant="outline" className="bg-white/80" />
+                计划工期
+              </span>
+              <span className="num-mono font-medium text-slate-800">{planDurationLabel}</span>
+            </div>
 
             <div className={advancedOpen ? 'grid grid-cols-2 gap-4' : 'hidden'}>
               <div className="space-y-2">
@@ -382,15 +404,19 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
 
             <div className={advancedOpen ? 'space-y-2' : 'hidden'}>
               <Label>{zhCN.gantt.progress}</Label>
-              <Input
-                type="number"
-                min="0"
-                max="100"
-                value={props.formData.progress}
-                onChange={(event) => props.setFormData({ ...props.formData, progress: parseInt(event.target.value, 10) || 0 })}
-                disabled={props.progressInputBlocked}
-                title={props.progressInputBlocked ? props.progressInputHint : undefined}
-              />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={props.formData.progress}
+                    onChange={(event) => props.setFormData({ ...props.formData, progress: parseInt(event.target.value, 10) || 0 })}
+                    disabled={props.progressInputBlocked}
+                  />
+                </TooltipTrigger>
+                <TooltipContent>{props.progressInputBlocked ? props.progressInputHint : undefined}</TooltipContent>
+              </Tooltip>
               <p className={`text-xs ${props.progressInputBlocked ? 'text-amber-600' : 'text-muted-foreground'}`}>
                 {props.progressInputHint}
               </p>
@@ -406,7 +432,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">即时数据校验</div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">即时数据校验</div>
                   <div className="mt-1 text-sm text-slate-700">
                     {props.liveCheckLoading
                       ? '正在核对当前草稿与前后置、条件、父子层级之间的关系。'
@@ -425,15 +451,15 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               {props.liveCheckSummary?.items?.length ? (
                 <div className="mt-3 space-y-2">
                   {props.liveCheckSummary.items.map((item) => (
-                    <div key={item.id} className="rounded-xl border border-amber-100 bg-white px-3 py-2">
+                    <Card key={item.id} className="rounded-xl border border-amber-100 bg-white px-3 py-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-medium text-slate-900">{item.taskTitle}</div>
-                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
                           {item.severity === 'critical' ? '严重' : item.severity === 'warning' ? '警告' : '关注'}
                         </span>
                       </div>
                       <div className="mt-1 text-xs leading-5 text-slate-600">{item.summary}</div>
-                    </div>
+                    </Card>
                   ))}
                 </div>
               ) : null}
@@ -471,17 +497,17 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                   </Button>
                 </div>
                 <Select
-                  value={selectedParticipantUnit ? selectedParticipantUnit.id : '__manual__'}
+                  value={selectedParticipantUnit ? selectedParticipantUnit.id : '__none__'}
                   onValueChange={(value) => {
-                    if (value === '__manual__') {
-                      props.setFormData({ ...props.formData, participant_unit_id: null })
+                    if (value === '__none__') {
+                      props.setFormData({ ...props.formData, participant_unit_id: null, participant_unit_name: '' })
                       return
                     }
                     const nextUnit = props.participantUnits.find((unit) => unit.id === value)
                     props.setFormData({
                       ...props.formData,
                       participant_unit_id: value,
-                      responsible_unit: nextUnit?.unit_name ?? props.formData.responsible_unit,
+                      participant_unit_name: nextUnit?.unit_name ?? props.formData.participant_unit_name,
                     })
                   }}
                 >
@@ -489,7 +515,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                     <SelectValue placeholder="优先从项目级参建单位选择" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__manual__">手工输入</SelectItem>
+                    <SelectItem value="__none__">未指定责任单位</SelectItem>
                     {props.participantUnits.map((unit) => (
                       <SelectItem key={unit.id} value={unit.id}>
                         {unit.unit_type ? `${unit.unit_name} · ${unit.unit_type}` : unit.unit_name}
@@ -497,38 +523,12 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                     ))}
                   </SelectContent>
                 </Select>
-                {props.formData.participant_unit_id ? (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs leading-5 text-emerald-700">
-                    {selectedParticipantUnit
-                      ? `已绑定项目级单位：${selectedParticipantUnit.unit_name}${selectedParticipantUnit.unit_type ? `（${selectedParticipantUnit.unit_type}）` : ''}。若需录入临时部门，可切回“手工输入”。`
-                      : `已绑定单位：${props.formData.responsible_unit || '未命名单位'}。若台账刚更新未刷新，可稍后重开此弹窗确认。`}
-                  </div>
-                ) : (
-                  <Input
-                    value={props.formData.responsible_unit}
-                    onChange={(event) => props.setFormData({
-                      ...props.formData,
-                      participant_unit_id: null,
-                      responsible_unit: event.target.value,
-                    })}
-                    placeholder="输入责任单位或部门"
-                  />
-                )}
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-              <button
-                type="button"
-                onClick={() => setAdvancedOpen((value) => !value)}
-                className="flex w-full items-center justify-between gap-3 text-left"
-                aria-expanded={advancedOpen}
-              >
-                <div>
-                  <p className="text-sm font-medium text-slate-900">高级选项</p>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600">
+                  {selectedParticipantUnit
+                    ? `已绑定项目级单位：${selectedParticipantUnit.unit_name}${selectedParticipantUnit.unit_type ? `（${selectedParticipantUnit.unit_type}）` : ''}。`
+                    : '责任单位需从项目级参建单位台账选择；临时单位请先维护台账。'}
                 </div>
-                {advancedOpen ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
-              </button>
+              </div>
             </div>
 
             {advancedOpen && (
@@ -545,24 +545,47 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="__none__">{zhCN.gantt.specialtyPlaceholder}</SelectItem>
-                        {SPECIALTY_TYPES.map((specialty) => (
-                          <SelectItem key={specialty.value} value={specialty.value}>
-                            {specialty.label}
+                        {Array.from(new Set(props.tasks.map(t => t.specialty_type).filter((value): value is string => Boolean(value)))).sort().map((specialty) => (
+                          <SelectItem key={specialty} value={specialty}>
+                            {specialty}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <Label>{zhCN.gantt.plannedDuration}</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      placeholder={zhCN.gantt.referenceDurationPlaceholder}
-                      value={props.formData.reference_duration}
-                      onChange={(event) => props.setFormData({ ...props.formData, reference_duration: event.target.value })}
-                    />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <Label>主要施工对象（可选）</Label>
+                    <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={props.onOpenEngineeringObjects}>
+                      维护对象
+                    </Button>
                   </div>
+                  <Select
+                    value={props.formData.engineering_object_id || '__none__'}
+                    onValueChange={(value) => props.setFormData({
+                      ...props.formData,
+                      engineering_object_id: value === '__none__' ? null : value,
+                    })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="选择主要施工对象/范围" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">选择主要施工对象/范围</SelectItem>
+                      {engineeringObjectOptions.map((object) => (
+                        <SelectItem key={object.id} value={object.id}>
+                          {getEngineeringObjectLabel(object)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    {props.engineeringObjectsLoading
+                      ? '正在加载施工对象...'
+                      : props.taskFormErrors.scope || '用于把任务归属到当前执行事实中的施工对象或范围。'}
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -581,7 +604,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         .filter((task) => task.id !== props.editingTask?.id)
                         .map((task) => (
                           <SelectItem key={task.id} value={task.id}>
-                            {task.title || task.name}
+                            {task.title}
                           </SelectItem>
                         ))}
                     </SelectContent>
@@ -603,7 +626,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         .filter(hasStringId)
                         .map((milestone) => (
                           <SelectItem key={milestone.id} value={milestone.id}>
-                            {milestone.title || milestone.name}
+                            {milestone.title}
                           </SelectItem>
                         ))}
                     </SelectContent>
@@ -613,23 +636,42 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                 {props.tasks.length > 1 && (
                   <div className="space-y-2">
                     <Label>{zhCN.gantt.predecessorTasks}</Label>
-                    <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border p-2">
-                      {props.tasks
+                    <PredecessorSelector
+                      predecessors={props.tasks
+                        .filter(hasStringId)
+                        .filter((task) => (props.formData.dependencies || []).includes(task.id))
+                        .map((task) => ({
+                          id: task.id,
+                          title: task.title || '未命名任务',
+                          wbsCode: task.wbs_code,
+                          engineeringObjectId: task.engineering_object_id ?? null,
+                          buildingObjectId: task.building_object_id ?? null,
+                          physicalZoneObjectId: task.physical_zone_object_id ?? null,
+                          functionalAreaObjectId: task.functional_area_object_id ?? null,
+                        }))}
+                      availableTasks={props.tasks
                         .filter(hasStringId)
                         .filter((task) => task.id !== props.editingTask?.id)
-                        .map((task) => (
-                          <label key={task.id} className="flex cursor-pointer items-center gap-2 rounded p-1 hover:bg-accent">
-                            <input
-                              type="checkbox"
-                              checked={(props.formData.dependencies || []).includes(task.id)}
-                              onChange={(event) => props.handleDependencyChange(task.id, event.target.checked)}
-                              className="rounded border-input"
-                            />
-                            <span className="text-sm">{task.title || task.name}</span>
-                            {props.isOnCriticalPath(task.id) && <AlertCircle className="h-3 w-3 text-red-500" />}
-                          </label>
-                        ))}
-                    </div>
+                        .map((task) => ({
+                          id: task.id,
+                          title: task.title || '未命名任务',
+                          wbsCode: task.wbs_code,
+                          engineeringObjectId: task.engineering_object_id ?? null,
+                          buildingObjectId: task.building_object_id ?? null,
+                          physicalZoneObjectId: task.physical_zone_object_id ?? null,
+                          functionalAreaObjectId: task.functional_area_object_id ?? null,
+                        }))}
+                      currentScope={{
+                        engineeringObjectId: props.formData.engineering_object_id ?? null,
+                        buildingObjectId: props.formData.building_object_id ?? null,
+                        physicalZoneObjectId: props.formData.physical_zone_object_id ?? null,
+                        functionalAreaObjectId: props.formData.functional_area_object_id ?? null,
+                      }}
+                      onAdd={(taskId) => props.handleDependencyChange(taskId, true)}
+                      onRemove={(taskId) => props.handleDependencyChange(taskId, false)}
+                      isCritical={props.editingTask?.id ? props.isOnCriticalPath(props.editingTask.id) : false}
+                      className="rounded-md border border-slate-200 bg-white px-2"
+                    />
                     <p className="text-xs text-muted-foreground">{zhCN.gantt.predecessorHelp}</p>
                   </div>
                 )}
@@ -638,9 +680,9 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => props.setDialogOpen(false)}>取消</Button>
-            <Button onClick={props.handleSaveTask} disabled={props.taskSaving}>
+            <Button onClick={props.handleSaveTask} loading={props.taskSaving}>
               <Save className="mr-2 h-4 w-4" />
-              {props.taskSaving ? '保存中' : '保存'}
+              保存
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -658,7 +700,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       />
 
       <Dialog open={props.milestoneDialogOpen} onOpenChange={props.setMilestoneDialogOpen}>
-        <DialogContent className="sm:max-w-[380px]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Flag className="h-4 w-4 text-amber-500" />
@@ -668,24 +710,24 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           </DialogHeader>
           <div className="py-3 space-y-3">
             <p className="text-sm text-muted-foreground">
-              任务：<span className="font-medium text-foreground">{props.milestoneTargetTask?.title || props.milestoneTargetTask?.name}</span>
+              任务：<span className="font-medium text-foreground">{props.milestoneTargetTask?.title}</span>
             </p>
             <div className="grid gap-2">
-              <button
+              <Button variant="ghost"
                 onClick={() => props.handleSelectMilestoneLevel(null)}
                 className={`flex items-center gap-3 p-3 rounded-lg border transition-colors hover:bg-accent ${!props.milestoneTargetTask?.is_milestone ? 'border-primary bg-primary/5' : 'border-border'}`}
               >
-                <Flag className="h-4 w-4 text-gray-300" />
+                <Flag className="h-4 w-4 text-slate-300" />
                 <div className="text-left">
                   <div className="text-sm font-medium">普通任务</div>
                   <div className="text-xs text-muted-foreground">取消里程碑标记</div>
                 </div>
-              </button>
+              </Button>
               {[1, 2, 3].map((level) => {
                 const config = MILESTONE_LEVEL_CONFIG[level]
                 const isSelected = props.milestoneTargetTask?.is_milestone && props.milestoneTargetTask?.milestone_level === level
                 return (
-                  <button
+                  <Button variant="ghost"
                     key={level}
                     onClick={() => props.handleSelectMilestoneLevel(level)}
                     className={`flex items-center gap-3 p-3 rounded-lg border transition-colors hover:bg-accent ${isSelected ? `border-current ${config.bgColor} ${config.color}` : 'border-border'}`}
@@ -697,7 +739,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                         {level === 1 ? '关键节点，影响整体工期' : level === 2 ? '重要节点，分项关键控制点' : '一般节点，过程监控点'}
                       </div>
                     </div>
-                  </button>
+                  </Button>
                 )
               })}
             </div>
@@ -709,122 +751,91 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
       </Dialog>
 
       <Dialog open={props.conditionDialogOpen} onOpenChange={props.setConditionDialogOpen}>
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-md-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-green-600" />
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
               开工条件管理
             </DialogTitle>
             <DialogDescription className="sr-only">管理当前任务的开工条件列表</DialogDescription>
             <p className="text-xs text-muted-foreground mt-1">
-              任务：<span className="font-medium text-foreground">{props.conditionTask?.title || props.conditionTask?.name}</span>
+              任务：<span className="font-medium text-foreground">{props.conditionTask?.title}</span>
             </p>
           </DialogHeader>
           <div className="py-2 space-y-3">
-            <div className="space-y-2 p-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/50">
-              <div className="flex gap-2">
-                <Select value={props.newConditionType} onValueChange={props.setNewConditionType}>
-                  <SelectTrigger className="w-28 h-8 text-xs">
-                    <SelectValue placeholder="类型" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CONDITION_TYPES.map((type) => (
-                      <SelectItem key={type.value} value={type.value} className="text-xs">{type.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input
-                  placeholder="输入开工条件"
-                  value={props.newConditionName}
-                  onChange={(event) => props.setNewConditionName(event.target.value)}
-                  onKeyDown={(event) => event.key === 'Enter' && props.handleAddCondition()}
-                  className="flex-1 h-8 text-sm"
-                />
-              </div>
-              <Input
-                placeholder="备注（可选）"
-                value={props.newConditionDescription}
-                onChange={(event) => props.setNewConditionDescription(event.target.value)}
-                className="h-7 text-xs"
-              />
-              <div className="flex gap-2 items-center">
-                <div className="flex items-center gap-1.5 flex-1">
-                  <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                  <label className="text-xs text-gray-500">目标日期</label>
-                  <Input
-                    type="date"
-                    value={props.newConditionTargetDate}
-                    onChange={(event) => props.setNewConditionTargetDate(event.target.value)}
-                    className="h-7 text-xs flex-1"
-                  />
-                </div>
-                <Input
-                  placeholder="责任单位"
-                  value={props.newConditionResponsibleUnit}
-                  onChange={(event) => props.setNewConditionResponsibleUnit(event.target.value)}
-                  className="h-7 text-xs w-28"
-                />
-                {props.newConditionType === 'preceding' && (
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 text-xs flex-1 justify-start gap-1.5 border-amber-200 bg-amber-50/50 hover:bg-amber-50"
-                      >
-                        <GitBranch className="h-3.5 w-3.5 text-amber-500 flex-shrink-0" />
-                        {props.newConditionPrecedingTaskIds.length === 0 ? (
-                          <span className="text-gray-400">选择前置任务（可多选）</span>
-                        ) : (
-                          <span className="text-amber-700 font-medium truncate">已选 {props.newConditionPrecedingTaskIds.length} 个前置任务</span>
-                        )}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 p-0" align="start">
-                      <div className="px-3 py-2 border-b bg-gray-50">
-                        <p className="text-xs text-gray-500">勾选所有前置任务（可多选）</p>
-                      </div>
-                      <div className="max-h-56 overflow-y-auto py-1">
-                        {props.tasks
-                          .filter(hasStringId)
-                          .filter((task) => props.conditionTask && task.id !== props.conditionTask.id)
-                          .map((task) => {
-                            const checked = props.newConditionPrecedingTaskIds.includes(task.id)
-                            return (
-                              <label key={task.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(event) => {
-                                    if (event.target.checked) {
-                                      props.setNewConditionPrecedingTaskIds((previous) => [...previous, task.id])
-                                    } else {
-                                      props.setNewConditionPrecedingTaskIds((previous) => previous.filter((id) => id !== task.id))
-                                    }
-                                  }}
-                                  className="accent-amber-500 w-3.5 h-3.5"
-                                />
-                                <span className="text-xs text-gray-700 truncate flex-1">{task.title || task.name}</span>
-                                {task.status && (
-                                  <span className={`rounded px-1 text-[10px] ${getStatusTheme(getTaskStatusThemeKey(task.status)).className}`}>
-                                    {getStatusTheme(getTaskStatusThemeKey(task.status), task.status).label}
-                                  </span>
-                                )}
-                              </label>
-                            )
-                          })}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                )}
-              </div>
+            <NewConditionForm
+              className="border-slate-200 bg-slate-50/50 shadow-none"
+              conditionTypes={CONDITION_TYPES.map((type) => ({ value: type.value, label: type.label }))}
+              defaultType={props.newConditionType}
+              participantUnits={props.participantUnits.map((unit) => ({
+                id: unit.id,
+                name: unit.unit_type ? `${unit.unit_name} · ${unit.unit_type}` : unit.unit_name,
+              }))}
+              onTypeChange={props.setNewConditionType}
+              onSubmit={props.handleAddConditionValue}
+            />
+            {props.newConditionType === 'preceding' && (
+              <div className="space-y-2 rounded-xl border border-amber-100 bg-amber-50/50 p-3">
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8 w-full justify-start gap-1.5 border-amber-200 bg-white text-xs hover:bg-amber-50"
+                    >
+                      <GitBranch className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" />
+                      {props.newConditionPrecedingTaskIds.length === 0 ? (
+                        <span className="text-slate-500">选择前置任务（可多选）</span>
+                      ) : (
+                        <span className="truncate font-medium text-amber-700">已选 {props.newConditionPrecedingTaskIds.length} 个前置任务</span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 p-0" align="start" side="bottom">
+                    <div className="bg-slate-50 px-3 py-2">
+                      <p className="text-xs text-slate-500">勾选所有前置任务（可多选）</p>
+                    </div>
+                    <Separator />
+                    <div className="max-h-56 overflow-y-auto py-1">
+                      {props.tasks
+                        .filter(hasStringId)
+                        .filter((task) => props.conditionTask && task.id !== props.conditionTask.id)
+                        .map((task) => {
+                          const checked = props.newConditionPrecedingTaskIds.includes(task.id)
+                          return (
+                            <label key={task.id} className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-slate-50">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  if (event.target.checked) {
+                                    props.setNewConditionPrecedingTaskIds((previous) => [...previous, task.id])
+                                  } else {
+                                    props.setNewConditionPrecedingTaskIds((previous) => previous.filter((id) => id !== task.id))
+                                  }
+                                }}
+                                className="h-3.5 w-3.5 accent-amber-500"
+                              />
+                              <span className="flex-1 truncate text-xs text-slate-700">{task.title}</span>
+                              {task.status && (
+                                <span className={`rounded px-1 text-xs ${getStatusTheme(getTaskStatusThemeKey(task.status)).className}`}>
+                                  {getStatusTheme(getTaskStatusThemeKey(task.status), task.status).label}
+                                </span>
+                              )}
+                            </label>
+                          )
+                        })}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               {props.newConditionType === 'preceding' && props.newConditionPrecedingTaskIds.length > 0 && (
                 <p className="text-xs text-amber-600 flex items-center gap-1">
-                  <GitBranch className="h-3 w-3" />
+                  <GitBranch className="h-3.5 w-3.5" />
                   已选 {props.newConditionPrecedingTaskIds.length} 个前置任务 — 全部完成时，此条件自动满足
                 </p>
               )}
-            </div>
+              </div>
+            )}
 
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {props.conditionsLoading ? (
@@ -833,7 +844,11 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                   className="min-h-24 py-4"
                 />
               ) : props.taskConditions.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">暂无开工条件</p>
+                <EmptyState
+                  title="暂无开工条件"
+                  description="新增条件后会在这里形成开工前置清单。"
+                  className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                />
               ) : (
                 props.taskConditions.map((condition) => {
                   const typeConfig = CONDITION_TYPES.find((item) => item.value === condition.condition_type)
@@ -842,63 +857,54 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                     <div
                       key={condition.id}
                       className={`flex items-start gap-2 p-2.5 rounded-xl border transition-colors ${
-                        condition.is_satisfied ? 'bg-green-50 border-green-200' : isOverdue ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
+                        condition.is_satisfied ? 'bg-emerald-50 border-emerald-200' : isOverdue ? 'bg-red-50 border-red-300' : 'bg-slate-50 border-slate-200'
                       }`}
                     >
-                      <button
+                      <Button variant="ghost"
                         onClick={() => props.handleToggleCondition(condition)}
                         className={`flex-shrink-0 mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
-                          condition.is_satisfied ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 hover:border-emerald-400'
+                          condition.is_satisfied ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-slate-300 hover:border-emerald-400'
                         }`}
                       >
-                        {condition.is_satisfied && <CheckCircle2 className="h-3 w-3" />}
-                      </button>
+                        {condition.is_satisfied && <CheckCircle2 className="h-3.5 w-3.5" />}
+                      </Button>
                       <div className="flex-1 min-w-0">
-                        <p className={`text-sm ${condition.is_satisfied ? 'line-through text-gray-400' : 'text-gray-700'}`}>{condition.name}</p>
+                        <p className={`text-sm ${condition.is_satisfied ? 'line-through text-slate-500' : 'text-slate-700'}`}>{condition.name}</p>
                         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                          {typeConfig && <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${typeConfig.color}`}>{typeConfig.label}</span>}
+                          {typeConfig && <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${typeConfig.color}`}>{typeConfig.label}</span>}
                           {condition.target_date && (
-                            <span className={`text-[10px] flex items-center gap-0.5 ${isOverdue ? 'text-red-600 font-medium' : 'text-gray-400'}`}>
+                            <span className={`text-xs flex items-center gap-0.5 ${isOverdue ? 'text-red-600 font-medium' : 'text-slate-500'}`}>
                               <Calendar className="h-2.5 w-2.5" />
                               {isOverdue ? '已超期: ' : ''}{condition.target_date}
                             </span>
                           )}
                           {(props.conditionPrecedingTasks[condition.id] || []).map((precedingTask) => (
-                            <span
-                              key={precedingTask.task_id}
-                              className={`text-[10px] px-1.5 py-0.5 rounded flex items-center gap-0.5 ${
-                                precedingTask.status === '已完成' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                            <Tooltip key={precedingTask.task_id}>
+  <TooltipTrigger asChild>
+    <span
+                              className={`text-xs px-1.5 py-0.5 rounded flex items-center gap-0.5 ${
+                                precedingTask.status === '已完成' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
                               }`}
-                              title={`前置任务: ${precedingTask.title || precedingTask.name}`}
+                              
                             >
                               <GitBranch className="h-2.5 w-2.5 flex-shrink-0" />
-                              {precedingTask.title || precedingTask.name}
+                              {precedingTask.title}
                             </span>
+  </TooltipTrigger>
+  <TooltipContent>{`前置任务: ${precedingTask.title}`}</TooltipContent>
+</Tooltip>
                           ))}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${condition.is_satisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
+                          <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${condition.is_satisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-orange-100 text-orange-700'}`}>
                             {condition.is_satisfied ? '已满足' : '未满足'}
                           </span>
                         </div>
-                        {!condition.is_satisfied && props.canAdminForceSatisfyCondition && (
-                          <div className="mt-2 flex justify-end">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-7 border-amber-200 text-xs text-amber-700 hover:bg-amber-50"
-                              onClick={() => props.handleAdminForceSatisfyCondition(condition)}
-                            >
-                              强制满足
-                            </Button>
-                          </div>
-                        )}
                       </div>
-                      <button
+                      <Button variant="ghost"
                         onClick={() => props.handleDeleteCondition(condition.id)}
-                        className="flex-shrink-0 p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors"
+                        className="flex-shrink-0 p-1 rounded hover:bg-red-50 text-slate-300 hover:text-red-500 transition-colors"
                       >
                         <XCircle className="h-3.5 w-3.5" />
-                      </button>
+                      </Button>
                     </div>
                   )
                 })
@@ -909,81 +915,19 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               <p className="text-xs text-muted-foreground">
                 已满足 {props.taskConditions.filter((condition) => condition.is_satisfied).length}/{props.taskConditions.length} 个条件
                 {props.taskConditions.every((condition) => condition.is_satisfied) && (
-                  <span className="ml-1.5 text-green-600 font-medium">全部满足，可以开工</span>
+                  <span className="ml-1.5 text-emerald-600 font-medium">全部满足，可以开工</span>
                 )}
               </p>
             )}
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => props.setConditionDialogOpen(false)}>关闭</Button>
-            <Button onClick={props.handleAddCondition} disabled={!props.newConditionName.trim()}>
-              <Plus className="h-4 w-4 mr-1" />
-              保存条件
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={props.forceSatisfyDialogOpen}
-        onOpenChange={(open) => {
-          props.setForceSatisfyDialogOpen(open)
-          if (!open) {
-            props.setForceSatisfyReason('')
-          }
-        }}
-      >
-        <DialogContent className="sm:max-w-[420px]" data-testid="gantt-force-satisfy-dialog">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-amber-600" />
-              强制满足条件
-            </DialogTitle>
-            <DialogDescription className="sr-only">管理员强制标记开工条件为已满足</DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3 py-1">
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
-              <div className="font-medium">{props.forceSatisfyCondition?.name ?? '当前条件'}</div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="gantt-force-satisfy-reason">强制满足原因</Label>
-              <Textarea
-                id="gantt-force-satisfy-reason"
-                value={props.forceSatisfyReason}
-                onChange={(event) => props.setForceSatisfyReason(event.target.value)}
-                placeholder="请输入管理员确认依据，例如：现场签认完成，允许继续推进。"
-                rows={4}
-                data-testid="gantt-force-satisfy-reason"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                props.setForceSatisfyDialogOpen(false)
-                props.setForceSatisfyReason('')
-              }}
-            >
-              取消
-            </Button>
-            <Button
-              type="button"
-              onClick={props.confirmAdminForceSatisfyCondition}
-              disabled={!props.forceSatisfyReason.trim()}
-              data-testid="gantt-force-satisfy-confirm"
-            >
-              确认强制满足
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={props.obstacleDialogOpen} onOpenChange={props.setObstacleDialogOpen}>
-        <DialogContent className="sm:max-w-[520px]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-md-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <AlertOctagon className="h-4 w-4 text-amber-600" />
@@ -991,7 +935,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
             </DialogTitle>
             <DialogDescription className="sr-only">查看和管理当前任务的阻碍记录</DialogDescription>
             <p className="text-xs text-muted-foreground mt-1">
-              任务：<span className="font-medium text-foreground">{props.obstacleTask?.title || props.obstacleTask?.name}</span>
+              任务：<span className="font-medium text-foreground">{props.obstacleTask?.title}</span>
             </p>
           </DialogHeader>
           <div className="py-2 space-y-3">
@@ -1004,16 +948,15 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                 className="flex-1"
               />
             </div>
-            <div className="grid gap-2 sm:grid-cols-[120px_minmax(0,1fr)]">
+            <div className="grid gap-2 sm:grid-cols-[7.5rem_minmax(0,1fr)]">
               <Select value={props.newObstacleSeverity} onValueChange={props.setNewObstacleSeverity}>
                 <SelectTrigger className="h-9">
                   <SelectValue placeholder="严重程度" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="低">低</SelectItem>
-                  <SelectItem value="中">中</SelectItem>
-                  <SelectItem value="高">高</SelectItem>
-                  <SelectItem value="严重">严重</SelectItem>
+                  <SelectItem value="low">低</SelectItem>
+                  <SelectItem value="medium">中</SelectItem>
+                  <SelectItem value="high">高</SelectItem>
                 </SelectContent>
               </Select>
               <Input
@@ -1027,7 +970,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
               value={props.newObstacleResolutionNotes}
               onChange={(event) => props.setNewObstacleResolutionNotes(event.target.value)}
               placeholder="处理备注 / 协调情况（可选）"
-              className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
             />
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {props.obstaclesLoading ? (
@@ -1036,23 +979,28 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                   className="min-h-24 py-4"
                 />
               ) : props.taskObstacles.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-4">暂无阻碍记录</p>
+                <EmptyState
+                  title="暂无阻碍记录"
+                  description="新增阻碍后会在这里跟踪处理与升级记录。"
+                  className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                />
               ) : (
                 props.taskObstacles.map((obstacle) => {
-                  const daysSince = Math.floor((Date.now() - new Date(obstacle.created_at).getTime()) / 86400000)
+                  const daysSince = getObstacleAgeDays(obstacle.created_at)
                   const isLongTerm = !obstacle.is_resolved && daysSince > 3
                   const isCritical = !obstacle.is_resolved && daysSince > 7
+                  const normalizedSeverity = normalizeObstacleSeverity(obstacle.severity)
                   const escalatedSeverity = isCritical
-                    ? '严重'
-                    : isLongTerm && ['low', 'medium', '低', '中'].includes(String(obstacle.severity || '').trim().toLowerCase())
-                      ? '高'
-                      : obstacle.severity || '中'
+                    ? 'high'
+                    : isLongTerm && ['low', 'medium'].includes(normalizedSeverity)
+                      ? 'high'
+                      : normalizedSeverity
                   const isEditing = props.editingObstacleId === obstacle.id
                   return (
                     <div
                       key={obstacle.id}
                       className={`p-2.5 rounded-xl border transition-colors ${
-                        obstacle.is_resolved ? 'bg-gray-50 border-gray-200 opacity-60' : isCritical ? 'bg-red-50 border-red-300' : isLongTerm ? 'bg-orange-50 border-orange-300' : 'bg-amber-50 border-amber-200'
+                        obstacle.is_resolved ? 'bg-slate-50 border-slate-200 opacity-60' : isCritical ? 'bg-red-50 border-red-300' : isLongTerm ? 'bg-orange-50 border-orange-300' : 'bg-amber-50 border-amber-200'
                       }`}
                     >
                       <div className="flex items-start gap-2">
@@ -1072,11 +1020,16 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                                     props.setEditingObstacleExpectedResolutionDate('')
                                     props.setEditingObstacleResolutionNotes('')
                                   }
-                                }}
+                                  }}
                                   className="h-7 text-xs flex-1"
                                   autoFocus
                                 />
-                                <Button size="sm" className="h-7 px-2" onClick={() => props.handleSaveObstacleEdit(obstacle.id)}>
+                                <Button
+                                  size="sm"
+                                  className="h-7 px-2"
+                                  onClick={() => props.handleSaveObstacleEdit(obstacle.id)}
+                                  disabled={!props.editingObstacleTitle.trim() || !props.editingObstacleExpectedResolutionDate}
+                                >
                                   <CheckCircle2 className="h-3.5 w-3.5" />
                                 </Button>
                                 <Button
@@ -1095,16 +1048,16 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                                 </Button>
                               </div>
                               <div className="grid gap-2 sm:grid-cols-3">
-                                <select
-                                  value={props.editingObstacleSeverity}
-                                  onChange={(event) => props.setEditingObstacleSeverity(event.target.value)}
-                                  className="h-8 rounded-md border border-slate-200 px-2 text-xs"
-                                >
-                                  <option value="low">低</option>
-                                  <option value="medium">中</option>
-                                  <option value="high">高</option>
-                                  <option value="critical">严重</option>
-                                </select>
+                                <Select value={props.editingObstacleSeverity} onValueChange={props.setEditingObstacleSeverity}>
+                                  <SelectTrigger className="h-8 rounded-md border-slate-200 bg-white px-2 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="low">低</SelectItem>
+                                    <SelectItem value="medium">中</SelectItem>
+                                    <SelectItem value="high">高</SelectItem>
+                                  </SelectContent>
+                                </Select>
                                 <Input
                                   type="date"
                                   value={props.editingObstacleExpectedResolutionDate}
@@ -1120,39 +1073,39 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                               </div>
                             </div>
                           ) : (
-                            <p className={`text-sm ${obstacle.is_resolved ? 'line-through text-gray-400' : 'text-gray-800'}`}>{obstacle.title}</p>
+                            <p className={`text-sm ${obstacle.is_resolved ? 'line-through text-slate-500' : 'text-slate-800'}`}>{obstacle.title}</p>
                           )}
                           {!isEditing && (
                             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                               {obstacle.severity && (
-                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-700">
-                                  严重程度 · {obstacle.severity}
+                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">
+                                  严重程度 · {getObstacleSeverityLabel(obstacle.severity)}
                                 </span>
                               )}
-                              {!obstacle.is_resolved && escalatedSeverity !== (obstacle.severity || '中') && (
-                                <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] text-red-700">
-                                  升级后 · {escalatedSeverity}
+                              {!obstacle.is_resolved && escalatedSeverity !== normalizedSeverity && (
+                                <span className="rounded bg-red-50 px-1.5 py-0.5 text-xs text-red-700">
+                                  升级后 · {getObstacleSeverityLabel(escalatedSeverity)}
                                 </span>
                               )}
                               {obstacle.severity_escalated_at && (
-                                <span className="rounded border border-violet-200 bg-violet-50 px-1.5 py-0.5 text-[10px] text-violet-700">
+                                <span className="rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-xs text-indigo-700">
                                   已升级 · {new Date(obstacle.severity_escalated_at).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}
                                 </span>
                               )}
                               {obstacle.expected_resolution_date && (
-                                <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">
+                                <span className="rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
                                   预计解决 · {obstacle.expected_resolution_date}
                                 </span>
                               )}
                               {isCritical && (
-                                <span className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${getStatusTheme('critical').className}`}>
+                                <span className={`flex items-center gap-0.5 rounded px-1.5 py-0.5 text-xs font-medium ${getStatusTheme('critical').className}`}>
                                   <AlertCircle className="h-2.5 w-2.5" />长期阻碍·{daysSince}天
                                 </span>
                               )}
                               {isLongTerm && !isCritical && (
-                                <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${getStatusTheme('warning').className}`}>超时·{daysSince}天</span>
+                                <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${getStatusTheme('warning').className}`}>超时·{daysSince}天</span>
                               )}
-                              {!isLongTerm && !obstacle.is_resolved && <span className="text-[10px] text-gray-400">{daysSince}天前</span>}
+                              {!isLongTerm && !obstacle.is_resolved && <span className="text-xs text-slate-500">{daysSince}天前</span>}
                             </div>
                           )}
                           {obstacle.description && !isEditing && <p className="text-xs text-muted-foreground mt-0.5">{obstacle.description}</p>}
@@ -1181,18 +1134,6 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                               </Link>
                             </div>
                           )}
-                          {!isEditing && isCritical && (
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 border-red-200 text-xs text-red-700 hover:bg-red-50"
-                                onClick={() => props.onOpenRiskWorkspaceForObstacle(obstacle)}
-                              >
-                                查看关联风险链
-                              </Button>
-                            </div>
-                          )}
                         </div>
                         {!isEditing && (
                           <div className="flex items-center gap-1 flex-shrink-0">
@@ -1206,37 +1147,52 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
                               {obstacle.is_resolved ? '已解决' : '进行中'}
                             </span>
                             {!obstacle.is_resolved && (
-                              <button
+                              <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                                 onClick={() => {
                                   props.setEditingObstacleId(obstacle.id)
                                   props.setEditingObstacleTitle(obstacle.title)
-                                  props.setEditingObstacleSeverity(obstacle.severity || 'medium')
+                                  props.setEditingObstacleSeverity(normalizeObstacleSeverity(obstacle.severity))
                                   props.setEditingObstacleExpectedResolutionDate(obstacle.expected_resolution_date || '')
                                   props.setEditingObstacleResolutionNotes(obstacle.resolution_notes || '')
                                 }}
-                                className="p-1 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-600 transition-colors"
-                                title="编辑"
+                                className="p-1 rounded hover:bg-blue-50 text-slate-500 hover:text-blue-600 transition-colors"
+                                
                               >
                                 <Save className="h-3.5 w-3.5" />
-                              </button>
+                              </Button>
+  </TooltipTrigger>
+  <TooltipContent>编辑</TooltipContent>
+</Tooltip>
                             )}
                             {!obstacle.is_resolved && (
-                              <button
+                              <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                                 onClick={() => props.handleResolveObstacle(obstacle)}
-                                className="p-1 rounded hover:bg-green-50 text-gray-400 hover:text-green-600 transition-colors"
-                                title="标记为已解决"
+                                className="p-1 rounded hover:bg-emerald-50 text-slate-500 hover:text-emerald-600 transition-colors"
+                                
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5" />
-                              </button>
+                              </Button>
+  </TooltipTrigger>
+  <TooltipContent>标记为已解决</TooltipContent>
+</Tooltip>
                             )}
                             {obstacle.is_resolved && (
-                              <button
+                              <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                                 onClick={() => props.handleDeleteObstacle(obstacle.id)}
-                                className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"
-                                title="删除"
+                                className="p-1 rounded hover:bg-red-50 text-slate-500 hover:text-red-500 transition-colors"
+                                
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
-                              </button>
+                              </Button>
+  </TooltipTrigger>
+  <TooltipContent>删除</TooltipContent>
+</Tooltip>
                             )}
                           </div>
                         )}
@@ -1249,9 +1205,9 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
             {props.taskObstacles.length > 0 && (
               <p className="text-xs text-muted-foreground">
                 共 {props.taskObstacles.length} 条阻碍 · {props.taskObstacles.filter((obstacle) => !obstacle.is_resolved).length} 条待解决
-                {props.taskObstacles.filter((obstacle) => !obstacle.is_resolved && Math.floor((Date.now() - new Date(obstacle.created_at).getTime()) / 86400000) > 7).length > 0 && (
+                {props.taskObstacles.filter((obstacle) => !obstacle.is_resolved && getObstacleAgeDays(obstacle.created_at) > 7).length > 0 && (
                   <span className="ml-1.5 text-red-600 font-medium">
-                    · {props.taskObstacles.filter((obstacle) => !obstacle.is_resolved && Math.floor((Date.now() - new Date(obstacle.created_at).getTime()) / 86400000) > 7).length} 条长期阻碍
+                    · {props.taskObstacles.filter((obstacle) => !obstacle.is_resolved && getObstacleAgeDays(obstacle.created_at) > 7).length} 条长期阻碍
                   </span>
                 )}
               </p>
@@ -1259,7 +1215,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => props.setObstacleDialogOpen(false)}>关闭</Button>
-            <Button onClick={props.handleAddObstacle} disabled={!props.newObstacleTitle.trim()}>
+            <Button onClick={props.handleAddObstacle} disabled={!props.newObstacleTitle.trim() || !props.newObstacleExpectedResolutionDate}>
               <Plus className="h-4 w-4 mr-1" />
               保存阻碍
             </Button>
@@ -1273,10 +1229,10 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
           if (!open) props.setNewTaskConditionPromptId(null)
         }}
       >
-        <DialogContent className="sm:max-w-[380px]">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-green-600" />
+              <ShieldCheck className="h-4 w-4 text-emerald-600" />
               需要设置开工条件吗？
             </DialogTitle>
             <DialogDescription className="sr-only">新任务创建后选择是否添加开工条件</DialogDescription>
@@ -1303,7 +1259,7 @@ export function GanttViewDialogs(props: GanttViewDialogsProps) {
         open={props.confirmDialog.open}
         onOpenChange={(open) => !open && props.setConfirmDialog((previous) => ({ ...previous, open: false }))}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-h-[90vh] max-w-[var(--dialog-sm-width)] overflow-y-auto rounded-2xl shadow-[var(--el-4)]">
           <DialogHeader>
             <DialogTitle>{props.confirmDialog.title}</DialogTitle>
             <DialogDescription className="sr-only">确认</DialogDescription>

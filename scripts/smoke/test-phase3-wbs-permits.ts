@@ -23,7 +23,7 @@ async function testTC015_01_WbsTemplateList() {
   console.log('\n=== TC-015-01: WBS模板列表查询 ===')
   
   try {
-    const response = await fetch(`${API_BASE}/api/wbs-templates`)
+    const response = await fetch(`${API_BASE}/api/planning/wbs-templates`)
     const data = await response.json()
     
     if (data.success) {
@@ -64,7 +64,7 @@ async function testTC015_02_CreateWbsTemplate() {
       is_active: true
     }
     
-    const response = await fetch(`${API_BASE}/api/wbs-templates`, {
+    const response = await fetch(`${API_BASE}/api/planning/wbs-templates`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(templateData)
@@ -108,7 +108,7 @@ async function testTC015_03_UpdateDeleteWbsTemplate() {
       template_type: '住宅'
     }
     
-    let response = await fetch(`${API_BASE}/api/wbs-templates/${testTemplateId}`, {
+    let response = await fetch(`${API_BASE}/api/planning/wbs-templates/${testTemplateId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updateData)
@@ -126,7 +126,7 @@ async function testTC015_03_UpdateDeleteWbsTemplate() {
     
     // 删除模板
     await sleep(100)
-    response = await fetch(`${API_BASE}/api/wbs-templates/${testTemplateId}`, {
+    response = await fetch(`${API_BASE}/api/planning/wbs-templates/${testTemplateId}`, {
       method: 'DELETE'
     })
     
@@ -152,7 +152,7 @@ async function testTC016_01_PreMilestoneList() {
   console.log('\n=== TC-016-01: 获取项目前期证照列表 ===')
   
   try {
-    const response = await fetch(`${API_BASE}/api/pre-milestones?projectId=${testProjectId}`)
+    const response = await fetch(`${API_BASE}/api/projects/${testProjectId}/pre-milestones`)
     const data = await response.json()
     
     if (data.success) {
@@ -195,7 +195,7 @@ async function testTC016_02_CreatePreMilestone() {
       notes: '测试备注'
     }
     
-    const response = await fetch(`${API_BASE}/api/pre-milestones`, {
+    const response = await fetch(`${API_BASE}/api/projects/${testProjectId}/pre-milestones`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(permitData)
@@ -262,7 +262,7 @@ async function testTC016_04_PreMilestoneCRUD() {
       actual_start_date: formatDate(new Date())
     }
     
-    let response = await fetch(`${API_BASE}/api/pre-milestones/${testPermitId}`, {
+    let response = await fetch(`${API_BASE}/api/projects/${testProjectId}/pre-milestones/${testPermitId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updateData)
@@ -280,7 +280,7 @@ async function testTC016_04_PreMilestoneCRUD() {
     
     // 查询单个证照
     await sleep(100)
-    response = await fetch(`${API_BASE}/api/pre-milestones/${testPermitId}`)
+    response = await fetch(`${API_BASE}/api/projects/${testProjectId}/pre-milestones/${testPermitId}`)
     data = await response.json()
     
     if (data.success) {
@@ -293,7 +293,7 @@ async function testTC016_04_PreMilestoneCRUD() {
     
     // 删除证照
     await sleep(100)
-    response = await fetch(`${API_BASE}/api/pre-milestones/${testPermitId}`, {
+    response = await fetch(`${API_BASE}/api/projects/${testProjectId}/pre-milestones/${testPermitId}`, {
       method: 'DELETE'
     })
     
@@ -495,7 +495,7 @@ async function testTC016_08_WbsTemplatePermitLink() {
   
   try {
     // 查询所有WBS模板
-    const templatesResponse = await fetch(`${API_BASE}/api/wbs-templates`)
+    const templatesResponse = await fetch(`${API_BASE}/api/planning/wbs-templates`)
     const templatesData = await templatesResponse.json()
     
     if (!templatesData.success) {
@@ -504,7 +504,7 @@ async function testTC016_08_WbsTemplatePermitLink() {
     }
     
     // 查询所有证照
-    const permitsResponse = await fetch(`${API_BASE}/api/pre-milestones?projectId=${testProjectId}`)
+    const permitsResponse = await fetch(`${API_BASE}/api/projects/${testProjectId}/pre-milestones`)
     const permitsData = await permitsResponse.json()
     
     if (!permitsData.success) {

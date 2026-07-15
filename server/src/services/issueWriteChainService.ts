@@ -8,9 +8,9 @@ import {
 import {
   deleteNotificationById,
   findNotification,
-  insertNotification,
   updateNotificationById,
 } from './notificationStore.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 import type { Issue, Notification } from '../types/db.js'
 
 function mapIssueSeverityToNotificationSeverity(severity?: Issue['severity'] | null): Notification['severity'] {
@@ -65,6 +65,7 @@ async function syncIssueNotification(issue: Issue | null) {
   if (!issue) return
 
   const existing = await findNotification({
+    projectId: issue.project_id,
     sourceEntityType: 'issue',
     sourceEntityId: issue.id,
   })
@@ -85,7 +86,7 @@ async function syncIssueNotification(issue: Issue | null) {
       resolved_at: issue.closed_at ?? new Date().toISOString(),
       resolved_source: issue.closed_reason ?? 'issue_closed',
       metadata: buildIssueNotificationMetadata(issue, existing),
-    })
+    }, existing)
     return
   }
 
@@ -101,11 +102,11 @@ async function syncIssueNotification(issue: Issue | null) {
   }
 
   if (existing) {
-    await updateNotificationById(existing.id, patch)
+    await updateNotificationById(existing.id, patch, existing)
     return
   }
 
-  await insertNotification({
+  await notificationTouchpointService.emit({
     project_id: issue.project_id,
     type: patch.type,
     notification_type: patch.notification_type,
@@ -119,6 +120,11 @@ async function syncIssueNotification(issue: Issue | null) {
     task_id: patch.task_id,
     status: 'unread',
     metadata: patch.metadata,
+    touchpoint_type: 'dashboard_todo',
+    scope_type: 'project',
+    dedupe_key: `issue:${issue.project_id}:${issue.id}`,
+    target_route: `/projects/${issue.project_id}/risks?tab=issues`,
+    target_label: '查看问题',
   })
 }
 
@@ -169,6 +175,6 @@ export async function deleteIssueInMainChain(id: string): Promise<void> {
   })
   await deleteIssue(id)
   if (existing) {
-    await deleteNotificationById(existing.id)
+    await deleteNotificationById(existing.id, existing)
   }
 }

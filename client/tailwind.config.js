@@ -1,3 +1,5 @@
+import defaultTheme from "tailwindcss/defaultTheme"
+
 /** @type {import('tailwindcss').Config} */
 // =============================================================================
 // Design Token 对齐说明（V4 设计规范）
@@ -35,7 +37,7 @@ export default {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
+        background: "var(--background)",
         foreground: "hsl(var(--foreground))",
         primary: {
           DEFAULT: "hsl(var(--primary))",
@@ -54,8 +56,8 @@ export default {
           foreground: "hsl(var(--muted-foreground))",
         },
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: "#F97316",
+          foreground: "#FFFFFF",
         },
         popover: {
           DEFAULT: "hsl(var(--popover))",
@@ -72,12 +74,24 @@ export default {
       // V4 规范：卡片统一 12px
       // shadcn 默认 rounded-lg = var(--radius) = 8px → 已在 index.css 改为 0.75rem
       // -----------------------------------------------------------------------
+      fontFamily: {
+        sans: ['"Plus Jakarta Sans"', 'Inter', '"Noto Sans SC"', '"Microsoft YaHei"', '"PingFang SC"', '"Hiragino Sans GB"', ...defaultTheme.fontFamily.sans],
+      },
+
       borderRadius: {
-        lg: "var(--radius)",           // shadcn default，现为 0.75rem (12px)
-        md: "calc(var(--radius) - 2px)", // 0.625rem (10px)
-        sm: "calc(var(--radius) - 4px)", // 0.5rem (8px)
-        card: "var(--radius)",        // 语义化卡片圆角 token = 12px
-        "2xl": "var(--radius)",       // 历史 rounded-2xl 写法统一回收为 12px
+        lg: "8px",
+        xl: "12px",
+        "2xl": "16px",
+        md: "6px",
+        sm: "4px",
+        card: "12px",
+      },
+
+      boxShadow: {
+        "el-1": "0 1px 3px rgba(0,0,0,0.04)",
+        "el-2": "0 4px 12px rgba(0,0,0,0.06)",
+        "el-3": "0 8px 24px rgba(0,0,0,0.08)",
+        "el-4": "0 20px 40px rgba(0,0,0,0.12)",
       },
 
       // -----------------------------------------------------------------------
@@ -96,7 +110,7 @@ export default {
         },
         // V4 页面/卡片淡入
         "fade-in": {
-          from: { opacity: "0", transform: "translateY(4px)" },
+          from: { opacity: "0", transform: "translateY(8px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
         // V4 骨架屏光晕
@@ -106,8 +120,8 @@ export default {
         },
         // V4 侧边栏子菜单展开（max-height）
         "expand-down": {
-          from: { maxHeight: "0", opacity: "0" },
-          to: { maxHeight: "200px", opacity: "1" },
+          from: { height: "0", opacity: "0", overflow: "hidden" },
+          to: { height: "var(--radix-collapsible-content-height)", opacity: "1" },
         },
         "collapse-up": {
           from: { maxHeight: "200px", opacity: "1" },
@@ -124,12 +138,16 @@ export default {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         // V4 动效
-        "fade-in": "fade-in 0.3s ease-out",
+        "fade-in": "fade-in 300ms ease-out",
         "fade-in-fast": "fade-in 0.15s ease-out",
         "skeleton": "skeleton-shimmer 1.5s linear infinite",
-        "expand-down": "expand-down 0.2s ease-out",
+        "expand-down": "expand-down 300ms ease-out",
         "collapse-up": "collapse-up 0.2s ease-out",
         "slide-in-right": "slide-in-right 0.2s ease-out",
+      },
+
+      transitionTimingFunction: {
+        bounce: "cubic-bezier(0.34, 1.56, 0.64, 1)",
       },
 
     },

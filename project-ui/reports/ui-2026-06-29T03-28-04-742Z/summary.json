@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "workbuddy-ui-dashboard-summary.v1",
+  "generatedAt": "2026-06-29T03:28:04.744Z",
+  "message": "UI dashboard dry-run completed",
+  "profile": "design-audit",
+  "dryRun": true,
+  "executed": false,
+  "reportDir": "C:\\Users\\jjj64\\WorkBuddy\\20260318232610\\project-ui\\reports\\ui-2026-06-29T03-28-04-742Z",
+  "commands": [
+    {
+      "id": "ui-center-check",
+      "command": "node project-ui/tools/check-ui-center.mjs",
+      "execution": "safe",
+      "status": "planned"
+    }
+  ],
+  "results": [],
+  "boundaries": {
+    "allowedUiArtifactWrites": [
+      "project-ui/artifacts/**",
+      "project-ui/reports/**"
+    ],
+    "forbiddenProductionWrites": [
+      "tasks",
+      "task_baselines",
+      "monthly_plans",
+      "monthly_plan_items",
+      "task_dependencies",
+      "project_daily_snapshot",
+      "published runtime overlay",
+      "production seed data"
+    ],
+    "rule": "UI research, screenshots, Figma extracts, and visual audit outputs can produce reports and candidates only; they cannot directly mutate production runtime data."
+  }
+}

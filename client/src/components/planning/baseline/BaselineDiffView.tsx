@@ -1,0 +1,149 @@
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent } from '@/components/ui/card'
+import type { PlanningTreeCellKey } from '@/components/planning/PlanningTreeView'
+import { MapPin } from 'lucide-react'
+
+export type BaselineDiffKind = '新增' | '修改' | '移除' | '里程碑变动'
+
+export interface BaselineDiffItem {
+  id: string
+  kind: BaselineDiffKind
+  title: string
+  before: string
+  after: string
+  note?: string
+  rowId?: string
+  field?: PlanningTreeCellKey
+}
+
+export interface BaselineDiffViewProps {
+  fromVersionLabel: string
+  toVersionLabel: string
+  items: BaselineDiffItem[]
+  onLocateItem?: (item: BaselineDiffItem) => void
+}
+
+const kindClassName: Record<BaselineDiffKind, string> = {
+  新增: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  修改: 'border-blue-200 bg-blue-50 text-blue-700',
+  移除: 'border-rose-200 bg-rose-50 text-rose-700',
+  里程碑变动: 'border-indigo-200 bg-indigo-50 text-indigo-700',
+}
+
+function buildCounts(items: BaselineDiffItem[]) {
+  return items.reduce(
+    (acc, item) => {
+      acc[item.kind] += 1
+      return acc
+    },
+    { 新增: 0, 修改: 0, 移除: 0, 里程碑变动: 0 } as Record<BaselineDiffKind, number>,
+  )
+}
+
+export function BaselineDiffView({ fromVersionLabel, toVersionLabel, items, onLocateItem }: BaselineDiffViewProps) {
+  const counts = buildCounts(items)
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900">完整差异视图</h3>
+          <p className="text-xs text-slate-500">
+            {fromVersionLabel} vs {toVersionLabel}
+          </p>
+        </div>
+        <Badge variant="outline">{items.length} 条变更</Badge>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Card className="surface-card sm:col-span-2">
+          <CardContent className="space-y-1 p-5">
+            <div className="text-xs text-slate-500">版本对比</div>
+            <div className="text-lg font-semibold text-slate-900">
+              {fromVersionLabel} → {toVersionLabel}
+            </div>
+          </CardContent>
+        </Card>
+        {(['新增', '修改', '移除', '里程碑变动'] as BaselineDiffKind[]).map((kind) => (
+          <Card key={kind} className="surface-card">
+            <CardContent className="space-y-1 p-5">
+              <div className="text-xs text-slate-500">{kind}</div>
+              <div className="text-lg font-semibold text-slate-900">{counts[kind]}</div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="space-y-2">
+        {items.length === 0 ? (
+          <Card className="surface-card">
+            <CardContent className="p-6 text-center text-sm text-slate-500">
+              当前版本与对比版本没有行级差异。
+            </CardContent>
+          </Card>
+        ) : null}
+        {items.map((item) => (
+          <Card key={item.id} className="surface-card">
+            <CardContent className="space-y-3 p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Badge variant="outline" className={kindClassName[item.kind]}>
+                    {item.kind}
+                  </Badge>
+                  <span className="font-medium text-slate-900">{item.title}</span>
+                </div>
+                {onLocateItem && item.rowId ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1 text-xs"
+                    data-testid={`baseline-diff-locate-${item.rowId}`}
+                    onClick={() => onLocateItem(item)}
+                  >
+                    <MapPin className="h-3.5 w-3.5" />
+                    定位行
+                  </Button>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                    <div className="font-medium text-slate-900">{fromVersionLabel}</div>
+                    <div className="mt-1 truncate">{item.before}</div>
+                  </div>
+                  <div className="flex items-center gap-2 text-blue-600">
+                    <span className="h-2.5 w-2.5 rounded-full bg-slate-300" />
+                    <span className="h-px w-10 bg-blue-300" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
+                  </div>
+                  <div className="min-w-0 flex-1 rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+                    <div className="font-medium">{toVersionLabel}</div>
+                    <div className="mt-1 truncate">{item.after}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                  <div className="text-xs font-medium text-slate-500">{fromVersionLabel}</div>
+                  <div className="mt-1 text-sm leading-6 text-slate-700">{item.before}</div>
+                </div>
+                <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-3 py-2">
+                  <div className="text-xs font-medium text-blue-600">{toVersionLabel}</div>
+                  <div className="mt-1 text-sm leading-6 text-blue-900">{item.after}</div>
+                </div>
+              </div>
+
+              {item.note ? <p className="text-xs leading-6 text-slate-500">{item.note}</p> : null}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export default BaselineDiffView

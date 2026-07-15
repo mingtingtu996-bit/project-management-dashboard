@@ -1,23 +1,4 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "client",
-      "use": "@vercel/static-build"
-    },
-    {
-      "src": "server",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "/server/index.js"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/client/$1"
-    }
-  ]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "node -e \"console.log('Vercel deployment retired: use the self-hosted release workflow'); process.exit(0)\""
 }

@@ -8,6 +8,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import type { PlanningDraftResumeSnapshot } from '../draftPersistence'
 
 interface PlanningDraftResumeDialogProps {
@@ -19,15 +20,7 @@ interface PlanningDraftResumeDialogProps {
 }
 
 function formatDateTime(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDisplayDateTime(value, '—')
 }
 
 export function PlanningDraftResumeDialog({
@@ -42,10 +35,17 @@ export function PlanningDraftResumeDialog({
       <AlertDialogContent data-testid="planning-draft-resume-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle>检测到上次未收口的草稿工作区</AlertDialogTitle>
-          <AlertDialogDescription>
-            {snapshot
-              ? `${snapshot.workspaceLabel} 的 ${snapshot.versionLabel} 在 ${formatDateTime(snapshot.updatedAt)} 留下了本地工作区状态。`
-              : '当前检测到未收口的本地工作区状态。'}
+          <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">
+            {snapshot ? (
+              <>
+                {snapshot.workspaceLabel} 的 {snapshot.versionLabel} 留下了本地工作区状态。
+                <span className="mt-1 block num-mono text-slate-500">
+                  保存于 {formatDateTime(snapshot.updatedAt)}
+                </span>
+              </>
+            ) : (
+              '当前检测到未收口的本地工作区状态。'
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

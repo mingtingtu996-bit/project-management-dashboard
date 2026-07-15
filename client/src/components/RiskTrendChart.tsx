@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { CHART_SERIES } from '@/lib/chartPalette'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Button } from '@/components/ui/button'
 import { LoadingState } from '@/components/ui/loading-state'
 import { AlertTriangle, ChevronDown, ChevronUp, CircleAlert, Minus, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react'
 import { useProject } from '@/contexts/ProjectContext'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { apiGet } from '@/lib/apiClient'
 
 interface RiskTrendData {
   date: string
@@ -52,7 +57,7 @@ function formatDate(dateStr: string) {
 function getTrendIcon(rate: number) {
   if (rate > 0) return <TrendingUp className="h-4 w-4 text-red-500" />
   if (rate < 0) return <TrendingDown className="h-4 w-4 text-emerald-500" />
-  return <Minus className="h-4 w-4 text-slate-400" />
+  return <Minus className="h-4 w-4 text-slate-500" />
 }
 
 function getTrendColor(rate: number) {
@@ -90,8 +95,10 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
 
     setLoading(true)
     try {
-      const response = await fetch(`/api/risk-statistics/trend?projectId=${currentProject.id}&days=${days}`)
-      const result = await response.json()
+      const projectId = String(currentProject.id)
+      const result = await apiGet<{ success: boolean; data: RiskTrendSummary }>(
+        `/api/risk-statistics/trend?projectId=${encodeURIComponent(projectId)}&days=${days}`,
+      )
       if (result.success) {
         setData(result.data)
       }
@@ -119,22 +126,22 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
 
   return (
     <Card className="mb-6">
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <CardTitle className="text-base font-semibold">风险趋势分析</CardTitle>
+      <CardContent padding="md">
+        <CardHead
+          eyebrow="RISK TREND"
+          title="风险趋势分析"
+          action={
+          <div className="flex items-center gap-2">
             {data ? (
               <div className="flex items-center gap-1 text-sm">
                 {getTrendIcon(data.summary.riskChangeRate)}
                 <span className={getTrendColor(data.summary.riskChangeRate)}>
-                  {data.summary.riskChangeRate > 0 ? '+' : ''}{data.summary.riskChangeRate}%
+                  {data.summary.riskChangeRate > 0 ? '+' : ''}
+                  {data.summary.riskChangeRate}%
                 </span>
-                <span className="text-xs text-slate-400">({days}天)</span>
+                <span className="text-xs text-slate-500">({days}天)</span>
               </div>
             ) : null}
-          </div>
-
-          <div className="flex items-center gap-2">
             {isExpanded ? (
               <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-1">
                 {[7, 14, 30].map((d) => (
@@ -160,18 +167,20 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
               {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </Button>
           </div>
-        </div>
-      </CardHeader>
+          }
+        />
+      </CardContent>
 
       {isExpanded ? (
         <CardContent>
           {loading ? (
             <LoadingState label="风险趋势加载中" description="" className="min-h-32 py-8" />
           ) : !trend.length ? (
-            <div className="py-8 text-center text-slate-500">
-              <p>暂无趋势数据</p>
-              <p className="mt-1 text-sm text-slate-400">系统将自动收集每日风险、问题和预警统计数据</p>
-            </div>
+            <EmptyState
+              title="暂无趋势数据"
+              description="系统将自动收集每日风险、问题和预警统计数据。"
+              className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+            />
           ) : (
             <div className="space-y-6">
               <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
@@ -195,46 +204,65 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   <div className="text-2xl font-bold text-amber-600">{data?.summary.currentIssueCount ?? 0}</div>
                   <div className="mt-1 text-xs text-slate-500">活跃问题</div>
                 </div>
-                <div className="rounded-xl bg-cyan-50 p-3 text-center">
-                  <div className="text-2xl font-bold text-cyan-600">{data?.summary.currentWarningCount ?? 0}</div>
+                <div className="rounded-xl bg-blue-50 p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-600">{data?.summary.currentWarningCount ?? 0}</div>
                   <div className="mt-1 text-xs text-slate-500">活跃预警</div>
                 </div>
               </div>
 
-              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.65fr)]">
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
                 <div className="space-y-6">
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-sm font-medium text-slate-700">风险存量趋势</span>
-                      <span className="text-xs text-slate-400">单位: 个</span>
+                      <span className="text-xs text-slate-500">单位: 个</span>
                     </div>
-                    <div className="relative h-44 rounded-2xl bg-slate-50 p-4">
-                      <div className="absolute left-2 top-4 bottom-8 flex flex-col justify-between text-xs text-slate-400">
-                        <span>{maxRiskTotal}</span>
-                        <span>{Math.round(maxRiskTotal / 2)}</span>
-                        <span>0</span>
+                    <ChartAccessibleWrapper
+                      columns={['日期', '风险总数', '新增风险', '已解决风险', '高风险', '中风险', '低风险']}
+                      rows={trend.map((item) => [
+                        item.date,
+                        item.totalRisks,
+                        item.newRisks,
+                        item.resolvedRisks,
+                        item.highRiskCount,
+                        item.mediumRiskCount,
+                        item.lowRiskCount,
+                      ])}
+                      summary="查看风险存量趋势数据"
+                    >
+                      <div className="relative h-44 rounded-2xl bg-slate-50 p-4">
+                        <div className="absolute left-2 top-4 bottom-8 flex flex-col justify-between text-xs text-slate-500">
+                          <span>{maxRiskTotal}</span>
+                          <span>{Math.round(maxRiskTotal / 2)}</span>
+                          <span>0</span>
+                        </div>
+                        <div className="ml-8 flex h-full items-end gap-1 pb-6">
+                          {trend.map((item, index) => {
+                            const height = (item.totalRisks / maxRiskTotal) * 100
+                            const isLatest = index === trend.length - 1
+                            return (
+                              <div key={item.date} className="flex flex-1 flex-col items-center justify-end">
+                                <Tooltip>
+  <TooltipTrigger asChild>
+    <div
+                                  className={`w-full max-w-9 rounded-t ${isLatest ? 'bg-blue-600' : 'bg-blue-300'}`}
+                                  style={{ height: `${Math.max(height, 4)}%` }}
+                                  
+                                />
+  </TooltipTrigger>
+  <TooltipContent>{`${item.date}: ${item.totalRisks} 个风险`}</TooltipContent>
+</Tooltip>
+                                {index % Math.max(Math.ceil(trend.length / 8), 1) === 0 ? (
+                                  <span className="mt-1 text-xs text-slate-500">{formatDate(item.date)}</span>
+                                ) : (
+                                  <span className="mt-1 text-xs text-transparent">.</span>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
                       </div>
-                      <div className="ml-8 flex h-full items-end gap-1 pb-6">
-                        {trend.map((item, index) => {
-                          const height = (item.totalRisks / maxRiskTotal) * 100
-                          const isLatest = index === trend.length - 1
-                          return (
-                            <div key={item.date} className="flex flex-1 flex-col items-center justify-end">
-                              <div
-                                className={`w-full max-w-9 rounded-t ${isLatest ? 'bg-blue-500' : 'bg-blue-300'}`}
-                                style={{ height: `${Math.max(height, 4)}%` }}
-                                title={`${item.date}: ${item.totalRisks} 个风险`}
-                              />
-                              {index % Math.max(Math.ceil(trend.length / 8), 1) === 0 ? (
-                                <span className="mt-1 text-[11px] text-slate-400">{formatDate(item.date)}</span>
-                              ) : (
-                                <span className="mt-1 text-[11px] text-transparent">.</span>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
+                    </ChartAccessibleWrapper>
                   </div>
 
                   <div>
@@ -242,78 +270,117 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                       <span className="text-sm font-medium text-slate-700">新增活动对比</span>
                       <div className="flex items-center gap-4 text-xs text-slate-500">
                         <span className="flex items-center gap-1">
-                          <span className="h-3 w-3 rounded bg-[color:var(--chart-danger)]" style={{ backgroundColor: CHART_SERIES.danger }} />
+                          <span className="h-3.5 w-3.5 rounded bg-[color:var(--chart-danger)]" style={{ backgroundColor: CHART_SERIES.danger }} />
                           风险
                         </span>
                         <span className="flex items-center gap-1">
-                          <span className="h-3 w-3 rounded" style={{ backgroundColor: CHART_SERIES.warning }} />
+                          <span className="h-3.5 w-3.5 rounded" style={{ backgroundColor: CHART_SERIES.warning }} />
                           问题
                         </span>
                         <span className="flex items-center gap-1">
-                          <span className="h-3 w-3 rounded" style={{ backgroundColor: CHART_SERIES.primary }} />
+                          <span className="h-3.5 w-3.5 rounded" style={{ backgroundColor: CHART_SERIES.primary }} />
                           预警
                         </span>
                       </div>
                     </div>
-                    <div className="relative h-36 rounded-2xl bg-slate-50 p-4">
-                      <div className="ml-2 flex h-full items-end gap-1 pb-6">
-                        {trend.map((item, index) => {
-                          const riskHeight = (item.newRisks / maxActivity) * 100
-                          const issueHeight = (item.newIssues / maxActivity) * 100
-                          const warningHeight = (item.newWarnings / maxActivity) * 100
-                          return (
-                            <div key={item.date} className="flex flex-1 flex-col items-center justify-end">
-                              <div className="flex w-full items-end justify-center gap-1">
-                                <div className="w-2 rounded-t bg-[color:var(--chart-danger)]" style={{ height: `${Math.max(riskHeight, 2)}%`, backgroundColor: CHART_SERIES.danger }} title={`新增风险 ${item.newRisks}`} />
-                                <div className="w-2 rounded-t" style={{ height: `${Math.max(issueHeight, 2)}%`, backgroundColor: CHART_SERIES.warning }} title={`新增问题 ${item.newIssues}`} />
-                                <div className="w-2 rounded-t" style={{ height: `${Math.max(warningHeight, 2)}%`, backgroundColor: CHART_SERIES.primary }} title={`新增预警 ${item.newWarnings}`} />
+                    <ChartAccessibleWrapper
+                      columns={['日期', '新增风险', '新增问题', '新增预警', '已解决风险', '已解决问题', '已解决预警']}
+                      rows={trend.map((item) => [
+                        item.date,
+                        item.newRisks,
+                        item.newIssues,
+                        item.newWarnings,
+                        item.resolvedRisks,
+                        item.resolvedIssues,
+                        item.resolvedWarnings,
+                      ])}
+                      summary="查看新增活动对比数据"
+                    >
+                      <div className="relative h-36 rounded-2xl bg-slate-50 p-4">
+                        <div className="ml-2 flex h-full items-end gap-1 pb-6">
+                          {trend.map((item, index) => {
+                            const riskHeight = (item.newRisks / maxActivity) * 100
+                            const issueHeight = (item.newIssues / maxActivity) * 100
+                            const warningHeight = (item.newWarnings / maxActivity) * 100
+                            return (
+                              <div key={item.date} className="flex flex-1 flex-col items-center justify-end">
+                                <div className="flex w-full items-end justify-center gap-1">
+                                  <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="w-2 rounded-t bg-[color:var(--chart-danger)]" style={{ height: `${Math.max(riskHeight, 2)}%`, backgroundColor: CHART_SERIES.danger }}  />
+  </TooltipTrigger>
+  <TooltipContent>{`新增风险 ${item.newRisks}`}</TooltipContent>
+</Tooltip>
+                                  <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="w-2 rounded-t" style={{ height: `${Math.max(issueHeight, 2)}%`, backgroundColor: CHART_SERIES.warning }}  />
+  </TooltipTrigger>
+  <TooltipContent>{`新增问题 ${item.newIssues}`}</TooltipContent>
+</Tooltip>
+                                  <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="w-2 rounded-t" style={{ height: `${Math.max(warningHeight, 2)}%`, backgroundColor: CHART_SERIES.primary }}  />
+  </TooltipTrigger>
+  <TooltipContent>{`新增预警 ${item.newWarnings}`}</TooltipContent>
+</Tooltip>
+                                </div>
+                                {index % Math.max(Math.ceil(trend.length / 8), 1) === 0 ? (
+                                  <span className="mt-1 text-xs text-slate-500">{formatDate(item.date)}</span>
+                                ) : (
+                                  <span className="mt-1 text-xs text-transparent">.</span>
+                                )}
                               </div>
-                              {index % Math.max(Math.ceil(trend.length / 8), 1) === 0 ? (
-                                <span className="mt-1 text-[11px] text-slate-400">{formatDate(item.date)}</span>
-                              ) : (
-                                <span className="mt-1 text-[11px] text-transparent">.</span>
-                              )}
-                            </div>
-                          )
-                        })}
+                            )
+                          })}
+                        </div>
                       </div>
-                    </div>
+                    </ChartAccessibleWrapper>
                   </div>
 
                   <div>
                     <div className="mb-2 flex items-center justify-between">
                       <span className="text-sm font-medium text-slate-700">风险等级结构</span>
-                      <span className="text-xs text-slate-400">当前存量</span>
+                      <span className="text-xs text-slate-500">当前存量</span>
                     </div>
-                    <div className="rounded-2xl bg-slate-50 p-4">
-                      <div className="flex h-4 overflow-hidden rounded-full">
-                        <div className="bg-red-500" style={{ width: `${((latest?.highRiskCount ?? 0) / severityTotal) * 100}%` }} />
-                        <div className="bg-orange-400" style={{ width: `${((latest?.mediumRiskCount ?? 0) / severityTotal) * 100}%` }} />
-                        <div className="bg-blue-400" style={{ width: `${((latest?.lowRiskCount ?? 0) / severityTotal) * 100}%` }} />
+                    <ChartAccessibleWrapper
+                      columns={['风险等级', '数量']}
+                      rows={[
+                        ['高', latest?.highRiskCount ?? 0],
+                        ['中', latest?.mediumRiskCount ?? 0],
+                        ['低', latest?.lowRiskCount ?? 0],
+                      ]}
+                      summary="查看风险等级结构数据"
+                    >
+                      <div className="rounded-2xl bg-slate-50 p-4">
+                        <div className="flex h-4 overflow-hidden rounded-full">
+                          <div className="bg-red-500" style={{ width: `${((latest?.highRiskCount ?? 0) / severityTotal) * 100}%` }} />
+                          <div className="bg-orange-400" style={{ width: `${((latest?.mediumRiskCount ?? 0) / severityTotal) * 100}%` }} />
+                          <div className="bg-blue-400" style={{ width: `${((latest?.lowRiskCount ?? 0) / severityTotal) * 100}%` }} />
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
+                          <span className="flex items-center gap-1">
+                            <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
+                            高 {latest?.highRiskCount ?? 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="h-2.5 w-2.5 rounded-full bg-orange-400" />
+                            中 {latest?.mediumRiskCount ?? 0}
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <span className="h-2.5 w-2.5 rounded-full bg-blue-400" />
+                            低 {latest?.lowRiskCount ?? 0}
+                          </span>
+                        </div>
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
-                        <span className="flex items-center gap-1">
-                          <span className="h-2.5 w-2.5 rounded-full bg-red-500" />
-                          高 {latest?.highRiskCount ?? 0}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="h-2.5 w-2.5 rounded-full bg-orange-400" />
-                          中 {latest?.mediumRiskCount ?? 0}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span className="h-2.5 w-2.5 rounded-full bg-blue-400" />
-                          低 {latest?.lowRiskCount ?? 0}
-                        </span>
-                      </div>
-                    </div>
+                    </ChartAccessibleWrapper>
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <Card className="border-slate-200 shadow-none">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm">来源结构</CardTitle>
-                    </CardHeader>
+                    <CardContent padding="md">
+                      <CardHead eyebrow="SOURCE" title="来源结构" />
+                    </CardContent>
                     <CardContent className="space-y-2">
                       {(data?.sourceTypeBreakdown ?? []).length > 0 ? (
                         (data?.sourceTypeBreakdown ?? []).map((item) => (
@@ -323,17 +390,19 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                           </div>
                         ))
                       ) : (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                          暂无来源分布
-                        </div>
+                        <EmptyState
+                          title="暂无来源分布"
+                          description="风险来源统计形成后会在这里展示。"
+                          className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 py-6"
+                        />
                       )}
                     </CardContent>
                   </Card>
 
                   <Card className="border-slate-200 shadow-none">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm">最新趋势摘要</CardTitle>
-                    </CardHeader>
+                    <CardContent padding="md">
+                      <CardHead eyebrow="SUMMARY" title="最新趋势摘要" />
+                    </CardContent>
                     <CardContent className="space-y-3 text-sm text-slate-600">
                       <div className="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2">
                         <span>最近新增风险</span>
@@ -351,12 +420,13 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
                   </Card>
 
                   <Card className="border-slate-200 shadow-none">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm flex items-center gap-2">
-                        <AlertTriangle className="h-4 w-4 text-amber-500" />
-                        风险提示
-                      </CardTitle>
-                    </CardHeader>
+                    <CardContent padding="md">
+                      <CardHead
+                        eyebrow="NOTICE"
+                        title="风险提示"
+                        action={<AlertTriangle className="h-4 w-4 text-amber-500" />}
+                      />
+                    </CardContent>
                     <CardContent className="space-y-2 text-sm text-slate-600">
                       <div className="flex items-start gap-2 rounded-xl bg-amber-50 px-3 py-2 text-amber-900">
                         <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />

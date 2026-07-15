@@ -42,6 +42,20 @@ describe('P2 event foundation contracts', () => {
     expect(planningGovernanceSource).toContain('planning_governance_notification')
   })
 
+  it('keeps task obstacle routes from selecting the retired expected_resolution_date column from the database', () => {
+    const taskObstaclesSource = readServerFile('src', 'routes', 'task-obstacles.ts')
+    const selectColumnsDefinition = taskObstaclesSource.match(
+      /const TASK_OBSTACLE_SELECT_COLUMNS = \[[\s\S]*?\]\.join\(', '\)/,
+    )?.[0] ?? ''
+
+    expect(taskObstaclesSource).toContain('TASK_OBSTACLE_SELECT_COLUMNS')
+    expect(taskObstaclesSource).toContain('estimated_resolve_date')
+    expect(taskObstaclesSource).toContain('expected_resolution_date')
+    expect(taskObstaclesSource).not.toContain('SELECT * FROM task_obstacles')
+    expect(selectColumnsDefinition).not.toContain('expected_resolution_date')
+    expect(taskObstaclesSource).toContain('expected_resolution_date: record.expected_resolution_date ?? record.estimated_resolve_date ?? null')
+  })
+
   it('keeps jobs API aligned with current schedulers and removes legacy auto alert placeholders', () => {
     const jobsSource = readServerFile('src', 'routes', 'jobs.ts')
 

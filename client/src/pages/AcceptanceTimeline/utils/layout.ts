@@ -6,8 +6,8 @@ export const FLOW_LANE_LABEL_WIDTH = 240
 export const FLOW_BUCKET_WIDTH = 280
 export const FLOW_HEADER_HEIGHT = 76
 export const FLOW_CARD_WIDTH = 240
-export const FLOW_CARD_HEIGHT = 160
-export const FLOW_CARD_STEP = 184
+export const FLOW_CARD_HEIGHT = 320
+export const FLOW_CARD_STEP = 344
 export const FLOW_CARD_INSET_X = 20
 export const FLOW_CARD_INSET_Y = 24
 

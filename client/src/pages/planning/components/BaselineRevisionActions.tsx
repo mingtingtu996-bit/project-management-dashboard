@@ -30,12 +30,10 @@ interface BaselineRevisionActionsProps {
   deferredReason: string
   deferredReasonVisible: boolean
   deferredReviewDueAt: string
-  canEnterDraft: boolean
   onAddToBasket: () => void
   onMarkDeferred: () => void
   onDeferredReasonChange: (reason: string) => void
   onDeferredReviewDueAtChange: (value: string) => void
-  onEnterDraft: () => void
 }
 
 export function BaselineRevisionActions({
@@ -43,12 +41,10 @@ export function BaselineRevisionActions({
   deferredReason,
   deferredReasonVisible,
   deferredReviewDueAt,
-  canEnterDraft,
   onAddToBasket,
   onMarkDeferred,
   onDeferredReasonChange,
   onDeferredReviewDueAtChange,
-  onEnterDraft,
 }: BaselineRevisionActionsProps) {
   const [reviewPreset, setReviewPreset] = useState<ReviewPreset>('custom')
 
@@ -78,17 +74,17 @@ export function BaselineRevisionActions({
     <div data-testid="baseline-revision-action-bar" className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="space-y-1">
-          <div className="text-sm font-semibold text-slate-900">动作区</div>
+          <div className="text-sm font-semibold text-slate-900">处理方式</div>
         </div>
         <div className="text-xs text-slate-500">
-          当前候选：{activeCandidate?.title ?? '未选择'}
+          当前建议：{activeCandidate?.title ?? '未选择'}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="outline" size="sm" onClick={onAddToBasket} data-testid="baseline-revision-add-to-basket">
           <Layers3 className="mr-2 h-4 w-4" />
-          纳入本次修订
+          采纳建议
         </Button>
         <Button
           type="button"
@@ -97,26 +93,16 @@ export function BaselineRevisionActions({
           onClick={onMarkDeferred}
           data-testid="baseline-revision-mark-deferred"
         >
-          标记暂不处理
-        </Button>
-        <Button
-          type="button"
-          variant="default"
-          size="sm"
-          onClick={onEnterDraft}
-          data-testid="baseline-revision-enter-draft"
-          disabled={!canEnterDraft}
-        >
-          发起基线修订
+          暂缓处理
         </Button>
       </div>
 
       {deferredReasonVisible ? (
         <Card className="border-amber-200 bg-amber-50/70">
-          <CardContent className="space-y-2 p-4">
+          <CardContent className="space-y-2 p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="text-sm font-semibold text-slate-900">暂不处理原因</div>
+                <div className="text-sm font-semibold text-slate-900">暂缓原因</div>
               </div>
               <Button type="button" variant="ghost" size="sm" onClick={() => onDeferredReasonChange('')} className="gap-2">
                 <X className="h-4 w-4" />
@@ -124,7 +110,7 @@ export function BaselineRevisionActions({
               </Button>
             </div>
             <div className="space-y-2">
-              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-slate-500">
                 <CalendarDays className="h-3.5 w-3.5" />
                 下次复核时点
               </div>
@@ -153,29 +139,29 @@ export function BaselineRevisionActions({
             </div>
             {reviewPreset === 'custom' ? (
               <label className="block space-y-1">
-                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-slate-500">
+                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-slate-500">
                   <CalendarDays className="h-3.5 w-3.5" />
                   自定义日期
                 </span>
                 <input
                   data-testid="baseline-revision-deferred-review-due-at"
                   type="date"
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none ring-0 focus:border-cyan-400"
+                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none ring-0 focus-visible:border-blue-400"
                   value={deferredReviewDueAt}
                   onChange={(event) => onDeferredReviewDueAtChange(event.target.value)}
                 />
               </label>
             ) : (
-              <div className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-900">
+              <Card className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs text-amber-900">
                 已自动计算为 {deferredReviewDueAt || '未设置'}，可切换为自定义日期继续调整。
-              </div>
+              </Card>
             )}
             <textarea
               data-testid="baseline-revision-deferred-reason"
-              className="min-h-[96px] w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-0 focus:border-cyan-400"
+              className="min-h-24 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none ring-0 focus-visible:border-blue-400"
               value={deferredReason}
               onChange={(event) => onDeferredReasonChange(event.target.value)}
-              placeholder="填写暂不处理原因"
+              placeholder="填写暂缓原因"
             />
           </CardContent>
         </Card>

@@ -1,0 +1,105 @@
+{
+  "schemaVersion": "workbuddy-release-handoff-input/v1",
+  "notes": [
+    "Template only. Do not write raw JWTs, database URLs, service-role keys, passwords, or migration URLs into this file.",
+    "Use *Ref fields to point to a secure operator handoff location outside the repository."
+  ],
+  "unlockFlags": {
+    "includeLive": false,
+    "confirmLiveHandoff": false,
+    "includeDb": false,
+    "confirmDbReady": false
+  },
+  "gates": {
+    "c18-l07-l15-live-diagnostics": {
+      "live": {
+        "baseUrl": "",
+        "authTokenRef": "",
+        "environmentOwner": "",
+        "writeApprovalRef": "",
+        "cleanupOwner": "",
+        "artifactRoot": ""
+      },
+      "targets": {
+        "projectId": "",
+        "planId": ""
+      },
+      "evidenceOwners": {
+        "backendDiagnosticsOwner": "",
+        "databaseEvidenceOwner": "",
+        "browserEvidenceOwner": ""
+      }
+    },
+    "c15-live-learning-closeout": {
+      "live": {
+        "environmentOwner": "",
+        "writeApprovalRef": "",
+        "artifactRoot": ""
+      },
+      "targets": {
+        "companyId": "",
+        "projectId": "",
+        "candidateId": "",
+        "sampleCohortRef": ""
+      },
+      "approvals": {
+        "manualApprovalRef": ""
+      },
+      "owners": {
+        "monitoringOwner": "",
+        "rollbackOwner": ""
+      },
+      "evidenceOwners": {
+        "learningLoopOwner": "",
+        "databaseEvidenceOwner": ""
+      }
+    },
+    "c19-runtime-publication-release-rollback": {
+      "live": {
+        "environmentOwner": "",
+        "writeApprovalRef": "",
+        "artifactRoot": ""
+      },
+      "targets": {
+        "companyId": "",
+        "projectId": ""
+      },
+      "release": {
+        "phase1L5Ref": "",
+        "releaseClosureArtifactRef": "",
+        "rollbackTargetRef": "",
+        "monitoringWindow": ""
+      },
+      "approvals": {
+        "manualApprovalRef": ""
+      },
+      "owners": {
+        "runtimePublicationOwner": "",
+        "consumerObservationOwner": "",
+        "monitoringOwner": "",
+        "rollbackOwner": ""
+      }
+    },
+    "old-object-physical-drop-closeout": {
+      "db": {
+        "databaseTargetRef": "",
+        "databaseReadinessOwner": "",
+        "candidateBundleRef": "",
+        "ddlExportRef": "",
+        "rollbackPlanRef": "",
+        "migrationWindow": "",
+        "backupLocationRef": "",
+        "catalogReadbackOwner": "",
+        "apiBrowserSmokeOwner": ""
+      },
+      "approvals": {
+        "manualApprovalRef": ""
+      },
+      "owners": {
+        "migrationOwner": "",
+        "rollbackOwner": "",
+        "postDropSmokeOwner": ""
+      }
+    }
+  }
+}

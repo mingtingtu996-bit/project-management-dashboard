@@ -35,6 +35,8 @@ vi.mock('../services/supabaseService.js', () => ({
   })),
 }))
 
+const { default: router } = await import('../routes/projects.js')
+
 function buildApp(router: express.Router) {
   const app = express()
   app.use(express.json())
@@ -56,11 +58,10 @@ describe('projects export route', () => {
     mocks.getRisks.mockResolvedValue([{ id: 'risk-1', project_id: '11111111-1111-4111-8111-111111111111', title: '风险 A', probability: 60, impact: 60, status: 'identified', version: 1 }])
     mocks.getMilestones.mockResolvedValue([{ id: 'ms-1', project_id: '11111111-1111-4111-8111-111111111111', name: '里程碑 A', target_date: '2026-04-30', status: 'pending', completion_rate: 0, created_at: '2026-04-17T00:00:00.000Z', updated_at: '2026-04-17T00:00:00.000Z', version: 1 }])
     mocks.getMembers.mockResolvedValue([{ id: 'member-1', project_id: '11111111-1111-4111-8111-111111111111', user_id: 'user-1', role: 'owner', joined_at: '2026-04-17T00:00:00.000Z' }])
-    mocks.getInvitations.mockResolvedValue([{ id: 'invite-1', project_id: '11111111-1111-4111-8111-111111111111', code: 'ABC123', role: 'viewer', status: 'active', created_by: 'user-1', created_at: '2026-04-17T00:00:00.000Z' }])
+    mocks.getInvitations.mockResolvedValue([{ id: 'invite-1', project_id: '11111111-1111-4111-8111-111111111111', code: 'ABC123', invitation_code: 'INVITE-SECRET', role: 'editor', status: 'active', created_by: 'user-1', created_at: '2026-04-17T00:00:00.000Z' }])
   })
 
   it('returns aggregate project export data from backend APIs', async () => {
-    const { default: router } = await import('../routes/projects.js')
     const response = await request(buildApp(router)).get('/api/projects/11111111-1111-4111-8111-111111111111/export')
 
     expect(response.status).toBe(200)
@@ -76,10 +77,25 @@ describe('projects export route', () => {
     })
   })
 
+  it('does not leak invitation codes in project exports', async () => {
+    const response = await request(buildApp(router)).get('/api/projects/11111111-1111-4111-8111-111111111111/export')
+
+    expect(response.status).toBe(200)
+    const [invitation] = response.body.data.invitations
+    expect(invitation).toMatchObject({
+      id: 'invite-1',
+      role: 'editor',
+      status: 'active',
+    })
+    expect(invitation).not.toHaveProperty('code')
+    expect(invitation).not.toHaveProperty('invitation_code')
+    expect(JSON.stringify(response.body.data.invitations)).not.toContain('ABC123')
+    expect(JSON.stringify(response.body.data.invitations)).not.toContain('INVITE-SECRET')
+  })
+
   it('returns 404 when the project does not exist', async () => {
     mocks.getProject.mockResolvedValue(null)
 
-    const { default: router } = await import('../routes/projects.js')
     const response = await request(buildApp(router)).get('/api/projects/99999999-9999-4999-8999-999999999999/export')
 
     expect(response.status).toBe(404)

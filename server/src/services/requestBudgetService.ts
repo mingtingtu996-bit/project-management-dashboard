@@ -1,6 +1,7 @@
 export const REQUEST_TIMEOUT_BUDGETS = {
   fastReadMs: 2_000,
   boardReadMs: 3_000,
+  analysisReadMs: 5_000,
   notificationReadMs: 5_000,
   batchWriteMs: 5_000,
 } as const
@@ -21,6 +22,22 @@ export interface RequestBudgetOptions {
 export interface SyncBatchLimitOptions {
   operation: string
   maxSyncItems?: number
+}
+
+function observeLateRunnerFailure<T>(
+  promise: Promise<T>,
+  options: RequestBudgetOptions,
+  isSettled: () => boolean,
+) {
+  promise.catch((error) => {
+    if (!isSettled()) return
+    console.warn('[requestBudgetService] runner rejected after request budget settled', {
+      operation: options.operation,
+      timeoutMs: options.timeoutMs,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  })
+  return promise
 }
 
 export function buildSyncBatchLimitError(
@@ -72,10 +89,16 @@ export async function runWithRequestBudget<T>(
   runner: () => Promise<T>,
 ): Promise<T> {
   let timer: NodeJS.Timeout | null = null
+  let settled = false
+  const runnerPromise = observeLateRunnerFailure(
+    Promise.resolve().then(runner),
+    options,
+    () => settled,
+  )
 
   try {
     return await Promise.race([
-      runner(),
+      runnerPromise,
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => {
           reject(buildRequestBudgetExceededError(options))
@@ -83,6 +106,7 @@ export async function runWithRequestBudget<T>(
       }),
     ])
   } finally {
+    settled = true
     if (timer) clearTimeout(timer)
   }
 }

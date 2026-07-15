@@ -33,17 +33,17 @@ jobs:
     name: Worktree Maintenance
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: Production
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
       - name: Configure SSH
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
@@ -63,10 +63,10 @@ jobs:
       - name: Inspect or clean production worktree
         if: ${{ inputs.mode != 'runtime-diagnostics' }}
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
           MODE: ${{ inputs.mode }}
           CONFIRMATION: ${{ inputs.confirmation }}
           OUTPUT_ROOT: project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}
@@ -223,10 +223,10 @@ jobs:
       - name: Collect runtime diagnostics
         if: ${{ inputs.mode == 'runtime-diagnostics' }}
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
           OUTPUT_ROOT: project-testing/reports/production-server-worktree-maintenance-${{ github.run_id }}
         run: |
           set -euo pipefail

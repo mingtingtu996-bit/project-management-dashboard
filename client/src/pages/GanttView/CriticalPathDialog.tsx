@@ -1,5 +1,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Separator } from '@/components/ui/separator'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   summarizeCriticalPathSnapshot,
   type CriticalPathOverrideInput,
@@ -82,7 +84,7 @@ export function CriticalPathDialog(props: CriticalPathDialogProps) {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         centered={false}
-        className="max-w-none overflow-hidden p-0"
+        className="max-w-none overflow-hidden rounded-2xl p-0 shadow-[var(--el-4)]"
         data-testid="critical-path-dialog"
         style={{
           left: '50%',
@@ -99,13 +101,16 @@ export function CriticalPathDialog(props: CriticalPathDialogProps) {
       >
         <div className="flex h-full min-h-0 flex-col overflow-hidden">
           <div
-            className="flex cursor-grab items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-6 py-3 active:cursor-grabbing"
+            className="flex cursor-grab items-center justify-between gap-3 bg-slate-50 px-6 py-3 active:cursor-grabbing"
             onPointerDown={startDrag}
             data-testid="critical-path-dialog-drag-handle"
           >
             <div className="min-w-0">
               <DialogHeader className="space-y-1 text-left">
-                <DialogTitle>关键路径图谱</DialogTitle>
+                <div className="flex flex-wrap items-center gap-2">
+                  <DialogTitle>关键路径图谱</DialogTitle>
+                  <span className="text-xs text-slate-500">红色链路为影响工期的关键路径</span>
+                </div>
                 <DialogDescription className="sr-only">查看项目关键路径网络图和覆盖规则</DialogDescription>
                 <div className="text-xs text-muted-foreground">
                   {summarizeCriticalPathSnapshot(props.snapshot) || '等待关键路径快照加载'}
@@ -114,11 +119,17 @@ export function CriticalPathDialog(props: CriticalPathDialogProps) {
             </div>
             <div className="shrink-0 text-xs text-slate-500">拖动此处移动，右下角可调整大小</div>
           </div>
+          <Separator />
 
           <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
             {props.snapshot?.hasCycleDetected && (
               <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800" data-testid="critical-path-cycle-warning">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">存在循环依赖会导致关键路径计算不准确</TooltipContent>
+                </Tooltip>
                 <div>
                   <span className="font-semibold">检测到依赖环，关键路径已回退到兜底排序。</span>
                   {props.snapshot.cycleTaskIds && props.snapshot.cycleTaskIds.length > 0 && (

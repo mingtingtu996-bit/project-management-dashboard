@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "tasks",
+  "authorityLevel": "business_fact",
+  "grain": "one row per project task",
+  "owner": "server task services",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "id",
+    "project_id",
+    "title",
+    "status",
+    "planned_start_date",
+    "planned_end_date",
+    "actual_start_date",
+    "actual_end_date",
+    "progress"
+  ],
+  "forbiddenDirectWriters": [
+    "project-search",
+    "external public data",
+    "candidate knowledge assets"
+  ],
+  "allowedWriterRegistryIds": [
+    "default_master_plan_staging_runtime_evidence",
+    "controlled_live_closeout_writers",
+    "task_dependencies_route_writer",
+    "task_code_transaction_service",
+    "task_write_chain_service",
+    "project_wizard_route_writer",
+    "task_conditions_route_writer",
+    "task_reconcile_route_writer",
+    "db_service_task_writer",
+    "project_critical_path_service",
+    "t2_rhythm_task_window_annotation_domain_writer",
+    "task_constraint_governance_service",
+    "wizard_generation_recovery_service",
+    "t2_rhythm_schedule_runtime_publication_service",
+    "full_app_test_env_fixture_writer",
+    "uiux_performance_fixture_writer",
+    "wave8_browser_fixture_writer",
+    "v11_chapter6_7_fixture_writer",
+    "task_summary_demo_fixture_writer",
+    "db_seed_data_fixture_writer"
+  ],
+  "qualityRules": [
+    "project_id_required",
+    "progress_range_0_100",
+    "actual_dates_controlled_by_task_lifecycle"
+  ]
+}

@@ -66,17 +66,24 @@ describe('P7 compatibility cleanup', () => {
     const runtimeFiles = runtimeRoots.flatMap(collectSourceFiles)
 
     const bannedTokens = [
-      'depends_on',
       'OBSTACLE_STATUS_UNRESOLVABLE',
       'legacy is_critical compatibility',
       "status = 'occurred'",
       "occurred: 1",
+    ]
+    const bannedPatterns = [
+      /\bacceptance_plans\s*\.\s*depends_on\b/i,
+      /\bdepends_on\b[\s\S]{0,120}\bacceptance_plans\b/i,
+      /\bacceptance_plans\b[\s\S]{0,120}\bdepends_on\b/i,
     ]
 
     for (const file of runtimeFiles) {
       const source = readFileSync(file, 'utf8')
       for (const token of bannedTokens) {
         expect(source).not.toContain(token)
+      }
+      for (const pattern of bannedPatterns) {
+        expect(source).not.toMatch(pattern)
       }
     }
   })

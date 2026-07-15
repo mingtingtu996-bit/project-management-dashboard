@@ -36,15 +36,15 @@ export function BatchActionBar({
     <div
       data-testid="planning-shared-batch-bar"
       className={cn(
-        'fixed bottom-4 left-0 right-0 z-40 px-4 transition-transform duration-300',
+        'fixed bottom-4 left-1/2 z-40 w-[calc(100%-2rem)] max-w-[var(--content-max-width)] -translate-x-1/2 px-0 transition-transform duration-300',
         visible ? 'translate-y-0' : 'translate-y-[140%]',
         className,
       )}
       aria-live="polite"
     >
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-2xl shadow-slate-950/30">
+      <div className="mx-auto flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-[var(--el-4)]">
         <div className="flex items-center gap-3">
-          <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-cyan-500 px-2 text-xs font-bold text-slate-950">
+          <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-blue-600 px-2 text-xs font-bold text-slate-950">
             {selectedCount}
           </span>
           <span className="text-sm font-medium">条已选中</span>
@@ -57,14 +57,14 @@ export function BatchActionBar({
               {unsavedLabel}
             </Badge>
           ) : null}
-          <button
+          <Button variant="ghost"
             type="button"
             onClick={onClear}
             className="rounded-full p-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
             aria-label="清空选择"
           >
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -80,7 +80,7 @@ export function BatchActionBar({
                 action.variant === 'destructive'
                   ? 'border-rose-500 bg-rose-600 text-white hover:bg-rose-500'
                   : action.variant === 'outline'
-                    ? 'border-slate-600 bg-transparent text-slate-100 hover:bg-white/10'
+                    ? 'border-slate-700 bg-slate-800 text-white hover:bg-slate-700'
                     : '',
               )}
             >

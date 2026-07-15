@@ -5,6 +5,8 @@
 
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface PaginationProps {
   /** 当前页码 (1-based) */
@@ -76,21 +78,27 @@ export function Pagination({
   }
 
   return (
-    <div className="flex items-center justify-between px-4 py-3 border-t bg-muted/20">
+    <>
+    <Separator />
+    <div className="flex items-center justify-between bg-muted/20 px-4 py-3">
       <div className="flex items-center gap-4">
         {/* 每页条数选择 */}
         {onPageSizeChange && (
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">每页</span>
-            <select
-              value={pageSize}
-              onChange={(e) => onPageSizeChange(Number(e.target.value))}
-              className="h-8 rounded-md border bg-background px-2 text-sm"
+            <Select
+              value={String(pageSize)}
+              onValueChange={(value) => onPageSizeChange(Number(value))}
             >
-              {pageSizeOptions.map(size => (
-                <option key={size} value={size}>{size}</option>
-              ))}
-            </select>
+              <SelectTrigger aria-label="每页条数" className="h-8 w-24 rounded-md bg-background text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {pageSizeOptions.map(size => (
+                  <SelectItem key={size} value={String(size)}>{size}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <span className="text-sm text-muted-foreground">条</span>
           </div>
         )}
@@ -161,6 +169,7 @@ export function Pagination({
         </Button>
       </div>
     </div>
+    </>
   )
 }
 

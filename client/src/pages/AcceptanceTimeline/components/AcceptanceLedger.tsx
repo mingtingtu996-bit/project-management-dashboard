@@ -2,10 +2,14 @@ import React, { useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
+import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import { CheckSquare, ChevronDown, ChevronRight, GripVertical, Search, Square, X } from 'lucide-react'
 import type { AcceptanceNode, AcceptancePlan, AcceptanceStatus, AcceptanceType } from '@/types/acceptance'
+import type { ParticipantUnitSummary } from '@/services/materialsApi'
 import { getAcceptanceDisplayBadges, ACCEPTANCE_STATUSES } from '@/types/acceptance'
 import {
   DndContext,
@@ -26,6 +30,7 @@ import { CSS } from '@dnd-kit/utilities'
 
 import type { AcceptanceTimelineScale } from '../types'
 import { formatTimelineMarker, getAcceptanceStatusMeta, getIcon, getTypeById } from '../utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type GroupMode = 'phase' | 'building' | 'specialty'
 
@@ -39,9 +44,10 @@ interface AcceptanceLedgerProps {
   onReorder?: (planIds: string[]) => void
   onBatchStatusChange?: (planIds: string[], status: AcceptanceStatus) => void | Promise<void>
   onBatchDateUpdate?: (planIds: string[], plannedDate: string) => void | Promise<void>
-  onBatchResponsibleUnitUpdate?: (planIds: string[], responsibleUnit: string) => void | Promise<void>
+  onBatchResponsibleUnitUpdate?: (planIds: string[], participantUnitId: string | null) => void | Promise<void>
   onBatchPhaseUpdate?: (planIds: string[], phaseCode: string) => void | Promise<void>
   timeScale: AcceptanceTimelineScale
+  participantUnits: ParticipantUnitSummary[]
   canEdit?: boolean
 }
 
@@ -62,7 +68,7 @@ function SortablePlanRow({ planId, children }: { planId: string; children: (drag
   )
 }
 
-export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClick, onStatusChange, onDateUpdate, onReorder, onBatchStatusChange, onBatchDateUpdate, onBatchResponsibleUnitUpdate, onBatchPhaseUpdate, timeScale, canEdit = true }: AcceptanceLedgerProps) {
+export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClick, onStatusChange, onDateUpdate, onReorder, onBatchStatusChange, onBatchDateUpdate, onBatchResponsibleUnitUpdate, onBatchPhaseUpdate, timeScale, participantUnits, canEdit = true }: AcceptanceLedgerProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [groupMode, setGroupMode] = useState<GroupMode>('phase')
@@ -70,10 +76,15 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   const [selectedPlanIds, setSelectedPlanIds] = useState<Set<string>>(new Set())
   const [batchStatus, setBatchStatus] = useState<AcceptanceStatus>('passed')
   const [batchDate, setBatchDate] = useState('')
-  const [batchUnit, setBatchUnit] = useState('')
+  const [batchUnit, setBatchUnit] = useState('__clear__')
   const [batchPhase, setBatchPhase] = useState('preparation')
   const [batchActionLoading, setBatchActionLoading] = useState(false)
   const editable = canEdit !== false
+  const readOnlyActionReason = editable ? undefined : '只读成员无编辑权限。'
+  const participantUnitNameById = useMemo(
+    () => new Map(participantUnits.map((unit) => [unit.id, unit.unit_name])),
+    [participantUnits],
+  )
 
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -228,9 +239,9 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   }
 
   async function handleBatchUnit() {
-    if (!onBatchResponsibleUnitUpdate || selectedPlanIds.size === 0 || !batchUnit.trim()) return
+    if (!onBatchResponsibleUnitUpdate || selectedPlanIds.size === 0) return
     setBatchActionLoading(true)
-    try { await onBatchResponsibleUnitUpdate([...selectedPlanIds], batchUnit.trim()) } finally { setBatchActionLoading(false) }
+    try { await onBatchResponsibleUnitUpdate([...selectedPlanIds], batchUnit === '__clear__' ? null : batchUnit) } finally { setBatchActionLoading(false) }
   }
 
   async function handleBatchPhase() {
@@ -247,20 +258,21 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   return (
     <div className="space-y-4">
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
         <input
           type="text"
+          aria-label="搜索验收节点"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="搜索验收节点名称..."
-          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus:border-blue-400 focus:outline-none"
+          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-sm text-slate-900 placeholder-slate-400 focus-visible:border-blue-400 focus-visible:outline-none"
           data-testid="acceptance-ledger-search"
         />
       </div>
       <div className="flex items-center gap-2 text-xs" data-testid="acceptance-group-mode">
         <span className="text-slate-500">分组方式：</span>
         {(['phase', 'building', 'specialty'] as GroupMode[]).map((mode) => (
-          <button
+          <Button variant="ghost"
             key={mode}
             type="button"
             onClick={() => { setGroupMode(mode); setCollapsedGroups(new Set()) }}
@@ -268,57 +280,89 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
               'rounded-full px-3 py-1 font-medium transition-colors',
               groupMode === mode
                 ? 'bg-blue-100 text-blue-700'
-                : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
+                : 'bg-white text-slate-500 ring-1 ring-inset ring-slate-200/60 hover:bg-slate-50',
             )}
           >
             {{ phase: '按阶段', building: '按楼栋', specialty: '按范围层级' }[mode]}
-          </button>
+          </Button>
         ))}
         <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
-            <CheckSquare className="h-3.5 w-3.5" />全选
-          </button>
+          <DisabledReasonTooltip reason={readOnlyActionReason}>
+            <Button variant="ghost" type="button" onClick={selectAll} disabled={!editable} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-slate-500 ring-1 ring-inset ring-slate-200/60 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-select-all">
+              <CheckSquare className="h-3.5 w-3.5" />全选
+            </Button>
+          </DisabledReasonTooltip>
           {selectedPlanIds.size > 0 && (
-            <button type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1 text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
-              <X className="h-3.5 w-3.5" />清除({selectedPlanIds.size})
-            </button>
+            <DisabledReasonTooltip reason={readOnlyActionReason}>
+              <Button variant="ghost" type="button" onClick={clearSelection} disabled={!editable} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-slate-500 ring-1 ring-inset ring-slate-200/60 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50" data-testid="acceptance-clear-selection">
+                <X className="h-3.5 w-3.5" />清除({selectedPlanIds.size})
+              </Button>
+            </DisabledReasonTooltip>
           )}
         </div>
       </div>
 
       {selectedPlanIds.size > 0 && (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-3" data-testid="acceptance-batch-toolbar">
+        <div className="rounded-xl bg-blue-50 p-3 ring-1 ring-inset ring-blue-200" data-testid="acceptance-batch-toolbar">
           <div className="mb-2 text-xs font-medium text-blue-800">已选 {selectedPlanIds.size} 项 — 批量操作：</div>
           <div className="flex flex-wrap items-center gap-3">
             {onBatchStatusChange && (
               <div className="flex items-center gap-2">
-                <select value={batchStatus} onChange={(e) => setBatchStatus(e.target.value as AcceptanceStatus)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
-                  {ACCEPTANCE_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
-                </select>
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
+                <Select value={batchStatus} onValueChange={(value) => setBatchStatus(value as AcceptanceStatus)} disabled={!editable}>
+                  <SelectTrigger className="h-9 min-w-32 border-blue-200 bg-white text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ACCEPTANCE_STATUSES.map((s) => <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} loading={batchActionLoading} onClick={() => void handleBatchStatus()} data-testid="acceptance-batch-status-apply">批量改状态</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
             {onBatchDateUpdate && (
               <div className="flex items-center gap-2">
                 <input type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchDate} loading={batchActionLoading} onClick={() => void handleBatchDate()} data-testid="acceptance-batch-date-apply">批量改日期</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
             {onBatchResponsibleUnitUpdate && (
               <div className="flex items-center gap-2">
-                <input value={batchUnit} onChange={(e) => setBatchUnit(e.target.value)} disabled={!editable} placeholder="责任单位" className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                <Select value={batchUnit} onValueChange={setBatchUnit} disabled={!editable}>
+                  <SelectTrigger className="h-9 min-w-40 border-blue-200 bg-white text-sm">
+                    <SelectValue placeholder="责任单位" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__clear__">清空责任单位</SelectItem>
+                    {participantUnits.map((unit) => (
+                      <SelectItem key={unit.id} value={unit.id}>{unit.unit_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} loading={batchActionLoading} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
             {onBatchPhaseUpdate && (
               <div className="flex items-center gap-2">
-                <select value={batchPhase} onChange={(e) => setBatchPhase(e.target.value)} disabled={!editable} className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm">
-                  <option value="preparation">准备阶段</option>
-                  <option value="special_acceptance">专项验收</option>
-                  <option value="unit_completion">单位工程验收</option>
-                  <option value="completion_acceptance">竣工验收</option>
-                </select>
-                <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
+                <Select value={batchPhase} onValueChange={setBatchPhase} disabled={!editable}>
+                  <SelectTrigger className="h-9 min-w-36 border-blue-200 bg-white text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="preparation">准备阶段</SelectItem>
+                    <SelectItem value="special_acceptance">专项验收</SelectItem>
+                    <SelectItem value="unit_completion">单位工程验收</SelectItem>
+                    <SelectItem value="completion_acceptance">竣工验收</SelectItem>
+                  </SelectContent>
+                </Select>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} loading={batchActionLoading} onClick={() => void handleBatchPhase()} data-testid="acceptance-batch-phase-apply">批量调整阶段</Button>
+                </DisabledReasonTooltip>
               </div>
             )}
           </div>
@@ -328,10 +372,10 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
       {filteredGroups.map((group) => (
         <Card key={group.id}>
           <CardContent className="p-0">
-            <button
+            <Button variant="ghost"
               type="button"
               onClick={() => toggleGroup(group.id)}
-              className="flex w-full items-center justify-between border-b border-slate-100 px-5 py-4 text-left hover:bg-slate-50"
+              className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50"
               data-testid={`acceptance-group-header-${group.id}`}
             >
               <div>
@@ -341,12 +385,13 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
               <div className="flex items-center gap-2">
                 <Badge variant="outline">{group.plans.length}</Badge>
                 {collapsedGroups.has(group.id) ? (
-                  <ChevronRight className="h-4 w-4 text-slate-400" />
+                  <ChevronRight className="h-4 w-4 text-slate-500" />
                 ) : (
-                  <ChevronDown className="h-4 w-4 text-slate-400" />
+                  <ChevronDown className="h-4 w-4 text-slate-500" />
                 )}
               </div>
-            </button>
+            </Button>
+            <Separator />
 
             {!collapsedGroups.has(group.id) && (
             <DndContext
@@ -363,6 +408,11 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                 const StatusIcon = getIcon(statusMeta.config.icon)
                 const hasPlannedDate = Boolean(plan.planned_date)
                 const overlayBadges = getAcceptanceDisplayBadges(plan)
+                const unitLabel = plan.participant_unit_id
+                  ? participantUnitNameById.get(plan.participant_unit_id) || '责任单位待确认'
+                  : plan.responsible_user_id
+                    ? plan.responsible_user_id.slice(-6)
+                    : '—'
 
                 return (
                   <SortablePlanRow key={plan.id} planId={plan.id}>
@@ -382,32 +432,44 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                     className={cn(
                       'flex w-full items-center justify-between gap-4 px-5 py-4 text-left transition-colors hover:bg-slate-50',
                       node && 'cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2',
-                      !hasPlannedDate && 'bg-amber-50/30',
-                      isDragging && 'shadow-lg ring-1 ring-blue-300',
+                      !hasPlannedDate && 'bg-amber-50/60',
+                      isDragging && 'shadow-[var(--el-3)] ring-1 ring-inset ring-blue-300',
                       selectedPlanIds.has(plan.id) && 'bg-blue-50/60',
                     )}
                   >
-                    <button
+                    <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                       type="button"
                       onClick={(e) => togglePlanSelection(plan.id, e)}
-                      className="mr-1 flex-shrink-0 text-slate-400 hover:text-blue-600"
-                      title="选择"
+                      aria-label={`${selectedPlanIds.has(plan.id) ? '取消选择' : '选择'}验收节点 ${plan.name}`}
+                      className="mr-1 flex-shrink-0 text-slate-500 hover:text-blue-600"
+                      
                       data-testid={`acceptance-select-${plan.id}`}
                     >
                       {selectedPlanIds.has(plan.id) ? <CheckSquare className="h-4 w-4 text-blue-600" /> : <Square className="h-4 w-4" />}
-                    </button>
-                    <button
+                    </Button>
+  </TooltipTrigger>
+  <TooltipContent>选择</TooltipContent>
+</Tooltip>
+                    <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
                       type="button"
                       {...dragHandleProps}
                       onClick={(e) => e.stopPropagation()}
+                      aria-label={`拖拽排序验收节点 ${plan.name}`}
                       className="mr-1 flex-shrink-0 cursor-grab text-slate-300 hover:text-slate-500 active:cursor-grabbing"
-                      title="拖拽排序"
+                      
                       data-testid={`acceptance-drag-handle-${plan.id}`}
                     >
                       <GripVertical className="h-4 w-4" />
-                    </button>
+                    </Button>
+  </TooltipTrigger>
+  <TooltipContent>拖拽排序</TooltipContent>
+</Tooltip>
                     <div className="flex min-w-0 items-center gap-4">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-sm" style={{ backgroundColor: type?.color || CHART_SERIES.primary }}>
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-[var(--el-1)]" style={{ backgroundColor: type?.color || CHART_SERIES.primary }}>
                         <span className="text-lg">{type?.icon || '验'}</span>
                       </div>
                       <div className="min-w-0">
@@ -420,26 +482,31 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
 
                     <div className="flex items-center gap-4">
                       <div className="w-20 flex-shrink-0 text-center">
-                        <div className="text-[10px] text-slate-400">责任单位</div>
-                        <div className="mt-0.5 truncate text-xs font-medium text-slate-700" title={plan.responsible_unit || plan.responsible_user_id || ''}>
-                          {plan.responsible_unit || (plan.responsible_user_id ? plan.responsible_user_id.slice(-6) : '—')}
+                        <div className="text-xs text-slate-500">责任单位</div>
+                        <Tooltip>
+  <TooltipTrigger asChild>
+    <div className="mt-0.5 truncate text-xs font-medium text-slate-700 num-mono" >
+                          {unitLabel}
                         </div>
+  </TooltipTrigger>
+  <TooltipContent>{unitLabel === '—' ? '' : unitLabel}</TooltipContent>
+</Tooltip>
                       </div>
                       <div className="w-20 flex-shrink-0 text-center">
-                        <div className="text-[10px] text-slate-400">并行组</div>
-                        <div className="mt-0.5 text-xs font-medium text-slate-700">
+                        <div className="text-xs text-slate-500">并行组</div>
+                        <div className="mt-0.5 text-xs font-medium text-slate-700 num-mono">
                           {plan.parallel_group_id ? (
-                            <span className="rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-indigo-700">{plan.parallel_group_id.slice(-4)}</span>
+                            <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-indigo-700 ring-1 ring-inset ring-indigo-200">{plan.parallel_group_id.slice(-4)}</span>
                           ) : '—'}
                         </div>
                       </div>
                       <div className="w-16 flex-shrink-0 text-center">
-                        <div className="text-[10px] text-slate-400">阻塞数</div>
-                        <div className="mt-0.5 text-xs font-medium">
+                        <div className="text-xs text-slate-500">阻塞数</div>
+                        <div className="mt-0.5 text-xs font-medium num-mono">
                           {plan.is_blocked ? (
                             <span className="rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-red-700">{plan.predecessor_plan_ids?.length || 1}</span>
                           ) : (
-                            <span className="text-slate-400">0</span>
+                            <span className="text-slate-500">0</span>
                           )}
                         </div>
                       </div>
@@ -456,32 +523,32 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                       </Badge>
                       <Badge
                         variant="outline"
-                        className={cn('rounded-full px-3 py-1', plan.is_custom ? 'border-violet-200 bg-violet-50 text-violet-700' : 'border-slate-200 bg-slate-50 text-slate-500')}
+                        className={cn('rounded-full px-3 py-1', plan.is_custom ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-slate-50 text-slate-500')}
                       >
                         {plan.is_custom ? '自定义项' : '系统项'}
                       </Badge>
                       {plan.scope_level && (
-                        <Badge variant="outline" className="rounded-full border-slate-200 bg-slate-50 px-3 py-1 text-slate-500">
+                        <Badge variant="outline" className="rounded-full bg-slate-50 px-3 py-1 text-slate-500 ring-slate-200/60">
                           {{ project: '项目级', building: '楼栋', unit: '单体', specialty: '专项' }[plan.scope_level] || plan.scope_level}
                         </Badge>
                       )}
                       {plan.building_id && (
-                        <Badge variant="outline" className="rounded-full border-sky-100 bg-sky-50 px-3 py-1 text-sky-700">
+                        <Badge variant="outline" className="rounded-full bg-sky-50 px-3 py-1 text-sky-700 ring-sky-100">
                           {plan.building_id}
                         </Badge>
                       )}
                       {plan.actual_date && (
-                        <Badge variant="outline" className="rounded-full border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">
-                          实际 {plan.actual_date}
+                        <Badge variant="outline" className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700 ring-emerald-200">
+                          <span className="num-mono">实际 {plan.actual_date}</span>
                         </Badge>
                       )}
                       {plan.predecessor_plan_ids?.length > 0 && (
-                        <Badge variant="outline" className="rounded-full border-amber-200 bg-amber-50 px-3 py-1 text-amber-700">
+                        <Badge variant="outline" className="rounded-full bg-amber-50 px-3 py-1 text-amber-700 ring-amber-200">
                           前置 {plan.predecessor_plan_ids.length}
                         </Badge>
                       )}
                       {plan.phase_code && (
-                        <Badge variant="outline" className="rounded-full border-slate-200 bg-slate-50 px-3 py-1 text-slate-500 text-[10px]">
+                        <Badge variant="outline" className="rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-500 ring-slate-200/60">
                           {plan.phase_code}
                         </Badge>
                       )}
@@ -489,32 +556,37 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                         <Badge
                           key={badge}
                           variant="outline"
-                          className="rounded-full border-slate-200 bg-slate-50 px-3 py-1 text-slate-700"
+                          className="rounded-full bg-slate-50 px-3 py-1 text-slate-700 ring-slate-200/60"
                         >
                           {badge}
                         </Badge>
                       ))}
                       {editable && onStatusChange && node && !['passed', 'archived'].includes(plan.status) && (
-                        <button
+                        <Button variant="ghost"
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onStatusChange(node.id, 'passed') }}
                           disabled={!editable}
-                          className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
+                          className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100"
                           data-testid={`acceptance-quick-pass-${plan.id}`}
                         >
                           标记通过
-                        </button>
+                        </Button>
                       )}
                       {!hasPlannedDate && editable && onDateUpdate && (
-                        <input
+                        <Tooltip>
+  <TooltipTrigger asChild>
+    <input
                           type="date"
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => { if (e.target.value) onDateUpdate(plan.id, e.target.value) }}
                           disabled={!editable}
-                          className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 focus:border-amber-400 focus:outline-none"
+                          className="rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs text-amber-800 focus-visible:border-amber-400 focus-visible:outline-none"
                           data-testid={`acceptance-quick-date-${plan.id}`}
-                          title="快速排期"
+                          
                         />
+  </TooltipTrigger>
+  <TooltipContent>快速排期</TooltipContent>
+</Tooltip>
                       )}
                       </div>
                     </div>

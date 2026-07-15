@@ -27,7 +27,7 @@ export function BaselineRevisionCandidateList({
   return (
     <div data-testid="baseline-revision-candidate-list" className="space-y-3">
       <div className="space-y-1">
-        <div className="text-sm font-semibold text-slate-900">候选列表</div>
+        <div className="text-sm font-semibold text-slate-900">建议列表</div>
       </div>
 
       <div className="space-y-3">
@@ -42,7 +42,7 @@ export function BaselineRevisionCandidateList({
               data-testid="baseline-revision-candidate-item"
               className={cn(
                 'cursor-pointer border-slate-200 transition',
-                active ? 'border-cyan-300 bg-cyan-50/60 shadow-sm' : 'hover:border-slate-300 hover:bg-slate-50'
+                active ? 'border-blue-300 bg-blue-50/60 shadow-[var(--el-1)]' : 'hover:border-slate-300 hover:bg-slate-50'
               )}
               role="button"
               tabIndex={0}
@@ -54,16 +54,16 @@ export function BaselineRevisionCandidateList({
                 }
               }}
             >
-              <CardContent className="space-y-3 p-4">
+              <CardContent className="space-y-3 p-5">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-medium text-slate-900">{candidate.title}</div>
                       <Badge variant="outline">{candidate.tag}</Badge>
                       {candidate.priority ? <Badge variant="secondary">{candidate.priority}</Badge> : null}
-                      {active ? <Badge variant="default">当前候选</Badge> : null}
-                      {inBasket || candidate.status === 'submitted' ? <Badge variant="secondary">已入篮</Badge> : null}
-                      {deferred || candidate.status === 'deferred' ? <Badge variant="outline">暂不处理</Badge> : null}
+                      {active ? <Badge variant="default">当前建议</Badge> : null}
+                      {inBasket || candidate.status === 'submitted' ? <Badge variant="secondary">已采纳</Badge> : null}
+                      {deferred || candidate.status === 'deferred' ? <Badge variant="outline">已暂缓</Badge> : null}
                       {candidate.status === 'accepted' ? <Badge variant="secondary">已接受</Badge> : null}
                       {candidate.status === 'rejected' ? <Badge variant="outline">已拒绝</Badge> : null}
                       {(deferred || candidate.status === 'deferred') && candidate.review_due_at ? (

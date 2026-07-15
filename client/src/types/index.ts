@@ -12,8 +12,12 @@ export type {
   TaskObstacle,
   TaskDelayHistory,
   AcceptancePlan,
+  ProjectMaterial,
   WbsTemplate,
   PreMilestone,
+  EngineeringObjectType,
+  EngineeringObject,
 } from '@/lib/supabase'
+export { ENGINEERING_OBJECT_TYPES } from '@/lib/supabase'
 
 export * from './planning'

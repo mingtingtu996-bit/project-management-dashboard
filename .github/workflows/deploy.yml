@@ -8,15 +8,50 @@ on:
       environment:
         description: Deployment environment
         required: true
-        default: production
+        default: preview
         type: choice
         options:
           - preview
           - staging
           - production
+      production_confirmation:
+        description: Type DEPLOY_PRODUCTION to authorize a production migration and deployment
+        required: false
+        default: ''
+        type: string
+      allow_skip_migration:
+        description: 'Break-glass only: allow deploy after externally verified migration and drift gates'
+        required: true
+        default: false
+        type: boolean
+      migration_skip_reason:
+        description: Why CI cannot run migrations directly
+        required: false
+        default: ''
+        type: string
+      external_migration_evidence_ref:
+        description: External migration execution evidence reference or URL
+        required: false
+        default: ''
+        type: string
+      external_pending_zero_confirmed:
+        description: Confirm external evidence shows pending migration count is zero
+        required: true
+        default: false
+        type: boolean
+      external_schema_drift_zero_confirmed:
+        description: Confirm external evidence shows blocking schema drift is zero
+        required: true
+        default: false
+        type: boolean
+      production_migration_governance_evidence:
+        description: Repository-relative path to MG-01..MG-07 production migration governance evidence JSON
+        required: false
+        default: ''
+        type: string
 
 concurrency:
-  group: deploy-${{ github.workflow }}-${{ github.ref }}
+  group: deploy-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
   cancel-in-progress: true
 
 permissions:
@@ -34,10 +69,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Enable pnpm via Corepack
         run: |
@@ -53,13 +88,22 @@ jobs:
       - name: Client typecheck
         run: pnpm --dir client run typecheck
 
+      - name: Client frontend BI aggregation guard
+        run: pnpm --dir client run guard:frontend-bi-aggregation
+
+      - name: Client UI commercial gates
+        run: pnpm --dir client run guard:ui-commercial-gates
+
+      - name: v1.4.23.1 Client Contract Gate
+        run: npm run verify:v14231-client-contracts --workspace=client
+
       - name: Client tests
         run: pnpm --dir client run test:run
 
   server-quality:
     name: Server Quality Check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: server
@@ -67,12 +111,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: server/package-lock.json
+
+      - name: Repository Secret Scan
+        working-directory: .
+        run: node scripts/guard-repository-secrets.mjs
 
       - name: Install server dependencies
         run: npm ci --workspaces=false
@@ -80,12 +128,99 @@ jobs:
       - name: Server typecheck
         run: npm run typecheck
 
+      - name: Server route aggregation guard
+        run: npm run guard:route-aggregation
+
+      - name: Server summary service aggregation guard
+        run: npm run guard:summary-service-aggregation
+
+      - name: Server route auth guard
+        run: npm run guard:route-auth
+
+      - name: Server route ownership guard
+        run: npm run guard:route-ownership
+
+      - name: Server governance admin membership guard
+        run: npm run guard:governance-admin-membership
+
+      - name: Server architecture boundary guard
+        run: npm run guard:architecture-boundaries
+
+      - name: Server workspace isolation guard
+        run: npm run guard:workspace-isolation
+
+      - name: Server construction organization hydration guard
+        run: npm run guard:construction-organization-hydration
+
+      - name: Server system registry guard
+        run: npm run guard:system-registry
+
+      - name: Server system surface ownership guard
+        run: npm run guard:system-surface-ownership
+
+      - name: Server duration architecture boundary guard
+        run: npm run guard:duration-architecture
+
+      - name: Server business-type registry guard
+        run: npm run guard:business-type-registry
+
+      - name: Server spatial semantic guard
+        run: npm run guard:spatial-semantic
+
+      - name: Server legacy scope runtime surface guard
+        run: npm run guard:legacy-scope-runtime-surface
+
+      - name: Server legacy object drop guard
+        run: npm run guard:legacy-object-drop -- --ci-no-drop-candidates-ok --from-retired-object-audit --scan-migration-drops --allow-target-catalog-preflight
+
+      - name: Server retired object reference audit
+        run: npm run audit:retired-object-references
+
+      - name: Server delete mutation classification audit
+        run: npm run audit:delete-mutation-classification
+
+      - name: Server public RLS audit guard
+        run: npm run guard:public-rls
+
+      - name: Server raw date math guard
+        run: npm run guard:raw-date-math
+
+      - name: Server metric SSOT guard
+        run: npm run guard:metric-ssot
+
+      - name: Server production-ready claims guard
+        run: npm run guard:production-ready-claims
+
+      - name: Server runtime consumer lineage guard
+        run: npm run guard:runtime-consumer-lineage
+
+      - name: Server status machine registry guard
+        run: npm run guard:status-machine-registry
+
+      - name: Server AI naming guard
+        run: npm run guard:ai-naming
+
       - name: Server executeSQL guard
         run: npm run guard:execute-sql
 
+      - name: v1.4.23.1 Non-live Closeout Gate
+        run: npm run verify:v14231-non-live-closeout
+
+      - name: Extended schema drift contract gate
+        run: npm run verify:schema-drift-extended
+
+      - name: v1.4.23.1 C-18.L Evidence Contract Gate
+        run: npm run verify:c18-live-evidence-contracts
+
+      - name: Install server Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Server tests
+        run: npm run test:release
+
+      - name: v1.4.22.3 Governance Gate
         working-directory: .
-        run: npx --prefix server vitest run --root server
+        run: npm run verify:v14223-governance
 
       - name: Server build
         run: npm run build
@@ -95,14 +230,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [client-quality, server-quality]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
+    env:
+      VITE_STORAGE_MODE: backend
+      VITE_API_BASE_URL: /api
+      # Required: PREVIEW_*, STAGING_*, and PRODUCTION_SUPABASE_URL / _ANON_KEY.
+      VITE_SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event_name != 'workflow_dispatch' && 'PREVIEW' || github.event.inputs.environment == 'preview' && 'PREVIEW' || github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets[format('{0}_SUPABASE_ANON_KEY', github.event_name != 'workflow_dispatch' && 'PREVIEW' || github.event.inputs.environment == 'preview' && 'PREVIEW' || github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Enable pnpm via Corepack
         run: |
@@ -114,10 +256,16 @@ jobs:
 
       - name: Build frontend
         run: pnpm --dir client run build
+
+      - name: Stamp frontend build provenance
         env:
-          VITE_STORAGE_MODE: backend
-          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('client/dist/workbuddy-build.json', JSON.stringify({releaseSha:process.env.RELEASE_SHA, environment:process.env.DEPLOY_TARGET, builtAt:new Date().toISOString()}, null, 2)+'\n')"
+
+      - name: Check frontend bundle budget
+        run: node scripts/check-client-bundle-budget.mjs client/dist --entry-gzip-kb 350 --max-chunk-gzip-kb 900 --total-gzip-kb 1600
 
       - name: Upload frontend build
         uses: actions/upload-artifact@v7
@@ -147,10 +295,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -199,10 +347,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -219,94 +367,426 @@ jobs:
       - name: Publish browser checks overview
         run: node scripts/write-browser-overview-summary.mjs browser-artifacts >> $GITHUB_STEP_SUMMARY
 
+      - name: Build current release readiness gate
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
+        run: >-
+          node scripts/write-v14231-readiness-gate.mjs
+          --artifacts-root browser-artifacts
+          --output runtime-evidence/v14231-readiness/gate.json
+          --release-sha "$RELEASE_SHA"
+          --target "$DEPLOY_TARGET"
+          --expected-suite-count 3
+
+      - name: Upload current release readiness gate
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: v14231-readiness-gate
+          path: runtime-evidence/v14231-readiness/gate.json
+          if-no-files-found: error
+          retention-days: 14
+
+  deployment-target-preflight:
+    name: Deployment Target Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ github.event.inputs.environment }}
+    if: >
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
+    env:
+      DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_ANON_KEY: ${{ secrets[format('{0}_SUPABASE_ANON_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+    steps:
+      - name: Check target deployment and runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            DEPLOY_HOST \
+            DEPLOY_USER \
+            DEPLOY_PATH \
+            DEPLOY_SSH_PRIVATE_KEY \
+            DEPLOY_HEALTH_URL \
+            SUPABASE_URL \
+            SUPABASE_ANON_KEY \
+            SUPABASE_MIGRATION_URL \
+            SUPABASE_ADVISOR_EXPORT_JSON; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          if [ "${#missing[@]}" -gt 0 ] || [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+            {
+              echo "### Target deployment preflight blocked"
+              echo ""
+              if [ "${#missing[@]}" -gt 0 ]; then
+                printf '%s\n' "- Missing target-specific secrets: ${missing[*]}"
+              fi
+              if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+                echo "- DEPLOY_HEALTH_URL must begin with https://."
+              fi
+              echo "- Database migrations were not started."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          {
+            echo "### Target deployment preflight passed"
+            echo ""
+            echo "- Target: ${{ github.event.inputs.environment }}"
+            echo "- Deployment, runtime, migration, and governance inputs are present."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   database-migration:
     name: Apply Pending Database Migrations
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [server-quality]
+    needs: [server-quality, deployment-target-preflight]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+    env:
+      # Required: STAGING_SUPABASE_MIGRATION_URL and PRODUCTION_SUPABASE_MIGRATION_URL.
+      DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+      SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     if: >
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview')
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
     defaults:
       run:
         working-directory: server
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: server/package-lock.json
 
       - name: Install server dependencies
         run: npm ci --workspaces=false
 
+      - name: Confirm production deployment
+        if: github.event.inputs.environment == 'production'
+        env:
+          PRODUCTION_CONFIRMATION: ${{ github.event.inputs.production_confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$PRODUCTION_CONFIRMATION" != "DEPLOY_PRODUCTION" ]; then
+            {
+              echo "### Production deployment blocked"
+              echo ""
+              echo "- Re-run this workflow manually and type \`DEPLOY_PRODUCTION\` in the production confirmation field."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Check migration connection secret
         id: migration-config
+        run: |
+          migration_skip_reason="${{ github.event.inputs.migration_skip_reason }}"
+          external_migration_evidence_ref="${{ github.event.inputs.external_migration_evidence_ref }}"
+
+          if [ -n "${DATABASE_URL}" ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "break_glass=false" >> "$GITHUB_OUTPUT"
+          else
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+              && [ "${{ github.event.inputs.allow_skip_migration }}" = "true" ] \
+              && [ -n "$migration_skip_reason" ] \
+              && [ -n "$external_migration_evidence_ref" ] \
+              && [ "${{ github.event.inputs.external_pending_zero_confirmed }}" = "true" ] \
+              && [ "${{ github.event.inputs.external_schema_drift_zero_confirmed }}" = "true" ]; then
+              echo "can_run=false" >> "$GITHUB_OUTPUT"
+              echo "break_glass=true" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Break-glass migration skip approved"
+                echo ""
+                echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret, so CI did not connect to the database directly."
+                echo "- Reason: ${migration_skip_reason}"
+                echo "- Evidence: ${external_migration_evidence_ref}"
+                echo "- External pending migration count confirmed zero: ${{ github.event.inputs.external_pending_zero_confirmed }}"
+                echo "- External blocking schema drift confirmed zero: ${{ github.event.inputs.external_schema_drift_zero_confirmed }}"
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "can_run=false" >> "$GITHUB_OUTPUT"
+              echo "break_glass=false" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Database migration blocked"
+                echo ""
+                echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
+                echo "- Manual releases cannot skip migration gates without complete break-glass inputs."
+                echo "- Manual break-glass requires \`allow_skip_migration=true\`, \`migration_skip_reason\`, \`external_migration_evidence_ref\`, \`external_pending_zero_confirmed=true\`, and \`external_schema_drift_zero_confirmed=true\` confirming blocking schema drift is zero."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+
+      - name: Preflight current migration governance inputs
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_ADVISOR_EXPORT_JSON" ]; then
+            echo "Missing target-specific SUPABASE_ADVISOR_EXPORT_JSON secret; refusing to mutate the database before governance evidence can be generated." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          advisor_export="$RUNNER_TEMP/supabase-advisor-export-preflight.json"
+          printf '%s' "$SUPABASE_ADVISOR_EXPORT_JSON" > "$advisor_export"
+          npm run migrate:production-governance:evidence -- \
+            --verify-advisor-export-only \
+            --advisor-export-file "$advisor_export" \
+            --expected-environment "$DEPLOY_TARGET" \
+            --advisor-max-age-hours 24
+
+      - name: Check migration structural safety before apply
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -o pipefail
+          npm run migrate:check -- --allow-pending | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Diagnose migration release readiness before apply
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -o pipefail
+          npm run migrate:diagnose | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Preflight pending migration DROP targets
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -o pipefail
+          npm run guard:pending-migration-drop-targets -- \
+            --approve-existing-drop-targets-for 311_retire_product_runtime_progress_knowledge_governance.sql \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Backup progress knowledge retirement data
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/progress-knowledge-retirement-311-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:progress-knowledge-retirement -- --if-pending --output "$backup_file"
+          if [ -f "$backup_file" ] && [ -f "$backup_file.sha256" ]; then
+            echo "PROGRESS_KNOWLEDGE_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload progress knowledge retirement backup
+        if: steps.migration-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: progress-knowledge-retirement-311-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/progress-knowledge-retirement-311-*.json
+            ${{ runner.temp }}/progress-knowledge-retirement-311-*.json.sha256
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Apply pending migrations
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: npm run migrate:pending
+
+      - name: Check migration pending zero after apply
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -o pipefail
+          npm run migrate:check | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check schema drift
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -o pipefail
+          npm run migrate:drift | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate current migration governance evidence
+        if: steps.migration-config.outputs.can_run == 'true'
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_ADVISOR_EXPORT_JSON" ]; then
+            echo "Missing target-specific SUPABASE_ADVISOR_EXPORT_JSON secret." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          mkdir -p runtime-evidence/production-migration-governance
+          advisor_export="$RUNNER_TEMP/supabase-advisor-export.json"
+          printf '%s' "$SUPABASE_ADVISOR_EXPORT_JSON" > "$advisor_export"
+          npm run migrate:production-governance:evidence -- \
+            --output-file runtime-evidence/production-migration-governance/current-release.json \
+            --advisor-export-file "$advisor_export" \
+            --expected-environment "$DEPLOY_TARGET" \
+            --advisor-max-age-hours 24 \
+            --operator "github-actions:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+
+      - name: Check v1.4.23.1 production migration governance evidence
+        if: steps.migration-config.outputs.can_run == 'true' || steps.migration-config.outputs.break_glass == 'true'
+        run: |
+          set -euo pipefail
+          current_evidence="runtime-evidence/production-migration-governance/current-release.json"
+          if [ "${{ steps.migration-config.outputs.can_run }}" != "true" ]; then
+            break_glass_evidence="${BREAK_GLASS_GOVERNANCE_EVIDENCE}"
+            if [ -z "$break_glass_evidence" ]; then
+              echo "Missing production_migration_governance_evidence input for break-glass." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            if [ -f "$break_glass_evidence" ]; then
+              source_evidence="$break_glass_evidence"
+            elif [ -f "../$break_glass_evidence" ]; then
+              source_evidence="../$break_glass_evidence"
+            else
+              echo "Break-glass production migration governance evidence file was not found: $break_glass_evidence" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            mkdir -p "$(dirname "$current_evidence")"
+            cp "$source_evidence" "$current_evidence"
+          fi
+          if [ ! -f "$current_evidence" ]; then
+            {
+              echo "### Production migration governance blocked"
+              echo ""
+              echo "- Current-release MG-01..MG-07 evidence was not generated or supplied."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          npm run migrate:production-governance -- --evidence-file "$current_evidence" | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          BREAK_GLASS_GOVERNANCE_EVIDENCE: ${{ github.event.inputs.production_migration_governance_evidence }}
+
+      - name: Upload current migration governance evidence
+        if: steps.migration-config.outputs.can_run == 'true' || steps.migration-config.outputs.break_glass == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-migration-governance-evidence
+          path: server/runtime-evidence/production-migration-governance/current-release.json
+          if-no-files-found: error
+          retention-days: 14
+
+  workspace-isolation-live:
+    name: Live Workspace Isolation Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [database-migration]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+    env:
+      DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+    if: >
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Check live database secret
+        id: isolation-config
         run: |
           if [ -n "${DATABASE_URL}" ]; then
             echo "can_run=true" >> "$GITHUB_OUTPUT"
           else
             echo "can_run=false" >> "$GITHUB_OUTPUT"
             {
-              echo "### Database migration skipped"
+              echo "### Live workspace isolation gate blocked"
               echo ""
               echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
-              echo "- Hosted GitHub runners cannot reach the current IPv6-only direct Supabase database host."
-              echo "- CI will not apply migrations directly; the self-hosted deployment step must run pending migrations from the production server env before starting the release."
+              echo "- The static workspace isolation tests still run in server-quality."
+              echo "- Live database isolation must run before promoting a staging or production release."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-        env:
-          DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
 
-      - name: Apply pending migrations
-        if: steps.migration-config.outputs.can_run == 'true'
-        run: npm run migrate:pending
-        env:
-          DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+      - name: Install root dependencies
+        if: steps.isolation-config.outputs.can_run == 'true'
+        run: npm ci --no-fund
+
+      - name: Run live workspace isolation regression
+        if: steps.isolation-config.outputs.can_run == 'true'
+        run: npm run verify:workspace-isolation:live
+
+      - name: Publish live isolation summary
+        if: steps.isolation-config.outputs.can_run == 'true'
+        run: |
+          latest="$(ls -t artifacts/reports/live-workspace-isolation-regression-*.json | head -n 1)"
+          node -e "const fs=require('fs'); const p=process.argv[1]; const r=JSON.parse(fs.readFileSync(p,'utf8')); console.log('### Live workspace isolation gate'); console.log(''); console.log('- Status: '+r.summary.status); console.log('- Errors: '+r.summary.errors); console.log('- Warnings: '+r.summary.warnings); console.log('- Report: '+p);" "$latest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live isolation report
+        if: steps.isolation-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-workspace-isolation-report
+          path: artifacts/reports/live-workspace-isolation-regression-*.json
+          if-no-files-found: error
+          retention-days: 14
 
   deploy-server:
     name: Deploy To Self-hosted Server
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [build-frontend, browser-checks, browser-checks-summary, database-migration]
+    needs: [build-frontend, browser-checks, browser-checks-summary, database-migration, workspace-isolation-live]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
     env:
       DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
-      HAS_SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK != '' }}
+      # Required per target: STAGING_DEPLOY_* and PRODUCTION_DEPLOY_*.
+      DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+      DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      SLACK_WEBHOOK: ${{ secrets[format('{0}_SLACK_WEBHOOK', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      HAS_SLACK_WEBHOOK: ${{ secrets[format('{0}_SLACK_WEBHOOK', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] != '' }}
     if: >
       always() &&
       needs.build-frontend.result == 'success' &&
       needs.browser-checks.result == 'success' &&
       needs.browser-checks-summary.result == 'success' &&
-      (needs.database-migration.result == 'success' || needs.database-migration.result == 'skipped') &&
-      (
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
-        (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview')
-      )
+      needs.database-migration.result == 'success' &&
+      needs.workspace-isolation-live.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Download tested frontend build
+        uses: actions/download-artifact@v7
         with:
-          fetch-depth: 0
+          name: frontend-build
+          path: client/dist
+
+      - name: Download current release readiness gate
+        uses: actions/download-artifact@v7
+        with:
+          name: v14231-readiness-gate
+          path: runtime-evidence/v14231-readiness
+
+      - name: Download current migration governance evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: production-migration-governance-evidence
+          path: runtime-evidence/production-migration-governance
 
       - name: Check server deployment credentials
         id: deployment-eligibility
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
         run: |
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [[ "$DEPLOY_HEALTH_URL" == https://* ]]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
           else
             echo "can_deploy=false" >> "$GITHUB_OUTPUT"
             {
               echo "### Self-hosted deployment blocked"
               echo ""
-              echo "- Missing one or more required GitHub secrets: \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`."
+              echo "- Missing deployment credentials or an HTTPS \`DEPLOY_HEALTH_URL\`: \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`, and a health URL beginning with \`https://\` are required."
               echo "- Quality gates and browser checks completed, but no server deployment was attempted."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -314,11 +794,6 @@ jobs:
 
       - name: Configure SSH
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -334,75 +809,35 @@ jobs:
       - name: Deploy to self-hosted server
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
-          DEPLOY_USE_RELEASE_BUNDLE: ${{ secrets.DEPLOY_USE_RELEASE_BUNDLE || 'false' }}
           RELEASE_SHA: ${{ github.sha }}
         run: |
-          SSH_OPTS=(
-            -i ~/.ssh/project-management-deploy \
-            -p "$DEPLOY_PORT" \
-            -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            -o ConnectTimeout=20 \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=10
-          )
-          SCP_OPTS=(
+          RELEASE_ARCHIVE="/tmp/project-management-${RELEASE_SHA}.tar.gz"
+          RELEASE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$RELEASE_DIR"' EXIT
+          git archive --format=tar "$RELEASE_SHA" | tar -xf - -C "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR/client/dist"
+          cp -a client/dist/. "$RELEASE_DIR/client/dist/"
+          tar -czf "$RELEASE_ARCHIVE" -C "$RELEASE_DIR" .
+          scp \
             -i ~/.ssh/project-management-deploy \
             -P "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
-            -o BatchMode=yes \
-            -o ConnectTimeout=20 \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=10
-          )
+            "$RELEASE_ARCHIVE" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$RELEASE_ARCHIVE"
 
-          RELEASE_BUNDLE=""
-          create_release_bundle() {
-            RELEASE_BUNDLE="/tmp/project-management-${RELEASE_SHA}.bundle"
-            echo "Creating minimal release bundle for ${RELEASE_SHA}"
-            git bundle create "$RELEASE_BUNDLE" HEAD
-            timeout 120s scp "${SCP_OPTS[@]}" "$RELEASE_BUNDLE" "$DEPLOY_USER@$DEPLOY_HOST:$RELEASE_BUNDLE"
-          }
-
-          run_remote_deploy() {
-            remote_env="APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\""
-            if [ -n "$RELEASE_BUNDLE" ]; then
-              remote_env="$remote_env RELEASE_BUNDLE=\"$RELEASE_BUNDLE\""
-            fi
-
-            ssh "${SSH_OPTS[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "$remote_env bash -s" < scripts/deploy-lighthouse-server.sh
-          }
-
-          if [ "${DEPLOY_USE_RELEASE_BUNDLE}" = "true" ]; then
-            create_release_bundle
-          else
-            echo "Using production server git fetch for ${RELEASE_SHA}"
-          fi
-
-          set +e
-          run_remote_deploy
-          deploy_status=$?
-          set -e
-
-          if [ "$deploy_status" -eq 86 ] && [ "${DEPLOY_USE_RELEASE_BUNDLE}" != "true" ]; then
-            echo "Server-side git fetch failed; retrying with minimal release bundle"
-            create_release_bundle
-            run_remote_deploy
-          else
-            exit "$deploy_status"
-          fi
+          ssh \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}
         uses: rtCamp/action-slack-notify@v2
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
           SLACK_CHANNEL: '#deployments'
           SLACK_COLOR: good
           SLACK_TITLE: 'Project Management System deployed to self-hosted server'
           SLACK_MESSAGE: 'Commit: ${{ github.sha }}\nEnvironment: ${{ env.DEPLOY_TARGET }}'
+

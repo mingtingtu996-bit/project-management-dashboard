@@ -4,7 +4,8 @@ import { z } from 'zod'
 import { authError, authSuccess, setAuthTokenCookie } from '../auth/http.js'
 import { extractTokenFromRequest, generateToken, verifyToken } from '../auth/jwt.js'
 import type { AuthSessionData } from '../auth/types.js'
-import { toAuthUserView } from '../auth/session.js'
+import { isDatabaseConnectivityError, toAuthUserView } from '../auth/session.js'
+import { getCurrentCompanyMembership } from '../auth/access.js'
 import { query } from '../database.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate } from '../middleware/validation.js'
@@ -52,24 +53,43 @@ router.put('/', validate(updateProfileSchema), asyncHandler(async (req, res) => 
   updates.push('updated_at = NOW()')
   params.push(payload.userId)
 
-  const result = await query(
-    `UPDATE public.users
+  let result
+  try {
+    result = await query(
+      `UPDATE public.users
         SET ${updates.join(', ')}
       WHERE id = $${paramIndex}
-  RETURNING id, username, display_name, email, role, global_role, joined_at, last_active`,
-    params,
-  )
+  RETURNING id, username, display_name, email, global_role, last_active_company_id, joined_at, last_active`,
+      params,
+    )
+  } catch (error) {
+    if (isDatabaseConnectivityError(error)) {
+      return res.status(503).json(authError('SERVICE_UNAVAILABLE', '认证服务暂时不可用，请稍后重试'))
+    }
+    throw error
+  }
 
   const updatedUser = result.rows[0]
   if (!updatedUser) {
     return res.status(404).json(authError('USER_NOT_FOUND', '用户不存在'))
   }
 
+  let membership
+  try {
+    membership = await getCurrentCompanyMembership(updatedUser.id, updatedUser.last_active_company_id)
+  } catch (error) {
+    if (isDatabaseConnectivityError(error)) {
+      return res.status(503).json(authError('SERVICE_UNAVAILABLE', '认证服务暂时不可用，请稍后重试'))
+    }
+    throw error
+  }
+  if (membership?.companyId) {
+    updatedUser.last_active_company_id = membership.companyId
+    updatedUser.current_company_role = membership.role
+  }
+
   const responseUser = toAuthUserView(updatedUser)
-  const newToken = generateToken({
-    ...responseUser,
-    role: updatedUser.role || 'member',
-  })
+  const newToken = generateToken(responseUser)
 
   setAuthTokenCookie(res, newToken)
 

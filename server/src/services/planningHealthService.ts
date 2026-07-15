@@ -83,10 +83,10 @@ export class PlanningHealthService {
     return scorePlanningHealth(integrity)
   }
 
-  async scanAllProjectHealth(): Promise<PlanningHealthReport[]> {
-    const projectIds = await listActiveProjectIds()
+  async scanAllProjectHealth(projectIds?: string[] | null): Promise<PlanningHealthReport[]> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const reports: PlanningHealthReport[] = []
-    for (const projectId of projectIds) {
+    for (const projectId of activeProjectIds) {
       reports.push(await this.evaluateProjectHealth(projectId))
     }
     return reports

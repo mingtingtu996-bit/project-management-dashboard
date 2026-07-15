@@ -1,13 +1,13 @@
-import { Card, CardContent, CardHeader } from './card'
+import { Card, CardContent } from './card'
 import { Skeleton } from './skeleton'
 
 function ShellSkeletonHeader() {
   return (
-    <div className="flex flex-col gap-4 rounded-[28px] border border-slate-100 bg-white/90 p-6 shadow-sm md:flex-row md:items-end md:justify-between">
+    <div className="flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white/90 p-5 shadow-[var(--el-1)] md:flex-row md:items-end md:justify-between">
       <div className="space-y-3">
         <Skeleton className="h-5 w-24 rounded-full" />
         <Skeleton className="h-9 w-56 rounded-2xl" />
-        <Skeleton className="h-4 w-[420px] max-w-full rounded-full" />
+        <Skeleton className="h-4 w-[26.25rem] max-w-full rounded-full" />
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -24,13 +24,13 @@ function ShellCardGrid() {
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
       {[1, 2, 3, 4, 5, 6].map((item) => (
         <Card key={item} variant="metric">
-          <CardHeader className="space-y-3">
+          <CardContent padding="md" className="space-y-3">
             <div className="flex items-center justify-between">
               <Skeleton className="h-5 w-40 rounded-full" />
               <Skeleton className="h-8 w-8 rounded-2xl" />
             </div>
             <Skeleton className="h-4 w-2/3 rounded-full" />
-          </CardHeader>
+          </CardContent>
           <CardContent className="space-y-3">
             <Skeleton className="h-4 w-full rounded-full" />
             <Skeleton className="h-4 w-5/6 rounded-full" />
@@ -48,13 +48,13 @@ function ShellCardGrid() {
 
 export function PageSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ShellSkeletonHeader />
 
       <div className="grid gap-4 md:grid-cols-3">
         {[1, 2, 3].map((item) => (
-          <Card key={item} className="card-l2">
-            <CardContent className="space-y-4 p-6">
+          <Card key={item} variant="surface">
+            <CardContent className="space-y-4 p-5">
               <div className="flex items-center justify-between">
                 <Skeleton className="h-4 w-24 rounded-full" />
                 <Skeleton className="h-10 w-10 rounded-2xl" />
@@ -73,7 +73,7 @@ export function PageSkeleton() {
 
 export function ProjectListSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ShellSkeletonHeader />
       <ShellCardGrid />
     </div>
@@ -82,12 +82,11 @@ export function ProjectListSkeleton() {
 
 export function RiskManagementSkeleton() {
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+    <div className="page-shell">
         <ShellSkeletonHeader />
-        <Card className="border-slate-200 shadow-sm">
-          <CardContent className="space-y-4 p-4 sm:p-5">
-            <div className="grid gap-3 md:grid-cols-4">
+        <Card className="surface-card">
+          <CardContent className="space-y-4 p-5">
+            <div className="grid gap-4 md:grid-cols-4">
               {[1, 2, 3, 4].map((item) => (
                 <div key={item} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <Skeleton className="h-3 w-20 rounded-full" />
@@ -100,14 +99,14 @@ export function RiskManagementSkeleton() {
         </Card>
         <div className="grid gap-4 lg:grid-cols-3">
           {[1, 2, 3].map((item) => (
-            <Card key={item} className="border-slate-200 shadow-sm">
-              <CardHeader className="space-y-2">
+            <Card key={item} className="surface-card">
+              <CardContent padding="md" className="space-y-2">
                 <Skeleton className="h-5 w-24 rounded-full" />
                 <Skeleton className="h-4 w-40 rounded-full" />
-              </CardHeader>
+              </CardContent>
               <CardContent className="space-y-3">
                 {[1, 2, 3].map((row) => (
-                  <div key={row} className="rounded-2xl border border-slate-200 p-4">
+                  <div key={row} className="rounded-2xl border border-slate-200 p-5">
                     <div className="flex flex-wrap gap-2">
                       <Skeleton className="h-5 w-12 rounded-full" />
                       <Skeleton className="h-5 w-16 rounded-full" />
@@ -120,14 +119,13 @@ export function RiskManagementSkeleton() {
             </Card>
           ))}
         </div>
-      </div>
     </div>
   )
 }
 
 export function GanttViewSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <ShellSkeletonHeader />
       <div className="grid gap-4 xl:grid-cols-6">
         {[1, 2, 3, 4, 5, 6].map((item) => (
@@ -142,10 +140,10 @@ export function GanttViewSkeleton() {
       </div>
 
       <Card variant="detail">
-        <CardHeader className="space-y-3">
+        <CardContent padding="md" className="space-y-3">
           <Skeleton className="h-5 w-48 rounded-full" />
           <Skeleton className="h-4 w-80 rounded-full" />
-        </CardHeader>
+        </CardContent>
         <CardContent className="space-y-4">
           <Skeleton className="h-12 w-full rounded-2xl" />
           <div className="space-y-3">
@@ -194,7 +192,7 @@ export function TaskListSkeleton() {
   return (
     <div className="space-y-3">
       {[1, 2, 3, 4, 5].map((item) => (
-        <Card key={item} className="card-l2">
+        <Card key={item} variant="surface">
           <CardContent className="p-5">
             <div className="flex items-center justify-between gap-4">
               <div className="flex-1 space-y-2">
@@ -215,11 +213,11 @@ export function TaskListSkeleton() {
 
 export function StatsCardSkeleton() {
   return (
-    <Card className="card-l2">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+    <Card variant="surface">
+      <CardContent padding="md" className="flex flex-row items-center justify-between space-y-0">
         <Skeleton className="h-4 w-24 rounded-full" />
         <Skeleton className="h-4 w-4 rounded-full" />
-      </CardHeader>
+      </CardContent>
       <CardContent>
         <Skeleton className="h-8 w-16 rounded-full" />
         <Skeleton className="mt-1 h-3 w-20 rounded-full" />
@@ -230,7 +228,7 @@ export function StatsCardSkeleton() {
 
 export function ReportsSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="grid gap-4 md:grid-cols-4">
         {[1, 2, 3, 4].map((item) => (
           <StatsCardSkeleton key={item} />
@@ -238,20 +236,20 @@ export function ReportsSkeleton() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <Card className="card-l2">
-          <CardHeader>
+        <Card variant="surface">
+          <CardContent padding="md">
             <Skeleton className="h-6 w-32 rounded-full" />
-          </CardHeader>
+          </CardContent>
           <CardContent>
-            <Skeleton className="h-64 w-full rounded-[24px]" />
+            <Skeleton className="h-64 w-full rounded-2xl" />
           </CardContent>
         </Card>
-        <Card className="card-l2">
-          <CardHeader>
+        <Card variant="surface">
+          <CardContent padding="md">
             <Skeleton className="h-6 w-32 rounded-full" />
-          </CardHeader>
+          </CardContent>
           <CardContent>
-            <Skeleton className="h-64 w-full rounded-[24px]" />
+            <Skeleton className="h-64 w-full rounded-2xl" />
           </CardContent>
         </Card>
       </div>
@@ -267,8 +265,8 @@ export function TeamMembersSkeleton() {
         <Skeleton className="h-10 w-40 rounded-2xl" />
       </div>
 
-      <Card className="card-l2">
-        <CardContent className="p-6">
+      <Card variant="surface">
+        <CardContent padding="md">
           <div className="space-y-4">
             {[1, 2, 3, 4].map((item) => (
               <div key={item} className="flex items-center justify-between">
@@ -276,7 +274,7 @@ export function TeamMembersSkeleton() {
                   <Skeleton className="h-10 w-10 rounded-full" />
                   <div className="space-y-2">
                     <Skeleton className="h-4 w-24 rounded-full" />
-                    <Skeleton className="h-3 w-32 rounded-full" />
+                    <Skeleton className="h-3.5 w-3.52 rounded-full" />
                   </div>
                 </div>
                 <Skeleton className="h-6 w-16 rounded-full" />
@@ -299,8 +297,8 @@ export function MilestonesSkeleton() {
 
       <div className="space-y-3">
         {[1, 2, 3].map((item) => (
-          <Card key={item} className="card-l2">
-            <CardContent className="p-4">
+          <Card key={item} variant="surface">
+            <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <div className="space-y-2">
                   <Skeleton className="h-5 w-40 rounded-full" />
@@ -318,14 +316,14 @@ export function MilestonesSkeleton() {
 
 export function SettingsSkeleton() {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <Skeleton className="h-8 w-32 rounded-full" />
 
-      <Card className="card-l2">
-        <CardHeader>
+      <Card variant="surface">
+        <CardContent padding="md">
           <Skeleton className="h-6 w-40 rounded-full" />
           <Skeleton className="h-4 w-60 rounded-full" />
-        </CardHeader>
+        </CardContent>
         <CardContent className="space-y-4">
           <Skeleton className="h-10 w-full rounded-2xl" />
           <Skeleton className="h-10 w-full rounded-2xl" />

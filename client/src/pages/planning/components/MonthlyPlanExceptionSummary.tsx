@@ -31,8 +31,8 @@ export function MonthlyPlanExceptionSummary({
       testId: 'monthly-plan-exception-conditions',
       title: '当前条件',
       count: conditionIssues.length,
-      tone: 'border-cyan-100 bg-cyan-50/70',
-      iconTone: 'text-cyan-700',
+      tone: 'border-blue-100 bg-blue-50/70',
+      iconTone: 'text-blue-700',
       icon: CheckCircle2,
       emptyLabel: '当前月份未发现待补齐条件',
       actionLabel: '回到任务管理补条件',
@@ -74,18 +74,18 @@ export function MonthlyPlanExceptionSummary({
           <div className="text-sm font-medium text-slate-900">条件 / 阻碍 / 延期摘要</div>
         </div>
         <Badge variant={canQuickConfirm ? 'secondary' : 'outline'} className="text-xs">
-          {canQuickConfirm ? '快速确认可用' : '建议走标准路径'}
+          {canQuickConfirm ? '快速确认可用' : '需补齐后确认'}
         </Badge>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-3">
+      <div className="mt-4 grid gap-4 md:grid-cols-3">
         {cards.map((card) => {
           const Icon = card.icon
           const topIssue = card.issues[0]
 
           return (
-            <Card key={card.key} data-testid={card.testId} className={`${card.tone} shadow-sm`}>
-              <CardContent className="space-y-3 p-3">
+            <Card key={card.key} data-testid={card.testId} className={`${card.tone} shadow-[var(--el-1)]`}>
+              <CardContent className="space-y-3 p-5">
                 <div className={`flex items-center gap-2 ${card.iconTone}`}>
                   <Icon className="h-4 w-4" />
                   <span className="text-xs font-medium">{card.title}</span>
@@ -98,23 +98,23 @@ export function MonthlyPlanExceptionSummary({
                   </div>
                 </div>
 
-                <div className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
+                <Card className="rounded-xl border border-white/80 bg-white/70 px-3 py-2">
                   <div className="text-xs font-medium text-slate-700">{topIssue ? topIssue.title : card.emptyLabel}</div>
                   {topIssue?.detail ? (
                     <p className="mt-1 text-xs leading-5 text-slate-500">{topIssue.detail}</p>
                   ) : null}
-                </div>
+                </Card>
 
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="w-full justify-between rounded-xl bg-white/80"
+                  className="h-auto min-h-9 w-full justify-between gap-2 whitespace-normal rounded-xl bg-white/80 px-3 py-2"
                   onClick={card.onAction}
                   data-testid={`monthly-plan-exception-action-${card.key}`}
                 >
-                  {card.actionLabel}
-                  <ArrowRight className="h-4 w-4" />
+                  <span className="min-w-0 flex-1 text-left leading-4">{card.actionLabel}</span>
+                  <ArrowRight className="h-4 w-4 shrink-0" />
                 </Button>
               </CardContent>
             </Card>

@@ -14,8 +14,10 @@ export function generateToken(user: AuthUser): string {
   const payload: JWTPayload = {
     userId: user.id,
     username: user.username,
-    role: user.role,
     globalRole: user.globalRole,
+    currentCompanyRole: user.currentCompanyRole ?? undefined,
+    tokenVersion: user.tokenVersion,
+    passwordResetRequired: user.passwordResetRequired,
   };
 
   return jwt.sign(payload, JWT_CONFIG.secret, {

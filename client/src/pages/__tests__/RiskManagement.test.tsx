@@ -1,13 +1,15 @@
 ﻿import type { ReactNode } from 'react'
 
 import { act } from 'react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RiskManagement from '../RiskManagement'
 import { useStore } from '@/hooks/useStore'
-import { apiGet, apiPost, apiPut } from '@/lib/apiClient'
+import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
 
 vi.mock('@/components/ReadOnlyGuard', () => ({
   ReadOnlyGuard: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -24,6 +26,7 @@ vi.mock('@/components/Breadcrumb', () => ({
 }))
 
 vi.mock('@/lib/apiClient', () => ({
+  apiDelete: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   apiPut: vi.fn(),
@@ -39,6 +42,7 @@ vi.mock('react-router-dom', async () => {
   }
 })
 
+const mockedApiDelete = vi.mocked(apiDelete)
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedApiPut = vi.mocked(apiPut)
@@ -51,6 +55,23 @@ let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function readRiskManagementSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/RiskManagement.tsx'),
+    join(process.cwd(), 'client/src/pages/RiskManagement.tsx'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Try the next workspace root.
+    }
+  }
+
+  throw new Error(`Unable to locate RiskManagement.tsx in: ${candidates.join(', ')}`)
 }
 
 async function waitForCondition(condition: () => boolean, container?: HTMLElement) {
@@ -104,10 +125,14 @@ function clickTestId(container: HTMLElement, testId: string) {
     throw new Error(`Element not found: ${resolvedTestId}`)
   }
   act(() => {
-    element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 }))
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 }))
+    if (element instanceof HTMLElement) {
+      element.click()
+    } else {
+      element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }))
+    }
   })
 }
 
@@ -263,6 +288,15 @@ describe('RiskManagement', () => {
     })
 
     mockedApiGet.mockImplementation(async (url: string) => {
+      if (url.includes('/api/risk-statistics/trend')) {
+        return {
+          trend: [
+            { date: '2026-04-01', newRisks: 1, resolvedRisks: 0, totalRisks: 1, highRiskCount: 0, mediumRiskCount: 1, lowRiskCount: 0, newIssues: 1, resolvedIssues: 0, totalIssues: 1, newWarnings: 2, resolvedWarnings: 0, totalWarnings: 2 },
+            { date: '2026-04-02', newRisks: 0, resolvedRisks: 1, totalRisks: 1, highRiskCount: 0, mediumRiskCount: 1, lowRiskCount: 0, newIssues: 0, resolvedIssues: 0, totalIssues: 1, newWarnings: 0, resolvedWarnings: 1, totalWarnings: 1 },
+          ],
+          pipelineStages: { identified: 1, assessed: 0, responded: 0, monitored: 0 },
+        } as never
+      }
       if (url.includes('/api/warnings')) return warningsData as never
       if (url.includes('/api/issues')) return issuesData as never
       if (url.includes('/api/risks')) return risksData as never
@@ -272,10 +306,12 @@ describe('RiskManagement', () => {
 
     mockedApiPost.mockResolvedValue({} as never)
     mockedApiPut.mockResolvedValue({} as never)
+    mockedApiDelete.mockResolvedValue({} as never)
 
   })
 
   afterEach(() => {
+    mockedApiDelete.mockReset()
     mockedApiGet.mockReset()
     mockedApiPost.mockReset()
     mockedApiPut.mockReset()
@@ -303,7 +339,30 @@ describe('RiskManagement', () => {
     consoleErrorSpy = null
   })
 
-  it('renders three sections and surfaces backend warnings in the active warning area', async () => {
+  it('keeps retention confirmation as a second explicit step for risk and issue deletes', () => {
+    const source = readRiskManagementSource()
+
+    expect(source).toContain("from '@/lib/retentionError'")
+    expect(source).toContain('parseRetentionApiError')
+    expect(source).toContain('buildRetentionDecisionDialogModel')
+    expect(source).toContain('getRetentionDecisionTokenFromError')
+    expect(source).toContain('isRetentionConfirmationError')
+    expect(source).toContain("apiPost('/api/deletion-retention/confirm'")
+    expect(source).toContain('retentionDecisionToken')
+    expect(source).toContain('retentionDialogModel.confirmLabel')
+  })
+
+  it('keeps governance and audit data out of the ordinary risk workspace', () => {
+    const source = readRiskManagementSource()
+
+    expect(source).not.toContain('/api/change-logs')
+    expect(source).not.toContain('DataQualityApiService')
+    expect(source).not.toContain('DataConfidenceBreakdown')
+    expect(source).not.toContain('showDataQualityBanner')
+    expect(source).not.toContain('linkedChangeLogs')
+  })
+
+  it('renders the consolidated workspace without restoring the removed overview columns', async () => {
     await act(async () => {
       root?.render(<RiskManagement />)
       await flush()
@@ -312,28 +371,99 @@ describe('RiskManagement', () => {
 
     await waitForCondition(
       () =>
-        container.textContent?.includes('预警') &&
-        container.textContent?.includes('风险') &&
-        container.textContent?.includes('问题') &&
-        container.textContent?.includes('既有风险') &&
-        container.textContent?.includes('材料未到') &&
+        Boolean(container.querySelector('[data-testid="risk-summary-band"]')) &&
+        Boolean(container.querySelector('[data-testid="risk-chain-workspace"]')) &&
         container.textContent?.includes('开工条件即将到期') &&
         container.textContent?.includes('阻碍已持续3天'),
       container,
     )
 
-    expect(container.textContent).toContain('预警')
-    expect(container.textContent).toContain('风险')
-    expect(container.textContent).toContain('问题')
-    expect(container.textContent).toContain('既有风险')
-    expect(container.textContent).toContain('材料未到')
+    const workspace = container.querySelector('[data-testid="risk-chain-workspace"]')
+    expect(workspace?.textContent).toContain('预警看板')
+    expect(workspace?.textContent).toContain('风险登记册')
+    expect(workspace?.textContent).toContain('问题工作台')
     expect(container.textContent).toContain('开工条件即将到期')
     expect(container.textContent).toContain('阻碍已持续3天')
+    expect(container.textContent).not.toContain('待确认或待处理的业务预警')
+    expect(container.textContent).not.toContain('风险主数据源使用 /api/risks')
+    expect(container.textContent).not.toContain('问题主数据源使用 /api/issues，并按优先级排序')
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => Boolean(workspace?.textContent?.includes('既有风险')), container)
+
+    clickTestId(container, 'risk-stream-issues')
+    await waitForCondition(() => Boolean(workspace?.textContent?.includes('既有风险')), container)
 
     await act(async () => {
       await flush()
       await flush()
     })
+  })
+
+  it('filters risks by route status and level', async () => {
+    warningsData = []
+    issuesData = []
+    obstaclesData = []
+    risksData = [
+      {
+        id: 'risk-route-match',
+        project_id: projectId,
+        task_id: 'task-route',
+        title: '路由匹配风险',
+        description: '应该保留',
+        category: 'schedule',
+        level: 'high',
+        probability: 80,
+        impact: 70,
+        status: 'mitigating',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-01T00:00:00.000Z',
+        version: 1,
+      },
+      {
+        id: 'risk-route-miss',
+        project_id: projectId,
+        task_id: 'task-route',
+        title: '路由不匹配风险',
+        description: '应该被过滤',
+        category: 'schedule',
+        level: 'low',
+        probability: 10,
+        impact: 20,
+        status: 'identified',
+        created_at: '2026-04-02T00:00:00.000Z',
+        updated_at: '2026-04-02T00:00:00.000Z',
+        version: 1,
+      },
+    ]
+    mockedUseLocation.mockReturnValue({
+      pathname: `/projects/${projectId}/risks`,
+      search: '?stream=risks&status=mitigating&level=high',
+      hash: '',
+      state: null,
+      key: 'risk-route-filter',
+    })
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+
+    const riskWorkspace = container.querySelector('[data-testid="risk-chain-workspace"]') as HTMLElement | null
+    expect(riskWorkspace).toBeTruthy()
+
+    await waitForCondition(
+      () =>
+        Boolean(
+          riskWorkspace?.textContent?.includes('路由匹配风险') &&
+          !riskWorkspace.textContent?.includes('路由不匹配风险'),
+        ),
+      riskWorkspace ?? container,
+    )
+
+    expect(riskWorkspace?.textContent).toContain('路由匹配风险')
+    expect(riskWorkspace?.textContent).not.toContain('路由不匹配风险')
   })
 
   it('surfaces task-derived warnings in the active warning area', async () => {
@@ -425,9 +555,7 @@ describe('RiskManagement', () => {
     await waitForCondition(
       () =>
         container.textContent?.includes('土方开挖开工条件未满足') &&
-        container.textContent?.includes('任务已延期') &&
-        container.textContent?.includes('暂无风险') &&
-        container.textContent?.includes('暂无问题'),
+        container.textContent?.includes('任务已延期'),
       container,
     )
 
@@ -435,12 +563,18 @@ describe('RiskManagement', () => {
     expect(container.textContent).toContain('任务已延期')
     expect(container.textContent).toContain('条件过期')
     expect(container.textContent).toContain('链路来源')
-    expect(container.textContent).toContain('暂无风险')
-    expect(container.textContent).toContain('暂无问题')
     expect(container.textContent).not.toContain('暂无预警')
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('暂无风险'), container)
+    expect(container.textContent).toContain('暂无风险')
+
+    clickTestId(container, 'risk-stream-issues')
+    await waitForCondition(() => container.textContent?.includes('暂无问题'), container)
+    expect(container.textContent).toContain('暂无问题')
   })
 
-  it('keeps the trend analysis collapsed by default and expands on demand', async () => {
+  it('renders the pipeline flow, unified filters, and multi-line trend legend', async () => {
     await act(async () => {
       root?.render(<RiskManagement />)
       await flush()
@@ -450,15 +584,26 @@ describe('RiskManagement', () => {
     await waitForCondition(
       () =>
         Boolean(container.querySelector('[data-testid="risk-summary-band"]')) &&
-        Boolean(container.querySelector('[data-testid="risk-trend-toggle"]')),
+        Boolean(container.querySelector('[data-testid="risk-pipeline-flow"]')) &&
+        Boolean(container.querySelector('[data-testid="risk-workspace-unified-filter"]')) &&
+        Boolean(container.querySelector('[data-testid="risk-trend-legend-risks"]')),
       container,
     )
 
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('识别')
+    expect(container.textContent).toContain('评估')
+    expect(container.textContent).toContain('应对')
+    expect(container.textContent).toContain('监控')
+    expect(container.textContent).toContain('全部等级')
+    expect(container.textContent).toContain('全部状态')
+    expect(container.textContent).toContain('全部责任人')
 
-    clickTestId(container, 'risk-trend-toggle')
+    clickTestId(container, 'risk-trend-legend-risks')
+    await act(async () => {
+      await flush()
+    })
 
-    await waitForCondition(() => fetchMock.mock.calls.length > 0, container)
+    expect(container.querySelector('[data-testid="risk-trend-legend-risks"]')?.textContent).toContain('风险')
   })
 
   it('surfaces pending manual close items with banner actions and quick filter', async () => {
@@ -520,17 +665,18 @@ describe('RiskManagement', () => {
     })
 
     await waitForCondition(
-      () =>
-        container.textContent?.includes('待确认关闭A') &&
-        container.textContent?.includes('待确认关闭B') &&
-        container.textContent?.includes('普通风险'),
+      () => Boolean(container.querySelector('[data-testid="risk-chain-workspace"]')),
       container,
     )
 
-    clickButtonText(container, '查看风险')
+    clickTestId(container, 'risk-stream-risks')
 
     await waitForCondition(
-      () => Boolean(container.querySelector('[data-testid="pending-manual-close-toggle"]')),
+      () =>
+        Boolean(container.querySelector('[data-testid="pending-manual-close-toggle"]')) &&
+        container.textContent?.includes('待确认关闭A') &&
+        container.textContent?.includes('待确认关闭B') &&
+        container.textContent?.includes('普通风险'),
       container,
     )
 
@@ -592,7 +738,7 @@ describe('RiskManagement', () => {
       await flush()
     })
 
-    clickButtonText(container, '查看风险')
+    clickTestId(container, 'risk-stream-risks')
 
     await waitForCondition(
       () =>
@@ -605,7 +751,7 @@ describe('RiskManagement', () => {
 
     clickButtonText(container, '时间轴')
     await waitForCondition(
-      () => container.textContent?.includes('2026/04/02') || container.textContent?.includes('2026/04/01'),
+      () => container.textContent?.includes('2026-04-02') || container.textContent?.includes('2026-04-01'),
       container,
     )
 
@@ -618,15 +764,15 @@ describe('RiskManagement', () => {
     await waitForCondition(() => document.body.textContent?.includes('实时优先级分'), document.body)
 
     const titleInput = document.body.querySelector('input[placeholder="例如：专项审批资料缺失"]') as HTMLInputElement | null
-    const severitySelect = document.body.querySelector('select') as HTMLSelectElement | null
+    const severityInput = document.body.querySelector('[data-testid="manual-issue-severity-value"]') as HTMLInputElement | null
     const descriptionInput = document.body.querySelector('textarea[placeholder="补充内容"]') as HTMLTextAreaElement | null
 
-    if (!titleInput || !severitySelect || !descriptionInput) {
+    if (!titleInput || !severityInput || !descriptionInput) {
       throw new Error('Manual issue dialog fields not found')
     }
 
     setElementValue(titleInput, '人工补录风险')
-    setElementValue(severitySelect, 'high')
+    setElementValue(severityInput, 'high')
     setElementValue(descriptionInput, '现场临时协调事项需要人工跟进')
 
     await act(async () => {
@@ -669,6 +815,9 @@ describe('RiskManagement', () => {
 
     await waitForCondition(() => container.textContent?.includes('issues down'), container)
     expect(container.textContent).toContain('issues down')
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('既有风险'), container)
     expect(container.textContent).toContain('既有风险')
   })
 
@@ -703,7 +852,7 @@ describe('RiskManagement', () => {
       await flush()
     })
 
-    clickButtonText(container, '查看风险')
+    clickTestId(container, 'risk-stream-risks')
     await waitForCondition(() => container.textContent?.includes('需要升级的问题风险'), container)
 
     clickButtonText(container, '转为问题')
@@ -825,6 +974,8 @@ describe('RiskManagement', () => {
       container,
     )
 
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('塔楼结构进度风险'), container)
     clickTestId(container, 'risk-detail-open-risk-risk-summary-1')
 
     await waitForCondition(
@@ -832,7 +983,7 @@ describe('RiskManagement', () => {
         Boolean(document.body.querySelector('[data-testid="risk-detail-dialog"]')) &&
         document.body.textContent?.includes('记录详情') &&
         document.body.textContent?.includes('塔楼结构进度风险') &&
-        document.body.textContent?.includes('chain-summary-1'),
+        document.body.textContent?.includes('查看关联过程'),
       document.body,
     )
   })
@@ -1033,7 +1184,7 @@ describe('RiskManagement', () => {
       await flush()
     })
 
-    clickButtonText(container, '查看风险')
+    clickTestId(container, 'risk-stream-risks')
     await waitForCondition(() => container.textContent?.includes('待关闭但被业务规则拦截的风险'), container)
 
     clickButtonText(container, '关闭风险')

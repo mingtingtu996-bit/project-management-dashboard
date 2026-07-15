@@ -87,6 +87,11 @@ describe('auditLogger test-mode guards', () => {
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('ALTER TABLE IF EXISTS public.operation_logs'))).toBe(false)
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('CREATE INDEX IF NOT EXISTS idx_operation_logs'))).toBe(false)
     expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.operation_logs'))).toBe(true)
+    const insertCall = mocks.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO public.operation_logs'))
+    const requestSummary = JSON.parse(String(insertCall?.[1]?.[8] ?? '{}'))
+    expect(requestSummary).toEqual({ fields: ['password', 'title'] })
+    expect(String(insertCall?.[1]?.[8])).not.toContain('secret')
+    expect(String(insertCall?.[1]?.[8])).not.toContain('测试任务')
   })
 
   it('captures the original api path even if req.path changes before finish', async () => {
@@ -116,27 +121,4 @@ describe('auditLogger test-mode guards', () => {
     expect(insertCall?.[1]?.[4]).toBe('/api/tasks/task-123')
   })
 
-  it('logs delay approval actions with the full api path', async () => {
-    process.env.ENABLE_AUDIT_LOGGER_IN_TESTS = 'true'
-
-    const { auditLogger } = await import('../middleware/auditLogger.js')
-    const req = createRequest({
-      method: 'POST',
-      path: '/approve',
-      originalUrl: '/api/delay-requests/delay-123/approve',
-      url: '/api/delay-requests/delay-123/approve',
-      body: {},
-    })
-    const res = createResponse()
-    const next = vi.fn()
-
-    await auditLogger(req, res, next)
-    res.emit('finish')
-    await flushImmediate()
-
-    const insertCall = mocks.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO public.operation_logs'))
-    expect(insertCall).toBeTruthy()
-    expect(insertCall?.[1]?.[2]).toBe('审批延期申请')
-    expect(insertCall?.[1]?.[4]).toBe('/api/delay-requests/delay-123/approve')
-  })
 })

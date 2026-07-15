@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from 'node:fs'
+﻿import { createReadStream, existsSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import http from 'node:http'
@@ -7,12 +7,14 @@ import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
+const isMainModule = normalize(process.argv[1] || '') === normalize(__filename)
 const repoRoot = normalize(join(__dirname, '..'))
 const distRoot = join(repoRoot, 'client', 'dist')
 const indexFile = join(distRoot, 'index.html')
 const port = Number(process.env.PORT || 4173)
 const apiTargetHost = process.env.API_HOST || '127.0.0.1'
 const apiTargetPort = Number(process.env.API_PORT || 3001)
+const shouldDisableOnboarding = process.env.BROWSER_VERIFY_DISABLE_ONBOARDING !== 'false'
 
 const contentTypeMap = new Map([
   ['.html', 'text/html; charset=utf-8'],
@@ -41,12 +43,74 @@ function resolveStaticPath(urlPath) {
   return filePath
 }
 
-function sendFile(res, filePath) {
+function injectBrowserVerifyState(html) {
+  if (!shouldDisableOnboarding) return html
+  const script = [
+    '<script>',
+    'try {',
+    'localStorage.setItem("onboarding_workspace_completed", "true");',
+    'localStorage.setItem("onboarding_project_completed", "true");',
+    'localStorage.setItem("onboarding_daily_workflow_dismissed", "true");',
+    '} catch (_) {}',
+    '</script>',
+  ].join('')
+
+  return html.replace('</head>', `${script}</head>`)
+}
+
+export function sendPreviewProxyError(res, error) {
+  if (res.headersSent) {
+    res.destroy(error)
+    return
+  }
+
+  res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' })
+  res.end(JSON.stringify({
+    success: false,
+    error: {
+      code: 'PREVIEW_PROXY_ERROR',
+      message: `Failed to proxy API request: ${error.message}`,
+    },
+  }))
+}
+
+export function buildPreviewProxyHeaders(headers, targetHost = apiTargetHost, targetPort = apiTargetPort) {
+  const nextHeaders = {}
+  const hopByHopHeaders = new Set([
+    'connection',
+    'host',
+    'keep-alive',
+    'proxy-authenticate',
+    'proxy-authorization',
+    'proxy-connection',
+    'te',
+    'trailer',
+    'transfer-encoding',
+    'upgrade',
+  ])
+
+  for (const [key, value] of Object.entries(headers || {})) {
+    if (hopByHopHeaders.has(key.toLowerCase())) continue
+    nextHeaders[key] = value
+  }
+
+  nextHeaders.host = `${targetHost}:${targetPort}`
+  return nextHeaders
+}
+
+async function sendFile(res, filePath) {
   const contentType = contentTypeMap.get(extname(filePath).toLowerCase()) || 'application/octet-stream'
   res.writeHead(200, {
     'Content-Type': contentType,
     'Cache-Control': filePath === indexFile ? 'no-cache' : 'public, max-age=31536000, immutable',
   })
+
+  if (filePath === indexFile) {
+    const html = await readFile(filePath, 'utf8')
+    res.end(injectBrowserVerifyState(html))
+    return
+  }
+
   createReadStream(filePath).pipe(res)
 }
 
@@ -57,7 +121,8 @@ function proxyApi(req, res) {
       port: apiTargetPort,
       path: req.url,
       method: req.method,
-      headers: req.headers,
+      headers: buildPreviewProxyHeaders(req.headers),
+      agent: false,
     },
     (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 502, proxyRes.headers)
@@ -65,16 +130,7 @@ function proxyApi(req, res) {
     },
   )
 
-  proxyReq.on('error', (error) => {
-    res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' })
-    res.end(JSON.stringify({
-      success: false,
-      error: {
-        code: 'PREVIEW_PROXY_ERROR',
-        message: `Failed to proxy API request: ${error.message}`,
-      },
-    }))
-  })
+  proxyReq.on('error', (error) => sendPreviewProxyError(res, error))
 
   req.pipe(proxyReq)
 }
@@ -121,17 +177,17 @@ const server = http.createServer(async (req, res) => {
   const staticPath = resolveStaticPath(requestUrl.pathname)
 
   if (staticPath) {
-    sendFile(res, staticPath)
+    await sendFile(res, staticPath)
     return
   }
 
   try {
-    const html = await readFile(indexFile)
+    const html = await readFile(indexFile, 'utf8')
     res.writeHead(200, {
       'Content-Type': 'text/html; charset=utf-8',
       'Cache-Control': 'no-cache',
     })
-    res.end(html)
+    res.end(injectBrowserVerifyState(html))
   } catch (error) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
     res.end(`Failed to read index.html: ${error instanceof Error ? error.message : String(error)}`)
@@ -147,6 +203,8 @@ server.on('upgrade', (req, socket) => {
   acceptWebSocket(req, socket)
 })
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Preview server listening at http://127.0.0.1:${port}`)
-})
+if (isMainModule) {
+  server.listen(port, '127.0.0.1', () => {
+    console.log(`Preview server listening at http://127.0.0.1:${port}`)
+  })
+}

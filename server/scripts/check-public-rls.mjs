@@ -1,6 +1,9 @@
 import fs from 'fs'
 import path from 'path'
+import { fileURLToPath } from 'url'
 import { Pool } from 'pg'
+
+export const TENANT_POLICY_PATTERN = /\b(company_id|project_id|project_members|company_members|auth\.uid\s*\(|current_setting\s*\()/i
 
 function loadEnv(envPath) {
   const content = fs.readFileSync(envPath, 'utf8')
@@ -44,16 +47,22 @@ async function main() {
       with table_status as (
         select
           c.relname as tablename,
-          c.relrowsecurity as rowsecurity
+          c.relrowsecurity as rowsecurity,
+          c.relforcerowsecurity as force_rowsecurity
         from pg_class c
         join pg_namespace n on n.oid = c.relnamespace
         where n.nspname = 'public'
           and c.relkind = 'r'
       ),
-      policy_counts as (
+      policies as (
         select
           tablename,
-          count(*)::int as policy_count
+          count(*)::int as policy_count,
+          string_agg(
+            coalesce(qual, '') || ' ' || coalesce(with_check, ''),
+            E'\n'
+            order by policyname
+          ) as policy_definition
         from pg_policies
         where schemaname = 'public'
         group by tablename
@@ -61,36 +70,90 @@ async function main() {
       select
         t.tablename,
         t.rowsecurity,
-        coalesce(p.policy_count, 0) as policy_count
+        t.force_rowsecurity,
+        coalesce(p.policy_count, 0) as policy_count,
+        coalesce(p.policy_definition, '') as policy_definition
       from table_status t
-      left join policy_counts p on p.tablename = t.tablename
+      left join policies p on p.tablename = t.tablename
       order by t.tablename
     `)
 
-    const disabledTables = rows.filter((row) => !row.rowsecurity)
-    const policyOnlyTables = rows.filter((row) => row.rowsecurity && row.policy_count > 0)
+    const audit = evaluateRlsAuditRows(rows)
 
     console.log('=== Public Table RLS Audit ===')
     console.log(`Total public tables: ${rows.length}`)
-    console.log(`RLS disabled tables: ${disabledTables.length}`)
-    console.log(`RLS enabled tables with policies: ${policyOnlyTables.length}`)
+    console.log(`RLS disabled tables: ${audit.disabledTables.length}`)
+    console.log(`RLS enabled tables without FORCE RLS: ${audit.forceMissingTables.length}`)
+    console.log(`RLS enabled tables with policies: ${audit.policyTables.length}`)
+    console.log(`RLS enabled tables without policies: ${audit.tablesWithoutPolicies.length}`)
+    console.log(`RLS policy tables without tenant predicate: ${audit.tablesWithoutTenantPredicate.length}`)
 
-    if (disabledTables.length > 0) {
+    if (audit.disabledTables.length > 0) {
       console.log('\nDisabled tables:')
-      for (const row of disabledTables) {
+      for (const row of audit.disabledTables) {
         console.log(`- ${row.tablename}`)
       }
+    }
+
+    if (audit.forceMissingTables.length > 0) {
+      console.log('\nRLS enabled but not forced tables:')
+      for (const row of audit.forceMissingTables) {
+        console.log(`- ${row.tablename}`)
+      }
+    }
+
+    if (audit.tablesWithoutPolicies.length > 0) {
+      console.log('\nRLS enabled but policy-less tables:')
+      for (const row of audit.tablesWithoutPolicies) {
+        console.log(`- ${row.tablename}`)
+      }
+    }
+
+    if (audit.tablesWithoutTenantPredicate.length > 0) {
+      console.log('\nPolicy tables without an obvious tenant predicate:')
+      for (const row of audit.tablesWithoutTenantPredicate) {
+        console.log(`- ${row.tablename}`)
+      }
+    }
+
+    if (audit.hasFailures) {
       process.exitCode = 1
       return
     }
 
-    console.log('\nAll public tables have RLS enabled.')
+    console.log('\nAll public tables have RLS, policies, and tenant predicates.')
   } finally {
     await pool.end()
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exit(1)
-})
+export function evaluateRlsAuditRows(rows) {
+  const disabledTables = rows.filter((row) => !row.rowsecurity)
+  const forceMissingTables = rows.filter((row) => row.rowsecurity && !row.force_rowsecurity)
+  const policyTables = rows.filter((row) => row.rowsecurity && Number(row.policy_count ?? 0) > 0)
+  const tablesWithoutPolicies = rows.filter((row) => row.rowsecurity && Number(row.policy_count ?? 0) === 0)
+  const tablesWithoutTenantPredicate = policyTables.filter((row) => (
+    !TENANT_POLICY_PATTERN.test(String(row.policy_definition ?? ''))
+  ))
+
+  return {
+    disabledTables,
+    forceMissingTables,
+    policyTables,
+    tablesWithoutPolicies,
+    tablesWithoutTenantPredicate,
+    hasFailures: disabledTables.length > 0
+      || forceMissingTables.length > 0
+      || tablesWithoutPolicies.length > 0
+      || tablesWithoutTenantPredicate.length > 0,
+  }
+}
+
+const isCli = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])
+
+if (isCli) {
+  main().catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
+}

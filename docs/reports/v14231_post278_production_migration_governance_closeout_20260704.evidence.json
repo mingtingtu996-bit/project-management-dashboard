@@ -1,0 +1,36 @@
+{
+  "sourceArtifactPath": "project-testing/reports/production-migration-governance/evidence.post278.production.with-advisor-export.json",
+  "advisorExportPath": "project-testing/reports/production-migration-governance/supabase-advisor-management-api-export.post278.production-wwdrkjnbvcbfytwnnyvs.json",
+  "reportPath": "docs/reports/v14231_post278_production_migration_governance_closeout_20260704.md",
+  "runDate": "2026-07-04",
+  "scope": "post-278-production-migration-governance-closeout-summary",
+  "projectRef": "wwdrkjnbvcbfytwnnyvs",
+  "environment": "production",
+  "advisorExport": {
+    "source": "management_api",
+    "securityIssueCount": 0,
+    "performanceIssueCount": 1136,
+    "exportedAt": "2026-07-04T14:55:00.977Z"
+  },
+  "closeoutReadback": {
+    "schemaMigrationsRowCount": 295,
+    "keyCatalogMatches": true,
+    "advisorPass": true,
+    "allowValidate": true,
+    "allowWarmup": true,
+    "allowScheduler": true
+  },
+  "governanceReportSummary": {
+    "status": "closed",
+    "mg07Status": "pass",
+    "mg07ReasonCodes": [],
+    "gatePassCount": 7,
+    "gateCount": 7
+  },
+  "runtimeSwitch": {
+    "schedulerBootSkipped": false,
+    "readModelWarmupSkipped": false,
+    "containerEvidencePath": "/app/runtime-evidence/production-migration-governance/evidence.post278.production.with-advisor-export.json"
+  },
+  "remainingBoundary": "This summary opens only the migration-governance-controlled scheduler and read-model warmup gates. It does not close PB-08/G6 performance governance, old-object physical drop, runtime publication apply, release rollback, monitoring, or unrelated product closeout gates."
+}

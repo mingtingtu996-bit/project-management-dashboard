@@ -2,7 +2,8 @@
 
 import { type Request, type Response, Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
+import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
@@ -16,9 +17,14 @@ import {
   REQUEST_TIMEOUT_BUDGETS,
   runWithRequestBudget,
 } from '../services/requestBudgetService.js'
+import { markPreMilestoneProjectChanged } from '../services/preMilestoneReadCache.js'
 
 const router = Router()
 router.use(authenticate)
+
+function hasOwn(source: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(source, key)
+}
 
 const preMilestoneConditionIdParamSchema = z.object({
   id: z.string().trim().min(1, 'id 不能为空'),
@@ -98,7 +104,7 @@ async function requireProjectEditorAccess(req: Request, res: Response, projectId
     return false
   }
 
-  const permissionLevel = await getProjectPermissionLevel(req.user.id, projectId)
+  const permissionLevel = await getProjectPermissionLevel(req.user.id, projectId, getRequestCompanyId(req))
   if (permissionLevel !== 'owner' && permissionLevel !== 'editor') {
     const response: ApiResponse = {
       success: false,
@@ -113,7 +119,10 @@ async function requireProjectEditorAccess(req: Request, res: Response, projectId
 }
 
 // 获取证照的所有条件
-router.get('/', validate(preMilestoneConditionListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+router.get('/', validate(preMilestoneConditionListQuerySchema, 'query'), requireProjectMember(async (req) => {
+  const preMilestoneId = String(req.query.preMilestoneId ?? req.query.pre_milestone_id ?? '').trim()
+  return await resolvePreMilestoneProjectId(preMilestoneId)
+}), asyncHandler(async (req, res) => {
   const preMilestoneId = String(req.query.preMilestoneId ?? req.query.pre_milestone_id ?? '').trim()
 
   if (!preMilestoneId) {
@@ -141,7 +150,13 @@ router.get('/', validate(preMilestoneConditionListQuerySchema, 'query'), asyncHa
 }))
 
 // 获取单个条件
-router.get('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), asyncHandler(async (req, res) => {
+router.get('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), requireProjectMember(async (req) => {
+  const row = await executeSQLOne<{ pre_milestone_id?: string | null }>(
+    'SELECT pre_milestone_id FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
+    [req.params.id],
+  )
+  return await resolvePreMilestoneProjectId(row?.pre_milestone_id)
+}), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching pre-milestone condition', { id })
 
@@ -233,6 +248,7 @@ router.post('/', validate(preMilestoneConditionCreateBodySchema), asyncHandler(a
     'SELECT * FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
     [id]
   )
+  markPreMilestoneProjectChanged(projectId)
 
   const response: ApiResponse<PreMilestoneCondition> = {
     success: true,
@@ -247,9 +263,8 @@ router.put('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), valid
   const { id } = req.params
   logger.info('Updating pre-milestone condition', { id })
 
-  // 获取当前状态
-  const current = await executeSQLOne(
-    'SELECT project_id, pre_milestone_id, status FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
+  const current = await executeSQLOne<PreMilestoneCondition & { project_id?: string | null }>(
+    'SELECT * FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
     [id]
   )
 
@@ -294,30 +309,48 @@ router.put('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), valid
     }
   }
 
-  // 构建动态 UPDATE（始终更新 updated_at）
-  const updateData = {
-    ...req.body,
-    due_date: req.body.target_date ?? req.body.due_date,
-    updated_at: new Date().toISOString(),
-  }
-  delete updateData.target_date
-  const setClauses: string[] = []
-  const setValues: any[] = []
-
-  for (const [key, val] of Object.entries(updateData)) {
-    setClauses.push(`${key} = ?`)
-    setValues.push(val)
-  }
+  const body = req.body as Record<string, unknown>
+  const dueDateWasProvided = hasOwn(body, 'target_date') || hasOwn(body, 'due_date')
+  const dueDate = hasOwn(body, 'target_date') ? req.body.target_date : req.body.due_date
+  const updatedAt = new Date().toISOString()
+  const nextIsSatisfied = hasOwn(body, 'is_satisfied')
+    ? (req.body.is_satisfied ? 1 : 0)
+    : current.is_satisfied
 
   await executeSQL(
-    `UPDATE pre_milestone_conditions SET ${setClauses.join(', ')} WHERE id = ?`,
-    [...setValues, id]
+    `UPDATE pre_milestone_conditions
+     SET condition_type = ?,
+         condition_name = ?,
+         description = ?,
+         status = ?,
+         is_satisfied = ?,
+         responsible_person = ?,
+         due_date = ?,
+         notes = ?,
+         completed_date = ?,
+         updated_at = ?
+     WHERE id = ? AND project_id = ?`,
+    [
+      hasOwn(body, 'condition_type') ? req.body.condition_type : current.condition_type,
+      hasOwn(body, 'condition_name') ? req.body.condition_name : current.condition_name,
+      hasOwn(body, 'description') ? req.body.description : current.description ?? null,
+      hasOwn(body, 'status') ? req.body.status : current.status,
+      nextIsSatisfied,
+      hasOwn(body, 'responsible_person') ? req.body.responsible_person : current.responsible_person ?? null,
+      dueDateWasProvided ? dueDate ?? null : current.due_date ?? null,
+      hasOwn(body, 'notes') ? req.body.notes : current.notes ?? null,
+      hasOwn(body, 'completed_date') ? req.body.completed_date : (current as any).completed_date ?? null,
+      updatedAt,
+      id,
+      projectId,
+    ]
   )
 
   const data = await executeSQLOne(
-    'SELECT * FROM pre_milestone_conditions WHERE id = ? LIMIT 1',
-    [id]
+    'SELECT * FROM pre_milestone_conditions WHERE id = ? AND project_id = ? LIMIT 1',
+    [id, projectId]
   )
+  markPreMilestoneProjectChanged(projectId)
 
   const response: ApiResponse<PreMilestoneCondition> = {
     success: true,
@@ -351,7 +384,15 @@ router.delete('/:id', validate(preMilestoneConditionIdParamSchema, 'params'), as
     return
   }
 
-  await executeSQL('DELETE FROM pre_milestone_conditions WHERE id = ?', [id])
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'pre_milestone_condition', entityId: id, projectId, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+
+  await executeSQL('DELETE FROM pre_milestone_conditions WHERE id = ? AND project_id = ?', [id, projectId])
+  markPreMilestoneProjectChanged(projectId)
 
   const response: ApiResponse = {
     success: true,
@@ -435,6 +476,7 @@ router.post('/batch', validate(preMilestoneConditionBatchBodySchema), asyncHandl
       )
     },
   )
+  markPreMilestoneProjectChanged(projectId)
 
   const response: ApiResponse<PreMilestoneCondition[]> = {
     success: true,

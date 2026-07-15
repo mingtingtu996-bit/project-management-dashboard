@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => {
   return {
     warningServiceInstance,
     insertNotification: vi.fn(async () => null),
+    dismissReminder: vi.fn(async () => undefined),
+    upsertReminderPreference: vi.fn(async () => undefined),
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -38,12 +40,31 @@ vi.mock('../services/notificationStore.js', () => ({
   insertNotification: mocks.insertNotification,
 }))
 
+vi.mock('../services/reminderPreferencesService.js', () => ({
+  dismissReminder: mocks.dismissReminder,
+  upsertReminderPreference: mocks.upsertReminderPreference,
+}))
+
 vi.mock('../middleware/auth.js', () => ({
-  authenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'user-1', globalRole: 'company_admin' }
+    next()
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
   logger: mocks.logger,
+}))
+
+vi.mock('../auth/access.js', () => ({
+  getCurrentCompanyId: vi.fn(async () => 'company-1'),
+  getCurrentCompanyMembership: vi.fn(async () => ({ companyId: 'company-1', role: 'company_admin' })),
+  getProjectPermissionLevel: vi.fn(async () => 'editor'),
+  getVisibleProjectIds: vi.fn(async () => ['project-1']),
+}))
+
+vi.mock('../auth/companyContext.js', () => ({
+  getRequestCompanyId: vi.fn(() => 'company-1'),
 }))
 
 const { default: remindersRouter } = await import('../routes/reminders.js')
@@ -88,12 +109,8 @@ describe('reminders route hardening', () => {
 
     expect(response.body.success).toBe(true)
     expect(response.body.data.message).toBe('弹窗已关闭')
-    expect(mocks.insertNotification).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'reminder_dismissed',
-        source_entity_id: 'reminder-1',
-      }),
-    )
+    expect(mocks.dismissReminder).toHaveBeenCalledWith('user-1', 'reminder-1')
+    expect(mocks.insertNotification).not.toHaveBeenCalled()
   })
 
   it('updates settings with project_id alias and persists the payload', async () => {
@@ -114,12 +131,16 @@ describe('reminders route hardening', () => {
 
     expect(response.body.success).toBe(true)
     expect(response.body.data.message).toBe('提醒设置已更新')
-    expect(mocks.insertNotification).toHaveBeenCalledWith(
+    expect(mocks.upsertReminderPreference).toHaveBeenCalledWith(
       expect.objectContaining({
-        project_id: 'project-1',
-        type: 'reminder_settings_updated',
-        content: JSON.stringify(payload),
+        userId: 'user-1',
+        projectId: 'project-1',
+        companyId: 'company-1',
+        reminderDaysBefore: 3,
+        popupEnabled: true,
+        emailEnabled: false,
       }),
     )
+    expect(mocks.insertNotification).not.toHaveBeenCalled()
   })
 })

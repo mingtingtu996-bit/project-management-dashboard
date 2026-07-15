@@ -7,6 +7,7 @@ import {
   resolveWarningsForTaskCompletion,
   shouldSkipAutoUpgrade,
 } from '../services/warningChainService.js'
+import { buildWarningSignature } from '../utils/warningSignature.js'
 
 describe('warning chain contract', () => {
   it('preserves notification routing fields and dedupes warnings by warning_type + task_id + day', () => {
@@ -21,12 +22,10 @@ describe('warning chain contract', () => {
       created_at: '2026-04-13T08:00:00.000Z',
       task_id: 'task-1',
       category: 'risk',
-      delay_request_id: 'delay-1',
     })
 
     expect(normalized.category).toBe('risk')
     expect(normalized.task_id).toBe('task-1')
-    expect(normalized.delay_request_id).toBe('delay-1')
     expect(buildNotificationIdentity(normalized)).toBe('condition_expired|task-1|2026-04-13')
 
     const deduped = dedupeNotifications([
@@ -52,6 +51,29 @@ describe('warning chain contract', () => {
 
     expect(deduped).toHaveLength(3)
     expect(deduped.map((item) => item.id)).toEqual(['w-4', 'w-3', 'w-2'])
+  })
+
+  it('uses impact source entity identity in warning signatures when present', () => {
+    const materialSignature = buildWarningSignature({
+      project_id: 'p-1',
+      task_id: 'task-1',
+      warning_type: 'condition_due',
+      created_at: '2026-05-26T08:00:00.000Z',
+      source_entity_type: 'project_material',
+      source_entity_id: 'material-1',
+    })
+    const permitSignature = buildWarningSignature({
+      project_id: 'p-1',
+      task_id: 'task-1',
+      warning_type: 'condition_due',
+      created_at: '2026-05-26T09:00:00.000Z',
+      source_entity_type: 'pre_milestone_condition',
+      source_entity_id: 'permit-1',
+    })
+
+    expect(materialSignature).toBe('condition_due|project_material:material-1|2026-05-26')
+    expect(permitSignature).toBe('condition_due|pre_milestone_condition:permit-1|2026-05-26')
+    expect(materialSignature).not.toBe(permitSignature)
   })
 
   it('does not coerce non-uuid source keys into task_id', () => {

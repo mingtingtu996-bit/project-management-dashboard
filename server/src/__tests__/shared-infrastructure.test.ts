@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+process.env.DB_SQL_EXECUTION_MODE = 'rest'
+
 type Row = Record<string, any>
 
 const mocks = vi.hoisted(() => {
@@ -53,7 +55,6 @@ const mocks = vi.hoisted(() => {
         version: 1,
       },
     ],
-    delay_requests: [],
     task_conditions: [],
     projects: [
       {
@@ -74,21 +75,6 @@ const mocks = vi.hoisted(() => {
         user_id: 'admin-1',
         role: 'admin',
         permission_level: 'admin',
-      },
-    ],
-    task_delay_history: [
-      {
-        id: 'legacy-delay-1',
-        task_id: 'task-1',
-        original_date: '2026-04-10',
-        delayed_date: '2026-04-12',
-        delay_days: 2,
-        delay_type: '主动延期',
-        reason: '旧延期记录',
-        delay_reason: '旧延期记录',
-        approved_by: 'user-1',
-        approved_at: '2026-04-02T00:00:00.000Z',
-        created_at: '2026-04-02T00:00:00.000Z',
       },
     ],
     task_progress_snapshots: [],
@@ -212,120 +198,7 @@ const mocks = vi.hoisted(() => {
 
   const supabase = {
     from: (table: string) => createQuery(table),
-    rpc: vi.fn(async (fn: string, params: Record<string, any>) => {
-      const timestamp = new Date().toISOString()
-      if (fn === 'approve_delay_request_atomic') {
-        const delayRequest = tables.delay_requests.find((row) => row.id === params.p_delay_request_id)
-        if (!delayRequest) {
-          return { data: { ok: false, code: 'DELAY_REQUEST_NOT_FOUND', message: '延期申请不存在', status_code: 404 }, error: null }
-        }
-        if (delayRequest.status !== 'pending') {
-          return { data: { ok: false, code: 'DELAY_REQUEST_STATE_INVALID', message: '只有待审批延期申请可以通过', status_code: 422 }, error: null }
-        }
-
-        const task = tables.tasks.find((row) => row.id === delayRequest.task_id)
-        if (!task) {
-          return { data: { ok: false, code: 'TASK_NOT_FOUND', message: '任务不存在', status_code: 404 }, error: null }
-        }
-
-        delayRequest.status = 'approved'
-        delayRequest.reviewed_by = params.p_reviewer_id ?? null
-        delayRequest.reviewed_at = timestamp
-        delayRequest.approved_by = params.p_reviewer_id ?? null
-        delayRequest.approved_at = timestamp
-        delayRequest.updated_at = timestamp
-
-        tables.change_logs.push({
-          id: `change-${tables.change_logs.length + 1}`,
-          entity_type: 'delay_request',
-          entity_id: delayRequest.id,
-          field_name: 'status',
-          old_value: 'pending',
-          new_value: 'approved',
-          change_source: 'approval',
-          changed_by: params.p_reviewer_id ?? null,
-          changed_at: timestamp,
-        })
-
-        tables.change_logs.push({
-          id: `change-${tables.change_logs.length + 1}`,
-          entity_type: 'task',
-          entity_id: task.id,
-          field_name: 'end_date',
-          old_value: task.end_date ?? task.planned_end_date ?? null,
-          new_value: delayRequest.delayed_date,
-          change_source: 'approval',
-          changed_by: params.p_reviewer_id ?? null,
-          changed_at: timestamp,
-        })
-
-        task.end_date = delayRequest.delayed_date
-        task.planned_end_date = delayRequest.delayed_date
-        task.updated_at = timestamp
-
-        tables.task_progress_snapshots.push({
-          id: `snapshot-${tables.task_progress_snapshots.length + 1}`,
-          task_id: task.id,
-          progress: Number(task.progress ?? 0),
-          snapshot_date: String(timestamp).slice(0, 10),
-          event_type: 'delay_approved',
-          event_source: 'delay_request',
-          notes: `延期审批通过，计划完成时间调整为 ${delayRequest.delayed_date}`,
-          status: task.status ?? null,
-          conditions_met_count: Number(task.conditions_met_count ?? 0),
-          conditions_total_count: Number(task.conditions_total_count ?? 0),
-          obstacles_active_count: Number(task.obstacles_active_count ?? 0),
-          recorded_by: params.p_reviewer_id ?? null,
-          is_auto_generated: true,
-          created_at: timestamp,
-        })
-
-        return {
-          data: {
-            ok: true,
-            project_id: delayRequest.project_id ?? task.project_id ?? null,
-            delay_request: { ...delayRequest },
-            task: { ...task },
-          },
-          error: null,
-        }
-      }
-
-      if (fn === 'reject_delay_request_atomic') {
-        const delayRequest = tables.delay_requests.find((row) => row.id === params.p_delay_request_id)
-        if (!delayRequest) {
-          return { data: { ok: false, code: 'DELAY_REQUEST_NOT_FOUND', message: '延期申请不存在', status_code: 404 }, error: null }
-        }
-        if (delayRequest.status !== 'pending') {
-          return { data: { ok: false, code: 'DELAY_REQUEST_STATE_INVALID', message: '只有待审批延期申请可以驳回', status_code: 422 }, error: null }
-        }
-
-        delayRequest.status = 'rejected'
-        delayRequest.reviewed_by = params.p_reviewer_id ?? null
-        delayRequest.reviewed_at = timestamp
-        delayRequest.updated_at = timestamp
-        tables.change_logs.push({
-          id: `change-${tables.change_logs.length + 1}`,
-          entity_type: 'delay_request',
-          entity_id: delayRequest.id,
-          field_name: 'status',
-          old_value: 'pending',
-          new_value: 'rejected',
-          change_source: 'approval',
-          changed_by: params.p_reviewer_id ?? null,
-          changed_at: timestamp,
-        })
-
-        return {
-          data: {
-            ok: true,
-            project_id: delayRequest.project_id ?? null,
-            delay_request: { ...delayRequest },
-          },
-          error: null,
-        }
-      }
-
+    rpc: vi.fn(async (fn: string, _params: Record<string, any>) => {
       if (
         fn === 'delete_task_with_source_backfill_atomic'
         || fn === 'delete_risk_with_source_backfill_atomic'
@@ -339,13 +212,31 @@ const mocks = vi.hoisted(() => {
     }),
   }
 
+  const writeLog = vi.fn(async (..._args: any[]) => undefined)
+  const writeLifecycleLog = vi.fn(async (params: Record<string, any>) => {
+    await writeLog({
+      project_id: params.project_id ?? null,
+      entity_type: params.entity_type,
+      entity_id: params.entity_id,
+      field_name: 'lifecycle',
+      old_value: null,
+      new_value: params.action,
+      changed_by: params.changed_by ?? null,
+      change_source: params.change_source ?? 'manual_adjusted',
+    })
+  })
+
   return {
     tables,
     baseTables,
     supabase,
     createClient: vi.fn(() => supabase),
     persistNotification: vi.fn(async (payload: any) => payload),
-    writeLog: vi.fn(async (..._args: any[]) => undefined),
+    writeLog,
+    writeLifecycleLog,
+    enqueueProjectHealthUpdate: vi.fn(async () => undefined),
+    syncProjectDataQuality: vi.fn(async () => undefined),
+    evaluateTaskConstraint: vi.fn(async () => undefined),
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -373,18 +264,7 @@ vi.mock('../services/changeLogs.js', () => ({
       change_source: params.change_source ?? 'manual_adjusted',
     })
   }),
-  writeLifecycleLog: vi.fn(async (params: Record<string, any>) => {
-    await (mocks.writeLog as any)({
-      project_id: params.project_id ?? null,
-      entity_type: params.entity_type,
-      entity_id: params.entity_id,
-      field_name: 'lifecycle',
-      old_value: null,
-      new_value: params.action,
-      changed_by: params.changed_by ?? null,
-      change_source: params.change_source ?? 'manual_adjusted',
-    })
-  }),
+  writeLifecycleLog: mocks.writeLifecycleLog,
 }))
 
 vi.mock('../services/warningChainService.js', () => ({
@@ -401,25 +281,27 @@ vi.mock('../middleware/logger.js', () => ({
 }))
 
 const dbService = await import('../services/dbService.js')
-const delayRequests = await import('../services/delayRequests.js')
-
-const { createTask, reopenTask, updateTask, updateRisk, updateIssue } = dbService
 const {
-  approveDelayRequest,
-  calculateDelayImpact,
-  createDelayRequest,
-  getApprovedDelayRequestsByTaskId,
-  getApprovedDelayRequestsByProjectId,
-  listDelayRequests,
-  rejectDelayRequest,
-  withdrawDelayRequest,
-} = delayRequests
+  createTask,
+  registerDbServiceBusinessSideEffectAdapters,
+  reopenTask,
+  updateTask,
+  updateRisk,
+  updateIssue,
+} = dbService
+
+registerDbServiceBusinessSideEffectAdapters({
+  writeLog: mocks.writeLog,
+  writeLifecycleLog: mocks.writeLifecycleLog,
+  enqueueProjectHealthUpdate: mocks.enqueueProjectHealthUpdate,
+  syncProjectDataQuality: mocks.syncProjectDataQuality,
+  evaluateTaskConstraint: mocks.evaluateTaskConstraint,
+})
 
 function resetTables() {
   for (const [key, value] of Object.entries(mocks.baseTables)) {
     mocks.tables[key] = value.map((row) => ({ ...row }))
   }
-  mocks.tables.delay_requests = []
   mocks.tables.task_progress_snapshots = []
   mocks.tables.change_logs = []
   vi.clearAllMocks()
@@ -428,70 +310,6 @@ function resetTables() {
 describe('shared infrastructure contract', () => {
   beforeEach(() => {
     resetTables()
-  })
-
-  it('locks delay request pending conflict and duplicate reject reason rules', async () => {
-    const firstCreated = await createDelayRequest({
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-12',
-      delay_days: 2,
-      reason: '材料运输受阻',
-      requested_by: 'user-1',
-    })
-
-    expect(mocks.persistNotification).toHaveBeenCalledWith(expect.objectContaining({
-      type: 'critical_path_delay_request_submitted',
-      severity: 'critical',
-      is_broadcast: true,
-      source_entity_type: 'delay_request',
-      source_entity_id: firstCreated.id,
-      recipients: expect.arrayContaining(['owner-1', 'admin-1']),
-    }))
-
-    await expect(createDelayRequest({
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-13',
-      delay_days: 3,
-      reason: '第二次延期',
-      requested_by: 'user-1',
-    })).rejects.toMatchObject({ code: 'PENDING_CONFLICT', statusCode: 409 })
-
-    mocks.tables.delay_requests = []
-    mocks.tables.delay_requests.push({
-      id: 'rejected-delay-1',
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-13',
-      delay_days: 3,
-      delay_type: '主动延期',
-      reason: '旧延期记录',
-      delay_reason: '旧延期记录',
-      status: 'rejected',
-      requested_by: 'user-1',
-      requested_at: '2026-04-03T00:00:00.000Z',
-      reviewed_by: 'reviewer-1',
-      reviewed_at: '2026-04-04T00:00:00.000Z',
-      withdrawn_at: null,
-      approved_by: null,
-      approved_at: null,
-      chain_id: null,
-      created_at: '2026-04-03T00:00:00.000Z',
-      updated_at: '2026-04-04T00:00:00.000Z',
-    })
-    await expect(createDelayRequest({
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-14',
-      delay_days: 4,
-      reason: '旧延期记录',
-      requested_by: 'user-1',
-    })).rejects.toMatchObject({ code: 'DUPLICATE_REASON', statusCode: 422 })
   })
 
   it('persists milestone_id when creating tasks', async () => {
@@ -512,8 +330,6 @@ describe('shared infrastructure contract', () => {
       milestone_id: 'milestone-1',
       is_critical: false,
       specialty_type: null,
-      reference_duration: null,
-      ai_duration: null,
       first_progress_at: null,
       delay_reason: null,
       planned_start_date: '2026-04-01',
@@ -522,7 +338,6 @@ describe('shared infrastructure contract', () => {
       actual_end_date: null,
       planned_duration: null,
       standard_duration: null,
-      ai_adjusted_duration: null,
       assignee_id: null,
       assignee_name: null,
       assignee_unit: null,
@@ -539,108 +354,53 @@ describe('shared infrastructure contract', () => {
     expect(mocks.tables.tasks.find((task) => task.id === created.id)?.milestone_id).toBe('milestone-1')
   })
 
-  it('rejects pending requests and blocks later withdrawal', async () => {
-    const created = await createDelayRequest({
+  it('ignores manual actual date writes in ordinary task create and update flows', async () => {
+    const created = await createTask({
       project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-12',
-      delay_days: 2,
-      reason: '雨天影响施工',
-      requested_by: 'user-1',
-    })
-
-    const rejected = await rejectDelayRequest(created.id, 'reviewer-1')
-    expect(rejected.status).toBe('rejected')
-
-    await expect(withdrawDelayRequest(created.id, 'user-1')).rejects.toMatchObject({
-      code: 'DELAY_REQUEST_STATE_INVALID',
-      statusCode: 422,
-    })
-  })
-
-  it('allows pending delay requests to be withdrawn by the requester only', async () => {
-    const created = await createDelayRequest({
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-12',
-      delay_days: 2,
-      reason: '雨天影响施工',
-      requested_by: 'user-1',
-    })
-
-    await expect(withdrawDelayRequest(created.id, 'user-2')).rejects.toMatchObject({
-      code: 'DELAY_REQUEST_FORBIDDEN',
-      statusCode: 403,
-    })
-
-    const withdrawn = await withdrawDelayRequest(created.id, 'user-1')
-    expect(withdrawn.status).toBe('withdrawn')
-  })
-
-  it('approves delay requests by updating task end dates, logs and snapshots', async () => {
-    const created = await createDelayRequest({
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-12',
-      delay_days: 2,
-      reason: '关键材料延期',
-      requested_by: 'user-1',
-    })
-
-    const approved = await approveDelayRequest(created.id, 'reviewer-1')
-    expect(approved.status).toBe('approved')
-
-    const task = (mocks.tables.tasks as Row[]).find((row) => row.id === 'task-1')
-    expect(task?.end_date).toBe('2026-04-12')
-    expect(task?.planned_end_date).toBe('2026-04-12')
-
-    const snapshot = mocks.tables.task_progress_snapshots[0]
-    expect(snapshot).toMatchObject({
-      task_id: 'task-1',
-      progress: 0,
-      event_type: 'delay_approved',
-      event_source: 'delay_request',
+      title: 'manual actual dates are ignored on create',
       status: 'todo',
-      conditions_met_count: 0,
-      conditions_total_count: 0,
-      obstacles_active_count: 0,
-      recorded_by: 'reviewer-1',
-      is_auto_generated: true,
-    })
+      priority: 'medium',
+      progress: 0,
+      planned_start_date: '2026-04-01',
+      planned_end_date: '2026-04-10',
+      actual_start_date: '2026-03-28',
+      actual_end_date: '2026-03-30',
+    } as any)
 
-    expect(mocks.tables.change_logs).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        entity_type: 'delay_request',
-        field_name: 'status',
-        new_value: 'approved',
-      }),
-      expect.objectContaining({
-        entity_type: 'task',
-        field_name: 'end_date',
-        new_value: '2026-04-12',
-      }),
-    ]))
+    expect(created.actual_start_date).toBeNull()
+    expect(created.actual_end_date).toBeNull()
+
+    const updated = await updateTask('task-1', {
+      actual_start_date: '2026-03-28',
+      actual_end_date: '2026-03-30',
+      updated_by: 'user-1',
+    } as any, 1)
+
+    expect(updated?.actual_start_date).toBeNull()
+    expect(updated?.actual_end_date).toBeNull()
   })
 
-  it('calculates delay impact for task and project duration before submission', async () => {
-    const impact = await calculateDelayImpact({
-      project_id: 'project-1',
-      task_id: 'task-1',
-      original_date: '2026-04-10',
-      delayed_date: '2026-04-12',
-    })
+  it('persists system critical-path projection fields through updateTask', async () => {
+    const updated = await updateTask('task-1', {
+      is_critical: true,
+      total_float_days: 0,
+      free_float_days: 0,
+      criticality_weight: 1.35,
+      updated_by: 'system-cpm',
+    } as any, 1)
 
-    expect(impact).toMatchObject({
-      original_task_end_date: '2026-04-10',
-      delayed_task_end_date: '2026-04-12',
-      task_end_date_impact_days: 2,
-      original_project_end_date: '2026-04-10',
-      delayed_project_end_date: '2026-04-12',
-      project_total_duration_impact_days: 2,
-    })
+    expect(updated).toEqual(expect.objectContaining({
+      is_critical: true,
+      total_float_days: 0,
+      free_float_days: 0,
+      criticality_weight: 1.35,
+    }))
+    expect(mocks.tables.tasks.find((task) => task.id === 'task-1')).toEqual(expect.objectContaining({
+      is_critical: true,
+      total_float_days: 0,
+      free_float_days: 0,
+      criticality_weight: 1.35,
+    }))
   })
 
   it('rejects decimal progress values at the service layer', async () => {
@@ -671,9 +431,7 @@ describe('shared infrastructure contract', () => {
     const task = (mocks.tables.tasks as Row[]).find((row) => row.id === 'task-1')
     expect(task?.actual_start_date).toBe(todayDate)
 
-    // GAP-10.2b-03: updateTask no longer auto-creates approved delay_requests;
-    // end_date changes must go through the delay approval flow (POST /api/delay-requests).
-    expect(mocks.tables.delay_requests).toHaveLength(0)
+    // end_date changes are direct schedule edits; automatic delay signals and planning algorithms consume the saved task state.
     expect(mocks.tables.task_progress_snapshots).toHaveLength(1)
     expect(mocks.tables.task_progress_snapshots[0]).toMatchObject({
       task_id: 'task-1',
@@ -726,21 +484,29 @@ describe('shared infrastructure contract', () => {
       field_name: 'actual_end_date',
       change_source: 'system_auto',
     }))
+    await vi.waitFor(() => {
+      expect(mocks.enqueueProjectHealthUpdate).toHaveBeenCalledWith('project-1', expect.any(String))
+      expect(mocks.syncProjectDataQuality).toHaveBeenCalledWith('project-1')
+      expect(mocks.evaluateTaskConstraint).toHaveBeenCalledWith('task-1', {
+        projectId: 'project-1',
+        sourceEventType: 'task_progress_or_status_updated',
+      })
+    })
   })
 
   it('writes task title changes to change_logs so gantt realtime can observe task edits', async () => {
     const updated = await updateTask('task-1', {
-      title: '主体结构施工-已改名',
+      title: 'main structure construction renamed',
       updated_by: 'user-1',
     } as any, 1)
 
-    expect(updated?.title).toBe('主体结构施工-已改名')
+    expect(updated?.title).toBe('main structure construction renamed')
     expect(mocks.writeLog).toHaveBeenCalledWith(expect.objectContaining({
       entity_type: 'task',
       entity_id: 'task-1',
       field_name: 'title',
       old_value: '主体结构施工',
-      new_value: '主体结构施工-已改名',
+      new_value: 'main structure construction renamed',
       change_source: 'manual_adjusted',
     }))
   })
@@ -809,7 +575,7 @@ describe('shared infrastructure contract', () => {
     }))
   })
 
-  it('allows the first 0 -> >0 progress update but blocks later advances when task conditions are still unmet', async () => {
+  it('allows progress updates with unmet task conditions and records an execution quality signal', async () => {
     mocks.tables.task_conditions = [
       {
         id: 'condition-1',
@@ -826,13 +592,19 @@ describe('shared infrastructure contract', () => {
     expect(firstReported?.progress).toBe(20)
     expect(firstReported?.first_progress_at).toBeTruthy()
 
-    await expect(updateTask('task-1', {
+    const laterReported = await updateTask('task-1', {
       progress: 35,
       updated_by: 'user-1',
-    } as any, 2)).rejects.toMatchObject({
-      code: 'TASK_CONDITIONS_UNMET',
-      statusCode: 422,
-    })
+    } as any, 2)
+
+    expect(laterReported?.progress).toBe(35)
+    expect(mocks.logger.info).toHaveBeenCalledWith(
+      '[dbService] task progressed with unmet start conditions',
+      expect.objectContaining({
+        taskId: 'task-1',
+        unmetConditionCount: 1,
+      }),
+    )
   })
 
   it('rejects direct terminal state jumps for risk and issue flows', async () => {
@@ -847,14 +619,4 @@ describe('shared infrastructure contract', () => {
     })
   })
 
-  it('reads approved delays through the new delay_requests contract and legacy fallback', async () => {
-    const projectDelays = await getApprovedDelayRequestsByProjectId('project-1')
-    const taskDelays = await getApprovedDelayRequestsByTaskId('task-1')
-    const rawList = await listDelayRequests('task-1')
-
-    expect(projectDelays).toHaveLength(1)
-    expect(taskDelays).toHaveLength(1)
-    expect(rawList.length).toBeGreaterThanOrEqual(1)
-    expect(taskDelays[0].reason).toBe('旧延期记录')
-  })
 })

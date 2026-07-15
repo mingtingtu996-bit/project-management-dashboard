@@ -32,6 +32,7 @@ describe('task progress snapshot trigger contract', () => {
       expect(source).toContain('ON CONFLICT (task_id, snapshot_date, event_type, event_source)')
       expect(source).toContain('progress = EXCLUDED.progress')
       expect(source).toContain('notes = EXCLUDED.notes')
+      expect(source).toMatch(/VALUES\s*\([\s\S]*?\)\s+ON CONFLICT \(task_id, snapshot_date, event_type, event_source\)/)
     }
   })
 })

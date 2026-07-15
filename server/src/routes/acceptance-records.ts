@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
 import { executeSQLOne } from '../services/dbService.js'
@@ -87,7 +87,39 @@ function normalizeRecordUpdatePayload(body: Record<string, any>) {
   return updates
 }
 
-router.get('/', validate(recordListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+async function resolvePlanProjectId(planId: string) {
+  const plan = await executeSQLOne<{ project_id?: string }>('SELECT project_id FROM acceptance_plans WHERE id = ? LIMIT 1', [planId])
+  return plan?.project_id
+}
+
+async function validateRecordPlanProject(payload: { project_id?: string | null; plan_id?: string | null }) {
+  const planId = String(payload.plan_id ?? '').trim()
+  const projectId = String(payload.project_id ?? '').trim()
+  if (!planId) return null
+
+  const planProjectId = await resolvePlanProjectId(planId)
+  if (!planProjectId || (projectId && String(planProjectId) !== projectId)) {
+    return {
+      success: false,
+      error: {
+        code: 'PLAN_PROJECT_MISMATCH',
+        message: '验收记录引用的验收计划必须属于当前项目',
+        details: { planId, projectId: projectId || null },
+      },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse
+  }
+
+  return null
+}
+
+router.get('/',
+  validate(recordListQuerySchema, 'query'),
+  requireProjectMember((req) => {
+    const planId = String(req.query.plan_id ?? req.query.planId ?? '').trim()
+    return planId ? resolvePlanProjectId(planId) : undefined
+  }),
+  asyncHandler(async (req, res) => {
   const planId = String(req.query.plan_id ?? req.query.planId ?? '').trim()
   if (!planId) {
     const response: ApiResponse = {
@@ -99,7 +131,8 @@ router.get('/', validate(recordListQuerySchema, 'query'), asyncHandler(async (re
   }
 
   logger.info('Fetching acceptance records', { planId })
-  const data = await listAcceptanceRecords(planId)
+  const projectId = String(await resolvePlanProjectId(planId) ?? '').trim()
+  const data = await listAcceptanceRecords(projectId, planId)
 
   const response: ApiResponse<AcceptanceRecord[]> = {
     success: true,
@@ -126,6 +159,11 @@ router.post('/',
     return res.status(400).json(response)
   }
 
+  const planProjectError = await validateRecordPlanProject(payload)
+  if (planProjectError) {
+    return res.status(400).json(planProjectError)
+  }
+
   logger.info('Creating acceptance record', payload)
   const data = await createAcceptanceRecord(payload)
 
@@ -142,7 +180,43 @@ async function handleUpdateRecord(req: any, res: any) {
   const updates = normalizeRecordUpdatePayload(req.body ?? {})
   logger.info('Updating acceptance record', { id })
 
-  const data = await updateAcceptanceRecord(id, updates)
+  if (updates.plan_id !== undefined || updates.project_id !== undefined) {
+    const current = await executeSQLOne<{ project_id?: string | null; plan_id?: string | null }>(
+      'SELECT project_id, plan_id FROM acceptance_records WHERE id = ? LIMIT 1',
+      [id],
+    )
+    if (!current) {
+      const response: ApiResponse = {
+        success: false,
+        error: { code: 'RECORD_NOT_FOUND', message: '验收记录不存在' },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(404).json(response)
+    }
+
+    const planProjectError = await validateRecordPlanProject({
+      project_id: updates.project_id === undefined ? current.project_id : updates.project_id,
+      plan_id: updates.plan_id === undefined ? current.plan_id : updates.plan_id,
+    })
+    if (planProjectError) {
+      return res.status(400).json(planProjectError)
+    }
+  }
+
+  const recordScope = await executeSQLOne<{ project_id?: string | null }>(
+    'SELECT project_id FROM acceptance_records WHERE id = ? LIMIT 1',
+    [id],
+  )
+  if (!recordScope?.project_id) {
+    const response: ApiResponse = {
+      success: false,
+      error: { code: 'RECORD_NOT_FOUND', message: 'Acceptance record does not exist' },
+      timestamp: new Date().toISOString(),
+    }
+    return res.status(404).json(response)
+  }
+
+  const data = await updateAcceptanceRecord(String(recordScope.project_id), id, updates)
 
   if (!data) {
     const response: ApiResponse = {
@@ -187,8 +261,15 @@ router.delete('/:id',
   asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting acceptance record', { id })
+  const record = await executeSQLOne<{ project_id?: string | null }>('SELECT project_id FROM acceptance_records WHERE id = ? LIMIT 1', [id])
 
-  const deleted = await deleteAcceptanceRecord(id)
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'acceptance_record', entityId: id, projectId: record?.project_id ?? null, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+
+  const deleted = await deleteAcceptanceRecord(String(record?.project_id ?? ''), id)
   if (!deleted) {
     const response: ApiResponse = {
       success: false,

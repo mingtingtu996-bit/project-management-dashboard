@@ -7,6 +7,7 @@ import { ReactNode, useState } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useAuthDialog } from '@/hooks/useAuthDialog';
 import { Lock } from 'lucide-react';
+import { Card } from '@/components/ui/card'
 
 interface ReadOnlyGuardProps {
   children: ReactNode;
@@ -54,10 +55,10 @@ export function ReadOnlyGuard({
         {children}
       </div>
       <div className="absolute inset-0 flex items-center justify-center bg-white/30 opacity-0 group-hover:opacity-100 transition-opacity rounded">
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-lg shadow-md border text-sm text-gray-600">
+        <Card className="flex items-center gap-2 px-3 py-1.5 bg-white rounded-lg shadow-[var(--el-2)] border text-sm text-slate-600">
           <Lock className="h-4 w-4" />
           {msg}
-        </div>
+        </Card>
       </div>
     </div>
   );

@@ -30,13 +30,11 @@ const supabase = createClient(
 
 const TABLES = [
   'projects',
-  'milestones',
   'tasks',
   'risks',
   'task_conditions',
   'task_obstacles',
   'acceptance_plans',
-  'task_delay_history',
   'wbs_templates',
   'pre_milestones',
   'project_members',
@@ -70,7 +68,7 @@ async function check() {
   console.log('-'.repeat(60))
 
   // 抽样检查关键表的数据质量
-  const sampleTables = ['tasks', 'milestones', 'task_conditions', 'task_obstacles', 'risks', 'acceptance_plans']
+  const sampleTables = ['tasks', 'task_conditions', 'task_obstacles', 'risks', 'acceptance_plans']
   for (const table of sampleTables) {
     const { data, error } = await supabase.from(table).select('*').limit(2)
     if (error) {

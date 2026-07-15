@@ -10,19 +10,37 @@ export default defineConfig({
     dedupe: ['react', 'react-dom'],
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      // 绕过 pnpm 符号链接问题，直接指定 chart.js 的真实路径
-      'chart.js': path.resolve(__dirname, './node_modules/.pnpm/chart.js@4.5.1/node_modules/chart.js/dist/chart.js'),
     },
   },
   build: {
-    // 关闭首屏 modulepreload，避免公网环境首屏并发拉取过多静态资源
+    // 关闭首屏 modulepreload，避免公网环境首屏并发拉取过多静态资源。
+    // 路由与重型能力仍保留动态拆包，避免 BI 页面继续膨胀首包。
     modulePreload: false,
-    // 公网环境偶发静态资源请求失败时，优先保证首屏只依赖单一入口脚本
     rollupOptions: {
       output: {
-        inlineDynamicImports: true,
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+
+          const normalizedId = id.replace(/\\/g, '/')
+
+          if (normalizedId.includes('/react/')
+            || normalizedId.includes('/react-dom/')
+            || normalizedId.includes('/scheduler/')
+            || normalizedId.includes('/react-router')
+          ) return 'vendor-react'
+          if (normalizedId.includes('/@supabase/')) return 'vendor-supabase'
+          if (normalizedId.includes('/@radix-ui/')) return 'vendor-radix'
+          if (normalizedId.includes('/@dnd-kit/')) return 'vendor-dnd'
+          if (normalizedId.includes('/chart.js/') || normalizedId.includes('/react-chartjs-2/')) return 'vendor-charts'
+          if (normalizedId.includes('/xlsx/')) return 'vendor-xlsx'
+
+          return undefined
+        },
       },
     },
+    // SheetJS is intentionally isolated as a lazy spreadsheet-only chunk.
+    // Keep the global warning close to the 500 kB default while allowing that fixed vendor boundary.
+    chunkSizeWarningLimit: 510,
     // 启用CSS代码分割
     cssCodeSplit: true,
     // 启用源代码映射（生产环境可关闭）

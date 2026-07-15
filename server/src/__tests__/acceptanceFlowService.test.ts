@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 type PlanRow = {
   id: string
   project_id: string
+  status?: string | null
+  planned_date?: string | null
   updated_at: string
 }
 
@@ -67,11 +69,15 @@ const state = vi.hoisted(() => {
       {
         id: 'plan-source',
         project_id: 'project-1',
+        status: 'passed',
+        planned_date: '2026-06-18',
         updated_at: '2026-04-15T00:00:00.000Z',
       },
       {
         id: 'plan-target',
         project_id: 'project-1',
+        status: 'submitted',
+        planned_date: '2026-06-19',
         updated_at: '2026-04-15T00:00:00.000Z',
       },
     )
@@ -98,6 +104,19 @@ const state = vi.hoisted(() => {
     }
 
     if (
+      normalized.includes('from acceptance_dependencies where project_id = ? and source_plan_id = ? and target_plan_id = ? limit 1')
+    ) {
+      return clone(
+        dependencies.find(
+          (row) =>
+            row.project_id === String(params[0] ?? '') &&
+            row.source_plan_id === String(params[1] ?? '') &&
+            row.target_plan_id === String(params[2] ?? ''),
+        ),
+      )
+    }
+
+    if (
       normalized.includes('from acceptance_dependencies where source_plan_id = ? and target_plan_id = ? limit 1')
     ) {
       return clone(
@@ -109,16 +128,24 @@ const state = vi.hoisted(() => {
       )
     }
 
-    if (normalized.includes('from acceptance_dependencies where id = ? limit 1')) {
-      return clone(dependencies.find((row) => row.id === String(params[0] ?? '')))
+    if (normalized.includes('from acceptance_dependencies where id = ?')) {
+      return clone(dependencies.find((row) => row.id === String(params[0] ?? '')
+        && (!normalized.includes('and project_id = ?') || row.project_id === String(params[1] ?? ''))))
     }
 
-    if (normalized.includes('from acceptance_requirements where id = ? limit 1')) {
-      return clone(requirements.find((row) => row.id === String(params[0] ?? '')))
+    if (normalized.includes('from acceptance_requirements where project_id = ? and id = ?')) {
+      return clone(requirements.find((row) => row.project_id === String(params[0] ?? '')
+        && row.id === String(params[1] ?? '')))
     }
 
-    if (normalized.includes('from acceptance_records where id = ? limit 1')) {
-      return clone(records.find((row) => row.id === String(params[0] ?? '')))
+    if (normalized.includes('from acceptance_requirements where id = ?')) {
+      return clone(requirements.find((row) => row.id === String(params[0] ?? '')
+        && (!normalized.includes('and project_id = ?') || row.project_id === String(params[1] ?? ''))))
+    }
+
+    if (normalized.includes('from acceptance_records where id = ?')) {
+      return clone(records.find((row) => row.id === String(params[0] ?? '')
+        && (!normalized.includes('and project_id = ?') || row.project_id === String(params[1] ?? ''))))
     }
 
     return null
@@ -166,10 +193,30 @@ const state = vi.hoisted(() => {
       return []
     }
 
-    if (normalized === 'delete from acceptance_dependencies where id = ?') {
+    if (normalized === 'delete from acceptance_dependencies where id = ?'
+      || normalized === 'delete from acceptance_dependencies where id = ? and project_id = ?') {
       const id = String(params[0] ?? '')
-      const index = dependencies.findIndex((row) => row.id === id)
+      const projectId = String(params[1] ?? '')
+      const index = dependencies.findIndex((row) => row.id === id && (!projectId || row.project_id === projectId))
       if (index !== -1) dependencies.splice(index, 1)
+      return []
+    }
+
+    if (normalized === 'delete from acceptance_requirements where id = ?'
+      || normalized === 'delete from acceptance_requirements where id = ? and project_id = ?') {
+      const id = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      const index = requirements.findIndex((row) => row.id === id && (!projectId || row.project_id === projectId))
+      if (index !== -1) requirements.splice(index, 1)
+      return []
+    }
+
+    if (normalized === 'delete from acceptance_records where id = ?'
+      || normalized === 'delete from acceptance_records where id = ? and project_id = ?') {
+      const id = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      const index = records.findIndex((row) => row.id === id && (!projectId || row.project_id === projectId))
+      if (index !== -1) records.splice(index, 1)
       return []
     }
 
@@ -289,10 +336,14 @@ const state = vi.hoisted(() => {
     }
 
     if (normalized.startsWith('update acceptance_requirements set ')) {
-      const match = normalized.match(/^update acceptance_requirements set (.+) where id = \?$/)
+      const match = normalized.match(/^update acceptance_requirements set (.+) where id = \?(?: and project_id = \?)?$/)
       if (!match) return []
 
-      const row = requirements.find((item) => item.id === String(params[params.length - 1] ?? ''))
+      const hasProjectFilter = normalized.endsWith('and project_id = ?')
+      const idParamIndex = hasProjectFilter ? params.length - 2 : params.length - 1
+      const projectParamIndex = hasProjectFilter ? params.length - 1 : -1
+      const row = requirements.find((item) => item.id === String(params[idParamIndex] ?? '')
+        && (!hasProjectFilter || item.project_id === String(params[projectParamIndex] ?? '')))
       if (!row) return []
 
       const assignments = match[1].split(',').map((assignment) => assignment.trim())
@@ -353,18 +404,24 @@ vi.mock('../services/dbService.js', () => ({
 }))
 
 const {
+  clearAcceptanceFlowSnapshotCache,
   createAcceptanceDependency,
   createAcceptanceRecord,
   createAcceptanceRequirement,
   deleteAcceptanceDependency,
   getAcceptanceFlowSnapshot,
+  listAcceptanceDependencies,
+  listAcceptanceRecords,
+  listAcceptanceRequirements,
   syncAcceptanceRequirementsBySource,
+  updateAcceptanceRecord,
   updateAcceptanceRequirement,
 } = await import('../services/acceptanceFlowService.js')
 
 describe('acceptance flow service', () => {
   beforeEach(() => {
     state.reset()
+    clearAcceptanceFlowSnapshotCache()
     vi.clearAllMocks()
   })
 
@@ -382,7 +439,7 @@ describe('acceptance flow service', () => {
       dependency_kind: 'hard',
     })
     expect(state.dependencies).toHaveLength(1)
-    await deleteAcceptanceDependency(created!.id)
+    await deleteAcceptanceDependency('project-1', created!.id)
 
     expect(state.dependencies).toHaveLength(0)
   })
@@ -437,6 +494,62 @@ describe('acceptance flow service', () => {
     })
   })
 
+  it('uses the local business calendar day for acceptance due buckets', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-06-18T23:30:00.000Z'))
+
+      const snapshot = await getAcceptanceFlowSnapshot('project-1')
+
+      expect(snapshot.plans.find((plan) => plan.id === 'plan-target')).toMatchObject({
+        planned_date: '2026-06-19',
+        days_to_due: 0,
+        is_overdue: false,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('invalidates the shared snapshot after acceptance write operations', async () => {
+    const initial = await getAcceptanceFlowSnapshot('project-1')
+    expect(initial.dependencies).toHaveLength(0)
+    expect(initial.requirements).toHaveLength(0)
+    expect(initial.records).toHaveLength(0)
+
+    await createAcceptanceDependency({
+      project_id: 'project-1',
+      source_plan_id: 'plan-source',
+      target_plan_id: 'plan-target',
+      dependency_kind: 'hard',
+    })
+    let snapshot = await getAcceptanceFlowSnapshot('project-1')
+    expect(snapshot.dependencies).toHaveLength(1)
+
+    await createAcceptanceRequirement({
+      project_id: 'project-1',
+      plan_id: 'plan-target',
+      requirement_type: 'external_precondition',
+      source_entity_type: 'warning',
+      source_entity_id: 'warning-cache',
+      description: 'cache invalidation',
+      status: 'open',
+      is_required: true,
+      is_satisfied: false,
+    })
+    snapshot = await getAcceptanceFlowSnapshot('project-1')
+    expect(snapshot.requirements).toHaveLength(1)
+
+    await createAcceptanceRecord({
+      project_id: 'project-1',
+      plan_id: 'plan-target',
+      record_type: 'note',
+      content: 'cache invalidated',
+    })
+    snapshot = await getAcceptanceFlowSnapshot('project-1')
+    expect(snapshot.records).toHaveLength(1)
+  })
+
   it('requires project_id instead of inferring it from the plan row', async () => {
     await expect(
       createAcceptanceDependency({
@@ -450,11 +563,90 @@ describe('acceptance flow service', () => {
     })
   })
 
-  it('falls back when acceptance_requirements is missing drawing_package_id during create and snapshot reads', async () => {
-    state.compatibility.missingRequirementDrawingPackageIdOnInsert = true
-    state.compatibility.missingRequirementDrawingPackageIdOnSelect = true
+  it('pushes project scope into dependency, requirement and record list queries', async () => {
+    await listAcceptanceDependencies('project-1', 'plan-target')
+    await listAcceptanceRequirements('project-1', 'plan-target')
+    await listAcceptanceRecords('project-1', 'plan-target')
 
-    const created = await createAcceptanceRequirement({
+    const calls = state.executeSQL.mock.calls.map(([sql, params]) => ({
+      sql: String(sql).replace(/\s+/g, ' ').trim().toLowerCase(),
+      params,
+    }))
+
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sql: expect.stringContaining('from acceptance_dependencies where project_id = ? and source_plan_id = ?'),
+        params: ['project-1', 'plan-target'],
+      }),
+      expect.objectContaining({
+        sql: expect.stringContaining('from acceptance_dependencies where project_id = ? and target_plan_id = ?'),
+        params: ['project-1', 'plan-target'],
+      }),
+      expect.objectContaining({
+        sql: expect.stringContaining('from acceptance_requirements where project_id = ? and plan_id = ?'),
+        params: ['project-1', 'plan-target'],
+      }),
+      expect.objectContaining({
+        sql: expect.stringContaining('from acceptance_records where project_id = ? and plan_id = ?'),
+        params: ['project-1', 'plan-target'],
+      }),
+    ]))
+  })
+
+  it('scopes dependency duplicate and cycle checks to the requested project', async () => {
+    await createAcceptanceDependency({
+      project_id: 'project-1',
+      source_plan_id: 'plan-source',
+      target_plan_id: 'plan-target',
+      dependency_kind: 'hard',
+    })
+
+    const calls = [
+      ...state.executeSQLOne.mock.calls,
+      ...state.executeSQL.mock.calls,
+    ].map(([sql, params]) => ({
+      sql: String(sql).replace(/\s+/g, ' ').trim().toLowerCase(),
+      params,
+    }))
+
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sql: expect.stringContaining('where project_id = ? and source_plan_id = ? and target_plan_id = ?'),
+        params: ['project-1', 'plan-source', 'plan-target'],
+      }),
+      expect.objectContaining({
+        sql: 'select source_plan_id, target_plan_id from acceptance_dependencies where project_id = ?',
+        params: ['project-1'],
+      }),
+    ]))
+  })
+
+  it('rejects moving an acceptance record to another project', async () => {
+    state.records.push({
+      id: 'record-1',
+      project_id: 'project-1',
+      plan_id: 'plan-target',
+      record_type: 'note',
+      content: 'before',
+      operator: null,
+      record_date: null,
+      attachments: null,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    })
+
+    await expect(updateAcceptanceRecord('project-1', 'record-1', {
+      project_id: 'project-2',
+    })).rejects.toMatchObject({
+      code: 'PROJECT_ID_IMMUTABLE',
+      statusCode: 400,
+    })
+  })
+
+  it('fails closed when the canonical acceptance requirement drawing-package column is missing during create', async () => {
+    state.compatibility.missingRequirementDrawingPackageIdOnInsert = true
+
+    await expect(createAcceptanceRequirement({
       project_id: 'project-1',
       plan_id: 'plan-target',
       requirement_type: 'external_precondition',
@@ -465,33 +657,12 @@ describe('acceptance flow service', () => {
       status: 'open',
       is_required: true,
       is_satisfied: false,
-    })
+    })).rejects.toThrow(/drawing_package_id/i)
 
-    expect(created).toMatchObject({
-      plan_id: 'plan-target',
-      source_entity_id: 'warning-compat',
-      description: 'legacy schema fallback',
-      drawing_package_id: null,
-      is_required: true,
-      is_satisfied: false,
-    })
-    expect(state.requirements).toHaveLength(1)
-    expect(state.requirements[0]).toMatchObject({
-      source_entity_id: 'warning-compat',
-      drawing_package_id: null,
-    })
-
-    const snapshot = await getAcceptanceFlowSnapshot('project-1')
-    expect(snapshot.requirements).toHaveLength(1)
-    expect(snapshot.requirements[0]).toMatchObject({
-      source_entity_id: 'warning-compat',
-      drawing_package_id: null,
-      is_required: true,
-      is_satisfied: false,
-    })
+    expect(state.requirements).toHaveLength(0)
   })
 
-  it('falls back when acceptance_requirements update touches drawing_package_id on a legacy schema', async () => {
+  it('fails closed when the canonical acceptance requirement drawing-package column is missing during update', async () => {
     state.requirements.push({
       id: 'requirement-1',
       project_id: 'project-1',
@@ -507,30 +678,21 @@ describe('acceptance flow service', () => {
       created_at: '2026-04-15T00:00:00.000Z',
       updated_at: '2026-04-15T00:00:00.000Z',
     })
-    state.compatibility.missingRequirementDrawingPackageIdOnSelect = true
     state.compatibility.missingRequirementDrawingPackageIdOnUpdate = true
 
-    const updated = await updateAcceptanceRequirement('requirement-1', {
+    await expect(updateAcceptanceRequirement('project-1', 'requirement-1', {
       drawing_package_id: null,
       description: 'after update',
       status: 'met',
       is_satisfied: true,
-    })
+    })).rejects.toThrow(/drawing_package_id/i)
 
-    expect(updated).toMatchObject({
-      id: 'requirement-1',
-      description: 'after update',
-      drawing_package_id: null,
-      status: 'met',
-      is_required: true,
-      is_satisfied: true,
-    })
     expect(state.requirements[0]).toMatchObject({
-      description: 'after update',
+      description: 'before update',
       drawing_package_id: null,
-      status: 'met',
+      status: 'open',
       is_required: true,
-      is_satisfied: true,
+      is_satisfied: false,
     })
   })
 

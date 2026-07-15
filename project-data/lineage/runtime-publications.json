@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "workbuddy-data-runtime-publication-lineage/v1",
+  "mutationBoundary": "lineage_only_no_db_mutation_no_runtime_write",
+  "status": "initial_inventory",
+  "rules": [
+    {
+      "id": "runtime_publication_requires_release_gate",
+      "description": "Runtime publication writes require testing-center handoff evidence, rollback evidence, and data contract checks."
+    }
+  ]
+}

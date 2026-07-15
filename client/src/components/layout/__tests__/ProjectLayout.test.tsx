@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ProjectLayout from '../ProjectLayout'
 import { useStore } from '@/hooks/useStore'
 import { ApiClientError } from '@/lib/apiClient'
-import { projectDb } from '@/lib/localDb'
 
 const { apiGet, useAuth, useAuthDialog } = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -22,9 +21,10 @@ vi.mock('@/lib/apiClient', async () => {
   }
 })
 
-vi.mock('@/hooks/useAuth', () => ({
-  useAuth,
-}))
+vi.mock('@/context/AuthContext', async () => {
+  const actual = await vi.importActual<typeof import('@/context/AuthContext')>('@/context/AuthContext')
+  return { ...actual, useAuth }
+})
 
 vi.mock('@/hooks/useAuthDialog', () => ({
   useAuthDialog,
@@ -35,7 +35,6 @@ const sharedSliceStatus = {
   warnings: { loading: false, error: null },
   issueRows: { loading: false, error: null },
   problemRows: { loading: false, error: null },
-  delayRequests: { loading: false, error: null },
   changeLogs: { loading: false, error: null },
   taskProgressSnapshots: { loading: false, error: null },
 } as const
@@ -75,7 +74,6 @@ function resetStore() {
     problemRows: [],
     sharedSliceStatus: { ...sharedSliceStatus },
     participantUnits: [],
-    scopeDimensions: [],
   })
 }
 
@@ -90,7 +88,6 @@ describe('ProjectLayout', () => {
     apiGet.mockReset()
     useAuth.mockReturnValue({ isAuthenticated: true, loading: false })
     useAuthDialog.mockReturnValue({ openLoginDialog: vi.fn(), closeLoginDialog: vi.fn(), isOpen: false })
-    projectDb.replaceAll([])
     resetStore()
   })
 
@@ -101,22 +98,12 @@ describe('ProjectLayout', () => {
     })
     root = null
     container.remove()
-    projectDb.replaceAll([])
     resetStore()
   })
 
-  it('keeps the project route alive when the project API is temporarily unavailable but a cached project exists', async () => {
-    vi.spyOn(projectDb, 'getById').mockReturnValue({
-      id: 'project-1',
-      name: '缓存项目',
-      description: '',
-      status: 'active',
-      created_at: '2026-04-18T00:00:00.000Z',
-      updated_at: '2026-04-18T00:00:00.000Z',
-    })
-
+  it('does not mask a bootstrap failure with a stale cached project', async () => {
     apiGet.mockImplementation((url: string) => {
-      if (url === '/api/projects/project-1') {
+      if (url === '/api/projects/project-1/bootstrap?changeLogLimit=100') {
         return Promise.reject(
           new ApiClientError('接口服务暂不可用', {
             status: null,
@@ -142,14 +129,11 @@ describe('ProjectLayout', () => {
       )
     })
 
-    await waitFor(
-      () => Boolean(container.querySelector('[data-testid="project-child"]')),
-      () => `Timed out waiting for cached project child. HTML: ${container.innerHTML}`,
-    )
+    await waitFor(() => container.textContent?.includes('项目加载失败') === true)
 
-    expect(container.textContent).toContain('项目子页面')
+    expect(container.textContent).not.toContain('项目子页面')
     expect(container.textContent).not.toContain('公司驾驶舱')
-    expect(container.textContent).not.toContain('项目加载失败')
+    expect(container.textContent).toContain('项目加载失败')
   })
 
   it('hydrates the materials route without extra project or task lookups', async () => {
@@ -174,9 +158,87 @@ describe('ProjectLayout', () => {
     expect(apiGet).not.toHaveBeenCalled()
   })
 
+  it('renders the modeling workbench route without project fetch or task prefetch', async () => {
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={['/projects/project-1/gantt?modelingWorkbench=generate']}>
+          <Routes>
+            <Route path="/projects/:id" element={<ProjectLayout />}>
+              <Route path="gantt" element={<div data-testid="modeling-child">建模工作台子页面</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitFor(
+      () => Boolean(container.querySelector('[data-testid="modeling-child"]')),
+      () => `Timed out waiting for modeling child. HTML: ${container.innerHTML}`,
+    )
+
+    expect(container.textContent).toContain('建模工作台子页面')
+    expect(apiGet).not.toHaveBeenCalled()
+  })
+
+  it('hydrates the dashboard route through the project shell without bootstrap blocking first screen', async () => {
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={['/projects/project-1/dashboard']}>
+          <Routes>
+            <Route path="/projects/:id" element={<ProjectLayout />}>
+              <Route path="dashboard" element={<div data-testid="dashboard-child">仪表盘子页面</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitFor(
+      () => Boolean(container.querySelector('[data-testid="dashboard-child"]')),
+      () => `Timed out waiting for dashboard child. HTML: ${container.innerHTML}`,
+    )
+
+    expect(container.textContent).toContain('仪表盘子页面')
+    expect(apiGet).not.toHaveBeenCalled()
+  })
+
+  it('keeps same-project route switches interactive while full hydration runs', async () => {
+    useStore.setState({
+      currentProject: {
+        id: 'project-1',
+        name: '已加载项目',
+        description: '',
+        status: 'active',
+        created_at: '2026-04-18T00:00:00.000Z',
+        updated_at: '2026-04-18T00:00:00.000Z',
+      } as never,
+      hydratedProjectId: 'project-1',
+    })
+    apiGet.mockImplementation(() => new Promise(() => {}))
+
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={['/projects/project-1/dashboard']}>
+          <Routes>
+            <Route path="/projects/:id" element={<ProjectLayout />}>
+              <Route path="dashboard" element={<div data-testid="dashboard-child">仪表盘子页面</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitFor(
+      () => Boolean(container.querySelector('[data-testid="dashboard-child"]')),
+      () => `Timed out waiting for same-project dashboard child. HTML: ${container.innerHTML}`,
+    )
+
+    expect(container.textContent).toContain('仪表盘子页面')
+  })
+
   it('shows not-found state for a real 404 instead of silently redirecting away', async () => {
     apiGet.mockImplementation((url: string) => {
-      if (url === '/api/projects/project-missing') {
+      if (url === '/api/projects/project-missing/bootstrap?changeLogLimit=100') {
         return Promise.reject(
           new ApiClientError('项目不存在', {
             status: 404,
@@ -211,7 +273,7 @@ describe('ProjectLayout', () => {
 
   it('shows a retryable load error when the project API fails and no cache exists', async () => {
     apiGet.mockImplementation((url: string) => {
-      if (url === '/api/projects/project-error') {
+      if (url === '/api/projects/project-error/bootstrap?changeLogLimit=100') {
         return Promise.reject(
           new ApiClientError('接口服务暂不可用，请稍后重试。', {
             status: 503,

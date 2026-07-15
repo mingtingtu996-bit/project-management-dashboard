@@ -1,11 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, ArrowRight, FolderOpen, Plus, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowRight, ChevronDown, FileStack, FolderOpen, Plus, RefreshCw, Sparkles } from 'lucide-react'
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
 import { EmptyState } from '@/components/EmptyState'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   Select,
   SelectContent,
@@ -14,6 +24,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
 import { useToast } from '@/hooks/use-toast'
@@ -25,9 +36,13 @@ import type {
   CertificateLedgerResponse,
   CertificateSharedRibbonItem,
   CertificateStage,
+  CertificateTemplatePreview,
   CertificateType,
   CertificateWorkItem,
   CertificateWorkItemFormData,
+  ApplyCertificateTemplateRequest,
+  ApplyCertificateTemplateResult,
+  LandAcquisitionMethodCode,
   ProjectOption,
 } from './PreMilestones/types'
 import {
@@ -35,24 +50,30 @@ import {
   getCertificateTypeLabel,
   mapCertificateStatusLabel,
 } from './PreMilestones/constants'
-import { LifecycleSummaryCards } from './PreMilestones/components/LifecycleSummaryCards'
+import { LifecycleMetricGrid } from './PreMilestones/components/LifecycleMetricGrid'
 import { CertificateSharedRibbon } from './PreMilestones/components/CertificateSharedRibbon'
 import { FourCertificateBoard } from './PreMilestones/components/FourCertificateBoard'
 import { CertificateLedger } from './PreMilestones/components/CertificateLedger'
 import { CertificateDetailDrawer } from './PreMilestones/components/CertificateDetailDrawer'
 import { CertificateWorkItemDialog } from './PreMilestones/components/CertificateWorkItemDialog'
+import { CertificateTemplateApplyDialog } from './PreMilestones/components/CertificateTemplateApplyDialog'
+import { Card } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { getProjectDisplayName } from '@/lib/projectDisplay'
+import { getAuthHeaders } from '@/lib/apiClient'
 
 const API_BASE = ''
+const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
 
 function buildProjectOptions(currentProject?: { id?: string; name?: string } | null, projects: Array<{ id?: string; name?: string }> = []) {
   if (projects.length > 0) {
     return projects
-      .filter((project) => project.id && project.name)
-      .map((project) => ({ id: project.id as string, name: project.name as string }))
+      .filter((project) => project.id)
+      .map((project) => ({ id: project.id as string, name: getProjectDisplayName(project.name) }))
   }
 
-  return currentProject?.id && currentProject?.name
-    ? [{ id: currentProject.id, name: currentProject.name }]
+  return currentProject?.id
+    ? [{ id: currentProject.id, name: getProjectDisplayName(currentProject.name) }]
     : []
 }
 
@@ -83,15 +104,50 @@ function buildDetailUrl(projectId: string, certificateId: string) {
   return `${API_BASE}/api/projects/${projectId}/pre-milestones/${certificateId}/detail`
 }
 
+function buildTemplatePreviewUrl(projectId: string, landAcquisitionMethodCode?: LandAcquisitionMethodCode | null) {
+  const url = `${API_BASE}/api/projects/${projectId}/certificate-templates/system/preview`
+  if (!landAcquisitionMethodCode) return url
+  return `${url}?landAcquisitionMethod=${encodeURIComponent(landAcquisitionMethodCode)}`
+}
+
+function buildTemplateApplyUrl(projectId: string) {
+  return `${API_BASE}/api/projects/${projectId}/certificate-templates/system/apply`
+}
+
 function buildEscalationUrl(projectId: string, certificateId: string, target: 'issue' | 'risk') {
   return `${API_BASE}/api/projects/${projectId}/pre-milestones/${certificateId}/escalate-${target}`
 }
 
-function withFreshDataOptions(options?: RequestInit): RequestInit {
+function mergeRequestHeaders(...sources: Array<HeadersInit | undefined>): Headers {
+  const headers = new Headers()
+  for (const source of sources) {
+    if (!source) continue
+    new Headers(source).forEach((value, key) => headers.set(key, value))
+  }
+  return headers
+}
+
+function withAuthOptions(options?: RequestInit): RequestInit {
+  const { headers, ...rest } = options ?? {}
   return {
+    ...rest,
+    headers: mergeRequestHeaders(getAuthHeaders(), headers),
+  }
+}
+
+function withJsonAuthOptions(options?: RequestInit): RequestInit {
+  const { headers, ...rest } = options ?? {}
+  return {
+    ...rest,
+    headers: mergeRequestHeaders(getAuthHeaders(), { 'Content-Type': 'application/json' }, headers),
+  }
+}
+
+function withFreshDataOptions(options?: RequestInit): RequestInit {
+  return withAuthOptions({
     ...(options ?? {}),
     cache: 'no-store',
-  }
+  })
 }
 
 function buildFormFromItem(item: CertificateWorkItem | null, selectedCertificateId?: string | null): CertificateWorkItemFormData {
@@ -122,7 +178,25 @@ function buildFormFromItem(item: CertificateWorkItem | null, selectedCertificate
   }
 }
 
+function getDefaultTemplateSelection(preview: CertificateTemplatePreview) {
+  return {
+    certificateKeys: preview.certificates
+      .filter((item) => item.selected && item.action === 'will_create')
+      .map((item) => item.key),
+    workItemCodes: preview.workItems
+      .filter((item) => item.selected && item.action === 'will_create')
+      .map((item) => item.workItemCode),
+    dependencyCodes: preview.dependencies
+      .filter((item) => item.selected && item.action === 'will_create')
+      .map((item) => item.dependencyCode),
+  }
+}
+
 export default function PreMilestones() {
+  useEffect(() => {
+    document.title = '前期证照 | WorkBuddy'
+  }, [])
+
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { currentProject, projects } = useStore()
@@ -138,7 +212,17 @@ export default function PreMilestones() {
   const [board, setBoard] = useState<CertificateBoardResponse | null>(null)
   const [ledger, setLedger] = useState<CertificateLedgerResponse | null>(null)
   const [detail, setDetail] = useState<CertificateDetailResponse | null>(null)
+  const [templatePreview, setTemplatePreview] = useState<CertificateTemplatePreview | null>(null)
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [selectedTemplateCertificateKeys, setSelectedTemplateCertificateKeys] = useState<string[]>([])
+  const [selectedTemplateWorkItemCodes, setSelectedTemplateWorkItemCodes] = useState<string[]>([])
+  const [selectedTemplateDependencyCodes, setSelectedTemplateDependencyCodes] = useState<string[]>([])
+  const [selectedLandAcquisitionMethodCode, setSelectedLandAcquisitionMethodCode] = useState<LandAcquisitionMethodCode | null>(null)
+  const [templateApplyDialogOpen, setTemplateApplyDialogOpen] = useState(false)
+  const [templateApplying, setTemplateApplying] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const selectedCertificateId = searchParams.get('cert') || null
   const selectedCertificateIdRef = useRef<string | null>(selectedCertificateId)
 
@@ -158,6 +242,7 @@ export default function PreMilestones() {
   const [hoveredWorkItemId, setHoveredWorkItemId] = useState<string | null>(null)
   const [hoveredCertificateType, setHoveredCertificateType] = useState<string | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [viewMode, setViewMode] = useState<'board' | 'ledger'>('board')
   const [detailLoading, setDetailLoading] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create')
@@ -173,28 +258,66 @@ export default function PreMilestones() {
     if (currentProject?.id) setSelectedProjectId(currentProject.id)
   }, [currentProject])
 
+  const loadTemplatePreview = useCallback(async (
+    projectId: string,
+    signal?: AbortSignal,
+    landAcquisitionMethodCode?: LandAcquisitionMethodCode | null,
+  ) => {
+    setTemplateLoading(true)
+    setTemplateError(null)
+
+    try {
+      const response = await fetch(
+        buildTemplatePreviewUrl(projectId, landAcquisitionMethodCode),
+        withFreshDataOptions({ signal }),
+      )
+      const result = (await response.json()) as ApiResponse<CertificateTemplatePreview>
+      if (!result.success || !result.data) {
+        throw new Error(result.error?.message || '系统模板预览加载失败')
+      }
+
+      setTemplatePreview(result.data)
+      setSelectedLandAcquisitionMethodCode(result.data.landAcquisition.selectedMethodCode)
+      const selection = getDefaultTemplateSelection(result.data)
+      setSelectedTemplateCertificateKeys(selection.certificateKeys)
+      setSelectedTemplateWorkItemCodes(selection.workItemCodes)
+      setSelectedTemplateDependencyCodes(selection.dependencyCodes)
+    } catch (error) {
+      if (signal?.aborted) return
+      console.error('Failed to load certificate template preview', error)
+      setTemplatePreview(null)
+      setSelectedLandAcquisitionMethodCode(null)
+      setTemplateError(error instanceof Error ? error.message : '系统模板预览加载失败，请刷新后重试。')
+    } finally {
+      if (!signal?.aborted) setTemplateLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (!selectedProjectId) {
       setBoard(null)
       setLedger(null)
       setDetail(null)
+      setTemplatePreview(null)
+      setSelectedTemplateCertificateKeys([])
+      setSelectedTemplateWorkItemCodes([])
+      setSelectedTemplateDependencyCodes([])
+      setSelectedLandAcquisitionMethodCode(null)
       setLoading(false)
       return
     }
 
     let cancelled = false
+    const controller = new AbortController()
     setLoading(true)
+    setLoadError(null)
 
     const load = async () => {
       try {
-        const [boardResponse, ledgerResponse] = await Promise.all([
-          fetch(buildBoardUrl(selectedProjectId), withFreshDataOptions()),
-          fetch(buildLedgerUrl(selectedProjectId), withFreshDataOptions()),
-        ])
-        const [boardResult, ledgerResult] = [
-          (await boardResponse.json()) as ApiResponse<CertificateBoardResponse>,
-          (await ledgerResponse.json()) as ApiResponse<CertificateLedgerResponse>,
-        ]
+        const boardResponse = await fetch(buildBoardUrl(selectedProjectId), withFreshDataOptions({ signal: controller.signal }))
+        const boardResult = (await boardResponse.json()) as ApiResponse<CertificateBoardResponse>
+        const ledgerResponse = await fetch(buildLedgerUrl(selectedProjectId), withFreshDataOptions({ signal: controller.signal }))
+        const ledgerResult = (await ledgerResponse.json()) as ApiResponse<CertificateLedgerResponse>
 
         if (!cancelled) {
           if (boardResult.success && boardResult.data) {
@@ -209,9 +332,15 @@ export default function PreMilestones() {
           if (ledgerResult.success && ledgerResult.data) {
             setLedger(ledgerResult.data)
           }
+
+          void loadTemplatePreview(selectedProjectId, controller.signal)
         }
       } catch (error) {
+        if (controller.signal.aborted) return
         console.error('Failed to load pre-milestone board', error)
+        if (!cancelled) {
+          setLoadError('前期证照数据加载失败，请刷新后重试。')
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -220,26 +349,29 @@ export default function PreMilestones() {
     void load()
     return () => {
       cancelled = true
+      controller.abort()
     }
-  }, [selectedProjectId, setSelectedCertificateId])
+  }, [loadTemplatePreview, selectedProjectId, setSelectedCertificateId])
 
   useEffect(() => {
-    if (!selectedProjectId || !selectedCertificateId) return
+    if (!selectedProjectId || !selectedCertificateId || !detailOpen) return
 
     let cancelled = false
+    const controller = new AbortController()
     setDetailLoading(true)
 
     const loadDetail = async () => {
       try {
         const response = await fetch(
           buildDetailUrl(selectedProjectId, selectedCertificateId),
-          withFreshDataOptions(),
+          withFreshDataOptions({ signal: controller.signal }),
         )
         const result = (await response.json()) as ApiResponse<CertificateDetailResponse>
         if (!cancelled && result.success && result.data) {
           setDetail(result.data)
         }
       } catch (error) {
+        if (controller.signal.aborted) return
         console.error('Failed to load certificate detail', error)
       } finally {
         if (!cancelled) setDetailLoading(false)
@@ -249,10 +381,13 @@ export default function PreMilestones() {
     void loadDetail()
     return () => {
       cancelled = true
+      controller.abort()
     }
-  }, [selectedCertificateId, selectedProjectId])
+  }, [detailOpen, selectedCertificateId, selectedProjectId])
 
-  const currentProjectName = projectOptions.find((project) => project.id === selectedProjectId)?.name || currentProject?.name
+  const currentProjectName =
+    projectOptions.find((project) => project.id === selectedProjectId)?.name ||
+    getProjectDisplayName(currentProject?.name, '项目')
   const certificates = useMemo(() => board?.certificates ?? [], [board?.certificates])
   const sharedItems = useMemo(() => board?.sharedItems ?? [], [board?.sharedItems])
   const workItems = useMemo(() => ledger?.items ?? [], [ledger?.items])
@@ -268,6 +403,45 @@ export default function PreMilestones() {
     [workItems]
   )
   const criticalItems = summary?.criticalItems ?? []
+
+  const toggleTemplateCertificate = (key: string, checked: boolean) => {
+    setSelectedTemplateCertificateKeys((previous) => (
+      checked ? [...new Set([...previous, key])] : previous.filter((item) => item !== key)
+    ))
+  }
+
+  const toggleTemplateWorkItem = (code: string, checked: boolean) => {
+    setSelectedTemplateWorkItemCodes((previous) => (
+      checked ? [...new Set([...previous, code])] : previous.filter((item) => item !== code)
+    ))
+  }
+
+  const toggleTemplateDependency = (code: string, checked: boolean) => {
+    setSelectedTemplateDependencyCodes((previous) => (
+      checked ? [...new Set([...previous, code])] : previous.filter((item) => item !== code)
+    ))
+  }
+
+  const handleChangeLandAcquisitionMethod = (code: LandAcquisitionMethodCode) => {
+    if (!selectedProjectId || code === selectedLandAcquisitionMethodCode) return
+    setSelectedLandAcquisitionMethodCode(code)
+    void loadTemplatePreview(selectedProjectId, undefined, code)
+  }
+
+  const openTemplateApplyDialog = () => {
+    if (!canEdit) {
+      toast({ title: '当前为只读模式', description: '没有编辑权限，无法应用系统模板', variant: 'destructive' })
+      return
+    }
+    if (!selectedProjectId) {
+      toast({ title: '请先选择项目', variant: 'destructive' })
+      return
+    }
+    if (!templatePreview && !templateLoading) {
+      void loadTemplatePreview(selectedProjectId, undefined, selectedLandAcquisitionMethodCode)
+    }
+    setTemplateApplyDialogOpen(true)
+  }
 
   const openDetailForCertificate = (certificateId: string) => {
     setSelectedCertificateId(certificateId)
@@ -337,6 +511,57 @@ export default function PreMilestones() {
     }
   }
 
+  const handleApplyTemplate = async () => {
+    if (!canEdit) {
+      toast({ title: '当前为只读模式', description: '没有编辑权限，无法应用系统模板', variant: 'destructive' })
+      return
+    }
+    if (!selectedProjectId || !templatePreview) {
+      toast({ title: '请先选择项目并加载系统模板', variant: 'destructive' })
+      return
+    }
+
+    const payload: ApplyCertificateTemplateRequest = {
+      templateCode: templatePreview.templateCode,
+      seedVersion: templatePreview.seedVersion,
+      selectedCertificateKeys: selectedTemplateCertificateKeys,
+      selectedWorkItemCodes: selectedTemplateWorkItemCodes,
+      selectedDependencyCodes: selectedTemplateDependencyCodes,
+      duplicatePolicy: 'skip_existing',
+      landAcquisitionMethodCode: selectedLandAcquisitionMethodCode ?? templatePreview.landAcquisition.selectedMethodCode,
+    }
+
+    setTemplateApplying(true)
+    try {
+      const response = await fetch(buildTemplateApplyUrl(selectedProjectId), withJsonAuthOptions({
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }))
+      const result = (await response.json()) as ApiResponse<ApplyCertificateTemplateResult>
+
+      if (!result.success) {
+        throw new Error(result.error?.message || '系统模板应用失败')
+      }
+
+      toast({
+        title: '已生成项目证照计划',
+        description: `新增 ${result.data?.createdCertificateIds.length ?? 0} 个证照、${result.data?.createdWorkItemIds.length ?? 0} 个办理事项。`,
+      })
+      setTemplateApplyDialogOpen(false)
+      await refreshData()
+      await loadTemplatePreview(selectedProjectId, undefined, payload.landAcquisitionMethodCode)
+    } catch (error) {
+      console.error('Failed to apply certificate template', error)
+      toast({
+        title: '系统模板应用失败',
+        description: error instanceof Error ? error.message : '请稍后重试',
+        variant: 'destructive',
+      })
+    } finally {
+      setTemplateApplying(false)
+    }
+  }
+
   const refreshDetail = async (certificateId: string) => {
     if (!selectedProjectId || !certificateId) return
 
@@ -366,13 +591,12 @@ export default function PreMilestones() {
     try {
       const response = await fetch(
         buildEscalationUrl(selectedProjectId, requestCertificateId, target),
-        {
+        withJsonAuthOptions({
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             work_item_id: workItemId || null,
           }),
-        }
+        }),
       )
 
       const result = (await response.json()) as ApiResponse<{ title?: string }>
@@ -423,9 +647,8 @@ export default function PreMilestones() {
         : `${API_BASE}/api/projects/${selectedProjectId}/certificate-work-items`
       const method = isEdit ? 'PATCH' : 'POST'
 
-      const response = await fetch(url, {
+      const response = await fetch(url, withJsonAuthOptions({
         method,
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           item_code: formData.item_code || undefined,
           item_name: formData.item_name,
@@ -443,7 +666,7 @@ export default function PreMilestones() {
           notes: formData.notes || null,
           certificate_ids: resolvedCertificateIds,
         }),
-      })
+      }))
 
       const result = (await response.json()) as ApiResponse<CertificateWorkItem>
       if (result.success) {
@@ -491,9 +714,8 @@ export default function PreMilestones() {
     const method = isEditing ? 'PUT' : 'POST'
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(url, withJsonAuthOptions({
         method,
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pre_milestone_id: payload.preMilestoneId,
           condition_type: payload.form.condition_type,
@@ -501,7 +723,7 @@ export default function PreMilestones() {
           description: payload.form.description || null,
           target_date: payload.form.target_date || null,
         }),
-      })
+      }))
 
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
@@ -530,11 +752,10 @@ export default function PreMilestones() {
     if (!conditionId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, {
+      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, withJsonAuthOptions({
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status }),
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已更新条件状态' })
@@ -562,10 +783,9 @@ export default function PreMilestones() {
     if (!conditionId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, {
+      const response = await fetch(`${API_BASE}/api/pre-milestone-conditions/${encodeURIComponent(conditionId)}`, withJsonAuthOptions({
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已删除条件' })
@@ -600,11 +820,10 @@ export default function PreMilestones() {
     if (!selectedProjectId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies`, {
+      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies`, withJsonAuthOptions({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已新增证照依赖' })
@@ -632,10 +851,9 @@ export default function PreMilestones() {
     if (!selectedProjectId) return
 
     try {
-      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies/${encodeURIComponent(dependencyId)}`, {
+      const response = await fetch(`${API_BASE}/api/projects/${selectedProjectId}/certificate-dependencies/${encodeURIComponent(dependencyId)}`, withJsonAuthOptions({
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      })
+      }))
       const result = (await response.json()) as ApiResponse<unknown>
       if (result.success) {
         toast({ title: '已删除证照依赖' })
@@ -660,12 +878,10 @@ export default function PreMilestones() {
   }
 
   return (
-    <div data-testid="pre-milestones-page" className="min-h-screen bg-slate-50 p-6 page-enter">
+    <div data-testid="pre-milestones-page" className="page-shell page-enter">
       <Breadcrumb
         items={[
-          { label: '公司驾驶舱', href: '/company' },
-          ...(currentProjectName ? [{ label: currentProjectName, href: `/projects/${selectedProjectId}` }] : []),
-          { label: '专项管理' },
+          { label: currentProjectName || '项目', href: `/projects/${selectedProjectId}/dashboard` },
           { label: '前期证照' },
         ]}
         className="mb-4"
@@ -676,11 +892,17 @@ export default function PreMilestones() {
         title="前期证照"
       />
 
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           {projectOptions.length > 1 && (
             <Select value={selectedProjectId || undefined} onValueChange={setSelectedProjectId}>
-              <SelectTrigger className="w-[220px] rounded-2xl border-slate-200 bg-white text-sm">
+              <SelectTrigger className="w-56 rounded-2xl border-slate-200 bg-white text-sm">
                 <SelectValue placeholder="请选择项目" />
               </SelectTrigger>
               <SelectContent className="rounded-2xl border-slate-200 bg-white">
@@ -712,6 +934,37 @@ export default function PreMilestones() {
             <FolderOpen className="h-4 w-4" />
             查看施工图纸
           </Button>
+          {canEdit ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={!selectedProjectId}
+                  data-testid="pre-milestones-template-menu"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  生成与模板
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuLabel className="text-xs text-slate-500">证照模板</DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={openTemplateApplyDialog}
+                  data-testid="pre-milestones-apply-system-template"
+                >
+                  <FileStack className="mr-2 h-4 w-4" />
+                  套用系统模板
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => selectedProjectId && void loadTemplatePreview(selectedProjectId, undefined, selectedLandAcquisitionMethodCode)}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  刷新模板建议
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
           <Button
             type="button"
             onClick={() => {
@@ -723,27 +976,29 @@ export default function PreMilestones() {
               }
             }}
             variant="outline"
-            className="border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800"
+            className="border-amber-200 bg-amber-50 text-amber-700 ring-1 ring-inset ring-amber-200 hover:border-amber-300 hover:bg-amber-100 hover:text-amber-800"
           >
             <AlertTriangle className="h-4 w-4" />
             查看全部逾期
           </Button>
-          <Button
-            type="button"
-            onClick={() => openCreateDialog(buildFormFromItem(null, selectedCertificateId))}
-            className="bg-slate-900 text-white hover:bg-slate-800"
-            disabled={!canEdit}
-          >
-            <Plus className="h-4 w-4" />
-            新增办理事项
-          </Button>
+          <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+            <Button
+              type="button"
+              onClick={() => openCreateDialog(buildFormFromItem(null, selectedCertificateId))}
+              className="bg-slate-900 text-white hover:bg-slate-800"
+              disabled={!canEdit}
+            >
+              <Plus className="h-4 w-4" />
+              新增办理事项
+            </Button>
+          </DisabledReasonTooltip>
         </div>
       </div>
 
       {loading && !board ? (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {[1, 2, 3].map((index) => (
-            <div key={index} className="rounded-card border border-slate-200 bg-white p-4">
+            <div key={index} className="surface-card p-5">
               <Skeleton className="h-4 w-24 rounded-full" />
               <Skeleton className="mt-4 h-8 w-16 rounded-full" />
               <Skeleton className="mt-4 h-3 w-2/3 rounded-full" />
@@ -759,7 +1014,7 @@ export default function PreMilestones() {
         />
       ) : (
         <div className="grid gap-5">
-          <LifecycleSummaryCards summary={summary || {
+          <LifecycleMetricGrid summary={summary || {
             completedCount: 0,
             totalCount: 0,
             blockingCertificateType: null,
@@ -780,13 +1035,16 @@ export default function PreMilestones() {
               setExpectedDateDialogOpen(true)
             }
           }}
-          onClickOverdue={() => setLedgerQuickFilter('overdue')}
+          onClickOverdue={() => {
+            setLedgerQuickFilter('overdue')
+            setViewMode('ledger')
+          }}
           />
 
-          <div data-testid="pre-milestones-overview" className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div data-testid="pre-milestones-overview" className="surface-card p-5">
             <div className="flex items-center justify-between gap-3 mb-4">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">开工准入总览</h3>
+                <CardHead eyebrow="ACCESS" title="开工准入总览" />
                 <p className="mt-1 text-xs text-slate-500">
                   {selectedCertificate
                     ? `当前卡点：${selectedCertificate.certificate_name} · ${mapCertificateStatusLabel(selectedCertificate.status)}`
@@ -805,56 +1063,72 @@ export default function PreMilestones() {
             />
           </div>
 
-          <FourCertificateBoard
-            certificates={certificates}
-            sharedItems={sharedItems}
-            selectedCertificateId={selectedCertificateId}
-            selectedWorkItemId={selectedWorkItemId}
-            hoveredWorkItemId={hoveredWorkItemId}
-            onSelectCertificate={(certificateId) => setSelectedCertificateId(certificateId)}
-            onSelectWorkItem={(workItemId) => {
-              setSelectedWorkItemId(workItemId)
-              openDetailForWorkItem(workItemId)
-            }}
-            onOpenCertificateDetail={openDetailForCertificate}
-            onHoverCertificate={(certId) => {
-              if (!certId) { setHoveredCertificateType(null); return }
-              const cert = certificates.find((c) => c.id === certId)
-              setHoveredCertificateType(cert?.certificate_type ?? null)
-            }}
-            onClickBlockedTag={() => {
-              setLedgerQuickFilter('blocked')
-              setTimeout(() => {
-                const ledger = document.querySelector('[data-testid="pre-milestones-ledger"]')
-                ledger?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-              }, 50)
-            }}
-          />
+          <Tabs value={viewMode} onValueChange={(value) => setViewMode(value as 'board' | 'ledger')} className="space-y-5">
+            <TabsList className="flex h-auto w-full max-w-md justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+              <TabsTrigger value="board" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600" onClick={() => setViewMode('board')} data-testid="pre-milestones-tab-board">
+                看板({certificates.length})
+              </TabsTrigger>
+              <TabsTrigger value="ledger" className="relative rounded-none bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600" onClick={() => setViewMode('ledger')} data-testid="pre-milestones-tab-ledger">
+                台账({workItems.length})
+              </TabsTrigger>
+            </TabsList>
 
-          <CertificateLedger
-            items={workItems}
-            certificates={certificates}
-            sharedItems={sharedItems}
-            canEdit={canEdit}
-            selectedWorkItemId={selectedWorkItemId}
-            filterByWorkItemId={selectedWorkItemId}
-            quickFilter={ledgerQuickFilter}
-            onQuickFilterChange={setLedgerQuickFilter}
-            typeFilter={ledgerTypeFilter}
-            onTypeFilterChange={setLedgerTypeFilter}
-            onSelectWorkItem={(workItemId) => {
-              setSelectedWorkItemId(workItemId)
-              openDetailForWorkItem(workItemId)
-            }}
-            onOpenDetail={(certificateId, workItemId) => {
-              if (workItemId) setSelectedWorkItemId(workItemId)
-              openDetailForCertificate(certificateId)
-            }}
-            onAddItem={(prefill) => openCreateDialog(prefill)}
-            onEditItem={openEditDialog}
-            onEscalateIssue={(workItemId) => void handleEscalate('issue', workItemId)}
-            onEscalateRisk={(workItemId) => void handleEscalate('risk', workItemId)}
-          />
+            <TabsContent value="board" forceMount className="mt-0 duration-200 data-[state=active]:animate-fade-in">
+              <FourCertificateBoard
+                certificates={certificates}
+                sharedItems={sharedItems}
+                selectedCertificateId={selectedCertificateId}
+                selectedWorkItemId={selectedWorkItemId}
+                hoveredWorkItemId={hoveredWorkItemId}
+                onSelectCertificate={(certificateId) => setSelectedCertificateId(certificateId)}
+                onSelectWorkItem={(workItemId) => {
+                  setSelectedWorkItemId(workItemId)
+                  openDetailForWorkItem(workItemId)
+                }}
+                onOpenCertificateDetail={openDetailForCertificate}
+                onHoverCertificate={(certId) => {
+                  if (!certId) { setHoveredCertificateType(null); return }
+                  const cert = certificates.find((c) => c.id === certId)
+                  setHoveredCertificateType(cert?.certificate_type ?? null)
+                }}
+                onClickBlockedTag={() => {
+                  setLedgerQuickFilter('blocked')
+                  setViewMode('ledger')
+                  setTimeout(() => {
+                    const ledger = document.querySelector('[data-testid="pre-milestones-ledger"]')
+                    ledger?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }, 50)
+                }}
+              />
+            </TabsContent>
+
+            <TabsContent value="ledger" forceMount className="mt-0 duration-200 data-[state=active]:animate-fade-in">
+              <CertificateLedger
+                items={workItems}
+                certificates={certificates}
+                sharedItems={sharedItems}
+                canEdit={canEdit}
+                selectedWorkItemId={selectedWorkItemId}
+                filterByWorkItemId={selectedWorkItemId}
+                quickFilter={ledgerQuickFilter}
+                onQuickFilterChange={setLedgerQuickFilter}
+                typeFilter={ledgerTypeFilter}
+                onTypeFilterChange={setLedgerTypeFilter}
+                onSelectWorkItem={(workItemId) => {
+                  setSelectedWorkItemId(workItemId)
+                  openDetailForWorkItem(workItemId)
+                }}
+                onOpenDetail={(certificateId, workItemId) => {
+                  if (workItemId) setSelectedWorkItemId(workItemId)
+                  openDetailForCertificate(certificateId)
+                }}
+                onAddItem={(prefill) => openCreateDialog(prefill)}
+                onEditItem={openEditDialog}
+                onEscalateIssue={(workItemId) => void handleEscalate('issue', workItemId)}
+                onEscalateRisk={(workItemId) => void handleEscalate('risk', workItemId)}
+              />
+            </TabsContent>
+          </Tabs>
         </div>
       )}
 
@@ -896,11 +1170,33 @@ export default function PreMilestones() {
         selectedWorkItemId={selectedWorkItemId}
         projectId={selectedProjectId}
         certificates={certificates}
+        handlingSteps={templatePreview?.handlingSteps ?? []}
+        materialEvidenceChains={templatePreview?.materialEvidenceChains ?? []}
         canEdit={canEdit}
       />
 
+      <CertificateTemplateApplyDialog
+        open={templateApplyDialogOpen}
+        preview={templatePreview}
+        loading={templateLoading}
+        error={templateError}
+        canEdit={canEdit}
+        selectedCertificateKeys={selectedTemplateCertificateKeys}
+        selectedWorkItemCodes={selectedTemplateWorkItemCodes}
+        selectedDependencyCodes={selectedTemplateDependencyCodes}
+        selectedLandAcquisitionMethodCode={selectedLandAcquisitionMethodCode}
+        applying={templateApplying}
+        onOpenChange={setTemplateApplyDialogOpen}
+        onChangeLandAcquisitionMethod={handleChangeLandAcquisitionMethod}
+        onToggleCertificate={toggleTemplateCertificate}
+        onToggleWorkItem={toggleTemplateWorkItem}
+        onToggleDependency={toggleTemplateDependency}
+        onRetry={() => selectedProjectId && void loadTemplatePreview(selectedProjectId, undefined, selectedLandAcquisitionMethodCode)}
+        onConfirm={() => void handleApplyTemplate()}
+      />
+
       <Dialog open={expectedDateDialogOpen} onOpenChange={setExpectedDateDialogOpen}>
-        <DialogContent className="max-w-md" data-testid="expected-date-dialog">
+        <DialogContent className="max-w-[var(--dialog-md-width)]" data-testid="expected-date-dialog">
           <DialogHeader>
             <DialogTitle>预计具备开工条件日期</DialogTitle>
             <DialogDescription className="sr-only">显示证件依赖关系和预计开工时间推算依据。</DialogDescription>
@@ -924,8 +1220,8 @@ export default function PreMilestones() {
               </ul>
             </div>
             {criticalItems.length > 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <div className="mb-2 text-xs font-medium text-slate-900">关键项</div>
+              <Card className="surface-card p-5">
+                <CardHead eyebrow="KEY ITEMS" title="关键项" />
                 <div className="space-y-2">
                   {criticalItems.slice(0, 6).map((item) => (
                     <div key={`${item.itemType}:${item.itemId}`} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs text-slate-600">
@@ -935,15 +1231,15 @@ export default function PreMilestones() {
                           {mapCertificateStatusLabel(item.status)}
                         </span>
                       </div>
-                      <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-500">
+                      <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
                         {item.dueDate ? <span>截止：{item.dueDate}</span> : null}
                         {item.isOverdue ? <span className="text-red-600">已逾期</span> : null}
                       </div>
-                      {item.blockReason ? <div className="mt-1 text-[11px] text-amber-700">{item.blockReason}</div> : null}
+                      {item.blockReason ? <div className="mt-1 text-xs text-amber-700">{item.blockReason}</div> : null}
                     </div>
                   ))}
                 </div>
-              </div>
+              </Card>
             ) : null}
           </div>
         </DialogContent>

@@ -5,8 +5,8 @@ import {
   listNotifications,
   updateNotificationById,
 } from './notificationStore.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
 
-const DAY_MS = 24 * 60 * 60 * 1000
 const ARCHIVE_AFTER_DAYS = 90
 const PURGE_AFTER_DAYS = 180
 
@@ -16,9 +16,47 @@ function nowIso() {
 
 function daysOld(value?: string | null) {
   if (!value) return 0
-  const timestamp = new Date(value).getTime()
-  if (!Number.isFinite(timestamp)) return 0
-  return Math.floor((Date.now() - timestamp) / DAY_MS)
+  return Math.max(0, signedDurationDayDelta(value, new Date()) ?? 0)
+}
+
+function isActiveLifecycleStatus(value?: string | null) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return normalized === ''
+    || normalized === 'active'
+    || normalized === 'muted'
+    || normalized === 'escalated'
+}
+
+function isArchivableLifecycleStatus(value?: string | null) {
+  const normalized = String(value ?? '').trim().toLowerCase()
+  return normalized === 'resolved'
+    || normalized === 'closed'
+    || normalized === 'acknowledged'
+    || normalized === 'dismissed'
+    || normalized === 'read'
+}
+
+function readMetadataTimestamp(notification: Notification, key: string) {
+  const metadata = typeof notification.metadata === 'object' && notification.metadata
+    ? notification.metadata
+    : null
+  const value = metadata?.[key]
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function retentionClock(notification: Notification) {
+  return notification.resolved_at
+    ?? notification.acknowledged_at
+    ?? notification.updated_at
+    ?? notification.created_at
+}
+
+function purgeClock(notification: Notification) {
+  return readMetadataTimestamp(notification, 'archived_at')
+    ?? notification.updated_at
+    ?? notification.resolved_at
+    ?? notification.acknowledged_at
+    ?? notification.created_at
 }
 
 function mergeMetadata(notification: Notification, patch: Record<string, unknown>) {
@@ -37,23 +75,41 @@ export interface NotificationLifecycleResult {
 }
 
 export class NotificationLifecycleService {
-  async runRetentionPolicy(): Promise<NotificationLifecycleResult> {
-    const notifications = await listNotifications()
+  async runRetentionPolicy(projectIds?: string[] | null): Promise<NotificationLifecycleResult> {
+    const scopedProjectIds = Array.isArray(projectIds)
+      ? [...new Set(projectIds.map((projectId) => String(projectId ?? '').trim()).filter(Boolean))]
+      : null
+    const notifications = scopedProjectIds
+      ? (await Promise.all(scopedProjectIds.map((projectId) => listNotifications({ projectId })))).flat()
+      : await listNotifications()
     const timestamp = nowIso()
     let archived = 0
     let deleted = 0
 
     for (const notification of notifications) {
-      const age = daysOld(notification.created_at)
       const normalizedStatus = String(notification.status ?? '').trim().toLowerCase()
+      const normalizedWarningLifecycleStatus = String(notification.warning_lifecycle_status ?? '').trim().toLowerCase()
 
-      if (age >= PURGE_AFTER_DAYS && normalizedStatus === 'archived') {
-        await deleteNotificationById(notification.id)
+      if (daysOld(purgeClock(notification)) >= PURGE_AFTER_DAYS && normalizedStatus === 'archived') {
+        await deleteNotificationById(notification.id, notification)
         deleted += 1
         continue
       }
 
-      if (age < ARCHIVE_AFTER_DAYS || normalizedStatus === 'archived') {
+      if (normalizedStatus === 'archived') {
+        continue
+      }
+
+      const effectiveLifecycleStatus = normalizedWarningLifecycleStatus || normalizedStatus
+      if (isActiveLifecycleStatus(effectiveLifecycleStatus)) {
+        continue
+      }
+
+      if (!isArchivableLifecycleStatus(effectiveLifecycleStatus)) {
+        continue
+      }
+
+      if (daysOld(retentionClock(notification)) < ARCHIVE_AFTER_DAYS) {
         continue
       }
 
@@ -66,7 +122,7 @@ export class NotificationLifecycleService {
           archived_reason: 'retention_90d',
         }),
         updated_at: timestamp,
-      })
+      }, notification)
       archived += 1
     }
 

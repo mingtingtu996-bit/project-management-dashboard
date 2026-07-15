@@ -4,10 +4,19 @@
  */
 
 import { useState } from 'react'
-import { MessageSquare, Send, X, CheckCircle } from 'lucide-react'
+import { MessageSquare, Send, CheckCircle } from 'lucide-react'
 import { z } from 'zod'
 import { getBrowserStorage, safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 
 interface FeedbackData {
   type: 'bug' | 'feature' | 'improvement' | 'other'
@@ -83,37 +92,24 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
     }, 1500)
   }
 
-  if (!isOpen) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* 背景遮罩 */}
-      <div 
-        className="absolute inset-0 bg-black/50" 
-        onClick={onClose}
-      />
-      
-      {/* 模态框 */}
-      <div className="relative bg-background border rounded-xl shadow-lg w-full max-w-md mx-4">
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <div className="flex items-center gap-2">
+    <Dialog open={isOpen} onOpenChange={(open) => {
+      if (!open) onClose()
+    }}>
+      <DialogContent className="max-h-[calc(100vh-4rem)] max-w-[var(--dialog-md-width)] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="h-5 w-5 text-primary" />
-            <span className="font-medium">提交反馈</span>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1 hover:bg-accent rounded-md"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+            提交反馈
+          </DialogTitle>
+          <DialogDescription>提交产品问题、功能建议或其他反馈。</DialogDescription>
+        </DialogHeader>
 
         {/* 内容 */}
         <form onSubmit={handleSubmit} className="p-4 space-y-4">
           {isSubmitted ? (
             <div className="py-8 text-center">
-              <CheckCircle className="h-12 w-12 text-green-500 mx-auto mb-2" />
+              <CheckCircle className="h-12 w-12 text-emerald-500 mx-auto mb-2" />
               <p className="font-medium">感谢您的反馈！</p>
             </div>
           ) : (
@@ -123,7 +119,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                 <label className="block text-sm font-medium mb-1">反馈类型</label>
                 <div className="grid grid-cols-2 gap-2">
                   {(['bug', 'feature', 'improvement', 'other'] as const).map((t) => (
-                    <button
+                    <Button variant="ghost"
                       key={t}
                       type="button"
                       onClick={() => setType(t)}
@@ -136,9 +132,9 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                     >
                       {t === 'bug' && '🐛 缺陷'}
                       {t === 'feature' && '✨ 新功能'}
-                      {t === 'improvement' && '💡 改进建议'}
+                      {t === 'improvement' && '? Ľ'}
                       {t === 'other' && '💬 其他'}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               </div>
@@ -150,9 +146,9 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="请简要描述问题或建议"
+                  placeholder="请输入反馈标题"
                   required
-                  className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
               </div>
 
@@ -162,10 +158,10 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="请详细描述您遇到的问题或建议..."
+                  placeholder="ϸ..."
                   required
                   rows={4}
-                  className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                  className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary resize-none"
                 />
               </div>
 
@@ -177,23 +173,23 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                   value={contact}
                   onChange={(e) => setContact(e.target.value)}
                   placeholder="邮箱或微信"
-                  className="w-full px-3 py-2 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
               </div>
 
               {/* 提交按钮 */}
-              <button
+              <Button
                 type="submit"
-                className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2 rounded-md hover:bg-primary/90 transition-colors"
+                className="w-full gap-2"
               >
                 <Send className="h-4 w-4" />
                 提交反馈
-              </button>
+              </Button>
             </>
           )}
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -203,13 +199,20 @@ export function FeedbackButton() {
 
   return (
     <>
-      <button
+      <Tooltip>
+  <TooltipTrigger asChild>
+    <Button variant="ghost"
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-4 right-4 z-40 bg-primary text-primary-foreground p-3 rounded-full shadow-lg hover:bg-primary/90 transition-all hover:scale-110"
-        title="反馈"
+        aria-label="打开反馈"
+        data-overlap-ignore="true"
+        className="fixed bottom-5 right-5 z-30 h-11 w-11 rounded-full bg-primary p-0 text-primary-foreground shadow-[var(--el-3)] transition-all hover:shadow-[var(--el-3)] hover:bg-primary/90"
+        
       >
         <MessageSquare className="h-5 w-5" />
-      </button>
+      </Button>
+  </TooltipTrigger>
+  <TooltipContent>反馈</TooltipContent>
+</Tooltip>
       <FeedbackModal 
         isOpen={isOpen} 
         onClose={() => setIsOpen(false)} 

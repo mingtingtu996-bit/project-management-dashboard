@@ -1,9 +1,12 @@
 import { ChevronRight, ChevronDown, FileText, FileWarning, Layers3, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useState } from 'react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { Separator } from '@/components/ui/separator'
 
 import { DRAWING_REVIEW_MODE_LABELS, DRAWING_STATUS_LABELS } from '../constants'
 import type { DrawingPackageCard } from '../types'
@@ -39,7 +42,6 @@ export function DrawingPackageBoard({
   emptyDescription?: string
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
-  void emptyDescription
 
   function toggleGroup(disciplineType: string) {
     setCollapsedGroups((prev) => {
@@ -64,39 +66,44 @@ export function DrawingPackageBoard({
       </div>
 
       {groups.length === 0 ? (
-        <Card className="border-dashed border-slate-200 shadow-sm">
-          <CardContent className="flex flex-col items-center justify-center gap-3 py-14 text-center">
-            <FileWarning className="h-10 w-10 text-slate-300" />
-            <div className="text-base font-medium text-slate-900">{emptyTitle}</div>
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={FileWarning}
+          title={emptyTitle}
+          description={emptyDescription || '当前筛选范围内没有可展示的图纸包。'}
+          className="rounded-2xl empty-state-frame border-slate-100 bg-white px-6 py-14 shadow-[var(--el-1)]"
+        />
       ) : (
         <div className="space-y-5">
           {groups.map((group) => {
             const isCollapsed = collapsedGroups.has(group.disciplineType)
             return (
             <section key={group.disciplineType} className="space-y-3">
-              <button
+              <Button variant="ghost"
                 type="button"
                 onClick={() => toggleGroup(group.disciplineType)}
                 className="flex items-center gap-2 w-full text-left"
               >
-                {isCollapsed ? <ChevronRight className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
-                <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
+                {isCollapsed ? <ChevronRight className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
+                <div className="h-2 w-2 rounded-full bg-blue-600" />
                 <h3 className="text-sm font-semibold text-slate-700">{group.disciplineType}</h3>
-                <span className="text-xs text-slate-400">{group.packages.length} 个包</span>
-              </button>
+                <span className="text-xs text-slate-500">{group.packages.length} 个包</span>
+              </Button>
 
               {!isCollapsed && <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
                 {group.packages.map((pkg) => (
-                  <Card key={pkg.packageId} className="overflow-hidden border-slate-200 shadow-sm" data-testid={`drawing-package-card-${pkg.packageId}`}>
-                    <CardHeader className="space-y-3 border-b border-slate-100 bg-slate-50/70 p-5">
+                  <Card
+                    key={pkg.packageId}
+                    className="surface-card cursor-pointer overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[var(--el-hover)]"
+                    data-testid={`drawing-package-card-${pkg.packageId}`}
+                  >
+                    <CardContent padding="md" className="space-y-4">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <CardTitle className="truncate text-lg text-slate-900">{pkg.packageName}</CardTitle>
+                          <CardHead eyebrow="PACKAGE" title={pkg.packageName} />
                           <p className="mt-1 text-xs text-slate-500">{pkg.packageCode}</p>
                         </div>
-                        <Badge variant="secondary" className="shrink-0 rounded-full px-2.5 py-1 text-xs">
+                        <Badge variant="secondary" className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs">
+                          <span className="h-1.5 w-1.5 rounded-full bg-current opacity-70" aria-hidden="true" />
                           {statusLabel(pkg.status)}
                         </Badge>
                       </div>
@@ -120,15 +127,12 @@ export function DrawingPackageBoard({
                           </Badge>
                         )}
                       </div>
-                    </CardHeader>
-
-                    <CardContent className="space-y-4 p-5">
                       <div className="space-y-2">
                         <div className="flex items-center justify-between text-xs text-slate-500">
                           <span>齐套度</span>
                           <span>{pkg.completenessRatio}%</span>
                         </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-[3px] overflow-hidden rounded-full bg-slate-100">
                           <div className="h-full rounded-full bg-blue-600" style={{ width: ratioWidth(pkg.completenessRatio) }} />
                         </div>
                       </div>
@@ -147,21 +151,21 @@ export function DrawingPackageBoard({
                       <div className="space-y-2 text-sm text-slate-600">
                         <div className="flex items-center justify-between gap-3">
                           <span className="inline-flex items-center gap-2">
-                            <FileText className="h-4 w-4 text-slate-400" />
+                            <FileText className="h-4 w-4 text-slate-500" />
                             当前审图
                           </span>
                           <span className="font-medium text-slate-900">{pkg.currentReviewStatus}</span>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span className="inline-flex items-center gap-2">
-                            <ShieldCheck className="h-4 w-4 text-slate-400" />
+                            <ShieldCheck className="h-4 w-4 text-slate-500" />
                             送审要求
                           </span>
                           <span className="font-medium text-slate-900">{pkg.reviewModeLabel}</span>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span className="inline-flex items-center gap-2">
-                            <RefreshCw className="h-4 w-4 text-slate-400" />
+                            <RefreshCw className="h-4 w-4 text-slate-500" />
                             变更 / 风险
                           </span>
                           <span className="font-medium text-slate-900">
@@ -201,23 +205,26 @@ export function DrawingPackageBoard({
                         )}
                       </div>
                       {((pkg.linkedTaskCount ?? 0) > 0 || (pkg.linkedAcceptanceCount ?? 0) > 0 || (pkg.linkedCertificateCount ?? 0) > 0) && (
-                        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-slate-100" data-testid={`drawing-package-impact-tags-${pkg.packageId}`}>
-                          {(pkg.linkedTaskCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                              影响任务 {pkg.linkedTaskCount} 项
-                            </span>
-                          )}
-                          {(pkg.linkedAcceptanceCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                              影响验收 {pkg.linkedAcceptanceCount} 项
-                            </span>
-                          )}
-                          {(pkg.linkedCertificateCount ?? 0) > 0 && (
-                            <span className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
-                              影响证照 {pkg.linkedCertificateCount} 项
-                            </span>
-                          )}
-                        </div>
+                        <>
+                          <Separator />
+                          <div className="flex flex-wrap gap-1.5 pt-1" data-testid={`drawing-package-impact-tags-${pkg.packageId}`}>
+                            {(pkg.linkedTaskCount ?? 0) > 0 && (
+                              <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-200/60">
+                                影响任务 {pkg.linkedTaskCount} 项
+                              </span>
+                            )}
+                            {(pkg.linkedAcceptanceCount ?? 0) > 0 && (
+                              <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200/60">
+                                影响验收 {pkg.linkedAcceptanceCount} 项
+                              </span>
+                            )}
+                            {(pkg.linkedCertificateCount ?? 0) > 0 && (
+                              <span className="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200/60">
+                                影响证照 {pkg.linkedCertificateCount} 项
+                              </span>
+                            )}
+                          </div>
+                        </>
                       )}
                     </CardContent>
                   </Card>

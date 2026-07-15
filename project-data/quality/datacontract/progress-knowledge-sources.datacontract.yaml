@@ -1,0 +1,45 @@
+dataContractSpecification: 1.1.0
+id: progress_knowledge_sources
+info:
+  title: Progress Knowledge Sources
+  version: 0.1.0
+  description: Candidate-only external progress knowledge source registry.
+servers:
+  local:
+    type: postgres
+    host: ${WORKBUDDY_PG_HOST}
+    database: ${WORKBUDDY_PG_DATABASE}
+    schema: public
+models:
+  progress_knowledge_sources:
+    type: table
+    fields:
+      source_key:
+        type: string
+        required: true
+      source_url:
+        type: string
+        required: false
+      connector_type:
+        type: string
+        required: true
+      access_level:
+        type: string
+        required: true
+      source_trust_level:
+        type: string
+        required: true
+      governance_status:
+        type: string
+        required: true
+      source_metadata:
+        type: object
+        required: true
+quality:
+  type: SodaCL
+  specification:
+    checks for progress_knowledge_sources:
+      - row_count > 0
+      - missing_count(source_key) = 0
+      - missing_count(source_trust_level) = 0
+      - missing_count(governance_status) = 0

@@ -1,9 +1,22 @@
 import { act } from 'react'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import ResponsibilityView from '../ResponsibilityView'
+
+function readResponsibilityViewSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/ResponsibilityView.tsx'),
+    join(process.cwd(), 'client/src/pages/ResponsibilityView.tsx'),
+  ]
+
+  const filePath = candidates.find((candidate) => existsSync(candidate))
+  if (!filePath) throw new Error(`Unable to locate ResponsibilityView.tsx in: ${candidates.join(', ')}`)
+  return readFileSync(filePath, 'utf8')
+}
 
 const { apiGet, apiPost, toast } = vi.hoisted(() => ({
   apiGet: vi.fn(),
@@ -67,6 +80,12 @@ function buildResponse(overrides?: Partial<{
   return {
     project_id: 'project-1',
     generated_at: '2026-04-17T09:00:00.000Z',
+    analysis_scope: {
+      model: 'execution_performance_insight',
+      taskOwnershipBasis: 'tasks.execution_owner_fields',
+      causalAttributionPolicy: 'excluded_use_progress_deviation_service',
+      causalAttributionSource: 'progressDeviationService.responsibility_contribution',
+    },
     watchlist: [],
     person_rows: [],
     unit_rows: [
@@ -115,7 +134,7 @@ function buildResponse(overrides?: Partial<{
             planned_end_date: '2026-04-15',
             actual_end_date: null,
             is_delayed: true,
-            is_critical: true,
+            is_critical_path: true,
             is_milestone: true,
           },
         ],
@@ -163,6 +182,22 @@ describe('ResponsibilityView', () => {
     await waitForSelector(container, '[data-testid="responsibility-page"]')
     await waitForSelector(container, '[data-testid="responsibility-row"]')
 
+    expect(container.textContent).toContain('责任主体监控(1 个主体)')
+    expect(container.textContent).toContain('履约洞察')
+    expect(container.textContent).toContain('进度偏差归因')
+    expect(container.textContent).toContain('趋势分析(')
+    expect(container.textContent).toContain('当前延期中')
+    expect(container.textContent).toContain('风险关联度')
+    expect(container.textContent).toContain('计划完成')
+
+    const responsibilityRow = container.querySelector('[data-testid="responsibility-row"]') as HTMLElement | null
+    expect(responsibilityRow?.className).toContain('ring-red-200')
+
+    const unitDimensionButton = Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent?.includes('责任单位维度'),
+    ) as HTMLButtonElement | undefined
+    expect(unitDimensionButton?.className).toContain('bg-blue-600')
+
     const watchButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === '加入关注',
     ) as HTMLButtonElement | undefined
@@ -209,6 +244,8 @@ describe('ResponsibilityView', () => {
     await waitForSelector(container, '[data-testid="responsibility-page"]')
     await waitForSelector(container, '[data-testid="responsibility-row"]')
 
+    expect(container.textContent).toContain('待确认恢复正常')
+
     const confirmButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === '确认恢复',
     ) as HTMLButtonElement | undefined
@@ -227,5 +264,14 @@ describe('ResponsibilityView', () => {
         subject_key: 'unit:unit-1',
       },
     )
+  })
+
+  it('keeps related task buttons height-adaptive on mobile viewports', () => {
+    const source = readResponsibilityViewSource()
+
+    expect(source).toContain('flex h-auto min-h-[3.25rem] w-full items-center justify-between gap-4 whitespace-normal px-4 py-3')
+    expect(source).toContain('<div className="min-w-0 flex-1 space-y-1">')
+    expect(source).toContain('<span className="max-w-full truncate">{task.assignee}</span>')
+    expect(source).toContain('<span className="max-w-full truncate">{task.unit}</span>')
   })
 })

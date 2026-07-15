@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "workbuddy-data-environment-boundaries/v1",
+  "mutationBoundary": "boundary_catalog_only_no_db_mutation_no_runtime_write",
+  "environments": [
+    {
+      "id": "local",
+      "defaultDatabaseAccess": "read_only_or_mock",
+      "writerPolicy": "no real DB writes unless an explicit local fixture path is used"
+    },
+    {
+      "id": "staging",
+      "defaultDatabaseAccess": "guarded",
+      "writerPolicy": "requires env file, target ids, unlock flags, authorization artifact, rollback plan, and readback evidence"
+    },
+    {
+      "id": "production",
+      "defaultDatabaseAccess": "blocked",
+      "writerPolicy": "requires separate production handoff, owner approval, rollback plan, monitoring, and evidence validation"
+    }
+  ]
+}

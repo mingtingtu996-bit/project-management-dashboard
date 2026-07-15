@@ -11,6 +11,7 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>()
+const inFlight = new Map<string, Promise<Set<string>>>()
 const CACHE_TTL_MS = 60 * 1000 // 1 分钟
 
 export async function isCriticalPathTask(projectId: string, taskId: string): Promise<boolean> {
@@ -26,18 +27,29 @@ export async function getCriticalPathTaskIds(projectId: string): Promise<Set<str
     return cached.taskIds
   }
 
-  const snapshot = await getProjectCriticalPathSnapshot(projectId)
-  const taskIds = new Set(snapshot.displayTaskIds)
+  const pending = inFlight.get(projectId)
+  if (pending) return pending
 
-  cache.set(projectId, { taskIds, timestamp: now })
+  const promise = getProjectCriticalPathSnapshot(projectId)
+    .then((snapshot) => {
+      const taskIds = new Set(snapshot.displayTaskIds)
+      cache.set(projectId, { taskIds, timestamp: Date.now() })
+      return taskIds
+    })
+    .finally(() => {
+      inFlight.delete(projectId)
+    })
 
-  return taskIds
+  inFlight.set(projectId, promise)
+  return promise
 }
 
 export function clearCriticalPathCache(projectId?: string): void {
   if (projectId) {
     cache.delete(projectId)
+    inFlight.delete(projectId)
   } else {
     cache.clear()
+    inFlight.clear()
   }
 }

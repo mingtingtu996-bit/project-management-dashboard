@@ -75,11 +75,11 @@ describe('wbs template presets', () => {
     const hospitalPreset = buildSuggestedWbsTemplate('医院门诊医技综合楼，计划30个月')
     const hospitalNames = flattenNames(hospitalPreset.nodes)
 
-    expect(schoolPreset.suggestedType).toBe('公共建筑')
+    expect(schoolPreset.suggestedType).toBe('学校')
     expect(schoolPreset.suggestedName).toContain('学校')
     expect(schoolNames).toContain('教室、实验室及图书阅览空间配套')
 
-    expect(hospitalPreset.suggestedType).toBe('公共建筑')
+    expect(hospitalPreset.suggestedType).toBe('医院')
     expect(hospitalPreset.suggestedName).toContain('医院')
     expect(hospitalNames).toContain('净化、医气与洁净区域专项安装')
     expect(hospitalNames).not.toContain('运营筹备')
@@ -87,8 +87,26 @@ describe('wbs template presets', () => {
 
   it('exports detailed built-in presets with reference days on all leaf nodes', () => {
     const presets = getBuiltInWbsTemplatePresets()
+    const expectedPresetTypes = [
+      '住宅',
+      '商业',
+      '工业',
+      '公共建筑',
+      '酒店',
+      '医院',
+      '学校',
+      '数据中心',
+      '交通枢纽',
+      '体育文化建筑',
+      'TOD上盖',
+      '改造修缮',
+      '模块化建筑',
+    ]
+    const presetTypes = presets.map((preset) => preset.templateType)
 
-    expect(presets).toHaveLength(4)
+    expect(presets).toHaveLength(expectedPresetTypes.length)
+    expect(new Set(presetTypes).size).toBe(expectedPresetTypes.length)
+    expect(presetTypes).toEqual(expect.arrayContaining(expectedPresetTypes))
 
     presets.forEach((preset) => {
       const names = flattenNames(preset.nodes)
@@ -123,5 +141,11 @@ describe('wbs template presets', () => {
 
     expect(totals['公共建筑']).toBeGreaterThanOrEqual(650)
     expect(totals['公共建筑']).toBeLessThanOrEqual(730)
+
+    expect(totals['医院']).toBeGreaterThanOrEqual(680)
+    expect(totals['医院']).toBeLessThanOrEqual(760)
+
+    expect(totals['学校']).toBeGreaterThanOrEqual(650)
+    expect(totals['学校']).toBeLessThanOrEqual(730)
   })
 })

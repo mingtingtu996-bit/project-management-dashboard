@@ -18,6 +18,7 @@ interface ConfirmActionDialogProps {
   cancelLabel?: string
   confirmTone?: 'default' | 'destructive'
   testId?: string
+  loading?: boolean
   onConfirm: () => void
 }
 
@@ -30,19 +31,23 @@ export function ConfirmActionDialog({
   cancelLabel = '取消',
   confirmTone = 'default',
   testId = 'confirm-action-dialog',
+  loading = false,
   onConfirm,
 }: ConfirmActionDialogProps) {
   const confirmClassName =
     confirmTone === 'destructive'
-      ? 'bg-rose-600 text-white hover:bg-rose-500 focus:ring-rose-500'
-      : 'bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-500'
+      ? 'bg-red-600 text-white hover:bg-red-500 focus-visible:ring-red-500'
+      : 'bg-slate-900 text-white hover:bg-slate-800 focus-visible:ring-slate-500'
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent data-testid={testId} className="max-w-md">
+    <AlertDialog open={open} onOpenChange={(nextOpen) => !loading && onOpenChange(nextOpen)}>
+      <AlertDialogContent
+        data-testid={testId}
+        className="w-[90%] max-w-md rounded-2xl border-slate-200 bg-white shadow-[var(--el-4)] sm:rounded-2xl"
+      >
         <AlertDialogHeader className="space-y-3">
           <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription className="leading-6 text-slate-600">
+          <AlertDialogDescription className="not-sr-only leading-6 text-slate-600">
             {description}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -50,6 +55,7 @@ export function ConfirmActionDialog({
           <AlertDialogCancel>{cancelLabel}</AlertDialogCancel>
           <AlertDialogAction
             className={confirmClassName}
+            loading={loading}
             onClick={(event) => {
               event.preventDefault()
               onConfirm()

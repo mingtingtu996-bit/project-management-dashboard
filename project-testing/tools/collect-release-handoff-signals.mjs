@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createRequire } from 'node:module';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +37,9 @@ const TABLES_TO_PROBE = [
   't2_rhythm_schedule_runtime_publications',
   'schema_migrations',
 ];
+
+const CANARY_CANDIDATE_TABLE = 'duration_context_policy_canary_candidates';
+const ELIGIBLE_CANARY_STATUSES = ['candidate', 'approved_for_canary'];
 
 const ENV_KEYS = [
   'SUPABASE_URL',
@@ -212,6 +215,15 @@ function qident(identifier) {
   return `"${identifier}"`;
 }
 
+function normalizeText(value) {
+  return String(value ?? '').trim();
+}
+
+function readInt(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.trunc(number) : 0;
+}
+
 async function getColumns(client, tableName) {
   const result = await client.query(
     `select column_name, data_type
@@ -229,6 +241,18 @@ async function tableCount(client, tableName) {
     return { exists: true, count: result.rows[0]?.count ?? null };
   } catch (error) {
     return { exists: false, count: null, error: String(error.message ?? error).slice(0, 160) };
+  }
+}
+
+async function countWhere(client, tableName, whereSql = '', whereValues = []) {
+  try {
+    const result = await client.query(
+      `select count(*)::int as count from public.${qident(tableName)} ${whereSql}`,
+      whereValues,
+    );
+    return readInt(result.rows[0]?.count);
+  } catch (error) {
+    return null;
   }
 }
 
@@ -251,6 +275,249 @@ async function selectFirst(client, tableName, wantedColumns, whereSql = '', wher
     limit 1`;
   const result = await client.query(query, whereValues);
   return result.rows[0] ?? null;
+}
+
+function statusPredicateSql() {
+  return `candidate_status in (${ELIGIBLE_CANARY_STATUSES.map((_, index) => `$${index + 1}`).join(', ')})`;
+}
+
+function appendEligibleStatusPredicate(predicates, values) {
+  if (predicates.length === 0 && values.length === 0) {
+    predicates.push(statusPredicateSql());
+    values.push(...ELIGIBLE_CANARY_STATUSES);
+    return;
+  }
+  const placeholders = ELIGIBLE_CANARY_STATUSES.map((_, index) => `$${values.length + index + 1}`).join(', ');
+  predicates.push(`candidate_status in (${placeholders})`);
+  values.push(...ELIGIBLE_CANARY_STATUSES);
+}
+
+function toWhere(predicates) {
+  return predicates.length > 0 ? `where ${predicates.join(' and ')}` : '';
+}
+
+function summarizeCandidate(record) {
+  if (!record) return null;
+  return {
+    id: normalizeText(record.id) || null,
+    projectId: normalizeText(record.project_id) || null,
+    companyId: normalizeText(record.company_id) || null,
+    candidateStatus: normalizeText(record.candidate_status) || null,
+  };
+}
+
+export function buildCandidateDiscoveryBlockers(discovery) {
+  const blockers = [];
+  const tableExists = discovery?.tableExists === true;
+  const totalCount = readInt(discovery?.counts?.total);
+  const hasProjectId = discovery?.columns?.projectId === true;
+  const hasCompanyId = discovery?.columns?.companyId === true;
+  const hasCandidateStatus = discovery?.columns?.candidateStatus === true;
+  const projectIdPresent = discovery?.filterInputs?.projectIdPresent === true;
+  const companyIdPresent = discovery?.filterInputs?.companyIdPresent === true;
+  const selectedCandidateId = normalizeText(discovery?.selectedCandidateId);
+
+  if (!tableExists) blockers.push('canary_candidate_table_missing');
+  if (tableExists && totalCount < 1) blockers.push('canary_candidate_rows_missing');
+  if (tableExists && !hasCandidateStatus) blockers.push('canary_candidate_status_column_missing');
+  if (projectIdPresent && !hasProjectId) blockers.push('canary_candidate_project_id_column_missing');
+  if (companyIdPresent && !hasCompanyId) blockers.push('canary_candidate_company_id_column_missing');
+  if (projectIdPresent && hasProjectId && readInt(discovery?.counts?.selectedProject) < 1) {
+    blockers.push('canary_candidate_selected_project_missing');
+  }
+  if (companyIdPresent && hasCompanyId && readInt(discovery?.counts?.selectedCompany) < 1) {
+    blockers.push('canary_candidate_selected_company_missing');
+  }
+  if (hasCandidateStatus && readInt(discovery?.counts?.eligibleStatus) < 1) {
+    blockers.push('canary_candidate_eligible_status_missing');
+  }
+  if (projectIdPresent && hasProjectId && hasCandidateStatus && readInt(discovery?.counts?.selectedProjectEligibleStatus) < 1) {
+    blockers.push('canary_candidate_selected_project_eligible_status_missing');
+  }
+  if (companyIdPresent && hasCompanyId && hasCandidateStatus && readInt(discovery?.counts?.selectedCompanyEligibleStatus) < 1) {
+    blockers.push('canary_candidate_selected_company_eligible_status_missing');
+  }
+  if (
+    projectIdPresent &&
+    companyIdPresent &&
+    hasProjectId &&
+    hasCompanyId &&
+    hasCandidateStatus &&
+    readInt(discovery?.counts?.selectedProjectCompanyEligibleStatus) < 1
+  ) {
+    blockers.push('canary_candidate_selected_project_company_eligible_status_missing');
+  }
+  if (!selectedCandidateId) blockers.push('canary_candidate_selected_id_missing');
+
+  return Array.from(new Set(blockers));
+}
+
+export async function buildCandidateDiscovery(client, { columns = [], tableCount = {}, projectId = '', companyId = '' } = {}) {
+  const available = new Set(columns.map((column) => column.column_name));
+  const tableExists = tableCount.exists === true;
+  const discovery = {
+    table: CANARY_CANDIDATE_TABLE,
+    tableExists,
+    requiredStatuses: ELIGIBLE_CANARY_STATUSES,
+    columns: {
+      projectId: available.has('project_id'),
+      companyId: available.has('company_id'),
+      candidateStatus: available.has('candidate_status'),
+      updatedAt: available.has('updated_at'),
+      createdAt: available.has('created_at'),
+    },
+    filterInputs: {
+      projectIdPresent: Boolean(normalizeText(projectId)),
+      companyIdPresent: Boolean(normalizeText(companyId)),
+    },
+    counts: {
+      total: tableExists ? readInt(tableCount.count) : 0,
+      selectedProject: null,
+      selectedCompany: null,
+      eligibleStatus: null,
+      selectedProjectEligibleStatus: null,
+      selectedCompanyEligibleStatus: null,
+      selectedProjectCompanyEligibleStatus: null,
+    },
+    latest: {
+      any: null,
+      selectedProject: null,
+      selectedCompany: null,
+      eligibleStatus: null,
+      selectedProjectEligibleStatus: null,
+      selectedCompanyEligibleStatus: null,
+      selectedProjectCompanyEligibleStatus: null,
+    },
+    selectedCandidateId: '',
+    selectedBy: '',
+    blockers: [],
+    ready: false,
+  };
+
+  if (!tableExists) {
+    discovery.blockers = buildCandidateDiscoveryBlockers(discovery);
+    return discovery;
+  }
+
+  discovery.latest.any = summarizeCandidate(await selectFirst(
+    client,
+    CANARY_CANDIDATE_TABLE,
+    ['id', 'project_id', 'company_id', 'candidate_status'],
+  ));
+
+  if (normalizeText(projectId) && discovery.columns.projectId) {
+    const values = [projectId];
+    discovery.counts.selectedProject = await countWhere(client, CANARY_CANDIDATE_TABLE, 'where project_id = $1', values);
+    discovery.latest.selectedProject = summarizeCandidate(await selectFirst(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      ['id', 'project_id', 'company_id', 'candidate_status'],
+      'where project_id = $1',
+      values,
+    ));
+  }
+
+  if (normalizeText(companyId) && discovery.columns.companyId) {
+    const values = [companyId];
+    discovery.counts.selectedCompany = await countWhere(client, CANARY_CANDIDATE_TABLE, 'where company_id = $1', values);
+    discovery.latest.selectedCompany = summarizeCandidate(await selectFirst(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      ['id', 'project_id', 'company_id', 'candidate_status'],
+      'where company_id = $1',
+      values,
+    ));
+  }
+
+  if (discovery.columns.candidateStatus) {
+    discovery.counts.eligibleStatus = await countWhere(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      `where ${statusPredicateSql()}`,
+      ELIGIBLE_CANARY_STATUSES,
+    );
+    discovery.latest.eligibleStatus = summarizeCandidate(await selectFirst(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      ['id', 'project_id', 'company_id', 'candidate_status'],
+      `where ${statusPredicateSql()}`,
+      ELIGIBLE_CANARY_STATUSES,
+    ));
+  }
+
+  if (normalizeText(projectId) && discovery.columns.projectId && discovery.columns.candidateStatus) {
+    const predicates = ['project_id = $1'];
+    const values = [projectId];
+    appendEligibleStatusPredicate(predicates, values);
+    discovery.counts.selectedProjectEligibleStatus = await countWhere(client, CANARY_CANDIDATE_TABLE, toWhere(predicates), values);
+    discovery.latest.selectedProjectEligibleStatus = summarizeCandidate(await selectFirst(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      ['id', 'project_id', 'company_id', 'candidate_status'],
+      toWhere(predicates),
+      values,
+    ));
+  }
+
+  if (normalizeText(companyId) && discovery.columns.companyId && discovery.columns.candidateStatus) {
+    const predicates = ['company_id = $1'];
+    const values = [companyId];
+    appendEligibleStatusPredicate(predicates, values);
+    discovery.counts.selectedCompanyEligibleStatus = await countWhere(client, CANARY_CANDIDATE_TABLE, toWhere(predicates), values);
+    discovery.latest.selectedCompanyEligibleStatus = summarizeCandidate(await selectFirst(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      ['id', 'project_id', 'company_id', 'candidate_status'],
+      toWhere(predicates),
+      values,
+    ));
+  }
+
+  if (
+    normalizeText(projectId) &&
+    normalizeText(companyId) &&
+    discovery.columns.projectId &&
+    discovery.columns.companyId &&
+    discovery.columns.candidateStatus
+  ) {
+    const predicates = ['project_id = $1', 'company_id = $2'];
+    const values = [projectId, companyId];
+    appendEligibleStatusPredicate(predicates, values);
+    discovery.counts.selectedProjectCompanyEligibleStatus = await countWhere(client, CANARY_CANDIDATE_TABLE, toWhere(predicates), values);
+    discovery.latest.selectedProjectCompanyEligibleStatus = summarizeCandidate(await selectFirst(
+      client,
+      CANARY_CANDIDATE_TABLE,
+      ['id', 'project_id', 'company_id', 'candidate_status'],
+      toWhere(predicates),
+      values,
+    ));
+  }
+
+  const hasProjectFilter = normalizeText(projectId) && discovery.columns.projectId;
+  const hasCompanyFilter = normalizeText(companyId) && discovery.columns.companyId;
+  const selected = hasProjectFilter && hasCompanyFilter
+    ? discovery.latest.selectedProjectCompanyEligibleStatus
+    : hasProjectFilter
+      ? discovery.latest.selectedProjectEligibleStatus
+      : hasCompanyFilter
+        ? discovery.latest.selectedCompanyEligibleStatus
+        : discovery.latest.eligibleStatus;
+  discovery.selectedCandidateId = normalizeText(selected?.id);
+  discovery.selectedBy = selected === discovery.latest.selectedProjectCompanyEligibleStatus
+    ? 'project_company_status'
+    : selected === discovery.latest.selectedProjectEligibleStatus
+      ? 'project_status'
+      : selected === discovery.latest.selectedCompanyEligibleStatus
+        ? 'company_status'
+        : '';
+  discovery.blockers = buildCandidateDiscoveryBlockers(discovery);
+  discovery.ready = discovery.blockers.length === 0;
+  if (!discovery.ready) {
+    discovery.selectedCandidateId = '';
+    discovery.selectedBy = '';
+  }
+
+  return discovery;
 }
 
 async function selectBestProjectTarget(client) {
@@ -287,6 +554,68 @@ async function selectBestProjectTarget(client) {
   return result.rows[0] ?? null;
 }
 
+async function selectProjectTargetById(client, projectId) {
+  if (!normalizeText(projectId)) return null;
+  const result = await client.query(`
+    select
+      p.id as "projectId",
+      p.company_id as "companyId",
+      p.name as "projectName",
+      mp.id as "planId",
+      coalesce(task_counts.task_count, 0)::int as "taskCount",
+      coalesce(plan_counts.monthly_plan_count, 0)::int as "monthlyPlanCount",
+      greatest(
+        coalesce(mp.updated_at, mp.created_at, timestamp with time zone 'epoch'),
+        coalesce(p.updated_at, p.created_at, timestamp with time zone 'epoch')
+      ) as "targetUpdatedAt"
+    from public.projects p
+    left join public.monthly_plans mp on mp.project_id = p.id
+    left join (
+      select project_id, count(*)::int as task_count
+      from public.tasks
+      group by project_id
+    ) task_counts on task_counts.project_id = p.id
+    left join (
+      select project_id, count(*)::int as monthly_plan_count
+      from public.monthly_plans
+      group by project_id
+    ) plan_counts on plan_counts.project_id = p.id
+    where p.id = $1
+    order by
+      case when mp.id is null then 1 else 0 end,
+      coalesce(task_counts.task_count, 0) desc,
+      "targetUpdatedAt" desc nulls last
+    limit 1
+  `, [projectId]);
+  return result.rows[0] ?? null;
+}
+
+function applyProjectTarget(output, project, selectionReason) {
+  output.targets.projectId = project?.projectId ? String(project.projectId) : '';
+  output.targets.companyId = project?.companyId ? String(project.companyId) : '';
+  output.targets.planId = project?.planId ? String(project.planId) : '';
+  output.targetSelection = {
+    reason: selectionReason,
+    projectName: normalizeText(project?.projectName) || null,
+    taskCount: readInt(project?.taskCount),
+    monthlyPlanCount: readInt(project?.monthlyPlanCount),
+    targetUpdatedAt: normalizeText(project?.targetUpdatedAt) || null,
+  };
+}
+
+export function normalizePgConnectionStringForHandoff(value, ssl) {
+  if (!ssl) return value;
+  try {
+    const parsed = new URL(value);
+    if (parsed.searchParams.get('sslmode') !== 'no-verify') {
+      parsed.searchParams.set('sslmode', 'no-verify');
+    }
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
 async function probeDatabase(env, envFile, pgModule) {
   const connectionString = env.SUPABASE_MIGRATION_URL || env.DB_CONNECTION_STRING;
   if (!connectionString) {
@@ -297,9 +626,10 @@ async function probeDatabase(env, envFile, pgModule) {
     };
   }
 
+  const ssl = { rejectUnauthorized: false };
   const client = new pgModule.Client({
-    connectionString: normalizePgConnectionStringForHandoff(connectionString, { rejectUnauthorized: false }),
-    ssl: { rejectUnauthorized: false },
+    connectionString: normalizePgConnectionStringForHandoff(connectionString, ssl),
+    ssl,
     connectionTimeoutMillis: 12000,
     query_timeout: 12000,
     statement_timeout: 12000,
@@ -312,6 +642,8 @@ async function probeDatabase(env, envFile, pgModule) {
       : envRef(envFile, 'DB_CONNECTION_STRING'),
     tableCounts: {},
     columns: {},
+    candidateDiscovery: null,
+    targetSelection: null,
     targets: {
       companyId: '',
       projectId: '',
@@ -330,15 +662,22 @@ async function probeDatabase(env, envFile, pgModule) {
       output.columns[table] = await getColumns(client, table).catch(() => []);
     }
 
-    const project = await selectBestProjectTarget(client);
-    output.targets.projectId = project?.projectId ? String(project.projectId) : '';
-    output.targets.companyId = project?.companyId ? String(project.companyId) : '';
-    output.targets.planId = project?.planId ? String(project.planId) : '';
+    const initialProject = await selectBestProjectTarget(client);
+    applyProjectTarget(output, initialProject, 'best_project_by_monthly_plan_task_count');
 
     if (!output.targets.projectId || !output.targets.companyId) {
       const fallbackProject = await selectFirst(client, 'projects', ['id', 'company_id', 'name', 'title']);
       output.targets.projectId ||= fallbackProject?.id ? String(fallbackProject.id) : '';
       output.targets.companyId ||= fallbackProject?.company_id ? String(fallbackProject.company_id) : '';
+      if (fallbackProject?.id) {
+        output.targetSelection = {
+          reason: 'fallback_first_project',
+          projectName: normalizeText(fallbackProject.name ?? fallbackProject.title) || null,
+          taskCount: null,
+          monthlyPlanCount: null,
+          targetUpdatedAt: null,
+        };
+      }
     }
 
     if (!output.targets.companyId) {
@@ -356,27 +695,27 @@ async function probeDatabase(env, envFile, pgModule) {
       output.targets.planId = monthlyPlan?.id ? String(monthlyPlan.id) : '';
     }
 
-    const candidateColumns = new Set(output.columns.duration_context_policy_canary_candidates.map((column) => column.column_name));
-    const candidatePredicates = [];
-    const candidateValues = [];
-    if (output.targets.projectId && candidateColumns.has('project_id')) {
-      candidateValues.push(output.targets.projectId);
-      candidatePredicates.push(`project_id = $${candidateValues.length}`);
+    output.candidateDiscovery = await buildCandidateDiscovery(client, {
+      columns: output.columns[CANARY_CANDIDATE_TABLE] ?? [],
+      tableCount: output.tableCounts[CANARY_CANDIDATE_TABLE] ?? {},
+      projectId: output.targets.projectId,
+      companyId: output.targets.companyId,
+    });
+    if (!output.candidateDiscovery.ready && output.candidateDiscovery.latest?.eligibleStatus?.projectId) {
+      const candidateProject = await selectProjectTargetById(client, output.candidateDiscovery.latest.eligibleStatus.projectId);
+      if (candidateProject?.projectId) {
+        applyProjectTarget(output, candidateProject, 'eligible_canary_candidate_project');
+        output.candidateDiscovery = await buildCandidateDiscovery(client, {
+          columns: output.columns[CANARY_CANDIDATE_TABLE] ?? [],
+          tableCount: output.tableCounts[CANARY_CANDIDATE_TABLE] ?? {},
+          projectId: output.targets.projectId,
+          companyId: output.targets.companyId,
+        });
+      }
     }
-    if (candidateColumns.has('candidate_status')) {
-      candidatePredicates.push(`candidate_status in ('candidate', 'approved_for_canary')`);
-    }
-    const candidateWhere = candidatePredicates.length > 0
-      ? `where ${candidatePredicates.join(' and ')}`
+    output.targets.candidateId = output.candidateDiscovery.ready
+      ? output.candidateDiscovery.selectedCandidateId
       : '';
-    const candidate = await selectFirst(
-      client,
-      'duration_context_policy_canary_candidates',
-      ['id', 'project_id', 'company_id', 'candidate_status'],
-      candidateWhere,
-      candidateValues,
-    );
-    output.targets.candidateId = candidate?.id ? String(candidate.id) : '';
     output.targets.sampleCohortRef = output.targets.projectId
       ? `db-sample://project/${output.targets.projectId}/duration-context-policy-canary-candidates`
       : '';
@@ -395,20 +734,14 @@ async function probeDatabase(env, envFile, pgModule) {
 
 async function loadEnv(options) {
   if (options.envSource === 'process') {
-    return {
-      envRaw: '',
-      env: Object.fromEntries(ENV_KEYS
-        .filter((key) => Object.prototype.hasOwnProperty.call(process.env, key))
-        .map((key) => [key, process.env[key] ?? ''])),
-    };
+    return Object.fromEntries(ENV_KEYS
+      .filter((key) => Object.prototype.hasOwnProperty.call(process.env, key))
+      .map((key) => [key, process.env[key] ?? '']));
   }
 
   const envRaw = await readFile(options.envFile, 'utf8');
   const dotenvModule = await importDependency('dotenv');
-  return {
-    envRaw,
-    env: dotenvModule.default.parse(envRaw),
-  };
+  return dotenvModule.default.parse(envRaw);
 }
 
 function sanitizeTargetValue(value) {
@@ -455,24 +788,10 @@ function sanitizeColumns(columns = {}) {
   return sanitized;
 }
 
-function normalizePgConnectionStringForHandoff(value, ssl) {
-  if (!ssl) return value;
-  try {
-    const parsed = new URL(value);
-    if (parsed.searchParams.get('sslmode') !== 'no-verify') {
-      parsed.searchParams.set('sslmode', 'no-verify');
-    }
-    return parsed.toString();
-  } catch {
-    return value;
-  }
-}
-
 async function readServerSignalsProbe(serverSignalsFile, envFile, env) {
   const raw = await readFile(serverSignalsFile, 'utf8');
-  const signals = JSON.parse(raw);
+  const signals = JSON.parse(raw.replace(/^\uFEFF/u, ''));
   const db = signals.connectivity?.db ?? {};
-  const targets = sanitizeDiscoveredTargets(signals.discoveredTargets ?? {});
   const error = db.error
     ? String(db.error).replace(/[\r\n]/g, ' ').slice(0, 200)
     : undefined;
@@ -488,7 +807,9 @@ async function readServerSignalsProbe(serverSignalsFile, envFile, env) {
     error,
     tableCounts: sanitizeTableCounts(signals.tableCounts),
     columns: sanitizeColumns(signals.columns),
-    targets,
+    targets: sanitizeDiscoveredTargets(signals.discoveredTargets),
+    targetSelection: null,
+    candidateDiscovery: null,
     discoverySource: 'server-side-sanitized-signals',
   };
 }
@@ -635,7 +956,7 @@ async function main() {
   const outputDir = options.outputDir ?? await findLatestHandoffDir(options.reportRoot);
   await mkdir(outputDir, { recursive: true });
 
-  const { env } = await loadEnv(options);
+  const env = await loadEnv(options);
   const dbProbe = options.serverSignalsFile
     ? await readServerSignalsProbe(options.serverSignalsFile, options.envFile, env)
     : await probeDatabase(env, options.envFile, (await importDependency('pg')).default);
@@ -654,6 +975,8 @@ async function main() {
     },
     tableCounts: dbProbe.tableCounts ?? {},
     discoveredTargets: dbProbe.targets ?? {},
+    targetSelection: dbProbe.targetSelection ?? null,
+    candidateDiscovery: dbProbe.candidateDiscovery ?? null,
     boundary: {
       noSecretValuesWritten: true,
       liveMutation: false,
@@ -696,10 +1019,12 @@ async function main() {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(JSON.stringify({
-    status: 'failed',
-    error: String(error.message ?? error),
-  }, null, 2));
-  process.exitCode = 1;
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(JSON.stringify({
+      status: 'failed',
+      error: String(error.message ?? error),
+    }, null, 2));
+    process.exitCode = 1;
+  });
+}

@@ -14,6 +14,10 @@ import {
 } from '../services/responsibilityInsightService.js'
 
 const router = Router({ mergeParams: true })
+const RESPONSIBILITY_INSIGHTS_CACHE_TTL_MS = Number(process.env.RESPONSIBILITY_INSIGHTS_CACHE_TTL_MS ?? 120_000)
+const RESPONSIBILITY_TRENDS_CACHE_TTL_MS = Number(process.env.RESPONSIBILITY_TRENDS_CACHE_TTL_MS ?? 120_000)
+const responsibilityInsightsCache = new Map<string, { expiresAt: number; data: ResponsibilityInsightsResponse }>()
+const responsibilityTrendsCache = new Map<string, { expiresAt: number; data: ResponsibilityTrendsResponse }>()
 
 router.use(authenticate)
 
@@ -23,6 +27,51 @@ function getProjectId(req: Request) {
 
 function normalizeDimension(value: unknown): ResponsibilityDimension {
   return String(value ?? '').trim().toLowerCase() === 'unit' ? 'unit' : 'person'
+}
+
+function clearResponsibilityCache(projectId: string) {
+  responsibilityInsightsCache.delete(projectId)
+  const prefix = `${projectId}:`
+  for (const key of responsibilityTrendsCache.keys()) {
+    if (key.startsWith(prefix)) responsibilityTrendsCache.delete(key)
+  }
+}
+
+async function loadResponsibilityInsights(projectId: string) {
+  const cached = responsibilityInsightsCache.get(projectId)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data
+  }
+
+  const data = await responsibilityInsightService.getProjectInsights(projectId, { syncAlertState: false })
+  responsibilityInsightsCache.set(projectId, {
+    expiresAt: Date.now() + RESPONSIBILITY_INSIGHTS_CACHE_TTL_MS,
+    data,
+  })
+  return data
+}
+
+async function loadResponsibilityTrends(projectId: string, days: number, groupBy: ResponsibilityDimension) {
+  const cacheKey = `${projectId}:${days}:${groupBy}`
+  const cached = responsibilityTrendsCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data
+  }
+
+  const data = await responsibilityInsightService.getProjectTrends(projectId, days, groupBy)
+  responsibilityTrendsCache.set(cacheKey, {
+    expiresAt: Date.now() + RESPONSIBILITY_TRENDS_CACHE_TTL_MS,
+    data,
+  })
+  return data
+}
+
+export async function warmResponsibilityCache(projectId: string) {
+  const [insights, personTrends] = await Promise.all([
+    loadResponsibilityInsights(projectId),
+    loadResponsibilityTrends(projectId, 30, 'person'),
+  ])
+  return { insights, personTrends }
 }
 
 const responsibilityTrendsQuerySchema = z.object({
@@ -37,7 +86,7 @@ router.get(
     const projectId = String(req.params.projectId)
     logger.info('Fetching responsibility insights', { projectId })
 
-    const data = await responsibilityInsightService.getProjectInsights(projectId)
+    const data = await loadResponsibilityInsights(projectId)
     const response: ApiResponse<ResponsibilityInsightsResponse> = {
       success: true,
       data,
@@ -54,7 +103,7 @@ const responsibilityTrendsHandler = asyncHandler(async (req, res) => {
 
   logger.info('Fetching responsibility trends', { projectId, days, groupBy })
 
-  const data = await responsibilityInsightService.getProjectTrends(projectId, days, groupBy)
+  const data = await loadResponsibilityTrends(projectId, days, groupBy)
   const response: ApiResponse<ResponsibilityTrendsResponse> = {
     success: true,
     data,
@@ -105,6 +154,7 @@ router.post(
       subject_unit_id: req.body?.subject_unit_id ? String(req.body.subject_unit_id) : null,
       actor_user_id: req.user?.id ?? null,
     })
+    clearResponsibilityCache(projectId)
 
     const response: ApiResponse = {
       success: true,
@@ -137,6 +187,7 @@ router.post(
       dimension: normalizeDimension(req.body?.dimension),
       subject_key: subjectKey,
     })
+    clearResponsibilityCache(projectId)
 
     const response: ApiResponse = {
       success: true,
@@ -169,6 +220,7 @@ router.post(
       dimension: normalizeDimension(req.body?.dimension),
       subject_key: subjectKey,
     })
+    clearResponsibilityCache(projectId)
 
     const response: ApiResponse = {
       success: true,

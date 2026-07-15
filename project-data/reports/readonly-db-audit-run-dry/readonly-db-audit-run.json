@@ -1,0 +1,371 @@
+{
+  "schemaVersion": "workbuddy-readonly-db-audit-run/v1",
+  "generatedAt": "2026-07-07T15:33:04.498Z",
+  "sourcePackageSchemaVersion": "workbuddy-readonly-db-audit-package/v1",
+  "sourcePackageGeneratedAt": "2026-07-07T15:31:39.065Z",
+  "mutationBoundary": "readonly_db_audit_execution_only_no_db_mutation",
+  "executionMode": "dry-run",
+  "target": {
+    "environmentBoundary": "explicitly supplied PostgreSQL target via environment variables",
+    "connectionDetailsRedacted": true
+  },
+  "summary": {
+    "plannedQueries": 35,
+    "executedQueries": 35,
+    "failedQueryCount": 0,
+    "tableContracts": 10,
+    "qualityChecks": 32,
+    "missingTableCount": null,
+    "missingColumnCount": null,
+    "failedQualityCheckCount": 0
+  },
+  "results": [
+    {
+      "id": "schema_inventory",
+      "kind": "schema",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "catalog_table_presence",
+      "kind": "catalog",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "contract_column_presence",
+      "kind": "contract",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "tasks.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "tasks.progress_range_0_100",
+      "kind": "quality",
+      "ruleId": "progress_range_0_100",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_baselines.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_baselines.baseline_version_required",
+      "kind": "quality",
+      "ruleId": "baseline_version_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_baseline_items.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_baseline_items.baseline_version_required",
+      "kind": "quality",
+      "ruleId": "baseline_version_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_baseline_items.baseline_dates_required_for_published_baseline",
+      "kind": "quality",
+      "ruleId": "baseline_dates_required_for_published_baseline",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plans.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plans.monthly_plan_month_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_month_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plans.monthly_plan_status_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_status_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plan_items.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plan_items.monthly_plan_item_plan_ref_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_item_plan_ref_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plan_items.monthly_plan_item_task_or_title_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_item_task_or_title_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_dependencies.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_dependencies.dependency_endpoints_required",
+      "kind": "quality",
+      "ruleId": "dependency_endpoints_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "task_dependencies.dependency_no_self_loop",
+      "kind": "quality",
+      "ruleId": "dependency_no_self_loop",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.progress_range_0_100",
+      "kind": "quality",
+      "ruleId": "progress_range_0_100",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.snapshot_date_required",
+      "kind": "quality",
+      "ruleId": "snapshot_date_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.one_snapshot_per_project_per_day",
+      "kind": "quality",
+      "ruleId": "one_snapshot_per_project_per_day",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.duration_sample_source_required",
+      "kind": "quality",
+      "ruleId": "duration_sample_source_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.duration_days_non_negative",
+      "kind": "quality",
+      "ruleId": "duration_days_non_negative",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.duration_sample_status_required",
+      "kind": "quality",
+      "ruleId": "duration_sample_status_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.source_key_required",
+      "kind": "quality",
+      "ruleId": "source_key_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.source_url_or_locator_required",
+      "kind": "quality",
+      "ruleId": "source_url_or_locator_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.trust_level_required",
+      "kind": "quality",
+      "ruleId": "trust_level_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.source_governance_status_required",
+      "kind": "quality",
+      "ruleId": "source_governance_status_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.document_key_required",
+      "kind": "quality",
+      "ruleId": "document_key_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.document_type_required",
+      "kind": "quality",
+      "ruleId": "document_type_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.extraction_status_required",
+      "kind": "quality",
+      "ruleId": "extraction_status_required",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.hash_required_when_downloaded",
+      "kind": "quality",
+      "ruleId": "hash_required_when_downloaded",
+      "status": "planned",
+      "rowCount": null,
+      "summary": null,
+      "rows": [],
+      "truncated": false
+    }
+  ]
+}

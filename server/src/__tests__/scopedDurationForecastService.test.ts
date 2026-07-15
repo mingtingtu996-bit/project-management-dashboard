@@ -1,0 +1,666 @@
+import { describe, expect, it } from 'vitest'
+
+import type { ScheduleAccelerationRow } from '../services/scheduleAccelerationService.js'
+import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
+import {
+  buildScopedDurationForecasts,
+} from '../services/scopedDurationForecastService.js'
+import {
+  buildProjectTaskAttributionProjection,
+  type ProjectTaskAttribution,
+} from '../services/taskAttributionProjectionService.js'
+import type { TaskDurationForecast } from '../services/taskDurationForecastService.js'
+
+function row(
+  id: string,
+  values: Record<string, unknown> = {},
+  predecessorDependencies: ScheduleAccelerationRow['predecessorDependencies'] = [],
+): ScheduleAccelerationRow {
+  return {
+    clientRowId: id,
+    rowProjectionMode: 'schedule_row',
+    predecessorDependencies,
+    values: {
+      title: id,
+      status: 'pending',
+      progress: 0,
+      planned_end_date: null,
+      actual_end_date: null,
+      duration_contribution_mode: 'duration_bearing',
+      row_projection_mode: 'schedule_row',
+      is_milestone: false,
+      ...values,
+    },
+  }
+}
+
+function attribution(overrides: Partial<ProjectTaskAttribution> = {}): ProjectTaskAttribution {
+  return {
+    divisionId: 'd1',
+    divisionName: 'Structure',
+    divisionSortOrder: 1,
+    subdivisionId: 'sd1',
+    subdivisionName: 'Concrete',
+    subdivisionSortOrder: 1,
+    specialtyId: 'sp1',
+    specialtyName: 'Civil',
+    specialtySortOrder: 1,
+    specialtySource: 'engineering_category',
+    degradationReasons: [],
+    ...overrides,
+  }
+}
+
+function forecast(
+  taskId: string,
+  finishDate: string,
+  probability: [number, number, number] | null = [5, 8, 12],
+  confidenceLevel = 'high',
+  confidenceScore = 90,
+): TaskDurationForecast {
+  return {
+    taskId,
+    recommendedDurationDays: probability?.[1] ?? null,
+    conservativeDurationDays: probability?.[2] ?? null,
+    remainingDurationDays: probability?.[1] ?? null,
+    forecastFinishDate: finishDate,
+    forecastDelayDays: 0,
+    confidenceLevel,
+    confidenceScore,
+    forecastSource: 'test',
+    businessReason: null,
+    probabilityDuration: probability
+      ? {
+          method: 'pert_from_existing_percentiles',
+          source: 'test',
+          p20RemainingDays: probability[0],
+          p50RemainingDays: probability[1],
+          p80RemainingDays: probability[2],
+          expectedRemainingDays: probability[1],
+          variance: null,
+          standardDeviationDays: null,
+          confidenceBandWidthDays: probability[2] - probability[0],
+        }
+      : null,
+  }
+}
+
+const calendar: ConstructionCalendarContext = { basis: 'calendar_day', windows: [] }
+
+describe('scopedDurationForecastService', () => {
+  it('uses the latest constrained finish for every dimension and governing-task confidence only', () => {
+    const rows = [
+      row('task-a', { planned_end_date: '2026-07-19' }),
+      row('task-b', { planned_end_date: '2026-07-17' }),
+    ]
+    const attributions = new Map([
+      ['task-a', attribution()],
+      ['task-b', attribution()],
+    ])
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [
+        forecast('task-a', '2026-07-20', [5, 8, 12], 'high', 92),
+        forecast('task-b', '2026-07-18', [4, 6, 8], 'low', 35),
+      ],
+      attributions,
+      criticalTaskIds: new Set(['task-b']),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division).toHaveLength(1)
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      id: 'division-d1',
+      sourceId: 'd1',
+      taskCount: 2,
+      criticalTaskCount: 1,
+      targetFinishDate: '2026-07-19',
+      p20FinishDate: '2026-07-17',
+      p50FinishDate: '2026-07-20',
+      p80FinishDate: '2026-07-24',
+      expectedFinishDate: '2026-07-20',
+      remainingDurationDays: 8,
+      targetGapDays: 1,
+      delayDays: 1,
+      confidenceLevel: 'high',
+      confidenceScore: 92,
+      forecastCoverageRate: 1,
+      probabilityCoverageRate: 1,
+      dataStatus: 'ready',
+      governingTaskIds: ['task-a'],
+    }))
+    expect(result.dimensions.subdivision[0].id).toBe('subdivision-sd1')
+    expect(result.dimensions.specialty[0].id).toBe('specialty-sp1')
+    expect(result.summary).toEqual({
+      groupCount: 3,
+      readyCount: 3,
+      degradedCount: 0,
+      insufficientDataCount: 0,
+    })
+  })
+
+  it('walks probability bands across shutdown days and orders an inverted band', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-a', { planned_end_date: '2026-07-22' })],
+      forecasts: [forecast('task-a', '2026-07-22', [10, 7, 3])],
+      attributions: new Map([['task-a', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          calendar_kind: 'winter_shutdown',
+          start_date: '2026-07-18',
+          end_date: '2026-07-20',
+        }],
+      },
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      p20FinishDate: '2026-07-15',
+      p50FinishDate: '2026-07-22',
+      p80FinishDate: '2026-07-25',
+      remainingDurationDays: 7,
+      dataStatus: 'degraded',
+      degradationReasons: expect.arrayContaining(['duration_band_reordered']),
+    }))
+  })
+
+  it('uses latest actual completion and zero remaining duration for a fully completed group', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [
+        row('task-a', {
+          status: 'completed',
+          progress: 100,
+          planned_end_date: '2026-07-09',
+          actual_end_date: '2026-07-10',
+        }),
+        row('task-b', {
+          status: 'completed',
+          progress: 100,
+          planned_end_date: '2026-07-11',
+          actual_end_date: '2026-07-12',
+        }),
+      ],
+      forecasts: [],
+      attributions: new Map([
+        ['task-a', attribution()],
+        ['task-b', attribution()],
+      ]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      completedTaskCount: 2,
+      remainingTaskCount: 0,
+      p20FinishDate: '2026-07-12',
+      p50FinishDate: '2026-07-12',
+      p80FinishDate: '2026-07-12',
+      expectedFinishDate: '2026-07-12',
+      remainingDurationDays: 0,
+      forecastCoverageRate: 1,
+      probabilityCoverageRate: 1,
+      forecastState: 'completed',
+      dataStatus: 'ready',
+    }))
+  })
+
+  it('degrades a completed group when actual completion dates are missing', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [
+        row('task-a', {
+          status: 'completed',
+          progress: 100,
+          planned_end_date: '2026-07-12',
+        }),
+      ],
+      forecasts: [],
+      attributions: new Map([
+        ['task-a', attribution()],
+      ]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      expectedFinishDate: '2026-07-12',
+      remainingDurationDays: 0,
+      forecastState: 'completed',
+      dataStatus: 'degraded',
+      degradationReasons: expect.arrayContaining(['missing_actual_completion']),
+    }))
+  })
+
+  it('deduplicates incoming boundary predecessors and does not count outgoing edges', () => {
+    const dependency = {
+      clientRowId: 'task-x',
+      dependencyType: 'FS' as const,
+      lagDays: 0,
+    }
+    const rows = [
+      row('task-a', { planned_end_date: '2026-07-20' }, [
+        dependency,
+        { ...dependency },
+        { clientRowId: 'task-y', dependencyType: 'FS', lagDays: 0 },
+      ]),
+      row('task-y', { planned_end_date: '2026-07-18' }),
+      row('task-x'),
+      row('task-z', { planned_end_date: '2026-07-25' }, [
+        { clientRowId: 'task-a', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const otherAttribution = attribution({
+      divisionId: 'd2',
+      divisionName: 'Facade',
+      subdivisionId: 'sd2',
+      subdivisionName: 'Curtain wall',
+      specialtyId: 'sp2',
+      specialtyName: 'Facade',
+    })
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [
+        forecast('task-a', '2026-07-20'),
+        forecast('task-y', '2026-07-18', [3, 6, 8]),
+        forecast('task-z', '2026-07-25', [8, 13, 16]),
+      ],
+      attributions: new Map([
+        ['task-a', attribution()],
+        ['task-y', attribution()],
+        ['task-x', otherAttribution],
+        ['task-z', otherAttribution],
+      ]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    const division = result.dimensions.division.find((group) => group.id === 'division-d1')
+    expect(division).toEqual(expect.objectContaining({
+      boundaryPredecessorCount: 1,
+      unresolvedBoundaryPredecessorCount: 1,
+      dataStatus: 'degraded',
+      degradationReasons: expect.arrayContaining(['unresolved_boundary_predecessor']),
+    }))
+  })
+
+  it('keeps an unfinished overdue boundary predecessor unresolved', () => {
+    const rows = [
+      row('task-active', { planned_end_date: '2026-07-20' }, [
+        { clientRowId: 'task-external', dependencyType: 'FS', lagDays: 0 },
+      ]),
+      row('task-external', {
+        status: 'in_progress',
+        progress: 60,
+        planned_end_date: '2026-07-01',
+      }),
+    ]
+    const externalAttribution = attribution({
+      divisionId: 'd2',
+      divisionName: 'External works',
+      subdivisionId: 'sd2',
+      subdivisionName: 'External works',
+      specialtyId: 'sp2',
+      specialtyName: 'External works',
+    })
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [forecast('task-active', '2026-07-20')],
+      attributions: new Map([
+        ['task-active', attribution()],
+        ['task-external', externalAttribution],
+      ]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division.find((group) => group.id === 'division-d1')).toEqual(
+      expect.objectContaining({
+        boundaryPredecessorCount: 1,
+        unresolvedBoundaryPredecessorCount: 1,
+        dataStatus: 'degraded',
+        degradationReasons: expect.arrayContaining(['unresolved_boundary_predecessor']),
+      }),
+    )
+  })
+
+  it('uses planned finish as a degraded fallback and reports missing finish as insufficient', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [
+        row('task-fallback', { planned_end_date: '2026-07-18' }),
+        row('task-missing'),
+      ],
+      forecasts: [],
+      attributions: new Map([
+        ['task-fallback', attribution({ divisionId: 'fallback', divisionName: 'Fallback' })],
+        ['task-missing', attribution({ divisionId: 'missing', divisionName: 'Missing' })],
+      ]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    const fallback = result.dimensions.division.find((group) => group.id === 'division-fallback')
+    const missing = result.dimensions.division.find((group) => group.id === 'division-missing')
+    expect(fallback).toEqual(expect.objectContaining({
+      p20FinishDate: '2026-07-18',
+      p50FinishDate: '2026-07-18',
+      p80FinishDate: '2026-07-18',
+      forecastCoverageRate: 0,
+      probabilityCoverageRate: 0,
+      dataStatus: 'degraded',
+      degradationReasons: expect.arrayContaining([
+        'planned_finish_fallback',
+        'missing_probability_window',
+      ]),
+    }))
+    expect(missing).toEqual(expect.objectContaining({
+      p50FinishDate: null,
+      expectedFinishDate: null,
+      remainingDurationDays: null,
+      dataStatus: 'insufficient_data',
+      degradationReasons: expect.arrayContaining(['missing_usable_finish']),
+    }))
+  })
+
+  it('does not report a past finish with zero remaining days for unfinished overdue work', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-overdue', {
+        status: 'in_progress',
+        progress: 50,
+        planned_end_date: '2026-06-01',
+      })],
+      forecasts: [],
+      attributions: new Map([['task-overdue', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      expectedFinishDate: null,
+      remainingDurationDays: null,
+      targetGapDays: null,
+      delayDays: 42,
+      dataStatus: 'insufficient_data',
+      degradationReasons: expect.arrayContaining([
+        'overdue_without_current_forecast',
+        'missing_usable_finish',
+      ]),
+    }))
+  })
+
+  it('rejects a past current forecast finish for unfinished work', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-stale-forecast', {
+        status: 'in_progress',
+        progress: 70,
+        planned_end_date: '2026-07-25',
+      })],
+      forecasts: [forecast('task-stale-forecast', '2026-07-10', [1, 3, 5])],
+      attributions: new Map([['task-stale-forecast', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      p20FinishDate: null,
+      p50FinishDate: null,
+      p80FinishDate: null,
+      expectedFinishDate: null,
+      remainingDurationDays: null,
+      delayDays: 3,
+      dataStatus: 'insufficient_data',
+      degradationReasons: expect.arrayContaining([
+        'past_current_forecast_finish',
+        'missing_usable_finish',
+      ]),
+    }))
+  })
+
+  it('treats one uncovered active task as insufficient for the group completion finish', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [
+        row('task-covered', { planned_end_date: '2026-07-20' }),
+        row('task-uncovered', { planned_end_date: '2026-06-01' }),
+      ],
+      forecasts: [forecast('task-covered', '2026-07-22', [5, 8, 12])],
+      attributions: new Map([
+        ['task-covered', attribution()],
+        ['task-uncovered', attribution()],
+      ]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      expectedFinishDate: null,
+      remainingDurationDays: null,
+      dataStatus: 'insufficient_data',
+      governingTaskIds: [],
+    }))
+  })
+
+  it('excludes cancelled tasks and record-only milestones from completion control', () => {
+    const rows = [
+      row('task-active', { planned_end_date: '2026-07-20' }),
+      row('task-cancelled', {
+        status: 'cancelled',
+        planned_end_date: '2027-12-31',
+      }),
+      row('milestone-record-only', {
+        is_milestone: true,
+        duration_contribution_mode: 'record_only',
+        planned_end_date: '2027-11-30',
+      }),
+    ]
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [forecast('task-active', '2026-07-20', [5, 8, 12])],
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      taskIds: ['task-active'],
+      taskCount: 1,
+      expectedFinishDate: '2026-07-20',
+      governingTaskIds: ['task-active'],
+    }))
+  })
+
+  it('does not present a past planned finish as the forecast for an unfinished overdue task', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-overdue', {
+        status: 'in_progress',
+        progress: 40,
+        planned_end_date: '2026-07-10',
+      })],
+      forecasts: [],
+      attributions: new Map([['task-overdue', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      p20FinishDate: null,
+      p50FinishDate: null,
+      p80FinishDate: null,
+      expectedFinishDate: null,
+      remainingDurationDays: null,
+      targetGapDays: null,
+      delayDays: 3,
+      forecastState: 'in_progress',
+      dataStatus: 'insufficient_data',
+      degradationReasons: expect.arrayContaining([
+        'missing_current_forecast',
+        'overdue_without_current_forecast',
+        'missing_usable_finish',
+      ]),
+    }))
+  })
+
+  it('includes controlling milestones but excludes linked and non-duration rows', () => {
+    const rows = [
+      row('task-a', { planned_end_date: '2026-07-18' }),
+      row('milestone-a', {
+        planned_end_date: '2026-07-25',
+        is_milestone: true,
+        duration_contribution_mode: 'handover_marker',
+      }),
+      {
+        ...row('linked-a', { planned_end_date: '2026-12-31' }),
+        rowProjectionMode: 'linked_projection' as const,
+      },
+      row('summary-a', {
+        planned_end_date: '2027-01-31',
+        duration_contribution_mode: 'summary_only',
+      }),
+    ]
+    const attributions = new Map(rows.map((item) => [item.clientRowId, attribution()]))
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [forecast('task-a', '2026-07-18', [3, 6, 8])],
+      attributions,
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      taskIds: ['task-a', 'milestone-a'],
+      taskCount: 2,
+      p50FinishDate: '2026-07-25',
+      dataStatus: 'degraded',
+    }))
+  })
+
+  it('excludes cancelled tasks from scoped finish and task counts', () => {
+    const rows = [
+      row('task-active', { planned_end_date: '2026-07-20' }),
+      row('task-cancelled', {
+        status: 'cancelled',
+        planned_end_date: '2026-12-31',
+      }),
+    ]
+    const attributions = new Map(rows.map((item) => [item.clientRowId, attribution()]))
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [forecast('task-active', '2026-07-20', [5, 8, 12])],
+      attributions,
+      criticalTaskIds: new Set(['task-cancelled']),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      taskIds: ['task-active'],
+      taskCount: 1,
+      criticalTaskCount: 0,
+      targetFinishDate: '2026-07-20',
+      p50FinishDate: '2026-07-20',
+      governingTaskIds: ['task-active'],
+    }))
+  })
+
+  it('merges governed specialty aliases before aggregating forecasts and boundaries', () => {
+    const rows = [
+      row('task-mep-category', { planned_end_date: '2026-07-20' }),
+      row('task-mep-label', { planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'task-mep-category', dependencyType: 'FS', lagDays: 0 },
+      ]),
+      row('task-curtain-category', { planned_end_date: '2026-07-24' }),
+      row('task-curtain-code', { planned_end_date: '2026-07-26' }),
+    ]
+    const attributions = buildProjectTaskAttributionProjection([
+      {
+        id: 'task-mep-category',
+        engineering_category_id: 'category-mep',
+        engineering_category_name: '机电安装',
+      },
+      { id: 'task-mep-label', specialty_type: '机电' },
+      {
+        id: 'task-curtain-category',
+        engineering_category_id: 'category-curtain-wall',
+        engineering_category_name: '幕墙工程',
+      },
+      { id: 'task-curtain-code', specialty_type: 'curtain_wall' },
+    ])
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [],
+      attributions,
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.specialty).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'specialty-mep',
+        sourceId: 'mep',
+        name: '机电安装',
+        taskCount: 2,
+        boundaryPredecessorCount: 0,
+      }),
+      expect.objectContaining({
+        id: 'specialty-curtain_wall',
+        sourceId: 'curtain_wall',
+        name: '幕墙工程',
+        taskCount: 2,
+      }),
+    ]))
+    expect(result.dimensions.specialty).toHaveLength(2)
+  })
+
+  it('keeps unmapped work visible in one explicit unassigned group per dimension', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-a', { planned_end_date: '2026-07-18' })],
+      forecasts: [],
+      attributions: new Map(),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    })
+
+    expect(result.dimensions.division[0]).toEqual(expect.objectContaining({
+      id: 'division-__unassigned__',
+      sourceId: null,
+      name: '未归属分部工程',
+    }))
+    expect(result.dimensions.subdivision[0].id).toBe('subdivision-__unassigned__')
+    expect(result.dimensions.specialty[0].id).toBe('specialty-__unassigned__')
+  })
+})

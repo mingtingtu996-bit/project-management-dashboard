@@ -6,8 +6,8 @@ process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = 'test-jwt-secret'
 
 const state = vi.hoisted(() => {
-  const executeSQL = vi.fn(async () => [])
-  const executeSQLOne = vi.fn(async () => null)
+  const executeSQL = vi.fn(async (_sql?: string, _params?: unknown[]) => [])
+  const executeSQLOne = vi.fn(async (_sql?: string, _params?: unknown[]) => null)
 
   return {
     executeSQL,
@@ -17,6 +17,8 @@ const state = vi.hoisted(() => {
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -31,6 +33,18 @@ vi.mock('../middleware/logger.js', () => ({
 vi.mock('../services/dbService.js', () => ({
   executeSQL: state.executeSQL,
   executeSQLOne: state.executeSQLOne,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({ blocked: false, reason: null, result: null })),
+  buildRetentionBlockedApiError: vi.fn((reason: string, result: unknown) => ({
+    code: 'RETENTION_CONFIRMATION_REQUIRED',
+    message: reason,
+    details: result,
+  })),
+  buildRetentionBlockedHttpStatus: vi.fn((result: Record<string, unknown>) => (
+    result.requiresUserConfirmation ? 409 : 422
+  )),
 }))
 
 const { certificateDependencyContracts, default: certificateDependenciesRouter } = await import('../routes/certificate-dependencies.js')
@@ -180,6 +194,7 @@ describe('certificate dependencies route', () => {
         created_at: '2026-04-16T00:05:00.000Z',
       },
     ])
+    state.executeSQLOne.mockResolvedValue({ project_id: 'project-1' })
 
     const request = supertest(buildApp())
     const response = await request.post('/api/projects/project-1/certificate-dependencies').send({
@@ -198,6 +213,34 @@ describe('certificate dependencies route', () => {
       },
     })
     expect(state.executeSQL).toHaveBeenCalledTimes(1)
-    expect(state.executeSQLOne).not.toHaveBeenCalled()
+    expect(state.executeSQLOne).toHaveBeenCalled()
+  })
+
+  it('rejects dependencies that reference entities outside the current project', async () => {
+    state.executeSQL.mockResolvedValue([])
+    state.executeSQLOne.mockImplementation(async (_sql: string, params: unknown[]) => {
+      const id = String(params[0] ?? '')
+      if (id === 'cert-a') return { project_id: 'project-1' }
+      if (id === 'work-other') return { project_id: 'project-2' }
+      return null
+    })
+
+    const request = supertest(buildApp())
+    const response = await request.post('/api/projects/project-1/certificate-dependencies').send({
+      predecessor_type: 'certificate',
+      predecessor_id: 'cert-a',
+      successor_type: 'work_item',
+      successor_id: 'work-other',
+      dependency_kind: 'hard',
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'DEPENDENCY_ENTITY_PROJECT_MISMATCH',
+      },
+    })
+    expect(response.body.error.details.invalidEntityIds).toContain('work-other')
   })
 })

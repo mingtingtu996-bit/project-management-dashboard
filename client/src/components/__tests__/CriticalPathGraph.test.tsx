@@ -300,6 +300,7 @@ describe('CriticalPathGraph', () => {
           ...createSnapshot(),
           calculationStatus: 'cached_after_failure',
           calculatedAt: '2026-04-26T08:00:00.000Z',
+          lastSuccessfulCalculatedAt: '2026-04-26T08:00:00.000Z',
           calculationFailedAt: '2026-04-26T09:00:00.000Z',
           calculationFailureMessage: 'CRITICAL_PATH_CYCLE_DETECTED:task-b',
         }}
@@ -313,7 +314,7 @@ describe('CriticalPathGraph', () => {
     const banner = screen.getByTestId('critical-path-calculation-cached-banner')
     expect(banner.textContent).toContain('最新计算失败')
     expect(banner.textContent).toContain('CRITICAL_PATH_CYCLE_DETECTED')
-    expect(banner.textContent).toContain('快照时间')
+    expect(banner.textContent).toContain('最近成功')
   })
 
   it('keeps alternate chains collapsed by default and expands them on demand', async () => {

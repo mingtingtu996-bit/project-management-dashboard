@@ -1,7 +1,7 @@
 /**
  * 8.4.1 项目创建与共享摘要联动验收
  *
- * 目标：验证"项目数据 -> /api/dashboard/projects-summary"最短链路
+ * 目标：验证"项目数据 -> /api/company/dashboard/projects-summary"最短链路
  *  1. 项目列表增加时，共享摘要结果中项目总数随之增加
  *  2. 摘要结果返回稳定结构，不因缺省字段导致接口异常（number 字段不为 undefined）
  *  3. 新项目进入摘要后，摘要列表中能读到该项目名称
@@ -70,6 +70,8 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('../services/dbService.js', () => ({
+  registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+  assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
   supabase: mocks.dbService.supabase,
   SupabaseService: vi.fn(),
   executeSQL: mocks.dbService.executeSQL,
@@ -105,6 +107,10 @@ vi.mock('../services/dbService.js', () => ({
   validateInvitation: vi.fn(),
 }))
 
+vi.mock('../database.js', () => ({
+  query: vi.fn(async () => ({ rows: [] })),
+}))
+
 vi.mock('../middleware/logger.js', () => ({
   logger: mocks.logger,
   requestLogger: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -112,6 +118,12 @@ vi.mock('../middleware/logger.js', () => ({
 
 vi.mock('../services/projectHealthService.js', () => ({
   calculateProjectHealth: mocks.calculateProjectHealth,
+  enqueueProjectHealthUpdate: vi.fn(),
+}))
+
+vi.mock('../auth/access.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../auth/access.js')>(),
+  getVisibleProjectIds: vi.fn(async () => mocks.projectList.map((project: { id: string }) => project.id)),
 }))
 
 // ── 测试 ─────────────────────────────────────────────────────────────────────
@@ -145,7 +157,7 @@ describe('project creation -> shared summary chain (8.4.1)', () => {
   })
 
   it('shared summary returns empty list when no projects exist', async () => {
-    const res = await request.get('/api/dashboard/projects-summary')
+    const res = await request.get('/api/company/dashboard/projects-summary')
     expect(res.status).toBe(200)
     expect(res.body.success).toBe(true)
     expect(Array.isArray(res.body.data)).toBe(true)
@@ -164,7 +176,7 @@ describe('project creation -> shared summary chain (8.4.1)', () => {
       },
     ])
 
-    const summaryRes = await request.get('/api/dashboard/projects-summary')
+    const summaryRes = await request.get('/api/company/dashboard/projects-summary')
     expect(summaryRes.status).toBe(200)
     expect(summaryRes.body.success).toBe(true)
     expect(Array.isArray(summaryRes.body.data)).toBe(true)
@@ -178,11 +190,11 @@ describe('project creation -> shared summary chain (8.4.1)', () => {
     expect(summary).toHaveProperty('totalTasks')
     expect(summary).toHaveProperty('completedTaskCount')
     expect(summary).toHaveProperty('overallProgress')
-    expect(summary).toHaveProperty('healthScore')
+    expect(summary).toHaveProperty('businessHealthScore')
     // 确认数值型字段不为 undefined（缺省字段不导致渲染失败）
     expect(typeof summary.totalTasks).toBe('number')
     expect(typeof summary.overallProgress).toBe('number')
-    expect(typeof summary.healthScore).toBe('number')
+    expect(typeof summary.businessHealthScore).toBe('number')
     // 名称可读取
     expect(
       summaryRes.body.data.map((s: any) => s.name),
@@ -191,12 +203,12 @@ describe('project creation -> shared summary chain (8.4.1)', () => {
 
   it('summary project count increases as more projects are added', async () => {
     // 0 个项目
-    let summaryRes = await request.get('/api/dashboard/projects-summary')
+    let summaryRes = await request.get('/api/company/dashboard/projects-summary')
     expect(summaryRes.body.data).toHaveLength(0)
 
     // 增加第 1 个项目
     mocks.setProjectList([{ id: 'p1', name: '联动项目A', status: 'active', version: 1 }])
-    summaryRes = await request.get('/api/dashboard/projects-summary')
+    summaryRes = await request.get('/api/company/dashboard/projects-summary')
     expect(summaryRes.body.data).toHaveLength(1)
 
     // 增加第 2 个项目
@@ -204,7 +216,7 @@ describe('project creation -> shared summary chain (8.4.1)', () => {
       { id: 'p1', name: '联动项目A', status: 'active', version: 1 },
       { id: 'p2', name: '联动项目B', status: 'active', version: 1 },
     ])
-    summaryRes = await request.get('/api/dashboard/projects-summary')
+    summaryRes = await request.get('/api/company/dashboard/projects-summary')
     expect(summaryRes.body.data).toHaveLength(2)
 
     // 两个项目名称都在摘要中

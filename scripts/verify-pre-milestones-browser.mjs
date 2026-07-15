@@ -1,15 +1,21 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import {
+  maybeBuildMockAuthResponse,
+  primeBrowserAuth,
+  readFullAppTestManifest,
+  resolveBrowserVerifyAuthToken,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,12 +24,12 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const mockProject = {
   id: projectId,
-  name: '涓撻」绀轰緥椤圭洰',
+  name: '专项示例项目',
   description: 'Pre-milestones browser verification fixture project',
   status: 'active',
   created_at: now,
@@ -44,12 +50,12 @@ const boardPayload = {
     {
       id: 'cert-land',
       certificate_type: 'land_certificate',
-      certificate_name: '鍦熷湴璇?',
+      certificate_name: '土地',
       status: 'issued',
-      current_stage: '瀹℃壒棰嗚瘉',
+      current_stage: '审批领证',
       planned_finish_date: '2026-05-08',
       actual_finish_date: '2026-05-07',
-      approving_authority: '鑷劧璧勬簮灞€',
+      approving_authority: '自然资源局',
       next_action: '褰掓。',
       next_action_due_date: '2026-05-08',
       is_blocked: false,
@@ -61,16 +67,16 @@ const boardPayload = {
     {
       id: 'cert-land-use',
       certificate_type: 'land_use_planning_permit',
-      certificate_name: '鐢ㄥ湴瑙勫垝璁稿彲璇?',
+      certificate_name: '用地规划许可',
       status: 'supplement_required',
-      current_stage: '澶栭儴鎶ユ壒',
+      current_stage: '外部报批',
       planned_finish_date: '2026-05-20',
       actual_finish_date: null,
-      approving_authority: '瑙勫垝灞€',
-      next_action: '琛ラ綈绛剧珷璧勬枡',
+      approving_authority: '规划局',
+      next_action: '补齐签章资料',
       next_action_due_date: '2026-05-18',
       is_blocked: true,
-      block_reason: '璧勬枡寰呰ˉ姝?',
+      block_reason: '资料待补',
       latest_record_at: '2026-05-09',
       work_item_ids: ['work-1'],
       shared_work_item_ids: ['work-1'],
@@ -78,13 +84,13 @@ const boardPayload = {
     {
       id: 'cert-engineering',
       certificate_type: 'engineering_planning_permit',
-      certificate_name: '宸ョ▼瑙勫垝璁稿彲璇?',
+      certificate_name: '工程规划许可',
       status: 'internal_review',
-      current_stage: '鍐呴儴鎶ュ',
+      current_stage: '内部报审',
       planned_finish_date: '2026-05-24',
       actual_finish_date: null,
-      approving_authority: '瑙勫垝灞€',
-      next_action: '绛夊緟鍐呴儴浼氱',
+      approving_authority: '规划局',
+      next_action: '等待内部会签',
       next_action_due_date: '2026-05-21',
       is_blocked: false,
       block_reason: null,
@@ -95,13 +101,13 @@ const boardPayload = {
     {
       id: 'cert-construction',
       certificate_type: 'construction_permit',
-      certificate_name: '鏂藉伐璁稿彲璇?',
+      certificate_name: '施工许可',
       status: 'pending',
-      current_stage: '璧勬枡鍑嗗',
+      current_stage: '资料准备',
       planned_finish_date: '2026-05-30',
       actual_finish_date: null,
-      approving_authority: '浣忓缓灞€',
-      next_action: '鏁寸悊寮€宸ヨ祫鏂?',
+      approving_authority: '住建局',
+      next_action: '整理开工资',
       next_action_due_date: '2026-05-26',
       is_blocked: false,
       block_reason: null,
@@ -113,17 +119,17 @@ const boardPayload = {
   sharedItems: [
     {
       work_item_id: 'work-1',
-      item_name: '鍏变韩璧勬枡鏀堕泦',
-      item_stage: '璧勬枡鍑嗗',
+      item_name: '共享资料收集',
+      item_stage: '资料准备',
       status: 'internal_review',
       is_shared: true,
       certificate_types: ['land_certificate', 'land_use_planning_permit'],
       certificate_names: ['土地证', '用地规划许可证'],
       blocking_certificate_types: ['land_use_planning_permit'],
       dependency_count: 2,
-      next_action: '琛ラ綈鍘熶欢鎵弿浠?',
+      next_action: '补齐原件扫描',
       next_action_due_date: '2026-05-15',
-      block_reason: '涓よ瘉鍏辩敤璧勬枡寰呰ˉ姝?',
+      block_reason: '两证共用资料待补',
       planned_finish_date: '2026-05-12',
     },
   ],
@@ -135,19 +141,19 @@ const ledgerPayload = {
       id: 'work-1',
       project_id: projectId,
       item_code: 'W-001',
-      item_name: '鍏变韩璧勬枡鏀堕泦',
-      item_stage: '璧勬枡鍑嗗',
+      item_name: '共享资料收集',
+      item_stage: '资料准备',
       status: 'internal_review',
       planned_finish_date: '2026-05-12',
       actual_finish_date: null,
-      approving_authority: '瀹℃壒灞€',
+      approving_authority: '审批局',
       is_shared: true,
-      next_action: '琛ラ綈鍘熶欢鎵弿浠?',
+      next_action: '补齐原件扫描',
       next_action_due_date: '2026-05-15',
       is_blocked: true,
-      block_reason: '涓よ瘉鍏辩敤璧勬枡寰呰ˉ姝?',
+      block_reason: '两证共用资料待补',
       sort_order: 1,
-      notes: '鍏堣ˉ鎵弿浠?',
+      notes: '先补扫描',
       latest_record_at: '2026-05-09',
       certificate_ids: ['cert-land', 'cert-land-use'],
       created_at: '2026-05-08T00:00:00.000Z',
@@ -186,7 +192,7 @@ const detailPayload = {
       record_type: 'supplement_required',
       from_status: 'internal_review',
       to_status: 'supplement_required',
-      content: '琛ユ璧勬枡閫€鍥?',
+      content: '补正资料退',
       recorded_at: '2026-05-09T00:00:00.000Z',
       recorded_by: 'system',
     },
@@ -195,11 +201,11 @@ const detailPayload = {
     {
       certificate_id: 'cert-land',
       certificate_type: 'land_certificate',
-      certificate_name: '鍦熷湴璇?',
+      certificate_name: '土地',
       cells: [
         {
           work_item_id: 'work-1',
-          work_item_name: '鍏变韩璧勬枡鏀堕泦',
+          work_item_name: '共享资料收集',
           status: 'satisfied',
           dependency_kind: 'hard',
           is_shared: true,
@@ -209,11 +215,11 @@ const detailPayload = {
     {
       certificate_id: 'cert-land-use',
       certificate_type: 'land_use_planning_permit',
-      certificate_name: '鐢ㄥ湴瑙勫垝璁稿彲璇?',
+      certificate_name: '用地规划许可',
       cells: [
         {
           work_item_id: 'work-1',
-          work_item_name: '鍏变韩璧勬枡鏀堕泦',
+          work_item_name: '共享资料收集',
           status: 'blocked',
           dependency_kind: 'hard',
           is_shared: true,
@@ -228,8 +234,8 @@ const detailPayload = {
       task_id: 'cert-land-use',
       warning_type: 'permit_expiry',
       warning_level: 'critical',
-      title: '璇佺収棰勮',
-      description: '褰撳墠璇佺収瀛樺湪鍒版湡鎻愰啋',
+      title: '证照预警',
+      description: '当前证照存在到期提醒',
       is_acknowledged: false,
       created_at: '2026-05-10T00:00:00.000Z',
     },
@@ -239,8 +245,8 @@ const detailPayload = {
       id: 'issue-link',
       project_id: projectId,
       task_id: null,
-      title: '鍏宠仈闂',
-      description: '鐢辫仈鍔ㄩ璀﹀崌绾ц€屾潵',
+      title: '关联问题',
+      description: '由联动预警升级而来',
       severity: 'high',
       status: 'open',
       source_type: 'manual',
@@ -257,8 +263,8 @@ const detailPayload = {
       id: 'risk-link',
       project_id: projectId,
       task_id: null,
-      title: '鍏宠仈椋庨櫓',
-      description: '鐢辫仈鍔ㄩ棶棰樼户缁崌绾?',
+      title: '关联风险',
+      description: '由联动问题继续升',
       level: 'high',
       status: 'identified',
       source_type: 'manual',
@@ -277,6 +283,105 @@ const detailPayload = {
 
 let currentDetail = structuredClone(detailPayload)
 
+const templatePreviewPayload = {
+  templateCode: 'system',
+  templateName: '系统四证模板',
+  seedVersion: 'browser-check-v1',
+  projectId,
+  summary: {
+    certificateCreateCount: 1,
+    workItemCreateCount: 1,
+    dependencyCreateCount: 1,
+    skippedExistingCount: 0,
+    needsConfirmationCount: 0,
+  },
+  certificates: [
+    {
+      key: 'land_use_planning_permit',
+      certificateType: 'land_use_planning_permit',
+      certificateName: '用地规划许可',
+      defaultStage: '资料准备',
+      defaultStatus: 'pending',
+      approvingAuthority: '规划局',
+      requiredPolicy: '系统模板默认项',
+      reason: '浏览器验证模板预览',
+      sortOrder: 1,
+      action: 'will_create',
+      selected: true,
+    },
+  ],
+  workItems: [
+    {
+      workItemCode: 'template-work-1',
+      itemName: '资料收集',
+      itemStage: '资料准备',
+      defaultStatus: 'pending',
+      approvingAuthority: '规划局',
+      isShared: true,
+      certificateTypes: ['land_use_planning_permit'],
+      requiredPolicy: '系统模板默认项',
+      planRole: 'blocking',
+      criticality: 'blocking',
+      defaultNextAction: '收集申报资料',
+      sortOrder: 1,
+      action: 'will_create',
+      selected: true,
+      landAcquisitionMethodCodes: ['transfer'],
+    },
+  ],
+  dependencies: [
+    {
+      dependencyCode: 'template-dep-1',
+      predecessor: { type: 'work_item', workItemCode: 'template-work-1' },
+      successor: { type: 'certificate', certificateType: 'land_use_planning_permit' },
+      dependencyKind: 'hard',
+      relationRole: '资料齐备后报批',
+      reason: '浏览器验证模板依赖',
+      action: 'will_create',
+      selected: true,
+    },
+  ],
+  materialPackages: [],
+  materialEvidenceChains: [],
+  handlingSteps: [],
+  landAcquisition: {
+    selectedMethodCode: 'transfer',
+    source: 'default',
+    methods: [
+      {
+        methodCode: 'transfer',
+        methodName: '出让',
+        description: '浏览器验证默认土地取得方式',
+        defaultSelected: true,
+        workItemCodes: ['template-work-1'],
+        materialNames: ['土地出让合同'],
+        policyBasis: ['系统模板'],
+        recommendedFor: ['普通经营性用地'],
+      },
+    ],
+  },
+  provinceProfile: {
+    provinceCode: 'default',
+    provinceName: '全国通用',
+    profileVersion: 'browser-check-v1',
+    source: 'default',
+    applied: true,
+    authorityAliases: {},
+    additionalWorkItemCodes: [],
+    optionalWorkItemCodes: [],
+    softDependencyCodes: [],
+    policySources: [
+      {
+        sourceName: '系统模板',
+        checkedAt: '2026-07-03',
+        updateMode: 'governed_seed_update',
+      },
+    ],
+    notes: [],
+  },
+  warnings: [],
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message)
@@ -289,6 +394,35 @@ function json(body, status = 200) {
     contentType: 'application/json; charset=utf-8',
     body: JSON.stringify(body),
   }
+}
+
+export function resolvePreMilestonesProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolvePreMilestonesProjectId({ manifest })
+  return projectId
+}
+
+export function selectPreMilestonesCertificateId(board) {
+  const certificates = Array.isArray(board?.certificates) ? board.certificates : []
+  const preferred = certificates.find((certificate) => certificate?.certificate_type === 'land_use_planning_permit')
+  const fallback = preferred ?? certificates.find((certificate) => certificate?.id)
+  return fallback?.id ? String(fallback.id) : ''
+}
+
+function isPreMilestonesBoardRequest(urlString, method) {
+  if (method !== 'GET') return false
+  const url = new URL(urlString)
+  return url.pathname === `/api/projects/${projectId}/pre-milestones/board`
 }
 
 async function isHttpReady(url) {
@@ -344,6 +478,22 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: [],
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (pathname === `/api/members/${projectId}/me`) {
     return json({
       success: true,
@@ -364,7 +514,6 @@ function buildMockResponse(urlString) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
@@ -381,6 +530,10 @@ function buildMockResponse(urlString) {
 
   if (pathname === `/api/projects/${projectId}/pre-milestones/cert-land-use/detail`) {
     return json({ success: true, data: currentDetail })
+  }
+
+  if (pathname === `/api/projects/${projectId}/certificate-templates/system/preview`) {
+    return json({ success: true, data: templatePreviewPayload })
   }
 
   if (pathname === `/api/projects/${projectId}/pre-milestones/cert-land-use/escalate-issue`) {
@@ -444,6 +597,8 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
+  const authToken = shouldUseMockApi ? null : await resolveBrowserVerifyAuthToken()
   currentDetail = structuredClone(detailPayload)
 
   let previewProcess = null
@@ -461,11 +616,15 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  let page = null
+  let pageBodyText = null
+  let failureScreenshot = null
+  let selectedCertificateId = 'cert-land-use'
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    await primeBrowserAuth(page, authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -479,6 +638,7 @@ async function main() {
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
+      const requestMethod = route.request().method().toUpperCase()
 
       if (shouldUseMockApi) {
         await route.fulfill(buildMockResponse(requestUrl))
@@ -488,10 +648,27 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (isPreMilestonesBoardRequest(forwardUrl, requestMethod) && response.ok()) {
+          const payload = await response.json()
+          const nextCertificateId = selectPreMilestonesCertificateId(payload?.data ?? payload)
+          if (nextCertificateId) {
+            selectedCertificateId = nextCertificateId
+          }
+          await route.fulfill(json(payload, response.status()))
+          return
+        }
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+          })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -523,13 +700,21 @@ async function main() {
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('pre-milestones-page').waitFor({ state: 'visible', timeout: 20000 })
 
-    await page.getByTestId('pre-milestones-certificate-cert-land-use').click()
+    assert(selectedCertificateId, 'Unable to resolve a certificate id from pre-milestones board response')
+    const landUseCertificate = page.getByTestId(`pre-milestones-certificate-${selectedCertificateId}`)
+    await landUseCertificate.focus()
+    await page.keyboard.press('Enter')
     await page.getByTestId('certificate-detail-drawer').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('linked-warnings').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('linked-issues').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('linked-risks').waitFor({ state: 'visible', timeout: 10000 })
     await page.getByTestId('certificate-detail-drawer').getByRole('button', { name: '升级为问题' }).click()
-    await page.getByText('新增证照问题').waitFor({ state: 'visible', timeout: 10000 })
+    await page.waitForFunction(() => {
+      const linkedIssues = document.querySelector('[data-testid="linked-issues"]')
+      const text = linkedIssues?.textContent ?? ''
+      return text.includes('联动问题') && !text.includes('暂无联动问题')
+    }, undefined, { timeout: 10000 })
+    const linkedIssuesText = await page.getByTestId('linked-issues').innerText()
     await page.screenshot({ path: join(outputDir, 'pre-milestones-detail-drawer.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
@@ -540,6 +725,9 @@ async function main() {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       initialUrl,
       drawingsUrl,
+      projectId,
+      selectedCertificateId,
+      linkedIssuesText,
       detailVisible: true,
       issueEscalationVisible: true,
       apiFailures,
@@ -555,9 +743,26 @@ async function main() {
     await writeFile(join(outputDir, 'pre-milestones-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        pageBodyText = await page.locator('body').innerText()
+      } catch {}
+
+      try {
+        failureScreenshot = join(outputDir, 'pre-milestones-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
+
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      projectId,
+      selectedCertificateId,
+      pageBodyText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -573,7 +778,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

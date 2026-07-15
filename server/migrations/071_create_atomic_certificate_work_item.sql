@@ -23,11 +23,11 @@ CREATE OR REPLACE FUNCTION create_certificate_work_item_atomic(
   p_latest_record_at TIMESTAMP,
   p_certificate_ids UUID[] DEFAULT ARRAY[]::UUID[]
 )
-RETURNS certificate_work_items
+RETURNS public.certificate_work_items
 LANGUAGE plpgsql
 AS $$
 DECLARE
-  v_work_item certificate_work_items%ROWTYPE;
+  v_work_item public.certificate_work_items%ROWTYPE;
   v_certificate_id UUID;
 BEGIN
   INSERT INTO certificate_work_items (

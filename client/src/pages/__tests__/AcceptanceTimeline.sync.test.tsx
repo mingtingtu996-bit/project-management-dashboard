@@ -7,11 +7,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AcceptanceTimeline from '../AcceptanceTimeline'
 import { useStore } from '@/hooks/useStore'
 
+vi.mock('@/services/engineeringObjectsApi', () => ({
+  listEngineeringObjects: vi.fn(async () => []),
+}))
+
+vi.mock('@/services/materialsApi', () => ({
+  MaterialsApiService: {
+    listParticipantUnits: vi.fn(async () => []),
+  },
+}))
+
 const state = vi.hoisted(() => {
   type PlanRow = {
     id: string
     project_id: string
-    milestone_id: string
+    covered_task_ids: string[]
     type_id: string
     type_name: string
     type_color: string
@@ -60,6 +70,7 @@ const state = vi.hoisted(() => {
   const clonePlans = () =>
     plans.map((plan) => ({
       ...plan,
+      covered_task_ids: [...plan.covered_task_ids],
       predecessor_plan_ids: [...plan.predecessor_plan_ids],
       successor_plan_ids: [...plan.successor_plan_ids],
       display_badges: [...plan.display_badges],
@@ -72,7 +83,7 @@ const state = vi.hoisted(() => {
       {
         id: 'plan-source',
         project_id: 'project-1',
-        milestone_id: 'milestone-source',
+        covered_task_ids: ['task-source'],
         type_id: 'pre_acceptance',
         type_name: 'Pre Acceptance',
         type_color: 'bg-slate-500',
@@ -93,10 +104,10 @@ const state = vi.hoisted(() => {
       {
         id: 'plan-target',
         project_id: 'project-1',
-        milestone_id: 'milestone-target',
+        covered_task_ids: ['task-target'],
         type_id: 'four_party',
         type_name: 'Four Party',
-        type_color: 'bg-blue-500',
+        type_color: 'bg-blue-600',
         name: 'Plan Beta',
         description: 'Target plan',
         planned_date: '2026-04-02',
@@ -114,7 +125,7 @@ const state = vi.hoisted(() => {
       {
         id: 'plan-blocked',
         project_id: 'project-1',
-        milestone_id: 'milestone-blocked',
+        covered_task_ids: ['task-blocked'],
         type_id: 'fire',
         type_name: 'Fire',
         type_color: 'bg-rose-500',
@@ -175,7 +186,7 @@ vi.mock('@/services/acceptanceApi', () => ({
       notStartedCount: state.plans.filter((plan) => plan.status === 'draft').length,
       blockedCount: state.plans.filter((plan) => plan.display_badges.includes('受阻')).length,
       dueSoon30dCount: 0,
-      keyMilestoneCount: state.plans.filter((plan) => Boolean(plan.milestone_id)).length,
+      keyMilestoneCount: state.plans.filter((plan) => plan.covered_task_ids.length > 0).length,
       completionRate: 0,
     })),
     getCustomTypes: vi.fn(async () => []),
@@ -228,8 +239,8 @@ vi.mock('@/services/acceptanceApi', () => ({
         id: `requirement-${state.requirements.length + 1}`,
         plan_id: planId,
         requirement_type: String(input.requirement_type ?? ''),
-        source_entity_type: String(input.source_entity_type ?? ''),
-        source_entity_id: String(input.source_entity_id ?? ''),
+        source_entity_type: 'acceptance_plan',
+        source_entity_id: planId,
         description: input.description == null ? null : String(input.description),
         status: String(input.status ?? 'open'),
         is_required: true,
@@ -414,21 +425,14 @@ describe('AcceptanceTimeline dependency sync', () => {
 
     await waitFor(() => Boolean(document.querySelector('[data-testid="acceptance-detail-drawer"]')))
 
-    const requirementTypeInput = document.querySelector('input[placeholder="external / drawing / task_condition"]') as HTMLInputElement | null
-    const sourceTypeInput = document.querySelector('input[placeholder="task_condition"]') as HTMLInputElement | null
-    const sourceIdInput = document.querySelector('input[placeholder="condition-1"]') as HTMLInputElement | null
+    const requirementTypeInput = document.querySelector('[data-testid="acceptance-requirement-type-input"]') as HTMLInputElement | null
     const descriptionInput = document.querySelector('textarea[placeholder="补充内容"]') as HTMLTextAreaElement | null
-    const sourceId = 'sync-created-requirement'
 
     expect(requirementTypeInput).toBeTruthy()
-    expect(sourceTypeInput).toBeTruthy()
-    expect(sourceIdInput).toBeTruthy()
     expect(descriptionInput).toBeTruthy()
 
     act(() => {
       fireEvent.change(requirementTypeInput!, { target: { value: 'external' } })
-      fireEvent.change(sourceTypeInput!, { target: { value: 'task_condition' } })
-      fireEvent.change(sourceIdInput!, { target: { value: sourceId } })
       fireEvent.change(descriptionInput!, { target: { value: 'created from drawer' } })
     })
 
@@ -437,12 +441,16 @@ describe('AcceptanceTimeline dependency sync', () => {
       addButton?.click()
     })
 
-    await waitFor(() => (document.body.textContent || '').includes(sourceId))
+    await waitFor(() => (document.body.textContent || '').includes('created from drawer'))
     expect(state.requirements).toHaveLength(1)
     expect(state.requirements[0]).toMatchObject({
       plan_id: 'plan-target',
-      source_entity_id: sourceId,
+      source_entity_type: 'acceptance_plan',
+      source_entity_id: 'plan-target',
       description: 'created from drawer',
     })
+    expect(
+      vi.mocked((await import('@/services/acceptanceApi')).acceptanceApi.createPlanRequirement).mock.calls[0]?.[2],
+    ).not.toHaveProperty('source_entity_id')
   })
 })

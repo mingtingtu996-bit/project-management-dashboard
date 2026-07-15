@@ -1,0 +1,14 @@
+[
+  "083_lock_down_public_rls.sql",
+  "086_preserve_task_snapshot_events.sql",
+  "087_create_job_failures.sql",
+  "087_create_revision_pool_candidates.sql",
+  "088_v2_hardening_drawings_dependencies_indexes.sql",
+  "091_remove_legacy_compatibility_bridges.sql",
+  "093_mainline_c_drawings_licenses_hardening.sql",
+  "098_create_project_materials.sql",
+  "100_create_project_materials.sql",
+  "115_runtime_login_rls_helper_acl.sql",
+  "116_grant_rls_helper_execute_to_runtime_roles.sql",
+  "131_v147_v1411_closure_fixups.sql"
+]

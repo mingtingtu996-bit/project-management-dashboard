@@ -17,7 +17,6 @@ describe('runtime schema reconciliation', () => {
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.task_baselines')
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.monthly_plans')
     expect(migration).toContain('ALTER TABLE public.task_progress_snapshots')
-    expect(migration).toContain('ALTER TABLE IF EXISTS public.delay_requests')
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.alerts')
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.planning_governance_states')
     expect(migration).toContain('CREATE TABLE IF NOT EXISTS public.operation_logs')
@@ -49,5 +48,32 @@ describe('runtime schema reconciliation', () => {
     expect(progressDeviationSource).not.toContain("fetchRows<TaskProgressSnapshot>('task_progress_snapshots', [['project_id', projectId]])")
     expect(taskSummarySource).toContain(".in('task_id', projectTaskIds)")
     expect(projectExecutionSummarySource).toContain('loadPlanningGovernanceStates(')
+  })
+
+  it('keeps v1.4.23.1 runtime-consumed columns in forward and clean migrations', () => {
+    const forwardMigration = readServerFile('migrations', '250_v14231_runtime_schema_gap_closeout.sql')
+    const cleanMigration = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const requiredSnippets = [
+      'ALTER TABLE public.tasks',
+      'ADD COLUMN IF NOT EXISTS execution_lane TEXT',
+      'CREATE INDEX IF NOT EXISTS idx_tasks_execution_lane',
+      'ALTER TABLE public.acceptance_plans',
+      'ADD COLUMN IF NOT EXISTS plan_name TEXT',
+      'SET plan_name = acceptance_name',
+      'ALTER TABLE public.monthly_plans',
+      'ADD COLUMN IF NOT EXISTS pending_closeout_count INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE public.task_conditions',
+      'ADD COLUMN IF NOT EXISTS condition_name TEXT',
+      'SET condition_name = name',
+    ]
+
+    for (const source of [forwardMigration, cleanMigration]) {
+      for (const snippet of requiredSnippets) {
+        expect(source).toContain(snippet)
+      }
+      expect(source).toContain("NOTIFY pgrst, 'reload schema'")
+    }
+
+    expect(cleanMigration).toContain('Source: 250_v14231_runtime_schema_gap_closeout.sql')
   })
 })

@@ -1,4 +1,4 @@
-import { chromium } from 'playwright'
+﻿import { chromium } from 'playwright'
 
 const baseUrl = 'http://127.0.0.1:4173'
 const projectId = '4cd542b4-1b59-4d66-a501-27dffc1b3a08'
@@ -83,7 +83,7 @@ function buildMockResponse(request) {
       user: {
         id: 'user-owner',
         username: 'wave4-owner',
-        display_name: '波4负责人',
+        display_name: '项目负责人',
         email: 'wave4-owner@example.com',
         role: 'company_admin',
         globalRole: 'company_admin',
@@ -119,7 +119,6 @@ function buildMockResponse(request) {
     || pathname === '/api/risks'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
     || pathname === `/api/projects/${projectId}/critical-path`

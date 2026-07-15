@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "workbuddy-runtime-writer-contract/v1",
+  "writerId": "default_master_plan_candidate_baseline_materialization",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "allowedMode": "candidate_baseline_materialization",
+  "requiresUnlock": true,
+  "mayWriteBusinessFacts": true,
+  "mayWriteRuntimeAssets": false,
+  "productionAllowed": false,
+  "allowedTables": [
+    "task_baselines"
+  ],
+  "forbiddenTables": [
+    "tasks",
+    "task_dependencies",
+    "monthly_plans",
+    "monthly_plan_items",
+    "duration_experience_samples",
+    "actual_duration_outcomes",
+    "critical_path",
+    "runtime_publication_tables",
+    "production_seed_rows"
+  ],
+  "requiredEvidence": [
+    "candidate_refresh_package",
+    "candidate_only_target_rows",
+    "local_or_staging_environment",
+    "execute_mode",
+    "allow_materialization_flag",
+    "unlock_flag",
+    "operator_approval_ref",
+    "human_materialized_by_actor",
+    "candidate_baseline_materialization_report"
+  ]
+}

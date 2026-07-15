@@ -2,7 +2,7 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { PlanningPageShell } from '@/components/planning/PlanningPageShell'
-import { PlanningWorkspaceLayers } from '@/components/planning/PlanningWorkspaceLayers'
+import { PlanningPageLayout } from '@/components/planning/PlanningPageLayout'
 import { PlanningTreeView } from '@/components/planning/PlanningTreeView'
 import { BatchActionBar } from '@/components/planning/BatchActionBar'
 import { ValidationPanel } from '@/components/planning/ValidationPanel'
@@ -34,7 +34,7 @@ describe('planning-ui-kit contract', () => {
           description="共享框架"
           tabs={[{ key: 'baseline', label: '项目基线', active: true, onClick: () => {} }]}
         >
-          <PlanningWorkspaceLayers
+          <PlanningPageLayout
             summary={<div>项目基线</div>}
             main={<div>主树工作区</div>}
             aside={
@@ -49,6 +49,7 @@ describe('planning-ui-kit contract', () => {
     })
 
     expect(container.querySelector('h1')?.textContent).toBe('计划编制')
+    expect(container.querySelector('[data-testid="planning-shared-shell"]')?.className).toContain('page-shell')
     expect(container.textContent).toContain('项目基线')
     expect(container.textContent).toContain('异常校核区')
   })

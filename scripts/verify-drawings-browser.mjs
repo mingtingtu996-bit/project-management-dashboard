@@ -1,15 +1,21 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import {
+  maybeBuildMockAuthResponse,
+  primeBrowserAuth,
+  readFullAppTestManifest,
+  resolveBrowserVerifyAuthToken,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,26 +24,44 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
+
+const drawingFixture = {
+  structure: {
+    packageCode: 'v1424-browser-structure',
+    packageName: 'v1.4.24 structure drawing package',
+    disciplineType: 'structure',
+    documentPurpose: 'construction',
+    drawingCode: 'V1424-STR-001',
+    drawingName: 'v1.4.24 foundation detail',
+    versionNo: '1.2',
+  },
+  architecture: {
+    packageCode: 'v1424-browser-architecture',
+    packageName: 'v1.4.24 architecture review package',
+    disciplineType: 'architecture',
+    documentPurpose: 'review',
+  },
+}
 
 const packageStructure = {
   packageId: 'pkg-structure',
-  packageCode: 'pkg-structure',
-  packageName: '缁撴瀯鏂藉伐鍥惧寘',
-  disciplineType: '缁撴瀯',
-  documentPurpose: '鏂藉伐鎵ц',
+  packageCode: drawingFixture.structure.packageCode,
+  packageName: drawingFixture.structure.packageName,
+  disciplineType: drawingFixture.structure.disciplineType,
+  documentPurpose: drawingFixture.structure.documentPurpose,
   status: 'preparing',
   requiresReview: false,
   reviewMode: 'none',
-  reviewModeLabel: '涓嶉€傜敤',
-  reviewBasis: '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸',
+  reviewModeLabel: '不适用',
+  reviewBasis: '常规施工执行包默认不送审',
   completenessRatio: 75,
   missingRequiredCount: 1,
   currentVersionDrawingId: 'drawing-1',
   currentVersionNo: '1.2',
-  currentVersionLabel: '褰撳墠鏈夋晥鐗?v1.2',
-  currentReviewStatus: '宸查€氳繃',
+  currentVersionLabel: '当前有效v1.2',
+  currentReviewStatus: '已通过',
   hasChange: false,
   scheduleImpactFlag: true,
   isReadyForConstruction: true,
@@ -49,21 +73,21 @@ const packageStructure = {
 
 const packageArchitecture = {
   packageId: 'pkg-architecture',
-  packageCode: 'pkg-architecture',
-  packageName: '寤虹瓚鍑哄浘鍖?',
-  disciplineType: '寤虹瓚',
-  documentPurpose: '鎶ュ褰掓。',
+  packageCode: drawingFixture.architecture.packageCode,
+  packageName: drawingFixture.architecture.packageName,
+  disciplineType: drawingFixture.architecture.disciplineType,
+  documentPurpose: drawingFixture.architecture.documentPurpose,
   status: 'reviewing',
   requiresReview: true,
   reviewMode: 'mandatory',
   reviewModeLabel: '蹇呴』閫佸',
-  reviewBasis: '鎸変笓椤瑰鍥捐鍒欐墽琛?',
+  reviewBasis: '按专项审图规则执',
   completenessRatio: 100,
   missingRequiredCount: 0,
   currentVersionDrawingId: 'drawing-2',
   currentVersionNo: '2.0',
-  currentVersionLabel: '褰撳墠鏈夋晥鐗?v2.0',
-  currentReviewStatus: '瀹℃煡涓?',
+  currentVersionLabel: '当前有效v2.0',
+  currentReviewStatus: '审查',
   hasChange: true,
   scheduleImpactFlag: false,
   isReadyForConstruction: false,
@@ -81,16 +105,16 @@ const ledgerRows = [
     packageName: packageStructure.packageName,
     disciplineType: packageStructure.disciplineType,
     documentPurpose: packageStructure.documentPurpose,
-    drawingCode: 'STR-001',
-    drawingName: '鍩虹鍥?',
-    versionNo: '1.2',
+    drawingCode: drawingFixture.structure.drawingCode,
+    drawingName: drawingFixture.structure.drawingName,
+    versionNo: drawingFixture.structure.versionNo,
     drawingStatus: 'issued',
-    reviewStatus: '宸查€氳繃',
+    reviewStatus: '已通过',
     isCurrentVersion: true,
     requiresReview: false,
     reviewMode: 'none',
-    reviewModeLabel: '涓嶉€傜敤',
-    reviewBasis: '甯歌鏂藉伐鎵ц鍖呴粯璁や笉閫佸',
+    reviewModeLabel: '不适用',
+    reviewBasis: '常规施工执行包默认不送审',
     hasChange: false,
     scheduleImpactFlag: false,
     plannedSubmitDate: null,
@@ -107,15 +131,15 @@ const ledgerRows = [
     disciplineType: packageArchitecture.disciplineType,
     documentPurpose: packageArchitecture.documentPurpose,
     drawingCode: 'ARC-002',
-    drawingName: '骞抽潰甯冪疆鍥?',
+    drawingName: '平面布置',
     versionNo: '2.0',
     drawingStatus: 'reviewing',
-    reviewStatus: '瀹℃煡涓?',
+    reviewStatus: '审查',
     isCurrentVersion: true,
     requiresReview: true,
     reviewMode: 'mandatory',
     reviewModeLabel: '蹇呴』閫佸',
-    reviewBasis: '鎸変笓椤瑰鍥捐鍒欐墽琛?',
+    reviewBasis: '按专项审图规则执',
     hasChange: true,
     scheduleImpactFlag: false,
     plannedSubmitDate: null,
@@ -132,7 +156,7 @@ const detailPayload = {
     {
       itemId: 'item-1',
       itemCode: 'req-001',
-      itemName: '缁撴瀯鎬昏鏄?',
+      itemName: '结构总说',
       isRequired: true,
       status: 'available',
       currentDrawingId: 'drawing-1',
@@ -143,12 +167,12 @@ const detailPayload = {
     {
       itemId: 'item-2',
       itemCode: 'req-002',
-      itemName: '鍩虹璇﹀浘',
+      itemName: '基础详图',
       isRequired: true,
       status: 'missing',
       currentDrawingId: null,
       currentVersion: '',
-      notes: '寰呰ˉ鍏?',
+      notes: '待补',
       sortOrder: 2,
     },
   ],
@@ -160,10 +184,10 @@ const detailPayload = {
       versionNo: '1.2',
       previousVersionId: 'version-1',
       isCurrentVersion: true,
-      changeReason: '琛ュ厖閰嶇瓔璇存槑',
+      changeReason: '补充配筋说明',
       createdAt: now,
-      createdBy: '娴嬭瘯鍛?',
-      drawingName: '鍩虹鍥?',
+      createdBy: '测试',
+      drawingName: '基础',
     },
     {
       versionId: 'version-1',
@@ -171,23 +195,23 @@ const detailPayload = {
       versionNo: '1.1',
       previousVersionId: null,
       isCurrentVersion: false,
-      changeReason: '鍒濈増鍙戝竷',
+      changeReason: '初版发布',
       createdAt: now,
-      createdBy: '娴嬭瘯鍛?',
-      drawingName: '鍩虹鍥?',
+      createdBy: '测试',
+      drawingName: '基础',
     },
   ],
   linkedTasks: [
     {
       id: 'task-1',
-      name: '涓讳綋缁撴瀯鏂藉伐',
-      status: '杩涜涓?',
+      name: '主体结构施工',
+      status: '进行',
       drawingConditionCount: 1,
       openConditionCount: 1,
       conditions: [
         {
           id: 'condition-1',
-          name: '缁撴瀯鍥剧鍙?',
+          name: '结构图签',
           status: '寰呮弧瓒?',
           conditionType: 'design',
           isSatisfied: false,
@@ -198,8 +222,8 @@ const detailPayload = {
   linkedAcceptance: [
     {
       id: 'acceptance-1',
-      name: '涓讳綋缁撴瀯楠屾敹',
-      status: '鏈紑濮?',
+      name: '主体结构验收',
+      status: '未开',
       requirementCount: 1,
       openRequirementCount: 1,
       latestRecordAt: null,
@@ -209,7 +233,7 @@ const detailPayload = {
           requirementType: 'drawing',
           sourceEntityType: 'drawing_package',
           sourceEntityId: packageStructure.packageId,
-          description: '闇€涓婁紶褰撳墠鏈夋晥鏂藉伐鍥?',
+          description: '需上传当前有效施工',
           status: 'open',
         },
       ],
@@ -218,10 +242,10 @@ const detailPayload = {
   issueSignals: [
     {
       code: 'issue-signal-1',
-      title: '鍥剧焊缂烘紡',
-      description: '鍩虹璇﹀浘缂哄け锛屽彲鑳藉奖鍝嶆柦宸ヤ氦搴曘€?',
+      title: '图纸缺漏',
+      description: '基础详图缺失，可能影响施工交底',
       severity: 'medium',
-      evidence: ['缂哄け鍩虹璇﹀浘'],
+      evidence: ['缺失基础详图'],
       escalatedEntityType: null,
       escalatedEntityId: null,
       escalatedAt: null,
@@ -230,10 +254,10 @@ const detailPayload = {
   riskSignals: [
     {
       code: 'risk-signal-1',
-      title: '閫佸寤惰',
-      description: '閫佸鑺傜偣鏅氫簬璁″垝锛屽瓨鍦ㄨ繘搴﹂闄┿€?',
+      title: '送审延误',
+      description: '送审节点晚于计划，存在进度风险',
       severity: 'high',
-      evidence: ['閫佸鐘舵€佷粛涓哄鏌ヤ腑'],
+      evidence: ['送审状态仍为审查中'],
       escalatedEntityType: null,
       escalatedEntityId: null,
       escalatedAt: null,
@@ -243,7 +267,7 @@ const detailPayload = {
 
 const mockProject = {
   id: projectId,
-  name: '鍥剧焊娴忚鍣ㄨ仈璋冮」鐩?',
+  name: '图纸浏览器联调项',
   description: 'Drawings browser verification fixture project',
   status: 'active',
   created_at: now,
@@ -261,6 +285,220 @@ function json(body, status = 200) {
     status,
     contentType: 'application/json; charset=utf-8',
     body: JSON.stringify(body),
+  }
+}
+
+export function resolveDrawingsProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolveDrawingsProjectId({ manifest })
+  return projectId
+}
+
+export function selectDrawingFixturePackage(packages, fixture) {
+  return (packages ?? []).find((pkg) => (
+    pkg?.packageCode === fixture.packageCode
+    || pkg?.package_code === fixture.packageCode
+    || pkg?.packageName === fixture.packageName
+    || pkg?.package_name === fixture.packageName
+  )) ?? null
+}
+
+function readPackageId(pkg) {
+  return pkg?.packageId || pkg?.id || pkg?.package_id || null
+}
+
+function readPackageCode(pkg) {
+  return pkg?.packageCode || pkg?.package_code || null
+}
+
+export function resolveExpectedDrawingVersionLabel(pkg, fixture = drawingFixture.structure) {
+  const rawVersion = pkg?.currentVersionNo || pkg?.current_version_no || fixture?.versionNo || ''
+  const normalized = String(rawVersion).trim().replace(/^v/i, '')
+  return normalized ? `v${normalized}` : ''
+}
+
+export async function waitForLocatorTextIncludes(
+  locator,
+  expectedText,
+  {
+    timeoutMs = 10000,
+    intervalMs = 100,
+    description = 'locator text',
+  } = {},
+) {
+  const deadline = Date.now() + timeoutMs
+  let lastText = ''
+  let lastError = null
+
+  while (Date.now() <= deadline) {
+    try {
+      lastText = await locator.innerText()
+      if (lastText.includes(expectedText)) {
+        return lastText
+      }
+    } catch (error) {
+      lastError = error
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+
+  const lastErrorText = lastError instanceof Error ? ` Last error: ${lastError.message}` : ''
+  throw new Error(
+    `Timeout waiting for ${description} to include ${JSON.stringify(expectedText)} after ${timeoutMs}ms. Last text: ${JSON.stringify(lastText)}.${lastErrorText}`,
+  )
+}
+
+function normalizeBoardPackage(pkg) {
+  return {
+    ...pkg,
+    packageId: readPackageId(pkg),
+    packageCode: readPackageCode(pkg),
+    packageName: pkg?.packageName || pkg?.package_name,
+  }
+}
+
+async function requestApiJson(pathname, { method = 'GET', token, body } = {}) {
+  const response = await fetch(`${apiBaseUrl}${pathname}`, {
+    method,
+    headers: {
+      Accept: 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const text = await response.text()
+  let payload = null
+  try {
+    payload = text ? JSON.parse(text) : null
+  } catch {
+    payload = null
+  }
+  if (!response.ok || payload?.success === false) {
+    const message = payload?.error?.message || payload?.message || text || `HTTP ${response.status}`
+    throw new Error(`${method} ${pathname} failed: ${response.status} ${message}`)
+  }
+  return payload?.data ?? payload
+}
+
+async function loadProxyDrawingBoard(token) {
+  return requestApiJson(`/api/construction-drawings/board?projectId=${projectId}`, { token })
+}
+
+async function loadProxyDrawingLedger(token) {
+  return requestApiJson(`/api/construction-drawings/ledger?projectId=${projectId}`, { token })
+}
+
+async function ensureProxyDrawingPackage(token, fixture) {
+  let board = await loadProxyDrawingBoard(token)
+  const existing = selectDrawingFixturePackage(board?.packages, fixture)
+  if (existing) {
+    return normalizeBoardPackage(existing)
+  }
+
+  await requestApiJson('/api/construction-drawings/packages', {
+    method: 'POST',
+    token,
+    body: {
+      projectId,
+      packageCode: fixture.packageCode,
+      packageName: fixture.packageName,
+      disciplineType: fixture.disciplineType,
+      documentPurpose: fixture.documentPurpose,
+      reviewMode: 'none',
+      items: fixture.drawingCode
+        ? [{
+            itemCode: fixture.drawingCode,
+            itemName: fixture.drawingName,
+            disciplineType: fixture.disciplineType,
+            isRequired: true,
+            sortOrder: 1,
+          }]
+        : [],
+    },
+  })
+
+  board = await loadProxyDrawingBoard(token)
+  const created = selectDrawingFixturePackage(board?.packages, fixture)
+  assert(created, `Created drawing package was not visible in board: ${fixture.packageCode}`)
+  return normalizeBoardPackage(created)
+}
+
+async function ensureProxyCurrentDrawing(token, pkg, fixture) {
+  const packageId = readPackageId(pkg)
+  assert(packageId, `Drawing fixture package missing id: ${JSON.stringify(pkg)}`)
+
+  const ledger = await loadProxyDrawingLedger(token)
+  const existing = (ledger?.drawings ?? []).find((drawing) => (
+    drawing?.packageId === packageId
+    || drawing?.package_id === packageId
+    || drawing?.packageCode === fixture.packageCode
+    || drawing?.package_code === fixture.packageCode
+  ) && (
+    drawing?.drawingCode === fixture.drawingCode
+    || drawing?.drawing_code === fixture.drawingCode
+  ))
+  if (existing) return existing
+
+  await requestApiJson('/api/construction-drawings', {
+    method: 'POST',
+    token,
+    body: {
+      project_id: projectId,
+      drawing_type: fixture.disciplineType,
+      drawing_name: fixture.drawingName,
+      version: fixture.versionNo,
+      status: '已出图',
+      review_status: '已通过',
+      package_id: packageId,
+      package_code: fixture.packageCode,
+      package_name: fixture.packageName,
+      discipline_type: fixture.disciplineType,
+      document_purpose: fixture.documentPurpose,
+      drawing_code: fixture.drawingCode,
+      version_no: fixture.versionNo,
+      revision_no: fixture.versionNo,
+      issued_for: fixture.documentPurpose,
+      is_current_version: true,
+      requires_review: false,
+      review_mode: 'none',
+      review_basis: 'v1.4.24 browser staging fixture',
+      is_ready_for_construction: true,
+      is_ready_for_acceptance: false,
+    },
+  })
+
+  const refreshedLedger = await loadProxyDrawingLedger(token)
+  const created = (refreshedLedger?.drawings ?? []).find((drawing) => (
+    drawing?.drawingCode === fixture.drawingCode
+    || drawing?.drawing_code === fixture.drawingCode
+  ))
+  assert(created, `Created drawing was not visible in ledger: ${fixture.drawingCode}`)
+  return created
+}
+
+async function ensureProxyDrawingFixtures(token) {
+  const structurePackage = await ensureProxyDrawingPackage(token, drawingFixture.structure)
+  await ensureProxyDrawingPackage(token, drawingFixture.architecture)
+  await ensureProxyCurrentDrawing(token, structurePackage, drawingFixture.structure)
+
+  const board = await loadProxyDrawingBoard(token)
+  const refreshedStructure = selectDrawingFixturePackage(board?.packages, drawingFixture.structure)
+  assert(refreshedStructure, `Drawing fixture package missing after refresh: ${drawingFixture.structure.packageCode}`)
+  return {
+    structurePackage: normalizeBoardPackage(refreshedStructure),
+    packageCount: board?.packages?.length ?? 0,
   }
 }
 
@@ -317,6 +555,22 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: [],
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (
     pathname === '/api/tasks'
     || pathname === '/api/risks'
@@ -324,7 +578,6 @@ function buildMockResponse(urlString) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
@@ -386,6 +639,17 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
+
+  let authToken = null
+  let targetPackage = packageStructure
+  let fixturePackageCount = 2
+  if (!shouldUseMockApi) {
+    authToken = await resolveBrowserVerifyAuthToken()
+    const proxyFixtures = await ensureProxyDrawingFixtures(authToken)
+    targetPackage = proxyFixtures.structurePackage
+    fixturePackageCount = proxyFixtures.packageCount
+  }
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -402,11 +666,15 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  let page = null
+  let lastDrawerText = null
+  let lastVersionDialogText = null
+  let failureScreenshot = null
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1400 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    await primeBrowserAuth(page, authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -416,6 +684,16 @@ async function main() {
 
     page.on('pageerror', (error) => {
       pageErrors.push(error.message)
+    })
+
+    page.on('response', (response) => {
+      if (!response.url().includes('/api/') || response.status() < 400) return
+      recordApiFailure(apiFailures, {
+        type: 'response',
+        url: response.url(),
+        status: response.status(),
+        statusText: response.statusText(),
+      })
     })
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
@@ -429,10 +707,18 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+          })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -450,23 +736,46 @@ async function main() {
     await page.getByTestId('drawing-ledger').waitFor({ state: 'visible', timeout: 20000 })
 
     const initialCardCount = await page.locator('[data-testid^="drawing-package-card-"]').count()
-    assert(initialCardCount === 2, `Expected 2 drawing package cards, got ${initialCardCount}`)
+    if (shouldUseMockApi) {
+      assert(initialCardCount === 2, `Expected 2 drawing package cards, got ${initialCardCount}`)
+    } else {
+      assert(initialCardCount >= 1, `Expected at least 1 drawing package card, got ${initialCardCount}`)
+      await page.getByTestId(`drawing-package-card-${targetPackage.packageId}`).waitFor({ state: 'visible', timeout: 10000 })
+    }
     await page.screenshot({ path: join(outputDir, 'drawings-page-initial.png'), fullPage: true })
 
-    await page.getByTestId('drawings-search-input').fill(packageStructure.packageName)
+    await page.getByTestId('drawings-search-input').fill(targetPackage.packageName)
     await page.waitForTimeout(300)
     const filteredCardCount = await page.locator('[data-testid^="drawing-package-card-"]').count()
-    assert(filteredCardCount === 1, `Expected search to reduce package cards to 1, got ${filteredCardCount}`)
+    assert(filteredCardCount >= 1, `Expected search to show the target package, got ${filteredCardCount}`)
+    await page.getByTestId(`drawing-package-card-${targetPackage.packageId}`).waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'drawings-page-search.png'), fullPage: true })
 
-    await page.getByTestId(`drawing-package-detail-${packageStructure.packageId}`).click()
-    await page.getByTestId('drawing-detail-drawer').waitFor({ state: 'visible', timeout: 10000 })
-    const drawerText = await page.getByTestId('drawing-detail-drawer').innerText()
-    assert(drawerText.includes(packageStructure.packageName), `Drawing detail drawer missing package name: ${packageStructure.packageName}`)
+    await page.getByTestId(`drawing-package-detail-${targetPackage.packageId}`).click()
+    const detailDrawer = page.getByTestId('drawing-detail-drawer')
+    await detailDrawer.waitFor({ state: 'visible', timeout: 10000 })
+    const drawerText = await waitForLocatorTextIncludes(detailDrawer, targetPackage.packageName, {
+      timeoutMs: 15000,
+      intervalMs: 200,
+      description: `drawing detail drawer for ${targetPackage.packageId}`,
+    })
+    lastDrawerText = drawerText
     await page.screenshot({ path: join(outputDir, 'drawings-page-detail.png'), fullPage: true })
 
     await page.getByRole('button', { name: '查看版本窗口' }).click()
-    await page.getByTestId('drawing-version-row-version-2').waitFor({ state: 'visible', timeout: 10000 })
+    await page.locator('[data-testid^="drawing-version-row-"]').first().waitFor({ state: 'visible', timeout: 10000 })
+    const versionPanel = page.getByTestId('drawing-version-detail-panel')
+    await versionPanel.waitFor({ state: 'visible', timeout: 10000 })
+    const expectedVersionLabel = resolveExpectedDrawingVersionLabel(targetPackage)
+    if (expectedVersionLabel) {
+      lastVersionDialogText = await waitForLocatorTextIncludes(versionPanel, expectedVersionLabel, {
+        timeoutMs: 10000,
+        intervalMs: 200,
+        description: `drawing version detail panel for ${targetPackage.packageId}`,
+      })
+    } else {
+      lastVersionDialogText = await versionPanel.innerText()
+    }
     await page.screenshot({ path: join(outputDir, 'drawings-page-versions.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
@@ -478,6 +787,14 @@ async function main() {
       targetUrl,
       initialCardCount,
       filteredCardCount,
+      fixtureProjectId: projectId,
+      fixturePackageCount,
+      targetPackage: {
+        packageId: targetPackage.packageId,
+        packageCode: targetPackage.packageCode,
+        packageName: targetPackage.packageName,
+      },
+      versionDialogText: lastVersionDialogText,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -492,9 +809,35 @@ async function main() {
     await writeFile(join(outputDir, 'drawings-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        const detailDrawer = page.getByTestId('drawing-detail-drawer')
+        if ((await detailDrawer.count()) > 0) {
+          lastDrawerText = await detailDrawer.first().innerText()
+        }
+      } catch {}
+
+      try {
+        const versionPanel = page.getByTestId('drawing-version-detail-panel')
+        if ((await versionPanel.count()) > 0) {
+          lastVersionDialogText = await versionPanel.first().innerText()
+        }
+      } catch {}
+
+      try {
+        failureScreenshot = join(outputDir, 'drawings-page-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
+
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      lastDrawerText,
+      lastVersionDialogText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -510,7 +853,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

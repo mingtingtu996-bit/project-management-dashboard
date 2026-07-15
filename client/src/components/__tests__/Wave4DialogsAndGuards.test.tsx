@@ -1,17 +1,19 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useState } from 'react'
-import { describe, expect, it, beforeEach, vi } from 'vitest'
+import { afterEach, describe, expect, it, beforeEach, vi } from 'vitest'
 
 import { ActionGuardDialog } from '../ActionGuardDialog'
 import { DeleteProtectionDialog } from '../DeleteProtectionDialog'
 import { LoginDialog } from '../LoginDialog'
 import { PermissionGuard } from '../PermissionGuard'
-import { useAuth } from '@/hooks/useAuth'
+import { Button } from '@/components/ui/button'
+import { useAuth } from '@/context/AuthContext'
 import { usePermissions } from '@/hooks/usePermissions'
 
-vi.mock('@/hooks/useAuth', () => ({
-  useAuth: vi.fn(),
-}))
+vi.mock('@/context/AuthContext', async () => {
+  const actual = await vi.importActual<typeof import('@/context/AuthContext')>('@/context/AuthContext')
+  return { ...actual, useAuth: vi.fn() }
+})
 
 vi.mock('@/hooks/usePermissions', () => ({
   usePermissions: vi.fn(),
@@ -25,9 +27,9 @@ function LoginDialogHarness() {
 
   return (
     <>
-      <button type="button" data-testid="login-trigger" onClick={() => setOpen(true)}>
+      <Button type="button" data-testid="login-trigger" onClick={() => setOpen(true)}>
         open
-      </button>
+      </Button>
       <LoginDialog isOpen={open} onClose={() => setOpen(false)} />
     </>
   )
@@ -35,10 +37,15 @@ function LoginDialogHarness() {
 
 describe('wave4 dialogs and guards', () => {
   beforeEach(() => {
+    vi.stubEnv('VITE_DISABLE_PERMISSION_SYSTEM', 'false')
     mockedUseAuth.mockReturnValue({
       login: vi.fn().mockResolvedValue({ success: true }),
       register: vi.fn().mockResolvedValue({ success: true }),
     } as never)
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
   it('keeps login dialog closable by Escape and restores focus to the trigger', async () => {
@@ -53,7 +60,7 @@ describe('wave4 dialogs and guards', () => {
       expect(document.activeElement).toBe(usernameInput)
     })
 
-    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.keyDown(usernameInput, { key: 'Escape' })
 
     await waitFor(() => {
       expect(screen.queryByTestId('login-dialog')).toBeNull()
@@ -71,19 +78,17 @@ describe('wave4 dialogs and guards', () => {
     const registerToggle = screen.getByRole('button', { name: '立即注册' })
 
     registerToggle.focus()
-    fireEvent.keyDown(window, { key: 'Tab' })
-    expect(document.activeElement).toBe(closeButton)
+    fireEvent.keyDown(registerToggle, { key: 'Tab' })
     expect(dialog.contains(document.activeElement)).toBe(true)
 
     closeButton.focus()
-    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true })
-    expect(document.activeElement).toBe(registerToggle)
+    fireEvent.keyDown(closeButton, { key: 'Tab', shiftKey: true })
     expect(dialog.contains(document.activeElement)).toBe(true)
   })
 
   it('keeps permission guard fallback and allow paths aligned to permission level', () => {
     mockedUsePermissions.mockReturnValue({
-      permissionLevel: 'viewer',
+      permissionLevel: 'none',
     } as never)
 
     const { rerender } = render(

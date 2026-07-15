@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   bindStorageWarningToToast,
+  clearReclaimableAppStorage,
   isQuotaExceededError,
   listAppStorageKeys,
+  listReclaimableAppStorageKeys,
   safeJsonParse,
   safeStorageGet,
   safeStorageSet,
@@ -68,9 +70,67 @@ describe('isQuotaExceededError', () => {
       length: 0,
     } as unknown as Storage
 
-    const result = safeStorageSet(mockStorage, 'pm_key', 'value')
+    const result = safeStorageSet(mockStorage, 'workbuddy_key', 'value')
 
     expect(result).toBe(false)
+    expect(listener).toHaveBeenCalledOnce()
+
+    window.removeEventListener('workbuddy:storage-warning', listener)
+  })
+
+  it('reclaims disposable app cache and retries the write before warning', () => {
+    const store = makeRealStorage()
+    store.setItem('workbuddy_gantt_tasks_snapshot:project-1', 'x'.repeat(100))
+    store.setItem('gantt_tasks', 'x'.repeat(80))
+    store.setItem('auth_token', 'keep-me')
+    store.setItem('current_company_id', 'keep-company')
+
+    let shouldThrowQuota = true
+    const originalSetItem = store.setItem.bind(store)
+    const setItemSpy = vi.spyOn(store, 'setItem').mockImplementation((key, value) => {
+      if (key === 'workbuddy_new_payload' && shouldThrowQuota) {
+        shouldThrowQuota = false
+        throw new DOMException('full', 'QuotaExceededError')
+      }
+      originalSetItem(key, value)
+    })
+    const listener = vi.fn()
+    window.addEventListener('workbuddy:storage-warning', listener)
+
+    const result = safeStorageSet(store, 'workbuddy_new_payload', 'saved')
+
+    expect(result).toBe(true)
+    expect(setItemSpy).toHaveBeenCalledTimes(2)
+    expect(store.getItem('workbuddy_new_payload')).toBe('saved')
+    expect(store.getItem('auth_token')).toBe('keep-me')
+    expect(store.getItem('current_company_id')).toBe('keep-company')
+    expect(store.getItem('workbuddy_gantt_tasks_snapshot:project-1')).toBeNull()
+    expect(store.getItem('gantt_tasks')).toBeNull()
+    expect(listener).not.toHaveBeenCalled()
+
+    window.removeEventListener('workbuddy:storage-warning', listener)
+  })
+
+  it('keeps protected auth and company context when automatic reclaim still cannot save', () => {
+    const store = makeRealStorage()
+    store.setItem('workbuddy_large_cache', 'x'.repeat(100))
+    store.setItem('auth_token', 'keep-me')
+    store.setItem('current_company_id', 'keep-company')
+    vi.spyOn(store, 'setItem').mockImplementation((key, value) => {
+      if (key === 'workbuddy_new_payload') {
+        throw new DOMException('full', 'QuotaExceededError')
+      }
+      return makeRealStorage().setItem(key, value)
+    })
+    const listener = vi.fn()
+    window.addEventListener('workbuddy:storage-warning', listener)
+
+    const result = safeStorageSet(store, 'workbuddy_new_payload', 'saved')
+
+    expect(result).toBe(false)
+    expect(store.getItem('auth_token')).toBe('keep-me')
+    expect(store.getItem('current_company_id')).toBe('keep-company')
+    expect(store.getItem('workbuddy_large_cache')).toBeNull()
     expect(listener).toHaveBeenCalledOnce()
 
     window.removeEventListener('workbuddy:storage-warning', listener)
@@ -102,13 +162,13 @@ describe('bindStorageWarningToToast de-duplication', () => {
 describe('safeStorageGet', () => {
   it('returns value from storage when key exists', () => {
     const store = makeRealStorage()
-    store.setItem('pm_test', 'hello')
-    expect(safeStorageGet(store, 'pm_test')).toBe('hello')
+    store.setItem('workbuddy_test', 'hello')
+    expect(safeStorageGet(store, 'workbuddy_test')).toBe('hello')
   })
 
   it('returns null when key does not exist', () => {
     const store = makeRealStorage()
-    expect(safeStorageGet(store, 'pm_missing')).toBeNull()
+    expect(safeStorageGet(store, 'workbuddy_missing')).toBeNull()
   })
 
   it('returns null and logs error when storage.getItem throws', () => {
@@ -119,7 +179,7 @@ describe('safeStorageGet', () => {
       }),
     } as unknown as Storage
 
-    expect(safeStorageGet(mockStorage, 'pm_key')).toBeNull()
+    expect(safeStorageGet(mockStorage, 'workbuddy_key')).toBeNull()
     expect(errorSpy).toHaveBeenCalled()
   })
 })
@@ -139,7 +199,7 @@ describe('SSR safety: explicit null/undefined storage', () => {
       setItem: () => { throw new Error('blocked') },
     } as unknown as Storage
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(safeStorageSet(brokenStorage, 'pm_key', 'v')).toBe(false)
+    expect(safeStorageSet(brokenStorage, 'workbuddy_key', 'v')).toBe(false)
     expect(errorSpy).toHaveBeenCalled()
   })
 
@@ -147,7 +207,7 @@ describe('SSR safety: explicit null/undefined storage', () => {
     // Passing null → getBrowserStorage(null ?? undefined) = getBrowserStorage(undefined) → window.localStorage
     // In jsdom, window.localStorage is the vi.fn() mock that returns undefined, not null
     // The key behavior: no crash, returns string | null | undefined from mock
-    expect(() => safeStorageGet(null, 'pm_any')).not.toThrow()
+    expect(() => safeStorageGet(null, 'workbuddy_any')).not.toThrow()
   })
 })
 
@@ -190,13 +250,13 @@ describe('safeJsonParse', () => {
 describe('listAppStorageKeys', () => {
   it('returns keys matching app prefixes', () => {
     const store = makeRealStorage()
-    store.setItem('pm_task_1', 'a')
+    store.setItem('gantt_task_1', 'a')
     store.setItem('workbuddy_setting', 'b')
     store.setItem('auth_token', 'c')
     store.setItem('unrelated_key', 'd')
 
     const keys = listAppStorageKeys(store)
-    expect(keys).toContain('pm_task_1')
+    expect(keys).toContain('gantt_task_1')
     expect(keys).toContain('workbuddy_setting')
     expect(keys).toContain('auth_token')
     expect(keys).not.toContain('unrelated_key')
@@ -209,7 +269,7 @@ describe('listAppStorageKeys', () => {
 
   it('returns array for non-empty storage', () => {
     const store = makeRealStorage()
-    store.setItem('pm_x', '1')
+    store.setItem('gantt_x', '1')
     const keys = listAppStorageKeys(store)
     expect(Array.isArray(keys)).toBe(true)
     expect(keys.length).toBeGreaterThan(0)
@@ -218,8 +278,7 @@ describe('listAppStorageKeys', () => {
   it('matches all defined app prefixes', () => {
     const store = makeRealStorage()
     const prefixes = [
-      'pm_', 'workbuddy_', 'auth_', 'access_token', 'device_id',
-      'storage_mode', 'pending_sync_ops', 'modal_manager_',
+      'workbuddy_', 'auth_', 'access_token', 'modal_manager_',
       'user_feedback', 'gantt_', 'wbs_template_', 'wbs-template',
     ]
     prefixes.forEach((prefix) => {
@@ -230,5 +289,38 @@ describe('listAppStorageKeys', () => {
     prefixes.forEach((prefix) => {
       expect(keys.some((k) => k.startsWith(prefix))).toBe(true)
     })
+  })
+})
+
+describe('reclaimable app storage cleanup', () => {
+  it('lists disposable keys by size and excludes protected state', () => {
+    const store = makeRealStorage()
+    store.setItem('workbuddy_small', '1')
+    store.setItem('gantt_large', '12345678901234567890')
+    store.setItem('auth_token', 'token')
+    store.setItem('current_company_id', 'company-1')
+    store.setItem('unrelated_key', 'large'.repeat(100))
+
+    expect(listReclaimableAppStorageKeys({ storage: store })).toEqual([
+      'gantt_large',
+      'workbuddy_small',
+    ])
+  })
+
+  it('clears only reclaimable keys and honors preserveKeys', () => {
+    const store = makeRealStorage()
+    store.setItem('gantt_tasks', 'tasks')
+    store.setItem('workbuddy_projects', 'projects')
+    store.setItem('current_company_id', 'company-1')
+
+    const removed = clearReclaimableAppStorage({
+      storage: store,
+      preserveKeys: ['workbuddy_projects'],
+    })
+
+    expect(removed).toBe(1)
+    expect(store.getItem('gantt_tasks')).toBeNull()
+    expect(store.getItem('workbuddy_projects')).toBe('projects')
+    expect(store.getItem('current_company_id')).toBe('company-1')
   })
 })

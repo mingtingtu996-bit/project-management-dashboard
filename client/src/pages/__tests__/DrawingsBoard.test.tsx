@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { DrawingPackageBoard } from '../Drawings/components/DrawingPackageBoard'
-import { DrawingReadinessSummary } from '../Drawings/components/DrawingReadinessSummary'
+import { DrawingReadinessMetricGrid } from '../Drawings/components/DrawingReadinessMetricGrid'
 import type { DrawingBoardSummary, DrawingPackageCard } from '../Drawings/types'
 
 describe('Drawings board contracts', () => {
@@ -66,11 +66,23 @@ describe('Drawings board contracts', () => {
   })
 
   it('renders the readiness summary', () => {
-    render(<DrawingReadinessSummary summary={summary} projectName="示例项目" />)
+    render(<DrawingReadinessMetricGrid summary={summary} projectName="示例项目" />)
 
     expect(container.textContent).toContain('图纸准备度总览')
-    expect(container.textContent).toContain('图纸包总数')
-    expect(container.querySelector('section')).toBeTruthy()
+    expect(container.textContent).toContain('总图纸数')
+    expect(container.textContent).toContain('已审批')
+    expect(container.textContent).toContain('待审批')
+    expect(container.textContent).toContain('逾期')
+    expect(container.querySelector('[data-testid="drawing-readiness-progress"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="drawing-detailed-stats"]')).toBeFalsy()
+
+    const detailsToggle = container.querySelector('[data-testid="drawing-detailed-stats-toggle"]') as HTMLButtonElement | null
+    act(() => {
+      detailsToggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    expect(container.querySelector('[data-testid="drawing-detailed-stats"]')).toBeTruthy()
+    expect(container.textContent).toContain('本月计划送审')
   })
 
   it('renders grouped package cards and actions', () => {

@@ -19,7 +19,7 @@ import { useEffect, useRef } from 'react'
 import { useCurrentProject } from '@/hooks/useStore'
 
 import { useProjectInit } from '@/hooks/useProjectInit'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ReportsSkeleton } from '@/components/ui/page-skeleton'
@@ -30,9 +30,13 @@ import { AlertCircle } from 'lucide-react'
 export default function ProjectLayout() {
   const location = useLocation()
   const isMaterialsRoute = location.pathname.endsWith('/materials')
-  const isGanttRoute = location.pathname.endsWith('/gantt')
+  const modelingWorkbenchMode = new URLSearchParams(location.search).get('modelingWorkbench')
+  const isModelingWorkbenchRoute = location.pathname.endsWith('/gantt')
+    && (modelingWorkbenchMode === 'generate' || modelingWorkbenchMode === 'adjust')
+  const isTaskListRoute = location.pathname.endsWith('/gantt')
+  const isDashboardRoute = location.pathname.endsWith('/dashboard')
   const { isLoaded, isLoading, status, errorMessage, retry } = useProjectInit({
-    mode: isMaterialsRoute ? 'materials' : isGanttRoute ? 'gantt' : 'full',
+    mode: isDashboardRoute || isModelingWorkbenchRoute ? 'project_shell' : isMaterialsRoute ? 'materials' : isTaskListRoute ? 'gantt' : 'full',
   })
   const currentProject = useCurrentProject()
   const navigate = useNavigate()
@@ -92,7 +96,7 @@ export default function ProjectLayout() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => navigate(`/company?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
+                onClick={() => navigate(`/workspace?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
               >
                 前往登录入口
               </Button>
@@ -114,12 +118,12 @@ export default function ProjectLayout() {
             项目 ID <code>{projectId}</code> 在数据库中找不到。
             <br />
             <br />
-            <button
-              onClick={() => navigate('/company')}
+            <Button variant="ghost"
+              onClick={() => navigate('/workspace')}
               className="text-white underline"
             >
-              返回公司驾驶舱
-            </button>
+              返回工作台
+            </Button>
           </AlertDescription>
         </Alert>
       </div>
@@ -138,18 +142,18 @@ export default function ProjectLayout() {
             <br />
             <br />
             <div className="flex flex-wrap gap-3">
-              <button
+              <Button variant="ghost"
                 onClick={retry}
                 className="text-white underline"
               >
                 重新加载
-              </button>
-              <button
-                onClick={() => navigate('/company')}
+              </Button>
+              <Button variant="ghost"
+                onClick={() => navigate('/workspace')}
                 className="text-white underline"
               >
-                返回公司驾驶舱
-              </button>
+                返回工作台
+              </Button>
             </div>
           </AlertDescription>
         </Alert>

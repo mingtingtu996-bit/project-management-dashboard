@@ -68,7 +68,7 @@ export function KeyboardShortcuts({
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-w-[var(--dialog-sm-width)]">
           <DialogHeader>
             <DialogTitle>计划编制快捷键</DialogTitle>
             <DialogDescription>这些快捷键只作用于计划编制工作台。</DialogDescription>

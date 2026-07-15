@@ -51,14 +51,9 @@ async function executeMigration() {
     try {
       console.log(`\n[${i + 1}/${statements.length}] 执行: ${sql.substring(0, 50)}...`)
       
-      // 使用RPC执行SQL（需要在Supabase中创建execute_sql函数）
-      // 或者直接使用supabase.rpc()执行存储过程
-      
-      // 由于RPC限制，这里使用简单的方式：
-      // 将复杂SQL拆分，只执行核心DDL/DML
-      
-      // 注意：实际生产环境应该使用Supabase CLI或psql执行Migration
-      // 这里只是为了演示流程
+      // This legacy helper is guidance-only. Use the checked migration runner
+      // (`npm run migrate:pending`) or psql/Supabase CLI for real DDL.
+      // Do not reintroduce arbitrary SQL RPC helpers for migrations.
       
       successCount++
     } catch (error) {
@@ -71,7 +66,7 @@ async function executeMigration() {
   
   if (errorCount > 0) {
     console.log('⚠️  部分语句执行失败，请检查日志')
-    console.log('💡 建议: 使用Supabase Dashboard SQL Editor手动执行Migration文件')
+    console.log('? : ʹSupabase Dashboard SQL EditorִֶMigrationļ')
   } else {
     console.log('✅ Migration执行成功!')
     console.log('📋 默认管理员账户: admin / admin123')

@@ -4,18 +4,36 @@ import { format } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 
 import { EmptyState } from '@/components/EmptyState'
+import { Breadcrumb } from '@/components/Breadcrumb'
 import { PageHeader } from '@/components/PageHeader'
-import { DeleteProtectionDialog } from '@/components/DeleteProtectionDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard } from '@/components/ui/metric-card'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Separator } from '@/components/ui/separator'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useApi } from '@/hooks/useApi'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { useReminderSettings } from '@/hooks/useReminderSettings'
 import {
@@ -31,8 +49,9 @@ import {
 import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
 import { buildMutedUntil, getMuteDurationActionLabel, MUTE_DURATION_OPTIONS, type AllowedMuteHours } from '@/lib/muteDurations'
-import { getCachedProjects } from '@/lib/projectPersistence'
 import { isRealtimeNotificationEvent } from '@/lib/realtime'
+import { translateSourceType } from '@/lib/lineagePresentation'
+import { cn } from '@/lib/utils'
 import { PROJECT_NAVIGATION_LABELS, resolveNotificationTarget } from '@/config/navigation'
 import {
   AlertCircle,
@@ -41,15 +60,16 @@ import {
   Bell,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Clock,
   GanttChart,
   Info,
   LayoutDashboard,
+  MoreHorizontal,
   RefreshCw,
+  Search,
   Settings,
   ShieldAlert,
-  Trash2,
-  User,
   Wifi,
   WifiOff,
 } from 'lucide-react'
@@ -59,9 +79,20 @@ type ReminderScope = 'company' | 'current-project'
 type ReminderTab =
   | 'all'
   | 'unread'
+  | 'processed'
+
+type ReminderTypeFilter =
+  | 'all'
   | 'business-warning'
   | 'system-exception'
   | 'flow-reminder'
+type TouchpointFilter =
+  | 'all'
+  | 'persistent'
+  | 'dashboard_todo'
+  | 'popup'
+  | 'page_banner'
+  | 'system_record'
 type NotificationTargetKey = 'dashboard' | 'reports' | 'tasks' | 'task-summary' | 'planning' | 'risks' | 'license' | 'special' | 'project-home'
 
 interface NotificationApiItem {
@@ -94,6 +125,18 @@ interface NotificationApiItem {
   metadata?: Record<string, unknown>
   resolved_source?: string | null
   resolvedSource?: string | null
+  lifecycle_status?: string | null
+  lifecycleStatus?: string | null
+  touchpoint_type?: string | null
+  touchpointType?: string | null
+  scope_type?: string | null
+  scopeType?: string | null
+  dedupe_key?: string | null
+  dedupeKey?: string | null
+  target_route?: string | null
+  targetRoute?: string | null
+  target_label?: string | null
+  targetLabel?: string | null
   created_at?: string
   createdAt?: string
   updated_at?: string
@@ -122,6 +165,12 @@ interface NormalizedNotification {
   data?: Record<string, unknown>
   metadata?: Record<string, unknown>
   resolvedSource?: string | null
+  lifecycleStatus?: string
+  touchpointType?: string
+  scopeType?: string
+  dedupeKey?: string
+  targetRoute?: string
+  targetLabel?: string
   createdAt: string
   updatedAt?: string
   status?: string
@@ -151,18 +200,48 @@ interface NotificationGroup {
   latestCreatedAt: string
 }
 
-interface NotificationDeleteTarget {
-  id: string
-  title: string
-  targetLabel: string
+interface NotificationCounts {
+  pendingCount: number
+  processedCount: number
+  businessWarningCount: number
+  systemExceptionCount: number
+  systemExceptionMappingCount: number
+  flowReminderCount: number
+  linkedProjectCount: number
+  allCount: number
+}
+
+const EMPTY_NOTIFICATION_COUNTS: NotificationCounts = {
+  pendingCount: 0,
+  processedCount: 0,
+  businessWarningCount: 0,
+  systemExceptionCount: 0,
+  systemExceptionMappingCount: 0,
+  flowReminderCount: 0,
+  linkedProjectCount: 0,
+  allCount: 0,
 }
 
 const TAB_OPTIONS: Array<{ value: ReminderTab; label: string }> = [
   { value: 'all', label: '全部' },
   { value: 'unread', label: '未读' },
+  { value: 'processed', label: '已处理' },
+]
+
+const TYPE_FILTER_OPTIONS: Array<{ value: ReminderTypeFilter; label: string }> = [
+  { value: 'all', label: '全部类型' },
   { value: 'business-warning', label: '业务预警' },
   { value: 'system-exception', label: '系统异常' },
   { value: 'flow-reminder', label: '流程催办' },
+]
+
+const TOUCHPOINT_FILTER_OPTIONS: Array<{ value: TouchpointFilter; label: string }> = [
+  { value: 'all', label: '全部触点' },
+  { value: 'dashboard_todo', label: '今日待办' },
+  { value: 'persistent', label: '通知中心' },
+  { value: 'popup', label: '弹窗' },
+  { value: 'page_banner', label: '页面横幅' },
+  { value: 'system_record', label: '系统记录' },
 ]
 
 function isPlanningMappingNotification(notification: Pick<
@@ -217,6 +296,12 @@ function normalizeNotification(raw: NotificationApiItem): NormalizedNotification
     data: raw.data,
     metadata,
     resolvedSource: raw.resolved_source ?? raw.resolvedSource ?? null,
+    lifecycleStatus: raw.lifecycle_status ?? raw.lifecycleStatus ?? undefined,
+    touchpointType: raw.touchpoint_type ?? raw.touchpointType ?? undefined,
+    scopeType: raw.scope_type ?? raw.scopeType ?? undefined,
+    dedupeKey: raw.dedupe_key ?? raw.dedupeKey ?? undefined,
+    targetRoute: raw.target_route ?? raw.targetRoute ?? undefined,
+    targetLabel: raw.target_label ?? raw.targetLabel ?? undefined,
     createdAt: raw.created_at ?? raw.createdAt ?? new Date().toISOString(),
     updatedAt,
     status: raw.status,
@@ -345,7 +430,7 @@ function getNotificationReadBadge(notification: NormalizedNotification) {
   return getNotificationStateLabel(notification)
 }
 
-function getReminderTab(notification: NormalizedNotification): Exclude<ReminderTab, 'all' | 'unread'> {
+function getReminderTab(notification: NormalizedNotification): Exclude<ReminderTypeFilter, 'all'> {
   if (isPlanningMappingNotification(notification)) {
     return 'system-exception'
   }
@@ -395,6 +480,11 @@ function getReminderTab(notification: NormalizedNotification): Exclude<ReminderT
   return 'system-exception'
 }
 
+function getReminderTypeLabel(notification: NormalizedNotification) {
+  const type = getReminderTab(notification)
+  return TYPE_FILTER_OPTIONS.find((option) => option.value === type)?.label ?? type
+}
+
 function getSeverityRank(notification: NormalizedNotification) {
   if (notification.severity === 'critical') return 3
   if (notification.severity === 'warning') return 2
@@ -410,7 +500,41 @@ function getNotificationStateLabel(notification: NormalizedNotification) {
   return '未读'
 }
 
+function getNotificationBusinessGroupKey(notification: NormalizedNotification, target: NotificationTarget) {
+  const reminderTab = getReminderTab(notification)
+  const touchpointType = notification.touchpointType || 'persistent'
+  if (notification.dedupeKey) {
+    return `${reminderTab}:${touchpointType}:${notification.dedupeKey}`
+  }
+  if (notification.sourceEntityType && notification.sourceEntityId) {
+    return `${reminderTab}:${touchpointType}:${notification.sourceEntityType}:${notification.sourceEntityId}`
+  }
+  return `${reminderTab}:${target.key}`
+}
+
+function normalizeNotificationCounts(value: unknown): NotificationCounts {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return EMPTY_NOTIFICATION_COUNTS
+  }
+
+  const record = value as Record<string, unknown>
+  return {
+    pendingCount: Number(record.pendingCount ?? 0),
+    processedCount: Number(record.processedCount ?? 0),
+    businessWarningCount: Number(record.businessWarningCount ?? 0),
+    systemExceptionCount: Number(record.systemExceptionCount ?? 0),
+    systemExceptionMappingCount: Number(record.systemExceptionMappingCount ?? 0),
+    flowReminderCount: Number(record.flowReminderCount ?? 0),
+    linkedProjectCount: Number(record.linkedProjectCount ?? 0),
+    allCount: Number(record.allCount ?? 0),
+  }
+}
+
 export default function Notifications() {
+  useEffect(() => {
+    document.title = '通知中心 | WorkBuddy'
+  }, [])
+
   const currentProject = useCurrentProject()
   const setCurrentProject = useSetCurrentProject()
   const { isAuthenticated, loading: authLoading } = useAuth()
@@ -420,6 +544,7 @@ export default function Notifications() {
   const lastRealtimeEvent = useLastRealtimeEvent()
   const setConnectionMode = useSetConnectionMode()
   const notifications = useNotifications()
+  const projects = useStore((state) => state.projects)
   const setNotifications = useStore((state) => state.setNotifications)
   const setSharedSliceStatus = useStore((state) => state.setSharedSliceStatus)
   const api = useApi()
@@ -435,16 +560,14 @@ export default function Notifications() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [scope, setScope] = useState<ReminderScope>('company')
   const [tab, setTab] = useState<ReminderTab>('all')
+  const [typeFilter, setTypeFilter] = useState<ReminderTypeFilter>('all')
+  const [touchpointFilter, setTouchpointFilter] = useState<TouchpointFilter>('all')
+  const [searchQuery, setSearchQuery] = useState('')
   const [systemExceptionFilter, setSystemExceptionFilter] = useState<'all' | 'mapping'>('all')
-  const [assigneeFilter, setAssigneeFilter] = useState<string>('all')
-  const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false)
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false)
   const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
-  const [deleteTarget, setDeleteTarget] = useState<NotificationDeleteTarget | null>(null)
-  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
-  const assigneeDropdownRef = useRef<HTMLDivElement>(null)
-  const settingsPanelRef = useRef<HTMLDivElement>(null)
+  const [notificationCounts, setNotificationCounts] = useState<NotificationCounts>(EMPTY_NOTIFICATION_COUNTS)
   const realtimeRefreshTimeoutRef = useRef<number | null>(null)
   const reminderProjectId = scope === 'current-project' ? currentProject?.id ?? projectIdFromQuery : undefined
   const {
@@ -453,20 +576,6 @@ export default function Notifications() {
     saveReminderSettings,
     saving: savingSettings,
   } = useReminderSettings(reminderProjectId, { enabled: !authLoading && isAuthenticated })
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (assigneeDropdownRef.current && !assigneeDropdownRef.current.contains(event.target as Node)) {
-        setAssigneeDropdownOpen(false)
-      }
-      if (settingsPanelRef.current && !settingsPanelRef.current.contains(event.target as Node)) {
-        setSettingsPanelOpen(false)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(location.search)
@@ -480,9 +589,9 @@ export default function Notifications() {
 
     if (!nextProjectId) return
 
-    const cachedProject = getCachedProjects().find((project) => project.id === nextProjectId) ?? null
-    if (cachedProject) {
-      setCurrentProject(cachedProject as never)
+    const project = projects.find((candidate) => candidate.id === nextProjectId) ?? null
+    if (project) {
+      setCurrentProject(project)
     }
     setScope('current-project')
   }, [location.search, setCurrentProject])
@@ -491,6 +600,7 @@ export default function Notifications() {
     if (authLoading || !isAuthenticated) {
       setLoadError(null)
       setSharedSliceStatus('notifications', { loading: false, error: null })
+      setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
       if (!options?.silent) {
         setLoading(false)
       }
@@ -509,12 +619,26 @@ export default function Notifications() {
         ? currentProject?.id ?? projectIdFromQuery
         : undefined
 
-      let url = '/api/notifications?limit=100'
+      let url = '/api/notifications?limit=100&touchpointType=all'
       if (effectiveProjectId) {
         url += `&projectId=${effectiveProjectId}`
       }
 
-      const response = await api.get<NotificationApiItem[]>(url)
+      let summaryUrl = '/api/notifications/summary'
+      if (effectiveProjectId) {
+        summaryUrl += `?projectId=${effectiveProjectId}`
+      }
+
+      const [responseResult, summaryResult] = await Promise.allSettled([
+        api.get<NotificationApiItem[]>(url),
+        api.get<NotificationCounts>(summaryUrl),
+      ])
+
+      if (responseResult.status !== 'fulfilled') {
+        throw responseResult.reason
+      }
+
+      const response = responseResult.value
       if (!Array.isArray(response)) {
         throw new Error('\u63d0\u9192\u6570\u636e\u683c\u5f0f\u4e0d\u6b63\u786e')
       }
@@ -523,6 +647,11 @@ export default function Notifications() {
         .filter(isReminderNotification)
 
       setNotifications(normalized)
+      if (summaryResult.status === 'fulfilled') {
+        setNotificationCounts(normalizeNotificationCounts(summaryResult.value))
+      } else {
+        setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
+      }
       setSharedSliceStatus('notifications', { loading: false, error: null })
     } catch (error) {
       console.error('Failed to load notifications:', error)
@@ -532,6 +661,7 @@ export default function Notifications() {
 
       // 10.10b: 不清空 store 数据，保留上次成功加载的内容；仅设置 error 状态
       setSharedSliceStatus('notifications', { loading: false, error: message })
+      setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
       if (!silent) {
         setLoadError(message)
         toast({ title: '加载失败', description: message, variant: 'destructive' })
@@ -549,6 +679,7 @@ export default function Notifications() {
       setLoading(false)
       setLoadError(null)
       setSharedSliceStatus('notifications', { loading: false, error: null })
+      setNotificationCounts(EMPTY_NOTIFICATION_COUNTS)
       return
     }
     void loadNotifications()
@@ -605,8 +736,10 @@ export default function Notifications() {
     try {
       await api.put(`/api/notifications/${id}/acknowledge`)
       patchNotifications([id], { isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'acknowledged' })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to acknowledge notification:', error)
+      toast({ variant: 'destructive', title: '确认通知失败，请重试' })
     }
   }
 
@@ -619,8 +752,10 @@ export default function Notifications() {
         mutedUntil: buildMutedUntil(muteHours),
         status: 'muted',
       })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mute notification:', error)
+      toast({ variant: 'destructive', title: '静音通知失败，请重试' })
     }
   }
 
@@ -629,8 +764,10 @@ export default function Notifications() {
     try {
       await api.put('/api/notifications/acknowledge-group', { ids })
       patchNotifications(ids, { isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'acknowledged' })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to acknowledge notifications:', error)
+      toast({ variant: 'destructive', title: '批量确认失败，请重试' })
     }
   }
 
@@ -644,8 +781,10 @@ export default function Notifications() {
         mutedUntil: buildMutedUntil(muteHours),
         status: 'muted',
       })
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mute notifications:', error)
+      toast({ variant: 'destructive', title: '批量静音失败，请重试' })
     }
   }
 
@@ -657,49 +796,47 @@ export default function Notifications() {
       }
       await api.put(url)
       setNotifications(notifications.map((item) => ({ ...item, isRead: true, isMuted: false, muteExpired: false, mutedUntil: undefined, status: 'read' })))
+      void loadNotifications({ silent: true })
     } catch (error) {
       console.error('Failed to mark all as read:', error)
+      toast({ variant: 'destructive', title: '全部标记已读失败，请重试' })
     }
   }
 
-  const requestDeleteNotification = (item: DecoratedNotification) => {
-    setDeleteTarget({
-      id: item.id,
-      title: item.title,
-      targetLabel: item.target.label,
-    })
-  }
-
-  const deleteNotification = async () => {
-    if (!deleteTarget) return
-
-    try {
-      setDeleteSubmitting(true)
-      await api.delete(`/api/notifications/${deleteTarget.id}`)
-      setNotifications(notifications.filter((item) => item.id !== deleteTarget.id))
-      setDeleteTarget(null)
-      toast({
-        title: '提醒已删除',
-        description: `“${deleteTarget.title}”已从提醒中心移除，不会影响原业务数据。`,
-      })
-    } catch (error) {
-      console.error('Failed to delete notification:', error)
-      toast({
-        title: '删除提醒失败',
-        description: getApiErrorMessage(error, '请稍后重试。'),
-        variant: 'destructive',
-      })
-    } finally {
-      setDeleteSubmitting(false)
+  const exportFilteredNotifications = () => {
+    const header = ['标题', '内容', '类型', '状态', '处理入口', '负责人', '时间']
+    const escapeCsvCell = (value: string | number | null | undefined) => {
+      const text = value === null || value === undefined ? '' : String(value)
+      return `"${text.replace(/"/g, '""')}"`
     }
+    const rows = filteredNotifications.map((item) => [
+      item.title,
+      item.content,
+      getReminderTypeLabel(item),
+      getNotificationStateLabel(item),
+      item.target.label,
+      item.assignee ?? '',
+      item.createdAt,
+    ])
+    const csv = [header, ...rows].map((row) => row.map(escapeCsvCell).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'notifications.csv'
+    link.click()
+    URL.revokeObjectURL(url)
   }
 
   const decoratedNotifications = useMemo(
     () =>
       notifications.map((item) => {
-        const target = resolveNotificationTarget(item, currentProject?.id)
-        const groupLabel = target.label
-        const groupKey = `${getReminderTab(item)}:${target.key}`
+        const resolvedTarget = resolveNotificationTarget(item, currentProject?.id)
+        const target = item.targetRoute
+          ? { ...resolvedTarget, href: item.targetRoute, label: item.targetLabel || resolvedTarget.label }
+          : resolvedTarget
+        const groupLabel = item.targetLabel || target.label
+        const groupKey = getNotificationBusinessGroupKey(item, target)
 
         return {
           ...item,
@@ -711,35 +848,39 @@ export default function Notifications() {
     [currentProject?.id, notifications],
   )
 
-  const pendingCount = decoratedNotifications.filter((item) => !item.isRead && !item.isMuted).length
-  const processedCount = decoratedNotifications.filter((item) => item.isRead || item.isMuted).length
-  const businessWarningCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'business-warning').length
-  const systemExceptionCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception').length
-  const systemExceptionMappingCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception' && isPlanningMappingNotification(item)).length
-  const flowReminderCount = decoratedNotifications.filter((item) => getReminderTab(item) === 'flow-reminder').length
-  const linkedProjectCount = decoratedNotifications.filter((item) => Boolean(item.projectId)).length
-  const allCount = decoratedNotifications.length
-
-  const assigneeList = useMemo(
-    () => Array.from(new Set(decoratedNotifications.map((item) => item.assignee).filter(Boolean) as string[])).sort(),
-    [decoratedNotifications],
-  )
+  const pendingCount = notificationCounts.pendingCount
+  const processedCount = notificationCounts.processedCount
+  const businessWarningCount = notificationCounts.businessWarningCount
+  const systemExceptionCount = notificationCounts.systemExceptionCount
+  const systemExceptionMappingCount = notificationCounts.systemExceptionMappingCount
+  const flowReminderCount = notificationCounts.flowReminderCount
+  const linkedProjectCount = notificationCounts.linkedProjectCount
+  const allCount = notificationCounts.allCount
 
   const filteredNotifications = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase()
     return decoratedNotifications.filter((item) => {
-      const assigneeMatch = assigneeFilter === 'all' || item.assignee === assigneeFilter
       const tabMatch =
         tab === 'all' ||
         (tab === 'unread' && !item.isRead && !item.isMuted) ||
-        getReminderTab(item) === tab
+        (tab === 'processed' && (item.isRead || item.isMuted || item.status === 'acknowledged'))
+      const typeMatch = typeFilter === 'all' || getReminderTab(item) === typeFilter
+      const itemTouchpointType = item.touchpointType || 'persistent'
+      const touchpointMatch = touchpointFilter === 'all' || itemTouchpointType === touchpointFilter
       const systemExceptionMatch =
-        tab !== 'system-exception' ||
+        typeFilter !== 'system-exception' ||
         systemExceptionFilter === 'all' ||
         isPlanningMappingNotification(item)
+      const searchMatch =
+        normalizedQuery.length === 0 ||
+        item.title.toLowerCase().includes(normalizedQuery) ||
+        item.content.toLowerCase().includes(normalizedQuery) ||
+        item.target.label.toLowerCase().includes(normalizedQuery) ||
+        (item.assignee ?? '').toLowerCase().includes(normalizedQuery)
 
-      return assigneeMatch && tabMatch && systemExceptionMatch
+      return tabMatch && typeMatch && touchpointMatch && systemExceptionMatch && searchMatch
     })
-  }, [assigneeFilter, decoratedNotifications, systemExceptionFilter, tab])
+  }, [decoratedNotifications, searchQuery, systemExceptionFilter, tab, touchpointFilter, typeFilter])
 
   const groupedNotifications = useMemo(() => {
     const groups = new Map<string, NotificationGroup>()
@@ -804,6 +945,39 @@ export default function Notifications() {
 
   const scopeLabel = scope === 'company' ? '\u516c\u53f8\u7ea7\u805a\u5408' : '\u5f53\u524d\u9879\u76ee\u805a\u7126'
   const currentTabCount = filteredNotifications.length
+  const hasActiveFilters =
+    tab !== 'all' ||
+    typeFilter !== 'all' ||
+    touchpointFilter !== 'all' ||
+    systemExceptionFilter !== 'all' ||
+    searchQuery.trim().length > 0
+  const resetNotificationFilters = () => {
+    setTab('all')
+    setTypeFilter('all')
+    setTouchpointFilter('all')
+    setSystemExceptionFilter('all')
+    setSearchQuery('')
+  }
+  const tabCounts: Record<ReminderTab, number> = {
+    all: decoratedNotifications.length,
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
+    unread: decoratedNotifications.filter((item) => !item.isRead && !item.isMuted).length,
+    processed: decoratedNotifications.filter((item) => item.isRead || item.isMuted || item.status === 'acknowledged').length,
+  }
+  const typeCounts: Record<ReminderTypeFilter, number> = {
+    all: decoratedNotifications.length,
+    'business-warning': decoratedNotifications.filter((item) => getReminderTab(item) === 'business-warning').length,
+    'system-exception': decoratedNotifications.filter((item) => getReminderTab(item) === 'system-exception').length,
+    'flow-reminder': decoratedNotifications.filter((item) => getReminderTab(item) === 'flow-reminder').length,
+  }
+  const touchpointCounts: Record<TouchpointFilter, number> = {
+    all: decoratedNotifications.length,
+    persistent: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'persistent').length,
+    dashboard_todo: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'dashboard_todo').length,
+    popup: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'popup').length,
+    page_banner: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'page_banner').length,
+    system_record: decoratedNotifications.filter((item) => (item.touchpointType || 'persistent') === 'system_record').length,
+  }
   const connectionLabel =
     connectionMode === 'polling'
       ? '轮询同步'
@@ -827,7 +1001,8 @@ export default function Notifications() {
 
   if (loading) {
     return (
-      <div className="page-enter space-y-6 p-6">
+      <div className="page-shell">
+        <Breadcrumb items={[{ label: PROJECT_NAVIGATION_LABELS.notifications }]} />
         <Card className="overflow-hidden">
           <CardContent className="pt-6">
             <LoadingState
@@ -844,10 +1019,11 @@ export default function Notifications() {
     const redirectTarget = `${location.pathname}${location.search}`
 
     return (
-      <div className="page-enter space-y-6 p-6" data-testid="notifications-login-required">
+      <div className="page-shell" data-testid="notifications-login-required">
+        <Breadcrumb items={[{ label: PROJECT_NAVIGATION_LABELS.notifications }]} />
         <PageHeader
-          eyebrow={'公司级第二入口'}
-          title={PROJECT_NAVIGATION_LABELS.notifications}
+          eyebrow="系统通知"
+          title="通知提醒"
           subtitle=""
         >
           <Badge variant="secondary">登录后可用</Badge>
@@ -873,7 +1049,7 @@ export default function Notifications() {
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => navigate(`/company?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
+                onClick={() => navigate(`/workspace?login=1&redirect=${encodeURIComponent(redirectTarget)}`)}
               >
                 前往登录入口
               </Button>
@@ -885,89 +1061,96 @@ export default function Notifications() {
   }
 
   return (
-    <div className="page-enter space-y-6 p-6" data-testid="notifications-page">
+    <div className="page-shell" data-testid="notifications-page">
+      <Breadcrumb items={[{ label: PROJECT_NAVIGATION_LABELS.notifications }]} />
       <PageHeader
-        eyebrow={'\u516c\u53f8\u7ea7\u7b2c\u4e8c\u5165\u53e3'}
-        title={PROJECT_NAVIGATION_LABELS.notifications}
+        eyebrow="系统通知"
+        title="通知提醒"
         subtitle=""
       >
-        <Badge variant="secondary">{scopeLabel}</Badge>
-        <Badge variant="secondary">
-          {connectionLabel}
-        </Badge>
-
-        <div className="relative" ref={assigneeDropdownRef}>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setAssigneeDropdownOpen((prev) => !prev)}
-            className="gap-2"
-          >
-            <User className="h-4 w-4" />
-            {assigneeFilter === 'all' ? '\u5168\u90e8\u8d1f\u8d23\u4eba' : assigneeFilter}
-            <ChevronDown className="h-4 w-4" />
-          </Button>
-          {assigneeDropdownOpen && (
-            <div className="absolute right-0 top-full z-20 mt-2 w-48 rounded-2xl border border-slate-200 bg-white py-1 shadow-xl">
-              <button
-                onClick={() => {
-                  setAssigneeFilter('all')
-                  setAssigneeDropdownOpen(false)
-                }}
-                className={`w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-slate-50 ${
-                  assigneeFilter === 'all' ? 'font-medium text-blue-600' : 'text-slate-700'
-                }`}
-              >
-                {'\u5168\u90e8\u8d1f\u8d23\u4eba'}
-              </button>
-              {assigneeList.length === 0 ? (
-                <div className="px-4 py-2.5 text-sm text-slate-400">{'\u6682\u65e0\u8d1f\u8d23\u4eba\u6570\u636e'}</div>
-              ) : (
-                assigneeList.map((name) => (
-                  <button
-                    key={name}
-                    onClick={() => {
-                      setAssigneeFilter(name)
-                      setAssigneeDropdownOpen(false)
-                    }}
-                    className={`w-full px-4 py-2.5 text-left text-sm transition-colors hover:bg-slate-50 ${
-                      assigneeFilter === name ? 'font-medium text-blue-600' : 'text-slate-700'
-                    }`}
-                  >
-                    {name}
-                  </button>
-                ))
-              )}
-            </div>
-          )}
+        <div className="relative w-full min-w-56 lg:w-72">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+          <Input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            aria-label="搜索提醒"
+            placeholder="搜索提醒标题、内容、入口"
+            className="pl-9"
+            data-testid="notifications-search-input"
+          />
         </div>
 
-        {pendingCount > 0 && (
-          <Button variant="outline" size="sm" onClick={markAllAsRead}>
-            {'\u5168\u90e8\u6807\u8bb0\u5df2\u8bfb'}
-          </Button>
-        )}
+        <Select
+          value={typeFilter}
+          onValueChange={(value) => {
+            const nextType = value as ReminderTypeFilter
+            setTypeFilter(nextType)
+            if (nextType !== 'system-exception') {
+              setSystemExceptionFilter('all')
+            }
+          }}
+        >
+          <SelectTrigger className="w-full lg:w-40" data-testid="notifications-type-select">
+            <SelectValue placeholder="提醒类型" />
+          </SelectTrigger>
+          <SelectContent align="end" side="bottom">
+            {TYPE_FILTER_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-        <Button variant="outline" size="sm" onClick={() => void loadNotifications()}>
-          <RefreshCw className="h-4 w-4" />
-        </Button>
+        <Select value={tab} onValueChange={(value) => setTab(value as ReminderTab)}>
+          <SelectTrigger className="w-full lg:w-36" data-testid="notifications-status-select">
+            <SelectValue placeholder="处理状态" />
+          </SelectTrigger>
+          <SelectContent align="end" side="bottom">
+            {TAB_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
 
-        <div className="relative" ref={settingsPanelRef}>
-          <Button
-            variant={settingsPanelOpen ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setSettingsPanelOpen((prev) => !prev)}
-            className="gap-2"
-          >
-            <Settings className="h-4 w-4" />
-            {'\u63d0\u9192\u8bbe\u7f6e'}
-          </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2" data-testid="notifications-more-actions">
+              <MoreHorizontal className="h-4 w-4" />
+              更多操作
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sideOffset={8} className="w-48">
+            <DropdownMenuItem onClick={() => void markAllAsRead()} disabled={pendingCount === 0}>
+              全部标记已读
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={exportFilteredNotifications} disabled={filteredNotifications.length === 0}>
+              导出当前筛选
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => void loadNotifications()}>
+              刷新提醒
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-          {settingsPanelOpen && (
-            <div className="absolute right-0 top-full z-20 mt-2 w-[340px] rounded-2xl border border-slate-200 bg-white p-4 shadow-xl">
+        <Popover open={settingsPanelOpen} onOpenChange={setSettingsPanelOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant={settingsPanelOpen ? 'default' : 'outline'}
+              size="icon"
+              aria-label="提醒设置"
+            >
+              <Settings className="h-4 w-4" />
+              <span className="sr-only">提醒设置</span>
+            </Button>
+          </PopoverTrigger>
+
+          <PopoverContent align="end" side="bottom" className="w-80 rounded-xl border-slate-200 bg-white p-4 shadow-[var(--el-2)]">
               <div className="space-y-4">
                 <div>
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {'\u63d0\u9192\u8303\u56f4'}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -989,8 +1172,9 @@ export default function Notifications() {
                   </div>
                 </div>
 
-                <div className="border-t border-slate-100 pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                <Separator />
+                <div className="pt-4">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {'\u540c\u6b65\u6a21\u5f0f'}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1013,8 +1197,9 @@ export default function Notifications() {
                   </div>
                 </div>
 
-                <div className="border-t border-slate-100 pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                <Separator />
+                <div className="pt-4">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     {'\u9759\u97f3\u65f6\u957f'}
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -1031,8 +1216,9 @@ export default function Notifications() {
                   </div>
                 </div>
 
-                <div className="border-t border-slate-100 pt-4">
-                  <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                <Separator />
+                <div className="pt-4">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                     \u63d0\u9192\u89c4\u5219
                   </div>
                   <div className="mt-3 space-y-3">
@@ -1080,22 +1266,18 @@ export default function Notifications() {
                     </div>
                     <div className="flex items-center justify-between">
                       <Label htmlFor="enable-popup" className="text-xs text-slate-600">\u542f\u7528\u5f39\u7a97\u63d0\u9192</Label>
-                      <input
+                      <Checkbox
                         id="enable-popup"
-                        type="checkbox"
                         checked={reminderSettings.enable_popup}
-                        onChange={(e) => setReminderSettings({ ...reminderSettings, enable_popup: e.target.checked })}
-                        className="h-4 w-4 rounded border-slate-300"
+                        onCheckedChange={(checked) => setReminderSettings({ ...reminderSettings, enable_popup: checked === true })}
                       />
                     </div>
                     <div className="flex items-center justify-between">
                       <Label htmlFor="enable-notification" className="text-xs text-slate-600">\u542f\u7528\u901a\u77e5</Label>
-                      <input
+                      <Checkbox
                         id="enable-notification"
-                        type="checkbox"
                         checked={reminderSettings.enable_notification}
-                        onChange={(e) => setReminderSettings({ ...reminderSettings, enable_notification: e.target.checked })}
-                        className="h-4 w-4 rounded border-slate-300"
+                        onCheckedChange={(checked) => setReminderSettings({ ...reminderSettings, enable_notification: checked === true })}
                       />
                     </div>
                     <Button
@@ -1110,9 +1292,8 @@ export default function Notifications() {
                 </div>
 
               </div>
-            </div>
-          )}
-        </div>
+          </PopoverContent>
+        </Popover>
       </PageHeader>
 
       {loadError ? (
@@ -1122,102 +1303,104 @@ export default function Notifications() {
         </Alert>
       ) : null}
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card className="rounded-xl border border-slate-200 bg-white p-4" data-testid="notifications-summary-total">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u63d0\u9192\u603b\u6570'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100">
-                <Info className="h-5 w-5 text-slate-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-slate-900">{allCount}</div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl border border-slate-200 bg-white p-4">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u672a\u8bfb'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-50">
-                <Bell className="h-5 w-5 text-amber-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-amber-600">{pendingCount}</div>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl border border-slate-200 bg-white p-4">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u4e1a\u52a1\u9884\u8b66'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-rose-50">
-                <AlertTriangle className="h-5 w-5 text-rose-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-rose-600">{businessWarningCount}</div>
-            <p className="text-xs text-slate-500">系统异常 {systemExceptionCount} 条</p>
-          </CardContent>
-        </Card>
-
-        <Card className="rounded-xl border border-slate-200 bg-white p-4">
-          <CardContent className="space-y-3 p-5">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-slate-500">{'\u6d41\u7a0b\u50ac\u529e'}</span>
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50">
-                <LayoutDashboard className="h-5 w-5 text-blue-600" />
-              </div>
-            </div>
-            <div className="text-3xl font-semibold tracking-tight text-blue-600">{flowReminderCount}</div>
-            <p className="text-xs text-slate-500">
-              {linkedProjectCount > 0 ? `${linkedProjectCount} 条 · 已处理 ${processedCount}` : ''}
-            </p>
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          eyebrow="TOTAL"
+          title="提醒总数"
+          value={allCount}
+          hint={`${currentTabCount} 条当前筛选结果`}
+          tone="slate"
+          icon={<Info className="h-4 w-4" />}
+          testId="notifications-summary-total"
+        />
+        <MetricCard
+          eyebrow="UNREAD"
+          title="未读"
+          value={pendingCount}
+          hint="需要优先确认"
+          tone={pendingCount > 0 ? 'warning' : 'slate'}
+          icon={<Bell className="h-4 w-4" />}
+        />
+        <MetricCard
+          eyebrow="WARNING"
+          title="业务预警"
+          value={businessWarningCount}
+          hint={`系统异常 ${systemExceptionCount} 条`}
+          tone={businessWarningCount > 0 ? 'danger' : 'slate'}
+          icon={<AlertTriangle className="h-4 w-4" />}
+        />
+        <MetricCard
+          eyebrow="FLOW"
+          title="流程催办"
+          value={flowReminderCount}
+          hint={linkedProjectCount > 0 ? `${linkedProjectCount} 条 · 已处理 ${processedCount}` : '暂无关联项目催办'}
+          tone={flowReminderCount > 0 ? 'primary' : 'slate'}
+          icon={<LayoutDashboard className="h-4 w-4" />}
+        />
       </div>
 
-      <Card className="overflow-hidden">
-        <CardContent className="space-y-5 p-0">
-          <div className="flex flex-col gap-4 border-b border-slate-100 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
-            <Tabs
-              value={tab}
-              onValueChange={(value) => {
-                setTab(value as ReminderTab)
-                if (value !== 'system-exception') {
-                  setSystemExceptionFilter('all')
-                }
-              }}
-              className="w-full"
-            >
-              <TabsList className="flex h-auto flex-wrap justify-start gap-2 bg-transparent p-0">
-                {TAB_OPTIONS.map((option) => (
-                  <TabsTrigger
-                    key={option.value}
-                    value={option.value}
-                    className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 data-[state=active]:border-blue-600 data-[state=active]:bg-blue-600 data-[state=active]:text-white"
-                  >
-                    {option.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
-
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              <Badge variant="secondary">{currentTabCount} {'\u6761'}</Badge>
-              <span>{'\u5f53\u524d\u7b5b\u9009\u7ed3\u679c'}</span>
-            </div>
+      <section className="space-y-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <CardHead eyebrow="NOTIFICATIONS" title="通知分组" />
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <Badge variant="secondary">{currentTabCount} {'\u6761'}</Badge>
+            <span>{'\u5f53\u524d\u7b5b\u9009\u7ed3\u679c'}</span>
           </div>
+        </div>
 
-          {tab === 'system-exception' ? (
-            <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-6 pb-4 pt-0">
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value as ReminderTab)}
+          className="w-full"
+        >
+          <TabsList className="flex h-auto w-full flex-wrap justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+            {TAB_OPTIONS.map((option) => (
+              <TabsTrigger
+                key={option.value}
+                value={option.value}
+                className="relative rounded-none border-0 bg-transparent px-0 pb-3 pt-0 text-sm text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
+              >
+                {option.label}({tabCounts[option.value]})
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+
+        <div className="flex flex-wrap items-center gap-2" data-testid="notifications-type-chips">
+            {TYPE_FILTER_OPTIONS.map((option) => (
               <Button
+                key={option.value}
                 type="button"
                 size="sm"
-                variant={systemExceptionFilter === 'all' ? 'default' : 'outline'}
-                onClick={() => setSystemExceptionFilter('all')}
+                variant={typeFilter === option.value ? 'default' : 'outline'}
+                onClick={() => {
+                  setTypeFilter(option.value)
+                  if (option.value !== 'system-exception') {
+                    setSystemExceptionFilter('all')
+                  }
+                }}
               >
-                全部异常
+                {option.label}({typeCounts[option.value]})
               </Button>
+            ))}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2" data-testid="notifications-touchpoint-chips">
+            {TOUCHPOINT_FILTER_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                type="button"
+                size="sm"
+                variant={touchpointFilter === option.value ? 'default' : 'outline'}
+                onClick={() => setTouchpointFilter(option.value)}
+              >
+                {option.label}({touchpointCounts[option.value]})
+              </Button>
+            ))}
+          </div>
+
+          {typeFilter === 'system-exception' ? (
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -1230,34 +1413,29 @@ export default function Notifications() {
             </div>
           ) : null}
 
+        <div className="surface-card overflow-hidden">
           {groupedNotifications.length === 0 ? (
             <div className="px-6 py-8">
               <EmptyState
+                variant={loadError ? 'error' : hasActiveFilters ? 'filter' : 'default'}
                 icon={Bell}
                 title={
                   loadError
                     ? '\u63d0\u9192\u670d\u52a1\u6682\u4e0d\u53ef\u7528'
-                    : scope === 'company'
-                      ? '\u6682\u65e0\u516c\u53f8\u7ea7\u63d0\u9192'
-                      : '\u5f53\u524d\u9879\u76ee\u6682\u65e0\u63d0\u9192'
+                    : '暂无新通知'
                 }
                 description={
                   loadError ||
                   '\u5207\u6362\u63d0\u9192\u8303\u56f4\u6216\u91cd\u7f6e\u7b5b\u9009\u6761\u4ef6\u540e\u518d\u8bd5\u3002'
                 }
-                action={
-                  <>
-                    {!loadError ? (
-                      <Button variant="outline" onClick={() => setTab('all')}>
-                        {'\u91cd\u7f6e\u7b5b\u9009'}
-                      </Button>
-                    ) : null}
-                    <Button onClick={() => void loadNotifications()}>
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                      {loadError ? '\u91cd\u8bd5\u52a0\u8f7d' : '\u5237\u65b0\u63d0\u9192'}
-                    </Button>
-                  </>
-                }
+                onRetry={() => void loadNotifications()}
+                onClearFilter={hasActiveFilters ? resetNotificationFilters : undefined}
+                action={!loadError && !hasActiveFilters ? (
+                  <Button onClick={() => void loadNotifications()}>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {'\u5237\u65b0\u63d0\u9192'}
+                  </Button>
+                ) : null}
               />
             </div>
           ) : (
@@ -1266,6 +1444,8 @@ export default function Notifications() {
                 const tone = getTargetTone(group.target)
                 const GroupIcon = getTargetIcon(group.target)
                 const isExpanded = expandedGroups[group.key] ?? true
+                const groupDate = format(new Date(group.latestCreatedAt), 'MM月dd日 HH:mm', { locale: zhCN })
+                const groupTypeLabel = TYPE_FILTER_OPTIONS.find((option) => option.value === group.key.split(':')[0])?.label
 
                 return (
                   <section key={group.key} className="px-6 py-5 transition-colors hover:bg-slate-50">
@@ -1279,15 +1459,16 @@ export default function Notifications() {
 
                         <div className="min-w-0 flex-1 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="text-sm font-semibold text-slate-900">{group.label}</h3>
-                            <Badge variant={tone.badge}>{group.target.label}</Badge>
+                            <h3 className="eyebrow">{group.label}</h3>
+                            <span className="text-xs text-slate-500">{groupDate}</span>
+                            <Badge variant={group.unreadCount > 0 ? 'default' : 'secondary'}>{`未读 ${group.unreadCount}`}</Badge>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                            {groupTypeLabel ? <span>{groupTypeLabel}</span> : null}
+                            <span>{`${group.items.length} 条同类提醒`}</span>
                             {group.items.some((item) => isPlanningMappingNotification(item)) ? (
-                              <Badge variant="outline">S2 mapping</Badge>
+                              <span>计划关联</span>
                             ) : null}
-                            <Badge variant="secondary">{`${group.items.length} 条同类提醒`}</Badge>
-                            {group.unreadCount > 0 && <Badge variant="destructive">{`未读 ${group.unreadCount}`}</Badge>}
-                            {group.mutedCount > 0 && <Badge variant="outline">{`静音 ${group.mutedCount}`}</Badge>}
-                            {group.expiredMuteCount > 0 && <Badge variant="outline">{`静音到期 ${group.expiredMuteCount}`}</Badge>}
                           </div>
                         </div>
                       </div>
@@ -1322,17 +1503,23 @@ export default function Notifications() {
                         const tone = getTargetTone(target)
                         const TargetIcon = getTargetIcon(target)
                         const timestamp = format(new Date(item.createdAt), 'MM\u6708dd\u65e5 HH:mm', { locale: zhCN })
+                        const typeLabel = getReminderTypeLabel(item)
+                        const sourceLabel = translateSourceType(item.sourceEntityType) || item.resolvedSource || '系统'
 
                         return (
                           <div
                             key={item.id}
-                            className={`flex flex-col gap-4 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-slate-200 ${
-                              item.isMuted ? 'opacity-85' : item.isRead ? 'bg-white' : 'bg-blue-50/30'
-                            }`}
+                            className={cn(
+                              'group flex flex-col gap-4 rounded-xl border px-4 py-4 transition-colors hover:bg-slate-50/60',
+                              item.isRead || item.isMuted
+                                ? 'border-slate-100 bg-white'
+                                : 'border-blue-200 bg-blue-50/50 ring-1 ring-inset ring-blue-200',
+                              item.isMuted && 'opacity-85',
+                            )}
                           >
                             <div className="flex min-w-0 flex-1 gap-4">
                               <div className="mt-0.5 flex-shrink-0">
-                                <div className={`flex h-10 w-10 items-center justify-center rounded-2xl ${tone.bg}`}>
+                                <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone.bg}`}>
                                   <TargetIcon className={`h-4 w-4 ${tone.icon}`} />
                                 </div>
                               </div>
@@ -1340,11 +1527,9 @@ export default function Notifications() {
                               <div className="min-w-0 flex-1 space-y-2">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <h4 className="text-sm font-semibold text-slate-900">{item.title}</h4>
-                                  <Badge variant={tone.badge}>{target.label}</Badge>
+                                  <Badge variant={tone.badge}>{typeLabel}</Badge>
                                   <Badge variant={item.isRead ? 'secondary' : 'default'}>{getNotificationStateLabel(item)}</Badge>
-                                  <Badge variant="outline">{getNotificationLevelLabel(item)}</Badge>
-                                  {item.muteExpired ? <Badge variant="outline">静音已到期</Badge> : null}
-                                  {item.assignee && <Badge variant="secondary">{`\u8d1f\u8d23\u4eba ${item.assignee}`}</Badge>}
+                                  <ChevronRight className="ml-auto h-4 w-4 text-slate-300 transition-colors group-hover:text-slate-500" aria-hidden="true" />
                                 </div>
 
                                 <p className="text-sm leading-6 text-slate-600">{item.content}</p>
@@ -1354,13 +1539,44 @@ export default function Notifications() {
                                   </div>
                                 ) : null}
 
-                                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-                                  <span className="inline-flex items-center gap-1">
-                                    <Clock className="h-3.5 w-3.5" />
-                                    {timestamp}
-                                  </span>
-                                  {item.projectId && <span>{`\u9879\u76ee ${item.projectId}`}</span>}
-                                  {item.sourceEntityType && <span>{`\u6765\u6e90 ${item.sourceEntityType}`}</span>}
+                                <div className="grid gap-5 rounded-xl border border-slate-100 bg-white/70 px-5 py-5 text-xs text-slate-500 sm:grid-cols-2 lg:grid-cols-4">
+                                  <div>
+                                    <div className="font-medium text-slate-700">入口</div>
+                                    <div className="mt-1">{target.label}</div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-slate-700">级别</div>
+                                    <div className="mt-1">{getNotificationLevelLabel(item)}</div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-slate-700">负责人</div>
+                                    <div className="mt-1">{item.assignee || '未指派'}</div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-slate-700">时间</div>
+                                    <div className="mt-1 inline-flex items-center gap-1">
+                                      <Clock className="h-3.5 w-3.5" />
+                                      {timestamp}
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-slate-700">来源</div>
+                                    <div className="mt-1">{sourceLabel}</div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-slate-700">项目</div>
+                                    <div className="mt-1">{item.projectId || '公司级'}</div>
+                                  </div>
+                                  <div>
+                                    <div className="font-medium text-slate-700">静音</div>
+                                    <div className="mt-1">{item.isMuted ? '静音中' : item.muteExpired ? '静音已到期' : '未静音'}</div>
+                                  </div>
+                                  {isPlanningMappingNotification(item) ? (
+                                    <div>
+                                      <div className="font-medium text-slate-700">异常标识</div>
+                                      <div className="mt-1">计划关联</div>
+                                    </div>
+                                  ) : null}
                                 </div>
                               </div>
                             </div>
@@ -1387,16 +1603,6 @@ export default function Notifications() {
                                 {getMuteDurationActionLabel(muteDurationHours)}
                               </Button>
 
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                title={'删除提醒'}
-                                aria-label={`删除提醒 ${item.title}`}
-                                data-testid={`notification-delete-action-${item.id}`}
-                                onClick={() => requestDeleteNotification(item)}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
                             </div>
                           </div>
                         )
@@ -1407,38 +1613,16 @@ export default function Notifications() {
               })}
             </div>
           )}
+        </div>
 
-          {groupedNotifications.length > 0 && (
-            <div className="flex items-center justify-between border-t border-slate-100 px-6 py-4 text-sm text-slate-500">
-              <span>{`\u5171 ${currentTabCount} \u6761\u63d0\u9192`}</span>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        {groupedNotifications.length > 0 && (
+          <div className="flex flex-col gap-2 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <span>{`\u5171 ${currentTabCount} \u6761\u63d0\u9192`}</span>
+            <span>{`${scopeLabel} · ${connectionLabel}`}</span>
+          </div>
+        )}
+      </section>
 
-      <DeleteProtectionDialog
-        open={Boolean(deleteTarget)}
-        onOpenChange={(open) => {
-          if (!open) {
-            setDeleteTarget(null)
-          }
-        }}
-        title="删除提醒"
-        description={
-          deleteTarget
-            ? `确认删除“${deleteTarget.title}”这条提醒？删除后只会从提醒中心移除，不会删除对应业务数据。`
-            : '确认删除当前提醒。'
-        }
-        warning={
-          deleteTarget
-            ? `来源模块：${deleteTarget.targetLabel}`
-            : undefined
-        }
-        confirmLabel={deleteSubmitting ? '删除中...' : '确认删除'}
-        loading={deleteSubmitting}
-        onConfirm={() => void deleteNotification()}
-        testId="notification-delete-guard"
-      />
     </div>
   )
 }

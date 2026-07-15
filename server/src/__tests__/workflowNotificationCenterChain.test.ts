@@ -38,6 +38,7 @@ const state = vi.hoisted(() => {
     insertNotification: vi.fn(async (notification: Record<string, any>) => {
       const row = {
         id: notification.id ?? `notification-${notifications.length + 1}`,
+        touchpoint_type: notification.touchpoint_type ?? 'persistent',
         created_at: notification.created_at ?? new Date().toISOString(),
         updated_at: notification.updated_at ?? notification.created_at ?? new Date().toISOString(),
         ...notification,
@@ -98,6 +99,7 @@ const state = vi.hoisted(() => {
     assignee_user_id: '11111111-1111-4111-8111-111111111111',
     planned_start_date: '2026-04-15',
     planned_end_date: '2026-04-20',
+    building_object_id: '99999999-9999-4999-8999-999999999999',
     responsible_unit: null,
     assignee_unit: null,
     participant_unit_id: null,
@@ -125,11 +127,11 @@ const state = vi.hoisted(() => {
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
 
-    if (normalized.includes('from construction_drawings where id = ? limit 1')) {
+    if (normalized.includes('from construction_drawings where id = ? limit 1') || normalized.includes('from construction_drawings where id = ? and project_id = ? limit 1')) {
       return { ...drawing }
     }
 
-    if (normalized.includes('from acceptance_plans where id = ? limit 1')) {
+    if (normalized.includes('from acceptance_plans where id = ? limit 1') || normalized.includes('from acceptance_plans where id = ? and project_id = ? limit 1')) {
       return { ...acceptancePlan }
     }
 
@@ -145,6 +147,40 @@ const state = vi.hoisted(() => {
     }
 
     return null
+  })
+
+  const databaseQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
+    const normalized = normalizeSql(sql)
+
+    if (normalized.includes('from public.notifications') && normalized.includes('where project_id = $1')) {
+      const project = String(params[0] ?? '')
+      const touchpointType = params[1] ? String(params[1]) : null
+      const category = params[2] ? String(params[2]) : null
+      const type = params[3] ? String(params[3]) : null
+      const types = Array.isArray(params[4]) ? params[4].map(String) : null
+      const limit = Number(params[5] ?? 20)
+      const offset = Number(params[6] ?? 0)
+      const rows = notifications
+        .filter((row) => row.project_id === project)
+        .filter((row) => !touchpointType || row.touchpoint_type === touchpointType)
+        .filter((row) => !category || row.category === category)
+        .filter((row) => !type || row.type === type)
+        .filter((row) => !types || types.includes(String(row.type)))
+        .sort((left, right) => String(right.created_at || '').localeCompare(String(left.created_at || '')))
+        .slice(offset, offset + limit)
+      return { rows, rowCount: rows.length }
+    }
+
+    if (normalized.includes('from public.task_preceding_relations relation')
+      && normalized.includes('condition_row.project_id = $2')) {
+      const inScope = params[0] === taskId && params[1] === projectId
+      return {
+        rows: inScope ? [{ condition_id: conditionId }] : [],
+        rowCount: inScope ? 1 : 0,
+      }
+    }
+
+    return { rows: [], rowCount: 0 }
   })
 
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
@@ -188,9 +224,10 @@ const state = vi.hoisted(() => {
       return []
     }
 
-    if (normalized.startsWith('update construction_drawings set ') && normalized.endsWith(' where id = ? and lock_version = ?')) {
+    if (normalized.startsWith('update construction_drawings set ') && (normalized.endsWith(' where id = ? and lock_version = ?') || normalized.endsWith(' where id = ? and project_id = ? and lock_version = ?'))) {
+      const withProject = normalized.endsWith(' where id = ? and project_id = ? and lock_version = ?')
       const clauseList = normalized
-        .slice('update construction_drawings set '.length, -' where id = ? and lock_version = ?'.length)
+        .slice('update construction_drawings set '.length, -(withProject ? ' where id = ? and project_id = ? and lock_version = ?'.length : ' where id = ? and lock_version = ?'.length))
         .split(', ')
         .map((item) => item.replace(' = ?', ''))
       if (Number(params[params.length - 1] ?? 1) !== Number(drawing.lock_version ?? 1)) {
@@ -202,18 +239,36 @@ const state = vi.hoisted(() => {
       return []
     }
 
-    if (normalized.startsWith('update acceptance_plans set ') && normalized.endsWith(' where id = ?')) {
-      const clauseList = normalized
-        .slice('update acceptance_plans set '.length, -' where id = ?'.length)
+    const acceptanceUpdateSql = normalized.endsWith(' returning id')
+      ? normalized.slice(0, -' returning id'.length)
+      : normalized
+    if (acceptanceUpdateSql.startsWith('update acceptance_plans set ') && (
+      acceptanceUpdateSql.endsWith(' where id = ?')
+      || acceptanceUpdateSql.endsWith(' where id = ? and project_id = ?')
+      || acceptanceUpdateSql.endsWith(' where id = ? and project_id = ? and status = ?')
+    )) {
+      const suffix = acceptanceUpdateSql.endsWith(' where id = ? and project_id = ? and status = ?')
+        ? ' where id = ? and project_id = ? and status = ?'
+        : acceptanceUpdateSql.endsWith(' where id = ? and project_id = ?')
+          ? ' where id = ? and project_id = ?'
+          : ' where id = ?'
+      const expectedStatus = acceptanceUpdateSql.endsWith(' where id = ? and project_id = ? and status = ?')
+        ? String(params[params.length - 1] ?? '')
+        : null
+      if (expectedStatus !== null && expectedStatus !== acceptancePlan.status) {
+        return []
+      }
+      const clauseList = acceptanceUpdateSql
+        .slice('update acceptance_plans set '.length, -suffix.length)
         .split(', ')
         .map((item) => item.replace(' = ?', ''))
       clauseList.forEach((field, index) => {
         ;(acceptancePlan as Record<string, unknown>)[field] = params[index] as never
       })
-      return []
+      return [{ ...acceptancePlan }]
     }
 
-    if (normalized === 'select id from tasks where preceding_task_id = ?') {
+    if (normalized === 'select id from tasks where preceding_task_id = ? and project_id = ?') {
       return []
     }
 
@@ -248,8 +303,8 @@ const state = vi.hoisted(() => {
   })
 
   const getMembers = vi.fn(async () => ([
-    { id: 'm-1', project_id: projectId, user_id: 'owner-1', role: 'owner', joined_at: '2026-04-01T00:00:00.000Z' },
-    { id: 'm-2', project_id: projectId, user_id: 'admin-1', role: 'admin', joined_at: '2026-04-01T00:00:00.000Z' },
+    { id: 'm-1', project_id: projectId, user_id: 'owner-1', permission_level: 'owner', joined_at: '2026-04-01T00:00:00.000Z' },
+    { id: 'm-2', project_id: projectId, user_id: 'editor-1', permission_level: 'editor', joined_at: '2026-04-01T00:00:00.000Z' },
   ]))
   const getTask = vi.fn(async () => ({ ...oldTask }))
   const updateTask = vi.fn(async (_id: string, updates: Record<string, unknown>) => ({
@@ -272,6 +327,7 @@ const state = vi.hoisted(() => {
     acceptancePlan.updated_at = '2026-04-15T00:00:00.000Z'
     executeSQLOne.mockClear()
     executeSQL.mockClear()
+    databaseQuery.mockClear()
     getMembers.mockClear()
     getTask.mockClear()
     updateTask.mockClear()
@@ -290,6 +346,7 @@ const state = vi.hoisted(() => {
     notifications,
     executeSQLOne,
     executeSQL,
+    databaseQuery,
     getMembers,
     getTask,
     updateTask,
@@ -320,6 +377,23 @@ vi.mock('../middleware/logger.js', () => ({
     error: vi.fn(),
     debug: vi.fn(),
   },
+}))
+
+vi.mock('../auth/access.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../auth/access.js')>()
+  return {
+    ...actual,
+    canAccessProject: vi.fn(async (_userId: string, projectId: string) => projectId === state.ids.projectId),
+    getCurrentCompanyMembership: vi.fn(async () => null),
+    getVisibleProjectIds: vi.fn(async () => [state.ids.projectId]),
+  }
+})
+
+vi.mock('../database.js', () => ({
+  query: state.databaseQuery,
+  isDatabaseTransactionActive: vi.fn(() => false),
+  withDatabaseTransaction: vi.fn(async (work: () => Promise<unknown>) => await work()),
+  registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => await effect()),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -360,6 +434,30 @@ vi.mock('../services/dbService.js', () => ({
       }
     }),
   },
+}))
+
+vi.mock('../services/engineeringObjectService.js', () => ({
+  hasAnyScopeObjectId: vi.fn((task: Record<string, unknown>) => Boolean(
+    task.engineering_object_id
+    || task.phase_object_id
+    || task.section_object_id
+    || task.building_object_id
+    || task.basement_object_id
+    || task.floor_object_id
+    || task.physical_zone_object_id
+    || task.functional_area_object_id,
+  )),
+  validateScopeObjectTypes: vi.fn(async () => null),
+  validateTaskScopeConsistency: vi.fn(async () => null),
+}))
+
+vi.mock('../services/taskCodeTransactionService.js', () => ({
+  rejectTaskCodeFields: vi.fn(() => null),
+  createTaskWithCodeInTransaction: vi.fn(),
+  updateTaskWithCodeInTransaction: vi.fn(async (taskId: string, updates: Record<string, unknown>) => ({
+    task: await state.updateTask(taskId, updates),
+    taskCode: 'TASK-001',
+  })),
 }))
 
 vi.mock('../services/notificationStore.js', () => ({
@@ -426,6 +524,7 @@ vi.mock('../services/drawingPackageService.js', () => ({
 
 vi.mock('../routes/drawing-packages.js', () => ({
   registerDrawingPackageRoutes: vi.fn(() => undefined),
+  clearDrawingBoardCache: vi.fn(() => undefined),
 }))
 
 vi.mock('../routes/drawing-review-rules.js', () => ({
@@ -555,31 +654,27 @@ describe('workflow notification center chain', () => {
     )
   })
 
-  it('refreshes planning governance notifications into the notification center on demand', async () => {
-    state.planningGovernanceService.persistProjectGovernanceNotifications.mockImplementationOnce(async (projectId?: string) => {
-      return [
-        await state.notificationStore.insertNotification({
-          id: 'notification-governance-1',
-          project_id: projectId ?? state.ids.projectId,
-          type: 'planning_gov_mapping_orphan_pointer',
-          notification_type: 'planning-governance-mapping',
-          category: 'planning_mapping_orphan',
-          severity: 'critical',
-          title: '规划映射存在孤立指针',
-          content: '映射孤立指针 2 条。',
-          is_read: false,
-          source_entity_type: 'planning_governance',
-          source_entity_id: `${projectId ?? state.ids.projectId}:mapping_orphan_pointer`,
-          created_at: '2026-04-18T00:00:00.000Z',
-        }),
-      ]
+  it('serves persisted planning governance notifications without refreshing them on read', async () => {
+    await state.notificationStore.insertNotification({
+      id: 'notification-governance-1',
+      project_id: state.ids.projectId,
+      type: 'planning_gov_mapping_orphan_pointer',
+      notification_type: 'planning-governance-mapping',
+      category: 'planning_mapping_orphan',
+      severity: 'critical',
+      title: '规划映射存在孤立指针',
+      content: '映射孤立指针 2 条。',
+      is_read: false,
+      source_entity_type: 'planning_governance',
+      source_entity_id: `${state.ids.projectId}:mapping_orphan_pointer`,
+      created_at: '2026-04-18T00:00:00.000Z',
     })
 
     const request = supertest(buildApp())
     const response = await request.get(`/api/notifications?projectId=${state.ids.projectId}`)
 
     expect(response.status).toBe(200)
-    expect(state.planningGovernanceService.persistProjectGovernanceNotifications).toHaveBeenCalledWith(state.ids.projectId)
+    expect(state.planningGovernanceService.persistProjectGovernanceNotifications).not.toHaveBeenCalled()
     expect(response.body.data).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -591,4 +686,3 @@ describe('workflow notification center chain', () => {
     )
   })
 })
-

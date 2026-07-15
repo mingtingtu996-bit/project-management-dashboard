@@ -6,7 +6,7 @@ const state = vi.hoisted(() => {
   const tables = {
     tasks: [] as TableRow[],
     weekly_digests: [] as TableRow[],
-    project_health_history: [] as TableRow[],
+    project_daily_snapshot: [] as TableRow[],
     task_progress_snapshots: [] as TableRow[],
     responsibility_alert_states: [] as TableRow[],
     risks: [] as TableRow[],
@@ -120,6 +120,10 @@ vi.mock('../services/criticalPathHelpers.js', () => ({
   getCriticalPathTaskIds: vi.fn(async () => new Set(['task-1', 'task-2'])),
 }))
 
+vi.mock('../services/constructionCalendar.js', () => ({
+  resolveConstructionCalendarContext: vi.fn(async () => null),
+}))
+
 import { weeklyDigestService } from '../services/weeklyDigestService.js'
 
 describe('weeklyDigestService', () => {
@@ -163,10 +167,10 @@ describe('weeklyDigestService', () => {
         is_milestone: true,
       },
     )
-    state.tables.project_health_history.push({
+    state.tables.project_daily_snapshot.push({
       project_id: 'project-1',
       health_score: 82,
-      recorded_at: recentISO,
+      snapshot_date: recentISO.slice(0, 10),
     })
     state.tables.task_progress_snapshots.push(
       { project_id: 'project-1', event_type: 'task_completed', created_at: recentISO },
@@ -174,6 +178,13 @@ describe('weeklyDigestService', () => {
     )
     state.tables.responsibility_alert_states.push({
       project_id: 'project-1',
+      dimension: 'unit',
+      subject_key: 'unit:unit-1',
+      subject_label: 'General Contractor',
+      subject_user_id: null,
+      subject_unit_id: 'unit-1',
+      current_level: 'abnormal',
+      alert_type: 'responsibility_health',
       subject_id: 'unit-1',
       subject_name: '总包单位',
       subject_type: 'contractor',
@@ -220,8 +231,35 @@ describe('weeklyDigestService', () => {
       critical_blocked_count: 1,
       completed_tasks_count: 1,
       completed_milestones_count: 1,
+      health_score: 82,
       new_risks_count: 1,
       new_obstacles_count: 3,
+      abnormal_responsibilities: [
+        {
+          subject_id: 'unit:unit-1',
+          name: 'General Contractor',
+          type: 'unit',
+        },
+      ],
     })
+  })
+
+  it('propagates project-scoped partial failures instead of reporting the batch as successful', async () => {
+    state.executeSQL.mockResolvedValueOnce([
+      { id: 'project-a', status: 'active' },
+      { id: 'project-b', status: 'active' },
+    ])
+    const generate = vi.spyOn(weeklyDigestService, 'generateForProject')
+      .mockImplementation(async (projectId) => {
+        if (projectId === 'project-b') throw new Error('digest failed')
+      })
+
+    await expect(weeklyDigestService.generateForAllProjects()).rejects.toMatchObject({
+      code: 'SCOPED_BATCH_PARTIAL_FAILURE',
+      successfulScopeIds: ['project-a'],
+      failures: [{ scopeId: 'project-b', attempts: 3, errorMessage: 'digest failed' }],
+    })
+    expect(generate.mock.calls.filter(([projectId]) => projectId === 'project-a')).toHaveLength(1)
+    expect(generate.mock.calls.filter(([projectId]) => projectId === 'project-b')).toHaveLength(3)
   })
 })

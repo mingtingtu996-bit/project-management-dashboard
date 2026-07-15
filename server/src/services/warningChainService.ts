@@ -1,12 +1,13 @@
 import type { Notification, Warning } from '../types/db.js'
-import { insertNotification, listNotifications } from './notificationStore.js'
+import { listNotifications } from './notificationStore.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 import { generateId } from '../utils/id.js'
+import { buildWarningSignature } from '../utils/warningSignature.js'
 
 export interface WarningChainNotification extends Partial<Notification> {
   notification_type?: string | null
   category?: string | null
   task_id?: string | null
-  delay_request_id?: string | null
   warning_type?: string | null
 }
 
@@ -85,22 +86,24 @@ export interface ObstacleSeverityUpgradeInput {
 }
 
 export function buildNotificationIdentity(notification: WarningChainNotification) {
-  const warningType = notification.warning_type || notification.category || notification.type || ''
-  const warningTaskId = notification.task_id || notification.source_entity_id || ''
-  const warningDay = toNaturalDay(notification.created_at)
-
+  // v1.4.12: delegate to shared buildWarningSignature
   if (
     notification.source_entity_type === 'warning'
     || notification.notification_type === 'business-warning'
     || Boolean(notification.warning_type)
   ) {
-    return [warningType, warningTaskId, warningDay].join('|')
+    return buildWarningSignature({
+      project_id: notification.project_id || '',
+      task_id: notification.task_id ?? null,
+      warning_type: notification.warning_type || notification.category || notification.type || '',
+      created_at: notification.created_at ?? null,
+    })
   }
 
   return [
     notification.category || notification.type || '',
     notification.task_id || notification.source_entity_id || '',
-    notification.delay_request_id || '',
+    notification.source_entity_type || '',
   ].join('|')
 }
 
@@ -191,7 +194,6 @@ export function normalizeNotificationRecord<T extends WarningChainNotification>(
     notification_type: inferNotificationType(notification),
     category: notification.category ?? notification.type ?? notification.warning_type ?? null,
     task_id: notification.task_id ?? asUuidLikeOrNull(notification.source_entity_id),
-    delay_request_id: notification.delay_request_id ?? null,
     source_entity_type: notification.source_entity_type ?? notification.category ?? notification.type ?? null,
     source_entity_id: notification.source_entity_id ?? notification.task_id ?? null,
   } as T
@@ -219,8 +221,8 @@ export function dedupeNotifications<T extends WarningChainNotification>(notifica
 export function normalizeNotificationPayload(
   warning: Warning & {
     category?: string | null
-    delay_request_id?: string | null
     source_entity_id?: string | null
+    source_entity_type?: string | null
   },
 ): WarningChainNotification {
   return {
@@ -230,14 +232,13 @@ export function normalizeNotificationPayload(
     warning_type: warning.warning_type,
     category: warning.category ?? warning.warning_type,
     task_id: warning.task_id ?? asUuidLikeOrNull(warning.source_entity_id),
-    delay_request_id: warning.delay_request_id ?? null,
     severity: warning.warning_level,
     title: warning.title,
     content: warning.description,
     is_read: false,
     is_broadcast: warning.warning_level === 'critical',
     source_entity_type: 'warning',
-    source_entity_id: warning.task_id ?? warning.source_entity_id ?? null,
+    source_entity_id: warning.source_entity_id ?? warning.task_id ?? null,
     created_at: warning.created_at,
   }
 }
@@ -247,7 +248,11 @@ async function insertNotificationRow(
 ): Promise<Notification | null> {
   const normalized = normalizeNotificationRecord(notification)
   const now = normalized.created_at || new Date().toISOString()
-  return await insertNotification({
+  const isWarning = normalized.source_entity_type === 'warning'
+  const warningSignature = isWarning
+    ? normalized.warning_signature ?? buildNotificationIdentity(normalized)
+    : null
+  return await notificationTouchpointService.emit({
     id: normalized.id || generateId(),
     project_id: normalized.project_id ?? null,
     type: normalized.type || normalized.warning_type || 'system',
@@ -262,7 +267,6 @@ async function insertNotificationRow(
     source_entity_id: normalized.source_entity_id ?? null,
     category: normalized.category ?? null,
     task_id: normalized.task_id ?? null,
-    delay_request_id: normalized.delay_request_id ?? null,
     recipients: normalized.recipients ?? [],
     status: normalized.status ?? (normalized.is_read === true ? 'read' : 'unread'),
     metadata: normalized.metadata ?? null,
@@ -276,6 +280,16 @@ async function insertNotificationRow(
     is_escalated: normalized.is_escalated ?? false,
     resolved_at: normalized.resolved_at ?? null,
     resolved_source: normalized.resolved_source ?? null,
+    warning_lifecycle_status: isWarning ? normalized.warning_lifecycle_status ?? 'active' : null,
+    warning_signature: warningSignature,
+    touchpoint_type: inferNotificationType(normalized) === 'system-exception' ? 'system_record' : 'dashboard_todo',
+    scope_type: normalized.project_id ? 'project' : 'system',
+    dedupe_key: warningSignature ?? undefined,
+    target_route: normalized.project_id ? `/projects/${normalized.project_id}/risks` : undefined,
+    target_label: '查看预警',
+    source_hash: isWarning
+      ? normalized.source_hash ?? `${normalized.source_entity_type ?? 'warning'}:${normalized.source_entity_id ?? normalized.task_id ?? warningSignature ?? ''}`
+      : null,
     created_at: now,
   })
 }
@@ -334,7 +348,6 @@ export class WarningChainService {
   normalizeNotificationPayload(
     warning: Warning & {
       category?: string | null
-      delay_request_id?: string | null
       source_entity_id?: string | null
     },
   ) {
@@ -411,7 +424,7 @@ export function resolvePendingDelayWarningSeverity(input: PendingDelayWarningInp
 
   return {
     severity: 'info' as const,
-    note: '延期审批中',
+    note: '延期信号跟踪中',
     escalated: false,
   }
 }

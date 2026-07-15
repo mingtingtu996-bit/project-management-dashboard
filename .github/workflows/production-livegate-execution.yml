@@ -27,15 +27,15 @@ jobs:
     name: Production Livegate
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: Production
+    environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install livegate dependencies
@@ -43,10 +43,10 @@ jobs:
 
       - name: Configure SSH
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_PRIVATE_KEY" ]; then
@@ -65,10 +65,10 @@ jobs:
 
       - name: Collect server-side discovery signals
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
           OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -269,10 +269,10 @@ jobs:
 
       - name: Run production livegate inside production container
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
           OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
         run: |
           set -euo pipefail

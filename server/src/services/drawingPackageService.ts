@@ -162,7 +162,7 @@ export interface DrawingLinkedConditionView {
 
 export interface DrawingLinkedTaskView {
   id: string
-  name: string
+  title: string
   status: string
   drawingConditionCount: number
   openConditionCount: number
@@ -1489,7 +1489,7 @@ function buildLinkedTasks(input: {
 
     linkedTasks.push({
       id: taskId,
-      name: normalizeString(task.title, '未命名任务'),
+      title: normalizeString(task.title, '未命名任务'),
       status: normalizeString(task.status, 'pending'),
       drawingConditionCount: matchedConditions.length,
       openConditionCount,
@@ -1501,7 +1501,7 @@ function buildLinkedTasks(input: {
     if (left.openConditionCount !== right.openConditionCount) {
       return right.openConditionCount - left.openConditionCount
     }
-    return left.name.localeCompare(right.name, 'zh-Hans-CN')
+    return left.title.localeCompare(right.title, 'zh-Hans-CN')
   })
 
   return linkedTasks
@@ -1623,7 +1623,7 @@ function buildLinkedTasksExplicit(input: {
 
       return {
         id: taskId,
-        name: normalizeString(task.title, 'Unnamed task'),
+        title: normalizeString(task.title, 'Unnamed task'),
         status: normalizeString(task.status, 'pending'),
         drawingConditionCount: linkedConditions.length,
         openConditionCount: linkedConditions.filter((condition) => !toBoolean(condition.is_satisfied)).length,
@@ -1635,7 +1635,7 @@ function buildLinkedTasksExplicit(input: {
       if (left.openConditionCount !== right.openConditionCount) {
         return right.openConditionCount - left.openConditionCount
       }
-      return left.name.localeCompare(right.name, 'zh-Hans-CN')
+      return left.title.localeCompare(right.title, 'zh-Hans-CN')
     })
 }
 
@@ -1762,7 +1762,7 @@ function buildDrawingIssueSignals(input: {
     signals.push(buildIssueSignal(
       'multi-round-reject',
       '多轮退审',
-      `图纸包内已有 ${rejectedDrawings.length} 条退审/修改记录，建议升级为问题闭环。`,
+      `图纸已有 ${rejectedDrawings.length} 条退审或修改记录尚未闭合`,
       'high',
       [`退审记录：${rejectedDrawings.length} 条`],
     ))
@@ -1781,7 +1781,7 @@ function buildDrawingRiskSignals(input: {
     signals.push(buildIssueSignal(
       'schedule-impact',
       '工期影响',
-      '图纸包已标记工期影响，建议同步风险并关注后续关键线路。',
+      'ͼֽѱǹӰ죬ͬղעؼ·',
       'critical',
       ['package.scheduleImpactFlag=true'],
     ))
@@ -1791,7 +1791,7 @@ function buildDrawingRiskSignals(input: {
     signals.push(buildIssueSignal(
       'package-change',
       '图纸变更',
-      '当前图纸包存在变更，建议评估变更对工期、施工与验收的连锁影响。',
+      '当前图纸包存在变更，可能对施工收口产生影响。',
       'high',
       ['package.hasChange=true'],
     ))
@@ -1801,7 +1801,7 @@ function buildDrawingRiskSignals(input: {
     signals.push(buildIssueSignal(
       'review-delay-risk',
       '送审延期风险',
-      '送审或审查逾期会放大关键线路的不确定性，建议同步风险化处理。',
+      'ڻŴؼ·Ĳȷԣͬջ',
       'medium',
       ['存在逾期送审问题'],
     ))

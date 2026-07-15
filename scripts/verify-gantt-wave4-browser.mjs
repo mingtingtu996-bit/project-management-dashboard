@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,8 +57,6 @@ const initialTasks = [
     assignee_name: '张工',
     assignee: '张工',
     assignee_user_id: 'user-owner',
-    assignee_unit: '总包单位',
-    responsible_unit: '总包单位',
     participant_unit_name: '总包单位',
     participant_unit_id: 'unit-1',
     specialty_type: 'structure',
@@ -86,8 +84,6 @@ const initialTasks = [
     assignee_name: '李工',
     assignee: '李工',
     assignee_user_id: 'user-editor',
-    assignee_unit: '机电分包',
-    responsible_unit: '机电分包',
     participant_unit_name: '机电分包',
     participant_unit_id: 'unit-2',
     specialty_type: 'electrical',
@@ -115,8 +111,6 @@ const initialTasks = [
     assignee_name: '王工',
     assignee: '王工',
     assignee_user_id: 'user-editor',
-    assignee_unit: '幕墙分包',
-    responsible_unit: '幕墙分包',
     participant_unit_name: '幕墙分包',
     participant_unit_id: 'unit-3',
     specialty_type: 'facade',
@@ -144,8 +138,6 @@ const initialTasks = [
     assignee_name: '赵工',
     assignee: '赵工',
     assignee_user_id: 'user-editor',
-    assignee_unit: '设计单位',
-    responsible_unit: '设计单位',
     participant_unit_name: '设计单位',
     participant_unit_id: 'unit-4',
     specialty_type: 'structure',
@@ -173,8 +165,6 @@ const initialTasks = [
     assignee_name: '周工',
     assignee: '周工',
     assignee_user_id: 'user-editor',
-    assignee_unit: '施工单位',
-    responsible_unit: '施工单位',
     participant_unit_name: '施工单位',
     participant_unit_id: 'unit-5',
     specialty_type: 'structure',
@@ -208,35 +198,6 @@ let taskConditionsState = [
     updated_at: now,
   },
 ]
-
-const delayRequestsInitial = [
-  {
-    id: 'delay-approve-1',
-    task_id: 'task-lagging-mild',
-    project_id: projectId,
-    status: 'pending',
-    delay_days: 3,
-    original_date: shiftDate(10),
-    delayed_date: shiftDate(13),
-    reason: '机电材料到货延迟',
-    delay_reason: '机电材料到货延迟',
-    requested_at: new Date(Date.now() - 4 * 86400000).toISOString(),
-  },
-  {
-    id: 'delay-reject-1',
-    task_id: 'task-lagging-moderate',
-    project_id: projectId,
-    status: 'pending',
-    delay_days: 2,
-    original_date: shiftDate(6),
-    delayed_date: shiftDate(8),
-    reason: '深化图纸尚未确认',
-    delay_reason: '深化图纸尚未确认',
-    requested_at: new Date(Date.now() - 2 * 86400000).toISOString(),
-  },
-]
-
-let delayRequestsState = delayRequestsInitial.map((item) => ({ ...item }))
 
 const project = {
   id: projectId,
@@ -358,7 +319,7 @@ function buildMockResponse(request) {
       user: {
         id: 'user-owner',
         username: 'wave4-owner',
-        display_name: '波4负责人',
+        display_name: '项目负责人',
         email: 'wave4-owner@example.com',
         role: 'company_admin',
         globalRole: 'company_admin',
@@ -408,7 +369,6 @@ function buildMockResponse(request) {
 
     if (method === 'DELETE') {
       tasksState = tasksState.filter((task) => task.id !== taskId)
-      delayRequestsState = delayRequestsState.filter((item) => item.task_id !== taskId)
       return json({ success: true, data: { id: taskId } })
     }
   }
@@ -457,60 +417,6 @@ function buildMockResponse(request) {
     || pathname === '/api/tasks/progress-snapshots'
   ) {
     return json({ success: true, data: [] })
-  }
-
-  if (pathname === '/api/delay-requests') {
-    if (method === 'GET') {
-      const taskId = searchParams.get('taskId')
-      const scopedProjectId = searchParams.get('projectId')
-      const filtered = delayRequestsState.filter((item) => {
-        if (taskId && item.task_id !== taskId) return false
-        if (scopedProjectId && item.project_id !== scopedProjectId) return false
-        return true
-      })
-      return json({ success: true, data: filtered })
-    }
-
-    if (method === 'POST') {
-      const next = {
-        id: `delay-${Date.now()}`,
-        status: 'pending',
-        requested_at: new Date().toISOString(),
-        ...body,
-      }
-      delayRequestsState = [next, ...delayRequestsState]
-      return json({ success: true, data: next }, 201)
-    }
-  }
-
-  const delayReviewMatch = pathname.match(/^\/api\/delay-requests\/([^/]+)\/(approve|reject|withdraw)$/)
-  if (delayReviewMatch && method === 'POST') {
-    const [, requestId, action] = delayReviewMatch
-    const current = delayRequestsState.find((item) => item.id === requestId)
-    if (!current) {
-      return json({ success: false, error: { message: 'DELAY_REQUEST_NOT_FOUND' } }, 404)
-    }
-    const nextStatus = action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'withdrawn'
-    const updated = {
-      ...current,
-      status: nextStatus,
-      reviewed_at: new Date().toISOString(),
-    }
-    delayRequestsState = delayRequestsState.map((item) => (item.id === requestId ? updated : item))
-    if (action === 'approve') {
-      tasksState = tasksState.map((task) => (
-        task.id === current.task_id
-          ? {
-              ...task,
-              planned_end_date: current.delayed_date,
-              end_date: current.delayed_date,
-              updated_at: new Date().toISOString(),
-              version: Number(task.version ?? 1) + 1,
-            }
-          : task
-      ))
-    }
-    return json({ success: true, data: updated })
   }
 
   if (pathname === `/api/members/${projectId}`) {
@@ -679,7 +585,7 @@ async function main() {
     await baseCheckbox.check()
     await mildCheckbox.check()
     await page.getByTestId('batch-action-bar').waitFor({ state: 'visible' })
-    await page.getByText('已选 2 项').waitFor({ state: 'visible' })
+    await page.getByText('已选 2').waitFor({ state: 'visible' })
     await page.screenshot({ path: join(outputDir, 'wave4-gantt-multi-select.png'), fullPage: true })
     summary.screenshots.push('wave4-gantt-multi-select.png')
     await page.getByTestId('batch-action-bar-clear').click()
@@ -696,7 +602,7 @@ async function main() {
     await page.getByRole('button', { name: '取消' }).click()
     await page.getByText('批量删除任务').waitFor({ state: 'detached' })
     await page.getByTestId('batch-action-bar-clear').click()
-    await page.getByText('已选 2 项').waitFor({ state: 'hidden' })
+    await page.getByText('已选 2').waitFor({ state: 'hidden' })
     summary.checks.push('batch delete opens the shared confirm dialog')
 
     const conditionWarningRow = page.locator('#gantt-task-row-task-condition-warning')
@@ -705,7 +611,7 @@ async function main() {
     await page.getByTestId('gantt-task-select-task-condition-warning').click()
     const progressPanel = page.getByTestId('gantt-progress-entry-panel')
     await progressPanel.waitFor({ state: 'visible' })
-    await progressPanel.getByLabel('录进展数值').fill('20')
+    await progressPanel.getByLabel('录入进度数值').fill('20')
     await progressPanel.getByTestId('gantt-progress-save').click()
     const conditionWarningModal = page.getByTestId('condition-warning-modal')
     await conditionWarningModal.waitFor({ state: 'visible' })

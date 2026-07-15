@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react'
 
-import { Badge } from '@/components/ui/badge'
+import { Breadcrumb, type BreadcrumbItem } from '@/components/Breadcrumb'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
 export interface PlanningPageTab {
@@ -17,9 +16,13 @@ interface PlanningPageShellProps {
   title: string
   description: string
   tabs: PlanningPageTab[]
+  eyebrow?: string
+  metrics?: ReactNode
   actions?: ReactNode
   children: ReactNode
   className?: string
+  frame?: 'card' | 'open'
+  breadcrumbItems?: BreadcrumbItem[]
 }
 
 export function PlanningPageShell({
@@ -27,59 +30,86 @@ export function PlanningPageShell({
   title,
   description,
   tabs,
+  eyebrow = '计划编制',
+  metrics,
   actions,
   children,
   className,
+  frame = 'card',
+  breadcrumbItems,
 }: PlanningPageShellProps) {
+  const titleParts = title.split('/').map((item) => item.trim()).filter(Boolean)
+  const displayTitle = titleParts[titleParts.length - 1] ?? title
+  const resolvedBreadcrumbItems = breadcrumbItems ?? [
+    { label: projectName },
+    ...(eyebrow && eyebrow !== displayTitle ? [{ label: eyebrow }] : []),
+    { label: displayTitle },
+  ]
+
+  const header = (
+    <div data-testid="planning-layer-l1" className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+      <div className="min-w-0 space-y-2">
+        <div className="eyebrow">{eyebrow}</div>
+        <div className="space-y-1">
+          <h1 className="dashboard-title break-keep font-semibold tracking-tight text-slate-950">
+            {displayTitle}
+          </h1>
+          {description ? <p className="max-w-2xl text-sm font-normal leading-6 text-slate-500">{description}</p> : null}
+        </div>
+      </div>
+      {actions ? <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">{actions}</div> : null}
+    </div>
+  )
+
+  const metricGrid = metrics ? <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">{metrics}</div> : null
+  const tabBar = tabs.length > 0 ? (
+    <div data-testid="planning-page-tabs" className="flex flex-wrap items-end gap-6 border-b border-slate-100">
+      {tabs.map((tab) => (
+        <Button
+          key={tab.key}
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={tab.onClick}
+          className={cn(
+            'relative h-9 rounded-none px-0 pb-3 text-sm font-medium text-slate-500 hover:bg-transparent hover:text-slate-900',
+            tab.active &&
+              'text-blue-700 after:absolute after:bottom-0 after:left-0 after:h-[2px] after:w-full after:rounded-full after:bg-blue-600',
+          )}
+        >
+          {tab.label}
+        </Button>
+      ))}
+    </div>
+  ) : null
+
+  if (frame === 'open') {
+    return (
+      <div data-testid="planning-shared-shell" className={cn('page-shell page-enter', className)}>
+        <Breadcrumb items={resolvedBreadcrumbItems} />
+        {header}
+        {metricGrid}
+        {tabBar}
+        <div>{children}</div>
+      </div>
+    )
+  }
+
   return (
-    <div data-testid="planning-shared-shell" className={cn('space-y-4 px-4 py-5 sm:px-6 lg:px-8', className)}>
-      <Card variant="detail" className="overflow-hidden">
-        <div className="h-1 bg-gradient-to-r from-cyan-500 via-sky-500 to-indigo-500" />
-        <CardContent className="space-y-5 p-0">
-          <div
-            data-testid="planning-layer-l1"
-            className="border-b border-slate-100 bg-white px-5 py-5 sm:px-6"
-          >
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="secondary">
-                    {projectName}
-                  </Badge>
-                  <span className="text-xs uppercase tracking-[0.24em] text-slate-500">planning workspace</span>
-                </div>
-                <div className="space-y-1">
-                  <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{title}</h1>
-                  {description && <p className="text-sm text-slate-500 mt-1">{description}</p>}
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">{actions}</div>
-            </div>
-          </div>
+    <div data-testid="planning-shared-shell" className={cn('page-shell', className)}>
+      <Breadcrumb items={resolvedBreadcrumbItems} />
 
-          <div className="px-5 pb-5 pt-4 sm:px-6">
-            <div data-testid="planning-page-tabs" className="flex flex-wrap gap-2">
-              {tabs.map((tab) => (
-                <Button
-                  key={tab.key}
-                  type="button"
-                  size="sm"
-                  variant={tab.active ? 'default' : 'outline'}
-                  onClick={tab.onClick}
-                  className={cn(
-                    'rounded-full px-4',
-                    tab.active ? 'shadow-md shadow-cyan-500/20' : 'bg-white'
-                  )}
-                >
-                  {tab.label}
-                </Button>
-              ))}
-            </div>
+      <section className="surface-card overflow-hidden">
+        <div className="space-y-8 p-5 sm:p-6">
+          {header}
 
-            <div className="mt-5">{children}</div>
-          </div>
-        </CardContent>
-      </Card>
+          {metricGrid}
+
+          {tabBar}
+
+          <div>{children}</div>
+        </div>
+      </section>
     </div>
   )
 }

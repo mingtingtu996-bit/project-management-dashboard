@@ -1,6 +1,21 @@
 import { useMemo } from 'react'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
+import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
+import {
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  ResponsiveContainer,
+  Scatter,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
 
 type DeviationRowLike = {
   id: string
@@ -10,10 +25,6 @@ type DeviationRowLike = {
   deviation_rate: number
   actual_date?: string | null
   status?: string
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value))
 }
 
 function toDateValue(value?: string | null) {
@@ -59,69 +70,110 @@ export function BaselineDumbbellChart({
     return { min: min - padding, max: max + padding }
   }, [points])
   const domainSpan = Math.max(dateDomain.max - dateDomain.min, 1)
+  const chartRows = points.map((row) => [
+    row.title,
+    formatDateLabel(row.planned_date ?? row.actual_date),
+    formatDateLabel(row.actual_date ?? row.planned_date),
+    row.deviation_days,
+    row.deviation_rate,
+    row.status || 'unknown',
+  ])
+  const chartPoints = points.map((row, index) => {
+    const plannedValue = toDateValue(row.planned_date) ?? toDateValue(row.actual_date) ?? dateDomain.min
+    const actualValue = toDateValue(row.actual_date) ?? plannedValue
+    return {
+      ...row,
+      rowIndex: index,
+      plannedValue,
+      actualValue,
+      plannedLabel: formatDateLabel(row.planned_date ?? row.actual_date),
+      actualLabel: formatDateLabel(row.actual_date ?? row.planned_date),
+    }
+  })
+  const plannedPoints = chartPoints.map((row) => ({
+    dateValue: row.plannedValue,
+    rowIndex: row.rowIndex,
+    name: row.title,
+    type: '计划',
+  }))
+  const actualPoints = chartPoints.map((row) => ({
+    dateValue: row.actualValue,
+    rowIndex: row.rowIndex,
+    name: row.title,
+    type: '实际',
+  }))
 
   return (
-    <Card data-testid="baseline-dumbbell-chart" className="border-slate-200 shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">{mainlineLabel} · 哑铃图</CardTitle>
-      </CardHeader>
+    <Card data-testid="baseline-dumbbell-chart" variant="surface">
+      <CardContent padding="md" className="pb-0">
+        <CardHead eyebrow="BASELINE" title={`${mainlineLabel} · 哑铃图`} />
+      </CardContent>
       <CardContent className="space-y-4">
         {points.length > 0 ? (
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" />计划日期</span>
-              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />实际日期</span>
-              <span className="flex items-center gap-1"><span className="h-2 w-6 border-b-2 border-slate-200" />连接线</span>
+          <ChartAccessibleWrapper
+            columns={['任务', '计划日期', '实际日期', '偏差生产日', '偏差率(%)', '状态']}
+            rows={chartRows}
+            summary="查看基线哑铃图数据"
+          >
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-600" />计划日期</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-rose-500" />实际日期</span>
+                <span className="flex items-center gap-1"><span className="h-2 w-6 border-b-2 border-slate-200" />连接线</span>
+              </div>
+              <div className="h-80 rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-100">
+                <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 640, height: 320 }}>
+                  <ComposedChart margin={{ top: 12, right: 16, bottom: 8, left: 12 }}>
+                    <CartesianGrid stroke={CHART_AXIS_COLORS.neutralGrid} horizontal={false} />
+                    <XAxis
+                      type="number"
+                      dataKey="dateValue"
+                      domain={[dateDomain.min, dateDomain.max]}
+                      tickLine={false}
+                      axisLine={false}
+                      tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                      tickFormatter={(value) => formatDateLabel(new Date(Number(value)).toISOString()).slice(5)}
+                    />
+                    <YAxis
+                      type="number"
+                      dataKey="rowIndex"
+                      domain={[-0.5, Math.max(chartPoints.length - 0.5, 0.5)]}
+                      reversed
+                      tickLine={false}
+                      axisLine={false}
+                      width={112}
+                      tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                      tickFormatter={(value) => chartPoints[Number(value)]?.title ?? ''}
+                    />
+                    <Tooltip content={<ChartTooltip labelFormatter={() => '基线对照'} />} cursor={chartTooltipCursor} />
+                    {chartPoints.map((row) => (
+                      <Line
+                        key={row.id}
+                        data={[
+                          { dateValue: row.plannedValue, rowIndex: row.rowIndex },
+                          { dateValue: row.actualValue, rowIndex: row.rowIndex },
+                        ]}
+                        type="linear"
+                        dataKey="rowIndex"
+                        stroke={row.actualValue >= row.plannedValue ? CHART_SERIES.warning : CHART_SERIES.success}
+                        strokeWidth={3}
+                        dot={false}
+                        isAnimationActive={false}
+                      />
+                    ))}
+                    <Scatter name="计划日期" data={plannedPoints} fill={CHART_SERIES.primary} animationDuration={800} />
+                    <Scatter name="实际日期" data={actualPoints} fill={CHART_SERIES.danger} animationDuration={800} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-            {points.map((row) => {
-              const plannedValue = toDateValue(row.planned_date) ?? toDateValue(row.actual_date) ?? dateDomain.min
-              const actualValue = toDateValue(row.actual_date) ?? plannedValue
-              const left = clamp(((Math.min(plannedValue, actualValue) - dateDomain.min) / domainSpan) * 100, 0, 100)
-              const width = Math.max((Math.abs(actualValue - plannedValue) / domainSpan) * 100, 1)
-              const deltaClass = actualValue >= plannedValue ? 'bg-amber-400' : 'bg-emerald-400'
-              const plannedLabel = formatDateLabel(row.planned_date ?? row.actual_date)
-              const actualLabel = formatDateLabel(row.actual_date ?? row.planned_date)
-
-              return (
-                <div key={row.id} className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-medium text-slate-900">{row.title}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        偏差 {row.deviation_days} 天 · {row.deviation_rate}% · 计划 {plannedLabel} · 实际 {actualLabel}
-                      </div>
-                    </div>
-                    <div className="text-xs text-slate-500">{row.status || 'unknown'}</div>
-                  </div>
-                  <div className="relative h-8 rounded-full bg-white px-2 py-3">
-                    <div className="absolute left-2 right-2 top-1/2 h-px -translate-y-1/2 bg-slate-200" />
-                    <div
-                      className={`absolute top-1/2 h-1 -translate-y-1/2 rounded-full ${deltaClass}`}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                    />
-                    <span
-                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow"
-                      style={{ left: `${clamp(((plannedValue - dateDomain.min) / domainSpan) * 100, 0, 100)}%` }}
-                      title={`计划 ${plannedLabel}`}
-                    />
-                    <span
-                      className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-rose-500 shadow"
-                      style={{ left: `${clamp(((actualValue - dateDomain.min) / domainSpan) * 100, 0, 100)}%` }}
-                      title={`实际 ${actualLabel}`}
-                    />
-                  </div>
-                  <div className="flex justify-between text-[11px] text-slate-500">
-                    <span>计划 {plannedLabel}</span>
-                    <span>实际 {actualLabel}</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+          </ChartAccessibleWrapper>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-            暂无基线哑铃图数据
-          </div>
+          <EmptyState
+            title="暂无基线哑铃图数据"
+            description="当前筛选条件下没有可对比的计划和实际日期。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

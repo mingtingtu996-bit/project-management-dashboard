@@ -9,12 +9,17 @@ import {
 } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
+import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { GANTT_BAR_PALETTE } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 
 import type { Task, WBSNode } from '../GanttViewTypes'
 import { TimelineDependencyLayer } from './TimelineDependencyLayer'
 import { TimelineScaleHeader, type TimelineScaleSegment } from './TimelineScaleHeader'
+import { compareTasksByExecutionOrder } from './taskListProjection'
 
 export type GanttTimelineScale = 'day' | 'week' | 'month'
 export type GanttTimelineCompareMode = 'plan' | 'baseline'
@@ -30,11 +35,21 @@ export interface TaskTimelineViewHandle {
   scrollToToday: () => void
 }
 
+export interface TaskTimelineReschedulePreview {
+  taskId: string
+  proposedStartDate: string | null
+  proposedEndDate: string | null
+  currentDurationDays: number
+  proposedDurationDays: number
+  recoverDays: number
+}
+
 interface TaskTimelineViewProps {
   rows: WBSNode[]
   collapsed: Set<string>
   selectedTaskId?: string | null
   highlightTaskId?: string | null
+  reschedulePreviewByTaskId?: Map<string, TaskTimelineReschedulePreview>
   scale: GanttTimelineScale
   compareMode: GanttTimelineCompareMode
   baselineOptions: TimelineBaselineOption[]
@@ -51,12 +66,13 @@ interface TaskTimelineViewProps {
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const BODY_HEIGHT = 560
-const ROW_HEIGHT = 40
+const ROW_HEIGHT = 48
 const OVERSCAN = 10
 const VIRTUALIZE_AFTER = 200
 const TIMELINE_LIMIT = 500
+const NO_BASELINE_SELECT_VALUE = '__no_confirmed_baseline__'
 const PX_PER_DAY: Record<GanttTimelineScale, number> = {
-  day: 24,
+  day: 32,
   week: 10,
   month: 4,
 }
@@ -71,6 +87,10 @@ type TimelineLayout = {
   mainEndX: number | null
   compareStartX: number | null
   compareEndX: number | null
+  reschedulePreview: TaskTimelineReschedulePreview | null
+  rescheduleStartX: number | null
+  rescheduleEndX: number | null
+  rescheduleDateLabel: string
   mainDateLabel: string
   compareDateLabel: string
   missingBaseline: boolean
@@ -195,76 +215,45 @@ function getTaskTone(task: WBSNode, sourceType: CriticalPathSourceType) {
     && (parseDate(task.end_date)?.getTime() ?? 0) < Date.now()
 
   if (sourceType === 'auto') {
-    return {
-      fill: '#fef2f2',
-      progressFill: '#ef4444',
-      stroke: '#fca5a5',
-      actualFill: '#dc2626',
-    }
+    return GANTT_BAR_PALETTE.auto
   }
 
   if (sourceType === 'manual_attention') {
-    return {
-      fill: '#fffbeb',
-      progressFill: '#f59e0b',
-      stroke: '#facc15',
-      actualFill: '#d97706',
-    }
+    return GANTT_BAR_PALETTE.manualAttention
   }
 
   if (sourceType === 'manual_insert') {
-    return {
-      fill: '#fff7ed',
-      progressFill: '#f97316',
-      stroke: '#fdba74',
-      actualFill: '#c2410c',
-    }
+    return GANTT_BAR_PALETTE.manualInsert
   }
 
   if (status === 'completed' || clampProgress(task.progress) >= 100) {
-    return {
-      fill: '#d1fae5',
-      progressFill: '#10b981',
-      stroke: '#6ee7b7',
-      actualFill: '#047857',
-    }
+    return GANTT_BAR_PALETTE.completed
   }
 
   if (status === 'blocked') {
-    return {
-      fill: '#fef3c7',
-      progressFill: '#f59e0b',
-      stroke: '#fbbf24',
-      actualFill: '#b45309',
-    }
+    return GANTT_BAR_PALETTE.blocked
   }
 
   if (overdue) {
-    return {
-      fill: '#fee2e2',
-      progressFill: '#ef4444',
-      stroke: '#fca5a5',
-      actualFill: '#dc2626',
-    }
+    return GANTT_BAR_PALETTE.overdue
   }
 
-  return {
-    fill: '#dbeafe',
-    progressFill: '#2563eb',
-    stroke: '#93c5fd',
-    actualFill: '#1d4ed8',
-  }
+  return GANTT_BAR_PALETTE.default
 }
 
 function getUnitLabel(task: WBSNode) {
-  return task.participant_unit_name || task.responsible_unit || task.assignee_unit || '未设置单位'
+  return task.participant_unit_name || '未设置单位'
 }
 
 function getAssigneeLabel(task: WBSNode) {
   return task.assignee || task.assignee_name || '未设置责任人'
 }
 
-function getTimelineDateRange(rows: WBSNode[], compareMode: GanttTimelineCompareMode) {
+function getTimelineDateRange(
+  rows: WBSNode[],
+  compareMode: GanttTimelineCompareMode,
+  reschedulePreviewByTaskId?: Map<string, TaskTimelineReschedulePreview>,
+) {
   const dates: Date[] = []
 
   rows.forEach((task) => {
@@ -274,6 +263,9 @@ function getTimelineDateRange(rows: WBSNode[], compareMode: GanttTimelineCompare
     const actualEnd = parseDate(task.actual_end_date || task.actual_start_date)
     const baselineStart = parseDate(task.baseline_start)
     const baselineEnd = parseDate(task.baseline_end || task.baseline_start)
+    const reschedulePreview = reschedulePreviewByTaskId?.get(task.id) ?? null
+    const rescheduleStart = parseDate(reschedulePreview?.proposedStartDate)
+    const rescheduleEnd = parseDate(reschedulePreview?.proposedEndDate || reschedulePreview?.proposedStartDate)
 
     if (compareMode === 'baseline') {
       if (baselineStart) dates.push(baselineStart)
@@ -286,6 +278,8 @@ function getTimelineDateRange(rows: WBSNode[], compareMode: GanttTimelineCompare
       if (actualStart) dates.push(actualStart)
       if (actualEnd) dates.push(actualEnd)
     }
+    if (rescheduleStart) dates.push(rescheduleStart)
+    if (rescheduleEnd) dates.push(rescheduleEnd)
   })
 
   const today = new Date()
@@ -304,6 +298,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
     collapsed,
     selectedTaskId,
     highlightTaskId,
+    reschedulePreviewByTaskId,
     scale,
     compareMode,
     baselineOptions,
@@ -329,25 +324,29 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
   ))
 
   const isDesktop = screenWidth >= 1024
-  const leftPaneWidth = screenWidth >= 1440 ? 360 : 300
+  const leftPaneWidth = screenWidth >= 1440 ? 600 : 520
   const pxPerDay = PX_PER_DAY[scale]
-  const shouldVirtualize = rows.length > VIRTUALIZE_AFTER
+  const executionRows = useMemo(
+    () => [...rows].sort(compareTasksByExecutionOrder),
+    [rows],
+  )
+  const shouldVirtualize = executionRows.length > VIRTUALIZE_AFTER
 
   const dateRange = useMemo(
-    () => getTimelineDateRange(rows, compareMode),
-    [compareMode, rows],
+    () => getTimelineDateRange(executionRows, compareMode, reschedulePreviewByTaskId),
+    [compareMode, executionRows, reschedulePreviewByTaskId],
   )
 
   const totalDays = Math.max(1, diffInDays(dateRange.end, dateRange.start) + 1)
   const timelineWidth = totalDays * pxPerDay
-  const totalHeight = rows.length * ROW_HEIGHT
+  const totalHeight = executionRows.length * ROW_HEIGHT
   const visibleStartIndex = shouldVirtualize
     ? Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN)
     : 0
   const visibleEndIndex = shouldVirtualize
-    ? Math.min(rows.length - 1, Math.ceil((scrollTop + BODY_HEIGHT) / ROW_HEIGHT) + OVERSCAN)
-    : rows.length - 1
-  const visibleRows = rows.slice(visibleStartIndex, visibleEndIndex + 1)
+    ? Math.min(executionRows.length - 1, Math.ceil((scrollTop + BODY_HEIGHT) / ROW_HEIGHT) + OVERSCAN)
+    : executionRows.length - 1
+  const visibleRows = executionRows.slice(visibleStartIndex, visibleEndIndex + 1)
 
   const xForDate = useMemo(
     () => (date: Date | null) => (date ? diffInDays(date, dateRange.start) * pxPerDay : null),
@@ -386,6 +385,9 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
       const compareEnd = compareMode === 'baseline'
         ? (currentEnd || currentStart)
         : (actualEnd || actualStart)
+      const reschedulePreview = reschedulePreviewByTaskId?.get(task.id) ?? null
+      const rescheduleStart = parseDate(reschedulePreview?.proposedStartDate)
+      const rescheduleEnd = parseDate(reschedulePreview?.proposedEndDate || reschedulePreview?.proposedStartDate)
 
       return {
         task,
@@ -397,6 +399,10 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
         mainEndX: xForDate(mainEnd),
         compareStartX: xForDate(compareStart),
         compareEndX: xForDate(compareEnd),
+        reschedulePreview,
+        rescheduleStartX: xForDate(rescheduleStart),
+        rescheduleEndX: xForDate(rescheduleEnd),
+        rescheduleDateLabel: `${formatDateLabel(reschedulePreview?.proposedStartDate)} → ${formatDateLabel(reschedulePreview?.proposedEndDate)}`,
         mainDateLabel: `${formatDateLabel(compareMode === 'baseline' ? task.baseline_start : (task.start_date || task.planned_start_date))} → ${formatDateLabel(compareMode === 'baseline' ? task.baseline_end : (task.end_date || task.planned_end_date))}`,
         compareDateLabel: compareMode === 'baseline'
           ? `${formatDateLabel(task.start_date || task.planned_start_date)} → ${formatDateLabel(task.end_date || task.planned_end_date)}`
@@ -405,7 +411,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
         mainTone: getTaskTone(task, sourceType),
       }
     })
-  ), [compareMode, getCriticalPathSourceType, visibleRows, visibleStartIndex, xForDate])
+  ), [compareMode, getCriticalPathSourceType, reschedulePreviewByTaskId, visibleRows, visibleStartIndex, xForDate])
 
   const layoutMap = useMemo(
     () => new Map(rowLayouts.map((layout) => [layout.task.id, layout])),
@@ -461,13 +467,13 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
   useEffect(() => {
     if (!highlightTaskId || !rightBodyRef.current) return
-    const targetIndex = rows.findIndex((task) => task.id === highlightTaskId)
+    const targetIndex = executionRows.findIndex((task) => task.id === highlightTaskId)
     if (targetIndex < 0) return
 
     const nextTop = Math.max(0, targetIndex * ROW_HEIGHT - BODY_HEIGHT / 2 + ROW_HEIGHT / 2)
     rightBodyRef.current.scrollTo({ top: nextTop, behavior: 'smooth' })
     leftBodyRef.current?.scrollTo({ top: nextTop, behavior: 'smooth' })
-  }, [highlightTaskId, rows])
+  }, [executionRows, highlightTaskId])
 
   function syncScroll(source: 'left' | 'right', top: number) {
     const target = source === 'left' ? rightBodyRef.current : leftBodyRef.current
@@ -496,21 +502,30 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
   if (!isDesktop) {
     return (
-      <div data-testid="gantt-timeline-mobile-fallback" className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
+      <EmptyState
+        testId="gantt-timeline-mobile-fallback"
+        title="横道图请在宽屏查看"
+        description="当前窗口较窄，请切换到宽屏查看时间轴。"
+        className="rounded-2xl border border-amber-200 bg-amber-50 py-8"
+      />
     )
   }
 
-  if (rows.length > TIMELINE_LIMIT) {
+  if (executionRows.length > TIMELINE_LIMIT) {
     return (
       <div data-testid="gantt-timeline-too-many" className="rounded-2xl border border-slate-200 bg-slate-50 px-5 py-6 text-sm text-slate-700">
-        {rows.length} 条任务
+        {executionRows.length} 条任务
       </div>
     )
   }
 
-  if (rows.length === 0) {
+  if (executionRows.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10" />
+      <EmptyState
+        title="暂无横道图任务"
+        description="当前筛选条件下没有可展示的任务时间轴。"
+        className="rounded-2xl empty-state-frame border-slate-300 bg-slate-50 py-10"
+      />
     )
   }
 
@@ -523,7 +538,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
           </span>
           <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
             {(['day', 'week', 'month'] as const).map((option) => (
-              <button
+              <Button variant="ghost"
                 key={option}
                 type="button"
                 data-testid={`gantt-timeline-scale-${option}`}
@@ -534,11 +549,11 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                 )}
               >
                 {option === 'day' ? '天' : option === 'week' ? '周' : '月'}
-              </button>
+              </Button>
             ))}
           </div>
           <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-            <button
+            <Button variant="ghost"
               type="button"
               data-testid="gantt-timeline-compare-plan"
               onClick={() => onCompareModeChange('plan')}
@@ -548,8 +563,8 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
               )}
             >
               计划 / 实际
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               type="button"
               data-testid="gantt-timeline-compare-baseline"
               onClick={() => onCompareModeChange('baseline')}
@@ -559,30 +574,40 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
               )}
             >
               基线对比
-            </button>
+            </Button>
           </div>
           {compareMode === 'baseline' ? (
-            <select
-              data-testid="gantt-timeline-baseline-select"
-              value={baselineVersionId}
+            <Select
+              value={baselineVersionId || NO_BASELINE_SELECT_VALUE}
               disabled={baselineLoading || baselineOptions.length === 0}
-              onChange={(event) => onBaselineVersionIdChange(event.target.value)}
-              className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:bg-slate-100"
+              onValueChange={(value) => {
+                if (value === NO_BASELINE_SELECT_VALUE) return
+                onBaselineVersionIdChange(value)
+              }}
             >
-              {baselineOptions.length === 0 ? (
-                <option value="">暂无已确认基线</option>
-              ) : (
-                baselineOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    V{option.version} · {option.title}
-                  </option>
-                ))
-              )}
-            </select>
+              <SelectTrigger
+                aria-label="选择对比基线版本"
+                data-testid="gantt-timeline-baseline-select"
+                className="h-10 min-w-56 rounded-xl border-slate-100 bg-white text-sm text-slate-700 shadow-[var(--el-1)] disabled:cursor-not-allowed disabled:bg-slate-100"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {baselineOptions.length === 0 ? (
+                  <SelectItem value={NO_BASELINE_SELECT_VALUE}>暂无已确认基线</SelectItem>
+                ) : (
+                  baselineOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      V{option.version} · {option.title}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
-          <span>当前共 {rows.length} 条任务</span>
+          <span>当前共 {executionRows.length} 条任务</span>
           <span>左侧固定列 + 右侧时间轴</span>
           {shouldVirtualize ? <span>已启用行级虚拟滚动</span> : null}
         </div>
@@ -591,14 +616,15 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
       {compareMode === 'baseline' && baselineOptions.length === 0 ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-6" />
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="surface-card overflow-hidden">
           <div className="grid" style={{ gridTemplateColumns: `${leftPaneWidth}px minmax(0, 1fr)` }}>
             <div className="border-r border-slate-200">
-              <div className="grid h-14 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 border-b border-slate-200 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <div className="grid h-14 grid-cols-[minmax(16rem,1fr)_8rem_7rem] items-center gap-3 bg-slate-50 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
                 <span>任务名称</span>
                 <span>责任单位</span>
                 <span>责任人</span>
               </div>
+              <Separator />
               <div
                 ref={leftBodyRef}
                 className="relative overflow-y-auto overflow-x-hidden"
@@ -618,7 +644,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         role="button"
                         tabIndex={0}
                         className={cn(
-                          'absolute left-0 right-0 grid h-10 grid-cols-[minmax(0,1fr)_7rem_7rem] items-center gap-3 border-b border-slate-100 px-4 text-left transition-colors',
+                          'absolute left-0 right-0 grid h-12 grid-cols-[minmax(16rem,1fr)_8rem_7rem] items-center gap-3 border-b border-slate-100 px-4 text-left transition-colors',
                           selected && 'bg-blue-50',
                           highlighted && 'bg-orange-50 ring-1 ring-inset ring-orange-300',
                           !selected && !highlighted && layout.index % 2 === 1 && 'bg-slate-50/70',
@@ -632,9 +658,9 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           }
                         }}
                       >
-                        <div className="flex min-w-0 items-center gap-2" style={{ paddingLeft: layout.task.depth * 14 }}>
+                        <div className="flex min-w-0 items-center gap-2 overflow-hidden" style={{ paddingLeft: layout.task.depth * 14 }}>
                           {hasChildren ? (
-                            <button
+                            <Button variant="ghost"
                               type="button"
                               aria-label={collapsed.has(layout.task.id) ? '展开子任务' : '折叠子任务'}
                               className="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-500 hover:bg-slate-200"
@@ -648,23 +674,23 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                               ) : (
                                 <ChevronDown className="h-4 w-4" />
                               )}
-                            </button>
+                            </Button>
                           ) : (
                             <span className="h-6 w-6 shrink-0" />
                           )}
-                          <div className="min-w-0">
+                          <div className="min-w-0 overflow-hidden leading-tight">
                             <div className="truncate text-sm font-medium text-slate-900">
-                              {layout.task.title || layout.task.name || '未命名任务'}
+                              {layout.task.title || '未命名任务'}
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 pt-0.5 text-[11px] text-slate-500">
-                              {layout.task.wbs_code ? <span>WBS {layout.task.wbs_code}</span> : null}
-                              {layout.task.is_milestone ? <span>里程碑</span> : null}
-                              {layout.missingBaseline ? <span className="text-amber-600">未映射基线</span> : null}
+                            <div className="flex min-w-0 items-center gap-2 overflow-hidden pt-0.5 text-xs text-slate-500">
+                              {layout.task.wbs_code ? <span className="min-w-0 truncate">WBS {layout.task.wbs_code}</span> : null}
+                              {layout.task.is_milestone ? <span className="shrink-0">里程碑</span> : null}
+                              {layout.missingBaseline ? <span className="shrink-0 text-amber-600">未映射</span> : null}
                             </div>
                           </div>
                         </div>
-                        <span className="truncate text-sm text-slate-600">{getUnitLabel(layout.task)}</span>
-                        <span className="truncate text-sm text-slate-600">{getAssigneeLabel(layout.task)}</span>
+                        <span className="min-w-0 truncate text-sm text-slate-600">{getUnitLabel(layout.task)}</span>
+                        <span className="min-w-0 truncate text-sm text-slate-600">{getAssigneeLabel(layout.task)}</span>
                       </div>
                     )
                   })}
@@ -711,12 +737,12 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         x2={segment.left}
                         y1={0}
                         y2={totalHeight}
-                        stroke="#e2e8f0"
+                        stroke={GANTT_BAR_PALETTE.grid}
                         strokeWidth={1}
                       />
                     ))}
                     {todayX !== null ? (
-                      <line x1={todayX} x2={todayX} y1={0} y2={totalHeight} stroke="#fb7185" strokeWidth={1.5} />
+                      <line x1={todayX} x2={todayX} y1={0} y2={totalHeight} stroke={GANTT_BAR_PALETTE.today} strokeWidth={1.5} />
                     ) : null}
 
                     <TimelineDependencyLayer edges={dependencyEdges} />
@@ -731,16 +757,23 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         ? Math.max(8, layout.compareEndX - layout.compareStartX + pxPerDay - 8)
                         : 0
                       const compareX = layout.compareStartX !== null ? layout.compareStartX + 4 : null
+                      const rescheduleWidth = layout.rescheduleStartX !== null && layout.rescheduleEndX !== null
+                        ? Math.max(8, layout.rescheduleEndX - layout.rescheduleStartX + pxPerDay - 8)
+                        : 0
+                      const rescheduleX = layout.rescheduleStartX !== null ? layout.rescheduleStartX + 4 : null
                       const progressWidth = Math.round(mainWidth * (clampProgress(layout.task.progress) / 100))
                       const milestoneX = layout.mainEndX !== null ? layout.mainEndX + pxPerDay / 2 : null
                       const tooltip = [
-                        layout.task.title || layout.task.name || '未命名任务',
+                        layout.task.title || '未命名任务',
                         `主条：${layout.mainDateLabel}`,
                         compareMode === 'baseline' ? `对比：${layout.compareDateLabel}` : `实际：${layout.compareDateLabel}`,
                         `进度：${clampProgress(layout.task.progress)}%`,
+                        layout.reschedulePreview
+                          ? `重排建议：${layout.rescheduleDateLabel}，${layout.reschedulePreview.currentDurationDays}天改为 ${layout.reschedulePreview.proposedDurationDays}天`
+                          : '',
                         `责任单位：${getUnitLabel(layout.task)}`,
                         `责任人：${getAssigneeLabel(layout.task)}`,
-                      ].join('\n')
+                      ].filter(Boolean).join('\n')
 
                       return (
                         <g
@@ -753,11 +786,11 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                             <>
                               <rect
                                 x={mainX}
-                                y={layout.top + 8}
+                                y={layout.top + 11}
                                 width={mainWidth}
                                 height={14}
                                 rx={7}
-                                fill={layout.missingBaseline ? '#f8fafc' : layout.mainTone.fill}
+                                fill={layout.missingBaseline ? GANTT_BAR_PALETTE.grid : layout.mainTone.fill}
                                 stroke={layout.mainTone.stroke}
                                 strokeDasharray={layout.missingBaseline ? '4 3' : undefined}
                                 strokeWidth={selected ? 1.8 : 1.2}
@@ -765,7 +798,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                               {progressWidth > 0 ? (
                                 <rect
                                   x={mainX}
-                                  y={layout.top + 8}
+                                  y={layout.top + 11}
                                   width={progressWidth}
                                   height={14}
                                   rx={7}
@@ -778,8 +811,8 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
 
                           {layout.task.is_milestone && milestoneX !== null ? (
                             <polygon
-                              points={`${milestoneX},${layout.top + 8} ${milestoneX + 8},${layout.top + 16} ${milestoneX},${layout.top + 24} ${milestoneX - 8},${layout.top + 16}`}
-                              fill="#f59e0b"
+                              points={`${milestoneX},${layout.top + 10} ${milestoneX + 8},${layout.top + 18} ${milestoneX},${layout.top + 26} ${milestoneX - 8},${layout.top + 18}`}
+                              fill={GANTT_BAR_PALETTE.milestone}
                               stroke={layout.mainTone.stroke}
                               strokeWidth={1.5}
                             />
@@ -788,12 +821,26 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                           {compareX !== null && compareWidth > 0 ? (
                             <rect
                               x={compareX}
-                              y={compareMode === 'baseline' ? layout.top + 27 : layout.top + 26}
+                              y={compareMode === 'baseline' ? layout.top + 33 : layout.top + 32}
                               width={compareWidth}
                               height={compareMode === 'baseline' ? 5 : 6}
                               rx={compareMode === 'baseline' ? 2.5 : 3}
-                              fill={compareMode === 'baseline' ? '#475569' : layout.mainTone.actualFill}
+                              fill={compareMode === 'baseline' ? GANTT_BAR_PALETTE.compare : layout.mainTone.actualFill}
                               opacity={0.88}
+                            />
+                          ) : null}
+                          {rescheduleX !== null && rescheduleWidth > 0 && !layout.task.is_milestone ? (
+                            <rect
+                              x={rescheduleX}
+                              y={layout.top + 39}
+                              width={rescheduleWidth}
+                              height={5}
+                              rx={2.5}
+                              fill="rgb(59 130 246)"
+                              opacity={0.9}
+                              stroke="rgb(29 78 216)"
+                              strokeDasharray="5 3"
+                              strokeWidth={1}
                             />
                           ) : null}
                         </g>
@@ -810,6 +857,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
       <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
         <span>主条：{compareMode === 'baseline' ? '基线计划' : '当前计划'}</span>
         <span>细条：{compareMode === 'baseline' ? '当前计划' : '实际时间'}</span>
+        {reschedulePreviewByTaskId && reschedulePreviewByTaskId.size > 0 ? <span>蓝色建议条：采纳重排后的计划</span> : null}
         <span>边框：关键路径高亮</span>
         <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={scrollToToday}>
           定位到今天

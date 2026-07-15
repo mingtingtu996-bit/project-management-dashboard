@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "workbuddy-data-mutation-boundaries/v1",
+  "mutationBoundary": "boundary_catalog_only_no_db_mutation_no_runtime_write",
+  "boundaries": [
+    {
+      "id": "search_candidate_only",
+      "center": "project-search",
+      "allowedTables": [
+        "progress_knowledge_sources",
+        "progress_knowledge_documents",
+        "progress_asset_candidates",
+        "progress_asset_calibration_runs",
+        "progress_asset_calibration_results",
+        "progress_asset_publication_readiness"
+      ],
+      "forbiddenTablesRef": "project-data/boundaries/forbidden-writes.json",
+      "defaultMode": "candidate_review_only"
+    },
+    {
+      "id": "testing_staging_controlled_writer",
+      "center": "project-testing",
+      "allowedWhen": "explicit staging authorization, env fingerprint, unlock flags, rollback plan, and readback evidence are present",
+      "forbiddenInProductionWithoutHandoff": true
+    },
+    {
+      "id": "evidence_index_only",
+      "center": "project-evidence",
+      "allowedMutation": "index and classify evidence files only",
+      "forbiddenMutation": "business table writes"
+    }
+  ]
+}

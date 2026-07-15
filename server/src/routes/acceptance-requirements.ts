@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
 import { executeSQLOne } from '../services/dbService.js'
@@ -14,6 +14,7 @@ import {
   listAcceptanceRequirements,
   updateAcceptanceRequirement,
 } from '../services/acceptanceFlowService.js'
+import { deactivateEntityLinksForEntity } from '../services/projectLinkingService.js'
 
 const router = Router()
 router.use(authenticate)
@@ -85,8 +86,6 @@ function normalizeRequirementCreatePayload(body: Record<string, any>) {
 function normalizeRequirementUpdatePayload(body: Record<string, any>) {
   const updates: Record<string, any> = {}
   if (body.requirement_type !== undefined || body.requirementType !== undefined) updates.requirement_type = body.requirement_type ?? body.requirementType
-  if (body.source_entity_type !== undefined || body.sourceEntityType !== undefined) updates.source_entity_type = body.source_entity_type ?? body.sourceEntityType
-  if (body.source_entity_id !== undefined || body.source_id !== undefined || body.sourceEntityId !== undefined) updates.source_entity_id = body.source_entity_id ?? body.source_id ?? body.sourceEntityId
   if (body.drawing_package_id !== undefined || body.drawingPackageId !== undefined) updates.drawing_package_id = body.drawing_package_id ?? body.drawingPackageId
   if (body.description !== undefined || body.notes !== undefined) updates.description = body.description ?? body.notes
   if (body.status !== undefined) updates.status = body.status
@@ -95,7 +94,84 @@ function normalizeRequirementUpdatePayload(body: Record<string, any>) {
   return updates
 }
 
-router.get('/', validate(requirementListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+function hasForbiddenLineageFields(body: Record<string, any> = {}) {
+  return body.source_entity_type !== undefined
+    || body.source_entity_id !== undefined
+    || body.source_id !== undefined
+    || body.sourceEntityType !== undefined
+    || body.sourceEntityId !== undefined
+}
+
+function isEntityExitStatus(value: unknown): boolean {
+  const status = String(value ?? '').trim().toLowerCase()
+  return status === 'archived' || status === 'inactive' || status === 'deleted'
+}
+
+async function resolvePlanProjectId(planId: string) {
+  const plan = await executeSQLOne<{ project_id?: string }>('SELECT project_id FROM acceptance_plans WHERE id = ? LIMIT 1', [planId])
+  return plan?.project_id
+}
+
+async function validateRequirementReferencesForProject(projectId: string, planId: string, drawingPackageId?: unknown) {
+  const plan = await executeSQLOne<{ project_id?: string }>(
+    'SELECT project_id FROM acceptance_plans WHERE id = ? LIMIT 1',
+    [planId],
+  )
+  if (!plan || String(plan.project_id ?? '') !== projectId) {
+    return {
+      ok: false as const,
+      code: 'PLAN_PROJECT_MISMATCH',
+      message: 'Acceptance requirement plan must belong to the current project',
+      details: { invalidPlanIds: [planId] },
+    }
+  }
+
+  const packageId = String(drawingPackageId ?? '').trim()
+  if (packageId) {
+    const drawingPackage = await executeSQLOne<{ id?: string }>(
+      'SELECT id FROM drawing_packages WHERE id = ? AND project_id = ? LIMIT 1',
+      [packageId, projectId],
+    )
+    if (!drawingPackage) {
+      return {
+        ok: false as const,
+        code: 'DRAWING_PACKAGE_PROJECT_MISMATCH',
+        message: 'Acceptance requirement drawing package must belong to the current project',
+        details: { invalidDrawingPackageIds: [packageId] },
+      }
+    }
+  }
+
+  return { ok: true as const }
+}
+
+async function validateDrawingPackageForProject(projectId: string, drawingPackageId?: unknown) {
+  const packageId = String(drawingPackageId ?? '').trim()
+  if (!packageId) return { ok: true as const }
+
+  const drawingPackage = await executeSQLOne<{ id?: string }>(
+    'SELECT id FROM drawing_packages WHERE id = ? AND project_id = ? LIMIT 1',
+    [packageId, projectId],
+  )
+  if (!drawingPackage) {
+    return {
+      ok: false as const,
+      code: 'DRAWING_PACKAGE_PROJECT_MISMATCH',
+      message: 'Acceptance requirement drawing package must belong to the current project',
+      details: { invalidDrawingPackageIds: [packageId] },
+    }
+  }
+
+  return { ok: true as const }
+}
+
+router.get('/',
+  validate(requirementListQuerySchema, 'query'),
+  requireProjectMember((req) => {
+    const planId = String(req.query.plan_id ?? req.query.planId ?? '').trim()
+    return planId ? resolvePlanProjectId(planId) : undefined
+  }),
+  asyncHandler(async (req, res) => {
   const planId = String(req.query.plan_id ?? req.query.planId ?? '').trim()
   if (!planId) {
     const response: ApiResponse = {
@@ -107,7 +183,8 @@ router.get('/', validate(requirementListQuerySchema, 'query'), asyncHandler(asyn
   }
 
   logger.info('Fetching acceptance requirements', { planId })
-  const data = await listAcceptanceRequirements(planId)
+  const projectId = String(await resolvePlanProjectId(planId) ?? '').trim()
+  const data = await listAcceptanceRequirements(projectId, planId)
 
   const response: ApiResponse<AcceptanceRequirement[]> = {
     success: true,
@@ -121,17 +198,35 @@ router.post('/',
   requireProjectEditor((req) => req.body.project_id ?? req.body.projectId),
   validate(requirementCreateBodySchema),
   asyncHandler(async (req, res) => {
+  // v1.4.6: Reject source_entity_* fields from normal API — backend auto-derives
+  if (hasForbiddenLineageFields(req.body ?? {})) {
+    return res.status(400).json({ success: false, error: { code: 'LINEAGE_FIELD_FORBIDDEN', message: 'source_entity_type/source_entity_id 不允许前端传入' }, timestamp: new Date().toISOString() })
+  }
   const payload = normalizeRequirementCreatePayload(req.body ?? {})
-  if (!payload.plan_id || !payload.requirement_type || !payload.source_entity_type || !payload.source_entity_id) {
-    const response: ApiResponse = {
+  // Auto-derive from acceptance plan context
+  if (payload.plan_id) {
+    payload.source_entity_type = 'acceptance_plan'
+    payload.source_entity_id = payload.plan_id
+  }
+  if (!payload.plan_id || !payload.requirement_type) {
+    return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'plan_id、requirement_type 是必需字段' }, timestamp: new Date().toISOString() })
+  }
+
+  const referenceValidation = await validateRequirementReferencesForProject(
+    String(payload.project_id ?? ''),
+    payload.plan_id,
+    payload.drawing_package_id,
+  )
+  if (!referenceValidation.ok) {
+    return res.status(400).json({
       success: false,
       error: {
-        code: 'VALIDATION_ERROR',
-        message: 'plan_id、requirement_type、source_entity_type、source_entity_id 是必需字段',
+        code: referenceValidation.code,
+        message: referenceValidation.message,
+        details: referenceValidation.details,
       },
       timestamp: new Date().toISOString(),
-    }
-    return res.status(400).json(response)
+    })
   }
 
   logger.info('Creating acceptance requirement', payload)
@@ -154,10 +249,44 @@ router.put('/:id',
   validate(requirementUpdateBodySchema),
   asyncHandler(async (req, res) => {
   const { id } = req.params
+  if (hasForbiddenLineageFields(req.body ?? {})) {
+    return res.status(400).json({ success: false, error: { code: 'LINEAGE_FIELD_FORBIDDEN', message: 'source_entity_type/source_entity_id 不允许前端传入' }, timestamp: new Date().toISOString() })
+  }
   const payload = normalizeRequirementUpdatePayload(req.body ?? {})
   logger.info('Updating acceptance requirement', { id })
+  const current = await executeSQLOne<{ project_id?: string | null }>(
+    'SELECT project_id FROM acceptance_requirements WHERE id = ? LIMIT 1',
+    [id],
+  )
 
-  const data = await updateAcceptanceRequirement(id, payload)
+  if (current?.project_id && payload.drawing_package_id !== undefined) {
+    const packageValidation = await validateDrawingPackageForProject(
+      String(current.project_id),
+      payload.drawing_package_id,
+    )
+    if (!packageValidation.ok) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: packageValidation.code,
+          message: packageValidation.message,
+          details: packageValidation.details,
+        },
+        timestamp: new Date().toISOString(),
+      })
+    }
+  }
+
+  const data = await updateAcceptanceRequirement(String(current?.project_id ?? ''), id, payload)
+
+  if (current?.project_id && isEntityExitStatus(payload.status)) {
+    await deactivateEntityLinksForEntity({
+      projectId: String(current.project_id),
+      entityType: 'acceptance_requirement',
+      entityId: id,
+      roles: ['target'],
+    })
+  }
 
   const response: ApiResponse<AcceptanceRequirement | null> = {
     success: true,
@@ -176,8 +305,27 @@ router.delete('/:id',
   asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting acceptance requirement', { id })
+  const current = await executeSQLOne<{ project_id?: string | null }>(
+    'SELECT project_id FROM acceptance_requirements WHERE id = ? LIMIT 1',
+    [id],
+  )
 
-  const deleted = await deleteAcceptanceRequirement(id)
+  if (current?.project_id) {
+    await deactivateEntityLinksForEntity({
+      projectId: String(current.project_id),
+      entityType: 'acceptance_requirement',
+      entityId: id,
+      roles: ['target'],
+    })
+  }
+
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'acceptance_requirement', entityId: id, projectId: (current as any)?.project_id ?? null, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+
+  const deleted = await deleteAcceptanceRequirement(String(current?.project_id ?? ''), id)
   if (!deleted) {
     const response: ApiResponse = {
       success: false,

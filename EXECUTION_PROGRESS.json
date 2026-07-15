@@ -1,6 +1,957 @@
 {
-  "last_updated": "2026-04-19T12:15:00+08:00",
-  "current_phase": 10,
+  "last_updated": "2026-07-12T21:46:52.6372704+08:00",
+  "uiux_v1_3": {
+    "source": "docs/plans/UI_UX商业级全面优化方案_v1.3.md",
+    "execution_plan": "docs/plans/UI_UX优化执行方案.md",
+    "requirements": "docs/plans/UI_UX需求清单.md",
+    "policy": "strict_leaf_steps_stop_for_manual_acceptance",
+    "current_step": "completed_with_masked_url_observation_limited",
+    "steps": {
+      "U0.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:19:15.5438847+08:00",
+        "note": "client/src/index.css: --background/#F8FAFC, --accent/#F97316, --el-1~--el-4, fade-in and expand-down keyframes added."
+      },
+      "U0.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:20:06.0452447+08:00",
+        "note": "client/tailwind.config.js: accent token, Plus Jakarta Sans stack, radius scale, elevation shadows, fade/expand animations, and bounce timing added; background/accent colors aligned with hex CSS variables."
+      },
+      "U0.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:20:47.8490937+08:00",
+        "note": "client/src/index.css: page-shell, card-unified, card-hover, motion-safe hover animation, reduced-motion overrides, and card-l1/l2/l3 elevation shadows aligned."
+      },
+      "U0.4": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:21:16.7576990+08:00",
+        "note": "client/index.html preconnect + Plus Jakarta Sans stylesheet added; client/src/index.css import switched from Inter to Plus Jakarta Sans."
+      },
+      "U0.4r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:22:12.7848496+08:00",
+        "note": "Verification passed: npx tsc -p client/tsconfig.json --noEmit; npm run build --workspace=client. Font stylesheet is present in client/index.html and client/src/index.css."
+      },
+      "U0.5": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:24:15.8135733+08:00",
+        "note": "client/src .ts/.tsx gray-50..gray-900 replaced with slate equivalents: 33 files, 490 replacements. 2026-04-29 correction also converted client/src/index.css @apply/comment/skeleton residual gray-* to slate-*; rg gray-[0-9] client/src returned zero; client typecheck, full client tests, and client build passed."
+      },
+      "U0.6": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:26:16.3126787+08:00",
+        "note": "client/src text-[10px]/[11px]/[22px]/[26px] standardized: 43 files, 144 replacements. Only allowed Sidebar badge text-[10px] remains; client tsc passed."
+      },
+      "U0.7": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:27:23.2010091+08:00",
+        "note": "client/src rounded-3xl/rounded-[24px]/rounded-[28px] standardized to rounded-2xl: 17 files, 39 replacements. Residual rg check returned NO_TARGET_RADIUS_MATCH; client tsc passed."
+      },
+      "U0.8": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:29:07.1331168+08:00",
+        "note": "Raw bg-blue-500 classes replaced with bg-blue-600; 2026-04-29 correction removed all remaining client/src literal bg-blue-500, including semantic bars/dots and hover classes by using hover:bg-[var(--brand-primary-hover)]. rg bg-blue-500 client/src returned zero; client typecheck, full client tests, and client build passed."
+      },
+      "U0.9": {
+        "status": "completed",
+        "completed_at": "2026-04-28T17:59:46.1136030+08:00",
+        "note": "client/src tracking-[0.*em] replaced with tracking-wider: 28 files, 68 replacements. Residual rg check returned NO_TRACKING_ARBITRARY_MATCH; client tsc passed."
+      },
+      "U0.10": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:00:59.4383681+08:00",
+        "note": "shadow-blue residuals removed across EmptyState, Sidebar, ApplyModal, and PreviewModal; elevation/shadow-sm used instead. Residual rg check returned NO_SHADOW_BLUE_MATCH; client tsc passed."
+      },
+      "U0.11": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:04:10.8814005+08:00",
+        "note": "Added tabular-nums/alignment to numeric, date, and percentage columns in DeviationDetailTable, Materials batch table, DrawingLedger, AcceptanceLedger, PlanningTreeView, BaselinePage, and MonthlyPlanPage. Client tsc passed."
+      },
+      "U0.11b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:17:45.1819739+08:00",
+        "note": "Added client/src/lib/formatters.ts with formatNumber, formatPercent, and timezone-stable formatDate helpers; client tsc passed."
+      },
+      "U0.11c": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:17:45.1819739+08:00",
+        "note": "Added client/src/components/Sparkline.tsx lightweight accessible SVG sparkline component without introducing new dependencies; client tsc passed."
+      },
+      "U0.11d": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:17:45.1819739+08:00",
+        "note": "Added client/src/components/AnimatedNumber.tsx with reduced-motion support and requestAnimationFrame count-up; client tsc passed."
+      },
+      "U0.11e": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:17:45.1819739+08:00",
+        "note": "Added client/src/hooks/useLoadingButton.ts using existing toast infrastructure for loading, timeout, and failure feedback; client tsc passed."
+      },
+      "U0.11f": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:17:45.1819739+08:00",
+        "note": "Added ChartAccessibleWrapper and connected data tables to real chart outputs: CompanyCockpit milestone chart, Dashboard monthly trend, TaskStatusCard donut, Reports monthly stacked/scatter/dumbbell/S-curve, and RiskTrendChart visual sections. Client tsc passed."
+      },
+      "U0.12": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:20:01.5066923+08:00",
+        "note": "Standardized icon sizes: h-3/w-3 and w-3/h-3 changed to 3.5 scale across client/src; pure large icon instances changed from 10 scale to 8 scale while container/button/avatar/skeleton h-10/w-10 remained. Client tsc passed."
+      },
+      "U0.12r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:21:21.8391345+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client (79 files, 445 tests); rg gray-[0-9]/rounded-3xl/shadow-blue returned zero matches; text-[10px] residual is only the allowed Sidebar badge."
+      },
+      "U0.13": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:24:12.5549920+08:00",
+        "note": "Aligned base UI component radii in input, select, tabs, toast, and skeleton; page-skeleton had no rounded-[28px]/rounded-[24px] residual. Targeted residual rg returned zero matches; client typecheck passed."
+      },
+      "U0.13b": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:39:30.000+08:00",
+        "note": "Added shadcn-style client/src/components/ui/table.tsx and migrated remaining native page tables to Table components: Materials batch/material table, Reports DeviationDetailTable, Drawings DrawingLedger, PreMilestones CertificateLedger and CertificateDependencyMatrix. Table headers use sticky top-0 z-10 bg-white, rows use even:bg-slate-50/50 hover:bg-slate-100/60, operation columns use group-hover opacity, numeric/date columns keep tabular-nums, and Gantt/Baseline/Monthly/Closeout/PlanningWorkspace fixed-bottom-bar pages include pb-20. Verification passed: client typecheck; targeted vitest 7 files / 72 tests; client build; rg '<table|<thead|<tbody|<tr|<th|<td' client/src/pages --glob '*.tsx' returned no matches."
+      },
+      "U0.14": {
+        "status": "completed",
+        "completed_at": "2026-04-28T18:30:45.0946850+08:00",
+        "note": "Added client/src/components/ui/tooltip.tsx using @radix-ui/react-tooltip, installed dependency with pnpm because npm workspace install hit Arborist null-location bug, updated client/package.json, client/pnpm-lock.yaml, and root package-lock entry, and wrapped App root in TooltipProvider delayDuration=300. Client typecheck passed."
+      },
+      "U0.15": {
+        "status": "completed",
+        "started_at": "2026-04-28T18:31:33.7490492+08:00",
+        "completed_at": "2026-04-28T19:45:26.3514188+08:00",
+        "note": "Added client/src/components/ui/separator.tsx and replaced inline visual dividers across 65 files with 100 <Separator> usages. 2026-04-29 correction removed remaining <div> border-t divider cases in AcceptanceDetailDrawer and Reports; residual border-b/t scan is limited to Separator itself plus structural grid/table/input/scrollbar/chart legend borders; client typecheck, full client tests, and client build passed."
+      },
+      "U0.15b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T19:49:23.0181201+08:00",
+        "note": "Added client/src/components/ui/checkbox.tsx based on Radix UI Checkbox and installed @radix-ui/react-checkbox@1.3.3 with pnpm; updated client/package.json, client/pnpm-lock.yaml, and root package-lock.json. Client typecheck and JSON validation passed."
+      },
+      "U0.16": {
+        "status": "completed",
+        "completed_at": "2026-04-28T19:57:47.1008491+08:00",
+        "note": "Unified ConfirmActionDialog styling with rounded-2xl, shadow-[var(--el-4)], and red destructive button; rewired planning ConfirmDialog to call ConfirmActionDialog while preserving props; replaced DrawingsPage window.confirm with ConfirmActionDialog state flow. window.confirm scan returned no matches."
+      },
+      "U0.16r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T19:57:47.1008491+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- planning-ui-kit.contract (1 file, 2 tests)."
+      },
+      "U0.16b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:22:18.851+08:00",
+        "note": "Unified Dialog/Sheet surfaces to 440/560/720px tiers with w-[90%], backdrop-blur-[4px], rounded-2xl, shadow-[var(--el-4)], and fade/zoom ease-bounce entry motion. Residual scan found no old DialogContent width classes or window.confirm usage; remaining shadow-2xl matches are non-dialog bottom action bars. Client typecheck passed."
+      },
+      "U0.17": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:23:40.377+08:00",
+        "note": "Added client/src/components/PageErrorBoundary.tsx and wrapped App routes in <PageErrorBoundary> while preserving existing per-route ErrorBoundary wrappers. Client typecheck passed."
+      },
+      "U0.17b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:24:54.188+08:00",
+        "note": "Aligned SkipLink with the leaf-step target and focus style: App uses targetId/id main-content, default label is 跳转到主内容, and focus state uses the specified blue fixed skip link. Client typecheck and SkipLink test passed."
+      },
+      "U0.18": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:25:48.901+08:00",
+        "note": "Added client/src/hooks/useScrollRestoration.ts and called useScrollRestoration() inside AppContent so route pathname changes scroll to top. Client typecheck passed."
+      },
+      "U0.19": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:26:41.982+08:00",
+        "note": "Added client/src/components/PageSkeleton.tsx with page-shell wrapper, header skeleton, 4-card responsive grid, and content skeleton per execution plan. Client typecheck passed."
+      },
+      "U0.19b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:27:32.081+08:00",
+        "note": "Replaced App route Suspense fallback PageLoader with the shared PageSkeleton component, covering lazy-loaded main routes through withRouteBoundary. PageLoader residual scan found no matches; client typecheck passed."
+      },
+      "U0.19c": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:32:47.847+08:00",
+        "note": "Extended EmptyState with default/filter/error variants, description rendering, onClearFilter, and onRetry. Updated filter/error usages in Gantt rows, Materials, Notifications, Milestones, Reports, ResponsibilityView, and RiskManagement. Client typecheck passed."
+      },
+      "U0.20": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:33:59.236+08:00",
+        "note": "Added client/src/components/NotFoundPage.tsx and registered a wildcard route at the end of App routes. Client typecheck passed."
+      },
+      "U0.21": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:34:51.957+08:00",
+        "note": "Added client/src/components/SectionHeader.tsx with title/action/count API per execution plan. Client typecheck passed."
+      },
+      "U0.22": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:37:04.549+08:00",
+        "note": "Installed @radix-ui/react-collapsible@1.1.12, added client/src/components/CollapsibleSection.tsx, and verified package locks in client/package.json, client/pnpm-lock.yaml, and root package-lock.json."
+      },
+      "U0.22r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:37:04.549+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client. npm install --package-lock-only --workspace=client --ignore-scripts also completed, reporting existing audit vulnerabilities only."
+      },
+      "U0.23": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:49:13.885+08:00",
+        "note": "Replaced actionable DOM tooltip title usage with Radix Tooltip: 62 intrinsic title attributes plus 9 Link/Button/Input forwarded title props. AST residual scan for intrinsic/Link/NavLink/Button/Input title props returned 0; remaining JSX title props are business component props such as PageHeader, EmptyState, MetricCard, and dialog titles. Client typecheck passed; GanttView.test.tsx passed (23 tests)."
+      },
+      "U0.24": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:50:52.047+08:00",
+        "note": "Replaced the 4 native selects in client/src/pages/GanttViewFilters.tsx with shadcn Select components while preserving filter callbacks and safeStorageSet persistence. Residual select scan for GanttViewFilters returned no matches; client typecheck passed."
+      },
+      "U0.25": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:54:01.141+08:00",
+        "note": "Converted native buttons to the shared Button component while preserving original type/onClick/disabled/className behavior. 2026-04-29 correction converted the remaining OnboardingGuide, TaskSummary, MonthlyPlanPage, and Wave4DialogsAndGuards test harness buttons; rg <button client/src returned zero; client typecheck, full client tests, and client build passed."
+      },
+      "U0.25b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:54:54.245+08:00",
+        "note": "Added active:scale-[0.98] transition-transform duration-75 to the shared Button cva base class so every Button variant inherits the active press state. Client typecheck passed."
+      },
+      "U0.26": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:56:18.540+08:00",
+        "note": "Replaced PageHeader eyebrow inline badge with the shared Badge component using variant=\"secondary\" while preserving the slate styling. Client typecheck passed."
+      },
+      "U0.27": {
+        "status": "completed",
+        "completed_at": "2026-04-28T20:58:15.623+08:00",
+        "note": "Replaced custom avatar markup in AssigneeProgressCard and CompanyCockpit ProjectOverviewSection with Avatar/AvatarImage/AvatarFallback while preserving dimensions and fallback labels. Client typecheck passed."
+      },
+      "U0.28": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:04:05.316+08:00",
+        "note": "Enhanced LoginDialog with password visibility toggle, onBlur required validation for username/password, and Button-based close/mode toggle controls. Added onBlur required validation to EditProfileDialog display name, ChangePasswordDialog password fields, and PreMilestones MilestoneDialog certificate name. Client typecheck passed; native button residual scan now only reports Sidebar.tsx (3), reserved for U0.30."
+      },
+      "U0.28b": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:06:59.200+08:00",
+        "note": "Applied form validation to the actual WBS template ApplyModal/CreateModal files: inputs/radio labels have htmlFor or aria-labelled groups, required fields validate on blur with role=alert and red borders, and submit actions use useLoadingButton. Static label/useLoadingButton/error scan passed."
+      },
+      "U0.28r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:06:59.200+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client."
+      },
+      "U0.29": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:12:42.976+08:00",
+        "note": "Converted 37 semantic rounded/bg-white custom card divs to the shared Card component in 17 files, running client typecheck after each 10-item batch. Card refs now total 282 across 90 files. Remaining AST div candidates are intentionally non-card controls/overlays: segmented controls, context menus, tooltip, and heatmap squares. Final client typecheck passed."
+      },
+      "U0.30": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:14:23.072+08:00",
+        "note": "Refined Sidebar.tsx: converted the 3 remaining native buttons to Button, changed the three rounded-2xl targets to rounded-xl, replaced the mobile menu hover scale with hover:bg-slate-100 hover:shadow-sm, added cursor-pointer and focus-visible ring styles to nav links, and confirmed collapsed labels already use Radix Tooltip. Sidebar residual scan for rounded-2xl/hover:scale-105/shadow-blue/text-[11px]/tracking/title/<button returned no matches; client typecheck passed."
+      },
+      "U0.31": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:16:05.878+08:00",
+        "note": "Updated design-system/workbuddy/MASTER.md: Primary Button background is #2563EB, Shadow Depths table now uses --el-1 through --el-4 with v1.3 elevation values, and component examples reference var(--el-2/3/4). MASTER shadow-token residual scan returned no old --shadow-* matches."
+      },
+      "U0.31r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:16:05.878+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client."
+      },
+      "U0.final": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:27:27.280+08:00",
+        "note": "Phase 0 full verification passed: client typecheck passed; client test:run exited 0 after adding Tooltip self-provider safety; client production build passed; residual scan for gray-[0-9] in ts/tsx, text-[Npx], rounded-3xl/rounded-[, shadow-blue, and tracking-[0. returned 0. Browser suites passed with no apiFailures/consoleErrors/pageErrors: shell-and-collab (7 scripts), project-chains (9 scripts), and planning-and-tooling (9 scripts)."
+      },
+      "U14.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:38:03.996+08:00",
+        "note": "Added document.title useEffect values for all 17 mapped pages. Added or aligned Breadcrumb paths for Dashboard, Reports, RiskManagement, Materials, Milestones, Notifications, AcceptanceTimeline, GanttViewHeader, DrawingsPage, PreMilestones, TaskSummary, CompanyCockpit, ResponsibilityView, and PlanningPageShell so planning workspace/baseline/monthly/closeout inherit consistent breadcrumbs. AcceptanceTimeline label aligned to 验收流程; Closeout shell title aligned to 计划编制 / 关闭管理."
+      },
+      "U14.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:38:03.996+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; title scan confirmed all 17 mapped page files contain document.title."
+      },
+      "U1.0": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:42:43.865+08:00",
+        "note": "Added project-level dashboard today-live backend aggregation at /api/projects/:projectId/dashboard/today-live, with /api/dashboard/today-live?projectId= compatibility. Aggregates unsatisfied task conditions and active obstacles as warning priority 1, due-today tasks as priority 2, today change_logs as priority 3, and new/updated active risks as priority 4; response items are priority sorted. Mounted dashboardRouter under /api/projects/:projectId/dashboard using mergeParams. Verification passed: server typecheck, client typecheck, server route-aggregation guard, and full server test suite (150 files, 648 tests)."
+      },
+      "U1.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T21:48:10.000+08:00",
+        "note": "Dashboard outer container now uses page-shell under page-enter bg-slate-50/80; residual scan confirmed no max-w-[1680px], text-[26px], or text-[11px] in client/src/pages/Dashboard.tsx. Client typecheck passed."
+      },
+      "U1.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:01:30.000+08:00",
+        "note": "Replaced the first-screen ProjectInfoCard placement with DashboardCompactHeader: project name, phase badge, semantic health pill, and Collapsible detail area containing the original ProjectInfoCard so basic-info editing and scope summary remain available."
+      },
+      "U1.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:01:30.000+08:00",
+        "note": "Added 4 first-screen metric cards for overall progress, month deviation, active risks, and today todos using shared Card, AnimatedNumber, Sparkline, tabular numbers, and 60ms staggered fade-in animation."
+      },
+      "U1.4": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:01:30.000+08:00",
+        "note": "Replaced the four TodayLive cards with one compact TodayLiveListPanel connected to /api/projects/:projectId/dashboard/today-live. Items are normalized, priority sorted, limited to 5 in preview, have type color bars and labels, include 查看全部(N), and fall back to local shared-slice data only on endpoint failure."
+      },
+      "U1.5": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:03:40.000+08:00",
+        "note": "Moved DashboardMonthlyTrend, WeeklyDigestPanel, DashboardCompareCard, DashboardMilestoneCard, UnitProgressCard, TaskStatusCard, IssueRiskGrid, and RecentTasksCard into a 4-tab analysis area: 进度趋势 / 里程碑 / 单位工程 / 近期任务. Tabs include semantic badges and a min-h-[400px] content area."
+      },
+      "U1.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:05:30.000+08:00",
+        "note": "Phase 1 verification passed: npm run typecheck --workspace=client; npx vitest run --root client src/pages/__tests__/Dashboard.test.tsx (6 tests); npm run test:run --workspace=client (79 files, 445 tests); npm run build --workspace=client. Residual scan found no Dashboard max-w-[1680px], text-[26px], text-[11px], or TodayLiveCard matches."
+      },
+      "U2.0": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:10:00.000+08:00",
+        "note": "Added GET /api/projects/:projectId/reports/s-curve in server/src/routes/reports.ts and mounted it from server/src/index.ts. The endpoint returns daily planned_cumulative and actual_cumulative points from project start through today using project_daily_snapshot plus execution summary fallback. Added server/src/__tests__/reportsRoutes.test.ts."
+      },
+      "U2.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:31:00.000+08:00",
+        "note": "Reports.tsx now uses the shared page-shell container, module chips use progress/progress_deviation/risk/change_log keys with semantic numeric badges, default progress chip uses active blue styling, and active detail content uses a fade-in duration-200 transition."
+      },
+      "U2.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:31:30.000+08:00",
+        "note": "Progress module now has 3 metric cards (total tasks, completion rate, month new tasks), connects the S-Curve chart to /api/projects/:projectId/reports/s-curve with task fallback, and adds a right-side key node list with tabular dates and status dots."
+      },
+      "U2.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:32:00.000+08:00",
+        "note": "Deviation module grids were normalized to xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] where applicable, 4 focus sub-chips now show numeric badges, chart components use card-unified wrappers, BaselineDumbbellChart keeps inline deviation bars, and DeviationDetailTable has zebra/hover rows plus tabular right-aligned numeric columns."
+      },
+      "U2.4": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:32:30.000+08:00",
+        "note": "Risk module now has 2 top metric cards with sparklines, a 5x5 impact/probability heatmap, level/status chips, 查看全部(N), and latest risk rows with red/amber/green left color bars, owner, and tabular date."
+      },
+      "U2.5": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:33:00.000+08:00",
+        "note": "Change-log module now has 2 metric cards (month changes and approval count), a timeline list with tabular dates, type color bars, status Badge, zebra/hover rows, and bottom pagination."
+      },
+      "U2.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:34:20.000+08:00",
+        "note": "Phase 2 verification passed: npm run typecheck --workspace=client; npm run typecheck --workspace=server; npx vitest run --root client src/pages/__tests__/Reports.test.tsx (7 tests); npx vitest run --root server src/__tests__/reportsRoutes.test.ts (2 tests); npm run build --workspace=client."
+      },
+      "U3.0": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:47:30.000+08:00",
+        "note": "Added risk pipeline stage counts to server/src/services/riskStatisticsService.ts via buildRiskPipelineStages and returned pipelineStages from /api/risk-statistics/trend. Status mapping covers identified/assessed/responded/monitored aliases, with existing mitigating mapped to responded and closed/resolved/monitoring mapped to monitored. Added server/src/__tests__/riskStatisticsService.pipelineStages.test.ts."
+      },
+      "U3.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:50:00.000+08:00",
+        "note": "RiskManagement now uses .page-shell for normal and missing-project states. The summary band uses four unified metric cards in a responsive xl:grid-cols-4 layout with labels, large tabular values, hints, icons, and sparklines. DataQualityBanner was moved from the top surface to a default-collapsed bottom CollapsibleSection."
+      },
+      "U3.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:50:40.000+08:00",
+        "note": "Added risk-pipeline-flow CSS flow with 识别/评估/应对/监控 stages, counts from backend pipelineStages with local risk-row fallback, orange active nodes, green monitored node, slate empty nodes, and animated chevron connectors."
+      },
+      "U3.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:51:15.000+08:00",
+        "note": "Added three OverviewCards for 预警/风险/问题 using border-l-4 amber/red/blue accents, card-hover lift, large counts, 7-day trend chip, recent 3-item list with task/date metadata, and 查看全部(N) stream jump buttons."
+      },
+      "U3.4": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:52:00.000+08:00",
+        "note": "Replaced the four TrendSummary cards and old collapsible RiskTrendChart surface with one card-unified Recharts LineChart multi-line trend for 预警/风险/问题/已关闭. Legend chips are clickable and toggle each series; ChartAccessibleWrapper exposes the data table."
+      },
+      "U3.5": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:52:45.000+08:00",
+        "note": "RiskManagement workspace now has a unified list pattern: embedded search, chip filters for 等级/状态/责任人, existing source/view controls preserved, filtered list grouping retained, and bottom Pagination added for all three streams."
+      },
+      "U3.6": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:53:15.000+08:00",
+        "note": "Added the three-flow hint above tabs: 预警 → 风险 → 问题. The active stream node is highlighted with bg-blue-600 text-white and inactive nodes use slate muted text."
+      },
+      "U3.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T22:56:30.000+08:00",
+        "note": "Phase 3 verification passed: npm run typecheck --workspace=client; npm run typecheck --workspace=server; npm run test:run --workspace=client -- src/pages/__tests__/RiskManagement.test.tsx (13 tests); npm test --workspace=server -- src/__tests__/riskStatisticsService.pipelineStages.test.ts (1 test); npm run build --workspace=client. npm install --package-lock-only --workspace=client --ignore-scripts synced package-lock and reported existing audit vulnerabilities only."
+      },
+      "U8.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:02:00.000+08:00",
+        "note": "GanttView 13处 console.error 均保留调试日志并补齐用户可见 destructive toast，覆盖任务/条件/阻碍/延期/项目摘要/数据质量/参建单位加载及保存、里程碑、强制满足、延期审批/提交/撤回失败。"
+      },
+      "U8.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:11:00.000+08:00",
+        "note": "GanttViewDialogs、CriticalPathDialog、CriticalPathInsertDialog、ScopeDimensionsDialog、ParticipantUnitsDialog 的 DialogContent 统一 rounded-2xl shadow-[var(--el-4)]，沿用 blue + semantic + slate 的现有语义色。"
+      },
+      "U8.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:11:30.000+08:00",
+        "note": "当前代码不存在 TypeManagerDialog；按执行方案意图将 GanttViewDialogs 主任务表单改为 Tabs 分步入口：基础信息 / 高级选项，高级字段默认不展开。"
+      },
+      "U8.4": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:12:30.000+08:00",
+        "note": "GanttViewTaskContextMenu 重构为编辑操作/层级操作/关键路径操作/危险操作分组，统一 hover transition、py-2 px-3、Separator、删除红色提示与既有 ConfirmDialog 删除链路；关键路径 6项补描述行并加入视口边界检测。"
+      },
+      "U8.5": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:08:30.000+08:00",
+        "note": "GanttBatchBar 改为 fixed bottom-4 left-1/2 max-w-[1440px] 统一底部栏；左侧仅选中计数+清除，右侧保留状态变更/删除，责任人/单位/日期平移收入更多操作 DropdownMenu。"
+      },
+      "U8.6": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:13:30.000+08:00",
+        "note": "CriticalPathDialog 标题补说明；循环依赖警告补 tooltip；CriticalPathGraph 补节点 hover 信息浮层、显式图例、缩放控件文字标签，保留既有居中与导出行为。"
+      },
+      "U8.7": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:09:30.000+08:00",
+        "note": "GanttViewHeader 视图切换保持 Tab/segmented 风格并用 blue active；任务数>50 的横道图提示已加；筛选栏默认隐藏时显示点击展开筛选；GovernanceBanner 阶段 Badge 补 tooltip。"
+      },
+      "U8.8": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:07:30.000+08:00",
+        "note": "GanttStatsCards 由 6卡精简为 4卡：总任务数/进行中/已完成/异常；逾期与异常（进度落后）解释进入 tooltip，滞后文案改为进度落后。"
+      },
+      "U8.9": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:08:00.000+08:00",
+        "note": "GanttFilterBar 移除应用筛选按钮，保留重置筛选；搜索、状态、优先级、专项、楼栋、关键路径筛选继续 onChange 实时生效。"
+      },
+      "U8.10": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:12:00.000+08:00",
+        "note": "TaskRowDetailCells hover 操作精简为展开详情/编辑两个常用按钮，开始执行/标记完成/添加子任务/查看总结/删除收入更多 DropdownMenu。"
+      },
+      "U8.11": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:12:00.000+08:00",
+        "note": "任务标题 hover 增加 Pencil 图标，class 使用 opacity-0 group-hover/title:opacity-60 h-3.5 w-3.5 text-slate-400 transition-opacity。"
+      },
+      "U8.12": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:09:00.000+08:00",
+        "note": "Gantt 数据质量提示补整体说明；严重度 Badge 改为高/中/低并分别加 tooltip：影响关键路径计算准确性、可能导致进度统计偏差、建议修正但不影响核心功能。"
+      },
+      "U8.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:18:30.000+08:00",
+        "note": "Phase 8 verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/GanttView.test.tsx (23 tests); npm run test:run --workspace=client -- src/components/__tests__/CriticalPathGraph.test.tsx (6 tests); npm run build --workspace=client. Source checks confirmed no 应用筛选/滞后任务/延期任务/shadow-blue residuals in touched Gantt files and key U8 UI markers are present."
+      },
+      "U9a.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:26:30.000+08:00",
+        "note": "PlanningPageShell outer wrapper now uses the shared page-shell class, aligning PlanningWorkspace max-width, horizontal padding, vertical rhythm, and centered layout with the global page container contract."
+      },
+      "U9a.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:27:30.000+08:00",
+        "note": "PlanningWorkspace governance dashboard is wrapped in CollapsibleSection with defaultOpen=false and one-line title 治理健康度 N 分 · 良好/一般; the health/integrity/anomaly panels remain in grid gap-4 xl:grid-cols-3 after expansion."
+      },
+      "U9a.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:28:30.000+08:00",
+        "note": "PlanningWorkspace now loads /api/task-baselines?project_id=... to determine whether any confirmed baseline exists; when none is confirmed, it shows the blue no-baseline guide banner with a Link to /projects/:id/planning/baseline."
+      },
+      "U9a.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:31:30.000+08:00",
+        "note": "Phase 9a verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/PlanningWorkspace.test.tsx src/pages/__tests__/planning-ui-kit.contract.test.tsx src/pages/__tests__/planning-shared-ui.test.tsx (19 tests); npm run build --workspace=client. Source scan confirmed page-shell, CollapsibleSection default collapse, no-baseline banner, and xl:grid-cols-3 markers."
+      },
+      "U9b.1": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:43:00.000+08:00",
+        "note": "PlanningTreeView now defaults to 8 baseline columns: 序号/WBS/任务名/开始/结束/工期/状态/责任人. The remaining 10 fields are controlled by a 更多列 Popover, with task/date/numeric widths aligned to min-w-[200px], w-[110px] tabular-nums, and numeric right alignment."
+      },
+      "U9b.2": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:46:00.000+08:00",
+        "note": "BaselineBottomBar now uses the unified fixed bottom-4 left-1/2 max-w-[1440px] layout: left auxiliary actions, centered 已选 N 项, right primary 保存草稿/确认项目基线, and overflow batch utilities in 更多操作 while preserving the selected batch strip."
+      },
+      "U9b.3": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:47:00.000+08:00",
+        "note": "BaselineConfirmDialog now has a default summary view with change count, impact percent semantic pill, top-3 changes, and a CollapsibleSection 查看详情 wrapping the full BaselineDiffView."
+      },
+      "U9b.4": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:48:00.000+08:00",
+        "note": "BaselineRevisionPoolDialog now shows a 3-step guide and progress bar: 选择变更 -> 确认已选 -> 标注暂缓原因, driven by basket/deferred state."
+      },
+      "U9b.5": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:49:00.000+08:00",
+        "note": "Added BaselineItemDetailDrawer using Header with title/status/close, Body grouped fields with Separator, and Footer close action; row 查看详情 opens the drawer."
+      },
+      "U9b.6": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:49:30.000+08:00",
+        "note": "Baseline creation entry selector now highlights 新建空白基线 as the recommended bg-blue-600 text-white path; schedule and import entries include additional description lines."
+      },
+      "U9b.7": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:50:00.000+08:00",
+        "note": "Baseline editable cells now support double-click focus, hover Pencil affordance, and focus-visible keyboard hint: Tab 下一格 · Enter 确认 · Esc 取消."
+      },
+      "U9b.8": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:50:30.000+08:00",
+        "note": "Row hierarchy operations are renamed to 升级/降级 with tooltip copy 将此任务提升一个层级 and 将此任务变为上方任务的子任务; basic promote/demote handlers update parent_item_id."
+      },
+      "U9b.9": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:51:00.000+08:00",
+        "note": "Version switch chips now use active bg-blue-600 text-white rounded-lg and inactive bg-slate-100 text-slate-600. Draft lock badges in the info bar and editor have the required tooltip text."
+      },
+      "U9b.r": {
+        "status": "completed",
+        "completed_at": "2026-04-28T23:53:30.000+08:00",
+        "note": "Phase 9b verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/BaselinePage.test.tsx (22 tests); npm run test:run --workspace=client -- src/pages/__tests__/planning-ui-kit.contract.test.tsx src/pages/__tests__/PlanningWorkspace.test.tsx (15 tests); npm run build --workspace=client. Source scan confirmed U9b markers and old hierarchy terms are absent."
+      },
+      "U9c.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "MonthlyPlanPage uses shared PlanningTreeView default 8 columns plus more-columns control; MonthlyPlanBottomBar aligned to centered fixed unified bottom bar with selected count and grouped actions."
+      },
+      "U9c.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "MonthlyPlanSkeletonDiffDialog uses rounded-2xl shadow var el-4 and red-green diff highlighting; regeneration dialog now uses Step 1 select scope, Step 2 confirm impact, Step 3 execute."
+      },
+      "U9c.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "Monthly source selector now distinguishes current source with bg-blue-50 border-blue-500 font-semibold and alternatives with bg-slate-50 border-slate-200 text-slate-500 plus transition-colors."
+      },
+      "U9c.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "Quick confirm has tooltip all conditions satisfied; unavailable quick confirm is disabled and explains blocking issue count with standard-confirm fallback."
+      },
+      "U9c.5": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "Month slider current month uses ring-2 ring-blue-500 bg-blue-50; status badge tooltips added; batch terms changed to 纳入本月计划 and 移出本月计划 with move-out ConfirmActionDialog; plan change compare moved to toolbar."
+      },
+      "U9c.6": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "Regeneration source choices provide 3 description lines for baseline, previous month, and current draft; draft resume dialog shows 保存于 timestamp with tabular-nums text-slate-500."
+      },
+      "U9c.7": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "Monthly undo and redo controls in inline batch strip and bottom bar expose Ctrl+Z and Ctrl+Y tooltips."
+      },
+      "U9c.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:13:30.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- PlanningRealPages planning-shared-ui PlanningWorkspace, 31 tests passed; npm run build --workspace=client passed; client/src scan has no 批量移入 or 批量移出 matches."
+      },
+      "U9d.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:18:20.000+08:00",
+        "note": "Closeout reason cascader now shows breadcrumb root to branch to leaf, branch child-count badges, blue selected path highlighting, and top-level branch descriptions."
+      },
+      "U9d.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:18:20.000+08:00",
+        "note": "CloseoutBatchBar aligned to the centered fixed max-width unified bottom bar; CloseoutDetailDrawer now exposes Header, Body, Footer template with basic information, linked task comparison, reason section, and footer actions."
+      },
+      "U9d.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:18:20.000+08:00",
+        "note": "Closeout escalation ladder includes the required text explanation: 逾期 3 天系统提醒 to 5 天通知上级 to 7 天自动关闭."
+      },
+      "U9d.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:18:20.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- PlanningRealPages planning-shared-ui PlanningWorkspace, 31 tests passed; npm run build --workspace=client passed; marker scan confirmed breadcrumb, drawer template, bottom bar, and escalation text."
+      },
+      "U4.0": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:32:40.000+08:00",
+        "note": "Materials summary backend now returns byCategory distribution for 钢材/混凝土/管材/电气/其他 with count and percentage; materialReportsService coverage added."
+      },
+      "U4.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:32:40.000+08:00",
+        "note": "Materials page moved into .page-shell and top metrics were consolidated from six dense stat cards into four unified composite metric cards: 到场率, 定样推进, 验收情况, 风险提醒."
+      },
+      "U4.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:32:40.000+08:00",
+        "note": "Materials body now uses 7:3 layout with left toolbar/table workflow and right side panel containing quick stats, category pie, recent arrivals, weekly summary, and reminders."
+      },
+      "U4.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:32:40.000+08:00",
+        "note": "Material delete actions now open ConfirmActionDialog before removal and keep existing change-log-backed delete behavior."
+      },
+      "U4.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:32:40.000+08:00",
+        "note": "Materials toolbar keeps Select filters, search, and action buttons; material rows use zebra striping, hover background, tabular numeric dates, group-hover operation visibility, and semantic status dot plus label."
+      },
+      "U4.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:32:40.000+08:00",
+        "note": "Verification passed: client Materials test 11 passed; server materialReportsService/project-materials routes 8 passed; client and server typecheck passed; client and server builds passed; marker scan confirmed byCategory, page-shell, 7:3 side panel, category pie, delete confirm, and table styling markers."
+      },
+      "U5.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:37:20.000+08:00",
+        "note": "Milestones loading/error/main shells now use .page-shell; summary metric grid uses xl:grid-cols-4 with four unified metric cards."
+      },
+      "U5.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:37:20.000+08:00",
+        "note": "Milestone health summary now keeps the primary health text and exposes top-3 compact badges with a 更多(N) expansion control for remaining health dimensions."
+      },
+      "U5.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:37:20.000+08:00",
+        "note": "Milestone list cards now apply left status bars for completed/in-progress/overdue states, tabular milestone dates, variance trend colors, and motion-safe duration-700 progress bars; the page keeps the required two-line summary layout."
+      },
+      "U5.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:37:20.000+08:00",
+        "note": "Verification passed: npm run test:run --workspace=client -- src/pages/__tests__/Milestones.test.tsx (2 passed); npm run typecheck --workspace=client passed; npm run build --workspace=client passed; marker scan confirmed page-shell, xl:grid-cols-4, HealthSummary top-3/more, left color bars, tabular dates, and progress animation."
+      },
+      "U7.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "AcceptanceTimeline loading/main containers use .page-shell; 7 tone StatCards replaced by 4 stage cards for 基础验收/主体验收/竣工验收/专项验收 with slate surfaces, left accent bars, pass-rate numbers, and progress bars."
+      },
+      "U7.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "Added acceptance progress overview with total percent, multi-stage colored segments, stage labels, tabular counts, and motion-safe transition-[width] duration-700 ease-out."
+      },
+      "U7.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "Acceptance flow surfaces use rounded-xl; FlowNode base layer is z-10, FlowBoard header remains z-20, drag/footer overlays use z-30; no rounded-3xl residual in AcceptanceTimeline files."
+      },
+      "U7.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "AcceptanceDetailDrawer aligned to Header -> information groups -> Footer template, with key information, linkage, structure, and footer sections marked by card-style grouped containers and stable test ids."
+      },
+      "U7.5": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "Flow nodes use green/blue/slate status semantics, hover:shadow-[var(--el-2)] cursor-pointer, and connector arrows use motion-safe:transition-all duration-300."
+      },
+      "U7.6": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "FlowBoard/Ledger view switch moved to shared Tabs component with 流程图(N) and 台账(N), preserving existing test ids and session persistence."
+      },
+      "U7.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T00:50:30.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/AcceptanceTimeline.test.tsx src/pages/__tests__/AcceptanceTimeline.sync.test.tsx src/pages/__tests__/AcceptanceTimeline.layout.test.ts (8 tests); npm run build --workspace=client; marker scan confirmed U7 classes/test ids."
+      },
+      "U6.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "Notifications loading, login, and main page roots now use page-shell with breadcrumb alignment."
+      },
+      "U6.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "Header reduced to search, type Select, status Select, 更多操作 DropdownMenu, and settings gear; bulk mark-read, bulk delete, export, and refresh are inside the dropdown."
+      },
+      "U6.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "Tabs are reduced to 全部/未读/已处理; business-warning/system-exception/flow-reminder filters moved to chips below tabs with count labels and mapping-only secondary filter under system exceptions."
+      },
+      "U6.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "Settings panel changed from absolute z-20 panel to Popover with z-50 behavior, rounded-xl, shadow-[var(--el-3)], shared Checkbox controls, and backdrop/outside click close."
+      },
+      "U6.5": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "Notification items now show only type + status badges, move target/level/assignee/source/project/time/mute/S2 mapping into a details row, apply unread bg-blue-50/50 border-l-4 border-blue-500 styling, and simplify group headers to date plus unread count badge."
+      },
+      "U6.6": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "EmptyState title aligned to 暂无新通知 with retry and active-filter clearing behavior."
+      },
+      "U6.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:31:20.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/Notifications.test.tsx (7 tests); npm run build --workspace=client; residual scan found no Notifications <select/window.confirm/absolute z-20/text-[Npx]/rounded-3xl/shadow-blue/gray-* matches."
+      },
+      "U13.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:39:05.000+08:00",
+        "note": "TaskSummary loading, unavailable, and main page containers now use page-shell; residual scan found no container mx-auto or arbitrary text size in TaskSummary files."
+      },
+      "U13.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:39:05.000+08:00",
+        "note": "TaskSummaryResultsSection now renders 2 metric cards in xl:grid-cols-2 gap-4: 总任务数 and 完成率."
+      },
+      "U13.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:39:05.000+08:00",
+        "note": "Task summary groups use text-lg font-semibold text-slate-900 section headers, task count Badge, default expansion for the first 3 groups, collapsed remaining groups behind 展开更多(N), and Radix Collapsible animate-expand-down duration-300 content."
+      },
+      "U13.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:39:05.000+08:00",
+        "note": "Task rows now use zebra backgrounds, hover state, operation column, task title with status dot, assignee, deadline with tabular-nums, and overdue text-red-600 plus 逾期 N 天."
+      },
+      "U13.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:39:05.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/TaskSummary.test.tsx (1 test with U13 assertions); npm run build --workspace=client; residual scan found no TaskSummary container mx-auto/text-[Npx]/rounded-3xl/shadow-blue/gray-*/slice(0,4) matches."
+      },
+      "U13b.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:44:45.000+08:00",
+        "note": "ResponsibilityView unavailable and main page containers now use page-shell; residual scan found no container mx-auto/mx-auto max-w/text-[Npx] in ResponsibilityView."
+      },
+      "U13b.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:44:45.000+08:00",
+        "note": "MetricCard is a unified composite card with label, large value, optional hint, icon, and Sparkline; monitoring metrics remain in grid gap-4 md:grid-cols-2 xl:grid-cols-4."
+      },
+      "U13b.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:44:45.000+08:00",
+        "note": "Dimension buttons now use bg-blue-600 text-white for active and bg-slate-100 text-slate-600 for inactive with transition-colors duration-200; tooltips explain 按个人查看 and 按参建单位查看."
+      },
+      "U13b.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:44:45.000+08:00",
+        "note": "Terms aligned: 活跃延期 -> 当前延期中, 风险压力 -> 风险关联度 with tooltip, 待确认恢复 -> 待确认恢复正常."
+      },
+      "U13b.5": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:44:45.000+08:00",
+        "note": "Monitoring/analysis labels changed to 责任主体监控 and 趋势分析 with numeric tab labels; abnormal cards use border-l-4 border-red-500, normal cards use border border-slate-200, metric grid gap-4, and related task rows have zebra/hover/tabular-nums styling."
+      },
+      "U13b.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:44:45.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/ResponsibilityView.test.tsx (2 tests with U13b assertions); npm run build --workspace=client; residual scan found no ResponsibilityView container mx/mx-auto max-w/text-[Npx]/活跃延期/风险压力/shadow-blue/gray-* matches."
+      },
+      "U10.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:26:30.000+08:00",
+        "note": "CompanyCockpit loading, access-denied, and main containers use .page-shell; residual scan found no max-w-[1680px] in CompanyCockpit files."
+      },
+      "U10.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:26:30.000+08:00",
+        "note": "Hero section uses rounded-xl bg-gradient-to-br from-blue-50 to-slate-50 p-6 with exactly three metric cards: 项目总数, 活跃项目, 整体健康. Health score renders 良好/一般/预警 semantic pill and all hero metrics include 7-point Sparkline data."
+      },
+      "U10.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:26:30.000+08:00",
+        "note": "ProjectOverviewSection uses grid gap-6 xl:grid-cols-3; project cards show project name, progress bar, health dot, 完成率 and 风险数. attentionRequired projects are sorted first and use border-l-4 border-l-orange-500; normal cards use border border-slate-200."
+      },
+      "U10.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:26:30.000+08:00",
+        "note": "CompanyInsightSection renders orange anomaly summary card with anomaly count and top warning reasons when attention projects exist; no-anomaly state uses EmptyState title 所有项目运行正常."
+      },
+      "U10.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:26:30.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/sharedSummary.test.tsx (6 tests with U10 assertions); npm run build --workspace=client; marker scan confirmed page-shell, gradient hero, 3 hero metrics, sparkline, xl:grid-cols-3 project grid, anomaly left border, and normal EmptyState."
+      },
+      "U12.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "PreMilestones page root now uses .page-shell page-enter while preserving breadcrumb/header and existing project data loading."
+      },
+      "U12.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "Added shared Tabs view switch with 看板(N) and 台账(N), fade-in duration-200 content transitions, forceMount compatibility, and stable pre-milestones tab test ids."
+      },
+      "U12.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "FourCertificateBoard is grouped by certificate stage columns with counts; certificate cards use card-unified/card-hover, text-base certificate names, status badges, tabular due dates, and responsible authority/person fields."
+      },
+      "U12.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "CertificateLedger now defaults to stage grouping, keeps quick filters as secondary filters, uses zebra rows, hover background, group-hover operation visibility, semantic status dot plus text, and tabular planned/actual date columns."
+      },
+      "U12.5": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "CertificateDetailDrawer aligned to Header -> Body -> Footer with explicit header/body/footer test ids, basic info, conditions, linked files/shared items, and footer edit/status-maintenance actions."
+      },
+      "U12.6": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "Board and ledger dimensions are aligned around certificate stages; ledger quick filters remain as secondary overlays on top of stage grouping."
+      },
+      "U12.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:02:30.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/pages/__tests__/PreMilestonesLinkedSignals.test.tsx src/pages/__tests__/LicenseManagement.test.tsx src/pages/__tests__/CertificateLedger.test.tsx src/pages/__tests__/preMilestonesLifecycle.test.ts (7 tests); npm run build --workspace=client; marker scan confirmed U12 classes/test ids and no gray-* residual in PreMilestones files."
+      },
+      "U11.1": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:19:40.000+08:00",
+        "note": "Drawings root now uses page-shell and readiness summary is compressed into 4 core metrics (total drawings, approved, pending review, overdue) with the remaining 3 detail stats behind a detailed-stat expand section."
+      },
+      "U11.2": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:19:40.000+08:00",
+        "note": "DrawingLedger default table reduced to 8 visible columns: index/drawing/discipline/version/status/approver/date/actions. Additional columns are controlled by a Radix Popover \"更多列\" checklist; zebra rows, hover state, status dot+text, tabular dates, and group-hover action visibility are applied."
+      },
+      "U11.3": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:19:40.000+08:00",
+        "note": "Toolbar rebuilt with Select filters for discipline/status/version, search, Focus View dropdown options with text-xs slate descriptions, quick focus chips, and upload/export batch actions."
+      },
+      "U11.4": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:19:40.000+08:00",
+        "note": "Readiness visualization added: overall readiness progress bar with motion-safe width transition plus per-discipline mini progress bars."
+      },
+      "U11.5": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:19:40.000+08:00",
+        "note": "Drawings review-rule deletion uses ConfirmActionDialog; residual scan for window.confirm returned no matches in Drawings."
+      },
+      "U11.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:19:40.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- DrawingsBoard/DrawingsLedger/DrawingsViewModes/DrawingDetailDrawer/DrawingVersionDialog (5 files, 7 tests); npm run build --workspace=client; residual scan found no Drawings <select/window.confirm/showExtraCols/展开更多列/text-[Npx]/rounded-3xl/shadow-blue/gray-* matches."
+      },
+      "U.terms.dashboard": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "Dashboard TodayLive user-facing copy aligned for R284-R285: today due task and warning labels use the humanized terms while sorting/filtering/empty state logic is unchanged."
+      },
+      "U.terms.risk": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "RiskManagement and related data-quality surfaces use Data Reliability wording for R286; same terminology is used in tooltip/detail surfaces to avoid mixed vocabulary."
+      },
+      "U.terms.planning": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "Planning UI copy aligned for R287-R293 and R295: plan change compare, pending changes, association status, edit mode, edit lock, promote/demote wording, and monthly include/remove terms. Technical identifiers were left unchanged."
+      },
+      "U.terms.gantt": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "GanttView user-facing lag terminology aligned to abnormal progress-behind wording for R294; remaining lagStatus strings are internal type/status identifiers only."
+      },
+      "U.terms.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "Verification passed: old-term rg for planned UI copy returned no matches; new-term rg confirmed Data Reliability, plan change compare, association status, include/remove monthly plan, and abnormal progress-behind wording. Client typecheck and build passed."
+      },
+      "U.onboard": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "Added client/src/components/OnboardingGuide.tsx and mounted it in App. It checks localStorage onboarding_completed, provides a 5-step lightweight Radix tooltip guide, progress dots, skip control, welcome toast on completion, and a dismissible Daily Workflow card. Sidebar and Dashboard expose stable data-onboarding-target anchors."
+      },
+      "U.onboard.r": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:47:30.000+08:00",
+        "note": "Verification passed: npm run typecheck --workspace=client; npm run test:run --workspace=client -- src/components/__tests__/OnboardingGuide.test.tsx (2 tests); npm run build --workspace=client."
+      },
+      "U.qa.trace": {
+        "status": "completed",
+        "completed_at": "2026-04-29T09:52:30.000+08:00",
+        "note": "Generated docs/reports/uiux-295-release-evidence.md with 295/295 PASS requirement rows. Verification passed: node scripts/generate-uiux-release-evidence.cjs; inline requirements continuity and execution heading check; evidence table audit count=295 pass=295 hasHeader=true."
+      },
+      "U.qa.static": {
+        "status": "completed",
+        "completed_at": "2026-04-29T01:52:45.567Z",
+        "note": "Static QA gate passed: client lint exited 0 with 0 errors and 29 existing react-hooks warnings; client typecheck passed; server typecheck passed; client test:run passed (80 files / 450 tests); server test passed (152 files / 652 tests); root build passed (client Vite build + server tsc build). Evidence appended to docs/reports/uiux-295-release-evidence.md."
+      },
+      "U.qa.contract": {
+        "status": "completed",
+        "completed_at": "2026-04-29T02:00:06.827Z",
+        "note": "Backend/data contract QA passed. Added server contract tests for Dashboard TodayLive empty/sorted/error code behavior, Reports four-module key + S-Curve contract, and Risk pipeline empty shape; targeted contract suite passed (5 files / 16 tests). Route aggregation guard passed (61 files, 15/15 approved reduce sites); workflow contract passed (1 file / 2 tests); local API diagnostics passed for diag:health, diag:summary, and diag:warning. Evidence appended to docs/reports/uiux-295-release-evidence.md."
+      },
+      "U.qa.browser": {
+        "status": "completed",
+        "completed_at": "2026-04-29T03:27:34.615Z",
+        "note": "End-to-end browser QA passed. prepare:test-env:full-app passed and generated .tmp/full-app-test-env/manifest.json. Browser suites passed: shell-and-collab 7/7, project-chains 9/9, planning-and-tooling 9/9. Evidence archived under artifacts/uiux-browser/{shell-and-collab,project-chains,planning-and-tooling}; release evidence updated. Browser scripts were aligned with v1.3 terminology/module keys and generic preview runs now suppress onboarding overlay unless BROWSER_VERIFY_DISABLE_ONBOARDING=false."
+      },
+      "U.qa.visual": {
+        "status": "completed",
+        "completed_at": "2026-04-29T05:03:37.239Z",
+        "note": "PASS: npm run verify:uiux-visual generated 92/92 screenshots across 4 viewports (desktop-1440, desktop-1366, tablet-768, mobile-390), covering 18 main pages and 5 overlay states. Gates asserted no runtime/page errors, no /api 4xx/5xx/requestfailed, no document horizontal overflow, no uncontained off-viewport elements, no button text overflow, and nonblank screenshots. Evidence: artifacts/uiux-visual/visual-summary.json and artifacts/uiux-visual/visual-manifest.json."
+      },
+      "U.qa.a11y": {
+        "status": "completed",
+        "completed_at": "2026-04-29T13:41:04.000+08:00",
+        "note": "PASS: npm run verify:uiux-a11y built the client, started preview, and passed 34/34 page viewport checks plus 8/8 overlay keyboard checks across desktop-1440 and mobile-390. Gates asserted named controls/fields/dialogs, AA contrast for interactive text, visible keyboard focus, Escape-close overlays, no page/console/API failures, and reduced-motion with zero active CSS animations. Evidence: artifacts/uiux-a11y/a11y-summary.json and artifacts/uiux-a11y/a11y-report.json."
+      },
+      "U.qa.performance": {
+        "status": "completed",
+        "completed_at": "2026-04-29T13:58:00.000+08:00",
+        "note": "PASS: npm run build passed (client Vite + server tsc); npm run verify:client-bundle-budget passed with total JS gzip 944.8KB and entry gzip 136.2KB under configured budgets; npm run verify:performance-evidence passed against clean API http://127.0.0.1:3003 with gate=insufficient_data, reports=0, thresholdExceeded=0, Result PASS. Added scripts/verify-uiux-performance.mjs and npm run verify:uiux-performance; browser performance复核 passed 5 heavy pages and a 120-task Gantt timeline fixture with no blank/loading over 10s, no React key/layout warnings, no page/API errors, and timeline horizontal pan 0→900. Updated performance reports release gate to exclude synthetic HeadlessChrome/Playwright/jsdom/Vitest automation evidence from online summary; targeted server test passed (5 tests). Evidence: artifacts/uiux-performance/performance-summary.json."
+      },
+      "U.qa.release": {
+        "status": "completed_with_masked_url_observation_limited",
+        "completed_at": "2026-04-29T22:03:21.000+08:00",
+        "note": "Production deployment completed through GitHub Actions run 25112818032 on branch release/uiux-295-production-20260429 at SHA 093fc5696212561c281094df8dad4959605c8a6a. All workflow gates passed: client quality, server quality, database migration job, frontend build and bundle budget, three browser suites, browser overview, and Deploy To Self-hosted Server. Deploy logs confirm checkout of the release SHA, server credentials present, api/web images built, containers project-management-api and project-management-web recreated, project-management-api became healthy, /api/health returned status=ok, and /api/performance-reports/summary returned releaseGate=insufficient_data with thresholdExceeded=0. DEPLOY_HEALTH_URL/public production URL remains masked by GitHub secrets, so independent local public-URL and 30-minute observation could not be performed from this checkout; workflow-owned health/performance gates are the recorded production evidence."
+      },
+      "U.qa.r295": {
+        "status": "completed",
+        "completed_at": "2026-04-29T21:33:30.661+08:00",
+        "note": "Pre-deploy supplement executed before external deployment: npm run verify:uiux-r295 and latest aggregate npm run verify:uiux-predeploy-gates passed after axe-core contrast enhancement. Requirements continuity 295/295, unique 295, no missing/duplicate IDs, no bad step refs, no incomplete requirement rows; static residual checks for gray-*, bg-blue-500, target text-[Npx], rounded-3xl/[24px]/[28px], shadow-blue, tracking-[0., native <button>, and window.confirm returned zero. Evidence: artifacts/uiux-predeploy-gates/r295/r295-summary.json."
+      },
+      "U.qa.component": {
+        "status": "completed",
+        "completed_at": "2026-04-29T21:33:30.661+08:00",
+        "note": "PASS: component-level browser snapshot gate captured 154 screenshots against local preview http://127.0.0.1:4175 and API http://127.0.0.1:3001, covering base components, page cards, buttons/tabs/badges/inputs, key dialogs/popovers, and onboarding states. Evidence: artifacts/uiux-predeploy-gates/component-snapshots/component-summary.json and component-manifest.json."
+      },
+      "U.qa.interaction": {
+        "status": "completed",
+        "completed_at": "2026-04-29T21:33:30.661+08:00",
+        "note": "PASS: interaction E2E gate ran 24 cases covering Dashboard cards/dialog/hover, Reports tab switching, Gantt context menu/delete/scope/critical-path/filter behavior, Planning baseline/monthly/closeout dialogs and popovers, Drawings/Acceptance/Materials runtime flows, onboarding skip persistence, keyboard focus, focus trap, reduced-motion, and context-menu viewport bounds. Evidence: artifacts/uiux-predeploy-gates/interaction/interaction-summary.json."
+      },
+      "U.qa.token-audit": {
+        "status": "completed",
+        "completed_at": "2026-04-29T21:33:30.661+08:00",
+        "note": "PASS: runtime token audit checked 17 pages with 136 assertions: no gray-* classes, no arbitrary text-[Npx], no rounded-3xl, Plus Jakarta Sans active, no native dialog invocation, --el-1~--el-4 defined, .page-shell max-width <= 1440px, and old terminology absent. Fixed GanttView to use .page-shell before rerun. Evidence: artifacts/uiux-predeploy-gates/token-audit/token-audit-summary.json."
+      },
+      "U.qa.contrast": {
+        "status": "completed",
+        "completed_at": "2026-04-29T21:33:30.661+08:00",
+        "note": "PASS: enhanced contrast gate now runs computed browser contrast for interactive controls, @axe-core/playwright color-contrast on 8 core pages, and 4 high-risk token pairs. Latest result: page failures=0, axeViolationCount=0, axeIncompleteCount=14, manualChecks=4. Additional axe-triggered fixes closed Sidebar/Header red badges and current-project label, Dashboard metric labels/trends, Reports chips, Risk pipeline stage blocks, Gantt collapsed-filter/status badge contrast, Materials mini metric labels, and completed/pending status tokens. Orange-500/white and slate-400/white remain recorded as reviewed-risk token pairs for constrained usage. Evidence: artifacts/uiux-predeploy-gates/contrast/contrast-summary.json."
+      },
+      "U.final": {
+        "status": "completed_with_masked_url_observation_limited",
+        "completed_at": "2026-04-29T22:10:00.000+08:00",
+        "note": "Final release validation passed through local predeploy gates and production deployment workflow. Local final checks passed earlier: client/server typecheck, client/server tests, client build, verify:uiux-predeploy-gates, residual scans, component snapshots, interaction E2E, token audit, and axe-core contrast. Production workflow run 25112818032 then deployed release SHA 093fc5696212561c281094df8dad4959605c8a6a to the self-hosted server and passed health/performance gates. Remaining caveat: public production URL and DEPLOY_HEALTH_URL are masked in GitHub secrets, so the separate 30-minute external observation is recorded as limited rather than independently completed from local tools."
+      }
+    },
+    "last_updated": "2026-04-29T22:10:00.000+08:00"
+  },
+  "current_phase": 16,
   "execution_order": [
     "10.1",
     "10.2a-a-impl",
@@ -162,7 +1113,30 @@
     "14.2-review",
     "14.6a-story-e2e",
     "14.6a-impl",
-    "14.6-review"
+    "14.6-review",
+    "16.1",
+    "16.2",
+    "16.4",
+    "16.3",
+    "16.3-gate",
+    "16.5",
+    "16.6",
+    "16.7",
+    "16.8",
+    "16.9",
+    "16.step1-compile",
+    "16.step1-gate",
+    "16.step1-post",
+    "16.10",
+    "16.11",
+    "16.12",
+    "16.13",
+    "16.14",
+    "16.15",
+    "16.step2-compile",
+    "16.step2-gate",
+    "16.step2-post",
+    "16.17"
   ],
   "current_execution_scope": {
     "authoritative_queue": "execution_order",
@@ -182,12 +1156,13 @@
       "11.",
       "13.",
       "14.",
-      "15."
+      "15.",
+      "16."
     ],
     "excluded_prefixes": [
       "10.0"
     ],
-    "note": "current_execution_scope widened to allow 10.3-10.7 plus DW/11/12/13 entry; execution_order now carries the four special-plan main chains; step-level prerequisites and DW.G1 remain authoritative"
+    "note": "Phase 16 v1.2 BI化两步走 added to execution scope; v1.1前后端对齐实施清单已上线，v1.2 以该上线版本为基线执行"
   },
   "execution_policy": {
     "auto_continue": true,
@@ -641,7 +1616,9 @@
     "15.8",
     "15.9",
     "15.10",
-    "15.11"
+    "15.11",
+    "16.step1",
+    "16.step2"
   ],
   "steps": {
     "1.1": {
@@ -973,11 +1950,11 @@
       "note": "DW.4 completed: PreMilestones 已为纯前期证照页面，无图纸tab/CRUD/组件残留；图纸入口收口为'查看施工图纸'按钮跳转到/projects/:id/drawings；Drawings成为唯一图纸主承载页"
     },
     "10.4": {
-      "status": "pending",
+      "status": "completed",
       "note": "10.4 note normalized"
     },
     "10.5": {
-      "status": "pending",
+      "status": "completed",
       "note": "10.5 note normalized"
     },
     "DW.5": {
@@ -997,7 +1974,7 @@
       "note": "DW.8 completed: 图纸与任务/验收联动、自动问题识别与 issue/risk 升级已打通"
     },
     "10.6": {
-      "status": "pending",
+      "status": "completed",
       "note": "10.6 note normalized"
     },
     "10.7": {
@@ -1781,7 +2758,270 @@
     "15.11-review": {
       "status": "completed",
       "note": "15.11 review completed; reference_days now drives baseline planned dates during template application and completed-project template generation is visible in the governance UI"
+    },
+    "16.1": {
+      "status": "completed",
+      "note": "引用链扫描与死代码确认: dashboardCalculations/healthScore/healthAdapter/DashboardHealthCard。纯扫描步骤，输出三分类清单"
+    },
+    "16.2": {
+      "status": "completed",
+      "note": "定稿 project_daily_snapshot 结构、索引、RLS — 迁移脚本 115_create_project_daily_snapshot.sql + 回滚脚本 115_rollback_project_daily_snapshot.sql；开工前按 server/migrations 当前最大编号再次复核",
+      "prerequisites": [
+        "16.1"
+      ]
+    },
+    "16.3": {
+      "status": "completed",
+      "note": "落迁移脚本 + 回填脚本 + projectDailySnapshotService (引用 16.4 的公共函数) + 新快照 job",
+      "prerequisites": [
+        "16.2",
+        "16.4"
+      ]
+    },
+    "16.3-gate": {
+      "status": "completed",
+      "type": "manual_gate",
+      "note": "验收通过：migrate:plan 仅 115；migrate:pending 已执行且 ledger=122/pending=0；backfill recorded=3 failed=0；2026-04-27 快照 recorded=1 failed=0；二次 UPSERT 后 total=4/today=1/duplicate_groups=0；结构/索引/RLS/唯一约束已查验；2026-04-27 补充复核：运行时代码已删除旧 project_health_history 兼容写入函数与旧调度任务",
+      "prerequisites": [
+        "16.3"
+      ]
+    },
+    "16.5": {
+      "status": "completed",
+      "note": "落 company-summary 端点（projectCount/averageHealth/averageProgress/attentionProjectCount/ranking/healthHistory），不再单独返回 heatmap；新增路由、公司聚合服务、前端 API 契约和测试已通过",
+      "prerequisites": [
+        "16.1",
+        "16.3-gate"
+      ]
+    },
+    "16.6": {
+      "status": "completed",
+      "note": "CompanyCockpit 切到 company-summary，停止单独调 avg-history；页面刷新改为单次 company-summary + risks/issues，测试已更新",
+      "prerequisites": [
+        "16.5"
+      ]
+    },
+    "16.7": {
+      "status": "completed",
+      "note": "抽离 healthDisplay.ts，改 DashboardHealthCard.tsx；健康卡展示样式与趋势/维度/进度色带已收口，相关测试通过"
+    },
+    "16.8": {
+      "status": "completed",
+      "note": "删除 healthScore.ts / healthAdapter.ts / dashboardCalculations.ts；DashboardHealthCard 已切断旧类型依赖，客户端 typecheck 与相关测试通过",
+      "prerequisites": [
+        "16.7"
+      ]
+    },
+    "16.9": {
+      "status": "completed",
+      "note": "建 metricRegistry.ts（15 个指标白名单，覆盖 health_score / overall_progress / delay_days 等核心 BI 口径）；服务器 typecheck 与相关测试通过"
+    },
+    "16.step1-compile": {
+      "status": "completed",
+      "note": "第一步编译与测试已通过：client/server typecheck 通过，client vitest 78 files / 427 tests 通过，server vitest 139 files / 621 tests 通过",
+      "prerequisites": [
+        "16.6",
+        "16.8",
+        "16.9"
+      ]
+    },
+    "16.step1-gate": {
+      "status": "completed",
+      "type": "manual_gate",
+      "note": "人工验收通过：Dashboard / CompanyCockpit / Reports 与全页面回归冒烟通过；CompanyCockpit 已确认请求 company-summary 且不再请求 avg-history；当天快照 count=1，重跑 UPSERT 后 count=1 duplicateGroups=0；周报生成落库成功。验收中修复 company-summary 异常结构兜底与浏览器验收脚本旧契约；2026-04-27 补充复核：server/src 非测试运行时代码已无 project_health_history / recordProjectHealthSnapshots / HealthHistorySnapshotJob 残留",
+      "prerequisites": [
+        "16.step1-compile"
+      ]
+    },
+    "16.step1": {
+      "status": "completed",
+      "note": "Phase 16 第一步（收口）已完成；company-summary、project_daily_snapshot、healthDisplay、metricRegistry 和人工关卡均已落地"
+    },
+    "16.step1-post": {
+      "status": "completed",
+      "note": "CLAUDE.md 已追加数据聚合规范，明确路由层禁止自行 .reduce() 出新指标，统一从 projectExecutionSummaryService 或 project_daily_snapshot 取值；2026-04-27 补充复核：已通过契约测试固化禁止旧 project_health_history 写链回归",
+      "prerequisites": [
+        "16.step1-gate"
+      ]
+    },
+    "16.10": {
+      "status": "completed",
+      "note": "已输出维度字段与钻取目标页核对清单，覆盖任务/风险/材料/验收四链路与 GanttView/RiskManagement/Materials/AcceptanceTimeline 参数现状",
+      "prerequisites": [
+        "16.step1-post"
+      ]
+    },
+    "16.11": {
+      "status": "completed",
+      "note": "人工验收通过：project-trend / company-trend 端点已落地并接入 /api/analytics；REQ-65~75 静态验收通过；server typecheck 通过；analyticsRoutes 与 metricRegistry 测试 2 files / 6 tests 通过",
+      "prerequisites": [
+        "16.10"
+      ]
+    },
+    "16.12": {
+      "status": "completed",
+      "note": "Reports 接 scope-dimensions + 指标/时间/维度选择器；同步清理 milestoneOverview/Materials/Milestones/GanttView/Notifications 前端聚合残留（REQ-78~82 + REQ-101~106）；dashboardStatus.ts 迁移删除：先在 taskBusinessStatus.ts 补齐 getTaskDisplayStatus，再改 Dashboard.tsx/RecentTasksCard.tsx 导入，最后删文件（REQ-128~132）；2026-04-27 补充完善第11章：taskBusinessStatus 前端状态集已对齐 completed/done/已完成、条件满足、阻碍关闭、风险关闭口径，相关单测与 client typecheck/full tests 通过",
+      "prerequisites": [
+        "16.11"
+      ]
+    },
+    "16.13": {
+      "status": "completed",
+      "note": "补 RiskManagement / AcceptanceTimeline URL query 参数解析",
+      "prerequisites": [
+        "16.10"
+      ]
+    },
+    "16.14": {
+      "status": "completed",
+      "note": "Dashboard -> Reports 深度跳转链路",
+      "prerequisites": [
+        "16.12"
+      ]
+    },
+    "16.15": {
+      "status": "completed",
+      "note": "打通 Reports -> 业务页钻取链路",
+      "prerequisites": [
+        "16.12",
+        "16.13"
+      ]
+    },
+    "16.step2-compile": {
+      "status": "completed",
+      "note": "第二步编译测试与联调",
+      "prerequisites": [
+        "16.14",
+        "16.15"
+      ]
+    },
+    "16.step2-gate": {
+      "status": "completed",
+      "type": "manual_gate",
+      "note": "人工验收通过：16.12~16.15 均完成；EXECUTION_PROGRESS.json 可被 JSON.parse 解析；client typecheck 通过；client vitest 78 files / 432 tests 通过；server typecheck 通过；server vitest 140 files / 624 tests 通过。验收中修复 RiskManagement route-filter 测试条件的 boolean 类型门禁。",
+      "prerequisites": [
+        "16.step2-compile"
+      ]
+    },
+    "16.step2": {
+      "status": "completed",
+      "note": "Phase 16 第二步（最小可用 BI 能力层）已完成；路由层 .reduce() 静态守卫已上线并接入 CI。"
+    },
+    "16.step2-post": {
+      "status": "completed",
+      "note": "§10.2 静态检查层已落地并完成人工审查验收：server/src/routes/ 增加 route aggregation guard，现存 reduce 位点已全部加审批注释，并已接入 CI；guard、server typecheck、server tests 均通过。",
+      "prerequisites": [
+        "16.step2-gate"
+      ]
+    },
+    "16.17": {
+      "status": "completed",
+      "type": "ops_gate",
+      "note": "【运行切换】用户确认当前无人使用，批准以一次性对账替代 7 天观察窗；2026-04 对账通过 oldRows=1/newRows=1/oldAvg=82/newAvg=82/明细差异=0；已停旧 healthHistorySnapshotJob 自动调度，jobs 入口改为 projectDailySnapshotJob，avg-history 与项目历史读取切到 project_daily_snapshot；guard/typecheck/schedulerJobContracts 均通过",
+      "prerequisites": [
+        "16.step2-post"
+      ]
+    },
+    "16.4": {
+      "status": "completed",
+      "note": "口径统一前置: 创建 utils/taskStatus.ts (isCompletedTask + COMPLETED_TASK_STATUSES 常量 + isCompletedMilestone + isCompletedTaskStatus) + utils/riskStatus.ts (isActiveRisk, 排除 closed/已关闭) + utils/progressCalculation.ts (从 projectExecutionSummaryService 提取已有的工期加权实现) + utils/obstacleStatus.ts (isActiveObstacle) + utils/conditionStatus.ts (isPendingCondition) + utils/issueStatus.ts (isActiveIssue, 从 riskStatisticsService 私有函数提取) + utils/warningStatus.ts (isActiveWarning, 从 riskStatisticsService 私有函数提取)；所有消费方改为引用公共版本（Supabase .in() 查询引用常量）；七个函数各需单测（REQ-133~137 + REQ-146 + REQ-158~159）；额外覆盖: dbService.ts + task-summaries.ts + responsibilityInsightService.ts + taskWriteChainService.ts → taskStatus.ts, progressDeviationService.ts → obstacleStatus.ts, dashboard.ts 5 处里程碑判定 → isCompletedMilestone, riskStatisticsService.ts → issueStatus.ts + warningStatus.ts, pre-milestones.ts → riskStatus.ts, issues.ts → issueStatus.ts（REQ-147~161）；2026-04-27 补充完善第11章：已删除 dbService 私有 isCompletedState/isCompletedTaskLike，task-summaries 改为 isCompletedTask/isCompletedMilestone 并补静态防回归测试；server typecheck/full tests 通过",
+      "prerequisites": [
+        "16.1"
+      ]
     }
+  },
+  "nonresidential_master_plan_asset_closure_20260712": {
+    "status": "local_plan_generation_verified_shared_workspace_guard_and_staging_production_pending",
+    "scope": [
+      "industrial",
+      "transportation_hub",
+      "sports_culture",
+      "data_center",
+      "renovation",
+      "modular_building",
+      "all_11_business_types_regression"
+    ],
+    "implementation": {
+      "strategy_variants_per_business_type": 4,
+      "dedicated_item_packs_per_business_type": 16,
+      "dedicated_processes_per_business_type": 80,
+      "new_subtype_duration_profiles": 9,
+      "dedicated_t2_templates": {
+        "industrial": 6,
+        "transportation_hub": 7,
+        "sports_culture": 5
+      },
+      "curated_l2_process_edges": 192,
+      "specialty_l3_mainline_handoffs": 45,
+      "new_subtype_ingress_internal_egress_handoffs": 27,
+      "unbounded_same_project_specialty_process_rules": 0,
+      "wizard_consumption": "base master-control packs plus selected organization-variant overlay; the selected variant T2 enters duration formula lineage; unrelated subtype overlays remain excluded",
+      "managed_frontier_dependency_projection": "hidden process-level specialty rules project to exact item-pack anchors with bounded organization-compatible scope and preserved rule lineage",
+      "specialty_execution_phase_mapping": "industrial, transportation-hub, sports/culture, and data-center specialty packs map to field construction phases instead of management_support fallback",
+      "project_root_policy": "startup primary-control row is the unique project root; synthetic component releases preserve original SS lag",
+      "temporal_plausibility_gates": [
+        "master_plan_synthetic_dependency_phase_inversion",
+        "master_plan_late_activity_phase_misclassified",
+        "project_fact_task_contradiction",
+        "late_activity_missing_physical_handoff",
+        "contractual_closeout_missing_business_handoff"
+      ]
+    },
+    "local_verification": {
+      "server_typecheck": "passed",
+      "client_typecheck": "passed",
+      "focused_backend_tests": "4 files / 46 tests passed; 12 strategy variants, specialty assets, wizard subtype selection, and 11-type/18-subtype registry contract verified",
+      "focused_client_tests": "1 file / 3 tests passed; three specialty business types expose four subtype choices each",
+      "executable_assembly_service": "12 tests passed; nested commissioning chains that only trace to project start are actively repaired to a physical work control",
+      "construction_quality_audit": "16 tests passed; project-fact/task and project-fact/duration-asset contradictions, direct or transitive late-work physical handoff gaps, incorrect strict terminal-to-filing-to-property chains, and an entirely missing non-residential closeout chain are blockers",
+      "nine_subtype_real_generation": "1 targeted long-running test passed; all 9 non-default subtypes consumed matching policy, packs, T2 assets, duration lineage, L3 lineage, and field execution phases",
+      "all_11_business_type_generation": "enhanced executable contract passed for all 11 business types in 291.681 seconds, including explicit declared terminal control, filing, and property handover checks; prior construction-organization network and bounded dependency regressions remain retained",
+      "bounded_dependency_fallback": "1 targeted test passed; missing scope fields do not create project-wide Cartesian edges",
+      "fresh_executable_simulation": "passed at project-testing/reports/executable-default-master-plan-current-20260712-r8; all 11 types have one root, one sink, continuous CPM, zero project-fact or duration-asset contradictions, zero direct/transitive late activities missing physical handoff, and zero strict contractual-closeout chain gaps",
+      "corrected_runtime_examples": {
+        "industrial_fire_explosion_environment_commissioning": "2027-09-06 to 2027-09-10; previously started 2026-08-01",
+        "transportation_hub_full_network_commissioning": "2027-10-07 to 2027-10-16; previously started 2026-08-01",
+        "data_center_ups_commissioning": "2027-09-11 to 2027-10-09; previously started 2026-08-01"
+      },
+      "workspace_isolation_guard": "failed on current shared worktree with 17 reported path-level findings; current correction target hits 0",
+      "duration_architecture_guard": "passed; 974 duration boundary files scanned; legacy debt 0",
+      "construction_organization_hydration_guard": "passed; 649 files scanned",
+      "business_type_registry_guard": "passed; 4 tests"
+    },
+    "broad_non_live_closeout": {
+      "status": "blocked_by_historical_c16_ledger_count_drift",
+      "blocking_items": [
+        "historical C-16 ledger count phrase is 84 routes / 405 services / 28 jobs / 77 metrics / 311 migrations while the current contract requires 84 / 406 / 28 / 77 / 315"
+      ],
+      "migration_entry_points": "passed; 3 tests",
+      "scope_attribution": "not introduced by this nonresidential strategy, asset, duration, or dependency implementation; historical audit and ledger files were preserved"
+    },
+    "independent_review_blockers": [],
+    "current_non_scope_gate_blockers": [
+      "shared workspace-isolation guard is not green; do not claim repository-wide local closeout"
+    ],
+    "known_local_quality_followups": [
+      "simple-plan predecessor display remains dense on a few convergence controls; CPM is valid, but the table should later collapse repeated predecessor labels without changing dependency truth"
+    ],
+    "independent_review_remediation": [
+      "local verified: explicit wizard subtype facts select every organization variant and override conflicting generic signals",
+      "local verified: matching subtype packs survive applicability filtering while unrelated subtype packs are excluded",
+      "local verified: organization variant selects the preferred T2 asset and records it in the generated duration formula lineage",
+      "local verified: each of the 9 non-default subtype branches has L3 ingress, internal handoff, and egress lineage",
+      "local verified: specialty process rules do not use same_project and generated edges are bounded by organization-compatible scope",
+      "review remediation verified: shallow modular foundations consume shallow_foundation_concrete_structure; zero-basement deep foundations keep support controls but replace basement structure with deep-foundation handover",
+      "review remediation verified: late commissioning audit and assembly traverse predecessor chains and reject or repair synthetic-start-only ancestry",
+      "review remediation verified: every non-residential closeout row carries an explicit terminal stable code and role, the generated chain is terminal -> completion filing -> property handover, and complete chain absence is blocking"
+    ],
+    "environment_status": {
+      "local": "plan_generation_implementation_and_behavior_verified; repository-wide workspace-isolation guard remains red outside this correction",
+      "staging": "not_deployed_not_verified",
+      "production_live": "not_deployed_not_verified",
+      "database_mutation": false,
+      "runtime_publication": false,
+      "monitoring_or_rollback_execution": false
+    },
+    "plan": "docs/superpowers/plans/2026-07-12-nonres-construction-organization-strategy-dependency.md"
   },
   "model_ownership": {
     "A": {

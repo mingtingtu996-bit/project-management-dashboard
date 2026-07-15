@@ -23,23 +23,23 @@ CREATE TABLE IF NOT EXISTS project_health_details (
         CHECK (health_status IN ('优秀', '良好', '警告', '危险')),
 
     -- 分项得分（调试和分析用）
-    base_score INTEGER NOT NULL DEFAULT 50 COMMENT '基础分（固定50分）',
-    task_completion_score INTEGER NOT NULL DEFAULT 0 COMMENT '任务完成加分（+2/任务）',
-    milestone_bonus INTEGER NOT NULL DEFAULT 0 COMMENT '里程碑完成奖励（+5/里程碑）',
-    delay_penalty INTEGER NOT NULL DEFAULT 0 COMMENT '延期惩罚（-1/天）',
-    risk_penalty INTEGER NOT NULL DEFAULT 0 COMMENT '风险惩罚（高=-10，中=-5，低=-2）',
+    base_score INTEGER NOT NULL DEFAULT 50,
+    task_completion_score INTEGER NOT NULL DEFAULT 0,
+    milestone_bonus INTEGER NOT NULL DEFAULT 0,
+    delay_penalty INTEGER NOT NULL DEFAULT 0,
+    risk_penalty INTEGER NOT NULL DEFAULT 0,
 
     -- 计算依据（快照）
-    completed_task_count INTEGER DEFAULT 0 COMMENT '计算时已完成任务数',
-    total_task_count INTEGER DEFAULT 0 COMMENT '计算时总任务数',
-    completed_milestone_count INTEGER DEFAULT 0 COMMENT '计算时已完成里程碑数',
-    total_delay_days INTEGER DEFAULT 0 COMMENT '累计延期天数',
-    high_risk_count INTEGER DEFAULT 0 COMMENT '高风险数量',
-    medium_risk_count INTEGER DEFAULT 0 COMMENT '中风险数量',
-    low_risk_count INTEGER DEFAULT 0 COMMENT '低风险数量',
+    completed_task_count INTEGER DEFAULT 0,
+    total_task_count INTEGER DEFAULT 0,
+    completed_milestone_count INTEGER DEFAULT 0,
+    total_delay_days INTEGER DEFAULT 0,
+    high_risk_count INTEGER DEFAULT 0,
+    medium_risk_count INTEGER DEFAULT 0,
+    low_risk_count INTEGER DEFAULT 0,
 
     -- 时间戳
-    calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW() COMMENT '计算时间',
+    calculated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     created_by UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -99,3 +99,16 @@ CREATE POLICY project_health_details_insert_policy ON project_health_details
 COMMENT ON TABLE project_health_details IS '项目健康度分项分数表，支持历史趋势分析和分项诊断';
 COMMENT ON COLUMN project_health_details.health_score IS '综合健康度得分（0-100）';
 COMMENT ON COLUMN project_health_details.health_status IS '健康度等级：优秀(90+)/良好(70-89)/警告(50-69)/危险(0-49)';
+COMMENT ON COLUMN project_health_details.base_score IS '基础分（固定50分）';
+COMMENT ON COLUMN project_health_details.task_completion_score IS '任务完成加分（+2/任务）';
+COMMENT ON COLUMN project_health_details.milestone_bonus IS '里程碑完成奖励（+5/里程碑）';
+COMMENT ON COLUMN project_health_details.delay_penalty IS '延期惩罚（-1/天）';
+COMMENT ON COLUMN project_health_details.risk_penalty IS '风险惩罚（高=-10，中=-5，低=-2）';
+COMMENT ON COLUMN project_health_details.completed_task_count IS '计算时已完成任务数';
+COMMENT ON COLUMN project_health_details.total_task_count IS '计算时总任务数';
+COMMENT ON COLUMN project_health_details.completed_milestone_count IS '计算时已完成里程碑数';
+COMMENT ON COLUMN project_health_details.total_delay_days IS '累计延期天数';
+COMMENT ON COLUMN project_health_details.high_risk_count IS '高风险数量';
+COMMENT ON COLUMN project_health_details.medium_risk_count IS '中风险数量';
+COMMENT ON COLUMN project_health_details.low_risk_count IS '低风险数量';
+COMMENT ON COLUMN project_health_details.calculated_at IS '计算时间';

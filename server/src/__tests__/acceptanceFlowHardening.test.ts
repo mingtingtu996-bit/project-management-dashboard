@@ -104,27 +104,44 @@ const state = vi.hoisted(() => {
       return clone(plans.find((row) => row.id === String(params[0] ?? '')))
     }
 
-    if (includesSql(normalized, 'from acceptance_dependencies where source_plan_id = ? and target_plan_id = ? limit 1')) {
+    if (includesSql(normalized, 'from acceptance_dependencies where project_id = ? and source_plan_id = ? and target_plan_id = ? limit 1')) {
       return clone(
         dependencies.find(
           (row) =>
-            row.source_plan_id === String(params[0] ?? '') &&
-            row.target_plan_id === String(params[1] ?? ''),
+            row.project_id === String(params[0] ?? '') &&
+            row.source_plan_id === String(params[1] ?? '') &&
+            row.target_plan_id === String(params[2] ?? ''),
         ),
       )
     }
 
-    if (includesSql(normalized, 'from acceptance_dependencies where id = ? limit 1')) {
-      return clone(dependencies.find((row) => row.id === String(params[0] ?? '')))
+    if (includesSql(normalized, 'from acceptance_dependencies where id = ? and project_id = ? limit 1')) {
+      return clone(dependencies.find((row) => (
+        row.id === String(params[0] ?? '')
+        && row.project_id === String(params[1] ?? '')
+      )))
     }
 
-    if (normalized === 'select id from acceptance_plans where catalog_id = ? limit 1') {
-      const referencedPlan = plans.find((row) => row.catalog_id === String(params[0] ?? ''))
+    if (
+      normalized === 'select id from acceptance_plans where catalog_id = ? limit 1'
+      || normalized === 'select id from acceptance_plans where catalog_id = ? and project_id = ? limit 1'
+    ) {
+      const catalogId = String(params[0] ?? '')
+      const projectId = normalized.includes('and project_id = ?') ? String(params[1] ?? '') : null
+      const referencedPlan = plans.find((row) => row.catalog_id === catalogId && (!projectId || row.project_id === projectId))
       return referencedPlan ? { id: referencedPlan.id } : null
     }
 
-    if (includesSql(normalized, 'from acceptance_records where id = ? limit 1')) {
-      return clone(records.find((row) => row.id === String(params[0] ?? '')))
+    if (includesSql(normalized, 'from acceptance_catalog where id = ?')) {
+      const id = String(params[0] ?? '')
+      const projectId = includesSql(normalized, 'and project_id = ?') ? String(params[1] ?? '') : null
+      return clone(catalogs.find((row) => row.id === id && (!projectId || row.project_id === projectId)))
+    }
+
+    if (includesSql(normalized, 'from acceptance_records where id = ?')) {
+      const id = String(params[0] ?? '')
+      const projectId = includesSql(normalized, 'and project_id = ?') ? String(params[1] ?? '') : null
+      return clone(records.find((row) => row.id === id && (!projectId || row.project_id === projectId)))
     }
 
     return null
@@ -133,8 +150,10 @@ const state = vi.hoisted(() => {
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
 
-    if (normalized === 'select source_plan_id, target_plan_id from acceptance_dependencies') {
-      return dependencies.map((row) => ({ source_plan_id: row.source_plan_id, target_plan_id: row.target_plan_id }))
+    if (normalized === 'select source_plan_id, target_plan_id from acceptance_dependencies where project_id = ?') {
+      return dependencies
+        .filter((row) => row.project_id === String(params[0] ?? ''))
+        .map((row) => ({ source_plan_id: row.source_plan_id, target_plan_id: row.target_plan_id }))
     }
 
     if (normalized === 'insert into acceptance_dependencies (id, project_id, source_plan_id, target_plan_id, dependency_kind, status, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)') {
@@ -159,22 +178,34 @@ const state = vi.hoisted(() => {
       return []
     }
 
-    if (normalized === 'delete from acceptance_catalog where id = ?') {
+    if (
+      normalized === 'delete from acceptance_catalog where id = ?'
+      || normalized === 'delete from acceptance_catalog where id = ? and project_id = ?'
+    ) {
       if (throwCatalogFkOnDelete) {
         throw new Error('[executeSQL DELETE] insert or update on table "acceptance_plans" violates foreign key constraint "fk_acceptance_plans_catalog_id" | SQL: DELETE FROM acceptance_catalog WHERE id = ?')
       }
       const id = String(params[0] ?? '')
-      const index = catalogs.findIndex((row) => row.id === id)
+      const projectId = normalized.includes('and project_id = ?') ? String(params[1] ?? '') : null
+      const index = catalogs.findIndex((row) => row.id === id && (!projectId || row.project_id === projectId))
       if (index !== -1) catalogs.splice(index, 1)
       return []
     }
 
-    if (normalized.startsWith('update acceptance_records set ') && normalized.endsWith(' where id = ?')) {
-      const setClause = normalized.slice('update acceptance_records set '.length, -' where id = ?'.length)
+    if (
+      normalized.startsWith('update acceptance_records set ')
+      && (normalized.endsWith(' where id = ?') || normalized.endsWith(' where id = ? and project_id = ?'))
+    ) {
+      const suffix = normalized.endsWith(' where id = ? and project_id = ?')
+        ? ' where id = ? and project_id = ?'
+        : ' where id = ?'
+      const setClause = normalized.slice('update acceptance_records set '.length, -suffix.length)
       const fields = setClause.split(', ').map((fragment) => fragment.replace(' = ?', ''))
-      const values = params.slice(0, -1)
-      const id = String(params[params.length - 1] ?? '')
-      const record = records.find((row) => row.id === id)
+      const values = normalized.endsWith(' where id = ? and project_id = ?') ? params.slice(0, -2) : params.slice(0, -1)
+      const idParamIndex = normalized.endsWith(' where id = ? and project_id = ?') ? params.length - 2 : params.length - 1
+      const id = String(params[idParamIndex] ?? '')
+      const projectId = normalized.endsWith(' where id = ? and project_id = ?') ? String(params[params.length - 1] ?? '') : null
+      const record = records.find((row) => row.id === id && (!projectId || row.project_id === projectId))
 
       if (record) {
         fields.forEach((field, index) => {
@@ -242,6 +273,7 @@ vi.mock('../middleware/auth.js', () => ({
   requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
   requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
   requireProjectOwner: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+  getAuthorizedRequestProjectId: vi.fn(() => 'project-1'),
   checkResourceAccess: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
 }))
 
@@ -257,6 +289,18 @@ vi.mock('../middleware/logger.js', () => ({
 vi.mock('../services/dbService.js', () => ({
   executeSQL: state.executeSQL,
   executeSQLOne: state.executeSQLOne,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({ blocked: false, reason: null, result: null })),
+  buildRetentionBlockedApiError: vi.fn((reason: string, result: Record<string, unknown>) => ({
+    code: result?.requiresUserConfirmation ? 'RETENTION_CONFIRMATION_REQUIRED' : 'RETENTION_REJECTED',
+    message: reason,
+    details: result,
+  })),
+  buildRetentionBlockedHttpStatus: vi.fn((result: Record<string, unknown>) => (
+    result?.requiresUserConfirmation ? 409 : 422
+  )),
 }))
 
 const { default: acceptancePlansRouter } = await import('../routes/acceptance-plans.js')
@@ -420,7 +464,7 @@ describe('acceptance flow hardening batch', () => {
     state.plans[0].catalog_id = null
     state.throwCatalogFkOnDelete = true
 
-    await expect(deleteAcceptanceCatalog('catalog-1')).rejects.toMatchObject({
+    await expect(deleteAcceptanceCatalog('catalog-1', 'project-1')).rejects.toMatchObject({
       code: 'CATALOG_IN_USE',
       statusCode: 422,
     })

@@ -56,7 +56,7 @@ export async function releaseBaselineVersionLock(params: {
   baselineVersionId: string
   actorUserId: string
   actorRole?: string | null
-  reason?: 'manual_release' | 'force_unlock'
+  reason?: 'manual_release'
 }) {
   const lock = await draftLockService.releaseDraftLock({
     projectId: params.projectId,

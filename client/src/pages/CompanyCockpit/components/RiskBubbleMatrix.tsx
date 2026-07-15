@@ -1,7 +1,12 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
+import { Separator } from '@/components/ui/separator'
 import type { Issue, Risk } from '@/lib/supabase'
 
 import type { ProjectRow } from '../types'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface RiskBubbleMatrixProps {
   risks: Risk[]
@@ -133,29 +138,38 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
   const totalSignals = signals.length
 
   return (
-    <Card className="rounded-[24px] border border-slate-100 bg-slate-50 shadow-none">
-      <CardHeader className="space-y-1 pb-3">
-        <CardTitle className="flex items-center justify-between text-base font-semibold text-slate-900">
-          <span>风险 / 问题 / 阻碍分布</span>
-          {totalSignals > 0 && (
+    <Card className="surface-card">
+      <CardContent padding="md" className="space-y-4">
+        <CardHead
+          eyebrow="风险信号"
+          title="风险 / 问题 / 阻碍分布提示"
+          action={totalSignals > 0 ? (
             <span className="text-xs font-normal text-slate-500">
               共 {totalSignals} 个活跃信号
             </span>
-          )}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0">
+          ) : null}
+        />
+        <p className="text-xs leading-5 text-slate-500">
+          仅用于提示分布与筛选入口；责任归因、绩效判断和处置结论需进入项目核查。
+        </p>
         <div className="mb-4 flex items-center justify-center gap-3 text-xs">
           {SIGNAL_LEVELS.map((level) => (
             <span key={level.key} className="flex items-center gap-1">
-              <span className={`h-3 w-3 rounded-full ${level.color}`} />
+              <span className={`h-2 w-2 rounded-full ${level.color}`} />
               <span className="text-slate-500">{level.label}</span>
             </span>
           ))}
         </div>
 
+        <ChartAccessibleWrapper
+          summary="风险矩阵数据"
+          columns={['来源', '级别', '信号数', '权重']}
+          rows={matrix.flatMap((item) =>
+            item.counts.map((cell) => [item.source, cell.label, cell.count, cell.weight]),
+          )}
+        >
         <div className="relative">
-          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-[10px] text-slate-400">
+          <div className="absolute bottom-0 left-0 top-0 flex w-10 flex-col justify-around py-2 text-xs text-slate-500">
             {[...SIGNAL_LEVELS].reverse().map((level) => (
               <span key={level.key} className="text-center">{level.label}</span>
             ))}
@@ -164,7 +178,7 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
           <div className="ml-10">
             <div className="mb-1 grid grid-cols-4 gap-2">
               {SIGNAL_SOURCES.map((source) => (
-                <div key={source} className="py-1 text-center text-[10px] text-slate-500">
+                <div key={source} className="py-1 text-center text-xs text-slate-500">
                   {source}
                 </div>
               ))}
@@ -179,15 +193,16 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
                     const weight = cell?.weight ?? 0
 
                     return (
-                      <div
-                        key={`${source}-${level.key}`}
+                      <Tooltip key={`${source}-${level.key}`}>
+  <TooltipTrigger asChild>
+    <div
                         className="relative aspect-square rounded-xl bg-white transition-colors hover:bg-slate-100"
-                        title={count > 0 ? `${source} · ${level.label}：${count} 个信号` : `${source} · ${level.label}`}
+                        
                       >
                         <div className="flex h-full items-center justify-center">
                           {count > 0 ? (
                             <div
-                              className={`flex items-center justify-center rounded-full text-[10px] font-semibold text-white shadow-sm ${level.color}`}
+                              className={`flex items-center justify-center rounded-full text-xs font-semibold text-white shadow-[var(--el-1)] ${level.color}`}
                               style={{
                                 width: `${calcBubbleSize(Math.max(count, weight))}px`,
                                 height: `${calcBubbleSize(Math.max(count, weight))}px`,
@@ -198,6 +213,9 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
                           ) : null}
                         </div>
                       </div>
+  </TooltipTrigger>
+  <TooltipContent>{count > 0 ? `${source} · ${level.label}：${count} 个信号` : `${source} · ${level.label}`}</TooltipContent>
+</Tooltip>
                     )
                   })}
                 </div>
@@ -205,9 +223,11 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
             </div>
           </div>
         </div>
+        </ChartAccessibleWrapper>
 
         {totalSignals > 0 ? (
-          <div className="mt-4 border-t border-slate-200 pt-3">
+          <div className="mt-4 pt-3">
+            <Separator className="mb-3" />
             <div className="flex flex-wrap gap-2">
               {matrix
                 .filter((item) => item.total > 0)
@@ -223,7 +243,11 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
             </div>
           </div>
         ) : (
-          <div className="py-8 text-center text-sm text-slate-400">暂无活跃风险信号</div>
+          <EmptyState
+            title="暂无活跃风险信号"
+            description="当前项目组合没有待跟踪的风险、问题、前置条件或阻碍信号。"
+            className="mt-4 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+          />
         )}
       </CardContent>
     </Card>

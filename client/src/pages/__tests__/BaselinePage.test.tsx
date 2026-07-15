@@ -2,49 +2,20 @@
 
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as XLSX from 'xlsx'
 
-import { usePlanningStore, type PlanningValidationIssue } from '@/hooks/usePlanningStore'
+import { usePlanningStore } from '@/hooks/usePlanningStore'
 import { useStore } from '@/hooks/useStore'
-import { ApiClientError, apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
-import type {
-  BaselineItem,
-  BaselineVersion,
-  ObservationPoolReadResponse,
-  PlanningDraftLockRecord,
-} from '@/types/planning'
-import { buildPlanningDraftResumeKey } from '../planning/draftPersistence'
+import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
+import type { BaselineItem, BaselineVersion } from '@/types/planning'
 
 import BaselinePage from '../planning/BaselinePage'
 
 vi.mock('@/lib/apiClient', () => ({
-  ApiClientError: class extends Error {
-    status: number | null
-    url: string
-    code: 'backend_unavailable' | 'network_error' | 'http_error'
-    rawText: string
-
-    constructor(
-      message: string,
-      options: {
-        status?: number | null
-        url: string
-        code: 'backend_unavailable' | 'network_error' | 'http_error'
-        rawText?: string
-      },
-    ) {
-      super(message)
-      this.name = 'ApiClientError'
-      this.status = options.status ?? null
-      this.url = options.url
-      this.code = options.code
-      this.rawText = options.rawText ?? ''
-    }
-  },
   apiGet: vi.fn(),
   apiPost: vi.fn(),
+  apiPut: vi.fn(),
   getApiErrorMessage: vi.fn(),
 }))
 
@@ -56,11 +27,17 @@ vi.mock('@/hooks/usePermissions', () => ({
   }),
 }))
 
+type BaselineDetail = BaselineVersion & { items: BaselineItem[] }
+
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedGetApiErrorMessage = vi.mocked(getApiErrorMessage)
+const mountedCleanups = new Set<() => void>()
 
-type BaselineDetail = BaselineVersion & { items: BaselineItem[] }
+let versions: BaselineVersion[]
+let details: Record<string, BaselineDetail>
+let generateCandidateDefaultMasterPlanDraft = false
+let generateCandidateDefaultMasterPlanDraftGovernanceOnly = false
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -102,20 +79,26 @@ function mount(node: ReactNode) {
     root.render(node)
   })
 
-  return {
-    container,
-    cleanup() {
-      act(() => {
-        root.unmount()
-      })
-      container.remove()
-    },
+  const cleanup = () => {
+    if (!mountedCleanups.has(cleanup)) return
+    mountedCleanups.delete(cleanup)
+    act(() => {
+      root.unmount()
+    })
+    container.remove()
   }
+
+  mountedCleanups.add(cleanup)
+  return { container, cleanup }
 }
 
-function RouteSearchProbe({ testId }: { testId: string }) {
-  const location = useLocation()
-  return <div data-testid={testId}>{`${location.pathname}${location.search}`}</div>
+async function clickElement(element: HTMLElement) {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    await flush()
+  })
 }
 
 async function clickButtonByText(container: HTMLElement, text: string) {
@@ -124,38 +107,7 @@ async function clickButtonByText(container: HTMLElement, text: string) {
     .at(-1) as HTMLButtonElement | undefined
 
   expect(button).toBeTruthy()
-
   await clickElement(button as HTMLButtonElement)
-}
-
-async function clickElement(element: HTMLElement) {
-  await act(async () => {
-    element.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }))
-    element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
-    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
-    element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    await flush()
-  })
-}
-
-async function selectBaselineVersion(container: HTMLElement, baselineId: string) {
-  const selector = `[data-testid="baseline-version-chip-${baselineId}"]`
-  await waitForCondition(() => Boolean(container.querySelector(selector)))
-
-  await clickElement(container.querySelector(selector) as HTMLButtonElement)
-}
-
-async function openDraftBaseline(container: HTMLElement) {
-  await selectBaselineVersion(container, 'baseline-v7')
-  await waitForText(container, ['可编辑态', '当前草稿基于 v6 继续整理'])
-  if ((container.textContent || '').includes('全选当前视图')) {
-    const draftIds = currentDetails['baseline-v7'].items.map((item) => item.id)
-    await act(async () => {
-      usePlanningStore.getState().setSelectedItemIds(draftIds)
-      await flush()
-    })
-    await waitForCondition(() => usePlanningStore.getState().selectedItemIds.length === draftIds.length)
-  }
 }
 
 async function setInputValue(input: HTMLInputElement, value: string) {
@@ -166,52 +118,22 @@ async function setInputValue(input: HTMLInputElement, value: string) {
     valueSetter?.call(input, value)
     input.dispatchEvent(new Event('input', { bubbles: true }))
     input.dispatchEvent(new Event('change', { bubbles: true }))
-    await flush()
-  })
-}
-
-async function setFileInput(input: HTMLInputElement, file: File) {
-  await act(async () => {
-    Object.defineProperty(input, 'files', {
-      configurable: true,
-      value: [file],
-    })
-    input.dispatchEvent(new Event('change', { bubbles: true }))
-    await flush()
-  })
-}
-
-async function setSelectValue(select: HTMLSelectElement, value: string) {
-  const valueSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
-
-  await act(async () => {
-    valueSetter?.call(select, value)
-    select.dispatchEvent(new Event('input', { bubbles: true }))
-    select.dispatchEvent(new Event('change', { bubbles: true }))
-    await flush()
-  })
-}
-
-async function setCheckboxChecked(input: HTMLInputElement, checked: boolean) {
-  await act(async () => {
-    if (input.checked !== checked) {
-      input.click()
-    }
-    await flush()
-  })
-}
-
-async function blurInput(input: HTMLInputElement) {
-  await act(async () => {
     input.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
     input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
     await flush()
   })
 }
 
-async function pressKey(input: HTMLInputElement, key: string) {
+async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+
   await act(async () => {
-    input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }))
+    textarea.focus()
+    valueSetter?.call(textarea, value)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    textarea.dispatchEvent(new Event('change', { bubbles: true }))
+    textarea.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
+    textarea.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
     await flush()
   })
 }
@@ -224,202 +146,255 @@ function getBaselineIdFromUrl(url: string) {
   return (url.split('?')[0]?.split('/').at(-1) ?? '').trim()
 }
 
-function isRevisionPoolUrl(url: string) {
-  return /\/api\/task-baselines\/[^/]+\/revision-pool(?:\?|$)/.test(url)
+function baselineSummary(): NonNullable<BaselineVersion['summary']> {
+  return {
+    total_items: 4,
+    structure_items: 2,
+    work_items: 2,
+    top_level_items: 1,
+    division_items: 1,
+    subdivision_items: 1,
+    construction_task_items: 2,
+    milestone_items: 1,
+    critical_path_items: 0,
+    planned_start_date: '2026-02-22',
+    planned_end_date: '2026-12-21',
+    duration_days: 303,
+  }
 }
 
-const emptyRevisionPool: ObservationPoolReadResponse = {
-  items: [],
-  total: 0,
+function planningFieldRegistryFixture() {
+  const now = '2026-05-09T08:00:00.000Z'
+  return {
+    registryVersion: 'v1.4.7.6',
+    surface: 'baseline',
+    generatedAt: now,
+    updatedAt: now,
+    groups: [
+      { key: 'basic_plan', label: '基础计划', sortOrder: 1 },
+      { key: 'node_control', label: '节点控制', sortOrder: 2 },
+    ],
+    fields: [
+      {
+        key: 'title',
+        group: 'basic_plan',
+        displayGroup: 'basic_plan',
+        mergeGroup: 'identity',
+        label: '任务名称',
+        dataType: 'text',
+        editableIn: ['baseline', 'monthly_plan', 'task_list'],
+        defaultVisibleIn: ['baseline', 'monthly_plan', 'task_list'],
+      },
+      {
+        key: 'planned_start_date',
+        group: 'basic_plan',
+        displayGroup: 'basic_plan',
+        mergeGroup: 'schedule',
+        label: '计划开始',
+        dataType: 'date',
+        editableIn: ['baseline', 'monthly_plan', 'task_list'],
+        defaultVisibleIn: ['baseline', 'monthly_plan', 'task_list'],
+      },
+      {
+        key: 'planned_end_date',
+        group: 'basic_plan',
+        displayGroup: 'basic_plan',
+        mergeGroup: 'schedule',
+        label: '计划完成',
+        dataType: 'date',
+        editableIn: ['baseline', 'monthly_plan', 'task_list'],
+        defaultVisibleIn: ['baseline', 'monthly_plan', 'task_list'],
+      },
+      {
+        key: 'sort_order',
+        group: 'node_control',
+        displayGroup: 'node_control',
+        mergeGroup: 'node_control',
+        label: '排序',
+        dataType: 'number',
+        editableIn: ['baseline', 'monthly_plan', 'task_list'],
+        defaultVisibleIn: [],
+      },
+      {
+        key: 'is_milestone',
+        group: 'node_control',
+        displayGroup: 'node_control',
+        mergeGroup: 'node_control',
+        label: '里程碑',
+        dataType: 'boolean',
+        editableIn: ['baseline', 'task_list'],
+        defaultVisibleIn: ['baseline'],
+      },
+    ],
+  }
 }
 
-const validationIssues: PlanningValidationIssue[] = [
-  {
-    id: 'baseline-v7-l2',
-    level: 'error',
-    title: 'L2 节点存在阻断项',
-    detail: '主体工程节点缺少必要校核信息，需要先修正再冻结。',
-  },
-  {
-    id: 'baseline-v7-l3',
-    level: 'warning',
-    title: 'L3 节点建议补充说明',
-    detail: '结构施工节点可补充处理摘要，方便后续确认。',
-  },
-]
-
-let currentVersions: BaselineVersion[]
-let currentDetails: Record<string, BaselineDetail>
-let currentLocks: Record<string, PlanningDraftLockRecord>
-let localStorageState: Map<string, string>
+function buildCommitResponse(rows: BaselineItem[], operations: Array<Record<string, unknown>>) {
+  return {
+    success: true,
+    surface: 'baseline',
+    resourceId: 'baseline-v7',
+    revision: '2026-05-09T08:03:00.000Z',
+    rows,
+    validationIssues: [],
+    governanceSummary: {
+      changedRowCount: operations.length,
+      createdRowCount: operations.filter((operation) => operation.type === 'create_row').length,
+      updatedRowCount: operations.filter((operation) => operation.type === 'update_row' || operation.type === 'update_cell').length,
+      deletedRowCount: operations.filter((operation) => operation.type === 'delete_row').length,
+      dateAdjustmentCount: 0,
+      progressAdjustmentCount: 0,
+      milestoneChangeCount: 0,
+      dependencyChangeCount: 0,
+    },
+    deletionResults: [],
+    criticalPathChangeSummary: { changed: false, enteredTaskIds: [], leftTaskIds: [] },
+    realtimeEvents: [],
+    tempIdMap: {},
+  }
+}
 
 function seedBaselineFixtures() {
-  const timestamps = {
-    created_at: '2026-04-15T08:00:00.000Z',
-    updated_at: '2026-04-15T08:30:00.000Z',
-  }
-
-  const confirmedItems: BaselineItem[] = [
+  const items: BaselineItem[] = [
     {
       id: 'baseline-v6-root',
       project_id: 'project-1',
       baseline_version_id: 'baseline-v6',
-      title: '项目基线 L1',
-      source_task_id: 'task-root',
+      title: '主体工程',
       sort_order: 0,
       mapping_status: 'mapped',
     },
     {
-      id: 'baseline-v6-l2',
+      id: 'baseline-v6-sub',
       project_id: 'project-1',
       baseline_version_id: 'baseline-v6',
       parent_item_id: 'baseline-v6-root',
-      title: '主体工程 L2',
-      source_task_id: 'task-l2',
+      title: '主体结构施工',
       sort_order: 1,
       mapping_status: 'mapped',
     },
     {
-      id: 'baseline-v6-l3',
+      id: 'baseline-v6-task',
       project_id: 'project-1',
       baseline_version_id: 'baseline-v6',
-      parent_item_id: 'baseline-v6-l2',
-      title: '结构施工 L3',
-      source_task_id: 'task-l3',
-      target_progress: 55,
+      parent_item_id: 'baseline-v6-sub',
+      title: '一层主体结构施工',
+      planned_start_date: '2026-04-20',
+      planned_end_date: '2026-07-04',
       sort_order: 2,
       mapping_status: 'mapped',
-      is_critical: true,
     },
     {
-      id: 'baseline-v6-l5',
+      id: 'baseline-v6-milestone',
       project_id: 'project-1',
       baseline_version_id: 'baseline-v6',
-      parent_item_id: 'baseline-v6-l3',
-      title: '交付收尾 L5',
-      source_milestone_id: 'milestone-l5',
-      planned_end_date: '2026-09-20',
+      parent_item_id: 'baseline-v6-sub',
+      title: '主体结构封顶',
+      planned_start_date: '2026-08-13',
+      planned_end_date: '2026-08-13',
       sort_order: 3,
-      mapping_status: 'mapped',
       is_milestone: true,
+      mapping_status: 'mapped',
     },
   ]
 
-  const draftItems: BaselineItem[] = [
-    {
-      id: 'baseline-v7-root',
-      project_id: 'project-1',
-      baseline_version_id: 'baseline-v7',
-      title: '项目基线 L1',
-      source_task_id: 'task-root',
-      sort_order: 0,
-      mapping_status: 'mapped',
-    },
-    {
-      id: 'baseline-v7-l2',
-      project_id: 'project-1',
-      baseline_version_id: 'baseline-v7',
-      parent_item_id: 'baseline-v7-root',
-      title: '主体工程 L2',
-      source_task_id: 'task-l2',
-      sort_order: 1,
-      mapping_status: 'mapped',
-    },
-    {
-      id: 'baseline-v7-l3',
-      project_id: 'project-1',
-      baseline_version_id: 'baseline-v7',
-      parent_item_id: 'baseline-v7-l2',
-      title: '结构施工 L3',
-      source_task_id: 'task-l3',
-      target_progress: 60,
-      sort_order: 2,
-      mapping_status: 'mapped',
-      is_critical: true,
-    },
-    {
-      id: 'baseline-v7-l4',
-      project_id: 'project-1',
-      baseline_version_id: 'baseline-v7',
-      parent_item_id: 'baseline-v7-l3',
-      title: '月度收口 L4',
-      source_task_id: 'task-l4',
-      sort_order: 3,
-      mapping_status: 'pending',
-    },
-    {
-      id: 'baseline-v7-l5',
-      project_id: 'project-1',
-      baseline_version_id: 'baseline-v7',
-      parent_item_id: 'baseline-v7-l4',
-      title: '交付收尾 L5',
-      source_milestone_id: 'milestone-l5',
-      planned_end_date: '2026-09-28',
-      sort_order: 4,
-      mapping_status: 'mapped',
-      is_milestone: true,
-    },
-  ]
-
-  currentVersions = [
-    {
-      id: 'baseline-v7',
-      project_id: 'project-1',
-      version: 7,
-      status: 'draft',
-      title: '城市中心广场项目（二期） 基线',
-      description: '基于 v6 生成的草稿快照',
-      source_type: 'manual',
-      source_version_id: 'baseline-v6',
-      source_version_label: 'v6',
-      ...timestamps,
-    },
-    {
-      id: 'baseline-v6',
-      project_id: 'project-1',
-      version: 6,
-      status: 'confirmed',
-      title: '城市中心广场项目（二期） 基线',
-      description: '已确认版本',
-      source_type: 'manual',
-      confirmed_at: timestamps.updated_at,
-      confirmed_by: 'user-1',
-      ...timestamps,
-    },
-  ]
-
-  currentDetails = {
-    'baseline-v6': {
-      ...currentVersions[1],
-      items: confirmedItems,
-    },
-    'baseline-v7': {
-      ...currentVersions[0],
-      items: draftItems,
-    },
+  const confirmed: BaselineDetail = {
+    id: 'baseline-v6',
+    project_id: 'project-1',
+    version: 6,
+    status: 'confirmed',
+    title: '城市中心广场项目（二期） 总进度计划',
+    description: '当前生效项目基线',
+    source_type: 'manual',
+    business_version_label: 'v6',
+    is_current_execution: true,
+    confirmed_at: '2026-05-04T08:00:00.000Z',
+    confirmed_by: 'user-1',
+    created_at: '2026-05-04T08:00:00.000Z',
+    updated_at: '2026-05-04T08:00:00.000Z',
+    summary: baselineSummary(),
+    items,
   }
 
-  currentLocks = {
-    'baseline-v7': {
-      id: 'lock-v7',
-      project_id: 'project-1',
-      draft_type: 'baseline',
-      resource_id: 'baseline-v7',
-      locked_by: 'user-1',
-      locked_at: '2026-04-15T08:30:00.000Z',
-      lock_expires_at: '2099-04-15T09:00:00.000Z',
-      is_locked: true,
-      version: 1,
-      created_at: '2026-04-15T08:30:00.000Z',
-      updated_at: '2026-04-15T08:30:00.000Z',
+  versions = [confirmed]
+  details = { [confirmed.id]: confirmed }
+}
+
+function candidateDefaultMasterPlanMetadata() {
+  return {
+    source: 'managed_frontier_default_master_plan',
+    candidateOnly: true,
+    writesTasks: false,
+    writesTaskDependencies: false,
+    writesCriticalPathFacts: false,
+    durationSuggestion: {
+      planDurationTruthSource: 'candidate_default_master_plan_baseline',
+      dataUpgradeBlockedBy: ['GENERATION_DEPTH_TRUST_REVIEW_REQUIRED'],
     },
   }
+}
+
+function candidateDefaultMasterPlanGovernanceMetadata() {
+  return {
+    source: 'default_master_plan_candidate_baseline_draft',
+    candidateOnly: true,
+    productionReady: false,
+    evidenceLevel: 'candidate_asset_backed_l1',
+    requiredEvidenceLevel: 'runtime_published_project_manager_accepted',
+    durationAssetUtilizationSummary: {
+      source: 'default_master_plan_duration_asset_utilization_summary',
+      evidenceLevel: 'candidate_duration_asset_utilization_l1',
+      scheduleRowCount: 54,
+      standardWorkDurationSeedRowCount: 54,
+      activeStandardWorkDurationSeedRowCount: 8,
+      fallbackStandardWorkDurationSeedRowCount: 46,
+      t2RhythmTemplateRowCount: 54,
+      activeT2RhythmTemplateRowCount: 7,
+      fallbackT2RhythmTemplateRowCount: 47,
+      dependencyAssetConsumedRowCount: 13,
+      dependencyTimingAssetConsumedRowCount: 13,
+      runtimeReferenceDaysRowCount: 6,
+      runtimeReferenceDaysConsumedRowCount: 6,
+      rowsMissingDurationAssetCount: 0,
+      rowsMissingT2RhythmTemplateCount: 0,
+      rowsMissingRuntimeReferenceDaysCount: 48,
+      productionWritePolicy: 'candidate_only_no_task_dependencies_write',
+    },
+    candidateNetworkEvaluation: {
+      source: 'generated_wbs_row_candidate_network_cpm',
+      projectedNetworkSpanDays: 326,
+      previewEdgeCount: 27,
+      processConstraintRoutingCandidateEdgeCount: 1,
+      unresolvedEdgeCount: 0,
+      criticalGeneratedRowIds: ['row-residential-1', 'row-residential-2', 'row-residential-3'],
+      writesTaskDependencies: false,
+      writesPlanDates: false,
+      writesCriticalPathFacts: false,
+    },
+    mutationBoundary: {
+      writesTasks: false,
+      writesTaskDependencies: false,
+      writesCriticalPathFacts: false,
+      writesRuntimePublication: false,
+    },
+  }
+}
+
+function renderBaselinePage() {
+  return mount(
+    <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
+      <Routes>
+        <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
+      </Routes>
+    </MemoryRouter>,
+  )
 }
 
 describe('BaselinePage planning workflow', () => {
   beforeEach(() => {
     seedBaselineFixtures()
-    localStorageState = new Map()
+    generateCandidateDefaultMasterPlanDraft = false
+    generateCandidateDefaultMasterPlanDraftGovernanceOnly = false
 
     useStore.setState({
       currentProject: {
@@ -427,73 +402,223 @@ describe('BaselinePage planning workflow', () => {
         name: '城市中心广场项目（二期）',
         status: 'active',
       } as never,
+      changeLogs: [],
     } as never)
 
     usePlanningStore.setState({
-      activeWorkspace: 'baseline',
       selectedItemIds: [],
       draftStatus: 'idle',
-      validationIssues,
-      confirmDialog: { open: false, target: null, title: '', description: '' },
+      validationIssues: [],
     } as never)
 
     mockedGetApiErrorMessage.mockImplementation((error, fallback = '请稍后重试。') => {
       if (error instanceof Error && error.message) return error.message
       return fallback
     })
-    vi.mocked(window.localStorage.getItem).mockImplementation((key: string) =>
-      localStorageState.has(key) ? localStorageState.get(key) ?? null : null,
-    )
-    vi.mocked(window.localStorage.setItem).mockImplementation((key: string, value: string) => {
-      localStorageState.set(key, String(value))
-    })
-    vi.mocked(window.localStorage.removeItem).mockImplementation((key: string) => {
-      localStorageState.delete(key)
-    })
-    vi.mocked(window.localStorage.clear).mockImplementation(() => {
-      localStorageState.clear()
-    })
 
     mockedApiGet.mockImplementation(async (url: string) => {
-      if (url.startsWith('/api/task-baselines?project_id=')) {
-        return deepClone(currentVersions)
+      if (url.startsWith('/api/planning/field-registry?')) {
+        return planningFieldRegistryFixture() as never
       }
 
-      if (isRevisionPoolUrl(url)) {
-        return deepClone(emptyRevisionPool)
+      if (url.startsWith('/api/task-baselines?project_id=')) {
+        return deepClone(versions)
+      }
+
+      if (url.startsWith('/api/task-baselines/baseline-v6/generation-candidate?')) {
+        return {
+          baselineId: 'baseline-v6',
+          projectId: 'project-1',
+          sourceVersionLabel: 'v6',
+          candidateVersionLabel: '新版基线草案',
+          recommended: true,
+          summary: '⵽ 1 ƻ죬°߲ݰ󸴺ˡ',
+          reasons: [
+            {
+              code: 'finish_shift',
+              label: '总完工日期偏移',
+              detail: '总完工日期偏移 14 天，超过 7 天阈值。',
+              severity: 'warning',
+            },
+          ],
+          metrics: {
+            baselineTaskCount: 4,
+            candidateTaskCount: 4,
+            affectedTaskCount: 1,
+            affectedTaskRatio: 0.25,
+            addedItemCount: 0,
+            removedItemCount: 0,
+            changedItemCount: 1,
+            structureChangeRatio: 0,
+            milestoneMaxShiftDays: 0,
+            totalFinishShiftDays: 14,
+          },
+          diffCounts: { total: 1, 新增: 0, 修改: 1, 移除: 0, 里程碑变动: 0 },
+          diffItems: [
+            {
+              id: 'candidate-baseline-v6-task-end',
+              kind: '修改',
+              title: '一层主体结构施工',
+              before: '一层主体结构施工 · 2026-04-20 - 2026-07-04',
+              after: '一层主体结构施工 · 2026-04-20 - 2026-07-18',
+              note: '计划完成: 2026-07-04 → 2026-07-18',
+              field: 'end',
+            },
+          ],
+        } as never
+      }
+
+      if (url.startsWith('/api/task-baselines/baseline-v7/diff?')) {
+        return {
+          baselineId: 'baseline-v7',
+          compareToBaselineId: 'baseline-v6',
+          fromVersionLabel: 'v6',
+          toVersionLabel: '编辑中',
+          counts: { total: 1, 新增: 0, 修改: 1, 移除: 0, 里程碑变动: 0 },
+          items: [
+            {
+              id: 'changed-baseline-v7-item-3-end',
+              kind: '修改',
+              title: '一层主体结构施工',
+              before: '一层主体结构施工 · 2026-04-20 - 2026-07-04',
+              after: '一层主体结构施工 · 2026-04-20 - 2026-07-18',
+              note: '计划完成: 2026-07-04 → 2026-07-18',
+              rowId: 'baseline-v7-item-3',
+              sourceRowId: 'baseline-v6-task',
+              field: 'end',
+            },
+          ],
+        } as never
       }
 
       const baselineId = getBaselineIdFromUrl(url)
-      const detail = currentDetails[baselineId]
+      const detail = details[baselineId]
       if (detail) return deepClone(detail)
 
       throw new Error(`Unexpected GET ${url}`)
     })
 
     mockedApiPost.mockImplementation(async (url: string, body?: unknown) => {
-      if (url === '/api/task-baselines/baseline-v7/lock') {
-        return { lock: deepClone(currentLocks['baseline-v7']) }
+      if (url === '/api/task-baselines/generate') {
+        const createdId = 'baseline-v7'
+        const sourceItems = details['baseline-v6'].items
+        const generatedIdBySourceId = new Map(
+          sourceItems.map((item, index) => [item.id, `${createdId}-item-${index + 1}`]),
+        )
+        const items = sourceItems.map((item, index) => ({
+          ...item,
+          id: `${createdId}-item-${index + 1}`,
+          baseline_version_id: createdId,
+          parent_item_id: item.parent_item_id ? generatedIdBySourceId.get(item.parent_item_id) ?? null : null,
+          planned_end_date: item.id === 'baseline-v6-task' ? '2026-07-18' : item.planned_end_date,
+          notes: item.id === 'baseline-v6-task'
+            ? 'ϵͳ飺Ѱǰбڸ¼ƻڡ'
+            : item.notes ?? null,
+          generation_metadata: generateCandidateDefaultMasterPlanDraft && !generateCandidateDefaultMasterPlanDraftGovernanceOnly
+            ? candidateDefaultMasterPlanMetadata()
+            : item.generation_metadata ?? null,
+        }))
+
+        const created: BaselineDetail = {
+          ...details['baseline-v6'],
+          id: createdId,
+          version: null,
+          status: 'draft',
+          title: '城市中心广场项目（二期） 总进度计划新版',
+          description: '系统根据当前任务列表排期自动生成的待发布新版总进度计划。',
+          source_version_id: 'baseline-v6',
+          source_version_label: generateCandidateDefaultMasterPlanDraft && !generateCandidateDefaultMasterPlanDraftGovernanceOnly
+            ? 'managed_frontier_default_master_plan'
+            : 'v6',
+          ...(generateCandidateDefaultMasterPlanDraft || generateCandidateDefaultMasterPlanDraftGovernanceOnly
+            ? { governance_metadata: candidateDefaultMasterPlanGovernanceMetadata() }
+            : {}),
+          business_version_label: '编辑中',
+          is_current_execution: false,
+          confirmed_at: undefined,
+          confirmed_by: undefined,
+          created_at: '2026-05-09T08:00:00.000Z',
+          updated_at: '2026-05-09T08:00:00.000Z',
+          items,
+          summary: baselineSummary(),
+        }
+
+        details[createdId] = created
+        versions = [created, ...versions]
+        return deepClone(created)
       }
 
-      if (url === '/api/task-baselines/baseline-v7/force-unlock') {
-        currentLocks['baseline-v7'] = {
-          ...currentLocks['baseline-v7'],
-          is_locked: false,
-          released_at: '2026-04-15T08:35:00.000Z',
-          released_by: 'user-1',
-          release_reason: 'force_unlock',
+      if (url === '/api/task-baselines/baseline-v7/commit') {
+        const payload = body as { operations?: Array<Record<string, unknown>> }
+        const operations = payload.operations ?? []
+        const current = details['baseline-v7']
+        const rows = current.items.map((item) => {
+          const update = operations.find((operation) =>
+            operation.type === 'update_row' && operation.rowId === item.id,
+          )
+          return update ? { ...item, ...(update.values as Partial<BaselineItem>) } : item
+        })
+        details['baseline-v7'] = { ...current, items: rows, updated_at: '2026-05-09T08:03:00.000Z' }
+        versions = versions.map((version) =>
+          version.id === 'baseline-v7'
+            ? { ...version, updated_at: '2026-05-09T08:03:00.000Z' }
+            : version,
+        )
+        return buildCommitResponse(deepClone(rows), operations) as never
+      }
+
+      if (url === '/api/task-baselines/baseline-v7/publish') {
+        const confirmed: BaselineDetail = {
+          ...details['baseline-v7'],
+          version: 7,
+          status: 'confirmed',
+          business_version_label: 'v7',
+          is_current_execution: true,
+          confirmed_at: '2026-05-09T08:05:00.000Z',
+          confirmed_by: 'user-1',
+          updated_at: '2026-05-09T08:05:00.000Z',
+          summary: baselineSummary(),
         }
-        return { lock: deepClone(currentLocks['baseline-v7']) }
+        details['baseline-v7'] = confirmed
+        versions = versions.map((version) =>
+          version.id === 'baseline-v7'
+            ? {
+                ...version,
+                version: 7,
+                status: 'confirmed',
+                business_version_label: 'v7',
+                is_current_execution: true,
+                confirmed_at: confirmed.confirmed_at,
+                confirmed_by: confirmed.confirmed_by,
+                updated_at: confirmed.updated_at,
+                summary: confirmed.summary,
+              }
+            : { ...version, is_current_execution: false },
+        )
+        return deepClone(confirmed)
+      }
+
+      if (
+        url === '/api/task-baselines'
+        || url === '/api/task-baselines/baseline-v6/generate-version'
+        || url === '/api/task-baselines/baseline-v7/confirm'
+      ) {
+        throw new Error(`Legacy baseline endpoint should not be used: ${url}`)
       }
 
       if (url === '/api/task-baselines') {
-        const payload = body as { items?: Array<Record<string, unknown>> }
-        const nextVersion = 8
-        const nextId = `baseline-v${nextVersion}`
-        const nextItems = (payload.items ?? []).map((item, index) => ({
-          id: `${nextId}-item-${index + 1}`,
+        const payload = body as {
+          title?: string
+          description?: string | null
+          source_version_id?: string | null
+          source_version_label?: string | null
+          items?: Array<Record<string, unknown>>
+        }
+        const createdId = 'baseline-v7'
+        const items = (payload.items ?? []).map((item, index) => ({
+          id: `${createdId}-item-${index + 1}`,
           project_id: 'project-1',
-          baseline_version_id: nextId,
+          baseline_version_id: createdId,
           parent_item_id: (item.parent_item_id as string | null | undefined) ?? null,
           source_task_id: (item.source_task_id as string | null | undefined) ?? null,
           source_milestone_id: (item.source_milestone_id as string | null | undefined) ?? null,
@@ -501,7 +626,7 @@ describe('BaselinePage planning workflow', () => {
           planned_start_date: (item.planned_start_date as string | null | undefined) ?? null,
           planned_end_date: (item.planned_end_date as string | null | undefined) ?? null,
           target_progress: (item.target_progress as number | null | undefined) ?? null,
-          sort_order: index,
+          sort_order: Number(item.sort_order ?? index),
           is_milestone: Boolean(item.is_milestone),
           is_critical: Boolean(item.is_critical),
           mapping_status: (item.mapping_status as BaselineItem['mapping_status']) ?? 'mapped',
@@ -509,60 +634,114 @@ describe('BaselinePage planning workflow', () => {
         }))
 
         const created: BaselineDetail = {
-          id: nextId,
-          project_id: 'project-1',
-          version: nextVersion,
+          ...details['baseline-v6'],
+          id: createdId,
+          version: null,
           status: 'draft',
-          title: '城市中心广场项目（二期） 基线',
-          description: '基于 v7 生成的草稿快照',
-          source_type: 'manual',
-          source_version_id: 'baseline-v7',
-          source_version_label: 'v7',
-          created_at: '2026-04-15T08:45:00.000Z',
-          updated_at: '2026-04-15T08:45:00.000Z',
-          items: nextItems,
+          title: payload.title ?? details['baseline-v6'].title,
+          description: payload.description ?? null,
+          source_version_id: payload.source_version_id ?? 'baseline-v6',
+          source_version_label: payload.source_version_label ?? 'v6',
+          business_version_label: '未发布调整',
+          is_current_execution: false,
+          created_at: '2026-05-09T08:00:00.000Z',
+          updated_at: '2026-05-09T08:00:00.000Z',
+          items,
         }
 
-        currentVersions = [created, ...currentVersions]
-        currentDetails[nextId] = created
-        currentLocks[nextId] = {
-          id: `lock-${nextId}`,
-          project_id: 'project-1',
-          draft_type: 'baseline',
-          resource_id: nextId,
-          locked_by: 'user-1',
-          locked_at: '2026-04-15T08:45:00.000Z',
-          lock_expires_at: '2099-04-15T09:15:00.000Z',
-          is_locked: true,
-          version: 1,
-          created_at: '2026-04-15T08:45:00.000Z',
-          updated_at: '2026-04-15T08:45:00.000Z',
-        }
-
+        details[createdId] = created
+        versions = [created, ...versions]
         return deepClone(created)
       }
 
-      if (url === '/api/task-baselines/baseline-v8/lock') {
-        return { lock: deepClone(currentLocks['baseline-v8']) }
+      if (url === '/api/task-baselines/baseline-v6/generate-version') {
+        const createdId = 'baseline-v7'
+        const sourceItems = details['baseline-v6'].items
+        const generatedIdBySourceId = new Map(
+          sourceItems.map((item, index) => [item.id, `${createdId}-item-${index + 1}`]),
+        )
+        const items = [
+          ...sourceItems.map((item, index) => ({
+            ...item,
+            id: `${createdId}-item-${index + 1}`,
+            baseline_version_id: createdId,
+            parent_item_id: item.parent_item_id ? generatedIdBySourceId.get(item.parent_item_id) ?? null : null,
+            planned_end_date: item.id === 'baseline-v6-task' ? '2026-07-18' : item.planned_end_date,
+            notes: item.id === 'baseline-v6-task' ? 'ϵͳ飺Ѱǰбڸ¼ƻڡ' : item.notes ?? null,
+          })),
+          {
+            id: `${createdId}-item-new`,
+            project_id: 'project-1',
+            baseline_version_id: createdId,
+            parent_item_id: `${createdId}-item-2`,
+            source_task_id: 'task-new',
+            title: '新增幕墙施工',
+            planned_start_date: '2026-08-01',
+            planned_end_date: '2026-08-20',
+            target_progress: null,
+            sort_order: sourceItems.length,
+            is_milestone: false,
+            is_critical: false,
+            mapping_status: 'pending' as const,
+            notes: 'ϵͳ飺ǰбʩ°߲ݰ',
+          },
+        ]
+        const created: BaselineDetail = {
+          ...details['baseline-v6'],
+          id: createdId,
+          version: null,
+          status: 'draft',
+          title: '城市中心广场项目（二期） 总进度计划新版',
+          description: '系统根据当前任务列表排期自动生成的待发布新版总进度计划。',
+          source_version_id: 'baseline-v6',
+          source_version_label: 'v6',
+          business_version_label: '编辑中',
+          is_current_execution: false,
+          created_at: '2026-05-09T08:00:00.000Z',
+          updated_at: '2026-05-09T08:00:00.000Z',
+          items,
+          summary: {
+            ...baselineSummary(),
+            total_items: 5,
+            construction_task_items: 3,
+          },
+          mapping_affected_count: 1,
+          modified_item_count: 2,
+        }
+
+        details[createdId] = created
+        versions = [created, ...versions]
+        return deepClone(created)
       }
 
       if (url === '/api/task-baselines/baseline-v7/confirm') {
         const confirmed: BaselineDetail = {
-          ...currentDetails['baseline-v7'],
+          ...details['baseline-v7'],
+          version: 7,
           status: 'confirmed',
-          confirmed_at: '2026-04-15T08:50:00.000Z',
+          business_version_label: 'v7',
+          is_current_execution: true,
+          confirmed_at: '2026-05-09T08:05:00.000Z',
           confirmed_by: 'user-1',
-          updated_at: '2026-04-15T08:50:00.000Z',
+          updated_at: '2026-05-09T08:05:00.000Z',
+          summary: baselineSummary(),
         }
-
-        currentDetails['baseline-v7'] = confirmed
-        currentVersions = currentVersions.map((version) =>
+        details['baseline-v7'] = confirmed
+        versions = versions.map((version) =>
           version.id === 'baseline-v7'
-            ? { ...version, status: 'confirmed', confirmed_at: '2026-04-15T08:50:00.000Z', confirmed_by: 'user-1' }
-            : version,
+            ? {
+                ...version,
+                version: 7,
+                status: 'confirmed',
+                business_version_label: 'v7',
+                is_current_execution: true,
+                confirmed_at: confirmed.confirmed_at,
+                confirmed_by: confirmed.confirmed_by,
+                updated_at: confirmed.updated_at,
+                summary: confirmed.summary,
+              }
+            : { ...version, is_current_execution: false },
         )
-        delete currentLocks['baseline-v7']
-
         return deepClone(confirmed)
       }
 
@@ -571,865 +750,329 @@ describe('BaselinePage planning workflow', () => {
   })
 
   afterEach(() => {
-    useStore.setState({ currentProject: null } as never)
+    for (const cleanup of Array.from(mountedCleanups)) cleanup()
+    useStore.setState({ currentProject: null, changeLogs: [] } as never)
     usePlanningStore.setState({
-      activeWorkspace: 'baseline',
       selectedItemIds: [],
       draftStatus: 'idle',
       validationIssues: [],
     } as never)
-
     mockedApiGet.mockReset()
     mockedApiPost.mockReset()
     mockedGetApiErrorMessage.mockReset()
-    vi.mocked(window.localStorage.getItem).mockReset()
-    vi.mocked(window.localStorage.setItem).mockReset()
-    vi.mocked(window.localStorage.removeItem).mockReset()
-    vi.mocked(window.localStorage.clear).mockReset()
-    window.localStorage.clear()
+    document.body.innerHTML = ''
   })
 
-  it('loads the current confirmed baseline by default and renders the real version summary', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+  it('renders the current baseline with backend KPI summary and no old draft workflow wording', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
     await waitForText(container, [
-      '计划编制 / 项目基线',
-      '只读查看态',
-      '当前展示的是已确认版本',
-      'v7 → v6',
-      'v6 · 已确认',
+      '项目基线',
+      '维护项目总进度计划',
+      'DIVISION',
+      '分部工程',
+      'SUBDIVISION',
+      '分项工程',
+      'TASK',
+      '施工任务',
+      'MILESTONE',
+      '里程碑',
+      'v6 已确认',
+      '总进度计划表',
+      '任务名称',
+      '计划开始',
+      '计划完成',
+      '工期',
+      '编辑',
     ])
 
-    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/lock')).toBe(false)
+    const text = container.textContent || ''
+    expect(text).not.toContain('修订草稿')
+    expect(text).not.toContain('确认冻结')
+    expect(text).not.toContain('计划修订候选')
+    expect(text).not.toContain('观察池')
+    expect(text).not.toContain(['修订', '池'].join(''))
+    expect(container.querySelector('[data-testid="baseline-health-banner"]')).toBeFalsy()
     cleanup()
   })
 
-  it('switches to the draft baseline from the history selector and acquires the edit lock', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
-
-    await waitForText(container, ['v7 · 草稿', '可编辑态'])
-    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/lock')).toBe(true)
-    cleanup()
-  })
-
-  it('renders a diff preview in the history sidebar', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-diff-preview"]')))
-    await waitForText(container, ['版本差异总览', '3 项变更', '月度收口 L4', '交付收尾 L5'])
-
-    cleanup()
-  })
-
-  it('allows choosing a specific compare version from the history sidebar', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-version-chip-baseline-v6"]')))
-
-    await act(async () => {
-      ;(container.querySelector('[data-testid="baseline-version-chip-baseline-v6"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-compare-version-select"]')))
-
-    await setSelectValue(
-      container.querySelector('[data-testid="baseline-compare-version-select"]') as HTMLSelectElement,
-      'baseline-v7',
-    )
-
-    await waitForText(container, ['v7 → v6', '3 项变更', '月度收口 L4'])
-
-    cleanup()
-  })
-
-  it('falls back to read-only when the draft lock cannot be acquired', async () => {
-    mockedApiPost.mockImplementation(async (url: string) => {
-      if (url === '/api/task-baselines/baseline-v7/lock') {
-        throw new Error('当前草稿暂时无法获取编辑锁，已切换为只读查看。')
-      }
-      throw new Error(`Unexpected POST ${url}`)
-    })
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await selectBaselineVersion(container, 'baseline-v7')
-    await waitForText(container, [
-      '只读查看态',
-      '当前草稿暂时无法获取编辑锁，已切换为只读查看。',
-      '未持有编辑锁',
-    ])
-
-    cleanup()
-  })
-
-  it('shows the no-baseline entry selector when the project has no baseline yet', async () => {
-    let scheduleCreated = false
-    const scheduleDetail: BaselineDetail = {
-      ...currentDetails['baseline-v7'],
-      id: 'baseline-schedule-v1',
-      version: 1,
-      source_type: 'current_schedule',
-      source_version_id: null,
-      source_version_label: '当前排期',
-      items: currentDetails['baseline-v7'].items.map((item) => ({
-        ...item,
-        baseline_version_id: 'baseline-schedule-v1',
-      })),
-    }
-    const scheduleLock: PlanningDraftLockRecord = {
-      ...currentLocks['baseline-v7'],
-      id: 'lock-baseline-schedule-v1',
-      resource_id: 'baseline-schedule-v1',
-    }
-
-    mockedApiGet.mockImplementation(async (url: string) => {
-      if (url.startsWith('/api/task-baselines?project_id=')) {
-        return scheduleCreated ? [{ ...scheduleDetail, items: undefined } as never] : [] as never
-      }
-      if (isRevisionPoolUrl(url)) return deepClone(emptyRevisionPool) as never
-      if (getBaselineIdFromUrl(url) === 'baseline-schedule-v1') return deepClone(scheduleDetail) as never
-      throw new Error(`Unexpected GET ${url}`)
-    })
-    mockedApiPost.mockImplementation(async (url: string) => {
-      if (url === '/api/task-baselines/bootstrap/from-schedule') {
-        scheduleCreated = true
-        return {
-          baseline: deepClone(scheduleDetail),
-          needs_mapping_review: true,
-          created_item_count: scheduleDetail.items.length,
-        } as never
-      }
-      if (url === '/api/task-baselines/baseline-schedule-v1/lock') {
-        return { lock: deepClone(scheduleLock) } as never
-      }
-      throw new Error(`Unexpected POST ${url}`)
-    })
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+  it('shows the baseline generation candidate panel and accepts the suggestion', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
     await waitForText(container, [
-      '首版基线创建入口',
-      '新建空白基线',
-      '从当前排期生成',
-      '导入计划文件',
+      '系统建议',
+      '建议生成新版基线草案',
+      '先不更新',
+      '查看详情',
+      '总完工偏移 14 天',
     ])
 
-    await clickButtonByText(container, '从当前排期生成')
-    await waitForText(container, ['已从当前排期生成初始化基线', 'v1 · 草稿'])
+    const acceptButton = container.querySelector('[data-testid="baseline-accept-generation-candidate"]') as HTMLButtonElement | null
+    expect(acceptButton).toBeTruthy()
+    expect(acceptButton?.getAttribute('title')).toContain('系统将基于当前任务列表和实际进度')
+
+    await clickButtonByText(container, '查看详情')
+    await waitForText(document.body, ['新版基线候选详情', '总完工日期偏移', '计划完成: 2026-07-04 → 2026-07-18'])
+    expect(document.body.querySelector('[data-testid="baseline-generation-candidate-dialog"]')).toBeTruthy()
+
+    await clickElement(acceptButton as HTMLButtonElement)
+    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/generate'))
+    await waitForText(container, ['正在编辑计划表', '已根据当前任务列表生成新版基线'])
+    expect(container.querySelector('[data-testid="baseline-generation-candidate"]')).toBeFalsy()
 
     cleanup()
   })
 
-  it('parses an imported spreadsheet and creates an imported baseline draft', async () => {
-    let importedCreated = false
-    const importLockRecord = {
-      id: 'lock-baseline-import',
-      project_id: 'project-1',
-      draft_type: 'baseline',
-      resource_id: 'baseline-import-v1',
-      locked_by: 'user-1',
-      locked_at: '2026-04-15T08:00:00.000Z',
-      lock_expires_at: '2099-04-15T10:00:00.000Z',
-      is_locked: true,
-      version: 1,
-      created_at: '2026-04-15T08:00:00.000Z',
-      updated_at: '2026-04-15T08:00:00.000Z',
-    } satisfies PlanningDraftLockRecord
-    const importedDetail: BaselineDetail = {
-      id: 'baseline-import-v1',
-      project_id: 'project-1',
-      version: 1,
-      status: 'draft',
-      title: '示例项目导入基线',
-      description: '来源文件 baseline-import.xlsx / 工作表 导入基线',
-      source_type: 'imported_file',
-      source_version_id: null,
-      source_version_label: 'baseline-import.xlsx',
-      created_at: '2026-04-15T08:00:00.000Z',
-      updated_at: '2026-04-15T08:00:00.000Z',
-      items: [
-        {
-          id: 'import-item-1',
-          project_id: 'project-1',
-          baseline_version_id: 'baseline-import-v1',
-          title: '导入结构 L1',
-          planned_start_date: '2026-05-01',
-          planned_end_date: '2026-05-12',
-          target_progress: 60,
-          sort_order: 0,
-          is_milestone: false,
-          is_critical: false,
-          mapping_status: 'pending',
-          notes: '来自文件导入',
-        },
-      ],
-    }
+  it('enters in-place edit mode and exposes shared table editing actions', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
-    mockedApiGet.mockImplementation(async (url: string) => {
-      if (url.startsWith('/api/task-baselines?project_id=')) {
-        return importedCreated ? [{ ...importedDetail, items: undefined } as never] : [] as never
-      }
-      if (isRevisionPoolUrl(url)) return deepClone(emptyRevisionPool) as never
-      if (getBaselineIdFromUrl(url) === 'baseline-import-v1') return importedDetail as never
-      throw new Error(`Unexpected GET ${url}`)
-    })
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
 
-    mockedApiPost.mockImplementation(async (url: string, body?: unknown) => {
-      if (url === '/api/task-baselines') {
-        importedCreated = true
-        return importedDetail as never
-      }
-      if (url === '/api/task-baselines/baseline-import-v1/lock') {
-        return { lock: importLockRecord } as never
-      }
-      throw new Error(`Unexpected POST ${url}`)
-    })
+    await waitForText(container, ['总进度计划', '正在编辑计划表', '取消', '保存'])
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
 
-    const workbook = XLSX.utils.book_new()
-    const worksheet = XLSX.utils.json_to_sheet([
-      {
-        任务名称: '导入结构 L1',
-        开始日期: '2026-05-01',
-        结束日期: '2026-05-12',
-        目标进度: 60,
-        备注: '来自文件导入',
-      },
-    ])
-    XLSX.utils.book_append_sheet(workbook, worksheet, '导入基线')
-    const file = new File(
-      [XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })],
-      'baseline-import.xlsx',
-      { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
-    )
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await waitForText(container, ['导入计划文件'])
-    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement | null
-    expect(fileInput).toBeTruthy()
-
-    await setFileInput(fileInput as HTMLInputElement, file)
-    await waitForText(container, ['导入预览', 'baseline-import.xlsx', '导入结构 L1'])
-
-    const mappingConfirm = Array.from(container.querySelectorAll('input[type="checkbox"]')).at(-1) as
-      | HTMLInputElement
-      | undefined
-    expect(mappingConfirm).toBeTruthy()
-    await setCheckboxChecked(mappingConfirm as HTMLInputElement, true)
-
-    await clickButtonByText(container, '生成导入基线草稿')
-    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines'))
-
-    const createCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines')
-    expect(createCall?.[1]).toMatchObject({
-      source_type: 'imported_file',
-      source_version_label: 'baseline-import.xlsx',
-    })
-    expect((createCall?.[1] as { items?: Array<Record<string, unknown>> } | undefined)?.items?.[0]).toMatchObject({
-      title: '导入结构 L1',
-      planned_start_date: '2026-05-01',
-      planned_end_date: '2026-05-12',
-      target_progress: 60,
-      mapping_status: 'pending',
-    })
+    expect(container.querySelector('[aria-label="添加同级"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="添加子级"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="标记里程碑"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="删除"]')).toBeTruthy()
 
     cleanup()
   })
 
-  it('prompts to continue or discard the local draft workspace snapshot', async () => {
-    window.localStorage.setItem(
-      buildPlanningDraftResumeKey('baseline', 'project-1'),
-      JSON.stringify({
-        resourceId: 'baseline-v7',
-        versionLabel: 'v7',
-        updatedAt: '2026-04-15T08:30:00.000Z',
-        workspaceLabel: '项目基线',
-      }),
-    )
+  it('opens version records as a right-side drawer', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+    await waitForText(container, ['查看版本记录'])
+    await clickButtonByText(container, '查看版本记录')
 
-    await selectBaselineVersion(container, 'baseline-v7')
-    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="planning-draft-resume-dialog"]')))
-    const resumeDialog = document.body.querySelector('[data-testid="planning-draft-resume-dialog"]') as HTMLElement | null
-    expect(resumeDialog?.textContent).toContain('v7')
-
-    const dialogButtons = resumeDialog?.querySelectorAll('button') ?? []
-    expect(dialogButtons.length).toBeGreaterThanOrEqual(2)
-
-    await act(async () => {
-      ;(dialogButtons[0] as HTMLButtonElement | undefined)?.click()
-      await flush()
-    })
-
-    await waitForText(container, ['已放弃本地草稿工作区状态'])
-    expect(window.localStorage.getItem(buildPlanningDraftResumeKey('baseline', 'project-1'))).toBeNull()
+    await waitForText(document.body, ['版本记录', '历史基线', '发布留痕'])
+    expect(document.body.querySelector('[data-testid="baseline-version-records-dialog"]')).toBeTruthy()
 
     cleanup()
   })
 
-  it('opens the confirm dialog with real diff data', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
+  it('opens a current-version diff drawer and locates changed baseline rows', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:end"]')))
 
-    await openDraftBaseline(container)
-    await waitForText(container, ['确认项目基线'])
-    await clickButtonByText(container, '确认项目基线')
-
+    await clickButtonByText(container, '对比当前生效版本')
     await waitForText(document.body, [
-      '基线确认弹窗',
-      '当前版本',
-      '目标版本',
-      '新增',
-      '修改',
-      '里程碑变动',
+      '对比当前生效版本',
+      'v6 → 编辑中',
+      '计划完成: 2026-07-04 → 2026-07-18',
+      '定位行',
     ])
 
-    await clickButtonByText(document.body, '查看完整差异')
-    await waitForText(document.body, ['完整差异视图', 'v6 vs v7', '月度收口 L4', '交付收尾 L5'])
+    expect(mockedApiGet.mock.calls.some(([url]) =>
+      String(url).startsWith('/api/task-baselines/baseline-v7/diff?'),
+    )).toBe(true)
+    expect(document.body.querySelector('[data-testid="baseline-version-records-dialog"]')).toBeFalsy()
 
-    cleanup()
-  })
+    const locateButton = document.body.querySelector('[data-testid="baseline-diff-locate-baseline-v7-item-3"]') as HTMLElement | null
+    expect(locateButton).toBeTruthy()
+    await clickElement(locateButton as HTMLElement)
 
-  it('opens the revision pool dialog and change log deep link from the baseline sidebar', async () => {
-    const mountBaseline = () =>
-      mount(
-        <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-          <Routes>
-            <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-            <Route path="/projects/:id/reports" element={<RouteSearchProbe testId="baseline-route-probe" />} />
-          </Routes>
-        </MemoryRouter>,
-      )
-
-    let view = mountBaseline()
-    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-info-open-revision-pool"]')))
-
-    await act(async () => {
-      ;(view.container.querySelector('[data-testid="baseline-info-open-revision-pool"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-revision-pool-dialog"]')))
-    view.cleanup()
-
-    view = mountBaseline()
-    await waitForText(view.container, ['变更记录分析'])
-    await clickButtonByText(view.container, '变更记录分析')
-
-    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-route-probe"]')))
-    expect(view.container.querySelector('[data-testid="baseline-route-probe"]')?.textContent).toContain('/projects/project-1/reports?view=change_log')
-    view.cleanup()
-  })
-
-  it('guards leaving the baseline page when there are unsaved edits', async () => {
-    const view = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-          <Route path="/projects/:id/reports" element={<RouteSearchProbe testId="baseline-guard-route" />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(view.container)
-    const titleSelector = '[data-baseline-editor-cell="baseline-v7-l3:title"]'
-    await waitForCondition(() => Boolean(view.container.querySelector(titleSelector)))
-
-    await setInputValue(view.container.querySelector(titleSelector) as HTMLInputElement, '结构施工 L3 守卫验证')
-    await pressKey(view.container.querySelector(titleSelector) as HTMLInputElement, 'Enter')
-    expect((view.container.querySelector(titleSelector) as HTMLInputElement | null)?.value).toBe('结构施工 L3 守卫验证')
-
-    await clickButtonByText(view.container, '变更记录分析')
-
-    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-unsaved-changes-dialog"]')))
-    expect(document.body.textContent).toContain('基线草稿还有未保存调整')
-
-    await clickButtonByText(document.body, '继续编辑')
-    await waitForCondition(() => !document.body.querySelector('[data-testid="baseline-unsaved-changes-dialog"]'))
-    expect(view.container.querySelector('[data-testid="baseline-guard-route"]')).toBeNull()
-
-    await clickButtonByText(view.container, '变更记录分析')
-
-    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-unsaved-changes-dialog"]')))
-    await clickButtonByText(document.body, '确认离开')
-    await waitForCondition(() => Boolean(view.container.querySelector('[data-testid="baseline-guard-route"]')))
-    expect(view.container.querySelector('[data-testid="baseline-guard-route"]')?.textContent).toContain(
-      '/projects/project-1/reports?view=change_log',
-    )
-
-    view.cleanup()
-  })
-
-  it('opens the revision pool dialog from the baseline info bar', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-info-open-revision-pool"]')))
-
-    await act(async () => {
-      ;(container.querySelector('[data-testid="baseline-info-open-revision-pool"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-revision-pool-dialog"]')))
-    expect(document.body.querySelector('[data-testid="baseline-revision-candidate-list"]')).toBeTruthy()
-    expect(document.body.querySelector('[data-testid="baseline-revision-action-bar"]')).toBeTruthy()
-
-    cleanup()
-  })
-
-  it('filters to mapping-attention rows and toggles the validation panel', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-info-bar"]')))
-
-    await act(async () => {
-      ;(container.querySelector('[data-testid="baseline-filter-mapping-attention"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    await waitForText(container, ['当前视图 1 项', '月度收口 L4'])
-
-    await act(async () => {
-      ;(container.querySelector('[data-testid="baseline-validation-toggle"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    expect(container.textContent).toContain('展开校核面板')
-    expect(container.textContent).not.toContain('L2 节点存在阻断项')
-
-    cleanup()
-  })
-
-  it('saves a new draft snapshot through the task-baselines API', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
-    await waitForText(container, ['保存草稿', 'v6 → v7'])
-    await clickButtonByText(container, '保存草稿')
-
-    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines'))
-
-    const createCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines')
-    expect(createCall?.[1]).toMatchObject({
-      project_id: 'project-1',
-      source_version_id: 'baseline-v7',
-      source_version_label: 'v7',
-    })
-
-    await waitForText(container, ['v6 → v8', 'v8 · 草稿'])
-    cleanup()
-  })
-
-  it('supports inline editing for title, dates, and target progress before save', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
+    await waitForCondition(() => !document.body.querySelector('[data-testid="baseline-current-diff-drawer"]'))
     await waitForCondition(() =>
-      Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-l3:title"]')),
+      document.activeElement === container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:end"]'),
     )
-
-    const titleInput = container.querySelector(
-      '[data-baseline-editor-cell="baseline-v7-l3:title"]',
-    ) as HTMLInputElement | null
-    const startInput = container.querySelector(
-      '[data-baseline-editor-cell="baseline-v7-l3:start"]',
-    ) as HTMLInputElement | null
-    const endInput = container.querySelector(
-      '[data-baseline-editor-cell="baseline-v7-l3:end"]',
-    ) as HTMLInputElement | null
-    const progressInput = container.querySelector(
-      '[data-baseline-editor-cell="baseline-v7-l3:progress"]',
-    ) as HTMLInputElement | null
-
-    expect(titleInput).toBeTruthy()
-    expect(startInput).toBeTruthy()
-    expect(endInput).toBeTruthy()
-    expect(progressInput).toBeTruthy()
-
-    await setInputValue(titleInput as HTMLInputElement, '结构施工 L3 调整')
-    await pressKey(titleInput as HTMLInputElement, 'Enter')
-    await setInputValue(startInput as HTMLInputElement, '2026-07-01')
-    await blurInput(startInput as HTMLInputElement)
-    await setInputValue(endInput as HTMLInputElement, '2026-07-20')
-    await blurInput(endInput as HTMLInputElement)
-    await setInputValue(progressInput as HTMLInputElement, '88')
-    await blurInput(progressInput as HTMLInputElement)
-
-    await clickButtonByText(container, '保存草稿')
-
-    const createCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines')
-    const payload = createCall?.[1] as { items?: Array<Record<string, unknown>> } | undefined
-    const editedItem = payload?.items?.find((item) => item.title === '结构施工 L3 调整')
-
-    expect(editedItem).toMatchObject({
-      title: '结构施工 L3 调整',
-      planned_start_date: '2026-07-01',
-      planned_end_date: '2026-07-20',
-      target_progress: 88,
-    })
 
     cleanup()
   })
 
-  it('supports undo and redo for committed field edits', async () => {
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
+  it('discards unsaved baseline table edits when cancelling edit mode', async () => {
+    const { container, cleanup } = renderBaselinePage()
+
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
+
+    const titleInput = container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement
+    await setInputValue(titleInput, 'Unsaved baseline title')
+    expect(titleInput.value).toBe('Unsaved baseline title')
+
+    await clickButtonByText(container, '取消')
+    await waitForCondition(() => !container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]'))
+
+    expect(container.textContent).not.toContain('Unsaved baseline title')
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/commit')).toBe(false)
+
+    cleanup()
+  })
+
+  it('supports undo and redo for baseline table edits before saving', async () => {
+    const { container, cleanup } = renderBaselinePage()
+
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
+
+    await setInputValue(
+      container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement,
+      'Undoable baseline title',
     )
-
-    await openDraftBaseline(container)
-    const titleSelector = '[data-baseline-editor-cell="baseline-v7-l3:title"]'
-    await waitForCondition(() => Boolean(container.querySelector(titleSelector)))
-
-    expect((container.querySelector(titleSelector) as HTMLInputElement | null)?.value).toBe('结构施工 L3')
-
-    await setInputValue(container.querySelector(titleSelector) as HTMLInputElement, '结构施工 L3 调整')
-    await pressKey(container.querySelector(titleSelector) as HTMLInputElement, 'Enter')
-    expect((container.querySelector(titleSelector) as HTMLInputElement | null)?.value).toBe('结构施工 L3 调整')
+    expect((container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement).value)
+      .toBe('Undoable baseline title')
 
     await clickButtonByText(container, '撤销')
-    expect((container.querySelector(titleSelector) as HTMLInputElement | null)?.value).toBe('结构施工 L3')
+    await waitForCondition(() => {
+      const input = container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement | null
+      return Boolean(input && input.value !== 'Undoable baseline title')
+    })
 
     await clickButtonByText(container, '重做')
-    expect((container.querySelector(titleSelector) as HTMLInputElement | null)?.value).toBe('结构施工 L3 调整')
+    await waitForCondition(() => {
+      const input = container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement | null
+      return input?.value === 'Undoable baseline title'
+    })
+
+    await clickButtonByText(container, '保存')
+    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/commit'))
+
+    const commitCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/commit')
+    const payload = commitCall?.[1] as { operations?: Array<{ type: string; rowId?: string; values?: Record<string, unknown> }> } | undefined
+    expect(payload?.operations?.some((operation) =>
+      operation.type === 'update_row'
+      && operation.rowId === 'baseline-v7-item-3'
+      && operation.values?.title === 'Undoable baseline title',
+    )).toBe(true)
 
     cleanup()
   })
 
-  it('supports batch shift and batch progress updates before save', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
+  it('blocks baseline draft save when shared table validation has errors', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
+
+    await setInputValue(
+      container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement,
+      '',
     )
+    await waitForText(container, ['表格校核', '请输入任务名称'])
 
-    await openDraftBaseline(container)
-    await waitForCondition(() => Boolean(container.querySelector('[data-testid="baseline-batch-bar"]')))
+    await clickButtonByText(container, '保存')
+    await waitForText(container, ['请先处理 1 项表格校核问题后再保存。'])
 
-    await clickButtonByText(container, '取消全选')
-
-    await act(async () => {
-      ;(container.querySelector('[aria-label="toggle-baseline-v7-l5"]') as HTMLButtonElement | null)?.click()
-      await flush()
-    })
-
-    const batchBar = container.querySelector('[data-testid="baseline-batch-bar"]') as HTMLElement | null
-    expect(batchBar).toBeTruthy()
-
-    const batchInputs = batchBar?.querySelectorAll('input') ?? []
-    expect(batchInputs.length).toBe(2)
-
-    await setInputValue(batchInputs[0] as HTMLInputElement, '2')
-    await blurInput(batchInputs[0] as HTMLInputElement)
-    await clickButtonByText(container, '平移日期')
-    await setInputValue(batchInputs[1] as HTMLInputElement, '88')
-    await blurInput(batchInputs[1] as HTMLInputElement)
-    await clickButtonByText(container, '设目标进度')
-    await clickButtonByText(container, '保存草稿')
-
-    const createCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines')
-    const payload = createCall?.[1] as { items?: Array<Record<string, unknown>> } | undefined
-
-    expect(payload?.items).toHaveLength(1)
-    expect(payload?.items?.[0]).toMatchObject({
-      title: '交付收尾 L5',
-      planned_end_date: '2026-09-30',
-      target_progress: 88,
-    })
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/commit')).toBe(false)
 
     cleanup()
   })
 
-  it('confirms the active draft through the task-baselines API', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
+  it('saves the edited whole schedule as a new published baseline version', async () => {
+    const { container, cleanup } = renderBaselinePage()
 
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
+
+    await setInputValue(
+      container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]') as HTMLInputElement,
+      '一层主体结构施工（调整）',
     )
 
-    await openDraftBaseline(container)
-    await waitForText(container, ['确认项目基线'])
-    await clickButtonByText(container, '确认项目基线')
+    await clickButtonByText(container, '保存')
+    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/commit'))
+    await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
+
+    await clickButtonByText(container, '发布项目基线')
+    await waitForText(document.body, ['发布项目基线', '确认发布'])
     await clickButtonByText(document.body, '确认发布')
 
-    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/confirm'))
-    const confirmCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/confirm')
-    expect(confirmCall?.[1]).toEqual({ version: 7 })
+    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish'))
 
-    await waitForText(container, ['当前展示的是已确认版本', 'v7 · 已确认'])
+    const commitCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/commit')
+    const payload = commitCall?.[1] as { operations?: Array<{ type: string; rowId?: string; values?: Record<string, unknown> }> } | undefined
+    expect(payload?.operations?.some((operation) =>
+      operation.type === 'update_row'
+      && operation.rowId === 'baseline-v7-item-3'
+      && operation.values?.title === '一层主体结构施工（调整）',
+    )).toBe(true)
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/generate')).toBe(true)
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines')).toBe(false)
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v6/generate-version')).toBe(false)
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/confirm')).toBe(false)
+    const publishCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/publish')
+    expect((publishCall?.[1] as Record<string, unknown> | undefined)?.candidate_governance_reviewed).toBeUndefined()
+
+    await waitForText(container, ['已发布新版项目基线', 'v7 已确认'])
     cleanup()
   })
 
-  it('keeps the confirm dialog open and surfaces realignment guidance on REQUIRES_REALIGNMENT', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
-    mockedGetApiErrorMessage.mockImplementation((error, fallback = '请稍后重试。') => {
-      if (error instanceof ApiClientError && error.rawText) {
-        try {
-          const parsed = JSON.parse(error.rawText)
-          return parsed?.error?.message ?? fallback
-        } catch {
-          return error.message || fallback
-        }
-      }
+  it('publishes a wizard-generated baseline through the normal confirmation dialog', async () => {
+    generateCandidateDefaultMasterPlanDraft = true
+    const { container, cleanup } = renderBaselinePage()
 
-      if (error instanceof Error && error.message) return error.message
-      return fallback
-    })
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
 
-    mockedApiPost.mockImplementation(async (url: string, body?: unknown) => {
-      if (url === '/api/task-baselines/baseline-v7/confirm') {
-        expect(body).toEqual({ version: 7 })
-        throw new ApiClientError('当前基线有效性已触发待重整阈值', {
-          status: 422,
-          url,
-          code: 'http_error',
-          rawText: JSON.stringify({
-            success: false,
-            error: {
-              code: 'REQUIRES_REALIGNMENT',
-              message:
-                '当前基线有效性已触发待重整阈值：任务偏差率 100%，里程碑偏移 0 个、平均 0 天，总工期偏差 360%。触发规则：任务偏差率超过 40%、总工期偏差超过 10%。请先发起重排或修订后再确认。',
-            },
-          }),
-        })
-      }
+    await clickButtonByText(container, '保存')
+    await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
 
-      if (url === '/api/task-baselines/baseline-v7/lock') {
-        return { lock: deepClone(currentLocks['baseline-v7']) }
-      }
+    await clickButtonByText(container, '发布项目基线')
+    await waitForText(document.body, ['发布项目基线', '确认发布'])
 
-      throw new Error(`Unexpected POST ${url}`)
-    })
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
-    await waitForText(container, ['确认项目基线'])
-    await clickButtonByText(container, '确认项目基线')
+    expect(document.body.querySelector('[data-testid="candidate-default-master-plan-review-warning"]')).toBeNull()
+    expect(document.body.querySelector('#candidate-default-master-plan-review-acknowledgement')).toBeNull()
+    expect(document.body.querySelector('#candidate-default-master-plan-review-notes')).toBeNull()
     await clickButtonByText(document.body, '确认发布')
 
-    await waitForText(document.body, [
-      '发布失败态',
-      '待重整阈值',
-      '打开计划修订候选',
-      '回到草稿继续处理',
-      '触发摘要',
-      '任务偏差率',
-      '100%',
-      '总工期偏差',
-      '360%',
-      '任务偏差率超过 40%',
-    ])
+    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish'))
 
-    const confirmButton = Array.from(document.body.querySelectorAll('button'))
-      .filter((button) => button.textContent?.includes('确认发布'))
-      .at(-1) as HTMLButtonElement | undefined
-    expect(confirmButton?.disabled).toBe(true)
-
-    await clickButtonByText(document.body, '打开计划修订候选')
-    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="baseline-revision-pool-dialog"]')))
-    expect(document.body.textContent || '').toContain('已打开计划修订候选，可先整理待重整项后再回到确认流程。')
+    const publishCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/publish')
+    const payload = publishCall?.[1] as Record<string, unknown> | undefined
+    expect(payload).toEqual({ project_id: 'project-1' })
 
     cleanup()
   })
 
-  it('queues the confirmed baseline into pending realignment', async () => {
-    currentVersions = currentVersions.map((version) =>
-      version.id === 'baseline-v7'
-        ? { ...version, status: 'confirmed', confirmed_at: '2026-04-15T09:00:00.000Z' }
-        : version.id === 'baseline-v6'
-          ? { ...version, status: 'archived' }
-          : version,
-    )
-    currentDetails['baseline-v7'] = {
-      ...currentDetails['baseline-v7'],
-      status: 'confirmed',
-      confirmed_at: '2026-04-15T09:00:00.000Z',
-    }
-    currentDetails['baseline-v6'] = {
-      ...currentDetails['baseline-v6'],
-      status: 'archived',
-    }
+  it('does not turn legacy candidate metadata into a PM approval UI', async () => {
+    generateCandidateDefaultMasterPlanDraftGovernanceOnly = true
+    const { container, cleanup } = renderBaselinePage()
 
-    mockedApiPost.mockImplementation(async (url: string) => {
-      if (url === '/api/task-baselines/baseline-v7/queue-realignment') {
-        currentVersions = currentVersions.map((version) =>
-          version.id === 'baseline-v7' ? { ...version, status: 'pending_realign' } : version,
-        )
-        currentDetails['baseline-v7'] = {
-          ...currentDetails['baseline-v7'],
-          status: 'pending_realign',
-        }
-        return deepClone(currentDetails['baseline-v7'])
-      }
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
 
-      throw new Error(`Unexpected POST ${url}`)
-    })
+    await clickButtonByText(container, '保存')
+    await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
 
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+    await clickButtonByText(container, '发布项目基线')
+    await waitForText(document.body, ['发布项目基线', '确认发布'])
 
-    await waitForText(container, ['声明开始重排', '已确认'])
-    await clickButtonByText(container, '声明开始重排')
+    expect(document.body.querySelector('[data-testid="candidate-default-master-plan-review-warning"]')).toBeNull()
+    expect(document.body.querySelector('#candidate-default-master-plan-review-acknowledgement')).toBeNull()
+    expect(document.body.querySelector('#candidate-default-master-plan-review-notes')).toBeNull()
+    await clickButtonByText(document.body, '确认发布')
 
+    await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish'))
+
+    const publishCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/publish')
+    const payload = publishCall?.[1] as Record<string, unknown> | undefined
+    expect(payload).toEqual({ project_id: 'project-1' })
+
+    cleanup()
+  })
+
+  it('uses the same table base for WBS hierarchy and visible row actions', async () => {
+    const { container, cleanup } = renderBaselinePage()
+
+    await waitForText(container, ['├', '1.1', '1.1.1', '主体工程', '主体结构施工'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[aria-label="添加子级"]')))
+
+    await clickElement(container.querySelector('[aria-label="添加子级"]') as HTMLElement)
     await waitForCondition(() =>
-      mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/queue-realignment'),
+      Array.from(container.querySelectorAll<HTMLInputElement>('[data-baseline-editor-cell$=":title"]'))
+        .some((input) => input.value.includes('新子级')),
     )
-    await waitForText(container, ['待重排', '当前版本已进入待重排态'])
-    expect(container.querySelector('[data-testid="baseline-resolve-realignment"]')).toBeTruthy()
-
-    cleanup()
-  })
-
-  it('shows the version-expired concurrent state', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline?confirm_state=stale']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
-    await waitForText(container, ['确认项目基线'])
-    await clickButtonByText(container, '确认项目基线')
-    await waitForText(document.body, ['版本过期并发态'])
-
-    const confirmButton = Array.from(document.body.querySelectorAll('button'))
-      .filter((button) => button.textContent?.includes('确认发布'))
-      .at(-1) as HTMLButtonElement | undefined
-    expect(confirmButton?.disabled).toBe(true)
-
-    cleanup()
-  })
-
-  it('shows the publish-failed state with retry entry', async () => {
-    usePlanningStore.setState({ validationIssues: [] } as never)
-
-    const { container, cleanup } = mount(
-      <MemoryRouter initialEntries={['/projects/project-1/planning/baseline?confirm_state=failed']}>
-        <Routes>
-          <Route path="/projects/:id/planning/baseline" element={<BaselinePage />} />
-        </Routes>
-      </MemoryRouter>,
-    )
-
-    await openDraftBaseline(container)
-    await waitForText(container, ['确认项目基线'])
-    await clickButtonByText(container, '确认项目基线')
-    await waitForText(document.body, ['发布失败态', '重新尝试'])
 
     cleanup()
   })

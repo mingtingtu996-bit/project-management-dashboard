@@ -2,10 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AlertTriangle, ArrowRight, CheckCircle2, FileCheck2, FileBadge2, Plus } from 'lucide-react'
 
+import { EmptyState } from '@/components/EmptyState'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import { LoadingState } from '@/components/ui/loading-state'
+import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useDialogFocusRestore } from '@/hooks/useDialogFocusRestore'
 import { useToast } from '@/hooks/use-toast'
 import { apiPost } from '@/lib/apiClient'
@@ -24,6 +29,7 @@ import type {
 import { getAcceptanceDisplayBadges, getAcceptancePredecessorIds, getAcceptanceSuccessorIds } from '@/types/acceptance'
 
 import { formatLinkedStatus, getAcceptanceStatusMeta, getIcon, getTypeById } from '../utils'
+import { Card } from '@/components/ui/card'
 
 interface AcceptanceDetailDrawerProps {
   node: AcceptanceNode | null
@@ -41,8 +47,6 @@ interface AcceptanceDetailDrawerProps {
     nodeId: string,
     input: {
       requirement_type: string
-      source_entity_type: string
-      source_entity_id: string
       description?: string | null
       status?: string | null
     },
@@ -72,6 +76,15 @@ const ALLOWED_TRANSITIONS: Record<string, string[]> = {
   archived: [],
 }
 
+const NO_DEPENDENCY_VALUE = '__no_dependency__'
+const NO_PARALLEL_GROUP_VALUE = '__no_parallel_group__'
+const REQUIREMENT_STATUS_LABELS: Record<string, string> = {
+  open: '待处理',
+  met: '已满足',
+  blocked: '受阻',
+  closed: '已关闭',
+}
+
 function canTransition(from: string, to: string): boolean {
   return (ALLOWED_TRANSITIONS[from] ?? []).includes(to)
 }
@@ -79,8 +92,6 @@ function canTransition(from: string, to: string): boolean {
 function createEmptyRequirementDraft() {
   return {
     requirement_type: 'external',
-    source_entity_type: 'task_condition',
-    source_entity_id: '',
     description: '',
     status: 'open',
   }
@@ -97,11 +108,9 @@ function createEmptyRecordDraft() {
 
 function formatRequirementBlockLabel(requirement: {
   description?: string | null
-  source_entity_id: string
   requirement_type: string
 }) {
   return requirement.description?.trim()
-    || requirement.source_entity_id.trim()
     || requirement.requirement_type.trim()
     || '未命名条件'
 }
@@ -133,6 +142,7 @@ export default function AcceptanceDetailDrawer({
   useDialogFocusRestore(open)
   const { toast } = useToast()
   const canMutate = canEdit !== false
+  const readOnlyActionReason = canMutate ? undefined : '只读成员无编辑权限。'
 
   const [dependencyTargetId, setDependencyTargetId] = useState('')
   const [requirementDraft, setRequirementDraft] = useState(createEmptyRequirementDraft)
@@ -251,10 +261,9 @@ export default function AcceptanceDetailDrawer({
     }
   }
 
+  // v1.4.6: source derived by backend from acceptance plan context
   const canCreateRequirement = Boolean(
-    requirementDraft.requirement_type.trim()
-    && requirementDraft.source_entity_type.trim()
-    && requirementDraft.source_entity_id.trim(),
+    requirementDraft.requirement_type.trim(),
   )
   const canCreateRecord = Boolean(recordDraft.record_type.trim() && recordDraft.content.trim())
 
@@ -275,6 +284,8 @@ export default function AcceptanceDetailDrawer({
       ? '申报校验数据加载失败，请刷新后重试。'
       : [prerequisiteBlockReason, requirementBlockReason].filter(Boolean).join('；') || null
   const canSubmitDeclaration = !changingStatus && !detailLoading && detailContext != null && prerequisitesMet && requiredRequirementsMet
+  const dependencySelectValue = dependencyTargetId || NO_DEPENDENCY_VALUE
+  const parallelGroupSelectValue = parallelGroupTargetId || NO_PARALLEL_GROUP_VALUE
 
   async function handleDependencyAdd() {
     if (!dependencyTargetId || !currentNodeId) return
@@ -348,10 +359,9 @@ export default function AcceptanceDetailDrawer({
     if (!canCreateRequirement) return
     setCreatingRequirement(true)
     try {
+      // v1.4.6: source derived by backend from acceptance plan context
       await onRequirementCreate(currentNodeId, {
         requirement_type: requirementDraft.requirement_type.trim(),
-        source_entity_type: requirementDraft.source_entity_type.trim(),
-        source_entity_id: requirementDraft.source_entity_id.trim(),
         description: requirementDraft.description.trim() || null,
         status: requirementDraft.status.trim() || null,
       })
@@ -391,7 +401,7 @@ export default function AcceptanceDetailDrawer({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto" data-testid="acceptance-detail-drawer">
+      <DialogContent className="max-h-[90vh] max-w-[var(--dialog-lg-width)] overflow-y-auto" data-testid="acceptance-detail-drawer">
         <DialogHeader>
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-2">
@@ -428,83 +438,85 @@ export default function AcceptanceDetailDrawer({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <div className="space-y-1">
-            <div className="text-xs text-slate-500">计划日期</div>
-            <input
-              type="date"
-              defaultValue={node.planned_date || ''}
-              onBlur={(e) => {
-                const nextValue = e.target.value || ''
-                if (nextValue !== (node.planned_date || '')) {
-                  void persistPlanUpdates({ planned_date: nextValue || null })
-                }
-              }}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-              data-testid="acceptance-planned-date-input"
-            />
+        <Card className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" data-testid="acceptance-detail-info-group">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500">计划日期</div>
+              <input
+                type="date"
+                defaultValue={node.planned_date || ''}
+                onBlur={(e) => {
+                  const nextValue = e.target.value || ''
+                  if (nextValue !== (node.planned_date || '')) {
+                    void persistPlanUpdates({ planned_date: nextValue || null })
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus-visible:border-blue-400 focus-visible:outline-none"
+                data-testid="acceptance-planned-date-input"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500">实际日期</div>
+              <input
+                type="date"
+                defaultValue={node.actual_date || ''}
+                onBlur={(e) => {
+                  const nextValue = e.target.value || ''
+                  if (nextValue !== (node.actual_date || '')) {
+                    void persistPlanUpdates({ actual_date: nextValue || null })
+                  }
+                }}
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus-visible:border-blue-400 focus-visible:outline-none"
+                data-testid="acceptance-actual-date-input"
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="text-xs text-slate-500">并行组</div>
+              <input
+                type="text"
+                defaultValue={planRow?.parallel_group_id || ''}
+                onBlur={(e) => {
+                  const nextValue = e.target.value.trim()
+                  if (nextValue !== (planRow?.parallel_group_id || '')) {
+                    void persistPlanUpdates({ parallel_group_id: nextValue || null })
+                  }
+                }}
+                placeholder="填写并行组编号"
+                className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus-visible:border-blue-400 focus-visible:outline-none"
+                data-testid="acceptance-parallel-group-input"
+              />
+            </div>
+            <InfoTile label="前置未完成" value={String(planRow?.upstream_unfinished_count ?? predecessorPlanIds.length)} />
+            <InfoTile label="资料准备度" value={`${planRow?.requirement_ready_percent ?? 100}%`} />
           </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-500">实际日期</div>
-            <input
-              type="date"
-              defaultValue={node.actual_date || ''}
-              onBlur={(e) => {
-                const nextValue = e.target.value || ''
-                if (nextValue !== (node.actual_date || '')) {
-                  void persistPlanUpdates({ actual_date: nextValue || null })
-                }
-              }}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-              data-testid="acceptance-actual-date-input"
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <InfoTile
+              label="验收范围"
+              value={({ project: '项目级', building: '楼栋级', unit: '单位工程级', specialty: '专项级' } as Record<string, string>)[planRow?.scope_level ?? 'project'] ?? '项目级'}
             />
+            {planRow?.building_id && (
+              <InfoTile label="楼栋" value={planRow.building_id} />
+            )}
+            {planRow?.covered_task_ids.length ? (
+              <InfoTile label="关联任务" value={planRow.covered_task_ids.join('、')} />
+            ) : null}
+            {planRow?.predecessor_plan_ids && planRow.predecessor_plan_ids.length > 0 && (
+              <InfoTile label="前置验收项数" value={String(planRow.predecessor_plan_ids.length)} />
+            )}
           </div>
-          <div className="space-y-1">
-            <div className="text-xs text-slate-500">并行组</div>
-            <input
-              type="text"
-              defaultValue={planRow?.parallel_group_id || ''}
-              onBlur={(e) => {
-                const nextValue = e.target.value.trim()
-                if (nextValue !== (planRow?.parallel_group_id || '')) {
-                  void persistPlanUpdates({ parallel_group_id: nextValue || null })
-                }
-              }}
-              placeholder="填写并行组编号"
-              className="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-900 focus:border-blue-400 focus:outline-none"
-              data-testid="acceptance-parallel-group-input"
-            />
-          </div>
-          <InfoTile label="前置未完成" value={String(planRow?.upstream_unfinished_count ?? predecessorPlanIds.length)} />
-          <InfoTile label="资料准备度" value={`${planRow?.requirement_ready_percent ?? 100}%`} />
-        </div>
-        <div className="mt-2 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <InfoTile
-            label="验收范围"
-            value={({ project: '项目级', building: '楼栋级', unit: '单位工程级', specialty: '专项级' } as Record<string, string>)[planRow?.scope_level ?? 'project'] ?? '项目级'}
-          />
-          {planRow?.building_id && (
-            <InfoTile label="楼栋" value={planRow.building_id} />
-          )}
-          {planRow?.milestone_id && (
-            <InfoTile label="关联里程碑" value={planRow.milestone_id} />
-          )}
-          {planRow?.predecessor_plan_ids && planRow.predecessor_plan_ids.length > 0 && (
-            <InfoTile label="前置验收项数" value={String(planRow.predecessor_plan_ids.length)} />
-          )}
-        </div>
+        </Card>
 
-        <div className="mt-4 rounded-2xl border border-blue-100 bg-blue-50/40 p-4" data-testid="acceptance-task-linkage">
+        <Card className="surface-card p-5" data-testid="acceptance-task-linkage">
           <h4 className="mb-2 text-sm font-semibold text-slate-900">任务联动</h4>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-3">
             <CompactMetric label="楼栋归属" value={planRow?.building_id || '项目级'} />
-            <CompactMetric label="里程碑挂靠" value={planRow?.milestone_id ? '已挂靠' : '未挂靠'} />
+            <CompactMetric label="关联任务" value={String(planRow?.covered_task_ids.length ?? 0)} />
             <CompactMetric label="前置验收项" value={String(planRow?.predecessor_plan_ids?.length ?? 0)} />
           </div>
           {(detailContext?.linkedTasks ?? []).length > 0 && (
             <div className="mt-3 grid gap-2">
               {(detailContext!.linkedTasks!).map((task: AcceptanceLinkedTask) => (
-                <div key={task.task_id} className="flex items-center justify-between rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm">
+                <Card key={task.task_id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
                   <div className="min-w-0">
                     <div className="font-medium text-slate-900 truncate">{task.task_name}</div>
                     <div className="mt-0.5 text-xs text-slate-500">
@@ -513,21 +525,21 @@ export default function AcceptanceDetailDrawer({
                   </div>
                   <Link
                     to={`/projects/${projectId}/gantt?taskId=${task.task_id}`}
-                    className="ml-3 shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs text-blue-700 hover:bg-blue-100"
+                    className="ml-3 shrink-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100"
                   >
                     前往甘特
                   </Link>
-                </div>
+                </Card>
               ))}
             </div>
           )}
-        </div>
+        </Card>
 
         {node.description ? (
-          <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+          <Card className="surface-card p-5">
             <div className="mb-1 text-sm font-medium text-slate-700">备注</div>
             <p className="text-sm text-slate-600">{node.description}</p>
-          </div>
+          </Card>
         ) : null}
 
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
@@ -536,7 +548,7 @@ export default function AcceptanceDetailDrawer({
             subtitle=""
             data-testid="acceptance-external-prerequisites"
           >
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-3">
               <CompactMetric label="前置项" value={String(predecessorPlanIds.length)} />
               <CompactMetric label="后续受影响" value={String(planRow?.downstream_block_count ?? successorPlanIds.length)} />
               <CompactMetric label="可申报" value={planRow?.can_submit ? '是' : '否'} />
@@ -548,8 +560,8 @@ export default function AcceptanceDetailDrawer({
               </div>
             ) : null}
 
-            <div className="grid gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
-              <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
+              <div className="grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   条件类型
                   <input
@@ -562,40 +574,21 @@ export default function AcceptanceDetailDrawer({
                   />
                 </label>
                 <label className="grid gap-1 text-xs text-slate-500">
-                  来源类型
-                  <input
-                    value={requirementDraft.source_entity_type}
-                    onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_type: event.target.value }))}
-                    disabled={!canMutate}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="task_condition"
-                    data-testid="acceptance-requirement-source-type-input"
-                  />
-                </label>
-                <label className="grid gap-1 text-xs text-slate-500">
-                  来源 ID
-                  <input
-                    value={requirementDraft.source_entity_id}
-                    onChange={(event) => setRequirementDraft((current) => ({ ...current, source_entity_id: event.target.value }))}
-                    disabled={!canMutate}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                    placeholder="condition-1"
-                    data-testid="acceptance-requirement-source-id-input"
-                  />
-                </label>
-                <label className="grid gap-1 text-xs text-slate-500">
                   状态
-                  <select
+                  <Select
                     value={requirementDraft.status}
-                    onChange={(event) => setRequirementDraft((current) => ({ ...current, status: event.target.value }))}
+                    onValueChange={(value) => setRequirementDraft((current) => ({ ...current, status: value }))}
                     disabled={!canMutate}
-                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   >
-                    <option value="open">open</option>
-                    <option value="met">met</option>
-                    <option value="blocked">blocked</option>
-                    <option value="closed">closed</option>
-                  </select>
+                    <SelectTrigger className="h-10 rounded-md border-slate-200 bg-white text-sm text-slate-900">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(REQUIREMENT_STATUS_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>{label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </label>
               </div>
               <label className="grid gap-1 text-xs text-slate-500">
@@ -610,20 +603,23 @@ export default function AcceptanceDetailDrawer({
                 />
               </label>
               <div className="flex justify-end">
-                <Button
-                  type="button"
-                  className="gap-2"
-                  disabled={!canMutate || !canCreateRequirement || creatingRequirement}
-                  onClick={() => void handleRequirementCreate()}
-                  data-testid="acceptance-create-requirement"
-                >
-                  <Plus className="h-4 w-4" />
-                  {creatingRequirement ? '保存中...' : '新增条件'}
-                </Button>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button
+                    type="button"
+                    className="gap-2"
+                    disabled={!canMutate || !canCreateRequirement || creatingRequirement}
+                    loading={creatingRequirement}
+                    onClick={() => void handleRequirementCreate()}
+                    data-testid="acceptance-create-requirement"
+                  >
+                    <Plus className="h-4 w-4" />
+                    新增条件
+                  </Button>
+                </DisabledReasonTooltip>
               </div>
             </div>
 
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               <CompactPanel label="资料与条件" count={prerequisites.length} />
               {prerequisites.length > 0 ? prerequisites.map((item) => {
                 const isDrawing = item.source_entity_type === 'drawing' || item.source_entity_type === 'drawing_package'
@@ -635,18 +631,18 @@ export default function AcceptanceDetailDrawer({
                   return (
                     <div
                       key={item.id}
-                      className={`flex items-start gap-3 rounded-xl border px-3 py-2.5 ${isSatisfied ? 'border-emerald-200 bg-emerald-50' : isBlocked ? 'border-amber-200 bg-amber-50' : 'border-blue-200 bg-blue-50'}`}
+                      className={`flex items-start gap-3 rounded-xl border px-3 py-2.5 ${isSatisfied ? 'border-emerald-200 bg-emerald-50' : isBlocked ? 'border-amber-200 bg-amber-50' : 'border-slate-200 bg-slate-50'}`}
                       data-testid={`acceptance-linked-drawing-${item.id}`}
                     >
-                      <FileCheck2 className={`mt-0.5 h-4 w-4 shrink-0 ${isSatisfied ? 'text-emerald-600' : isBlocked ? 'text-amber-600' : 'text-blue-600'}`} />
+                      <FileCheck2 className={`mt-0.5 h-4 w-4 shrink-0 ${isSatisfied ? 'text-emerald-600' : isBlocked ? 'text-amber-600' : 'text-slate-500'}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.source_entity_id}</span>
-                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : isBlocked ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.requirement_type}</span>
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : isBlocked ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-700'}`}>
                             {isSatisfied ? '已满足' : isBlocked ? '阻塞' : '待确认'}
                           </span>
                         </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">关联图纸 · {item.requirement_type}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">关联图纸 · {item.requirement_type}</div>
                       </div>
                     </div>
                   )
@@ -662,12 +658,12 @@ export default function AcceptanceDetailDrawer({
                       <FileBadge2 className={`mt-0.5 h-4 w-4 shrink-0 ${isSatisfied ? 'text-emerald-600' : 'text-amber-600'}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.source_entity_id}</span>
-                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                          <span className="text-xs font-semibold text-slate-800 truncate">{item.description || item.requirement_type}</span>
+                          <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${isSatisfied ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                             {isSatisfied ? '已获取' : '待取得'}
                           </span>
                         </div>
-                        <div className="mt-0.5 text-[11px] text-slate-500">关联证照 · {item.requirement_type}</div>
+                        <div className="mt-0.5 text-xs text-slate-500">关联证照 · {item.requirement_type}</div>
                       </div>
                     </div>
                   )
@@ -677,7 +673,6 @@ export default function AcceptanceDetailDrawer({
                   <LinkedRow
                     key={item.id}
                     title={item.requirement_type}
-                    subtitle={[item.source_entity_type, item.source_entity_id].filter(Boolean).join(' / ')}
                     description={item.description || undefined}
                     meta={formatLinkedStatus(item.status)}
                   />
@@ -713,8 +708,8 @@ export default function AcceptanceDetailDrawer({
             subtitle=""
             data-testid="acceptance-records"
           >
-            <div className="grid gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3">
-              <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-4 rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5">
+              <div className="grid gap-4 md:grid-cols-2">
                 <label className="grid gap-1 text-xs text-slate-500">
                   记录类型
                 <input
@@ -757,19 +752,22 @@ export default function AcceptanceDetailDrawer({
                 </label>
               </div>
               <div className="flex justify-end">
-                <Button
-                  type="button"
-                  className="gap-2"
-                  disabled={!canMutate || !canCreateRecord || creatingRecord}
-                  onClick={() => void handleRecordCreate()}
-                >
-                  <Plus className="h-4 w-4" />
-                  {creatingRecord ? '保存中...' : '新增记录'}
-                </Button>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button
+                    type="button"
+                    className="gap-2"
+                    disabled={!canMutate || !canCreateRecord || creatingRecord}
+                    loading={creatingRecord}
+                    onClick={() => void handleRecordCreate()}
+                  >
+                    <Plus className="h-4 w-4" />
+                    新增记录
+                  </Button>
+                </DisabledReasonTooltip>
               </div>
             </div>
 
-            <div className="grid gap-3">
+            <div className="grid gap-4">
               <CompactPanel label="状态记录区" count={records.length} />
               {records.length > 0 ? records.map((item) => (
                 <LinkedRow
@@ -861,7 +859,7 @@ export default function AcceptanceDetailDrawer({
           </LinkedBundleSection>
         </div>
 
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <Card className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-detail-structure-group">
           <div className="flex items-center justify-between gap-3">
             <div>
               <h4 className="text-sm font-semibold text-slate-900">结构维护</h4>
@@ -870,38 +868,44 @@ export default function AcceptanceDetailDrawer({
           </div>
 
           <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-            <select
-              value={dependencyTargetId}
-              onChange={(event) => setDependencyTargetId(event.target.value)}
-              disabled={!canMutate}
-              className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-              data-testid="acceptance-dependency-target"
+            <Select
+              value={dependencySelectValue}
+              onValueChange={(value) => setDependencyTargetId(value === NO_DEPENDENCY_VALUE ? '' : value)}
+              disabled={!canMutate || dependencyOptions.length === 0}
             >
-              {dependencyOptions.length === 0 ? (
-                <option value="">暂无可选前置</option>
-              ) : (
-                dependencyOptions.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))
-              )}
-            </select>
-            <Button
-              type="button"
-              className="shrink-0 gap-2"
-              disabled={!canMutate || !dependencyTargetId || mutatingDependency}
-              onClick={() => void handleDependencyAdd()}
-              data-testid="acceptance-add-dependency"
-            >
-              <Plus className="h-4 w-4" />
-              {mutatingDependency ? '保存中...' : '添加前置'}
-            </Button>
+              <SelectTrigger className="min-w-0 flex-1 rounded-md border-slate-200 bg-white text-sm text-slate-900" data-testid="acceptance-dependency-target">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {dependencyOptions.length === 0 ? (
+                  <SelectItem value={NO_DEPENDENCY_VALUE}>暂无可选前置</SelectItem>
+                ) : (
+                  dependencyOptions.map((item) => (
+                    <SelectItem key={item.id} value={item.id}>
+                      {item.name}
+                    </SelectItem>
+                  ))
+                )}
+              </SelectContent>
+            </Select>
+            <DisabledReasonTooltip reason={readOnlyActionReason}>
+              <Button
+                type="button"
+                className="shrink-0 gap-2"
+                disabled={!canMutate || !dependencyTargetId || mutatingDependency}
+                loading={mutatingDependency}
+                onClick={() => void handleDependencyAdd()}
+                data-testid="acceptance-add-dependency"
+              >
+                <Plus className="h-4 w-4" />
+                添加前置
+              </Button>
+            </DisabledReasonTooltip>
           </div>
 
           <div className="mt-4 space-y-2">
             {upstreamDependencies.length > 0 ? upstreamDependencies.map((item) => (
-              <div
+              <Card
                 key={item.id}
                 className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
               >
@@ -913,22 +917,24 @@ export default function AcceptanceDetailDrawer({
                     {planLookup.get(item.target_plan_id)?.name || item.target_plan_id}
                   </div>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={!canMutate || mutatingDependency}
-                  onClick={() => void handleDependencyRemove(item.source_plan_id)}
-                  data-testid={`acceptance-remove-dependency-${item.id}`}
-                >
-                  移除
-                </Button>
-              </div>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={!canMutate || mutatingDependency}
+                    onClick={() => void handleDependencyRemove(item.source_plan_id)}
+                    data-testid={`acceptance-remove-dependency-${item.id}`}
+                  >
+                    移除
+                  </Button>
+                </DisabledReasonTooltip>
+              </Card>
             )) : <LinkedEmptyState text="暂无前置依赖，可在此维护。" />}
           </div>
 
-          <div className="mt-4 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3" data-testid="acceptance-parallel-group-panel">
+          <Card className="mt-4 rounded-xl border border-slate-100 bg-slate-50 p-5 shadow-[var(--el-1)]" data-testid="acceptance-parallel-group-panel">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="text-sm font-semibold text-slate-900">并行组</div>
@@ -937,137 +943,155 @@ export default function AcceptanceDetailDrawer({
                 </div>
               </div>
               {currentParallelGroupId ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!canMutate || mutatingParallelGroup}
-                  onClick={() => void handleExitParallelGroup()}
-                  data-testid="acceptance-exit-parallel-group"
-                >
-                  退出并行组
-                </Button>
+                <DisabledReasonTooltip reason={readOnlyActionReason}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={!canMutate || mutatingParallelGroup}
+                    onClick={() => void handleExitParallelGroup()}
+                    data-testid="acceptance-exit-parallel-group"
+                  >
+                    退出并行组
+                  </Button>
+                </DisabledReasonTooltip>
               ) : null}
             </div>
 
             <div className="mt-3 grid gap-2">
               {currentParallelGroupMembers.length > 0 ? currentParallelGroupMembers.map((member) => (
-                <div key={member.id} className="flex items-center justify-between rounded-xl border border-indigo-100 bg-white px-3 py-2 text-sm">
+                <Card key={member.id} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm">
                   <span className="truncate font-medium text-slate-800">{member.name}</span>
                   <Badge variant="outline" className="shrink-0">{member.status}</Badge>
-                </div>
+                </Card>
               )) : (
                 <LinkedEmptyState text={currentParallelGroupId ? '当前组暂无其他节点。' : '加入或创建并行组后，将在这里展示组内其他节点。'} />
               )}
             </div>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
-              <select
-                value={parallelGroupTargetId}
-                onChange={(event) => setParallelGroupTargetId(event.target.value)}
+            <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_auto]">
+              <Select
+                value={parallelGroupSelectValue}
+                onValueChange={(value) => setParallelGroupTargetId(value === NO_PARALLEL_GROUP_VALUE ? '' : value)}
                 disabled={!canMutate || parallelGroupOptions.length === 0}
-                className="min-w-0 rounded-md border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-900"
-                data-testid="acceptance-parallel-group-select"
               >
-                {parallelGroupOptions.length === 0 ? (
-                  <option value="">暂无已有并行组</option>
-                ) : (
-                  parallelGroupOptions.map((group) => (
-                    <option key={group.groupId} value={group.groupId} disabled={group.groupId === currentParallelGroupId}>
-                      {group.groupId}（{group.members.length}项）
-                    </option>
-                  ))
-                )}
-              </select>
-              <Button
-                type="button"
-                variant="outline"
-                className="shrink-0"
-                disabled={!canMutate || !parallelGroupTargetId || mutatingParallelGroup}
-                onClick={() => void handleJoinParallelGroup(parallelGroupTargetId)}
-                data-testid="acceptance-join-parallel-group"
-              >
-                {mutatingParallelGroup ? '保存中...' : '加入并行组'}
-              </Button>
+                <SelectTrigger className="min-w-0 rounded-md border-slate-200 bg-white text-sm text-slate-900" data-testid="acceptance-parallel-group-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {parallelGroupOptions.length === 0 ? (
+                    <SelectItem value={NO_PARALLEL_GROUP_VALUE}>暂无已有并行组</SelectItem>
+                  ) : (
+                    parallelGroupOptions.map((group) => (
+                      <SelectItem key={group.groupId} value={group.groupId} disabled={group.groupId === currentParallelGroupId}>
+                        {group.groupId}（{group.members.length}项）
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              <DisabledReasonTooltip reason={readOnlyActionReason}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={!canMutate || !parallelGroupTargetId || mutatingParallelGroup}
+                  loading={mutatingParallelGroup}
+                  onClick={() => void handleJoinParallelGroup(parallelGroupTargetId)}
+                  data-testid="acceptance-join-parallel-group"
+                >
+                  加入并行组
+                </Button>
+              </DisabledReasonTooltip>
             </div>
 
-            <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_auto]">
               <input
                 value={parallelGroupDraft}
                 onChange={(event) => setParallelGroupDraft(event.target.value)}
                 disabled={!canMutate}
-                className="min-w-0 rounded-md border border-indigo-100 bg-white px-3 py-2 text-sm text-slate-900"
+                className="min-w-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                 placeholder="新并行组编号，可留空自动生成"
                 data-testid="acceptance-new-parallel-group-input"
               />
-              <Button
-                type="button"
-                className="shrink-0"
-                disabled={!canMutate || mutatingParallelGroup}
-                onClick={() => {
-                  const fallbackGroupId = `PG-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${currentNodeId.slice(0, 4) || 'new'}`
-                  void handleJoinParallelGroup(parallelGroupDraft || fallbackGroupId)
-                }}
-                data-testid="acceptance-create-parallel-group"
-              >
-                {mutatingParallelGroup ? '保存中...' : '创建并加入'}
-              </Button>
+              <DisabledReasonTooltip reason={readOnlyActionReason}>
+                <Button
+                  type="button"
+                  className="shrink-0"
+                  disabled={!canMutate || mutatingParallelGroup}
+                  loading={mutatingParallelGroup}
+                  onClick={() => {
+                    const fallbackGroupId = `PG-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${currentNodeId.slice(0, 4) || 'new'}`
+                    void handleJoinParallelGroup(parallelGroupDraft || fallbackGroupId)
+                  }}
+                  data-testid="acceptance-create-parallel-group"
+                >
+                  创建并加入
+                </Button>
+              </DisabledReasonTooltip>
             </div>
-          </div>
-        </div>
+          </Card>
+        </Card>
 
-        <div className="mt-4 flex flex-wrap gap-3 border-t border-slate-100 pt-4">
+        <Separator className="mt-4" />
+        <div className="sticky bottom-0 z-30 -mx-6 -mb-6 flex flex-wrap gap-3 bg-white/95 px-6 py-4 backdrop-blur" data-testid="acceptance-detail-footer">
           {['inspecting', 'rectifying'].includes(node.status) && (
-            <Button className="gap-2 bg-green-600 hover:bg-green-500" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('passed')}>
+            <Button className="gap-2 bg-emerald-600 hover:bg-emerald-500" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('passed')}>
               <CheckCircle2 className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '标记通过'}
+              标记通过
             </Button>
           )}
           {node.status === 'submitted' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('inspecting')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('inspecting')}>
               <ArrowRight className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '开始验收'}
+              开始验收
             </Button>
           )}
           {node.status === 'draft' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('preparing')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('preparing')}>
               <ArrowRight className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '开始准备'}
+              开始准备
             </Button>
           )}
           {node.status === 'ready_to_submit' && (
             <div className="flex flex-col gap-1">
-              <Button
-                variant="outline"
-                className="gap-2"
-                disabled={!canMutate || !canSubmitDeclaration}
-                title={submitBlockedReason ?? undefined}
-                onClick={() => void handleStatusChange('submitted')}
-              >
-                <ArrowRight className="h-4 w-4" />
-                {changingStatus ? '提交中...' : '提交申报'}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    disabled={!canMutate || !canSubmitDeclaration || changingStatus}
+                    loading={changingStatus}
+                    onClick={() => void handleStatusChange('submitted')}
+                  >
+                    <ArrowRight className="h-4 w-4" />
+                    提交申报
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{submitBlockedReason ?? undefined}</TooltipContent>
+              </Tooltip>
               {!canSubmitDeclaration && submitBlockedReason && (
                 <p className="text-xs text-amber-600">{submitBlockedReason}</p>
               )}
             </div>
           )}
           {node.status === 'rectifying' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('ready_to_submit')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('ready_to_submit')}>
               <ArrowRight className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '回到待申报'}
+              回到待申报
             </Button>
           )}
           {node.status === 'passed' && (
-            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} onClick={() => void handleStatusChange('archived')}>
+            <Button variant="outline" className="gap-2" disabled={!canMutate || changingStatus} loading={changingStatus} onClick={() => void handleStatusChange('archived')}>
               <CheckCircle2 className="h-4 w-4" />
-              {changingStatus ? '提交中...' : '标记已归档'}
+              标记已归档
             </Button>
           )}
           <Button
             variant="outline"
             className="gap-2 text-amber-700 border-amber-200 hover:bg-amber-50"
             disabled={!canMutate || escalatingIssue}
+            loading={escalatingIssue}
             onClick={async () => {
               setEscalatingIssue(true)
               try {
@@ -1088,7 +1112,7 @@ export default function AcceptanceDetailDrawer({
             data-testid="acceptance-escalate-issue"
           >
             <AlertTriangle className="h-4 w-4" />
-            {escalatingIssue ? '升级中...' : '升级为问题'}
+            升级为问题
           </Button>
         </div>
       </DialogContent>
@@ -1103,7 +1127,7 @@ function normalizeLookupValue(value?: string | null) {
 function getAcceptancePlanLookup(plan: AcceptanceNode, allPlans: AcceptancePlan[]) {
   const planRow = allPlans.find((item) => item.id === plan.id)
   const taskKeys = new Set(
-    [plan.id, planRow?.milestone_id]
+    (planRow?.covered_task_ids ?? [])
       .map((item) => String(item ?? '').trim())
       .filter(Boolean),
   )
@@ -1183,7 +1207,7 @@ function LinkedBundleSection(
 ) {
   const { title, subtitle, children, ...rest } = props
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" {...rest}>
+    <section className="rounded-2xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]" {...rest}>
       <div className="mb-3 space-y-1">
         <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
         {subtitle ? <p className="text-xs text-slate-500">{subtitle}</p> : null}
@@ -1195,9 +1219,11 @@ function LinkedBundleSection(
 
 function LinkedEmptyState({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-sm text-slate-500">
-      {text}
-    </div>
+    <EmptyState
+      title={text.replace(/[。.]$/, '')}
+      description="当前节点没有对应的联动记录。"
+      className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-3 py-6"
+    />
   )
 }
 
@@ -1231,7 +1257,7 @@ function LinkedRow({
   meta?: string | null
 }) {
   return (
-    <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-sm">
+    <Card className="rounded-xl border border-slate-100 bg-white p-5 shadow-[var(--el-1)]">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <div className="truncate text-sm font-medium text-slate-900">{title}</div>
@@ -1244,7 +1270,7 @@ function LinkedRow({
         ) : null}
       </div>
       {description ? <p className="mt-2 text-xs leading-5 text-slate-500">{description}</p> : null}
-    </div>
+    </Card>
   )
 }
 

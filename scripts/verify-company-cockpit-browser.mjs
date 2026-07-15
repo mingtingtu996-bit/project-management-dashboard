@@ -1,5 +1,5 @@
 ﻿import { spawn } from 'node:child_process'
-import { access, mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -8,9 +8,10 @@ import { chromium } from 'playwright'
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
+const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
 
 const baseUrl = process.env.BASE_URL || 'http://127.0.0.1:4173'
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
@@ -20,6 +21,7 @@ const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 const cockpitLabel = '\u516c\u53f8\u9a7e\u9a76\u8231'
 const wrongCockpitLabel = '\u516c\u53f8\u9a71\u9a76\u8231'
 const projectId = '422ba093-7a94-4e91-a47a-c1b865185e86'
+const companyId = 'company-cockpit-fixture-company'
 const now = new Date().toISOString()
 
 const mockAuthState = {
@@ -30,6 +32,8 @@ const mockAuthState = {
     display_name: '公司管理员',
     email: 'admin@example.com',
     globalRole: 'company_admin',
+    currentCompanyId: companyId,
+    currentCompanyRole: 'company_admin',
   },
 }
 
@@ -80,7 +84,7 @@ const mockProjectSummary = {
   reviewingConstructionDrawingCount: 1,
   attentionRequired: true,
   scheduleVarianceDays: 4,
-  activeDelayRequests: 1,
+  activeDelayedTasks: 1,
   activeObstacles: 1,
   monthlyCloseStatus: '\u8fdb\u884c\u4e2d',
   closeoutOverdueDays: 0,
@@ -89,7 +93,7 @@ const mockProjectSummary = {
   highestWarningSummary: '\u65bd\u5de5\u4e3b\u7ebf\u5b58\u5728 1 \u9879\u5ef6\u671f\u5ba1\u6279\u5f85\u5904\u7406',
   shiftedMilestoneCount: 1,
   criticalPathAffectedTasks: 2,
-  healthScore: 72,
+  businessHealthScore: 72,
   healthStatus: '\u4e9a\u5065\u5eb7',
   nextMilestone: {
     id: 'milestone-1',
@@ -104,6 +108,30 @@ const mockProjectSummary = {
     completedMilestoneCount: 0,
     upcomingMilestoneCount: 1,
   },
+}
+
+const mockCompanySummary = {
+  projectCount: 1,
+  statusCounts: { total: 1, inProgress: 1, completed: 0, paused: 0, notStarted: 0 },
+  averageHealth: 72,
+  averageProgress: 48,
+  attentionProjectCount: 1,
+  totalUnreadWarningCount: 2,
+  totalDelayedTaskCount: 1,
+  lowHealthProjectCount: 0,
+  overdueMilestoneProjectCount: 1,
+  healthHistory: {
+    thisMonth: 72,
+    lastMonth: 69,
+    change: 3,
+    thisMonthPeriod: '2026-04',
+    lastMonthPeriod: '2026-03',
+    periods: [
+      { period: '2026-03', value: 69 },
+      { period: '2026-04', value: 72 },
+    ],
+  },
+  ranking: [mockProjectSummary],
 }
 
 const mockTasks = [
@@ -139,8 +167,7 @@ const mockTasks = [
     updated_at: now,
     assignee_name: '\u963f\u8fbe\u662f\u7684',
     assignee_user_id: 'user-2',
-    assignee_unit: '\u603b\u5305\u5355\u4f4d',
-    responsible_unit: '\u603b\u5305\u5355\u4f4d',
+    participant_unit_name: '\u603b\u5305\u5355\u4f4d',
     is_milestone: false,
   },
   {
@@ -167,11 +194,11 @@ const mockNotifications = [
     type: 'warning',
     notification_type: 'flow-reminder',
     severity: 'warning',
-    title: '\u5ef6\u671f\u5ba1\u6279\u5f85\u5904\u7406',
-    content: '\u4e3b\u4f53\u7ed3\u6784\u65bd\u5de5\u5b58\u5728 1 \u6761\u5ef6\u671f\u5ba1\u6279\u5f85\u5904\u7406\uff0c\u8bf7\u8fdb\u5165\u4efb\u52a1\u5217\u8868\u5904\u7406\u3002',
+    title: '\u5ef6\u671f\u4fe1\u53f7\u5f85\u590d\u6838',
+    content: '\u4e3b\u4f53\u7ed3\u6784\u65bd\u5de5\u5b58\u5728 1 \u6761\u5ef6\u671f\u4fe1\u53f7\uff0c\u8bf7\u5728\u4efb\u52a1\u5217\u8868\u590d\u6838\u5f53\u524d\u6392\u671f\u3002',
     status: 'pending',
-    source_entity_type: 'delay_request',
-    source_entity_id: 'delay-1',
+    source_entity_type: 'task',
+    source_entity_id: 'task-2',
     task_id: 'task-2',
     assignee: '\u963f\u8fbe\u662f\u7684',
     created_at: now,
@@ -239,12 +266,127 @@ function json(body, status = 200) {
   }
 }
 
+async function apiRequest(pathname, { method = 'GET', body, token } = {}) {
+  const response = await fetch(`${apiBaseUrl}${pathname}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  const text = await response.text()
+  let payload = null
+  try {
+    payload = text ? JSON.parse(text) : null
+  } catch {
+    throw new Error(`Non-JSON response from ${pathname}: ${text.slice(0, 160)}`)
+  }
+
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error?.message || payload?.message || text || `${method} ${pathname} failed with ${response.status}`)
+  }
+
+  return payload?.data ?? payload
+}
+
+async function readFullAppManifest() {
+  try {
+    return JSON.parse(await readFile(manifestPath, 'utf8'))
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`MOCK_API=false requires ${manifestPath}. Run npm run prepare:test-env:full-app first. ${message}`)
+  }
+}
+
+async function loginForProxyApi() {
+  if (process.env.BROWSER_VERIFY_AUTH_TOKEN) {
+    return {
+      token: process.env.BROWSER_VERIFY_AUTH_TOKEN,
+      source: 'BROWSER_VERIFY_AUTH_TOKEN',
+    }
+  }
+
+  const manifest = await readFullAppManifest()
+  const account = manifest.accounts?.companyAdmin || manifest.accounts?.owner
+  assert(account?.username && account?.password, `Missing companyAdmin/owner account in ${manifestPath}`)
+
+  const data = await apiRequest('/api/auth/login', {
+    method: 'POST',
+    body: {
+      username: account.username,
+      password: account.password,
+    },
+  })
+  assert(data?.token, `Login did not return token for ${account.username}`)
+  return {
+    token: data.token,
+    source: `full-app-test-env:${account.username}`,
+  }
+}
+
+async function primeProxyAuth(page, authToken) {
+  await page.addInitScript((token) => {
+    window.localStorage.setItem('auth_token', token)
+    window.localStorage.setItem('access_token', token)
+    window.localStorage.setItem('onboarding_workspace_completed', 'true')
+    window.localStorage.setItem('onboarding_project_completed', 'true')
+    window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
+  }, authToken)
+}
+
 function buildMockResponse(urlString) {
   const url = new URL(urlString)
   const { pathname, searchParams } = url
 
   if (pathname === '/api/auth/me') {
     return json({ success: true, ...mockAuthState })
+  }
+
+  if (pathname === '/api/workspace') {
+    return json({
+      success: true,
+      data: {
+        hasCompany: true,
+        currentCompany: {
+          id: companyId,
+          name: '公司驾驶舱测试公司',
+          role: 'company_admin',
+          isCurrent: true,
+          active: true,
+        },
+        switchableCompanies: [
+          {
+            id: companyId,
+            name: '公司驾驶舱测试公司',
+            role: 'company_admin',
+            isCurrent: true,
+            active: true,
+          },
+        ],
+        myProjects: [],
+        recentProjects: [],
+        companyProjects: [
+          {
+            id: projectId,
+            name: mockProject.name,
+            projectType: 'industrial-park',
+            stage: '施工中',
+            ownerName: '公司管理员',
+            businessHealthScore: 72,
+            progress: 48,
+            criticalPathCount: 1,
+            lastActivityAt: now,
+            myRole: 'company_admin',
+          },
+        ],
+        joinableProjects: [],
+        pendingInvitations: [],
+        joinRequests: [],
+        demoEntry: null,
+        emptyStateReason: null,
+      },
+    })
   }
 
   if (pathname === '/api/projects') {
@@ -259,16 +401,8 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: [mockProjectSummary] })
   }
 
-  if (pathname === '/api/health-score/avg-history') {
-    return json({
-      success: true,
-      data: {
-        thisMonth: 72,
-        lastMonth: 69,
-        change: 3,
-        lastMonthPeriod: '2026-03',
-      },
-    })
+  if (pathname === '/api/company/dashboard/company-summary') {
+    return json({ success: true, data: mockCompanySummary })
   }
 
   if (pathname === '/api/risks' || pathname === '/api/issues') {
@@ -288,7 +422,6 @@ function buildMockResponse(urlString) {
     pathname === '/api/task-conditions'
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/task-baselines'
     || pathname === `/api/projects/${projectId}/critical-path/overrides`
@@ -383,6 +516,9 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  const requestedPaths = []
+  let authSource = shouldUseMockApi ? 'mock-api-auth-route' : null
+  let expectedCompanySummary = mockCompanySummary
   let result = null
 
   try {
@@ -401,6 +537,7 @@ async function main() {
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
+      requestedPaths.push(new URL(requestUrl).pathname)
 
       if (shouldUseMockApi) {
         await route.fulfill(buildMockResponse(requestUrl))
@@ -424,18 +561,52 @@ async function main() {
       }
     })
 
+    if (!shouldUseMockApi) {
+      const auth = await loginForProxyApi()
+      authSource = auth.source
+      await primeProxyAuth(page, auth.token)
+      expectedCompanySummary = await apiRequest('/api/company/dashboard/company-summary', {
+        token: auth.token,
+      })
+    }
+
     console.log('[company-cockpit-check] goto company')
     await page.goto(`${baseUrl}/#/company`, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('company-cockpit-page').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('company-health-overview').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('company-action-focus').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('company-signal-ranking').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('company-project-overview').waitFor({ state: 'visible', timeout: 20000 })
 
     const companyBodyText = await page.locator('body').innerText()
+    const expectedHealth = Number(expectedCompanySummary.averageHealth)
+    const expectedAttentionCount = Number(expectedCompanySummary.attentionProjectCount)
+    const expectedOverview = expectedAttentionCount > 0
+      ? `组合信号 ${expectedHealth} 分 · ${expectedAttentionCount} 个项目建议优先查看`
+      : `组合信号 ${expectedHealth} 分`
     assert(companyBodyText.includes(cockpitLabel), `Missing label: ${cockpitLabel}`)
     assert(!companyBodyText.includes(wrongCockpitLabel), `Found wrong label: ${wrongCockpitLabel}`)
+    assert(companyBodyText.includes(expectedOverview), `Company cockpit did not render the API-backed company signal conclusion: ${expectedOverview}`)
+    assert(companyBodyText.includes('本周建议优先查看'), 'Company cockpit did not render the priority action heading')
+    if (shouldUseMockApi) {
+      assert(companyBodyText.includes(mockProjectSummary.highestWarningSummary), 'Company cockpit did not render the summary priority reason')
+    }
+    if (expectedHealth !== 0) {
+      assert(!companyBodyText.includes('组合信号 0 分'), 'Company cockpit rendered a fake zero signal conclusion')
+    }
+    if (expectedAttentionCount !== 0) {
+      assert(!companyBodyText.includes('0 个项目建议优先查看'), 'Company cockpit rendered a fake zero attention conclusion')
+    }
 
     const initialUrl = page.url()
     assert(initialUrl.includes('/#/company'), `Unexpected cockpit URL: ${initialUrl}`)
+    assert(requestedPaths.includes('/api/company/dashboard/company-summary'), 'Company cockpit did not request /api/company/dashboard/company-summary')
+    assert(!requestedPaths.includes('/api/health-score/avg-history'), 'Company cockpit still requested /api/health-score/avg-history')
+    const oldHeroMetricCount = await page.getByTestId('company-hero-metric').count()
+    assert(oldHeroMetricCount === 0, 'Company cockpit still rendered old hero KPI metric cards')
+
+    const actionItemCount = await page.getByTestId('company-action-item').count()
+    assert(actionItemCount > 0, 'Company cockpit rendered zero priority action items')
 
     const ganttLinks = page.getByTestId('company-project-gantt-link')
     const ganttCount = await ganttLinks.count()
@@ -471,9 +642,11 @@ async function main() {
 
     result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
+      authSource,
       initialUrl,
       ganttCount,
       reminderCount,
+      requestedPaths: [...new Set(requestedPaths)],
       ganttUrl,
       notificationsUrl,
       apiFailures,
@@ -491,7 +664,9 @@ async function main() {
   } catch (error) {
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
+      authSource,
       error: error instanceof Error ? error.message : String(error),
+      requestedPaths: [...new Set(requestedPaths)],
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -514,4 +689,3 @@ main().catch((error) => {
   console.error(error)
   process.exitCode = 1
 })
-

@@ -1,0 +1,495 @@
+import { describe, expect, it } from 'vitest'
+
+function createRecordingQueryExec() {
+  const calls: Array<{ sql: string, params: unknown[] }> = []
+  const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+    calls.push({ sql, params })
+    return [] as T[]
+  }
+  return { calls, queryExec }
+}
+
+function joinedSql(calls: Array<{ sql: string }>) {
+  return calls.map((call) => call.sql).join('\n').toLowerCase()
+}
+
+describe('durationRuntimeConsumerObservationService', () => {
+  it('records runtime consumer runtime calls without writing runtime artifacts or facts', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'projectRemainingDurationForecastService.ts',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+      callContext: { projectId: 'project-a' },
+      sourceEvidenceRefs: ['runtime-path:remaining-duration:call'],
+      calledAt: '2026-06-15T06:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+      reasons: [],
+    }))
+    expect(result.runtimeCall).toEqual(expect.objectContaining({
+      consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+      callStatus: 'called',
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+    }))
+
+    const sql = joinedSql(calls)
+    expect(sql).toContain('insert into public.runtime_consumer_runtime_calls')
+    expect(sql).not.toContain('runtime_consumer_observations')
+    expect(sql).not.toContain('algorithm_learnable_parameter_runtime_publications')
+    expect(sql).not.toContain('algorithm_seed_versions')
+    expect(sql).not.toContain('standard_work_duration')
+    expect(sql).not.toContain('tasks ')
+    expect(sql).not.toContain('task_baseline_items')
+    expect(sql).not.toContain('monthly_plan_items')
+  })
+
+  it('blocks runtime calls that try to declare direct runtime or fact mutation', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'durationSuggestionService',
+      runtimeEntryRef: 'durationSuggestionService:getTaskDurationSuggestion',
+      writesRuntimeDirectly: true,
+      writesFactDirectly: true,
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_blocked',
+      canPersist: false,
+      runtimeCall: null,
+      reasons: [
+        'runtime_consumer_runtime_call_must_not_write_runtime_directly',
+        'runtime_consumer_runtime_call_must_not_write_fact_directly',
+      ],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks runtime calls from undeclared consumers', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'unknownDurationConsumerService',
+      runtimeEntryRef: 'unknownDurationConsumerService:run',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_blocked',
+      canPersist: false,
+      runtimeCall: null,
+      reasons: ['runtime_consumer_runtime_call_consumer_not_declared'],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks runtime calls whose entry ref does not match the declared facade runtime path', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'projectRemainingDurationForecastService',
+      runtimeEntryRef: 'projectRemainingDurationForecastService:calculateRemainingDuration',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_blocked',
+      canPersist: false,
+      runtimeCall: null,
+      reasons: ['runtime_consumer_runtime_call_entry_ref_not_declared_for_consumer'],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('allows schedule acceleration adoption as a runtime consumer entry without adding it to the global required path list', async () => {
+    const {
+      recordDurationRuntimeConsumerRuntimeCall,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const {
+      listDurationRuntimeConsumerBusinessPathRequiredIntegrations,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerRuntimeCall({
+      queryExec,
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      runtimeEntryRef: 'scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption',
+      callContext: {
+        projectId: 'project-1',
+        consumerTrigger: 'schedule_acceleration_recommendation_adoption',
+      },
+      sourceEvidenceRefs: ['schedule_acceleration_adoption:project-1'],
+      calledAt: '2027-02-15T00:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+      runtimeCall: expect.objectContaining({
+        consumerKey: 'scheduleAccelerationRuntimeService',
+        runtimeEntryRef: 'scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption',
+      }),
+    }))
+    expect(calls).toHaveLength(1)
+    expect(listDurationRuntimeConsumerBusinessPathRequiredIntegrations()
+      .map((item) => item.runtimeEntryRef))
+      .not.toContain('scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption')
+  })
+
+  it('records runtime consumer observations without writing runtime artifacts or facts', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'forecast_confidence_weight',
+      publicationKey: 'learnable-parameter-runtime:confidence:project_override',
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+      observationContext: { projectId: 'project-a', mode: 'canary' },
+      sourceEvidenceRefs: ['runtime_consumption:task-duration-forecast:confidence'],
+      observedAt: '2026-06-15T02:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_recorded',
+      canPersist: true,
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+      reasons: [],
+    }))
+    expect(result.observation).toEqual(expect.objectContaining({
+      assetKey: 'forecast_confidence_weight',
+      publicationKey: 'learnable-parameter-runtime:confidence:project_override',
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+      observationStatus: 'observed',
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+    }))
+
+    const sql = joinedSql(calls)
+    expect(sql).toContain('insert into public.runtime_consumer_observations')
+    expect(sql).not.toContain('algorithm_learnable_parameter_runtime_publications')
+    expect(sql).not.toContain('algorithm_seed_versions')
+    expect(sql).not.toContain('standard_work_duration')
+    expect(sql).not.toContain('tasks ')
+    expect(sql).not.toContain('task_baseline_items')
+    expect(sql).not.toContain('monthly_plan_items')
+  })
+
+  it('blocks observation writes that try to declare direct runtime or fact mutation', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'base_duration_benchmark',
+      publicationKey: 'duration-benchmark-runtime:base:p50',
+      consumerKey: 'durationSuggestionService',
+      consumerSurface: 'duration_suggestion',
+      sourceEvidenceRefs: ['runtime_publication:duration-benchmark:base:p50'],
+      writesRuntimeDirectly: true,
+      writesFactDirectly: true,
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: [
+        'runtime_consumer_observation_must_not_write_runtime_directly',
+        'runtime_consumer_observation_must_not_write_fact_directly',
+      ],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks observations from consumers that are not declared for the asset', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'forecast_confidence_weight',
+      publicationKey: 'learnable-parameter-runtime:confidence:project_override',
+      consumerKey: 'projectRemainingDurationForecastService',
+      consumerSurface: 'remaining_duration_forecast',
+      sourceEvidenceRefs: ['runtime_publication:forecast-confidence:project-override'],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: ['runtime_consumer_observation_consumer_not_declared_for_asset'],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks observations whose publication key cannot belong to the declared asset', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'critical_path_rule_candidate',
+      publicationKey: 'duration_benchmark_runtime:base-v2',
+      consumerKey: 'projectRemainingDurationForecastService',
+      consumerSurface: 'remaining_duration_forecast',
+      sourceEvidenceRefs: ['runtime_publication:critical-path-rule:base-v2'],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: ['runtime_consumer_observation_publication_key_not_allowed_for_asset'],
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks construction organization runtime consumer observations without structured business type attribution', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'construction_organization_plan_network',
+      publicationKey: 'construction-org-plan-network:option-ready',
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      consumerSurface: 'schedule_acceleration_runtime',
+      observationContext: {},
+      sourceEvidenceRefs: ['runtime_consumption:schedule-acceleration-runtime:construction-organization'],
+      observedAt: '2026-06-23T06:00:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: expect.arrayContaining(['business_type_required']),
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks construction organization runtime consumer observations without project and option network anchors', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'construction_organization_plan_network',
+      publicationKey: 'construction-org-plan-network:option-ready',
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      consumerSurface: 'schedule_acceleration_runtime',
+      observationContext: {
+        businessType: 'hospital',
+      },
+      sourceEvidenceRefs: ['runtime_consumption:schedule-acceleration-runtime:construction-organization'],
+      observedAt: '2026-06-24T04:45:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: expect.arrayContaining([
+        'project_id_required',
+        'option_network_identity_required',
+      ]),
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('blocks construction organization runtime consumer observations when product closeout projection evidence is supplied', async () => {
+    const {
+      recordDurationRuntimeConsumerObservation,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservation({
+      queryExec,
+      assetKey: 'construction_organization_plan_network',
+      publicationKey: 'construction-org-plan-network:option-ready',
+      consumerKey: 'scheduleAccelerationRuntimeService',
+      consumerSurface: 'schedule_acceleration_runtime',
+      observationContext: {
+        businessType: 'hospital',
+        evidenceAction: 'collect_runtime_ready_use_case_option_closeout_claim_evidence_for_business_type',
+      },
+      sourceEvidenceRefs: ['runtime_consumption:schedule-acceleration-runtime:construction-organization'],
+      observedAt: '2026-06-23T06:30:00.000Z',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observation_blocked',
+      canPersist: false,
+      observation: null,
+      reasons: expect.arrayContaining(['product_outcome_projection_evidence_action_must_not_write_runtime_evidence']),
+    }))
+    expect(calls).toEqual([])
+  })
+
+  it('records multiple published artifacts observed by one declared runtime consumer', async () => {
+    const {
+      recordDurationRuntimeConsumerObservedArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservedArtifacts({
+      queryExec,
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+      observedAt: '2026-06-15T03:00:00.000Z',
+      artifacts: [
+        {
+          assetKey: 'forecast_confidence_weight',
+          publicationKey: 'forecast_confidence_weight_runtime:weight-v2',
+          publicationStatus: 'canary',
+          observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_consumption:task-duration-forecast:confidence'],
+        },
+        {
+          assetKey: 'forecast_residual_overlay',
+          publicationKey: 'forecast_residual_overlay_runtime:overlay-v2',
+          publicationStatus: 'published',
+          observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_consumption:task-duration-forecast:overlay'],
+        },
+      ],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_recorded',
+      recordedCount: 2,
+      blockedCount: 0,
+      writesRuntimeDirectly: false,
+      writesFactDirectly: false,
+      reasons: [],
+    }))
+    expect(result.results.map((item) => item.status)).toEqual([
+      'runtime_consumer_observation_recorded',
+      'runtime_consumer_observation_recorded',
+    ])
+    expect(calls).toHaveLength(2)
+
+    const sql = joinedSql(calls)
+    expect(sql).toContain('insert into public.runtime_consumer_observations')
+    expect(sql).not.toContain('algorithm_learnable_parameter_runtime_publications')
+    expect(sql).not.toContain('tasks ')
+    expect(sql).not.toContain('task_baseline_items')
+    expect(sql).not.toContain('monthly_plan_items')
+  })
+
+  it('records declared consumer artifacts with surfaces resolved from the integration contract', async () => {
+    const {
+      recordDurationRuntimeConsumerObservedContractArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservedContractArtifacts({
+      queryExec,
+      consumerKey: 'projectRemainingDurationForecastService.ts',
+      observedAt: '2026-06-15T04:00:00.000Z',
+      artifacts: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          publicationKey: 'forecast_residual_overlay_runtime:overlay-v3',
+          publicationStatus: 'published',
+          observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_publication:forecast-residual-overlay:overlay-v3'],
+        },
+        {
+          assetKey: 'wbs_reference_days',
+          publicationKey: 'wbs_reference_days_runtime:reference-v3',
+          publicationStatus: 'runtime_published',
+          observationContext: { projectId: 'project-a' },
+          sourceEvidenceRefs: ['runtime_publication:wbs-reference-days:reference-v3'],
+        },
+      ],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_recorded',
+      recordedCount: 2,
+      blockedCount: 0,
+      reasons: [],
+    }))
+    expect(calls.map((call) => call.params.slice(0, 4))).toEqual([
+      [
+        'forecast_residual_overlay',
+        'forecast_residual_overlay_runtime:overlay-v3',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+      [
+        'wbs_reference_days',
+        'wbs_reference_days_runtime:reference-v3',
+        'projectRemainingDurationForecastService',
+        'remaining_duration_forecast',
+      ],
+    ])
+  })
+
+  it('blocks batch observations for artifacts that are not published or canary', async () => {
+    const {
+      recordDurationRuntimeConsumerObservedArtifacts,
+    } = await import('../services/durationRuntimeConsumerObservationService.js')
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordDurationRuntimeConsumerObservedArtifacts({
+      queryExec,
+      consumerKey: 'taskDurationForecastService',
+      consumerSurface: 'task_duration_forecast',
+      artifacts: [{
+        assetKey: 'forecast_confidence_weight',
+        publicationKey: 'forecast_confidence_weight_runtime:weight-candidate',
+        publicationStatus: 'candidate',
+        sourceEvidenceRefs: ['runtime_publication:forecast-confidence:weight-candidate'],
+      }],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_blocked',
+      recordedCount: 0,
+      blockedCount: 1,
+      reasons: ['runtime_consumer_observation_published_or_canary_artifact_required'],
+    }))
+    expect(calls).toEqual([])
+  })
+})

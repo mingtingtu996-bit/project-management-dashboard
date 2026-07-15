@@ -1,6 +1,8 @@
 import { useState } from 'react'
+import { EmptyState } from '@/components/EmptyState'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 
 export interface BaselineSwitchEvent {
   switch_date: string
@@ -27,10 +29,10 @@ export function BaselineSwitchMarker({
     : null
 
   return (
-    <Card data-testid="baseline-switch-marker" className="border-blue-200 shadow-sm">
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">基线版本切换标记</CardTitle>
-      </CardHeader>
+    <Card data-testid="baseline-switch-marker" className="border-blue-200 shadow-[var(--el-1)]">
+      <CardContent padding="md" className="pb-0">
+        <CardHead eyebrow="BASELINE" title="基线版本切换标记" />
+      </CardContent>
       <CardContent className="space-y-3">
         {selectedEvent ? (
           <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm leading-6 text-blue-900">
@@ -38,7 +40,7 @@ export function BaselineSwitchMarker({
               <div className="font-medium">
                 {selectedEvent.switch_date} {selectedEvent.from_version} → {selectedEvent.to_version}
               </div>
-              <div className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-blue-700">
+              <div className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-blue-700">
                 当前基线 {baselineLabel}
               </div>
             </div>
@@ -48,12 +50,17 @@ export function BaselineSwitchMarker({
             </div>
           </div>
         ) : (
-          <div data-testid="deviation-version-note" className="rounded-2xl border border-blue-100 bg-blue-50 p-4" />
+          <EmptyState
+            testId="deviation-version-note"
+            title="暂无版本切换说明"
+            description="存在基线切换事件后，这里会展示切换原因。"
+            className="rounded-2xl border border-blue-100 bg-blue-50 py-6"
+          />
         )}
         <div className="space-y-2">
           {events.length > 0 ? (
             events.map((event) => (
-              <button
+              <Button variant="ghost"
                 key={`${event.switch_date}-${event.from_version}-${event.to_version}`}
                 type="button"
                 onClick={() => setSelectedEventKey(`${event.switch_date}-${event.from_version}-${event.to_version}`)}
@@ -67,12 +74,14 @@ export function BaselineSwitchMarker({
                   {event.switch_date}：{event.from_version} → {event.to_version}
                 </div>
                 <div className="mt-1 leading-6 text-slate-600">{event.explanation}</div>
-              </button>
+              </Button>
             ))
           ) : (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
-              暂无版本切换事件
-            </div>
+            <EmptyState
+              title="暂无版本切换事件"
+              description="当前对比范围没有基线版本切换记录。"
+              className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+            />
           )}
         </div>
       </CardContent>

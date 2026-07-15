@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "project_daily_snapshot",
+  "authorityLevel": "summary_fact",
+  "grain": "one row per project per day",
+  "owner": "projectDailySnapshotService",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "project_id",
+    "snapshot_date",
+    "overall_progress",
+    "task_progress",
+    "planned_cumulative",
+    "health_score"
+  ],
+  "allowedWriterRegistryIds": [
+    "project_daily_snapshot_service",
+    "company_health_trend_live_diagnostic_writer"
+  ],
+  "qualityRules": [
+    "project_id_required",
+    "snapshot_date_required",
+    "one_snapshot_per_project_per_day",
+    "progress_range_0_100"
+  ]
+}

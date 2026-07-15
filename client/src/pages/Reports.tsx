@@ -1,9 +1,8 @@
-﻿import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   ArrowLeft,
   BarChart3,
-  CheckSquare,
   ClipboardList,
   Clock3,
   Download,
@@ -11,30 +10,44 @@ import {
   Flag,
   LockKeyhole,
   RefreshCw,
+  ArrowRight,
   ShieldAlert,
   type LucideIcon,
 } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
-import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import { EmptyState } from '@/components/EmptyState'
+import { V14231PageReadinessBoundary } from '@/components/governance/V14231PageReadinessBoundary'
 import { PageHeader } from '@/components/PageHeader'
+import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
+import { Sparkline } from '@/components/Sparkline'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LoadingState } from '@/components/ui/loading-state'
+import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
+import { Separator } from '@/components/ui/separator'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { toast } from '@/hooks/use-toast'
-import { apiGet, getApiErrorMessage } from '@/lib/apiClient'
+import { apiGet, getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
+import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
+import {
+  formatDate as formatDisplayDate,
+  formatDateTime as formatDisplayDateTime,
+  formatWholePercent,
+} from '@/lib/formatters'
 import {
   selectProjectScopeOrEmpty,
   useCurrentProject,
   useStore,
 } from '@/hooks/useStore'
-import type { Risk, Task, TaskCondition, TaskObstacle } from '@/lib/supabase'
+import type { EngineeringObject, Risk, Task, TaskCondition, TaskObstacle } from '@/lib/supabase'
 import { DashboardApiService, type CriticalPathSummaryModel, type ProjectSummary } from '@/services/dashboardApi'
-import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
 import { MaterialsApiService, type MaterialReportSummary } from '@/services/materialsApi'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { DeviationFocusHint, viewLabels } from './Reports/components/DeviationFocusHint'
@@ -45,7 +58,24 @@ import { DeviationTabs, type DeviationView } from './Reports/components/Deviatio
 import { ExecutionScatterChart } from './Reports/components/ExecutionScatterChart'
 import { BaselineDumbbellChart } from './Reports/components/BaselineDumbbellChart'
 import { MonthlyStackedBarChart } from './Reports/components/MonthlyStackedBarChart'
-import * as XLSX from 'xlsx'
+import { SCurveChart } from './Reports/components/SCurveChart'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+
+function ReportSectionHead({ eyebrow, title, action }: { eyebrow: string; title: string; action?: ReactNode }) {
+  return (
+    <CardContent padding="md" className="pb-0">
+      <CardHead eyebrow={eyebrow} title={title} action={action} />
+    </CardContent>
+  )
+}
 
 type MetricItem = {
   title: string
@@ -64,15 +94,120 @@ type AnalysisEntry = {
   to: string
 }
 
-type AnalysisView = 'progress' | 'progress_deviation' | 'risk' | 'change_log'
+// v1.4.14: audit trail view is no longer part of ordinary Reports.
+type AnalysisView = 'progress' | 'progress_deviation' | 'risk'
 
 type DetailStat = {
   label: string
   value: string | number
   hint: string
+  to?: string
+  testId?: string
+}
+
+type ReportMetricKey = string
+
+type ReportTimeRange = 'all' | '7d' | '30d' | '90d'
+type EngineeringObjectReportDimensionKey =
+  | 'phase'
+  | 'section'
+  | 'building'
+  | 'basement'
+  | 'floor'
+  | 'physical_zone'
+  | 'functional_area'
+type ReportDimensionKey = 'none' | EngineeringObjectReportDimensionKey
+type ReportGranularity = 'day' | 'week' | 'month'
+
+type EngineeringObjectReportSection = {
+  key: EngineeringObjectReportDimensionKey
+  label: string
+  description?: string
+  options: string[]
+  selected: string[]
+}
+
+type ReportTrendPoint = {
+  date: string
+  value: number | null
+  group?: string | null
+}
+
+type ReportTrendResponse = {
+  projectId: string
+  metric: ReportMetricKey
+  from: string
+  to: string
+  groupBy: ReportDimensionKey
+  granularity: ReportGranularity
+  points: ReportTrendPoint[]
+}
+
+const REPORT_SCOPE_META: Record<EngineeringObjectReportDimensionKey, { label: string; description: string }> = {
+  phase: { label: '分期', description: '项目分期 / 阶段性范围' },
+  section: { label: '标段', description: '合同标段 / 施工段' },
+  building: { label: '单体', description: '单体 / 楼栋' },
+  basement: { label: '地下室', description: '地下室 / 地下车库 / 共用地下空间' },
+  floor: { label: '楼层', description: '楼层 / 标高层' },
+  physical_zone: { label: '工程区域', description: '屋面、外立面、室外、地下局部等实体区域' },
+  functional_area: { label: '功能区', description: '手术部、ICU、设备机房等功能触发区' },
+}
+
+const REPORT_SCOPE_KEYS = Object.keys(REPORT_SCOPE_META) as EngineeringObjectReportDimensionKey[]
+
+function buildScopeSectionsFromEngineeringObjects(objects: EngineeringObject[]): EngineeringObjectReportSection[] {
+  return REPORT_SCOPE_KEYS.map((key) => {
+    const options = objects
+      .filter((object) => object.objectType === key && object.status !== 'inactive')
+      .map((object) => String(object.objectName ?? '').trim())
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+    const meta = REPORT_SCOPE_META[key]
+    return {
+      key,
+      label: meta.label,
+      description: meta.description,
+      options,
+      selected: options,
+    }
+  }).filter((section) => section.options.length > 0)
+}
+
+type ReportMetricOption = {
+  value: ReportMetricKey
+  label: string
+  description: string
+}
+
+type MetricRegistryOptionResponse = {
+  key: string
+  label: string
+  description: string
+  frontendVisible?: boolean
+}
+
+type SCurveApiPoint = {
+  date: string
+  planned_cumulative: number
+  actual_cumulative: number | null
 }
 
 type ProgressDeviationMainlineKey = 'baseline' | 'monthly_plan' | 'execution'
+
+type ProgressDeviationCauseChainItem = {
+  cause_type: string
+  affected_task_id?: string | null
+  upstream_task_id?: string | null
+  impacted_owner?: string | null
+  accountable_owner?: string | null
+  responsibility_basis?: string | null
+  evidence_source?: string | null
+  evidence_id?: string | null
+  impact_days?: number | null
+  wait_days?: number | null
+  confidence?: number | string | null
+  evidence?: (Record<string, unknown> & { wait_days?: number | string | null }) | null
+}
 
 type ProgressDeviationRow = {
   id: string
@@ -87,9 +222,11 @@ type ProgressDeviationRow = {
   deviation_rate: number
   status: string
   reason?: string | null
-  mapping_status?: 'mapped' | 'mapping_pending' | 'merged_into' | null
   merged_into?: { title: string; group_id?: string | null; item_ids?: string[] } | null
   child_group?: { parent_title: string; child_count: number; group_id?: string | null } | null
+  attribution?: {
+    cause_chain?: ProgressDeviationCauseChainItem[]
+  } | null
 }
 
 type ProgressDeviationMainline = {
@@ -117,9 +254,18 @@ type ProgressDeviationMonthlyBucket = {
 
 type ProgressDeviationResponsibilityContribution = {
   owner: string
+  owner_id?: string | null
   count: number
   percentage: number
   task_ids: string[]
+  causal_task_ids?: string[]
+  basis?: string | null
+  confidence?: number | null
+  impact_days?: number | null
+  weighted_count?: number | null
+  weighted_percentage?: number | null
+  evidence_sources?: string[]
+  responsibility_role?: 'accountable_subject' | 'execution_owner' | 'impacted_subject' | string | null
 }
 
 type ProgressDeviationCauseSummary = {
@@ -189,20 +335,6 @@ type BaselineVersionLock = {
   is_locked: boolean
 }
 
-type ChangeLogRecord = {
-  id: string
-  project_id?: string | null
-  entity_type: string
-  entity_id: string
-  field_name: string
-  old_value?: string | null
-  new_value?: string | null
-  change_reason?: string | null
-  changed_by?: string | null
-  change_source?: string | null
-  changed_at?: string | null
-}
-
 type IssueSummaryTrendPoint = {
   date: string
   newIssues: number
@@ -216,6 +348,7 @@ type IssueSummaryRecord = {
   description?: string | null
   status?: string | null
   source_type?: string | null
+  source_entity_type?: string | null
   created_at?: string | null
 }
 
@@ -251,31 +384,28 @@ function normalizeIssueSummaryResponse(value: unknown, projectId?: string): Issu
   }
 }
 
-function MetricCard({ title, value, hint, icon }: MetricItem) {
+function DetailStatCard({ label, value, hint, to, testId }: DetailStat) {
   void hint
 
-  return (
-    <Card className="border-slate-200 shadow-sm">
-      <CardContent className="pt-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm text-muted-foreground">{title}</p>
-            <div className="mt-2 text-2xl font-bold">{value}</div>
-          </div>
-          {icon ? <div className="rounded-lg bg-primary/10 p-2 text-primary">{icon}</div> : null}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function DetailStatCard({ label, value, hint }: DetailStat) {
-  void hint
-
-  return (
-    <div className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+  const content = (
+    <>
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+    </>
+  )
+  const className = "rounded-2xl border border-slate-100 bg-slate-50 p-4 transition-colors"
+
+  if (to) {
+    return (
+      <Link data-testid={testId} to={to} className={`block ${className} hover:border-blue-200 hover:bg-blue-50/60`}>
+        {content}
+      </Link>
+    )
+  }
+
+  return (
+    <div data-testid={testId} className={className}>
+      {content}
     </div>
   )
 }
@@ -300,16 +430,16 @@ function AnalysisEntryCard({
   void description
 
   return (
-    <button
+    <Button variant="ghost"
       data-testid={testId}
       onClick={onClick}
-      className="group flex h-full flex-col rounded-2xl border border-slate-200 bg-white p-5 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-md"
+      className="group flex h-full flex-col rounded-2xl border border-slate-100 bg-white p-5 text-left shadow-[var(--el-1)] transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[var(--el-2)]"
     >
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-3">
           <div className="inline-flex rounded-xl bg-blue-50 p-2 text-blue-600">{icon}</div>
           <div>
-            <div className="text-xs font-medium uppercase tracking-[0.12em] text-slate-400">{moduleLabel}</div>
+            <div className="text-xs font-medium uppercase tracking-wider text-slate-500">{moduleLabel}</div>
             <div className="text-base font-semibold text-slate-900">{title}</div>
           </div>
         </div>
@@ -318,13 +448,12 @@ function AnalysisEntryCard({
         {actionLabel}
         <span aria-hidden="true">→</span>
       </div>
-    </button>
+    </Button>
   )
 }
 
 function formatDateLabel(value?: string | null) {
-  if (!value) return '未设置'
-  return value
+  return formatDisplayDate(value, '未设置')
 }
 
 function parseStatusLabel(status?: string | null) {
@@ -340,7 +469,7 @@ function parseStatusLabel(status?: string | null) {
     case 'archived':
       return '已归档'
     case 'pending_realign':
-      return '待重排'
+      return '待编辑'
     case 'pending':
       return '待处理'
     default:
@@ -349,20 +478,185 @@ function parseStatusLabel(status?: string | null) {
 }
 
 function formatDateTimeLabel(value?: string | null) {
-  if (!value) return '未设置'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatDisplayDateTime(value, '未设置')
+}
+
+function relationSummaryLabel(row: ProgressDeviationRow) {
+  if (row.merged_into?.title) return `\u5df2\u5408\u5e76\u5230 ${row.merged_into.title}`
+  if (row.child_group?.parent_title) return `\u5b50\u9879\u7ec4 ${row.child_group.parent_title} \u00b7 ${row.child_group.child_count}`
+  return '\u5f53\u524d\u6267\u884c\u6761\u76ee'
+}
+
+function getResponsibilityRoleLabel(role?: string | null) {
+  switch (role) {
+    case 'accountable_subject':
+      return '致因责任主体'
+    case 'execution_owner':
+      return '执行承办主体'
+    case 'impacted_subject':
+      return '受影响主体'
+    default:
+      return role || '责任主体'
+  }
+}
+
+function getResponsibilityBasisLabel(basis?: string | null) {
+  switch (basis) {
+    case 'upstream_dependency':
+      return '上游依赖'
+    case 'blocking_condition':
+      return '开工条件'
+    case 'active_obstacle':
+      return '活跃阻碍'
+    case 'obstacle_owner':
+      return '阻碍责任'
+    case 'condition_owner':
+      return '条件责任'
+    case 'external_wait':
+      return '外部等待'
+    case 'site_capacity':
+      return '现场产能'
+    case 'workflow':
+    case 'workflow_sequence':
+      return '流程衔接'
+    default:
+      return basis || '未标注依据'
+  }
+}
+
+function getCauseTypeLabel(causeType?: string | null) {
+  switch (causeType) {
+    case 'dependency_wait':
+      return '上游依赖等待'
+    case 'blocking_condition':
+      return '开工条件未满足'
+    case 'active_obstacle':
+      return '阻碍未解除'
+    default:
+      return causeType || '未标注原因'
+  }
+}
+
+function formatEvidenceConfidence(value?: number | string | null) {
+  if (typeof value === 'string') {
+    switch (value.trim().toLowerCase()) {
+      case 'high':
+        return '高'
+      case 'medium':
+        return '中'
+      case 'low':
+        return '低'
+      default:
+        return value.trim() || null
+    }
+  }
+
+  if (!Number.isFinite(value ?? NaN)) return null
+  const normalized = Math.abs(value ?? 0) <= 1 ? (value ?? 0) * 100 : value ?? 0
+  return formatWholePercent(normalized)
+}
+
+function getCauseImpactDays(item: ProgressDeviationCauseChainItem) {
+  const candidates = [item.impact_days, item.wait_days, item.evidence?.wait_days]
+  for (const candidate of candidates) {
+    const value = Number(candidate)
+    if (Number.isFinite(value) && value > 0) return Math.round(value * 10) / 10
+  }
+  return null
+}
+
+function formatEvidenceIds(ids?: string[]) {
+  const normalized = (ids ?? []).map((id) => String(id || '').trim()).filter(Boolean)
+  if (normalized.length === 0) return null
+  const visible = normalized.slice(0, 3).join('、')
+  return normalized.length > 3 ? `${visible} 等 ${normalized.length} 项` : visible
+}
+
+function getCurrentMonthKey() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function isCurrentMonth(value?: string | null) {
+  if (!value) return false
+  return String(value).slice(0, 7) === getCurrentMonthKey()
+}
+
+function isActiveRisk(risk: Risk) {
+  const status = String(risk.status || '').trim().toLowerCase()
+  return !['closed', 'resolved', 'archived', '已关闭', '已解决'].includes(status)
+}
+
+function getRiskLevelLabel(level?: string | null) {
+  switch (String(level || '').trim().toLowerCase()) {
+    case 'critical':
+    case '严重':
+      return '严重'
+    case 'high':
+    case '高':
+      return '高'
+    case 'medium':
+    case '中':
+      return '中'
+    case 'low':
+    case '低':
+      return '低'
+    default:
+      return '未分级'
+  }
+}
+
+function getRiskLevelRank(level?: string | null) {
+  switch (getRiskLevelLabel(level)) {
+    case '严重':
+      return 4
+    case '高':
+      return 3
+    case '中':
+      return 2
+    case '低':
+      return 1
+    default:
+      return 0
+  }
+}
+
+function getRiskLevelTone(level?: string | null) {
+  switch (getRiskLevelLabel(level)) {
+    case '严重':
+    case '高':
+      return {
+        bar: 'bg-red-500',
+        badge: 'border-red-200 bg-red-50 text-red-700',
+      }
+    case '中':
+      return {
+        bar: 'bg-amber-500',
+        badge: 'border-amber-200 bg-amber-50 text-amber-700',
+      }
+    default:
+      return {
+        bar: 'bg-emerald-500',
+        badge: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      }
+  }
+}
+
+function toRiskMatrixBucket(value?: number | null, fallback = 3) {
+  if (!Number.isFinite(value ?? Number.NaN)) return fallback
+  return Math.max(1, Math.min(5, Math.ceil(Number(value) / 20)))
+}
+
+function getRiskMatrixCellClass(count: number, impact: number, probability: number) {
+  if (count === 0) return 'border-slate-100 bg-slate-50 text-slate-500'
+  const score = impact * probability
+  if (score >= 16) return 'border-red-200 bg-red-50 text-red-700'
+  if (score >= 9) return 'border-amber-200 bg-amber-50 text-amber-700'
+  return 'border-emerald-200 bg-emerald-50 text-emerald-700'
 }
 
 function getTaskDisplayName(task: Task) {
-  return task.title || task.name || '未命名任务'
+  return task.title || '未命名任务'
 }
 
 function getTaskStatus(task: Task) {
@@ -401,18 +695,37 @@ function isCompletedTask(task: Task) {
   return ['已完成', 'completed'].includes(task.status || '')
 }
 
+function readBackendDelayDays(task: Task): number {
+  const rawDelayDays = (task as Task & { delayDays?: number | string | null }).delay_days
+    ?? (task as Task & { delayDays?: number | string | null }).delayDays
+  const parsedDelayDays = Number(rawDelayDays)
+  if (Number.isFinite(parsedDelayDays) && parsedDelayDays > 0) {
+    return Math.ceil(parsedDelayDays)
+  }
+
+  const dueStatus = task.dueStatus ?? task.statusDerivation?.dueStatus ?? null
+  const daysUntilDue = Number(dueStatus?.daysUntilDue)
+  if (Number.isFinite(daysUntilDue) && daysUntilDue < 0) {
+    return Math.ceil(Math.abs(daysUntilDue))
+  }
+
+  return 0
+}
+
 function isDelayedTask(task: Task) {
-  const plannedEnd = task.planned_end_date || task.end_date
-  if (!plannedEnd || isCompletedTask(task)) return false
-  const target = new Date(plannedEnd)
-  return !Number.isNaN(target.getTime()) && target.getTime() < Date.now()
+  if (isCompletedTask(task)) return false
+  const dueStatus = task.dueStatus ?? task.statusDerivation?.dueStatus ?? null
+  const statusText = String(task.status || task.displayStatus || '').trim().toLowerCase()
+  return readBackendDelayDays(task) > 0
+    || dueStatus?.status === 'overdue'
+    || statusText === 'delayed'
 }
 
 function summarizeRiskSource(risk: Risk) {
   return risk.risk_source || risk.risk_category || '未分类'
 }
 
-function getIssueSourceLabel(sourceType?: string | null) {
+function getIssueSourceLabel(sourceType?: string | null, sourceEntityType?: string | null) {
   switch (String(sourceType || '').trim()) {
     case 'manual':
       return '人工录入'
@@ -423,6 +736,9 @@ function getIssueSourceLabel(sourceType?: string | null) {
     case 'obstacle_escalated':
       return '阻碍上卷'
     case 'condition_expired':
+      if (sourceEntityType === 'acceptance_plan') {
+        return '验收逾期'
+      }
       return '条件过期'
     default:
       return String(sourceType || '未分类')
@@ -503,22 +819,74 @@ function getObstacleTypeLabel(obstacle: TaskObstacle) {
 
 function getResponsibilityLabel(task?: Task | null) {
   const raw = task as Record<string, unknown> | null | undefined
-  return String(raw?.participant_unit_name || raw?.responsible_unit || raw?.assignee_name || raw?.assignee || '未指定责任主体')
+  return String(raw?.participant_unit_name || raw?.assignee_name || raw?.assignee || '未指定责任主体')
 }
 
-function getTaskBuildingLabel(task?: Task | null) {
-  const raw = task as Record<string, unknown> | null | undefined
-  return String(raw?.building_id || raw?.buildingId || raw?.building_type || raw?.buildingType || '未设置')
+type ReportEngineeringObjectRef = {
+  objectName?: string | null
+  objectType?: string | null
 }
 
-function getTaskSectionLabel(task?: Task | null) {
-  const raw = task as Record<string, unknown> | null | undefined
-  return String(raw?.section_id || raw?.sectionId || raw?.assignee_unit || raw?.responsible_unit || raw?.wbs_code || '未设置')
+type ReportEngineeringObjectLookup = Map<string, ReportEngineeringObjectRef>
+
+function readTaskText(raw: Record<string, unknown> | null | undefined, keys: string[]) {
+  for (const key of keys) {
+    const value = raw?.[key]
+    if (value === undefined || value === null) continue
+    const text = String(value).trim()
+    if (text) return text
+  }
+  return ''
 }
 
-function getTaskSpecialtyLabel(task?: Task | null) {
+function getTaskScopeObjectLabel(
+  task: Task | null | undefined,
+  objectLookup: ReportEngineeringObjectLookup | undefined,
+  objectIdKeys: string[],
+  fallbackKeys: string[],
+  expectedType?: string,
+) {
   const raw = task as Record<string, unknown> | null | undefined
-  return String(raw?.specialty_type || task?.specialty_type || '未设置')
+  for (const key of objectIdKeys) {
+    const objectId = readTaskText(raw, [key])
+    if (!objectId) continue
+    const object = objectLookup?.get(objectId)
+    if (object && (!expectedType || object.objectType === expectedType)) {
+      const objectName = String(object.objectName ?? '').trim()
+      if (objectName) return objectName
+    }
+  }
+
+  return readTaskText(raw, fallbackKeys) || '未设置'
+}
+
+function getTaskBuildingLabel(task?: Task | null, objectLookup?: ReportEngineeringObjectLookup) {
+  return getTaskScopeObjectLabel(
+    task,
+    objectLookup,
+    ['building_object_id', 'buildingObjectId'],
+    ['building_name', 'buildingName', 'building_id', 'buildingId', 'building_type', 'buildingType'],
+    'building',
+  )
+}
+
+function getTaskSectionLabel(task?: Task | null, objectLookup?: ReportEngineeringObjectLookup) {
+  return getTaskScopeObjectLabel(
+    task,
+    objectLookup,
+    ['section_object_id', 'sectionObjectId'],
+    ['section_name', 'sectionName', 'section_id', 'sectionId', 'section_object_code', 'sectionObjectCode', 'wbs_code'],
+    'section',
+  )
+}
+
+function getTaskSpecialtyLabel(task?: Task | null, objectLookup?: ReportEngineeringObjectLookup) {
+  return getTaskScopeObjectLabel(
+    task,
+    objectLookup,
+    [],
+    ['professional_name', 'professionalName', 'specialty_name', 'specialtyName', 'specialty_type', 'specialtyType'],
+  )
 }
 
 function normalizeAnalysisView(value: string | null): AnalysisView {
@@ -526,7 +894,7 @@ function normalizeAnalysisView(value: string | null): AnalysisView {
     return 'progress_deviation'
   }
 
-  if (value === 'progress' || value === 'progress_deviation' || value === 'risk' || value === 'change_log') {
+  if (value === 'progress' || value === 'progress_deviation' || value === 'risk') {
     return value
   }
 
@@ -541,13 +909,117 @@ function normalizeDeviationView(value: string | null): DeviationView {
   return 'execution'
 }
 
+function buildCountSummary<T>(
+  items: readonly T[],
+  getKey: (item: T) => string | null | undefined,
+) {
+  const counts = new Map<string, number>()
+
+  for (const item of items) {
+    const key = String(getKey(item) ?? '').trim()
+    if (!key) continue
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+
+  return Array.from(counts.entries()).sort((left, right) => right[1] - left[1])
+}
+
+function buildDelayObstacleCorrelationRows(delayedTasks: Task[], projectObstacles: TaskObstacle[]) {
+  return delayedTasks
+    .map((task) => {
+      let activeObstacleCount = 0
+      const obstacleTypeLabels = new Set<string>()
+
+      for (const obstacle of projectObstacles) {
+        if (obstacle.task_id !== task.id) continue
+
+        const label = getObstacleTypeLabel(obstacle)
+        if (label) obstacleTypeLabels.add(label)
+
+        if (String(obstacle.status || '').trim() !== '已解决') {
+          // eslint-disable-next-line -- frontend-bi-aggregation-approved
+          activeObstacleCount += 1
+        }
+      }
+
+      return {
+        id: String(task.id || ''),
+        title: getTaskDisplayName(task),
+        activeObstacleCount,
+        obstacleTypes: Array.from(obstacleTypeLabels),
+      }
+    })
+    .filter((row) => row.activeObstacleCount > 0)
+}
+
+const DEFAULT_REPORT_METRIC_OPTIONS: ReportMetricOption[] = [
+  { value: 'overall_progress', label: '总体进度', description: '项目整体加权进度' },
+  { value: 'health_score', label: '业务健康分', description: '项目业务健康评分' },
+  { value: 'delay_days', label: '延期生产日', description: '累计延期施工生产日' },
+  { value: 'schedule_deviation_days', label: '偏差生产日', description: '实际完成相对计划完成的签名施工生产日偏差' },
+  { value: 'active_risk_count', label: '活跃风险数', description: '当前活跃风险数量' },
+  { value: 'active_obstacle_count', label: '阻碍数', description: '当前活跃阻碍数量' },
+  { value: 'active_delayed_tasks', label: '延期任务数', description: '自动识别的活跃延期任务数量' },
+]
+
+function normalizeMetricRegistryOptions(payload: MetricRegistryOptionResponse[] | null | undefined): ReportMetricOption[] {
+  const rows = Array.isArray(payload) ? payload : []
+  const options = rows
+    .filter((item) => item.frontendVisible !== false)
+    .map((item) => ({
+      value: String(item.key ?? '').trim(),
+      label: String(item.label ?? item.key ?? '').trim(),
+      description: String(item.description ?? '').trim(),
+    }))
+    .filter((item) => item.value && item.label)
+
+  return options.length > 0 ? options : DEFAULT_REPORT_METRIC_OPTIONS
+}
+
+const REPORT_TIME_RANGE_OPTIONS: Array<{ value: ReportTimeRange; label: string; granularity: ReportGranularity }> = [
+  { value: '7d', label: '近 7 天', granularity: 'day' },
+  { value: '30d', label: '近 30 天', granularity: 'week' },
+  { value: '90d', label: '近 90 天', granularity: 'month' },
+  { value: 'all', label: '全部时间', granularity: 'month' },
+]
+
+function formatReportDateKey(value: Date) {
+  return value.toISOString().slice(0, 10)
+}
+
+function resolveReportTrendWindow(range: ReportTimeRange) {
+  const now = new Date()
+  const to = formatReportDateKey(now)
+  if (range === 'all') {
+    return {
+      from: undefined as string | undefined,
+      to: undefined as string | undefined,
+      granularity: 'month' as ReportGranularity,
+    }
+  }
+
+  const days = range === '7d' ? 6 : range === '30d' ? 29 : 89
+  const fromDate = new Date(now)
+  fromDate.setDate(fromDate.getDate() - days)
+
+  const selectedGranularity = REPORT_TIME_RANGE_OPTIONS.find((item) => item.value === range)?.granularity ?? 'month'
+  return {
+    from: formatReportDateKey(fromDate),
+    to,
+    granularity: selectedGranularity,
+  }
+}
+
 export default function Reports() {
+  useEffect(() => {
+    document.title = '分析报表 | WorkBuddy'
+  }, [])
+
   const navigate = useNavigate()
   const { id: routeProjectId } = useParams()
   const [searchParams] = useSearchParams()
   const currentProject = useCurrentProject()
   const [summaryData, setSummaryData] = useState<ProjectSummary | null>(null)
-  const [dataQualitySummary, setDataQualitySummary] = useState<DataQualityProjectSummary | null>(null)
   const [materialSummary, setMaterialSummary] = useState<MaterialReportSummary | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -568,11 +1040,13 @@ export default function Reports() {
   const [deviationSpecialtyFilter, setDeviationSpecialtyFilter] = useState('all')
   const [deviationLevelFilter, setDeviationLevelFilter] = useState('all')
   const [baselineLabel, setBaselineLabel] = useState('当前基线')
-  const [changeLogs, setChangeLogs] = useState<ChangeLogRecord[]>([])
-  const [changeLogLoading, setChangeLogLoading] = useState(false)
-  const [changeLogError, setChangeLogError] = useState<string | null>(null)
   const [issueSummaryData, setIssueSummaryData] = useState<IssueSummaryResponse | null>(null)
   const [issueSummaryLoading, setIssueSummaryLoading] = useState(false)
+  const [sCurvePoints, setSCurvePoints] = useState<SCurveApiPoint[]>([])
+  const [sCurveLoading, setSCurveLoading] = useState(false)
+  const [sCurveError, setSCurveError] = useState<string | null>(null)
+  const [riskLevelFilter, setRiskLevelFilter] = useState('all')
+  const [riskStatusFilter, setRiskStatusFilter] = useState('active')
 
   const activeView = normalizeAnalysisView(searchParams.get('view'))
   const deviationView = normalizeDeviationView(searchParams.get('view'))
@@ -626,24 +1100,6 @@ export default function Reports() {
     }
   }, [projectId])
 
-  const loadDataQualitySummary = useCallback(async (signal?: AbortSignal) => {
-    if (!projectId) {
-      setDataQualitySummary(null)
-      return
-    }
-
-    try {
-      const summary = await DataQualityApiService.getProjectSummary(projectId, undefined, { signal })
-      setDataQualitySummary(summary)
-    } catch (err) {
-      if (signal?.aborted) return
-      console.error('[Reports] Failed to load data quality summary', err)
-      setDataQualitySummary(null)
-    } finally {
-      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
-    }
-  }, [projectId])
-
   const loadMaterialSummary = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) {
       setMaterialSummary(null)
@@ -662,6 +1118,31 @@ export default function Reports() {
     }
   }, [projectId])
 
+  const loadSCurve = useCallback(async (signal?: AbortSignal) => {
+    if (!projectId) {
+      setSCurvePoints([])
+      setSCurveError(null)
+      return
+    }
+
+    setSCurveLoading(true)
+    setSCurveError(null)
+    try {
+      const response = await apiGet<SCurveApiPoint[]>(`/api/projects/${encodeURIComponent(projectId)}/reports/s-curve`, { signal })
+      if (!signal?.aborted) {
+        setSCurvePoints(Array.isArray(response) ? response : [])
+      }
+    } catch (err) {
+      if (signal?.aborted) return
+      console.error('[Reports] Failed to load S-Curve', err)
+      setSCurvePoints([])
+      setSCurveError(getApiErrorMessage(err, 'S 曲线数据加载失败，已使用本地任务进度兜底'))
+    } finally {
+      setSCurveLoading(false)
+      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
+    }
+  }, [projectId])
+
   useEffect(() => {
     const c = new AbortController()
     void loadSummary(c.signal)
@@ -676,15 +1157,15 @@ export default function Reports() {
 
   useEffect(() => {
     const c = new AbortController()
-    void loadDataQualitySummary(c.signal)
-    return () => { c.abort() }
-  }, [loadDataQualitySummary])
-
-  useEffect(() => {
-    const c = new AbortController()
     void loadMaterialSummary(c.signal)
     return () => { c.abort() }
   }, [loadMaterialSummary])
+
+  useEffect(() => {
+    const c = new AbortController()
+    void loadSCurve(c.signal)
+    return () => { c.abort() }
+  }, [loadSCurve])
 
   const loadDeviationAnalysis = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) {
@@ -753,38 +1234,6 @@ export default function Reports() {
     return () => { c.abort() }
   }, [loadDeviationAnalysis])
 
-  const loadChangeLogs = useCallback(async (signal?: AbortSignal) => {
-    if (!projectId) {
-      setChangeLogs([])
-      setChangeLogError('请先进入项目后再查看变更记录')
-      return
-    }
-
-    setChangeLogLoading(true)
-    setChangeLogError(null)
-    try {
-      const nextLogs = await apiGet<ChangeLogRecord[]>(
-        `/api/change-logs?projectId=${encodeURIComponent(projectId)}&limit=50`,
-        { signal },
-      )
-      setChangeLogs(nextLogs ?? [])
-    } catch (err) {
-      if (signal?.aborted) return
-      console.error('[Reports] Failed to load change logs', err)
-      setChangeLogs([])
-      setChangeLogError(getApiErrorMessage(err, '变更记录加载失败，请稍后重试'))
-    } finally {
-      setChangeLogLoading(false)
-      if (!signal?.aborted) setLastRefreshedAt(new Date().toISOString())
-    }
-  }, [projectId])
-
-  useEffect(() => {
-    const c = new AbortController()
-    void loadChangeLogs(c.signal)
-    return () => { c.abort() }
-  }, [loadChangeLogs])
-
   const loadIssueSummary = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) {
       setIssueSummaryData(null)
@@ -820,7 +1269,15 @@ export default function Reports() {
   const projectRisks = useMemo(() => projectScope?.risks ?? [], [projectScope?.risks])
   const projectConditions = useMemo(() => projectScope?.conditions ?? [], [projectScope?.conditions])
   const projectObstacles = useMemo(() => projectScope?.obstacles ?? [], [projectScope?.obstacles])
-  const scopeDimensions = useStore((state) => state.scopeDimensions)
+  const engineeringObjects = useStore((state) => state.engineeringObjects)
+  const fetchEngineeringObjects = useStore((state) => state.fetchEngineeringObjects)
+  const [metricOptions, setMetricOptions] = useState<ReportMetricOption[]>(DEFAULT_REPORT_METRIC_OPTIONS)
+  const [trendMetric, setTrendMetric] = useState<ReportMetricKey>('overall_progress')
+  const [trendTimeRange, setTrendTimeRange] = useState<ReportTimeRange>('30d')
+  const [trendDimension, setTrendDimension] = useState<ReportDimensionKey>('none')
+  const [trendData, setTrendData] = useState<ReportTrendResponse | null>(null)
+  const [trendLoading, setTrendLoading] = useState(false)
+  const [trendError, setTrendError] = useState<string | null>(null)
   const deviationTaskLookup = useMemo(() => new Map(projectTasks.map((task) => [String(task.id || ''), task])), [projectTasks])
   const issueRows = useStore((state) => state.issueRows)
   const projectIssues = useMemo(() => issueRows, [issueRows])
@@ -838,6 +1295,156 @@ export default function Reports() {
   )
   const emptyIssueSummary = useMemo<IssueSummaryResponse>(() => normalizeIssueSummaryResponse(null, projectId || undefined), [projectId])
   const issueSummary = issueSummaryData ?? emptyIssueSummary
+  const activeProjectRisks = useMemo(() => projectRisks.filter(isActiveRisk), [projectRisks])
+  const activeRiskCount = summary?.activeRiskCount ?? activeProjectRisks.length
+  const monthNewTaskCount = useMemo(
+    () => projectTasks.filter((task) => isCurrentMonth(task.created_at)).length,
+    [projectTasks],
+  )
+  const riskTrendData = useMemo(() => {
+    const points = issueSummary.trend.slice(-7).map((point) => ({ value: point.activeIssues }))
+    if (points.length > 0) return points
+    return Array.from({ length: 7 }, (_, index) => ({
+      value: index === 6 ? activeRiskCount : Math.max(0, activeRiskCount - (6 - index)),
+    }))
+  }, [activeRiskCount, issueSummary.trend])
+  const riskMatrixCells = useMemo(() => {
+    const matrix = Array.from({ length: 5 }, (_, impactIndex) =>
+      Array.from({ length: 5 }, (_, probabilityIndex) => ({
+        impact: 5 - impactIndex,
+        probability: probabilityIndex + 1,
+        count: 0,
+      })),
+    )
+
+    for (const risk of activeProjectRisks) {
+      const probability = toRiskMatrixBucket(risk.probability, getRiskLevelRank(risk.level) || 3)
+      const impact = toRiskMatrixBucket(risk.impact, getRiskLevelRank(risk.level) || 3)
+      matrix[5 - impact][probability - 1].count += 1
+    }
+
+    return matrix
+  }, [activeProjectRisks])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved; display-only local filter chips for already-loaded risk rows
+  const riskLevelChips = useMemo(
+    () => [
+      { key: 'all', label: '全部', count: projectRisks.length },
+      { key: 'critical', label: '严重', count: projectRisks.filter((risk) => getRiskLevelLabel(risk.level) === '严重').length },
+      { key: 'high', label: '高', count: projectRisks.filter((risk) => getRiskLevelLabel(risk.level) === '高').length },
+      { key: 'medium', label: '中', count: projectRisks.filter((risk) => getRiskLevelLabel(risk.level) === '中').length },
+      { key: 'low', label: '低', count: projectRisks.filter((risk) => getRiskLevelLabel(risk.level) === '低').length },
+    ],
+    [projectRisks],
+  )
+  const riskStatusChips = useMemo(
+    () => [
+      { key: 'active', label: '活跃', count: activeProjectRisks.length },
+      { key: 'all', label: '全部状态', count: projectRisks.length },
+      { key: 'closed', label: '已关闭', count: projectRisks.length - activeProjectRisks.length },
+    ],
+    [activeProjectRisks.length, projectRisks.length],
+  )
+  const filteredRiskRows = useMemo(
+    () =>
+      [...projectRisks]
+        .filter((risk) => {
+          if (riskStatusFilter === 'active' && !isActiveRisk(risk)) return false
+          if (riskStatusFilter === 'closed' && isActiveRisk(risk)) return false
+          if (riskLevelFilter !== 'all' && getRiskLevelLabel(risk.level) !== getRiskLevelLabel(riskLevelFilter)) return false
+          return true
+        })
+        .sort((left, right) => {
+          const levelDelta = getRiskLevelRank(right.level) - getRiskLevelRank(left.level)
+          if (levelDelta !== 0) return levelDelta
+          return new Date(right.created_at || 0).getTime() - new Date(left.created_at || 0).getTime()
+        }),
+    [projectRisks, riskLevelFilter, riskStatusFilter],
+  )
+  const visibleRiskRows = filteredRiskRows.slice(0, 5)
+  useEffect(() => {
+    const controller = new AbortController()
+    void (async () => {
+      try {
+        const payload = await apiGet<MetricRegistryOptionResponse[]>('/api/metrics/registry', {
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted) return
+        const nextOptions = normalizeMetricRegistryOptions(payload)
+        setMetricOptions(nextOptions)
+        setTrendMetric((current) => (
+          nextOptions.some((option) => option.value === current)
+            ? current
+            : nextOptions[0]?.value ?? 'overall_progress'
+        ))
+      } catch (err) {
+        if (controller.signal.aborted) return
+        console.error('[Reports] Failed to load metric registry', err)
+        setMetricOptions(DEFAULT_REPORT_METRIC_OPTIONS)
+      }
+    })()
+
+    return () => {
+      controller.abort()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!projectId) return
+    void fetchEngineeringObjects(projectId).catch((err) => {
+      console.error('[Reports] Failed to load engineering objects', err)
+    })
+  }, [fetchEngineeringObjects, projectId])
+
+  useEffect(() => {
+    if (!projectId) {
+      setTrendData(null)
+      setTrendError(null)
+      setTrendLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    const window = resolveReportTrendWindow(trendTimeRange)
+    const query = new URLSearchParams({
+      metric: trendMetric,
+      groupBy: trendDimension,
+      granularity: window.granularity,
+    })
+
+    if (window.from) {
+      query.set('from', window.from)
+    }
+    if (window.to) {
+      query.set('to', window.to)
+    }
+
+    setTrendLoading(true)
+    setTrendError(null)
+    void (async () => {
+      try {
+        const data = await apiGet<ReportTrendResponse>(`/api/projects/${encodeURIComponent(projectId)}/metrics/trend?${query.toString()}`, {
+          signal: controller.signal,
+        })
+        if (!controller.signal.aborted) {
+          setTrendData(data)
+        }
+      } catch (err) {
+        if (controller.signal.aborted) return
+        console.error('[Reports] Failed to load trend analytics', err)
+        setTrendData(null)
+        setTrendError(getApiErrorMessage(err, '趋势数据加载失败，请稍后重试'))
+      } finally {
+        if (!controller.signal.aborted) {
+          setTrendLoading(false)
+        }
+      }
+    })()
+
+    return () => {
+      controller.abort()
+    }
+  }, [projectId, trendDimension, trendMetric, trendTimeRange])
+
   const milestoneTasks = useMemo(
     () =>
       projectTasks
@@ -905,23 +1512,14 @@ export default function Reports() {
     [projectTasks],
   )
   const obstacleTypeSummary = useMemo(
-    () =>
-      Array.from(
-        projectObstacles.reduce((map, obstacle) => {
-          const key = getObstacleTypeLabel(obstacle)
-          map.set(key, (map.get(key) || 0) + 1)
-          return map
-        }, new Map<string, number>()),
-      ).sort((left, right) => right[1] - left[1]),
+    () => buildCountSummary(projectObstacles, (obstacle) => getObstacleTypeLabel(obstacle)),
     [projectObstacles],
   )
   const delayStatisticsRows = useMemo(
     () =>
       delayedTasks.map((task) => {
         const plannedEnd = task.planned_end_date || task.end_date
-        const delayDays = plannedEnd
-          ? Math.max(0, Math.ceil((Date.now() - new Date(plannedEnd).getTime()) / 86400000))
-          : 0
+        const delayDays = readBackendDelayDays(task)
         return {
           id: String(task.id || ''),
           title: getTaskDisplayName(task),
@@ -933,17 +1531,7 @@ export default function Reports() {
     [delayedTasks],
   )
   const delayObstacleCorrelationRows = useMemo(
-    () =>
-      delayedTasks.map((task) => {
-        const relatedObstacles = projectObstacles.filter((obstacle) => obstacle.task_id === task.id)
-        const activeObstacleCount = relatedObstacles.filter((obstacle) => String(obstacle.status || '').trim() !== '已解决').length
-        return {
-          id: String(task.id || ''),
-          title: getTaskDisplayName(task),
-          activeObstacleCount,
-          obstacleTypes: Array.from(new Set(relatedObstacles.map((obstacle) => getObstacleTypeLabel(obstacle)))).filter(Boolean),
-        }
-      }).filter((row) => row.activeObstacleCount > 0),
+    () => buildDelayObstacleCorrelationRows(delayedTasks, projectObstacles),
     [delayedTasks, projectObstacles],
   )
 
@@ -965,25 +1553,16 @@ export default function Reports() {
         moduleLabel: '进度偏差',
         actionLabel: '进入偏差分析',
         icon: BarChart3,
-        to: `/projects/${projectId}/reports?view=execution`,
+        to: `/projects/${projectId}/reports?view=progress_deviation`,
       },
       {
         view: 'risk',
         title: '风险与问题分析',
-        description: '查看风险压力、问题聚合、条件未满足、阻碍类型与治理建议。',
+        description: '查看风险、问题与阻碍的综合分析。',
         moduleLabel: '风险与问题',
         actionLabel: '进入风险分析',
         icon: ShieldAlert,
         to: `/projects/${projectId}/reports?view=risk`,
-      },
-      {
-        view: 'change_log',
-        title: '变更记录分析',
-        description: '从任务管理进入，集中查看范围、计划和执行层面的变更记录入口。',
-        moduleLabel: '任务管理 / 变更记录',
-        actionLabel: '进入变更记录分析',
-        icon: RefreshCw,
-        to: `/projects/${projectId}/reports?view=change_log`,
       },
     ],
     [projectId],
@@ -991,19 +1570,15 @@ export default function Reports() {
 
   const activeEntry = analysisEntries.find((entry) => entry.view === activeView)
 
-  const changeLogSourceSummary = useMemo(
-    () =>
-      Array.from(
-        changeLogs.reduce((map, record) => {
-          const key = record.change_source || 'manual_adjusted'
-          map.set(key, (map.get(key) || 0) + 1)
-          return map
-        }, new Map<string, number>()),
-      ).sort((left, right) => right[1] - left[1]),
-    [changeLogs],
-  )
-  const recentChangeLogs = useMemo(() => changeLogs.slice(0, 8), [changeLogs])
   const deviationViewLabel = viewLabels[deviationView]
+  const moduleChips = useMemo(
+    () => [
+      { key: 'progress' as const, label: '进度总览', badge: null as number | null, color: 'blue' },
+      { key: 'progress_deviation' as const, label: '进度偏差', badge: deviationData?.summary.deviated_items ?? 0, color: 'amber' },
+      { key: 'risk' as const, label: `风险(${activeRiskCount} 活跃)`, badge: activeRiskCount, color: 'red' },
+    ],
+    [activeRiskCount, deviationData?.summary.deviated_items],
+  )
 
   const viewConfig = useMemo(() => {
     if (activeView === 'progress') {
@@ -1014,10 +1589,14 @@ export default function Reports() {
         backLabel: '返回里程碑',
         backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
         metrics: [
-          { title: '总体进度', value: `${summary?.overallProgress ?? '--'}%`, hint: `共享摘要口径 · 任务总数 ${summary?.totalTasks ?? 0}`, icon: <BarChart3 className="h-4 w-4" /> },
-          { title: '里程碑完成', value: `${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`, hint: `完成率 ${summary?.milestoneProgress ?? 0}%`, icon: <Flag className="h-4 w-4" /> },
-          { title: '延期任务', value: summary?.delayedTaskCount ?? 0, hint: `延期天数 ${summary?.delayDays ?? 0} · 次数 ${summary?.delayCount ?? 0}`, icon: <ClipboardList className="h-4 w-4" /> },
-          { title: 'WBS完成度', value: `${summary?.taskProgress ?? summary?.overallProgress ?? 0}%`, hint: `叶子任务 ${summary?.leafTaskCount ?? summary?.totalTasks ?? 0}`, icon: <BarChart3 className="h-4 w-4" /> },
+          { title: '总任务数', value: summary?.totalTasks ?? projectTasks.length, hint: `叶子任务 ${summary?.leafTaskCount ?? projectTasks.length}`, icon: <ClipboardList className="h-4 w-4" /> },
+          {
+            title: '完成率',
+            value: formatWholePercent(summary?.overallProgress ?? 0),
+            hint: `里程碑完成率 ${formatWholePercent(summary?.milestoneProgress ?? 0)}`,
+            icon: <BarChart3 className="h-4 w-4" />,
+          },
+          { title: '本月新增', value: monthNewTaskCount, hint: `本月新增任务 · ${getCurrentMonthKey()}`, icon: <Flag className="h-4 w-4" /> },
         ] as MetricItem[],
       }
     }
@@ -1046,26 +1625,8 @@ export default function Reports() {
         backLabel: '返回风险与问题',
         backTo: projectId ? `/projects/${projectId}/risks` : undefined,
         metrics: [
-          { title: '活跃风险', value: summary?.activeRiskCount ?? 0, hint: `总风险 ${summary?.riskCount ?? 0}`, icon: <ShieldAlert className="h-4 w-4" /> },
-          { title: '条件未满足', value: summary?.pendingConditionCount ?? 0, hint: `任务数 ${summary?.pendingConditionTaskCount ?? 0}`, icon: <CheckSquare className="h-4 w-4" /> },
-          { title: '阻碍事项', value: summary?.activeObstacleCount ?? 0, hint: `任务数 ${summary?.activeObstacleTaskCount ?? 0}`, icon: <ClipboardList className="h-4 w-4" /> },
-          { title: '健康度', value: summary?.healthScore ?? '--', hint: summary?.healthStatus || '共享摘要口径', icon: <BarChart3 className="h-4 w-4" /> },
-        ] as MetricItem[],
-      }
-    }
-
-    if (activeView === 'change_log') {
-      return {
-        eyebrow: '任务管理分析',
-        title: '变更记录分析',
-        subtitle: '范围、计划和执行层面的变更轨迹统一回溯。',
-        backLabel: '返回任务管理',
-        backTo: projectId ? `/projects/${projectId}/gantt` : undefined,
-        metrics: [
-          { title: '变更记录', value: changeLogs.length, hint: '项目级变更留痕总数', icon: <ClipboardList className="h-4 w-4" /> },
-          { title: '延期相关', value: changeLogs.filter((record) => record.entity_type === 'delay_request').length, hint: '计划调整与延期审批记录', icon: <RefreshCw className="h-4 w-4" /> },
-          { title: '任务 / 里程碑', value: changeLogs.filter((record) => record.entity_type === 'task' || record.entity_type === 'milestone').length, hint: '任务与关键节点变更', icon: <Flag className="h-4 w-4" /> },
-          { title: '最近来源', value: changeLogSourceSummary[0]?.[0] || '暂无', hint: `最近 50 条共 ${changeLogs.length} 条`, icon: <BarChart3 className="h-4 w-4" /> },
+          { title: '活跃风险', value: activeRiskCount, hint: `总风险 ${summary?.riskCount ?? projectRisks.length}`, icon: <Sparkline data={riskTrendData} color={CHART_SERIES.danger} /> },
+          { title: '未关闭问题', value: issueSummary.active_issues || activeProjectIssues.length, hint: `问题总数 ${issueSummary.total_issues || projectIssues.length}`, icon: <Sparkline data={riskTrendData} color={CHART_SERIES.warning} /> },
         ] as MetricItem[],
       }
     }
@@ -1077,26 +1638,91 @@ export default function Reports() {
       backLabel: '返回里程碑',
       backTo: projectId ? `/projects/${projectId}/milestones` : undefined,
       metrics: [
-        { title: '总体进度', value: `${summary?.overallProgress ?? '--'}%`, hint: `共享摘要口径 · 任务总数 ${summary?.totalTasks ?? 0}`, icon: <BarChart3 className="h-4 w-4" /> },
-        { title: '里程碑完成', value: `${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`, hint: `完成率 ${summary?.milestoneProgress ?? 0}%`, icon: <Flag className="h-4 w-4" /> },
-        { title: '延期任务', value: summary?.delayedTaskCount ?? 0, hint: `延期天数 ${summary?.delayDays ?? 0} · 次数 ${summary?.delayCount ?? 0}`, icon: <ClipboardList className="h-4 w-4" /> },
-        { title: 'WBS完成度', value: `${summary?.taskProgress ?? summary?.overallProgress ?? 0}%`, hint: `叶子任务 ${summary?.leafTaskCount ?? summary?.totalTasks ?? 0}`, icon: <BarChart3 className="h-4 w-4" /> },
+        { title: '总任务数', value: summary?.totalTasks ?? projectTasks.length, hint: `叶子任务 ${summary?.leafTaskCount ?? projectTasks.length}`, icon: <ClipboardList className="h-4 w-4" /> },
+        {
+          title: '完成率',
+          value: formatWholePercent(summary?.overallProgress ?? 0),
+          hint: `里程碑完成率 ${formatWholePercent(summary?.milestoneProgress ?? 0)}`,
+          icon: <BarChart3 className="h-4 w-4" />,
+        },
+        { title: '本月新增', value: monthNewTaskCount, hint: `本月新增任务 · ${getCurrentMonthKey()}`, icon: <Flag className="h-4 w-4" /> },
       ] as MetricItem[],
     }
 
-  }, [activeView, changeLogSourceSummary, changeLogs, deviationData, deviationViewLabel, projectId, projectName, summary])
+  }, [activeProjectIssues.length, activeRiskCount, activeView, deviationData, deviationViewLabel, issueSummary.active_issues, issueSummary.total_issues, monthNewTaskCount, projectId, projectIssues.length, projectRisks.length, projectTasks.length, riskTrendData, summary])
 
   const currentMetrics = viewConfig.metrics
-  const hasSummary = Boolean(summary)
+  const metricGridClass = activeView === 'progress'
+    ? 'grid gap-4 md:grid-cols-2 xl:grid-cols-3'
+    : activeView === 'risk'
+      ? 'grid gap-4 md:grid-cols-2'
+      : 'grid gap-5 md:grid-cols-2 xl:grid-cols-4'
+  const reportEngineeringObjects = useMemo(
+    () => engineeringObjects.filter((object) => !projectId || object.projectId === projectId),
+    [engineeringObjects, projectId],
+  )
+  const reportScopeSections = useMemo(() => {
+    return buildScopeSectionsFromEngineeringObjects(reportEngineeringObjects)
+  }, [reportEngineeringObjects])
+  const engineeringObjectLookup = useMemo<ReportEngineeringObjectLookup>(
+    () => new Map(reportEngineeringObjects.map((object) => [
+      object.id,
+      { objectName: object.objectName, objectType: object.objectType },
+    ])),
+    [reportEngineeringObjects],
+  )
+  const engineeringObjectLabelsByType = useMemo(() => {
+    const labels: Record<'building' | 'section' | 'specialty', string[]> = {
+      building: [],
+      section: [],
+      specialty: [],
+    }
+    for (const object of reportEngineeringObjects) {
+      if (object.status !== 'active') continue
+      const label = String(object.objectName ?? '').trim()
+      if (!label) continue
+      if (object.objectType === 'building') labels.building.push(label)
+      if (object.objectType === 'section') labels.section.push(label)
+    }
+    for (const task of projectTasks) {
+      const label = getTaskSpecialtyLabel(task, engineeringObjectLookup)
+      if (label) labels.specialty.push(label)
+    }
+    return labels
+  }, [engineeringObjectLookup, projectTasks, reportEngineeringObjects])
+  const selectedTrendMetric = metricOptions.find((option) => option.value === trendMetric) ?? metricOptions[0] ?? DEFAULT_REPORT_METRIC_OPTIONS[0]
+  const selectedTrendRange = REPORT_TIME_RANGE_OPTIONS.find((option) => option.value === trendTimeRange) ?? REPORT_TIME_RANGE_OPTIONS[1]
+  const selectedTrendDimension = reportScopeSections.find((section) => section.key === trendDimension) ?? null
+  const trendPoints = trendData?.points ?? []
+  const showReportModules = Boolean(projectId)
+
+  useEffect(() => {
+    if (trendDimension !== 'none' && !reportScopeSections.some((section) => section.key === trendDimension)) {
+      setTrendDimension('none')
+    }
+  }, [reportScopeSections, trendDimension])
   const deviationMainlineKey: Record<DeviationView, ProgressDeviationMainlineKey> = {
     baseline: 'baseline',
     monthly: 'monthly_plan',
     execution: 'execution',
   }
   const deviationMainline = deviationData?.mainlines.find((mainline) => mainline.key === deviationMainlineKey[deviationView]) ?? null
-  const deviationRows = deviationMainline?.rows ?? deviationData?.rows.filter((row) => row.mainline === deviationMainlineKey[deviationView]) ?? []
+  const deviationRowDetails = useMemo(
+    () => new Map((deviationData?.rows ?? []).map((row) => [row.id, row] as const)),
+    [deviationData?.rows],
+  )
+  const deviationRows = useMemo(() => {
+    const rows = deviationMainline?.rows ?? deviationData?.rows.filter((row) => row.mainline === deviationMainlineKey[deviationView]) ?? []
+    return rows.map((row) => {
+      const detail = deviationRowDetails.get(row.id)
+      return detail ? { ...row, ...detail } : row
+    })
+  }, [deviationData?.rows, deviationMainline?.rows, deviationMainlineKey[deviationView], deviationRowDetails, deviationView])
   const deviationVersionEvents = deviationData?.trend_events ?? []
   const activeDeviationLock = deviationLock ?? deviationData?.version_lock ?? null
+  // progress-deviation-ssot: this surface displays backend ProgressDeviationAnalysisResponse fields
+  // (`planned_progress`, `actual_progress`, `deviation_days`, `deviation_rate`) and must not
+  // recompute delay/progress deviation from task dates or raw task progress.
   const deviationRowMeta = useMemo(
     () =>
       deviationRows.map((row) => {
@@ -1104,38 +1730,37 @@ export default function Reports() {
         return {
           row,
           task,
-          buildingLabel: getTaskBuildingLabel(task),
-          sectionLabel: getTaskSectionLabel(task),
-          specialtyLabel: getTaskSpecialtyLabel(task),
+          buildingLabel: getTaskBuildingLabel(task, engineeringObjectLookup),
+          sectionLabel: getTaskSectionLabel(task, engineeringObjectLookup),
+          specialtyLabel: getTaskSpecialtyLabel(task, engineeringObjectLookup),
           levelLabel: getDeviationStatusLabel(row.status),
           actualDateKey: row.actual_date ? row.actual_date.slice(0, 10) : '',
         }
       }),
-    [deviationRows, deviationTaskLookup],
+    [deviationRows, deviationTaskLookup, engineeringObjectLookup],
   )
   const deviationFilterOptions = useMemo(() => {
     const uniqueValues = (items: string[]) => [...new Set(items.map((value) => String(value || '').trim()).filter((value) => value && value !== '未设置'))].sort((left, right) => left.localeCompare(right, 'zh-CN'))
     const taskScopeOptions = (section?: { selected?: string[]; options?: string[] }) => section?.selected?.length ? section.selected : section?.options ?? []
-    const buildingScope = scopeDimensions.find((section) => section.key === 'building')
-    const specialtyScope = scopeDimensions.find((section) => section.key === 'specialty')
-    const phaseScope = scopeDimensions.find((section) => section.key === 'phase')
+    const buildingScope = reportScopeSections.find((section) => section.key === 'building')
 
     return {
       buildings: uniqueValues([
         ...deviationRowMeta.map((item) => item.buildingLabel),
+        ...engineeringObjectLabelsByType.building,
         ...taskScopeOptions(buildingScope),
       ]),
       sections: uniqueValues([
         ...deviationRowMeta.map((item) => item.sectionLabel),
-        ...taskScopeOptions(phaseScope),
+        ...engineeringObjectLabelsByType.section,
       ]),
       specialties: uniqueValues([
         ...deviationRowMeta.map((item) => item.specialtyLabel),
-        ...taskScopeOptions(specialtyScope),
+        ...engineeringObjectLabelsByType.specialty,
       ]),
       levels: uniqueValues(deviationRowMeta.map((item) => String(item.row.status || '').trim())),
     }
-  }, [deviationRowMeta, scopeDimensions])
+  }, [deviationRowMeta, engineeringObjectLabelsByType, reportScopeSections])
   const filteredDeviationRows = useMemo(
     () =>
       deviationRowMeta
@@ -1159,6 +1784,18 @@ export default function Reports() {
         .map((item) => item.row),
     [deviationBuildingFilter, deviationLevelFilter, deviationRowMeta, deviationSectionFilter, deviationSpecialtyFilter, deviationTimeRange],
   )
+  const deviationTableRows = useMemo(() => {
+    if (deviationView !== 'execution') {
+      return filteredDeviationRows
+    }
+
+    return [...filteredDeviationRows].sort((left, right) => {
+      const leftLinked = left.source_task_id ? 1 : 0
+      const rightLinked = right.source_task_id ? 1 : 0
+      if (rightLinked !== leftLinked) return rightLinked - leftLinked
+      return Math.abs(right.deviation_days) - Math.abs(left.deviation_days)
+    })
+  }, [deviationView, filteredDeviationRows])
   const filteredDeviationRowIds = useMemo(
     () => new Set(filteredDeviationRows.map((row) => row.id)),
     [filteredDeviationRows],
@@ -1212,7 +1849,7 @@ export default function Reports() {
       },
       {
         title: '月度兑现偏差',
-        value: `${summary?.overallProgress ?? 0}%`,
+        value: formatWholePercent(summary?.overallProgress ?? 0),
         description: '月度兑现偏差受确认状态、延期与月末待处理事项共同影响。',
         hint: '非主线摘要默认折叠',
       },
@@ -1227,160 +1864,112 @@ export default function Reports() {
   )
   const pageHeaderConfig = {
     breadcrumbLabel: viewConfig.title,
-    eyebrow: viewConfig.eyebrow,
-    title: viewConfig.title,
-    subtitle: viewConfig.subtitle,
+    eyebrow: '数据分析',
+    title: '报表分析',
+    subtitle: '',
     backLabel: viewConfig.backLabel,
     backTo: viewConfig.backTo,
   }
 
+  const reportConclusionCards = useMemo(() => [
+    {
+      title: '当前主结论',
+      value: formatWholePercent(summary?.overallProgress ?? 0),
+      hint: '整体进度与里程碑完成率的综合口径',
+    },
+    {
+      title: '风险压力',
+      value: activeRiskCount + issueSummary.active_issues,
+      hint: '活跃风险与未闭环问题合计',
+    },
+    {
+      title: '交付阻塞',
+      value: (summary?.activeObstacleCount ?? projectObstacles.length) + (summary?.pendingConditionCount ?? projectConditions.length),
+      hint: '条件未满足与阻碍项合并观察',
+    },
+  ], [activeRiskCount, issueSummary.active_issues, projectConditions.length, projectObstacles.length, summary?.activeObstacleCount, summary?.overallProgress, summary?.pendingConditionCount])
+
   const handleRefreshReports = () => {
     void loadSummary()
     void loadCriticalPathSummary()
-    void loadDataQualitySummary()
     void loadMaterialSummary()
+    void loadSCurve()
     void loadDeviationAnalysis()
-    void loadChangeLogs()
+    // v1.4.14: audit trail loading removed from ordinary Reports.
     void loadIssueSummary()
   }
 
-  const handleExportCurrentView = (format: 'xlsx' | 'pdf') => {
-    if (format === 'pdf') {
-      window.print()
-      return
+  const downloadReportFile = async (url: string, fallbackFileName: string) => {
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      headers: getAuthHeaders(),
+    })
+
+    if (!response.ok) {
+      const message = await response.text().catch(() => '')
+      throw new Error(message || `导出失败 ${response.status}`)
     }
 
-    const buildSheet = (rows: Record<string, unknown>[], emptyLabel: string) =>
-      XLSX.utils.json_to_sheet(rows.length > 0 ? rows : [{ 提示: emptyLabel }])
+    const blob = await response.blob()
+    const disposition = response.headers.get('content-disposition') || ''
+    const encodedFileName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1]
+    const quotedFileName = disposition.match(/filename="([^"]+)"/i)?.[1]
+    const fileName = encodedFileName
+      ? decodeURIComponent(encodedFileName)
+      : quotedFileName || fallbackFileName
 
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    const fileBase = `${projectName}-${pageHeaderConfig.title}-${timestamp}`
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, '_')
+    const objectUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = fileName
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(objectUrl)
+    toast({ title: '导出已生成', description: fileName })
+  }
 
-    const workbook = XLSX.utils.book_new()
-    const overviewRows = currentMetrics.map((metric) => ({
-      指标: metric.title,
-      数值: typeof metric.value === 'number' ? metric.value : String(metric.value),
-      说明: metric.hint || '',
-    }))
-    XLSX.utils.book_append_sheet(workbook, buildSheet(overviewRows, '当前视图暂无概览数据'), '概览')
-
-    if (activeView === 'progress') {
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          reportMilestoneCards.map((milestone) => ({
-            里程碑: milestone.name,
-            状态: milestone.statusLabel,
-            进度: milestone.progress,
-            计划日期: formatDateLabel(milestone.plannedDate),
-            当前计划: formatDateLabel(milestone.currentPlannedDate),
-            实际日期: formatDateLabel(milestone.actualDate),
-          })),
-          '当前视图暂无里程碑数据',
-        ),
-        '里程碑',
+  const handleExportCurrentView = async (format: 'xlsx' | 'pdf') => {
+    if (!projectId) return
+    try {
+      const query = new URLSearchParams({
+        format,
+        view: activeView,
+      })
+      await downloadReportFile(
+        `/api/projects/${encodeURIComponent(projectId)}/reports/export?${query.toString()}`,
+        `${projectName}-${pageHeaderConfig.title}.${format}`,
       )
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          delayedTasks.map((task) => ({
-            任务: getTaskDisplayName(task),
-            状态: getTaskStatus(task),
-            责任主体: getResponsibilityLabel(task),
-            计划完成: formatDateLabel(task.planned_end_date || task.end_date || null),
-            实际完成: formatDateLabel(task.actual_end_date || null),
-          })),
-          '当前视图暂无延期任务',
-        ),
-        '延期任务',
-      )
-    } else if (activeView === 'progress_deviation') {
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          deviationRows.map((row) => ({
-            条目: row.title,
-            主线: deviationMainline?.label || row.mainline,
-            计划进度: row.planned_progress ?? '',
-            实际进度: row.actual_progress ?? '',
-            实际日期: formatDateLabel(row.actual_date || null),
-            偏差天数: row.deviation_days,
-            偏差率: `${row.deviation_rate}%`,
-            状态: row.status,
-            原因: row.reason || '',
-            映射状态: row.mapping_status || 'mapped',
-            合并到: row.merged_into?.title || '',
-            子项数: row.child_group?.child_count ?? '',
-          })),
-          '当前视图暂无偏差明细',
-        ),
-        '偏差明细',
-      )
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          deviationVersionEvents.map((event) => ({
-            切换日期: event.switch_date,
-            从版本: event.from_version,
-            到版本: event.to_version,
-            说明: event.explanation,
-          })),
-          '当前视图暂无切换事件',
-        ),
-        '切换事件',
-      )
-    } else if (activeView === 'risk') {
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          focusRisks.map((risk) => ({
-            风险: risk.title || '未命名风险',
-            描述: risk.description || '',
-            等级: risk.level || '',
-            来源: summarizeRiskSource(risk),
-            状态: parseStatusLabel(risk.status),
-          })),
-          '当前视图暂无风险清单',
-        ),
-        '风险清单',
-      )
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          activeProjectIssues.map((issue) => ({
-            问题: issue.title,
-            状态: getIssueStatusLabel(issue.status),
-            来源: getIssueSourceLabel(issue.sourceType),
-            严重度: getIssueSeverityLabel(issue.severity),
-            创建时间: formatDateTimeLabel(issue.createdAt),
-            描述: issue.description || '',
-          })),
-          '当前视图暂无问题清单',
-        ),
-        '问题清单',
-      )
-    } else if (activeView === 'change_log') {
-      XLSX.utils.book_append_sheet(
-        workbook,
-        buildSheet(
-          recentChangeLogs.map((record) => ({
-            实体类型: record.entity_type,
-            字段: record.field_name,
-            来源: record.change_source || 'manual_adjusted',
-            旧值: record.old_value || '',
-            新值: record.new_value || '',
-            原因: record.change_reason || '',
-            时间: record.changed_at || '',
-          })),
-          '当前视图暂无变更记录',
-        ),
-        '变更记录',
-      )
+    } catch (err) {
+      console.error('[Reports] Failed to export current view', err)
+      toast({
+        title: '导出失败',
+        description: getApiErrorMessage(err, '请稍后重试。'),
+        variant: 'destructive',
+      })
     }
+  }
 
-    XLSX.writeFile(workbook, `${fileBase}.xlsx`)
+  const handleExportOwnerMonthly = async (format: 'xlsx' | 'pdf') => {
+    if (!projectId) return
+    try {
+      const query = new URLSearchParams({
+        format,
+        period: new Date().toISOString().slice(0, 7),
+      })
+      await downloadReportFile(
+        `/api/projects/${encodeURIComponent(projectId)}/reports/owner-monthly?${query.toString()}`,
+        `${projectName}-业主月报.${format}`,
+      )
+    } catch (err) {
+      console.error('[Reports] Failed to export owner monthly report', err)
+      toast({
+        title: '业主月报导出失败',
+        description: getApiErrorMessage(err, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    }
   }
 
   const openEntry = (entry: AnalysisEntry) => {
@@ -1390,30 +1979,79 @@ export default function Reports() {
 
   const renderProgressDetail = () => (
     <>
+      <div className="content-sidebar-grid">
+        <div className="space-y-3">
+          {sCurveLoading && sCurvePoints.length === 0 ? (
+            <LoadingState
+              label="S 曲线加载中"
+              className="min-h-64 rounded-2xl empty-state-frame border-slate-200 bg-slate-50"
+            />
+          ) : (
+            <SCurveChart points={sCurvePoints} tasks={projectTasks} />
+          )}
+          {sCurveError ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              {sCurveError}
+            </div>
+          ) : null}
+        </div>
+
+        <Card data-testid="reports-key-node-list" variant="surface">
+          <ReportSectionHead eyebrow="REPORT" title="关键节点列表" />
+          <CardContent className="space-y-3">
+            {reportMilestoneCards.length === 0 ? (
+              <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                暂无关键节点
+              </div>
+            ) : (
+              reportMilestoneCards.map((milestone) => {
+                const completed = milestone.statusLabel.includes('完成') || milestone.progress >= 100
+                const delayed = milestone.currentPlannedDate && !completed && new Date(milestone.currentPlannedDate).getTime() < Date.now()
+                const dotClass = completed ? 'bg-emerald-500' : delayed ? 'bg-red-500' : 'bg-amber-500'
+
+                return (
+                  <div
+                    key={milestone.id}
+                    className="grid grid-cols-[5.75rem_minmax(0,1fr)_0.625rem] items-center gap-4 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                  >
+                    <div className="text-xs text-slate-500 num-mono">{formatDateLabel(milestone.currentPlannedDate)}</div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-slate-900">{milestone.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">进度 {formatWholePercent(milestone.progress)} · {milestone.statusLabel}</div>
+                    </div>
+                    <span className={`h-2 w-2 rounded-full ${dotClass}`} aria-hidden="true" />
+                  </div>
+                )
+              })
+            )}
+          </CardContent>
+        </Card>
+      </div>
       <CriticalPathSummaryCard summary={criticalPathSummary} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-      <Card className="border-slate-200 shadow-sm">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">工期偏差与执行判断</CardTitle>
-        </CardHeader>
+      <div className="content-sidebar-grid">
+      <Card className="surface-card">
+        <ReportSectionHead eyebrow="REPORT" title="工期偏差与执行判断" />
         <CardContent className="space-y-4">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <DetailStatCard label="整体完成率" value={`${summary?.overallProgress ?? 0}%`} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
-            <DetailStatCard label="里程碑完成率" value={`${summary?.milestoneProgress ?? 0}%`} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
-            <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 天`} />
-            <DetailStatCard label="下一里程碑" value={summary?.nextMilestone?.daysRemaining ?? '--'} hint={summary?.nextMilestone?.name || '待识别关键节点'} />
+          <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+            <DetailStatCard label="整体完成率" value={formatWholePercent(summary?.overallProgress ?? 0)} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
+            <DetailStatCard label="里程碑完成率" value={formatWholePercent(summary?.milestoneProgress ?? 0)} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
+            <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 个生产日`} />
+            <DetailStatCard
+              label="验收通过"
+              value={`${summary?.passedAcceptancePlanCount ?? 0}/${summary?.acceptancePlanCount ?? 0}`}
+              hint={`进行中 ${summary?.inProgressAcceptancePlanCount ?? 0} · 需补充 ${summary?.failedAcceptancePlanCount ?? 0}`}
+              to={projectId ? `/projects/${projectId}/acceptance?status=passed&phase=all` : '/acceptance?status=passed&phase=all'}
+              testId="reports-acceptance-summary-link"
+            />
           </div>
         </CardContent>
       </Card>
 
-      <Card className="border-slate-200 shadow-sm">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">里程碑窗口</CardTitle>
-        </CardHeader>
+      <Card className="surface-card">
+        <ReportSectionHead eyebrow="REPORT" title="里程碑窗口" />
         <CardContent className="space-y-3">
           {reportMilestoneCards.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-              暂无里程碑任务
+            <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
             </div>
           ) : (
             reportMilestoneCards.map((milestone) => (
@@ -1422,22 +2060,22 @@ export default function Reports() {
                   <div className="text-sm font-medium text-slate-900">{milestone.name}</div>
                   <div className="text-xs text-slate-500">{milestone.statusLabel}</div>
                 </div>
-                <div className="mt-3 grid gap-2 text-[11px] text-slate-500 sm:grid-cols-3" data-testid="reports-milestone-three-time">
+                <div className="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-3" data-testid="reports-milestone-three-time">
                   <div className="rounded-lg bg-white px-2 py-1.5">
-                    <div className="text-[10px] uppercase tracking-wide text-slate-400">计划</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">计划</div>
                     <div className="mt-0.5 font-medium text-slate-700">{formatDateLabel(milestone.plannedDate)}</div>
                   </div>
                   <div className="rounded-lg bg-white px-2 py-1.5">
-                    <div className="text-[10px] uppercase tracking-wide text-slate-400">当前</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">当前</div>
                     <div className="mt-0.5 font-medium text-slate-700">{formatDateLabel(milestone.currentPlannedDate)}</div>
                   </div>
                   <div className="rounded-lg bg-white px-2 py-1.5">
-                    <div className="text-[10px] uppercase tracking-wide text-slate-400">实际</div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">实际</div>
                     <div className="mt-0.5 font-medium text-slate-700">{formatDateLabel(milestone.actualDate)}</div>
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-slate-500">
-                  当前进度 {milestone.progress}% · 主对比 {formatDateLabel(milestone.currentPlannedDate)} / {formatDateLabel(milestone.actualDate)}
+                  当前进度 {formatWholePercent(milestone.progress)} · 主对比 {formatDateLabel(milestone.currentPlannedDate)} / {formatDateLabel(milestone.actualDate)}
                 </div>
               </div>
             ))
@@ -1445,11 +2083,9 @@ export default function Reports() {
         </CardContent>
       </Card>
 
-      <Card className="border-slate-200 shadow-sm">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">专项与关键路径概览</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
+      <Card className="surface-card">
+        <ReportSectionHead eyebrow="REPORT" title="专项与关键路径概览" />
+        <CardContent className="grid gap-5 sm:grid-cols-3">
           <DetailStatCard
             label="专项准备度"
             value={(summary?.completedPreMilestoneCount ?? 0) + (summary?.issuedConstructionDrawingCount ?? 0)}
@@ -1468,23 +2104,21 @@ export default function Reports() {
         </CardContent>
       </Card>
 
-      <Card className="border-slate-200 shadow-sm xl:col-span-2">
-        <CardHeader className="pb-4">
-          <CardTitle className="text-base">关键任务 / WBS 节点</CardTitle>
-        </CardHeader>
+      <Card className="surface-card xl:col-span-2">
+        <ReportSectionHead eyebrow="REPORT" title="关键任务 / WBS 节点" />
         <CardContent className="space-y-3">
           {wbsFocusRows.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+            <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
               暂无任务节点数据
             </div>
           ) : (
             wbsFocusRows.map((task) => (
-              <div key={task.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.2fr)_120px_140px_120px]">
+              <div key={task.id} className="grid gap-5 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.2fr)_7.5rem_8.75rem_7.5rem]">
                 <div>
                   <div className="text-sm font-medium text-slate-900">{getTaskDisplayName(task)}</div>
                   <div className="mt-1 text-xs text-slate-500">WBS {task.wbs_code || '未编码'} · {getTaskStatus(task)}</div>
                 </div>
-                <div className="text-sm text-slate-700">进度 {task.progress ?? 0}%</div>
+                <div className="text-sm text-slate-700">进度 {formatWholePercent(task.progress ?? 0)}</div>
                 <div className="text-sm text-slate-700">计划完成 {formatDateLabel(task.planned_end_date || task.end_date)}</div>
                 <div className={`text-sm font-medium ${isDelayedTask(task) ? 'text-red-600' : 'text-slate-700'}`}>
                   {isDelayedTask(task) ? '存在延期' : '节奏正常'}
@@ -1523,41 +2157,51 @@ export default function Reports() {
 
       <div
         data-testid="deviation-filter-chips"
-        className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+        className="flex flex-wrap gap-2 rounded-2xl border border-slate-100 bg-white p-4 shadow-[var(--el-1)]"
       >
         {deviationChips.map((chip) => (
-          <button
+          <Button variant="ghost"
             key={chip.label}
             type="button"
             onClick={() => setDeviationFocus(chip.key)}
-            className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+            className={`gap-2 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
               deviationFocus === chip.key
                 ? 'bg-slate-900 text-white'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             }`}
           >
-            {chip.label} {chip.value}
-          </button>
+            <span>{chip.label}</span>
+            <span
+              className={`rounded-full px-2 py-0.5 text-xs font-semibold num-mono ${
+                deviationFocus === chip.key ? 'bg-white/20 text-white' : 'bg-white text-slate-600'
+              }`}
+            >
+              {chip.value}
+            </span>
+          </Button>
         ))}
         <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
           当前聚焦 {getDeviationFocusLabel(deviationFocus)}
         </span>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard
+      <div className="grid gap-5 md:grid-cols-3">
+        <SharedMetricCard
+          eyebrow="BASELINE"
           title="基线偏差"
           value={deviationData?.summary.baseline_items ?? 0}
           hint="聚焦基线节点、对应关系状态与版本切换影响"
           icon={<Flag className="h-4 w-4" />}
         />
-        <MetricCard
+        <SharedMetricCard
+          eyebrow="MONTHLY"
           title="月度兑现偏差"
           value={deviationData?.summary.monthly_plan_items ?? 0}
           hint="聚焦月度计划兑现、延期与月末待处理事项"
           icon={<ClipboardList className="h-4 w-4" />}
         />
-        <MetricCard
+        <SharedMetricCard
+          eyebrow="EXEC"
           title="执行偏差"
           value={deviationData?.summary.execution_items ?? projectTasks.length}
           hint="聚焦任务推进、条件阻碍与执行节奏"
@@ -1565,12 +2209,22 @@ export default function Reports() {
         />
       </div>
 
-      <Card data-testid="reports-deviation-lock-card" className="border-slate-200 shadow-sm">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <DetailStatCard
+          label="验收通过"
+          value={`${summary?.passedAcceptancePlanCount ?? 0}/${summary?.acceptancePlanCount ?? 0}`}
+          hint={`进行中 ${summary?.inProgressAcceptancePlanCount ?? 0} · 需补充 ${summary?.failedAcceptancePlanCount ?? 0}`}
+          to={projectId ? `/projects/${projectId}/acceptance?status=passed&phase=all` : '/acceptance?status=passed&phase=all'}
+          testId="reports-acceptance-summary-link"
+        />
+      </div>
+
+      <Card data-testid="reports-deviation-lock-card" className="surface-card">
         <CardContent className="flex flex-wrap items-center justify-between gap-4 p-5">
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
               <LockKeyhole className="h-4 w-4 text-slate-500" />
-              版本锁状态
+              <span>版本锁状态</span>
             </div>
             <div className="text-sm text-slate-600">
               {activeDeviationLock?.is_locked
@@ -1581,7 +2235,7 @@ export default function Reports() {
               <div className="text-xs text-amber-700">{deviationLockError}</div>
             ) : null}
           </div>
-          <div className="grid gap-2 text-right text-xs text-slate-500 sm:min-w-[220px]">
+          <div className="grid gap-2 text-right text-xs text-slate-500 sm:min-w-56">
             <div>锁定时间：{formatDateTimeLabel(activeDeviationLock?.locked_at)}</div>
             <div>到期时间：{formatDateTimeLabel(activeDeviationLock?.lock_expires_at)}</div>
           </div>
@@ -1589,7 +2243,7 @@ export default function Reports() {
       </Card>
 
       {deviationError ? (
-        <Card className="border-slate-200 shadow-sm">
+        <Card className="surface-card">
           <CardContent className="py-10 text-center text-sm text-red-600">
             {deviationError}
           </CardContent>
@@ -1605,75 +2259,81 @@ export default function Reports() {
             <>
           <BaselineSwitchMarker events={deviationVersionEvents} baselineLabel={baselineLabel} />
 
-          <Card data-testid="reports-deviation-filter-panel" className="border-slate-200 shadow-sm">
-            <CardHeader className="pb-4">
-              <CardTitle className="text-base">偏差筛选</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <Card data-testid="reports-deviation-filter-panel" className="surface-card">
+            <ReportSectionHead eyebrow="REPORT" title="偏差筛选" />
+            <CardContent className="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
               <label className="space-y-1 text-xs text-slate-500">
                 <span>时间范围</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
+                <Select
                   value={deviationTimeRange}
-                  onChange={(event) => setDeviationTimeRange(event.target.value as 'all' | '7d' | '30d' | '90d')}
+                  onValueChange={(value) => setDeviationTimeRange(value as 'all' | '7d' | '30d' | '90d')}
                 >
-                  <option value="all">全部时间</option>
-                  <option value="7d">近 7 天</option>
-                  <option value="30d">近 30 天</option>
-                  <option value="90d">近 90 天</option>
-                </select>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部时间" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部时间</SelectItem>
+                    <SelectItem value="7d">近 7 天</SelectItem>
+                    <SelectItem value="30d">近 30 天</SelectItem>
+                    <SelectItem value="90d">近 90 天</SelectItem>
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>楼栋</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationBuildingFilter}
-                  onChange={(event) => setDeviationBuildingFilter(event.target.value)}
-                >
-                  <option value="all">全部楼栋</option>
-                  {deviationFilterOptions.buildings.map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </select>
+                <Select value={deviationBuildingFilter} onValueChange={setDeviationBuildingFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部楼栋" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部楼栋</SelectItem>
+                    {deviationFilterOptions.buildings.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>标段</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationSectionFilter}
-                  onChange={(event) => setDeviationSectionFilter(event.target.value)}
-                >
-                  <option value="all">全部标段</option>
-                  {deviationFilterOptions.sections.map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </select>
+                <Select value={deviationSectionFilter} onValueChange={setDeviationSectionFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部标段" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部标段</SelectItem>
+                    {deviationFilterOptions.sections.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>专业</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationSpecialtyFilter}
-                  onChange={(event) => setDeviationSpecialtyFilter(event.target.value)}
-                >
-                  <option value="all">全部专业</option>
-                  {deviationFilterOptions.specialties.map((value) => (
-                    <option key={value} value={value}>{value}</option>
-                  ))}
-                </select>
+                <Select value={deviationSpecialtyFilter} onValueChange={setDeviationSpecialtyFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部专业" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部专业</SelectItem>
+                    {deviationFilterOptions.specialties.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
               <label className="space-y-1 text-xs text-slate-500">
                 <span>偏差等级</span>
-                <select
-                  className="h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700"
-                  value={deviationLevelFilter}
-                  onChange={(event) => setDeviationLevelFilter(event.target.value)}
-                >
-                  <option value="all">全部等级</option>
-                  {deviationFilterOptions.levels.map((value) => (
-                    <option key={value} value={value}>{getDeviationStatusLabel(value)}</option>
-                  ))}
-                </select>
+                <Select value={deviationLevelFilter} onValueChange={setDeviationLevelFilter}>
+                  <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                    <SelectValue placeholder="全部等级" />
+                  </SelectTrigger>
+                  <SelectContent align="start" side="bottom">
+                    <SelectItem value="all">全部等级</SelectItem>
+                    {deviationFilterOptions.levels.map((value) => (
+                      <SelectItem key={value} value={value}>{getDeviationStatusLabel(value)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </label>
             </CardContent>
           </Card>
@@ -1690,19 +2350,17 @@ export default function Reports() {
             <ExecutionScatterChart rows={executionDeviationChartRows} mainlineLabel={deviationMainline?.label || deviationViewLabel} />
           )}
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(380px,0.9fr)]">
+          <div className="content-sidebar-grid">
             <DeviationDetailTable
-              rows={filteredDeviationRows}
+              rows={deviationTableRows}
               mainlineLabel={deviationMainline?.label || deviationViewLabel}
               onSelectRow={(row) => setSelectedDeviationRow(row as ProgressDeviationRow)}
             />
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.9fr)]">
-            <Card data-testid="deviation-detail-panel" className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-base">下钻明细区</CardTitle>
-              </CardHeader>
+          <div className="content-sidebar-grid">
+            <Card data-testid="deviation-detail-panel" className="surface-card">
+              <ReportSectionHead eyebrow="REPORT" title="下钻明细区" />
               <CardContent className="space-y-3">
                 {secondaryExpanded ? (
                   secondarySummaryCards.map((card) => (
@@ -1712,41 +2370,75 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-5" />
+                  <EmptyState
+                    icon={BarChart3}
+                    title="下钻明细已收起"
+                    description="当前只展示主表和责任归因摘要。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-5"
+                  />
                 )}
               </CardContent>
             </Card>
 
-            <Card data-testid="reports-responsibility-analysis" className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-base">责任归因分析</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
+            <Card data-testid="reports-responsibility-analysis" className="surface-card">
+              <ReportSectionHead eyebrow="REPORT" title="责任归因分析" />
+              <CardContent className="space-y-8">
                 <div className="space-y-3">
                   <div className="text-sm font-medium text-slate-700">责任贡献</div>
                   {responsibilityContribution.length > 0 ? (
-                    responsibilityContribution.map((entry) => (
-                      <div key={entry.owner} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                    responsibilityContribution.map((entry) => {
+                      const affectedTaskIds = formatEvidenceIds(entry.task_ids)
+                      const causalTaskIds = formatEvidenceIds(entry.causal_task_ids)
+                      const evidenceSources = formatEvidenceIds(entry.evidence_sources)
+                      const confidenceLabel = formatEvidenceConfidence(entry.confidence)
+                      const impactDays =
+                        typeof entry.impact_days === 'number' && Number.isFinite(entry.impact_days)
+                          ? Math.round(entry.impact_days * 10) / 10
+                          : null
+                      const weightedCount =
+                        typeof entry.weighted_count === 'number' && Number.isFinite(entry.weighted_count)
+                          ? Math.round(entry.weighted_count * 10) / 10
+                          : null
+
+                      return (
+                      <div
+                        key={`${entry.owner}:${entry.responsibility_role || 'owner'}:${entry.basis || 'basis'}:${entry.task_ids.join('|')}`}
+                        className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3"
+                      >
                         <div className="flex items-center justify-between gap-3">
-                          <div>
+                          <div className="min-w-0">
+                            <div className="mb-2 flex flex-wrap gap-2">
+                              <Badge variant={entry.responsibility_role === 'accountable_subject' ? 'default' : 'secondary'}>
+                                {getResponsibilityRoleLabel(entry.responsibility_role)}
+                              </Badge>
+                              <Badge variant="outline">{getResponsibilityBasisLabel(entry.basis)}</Badge>
+                            </div>
                             <div className="text-sm font-medium text-slate-900">{entry.owner}</div>
                             <div className="mt-1 text-xs text-slate-500">
                               {entry.task_ids.length} 个任务 · {entry.count} 项偏差
                             </div>
                           </div>
-                          <div className="text-xs text-slate-500">{entry.percentage}%</div>
+                          <div className="text-xs text-slate-500">{formatWholePercent(entry.percentage)}</div>
                         </div>
-                        <div className="mt-2 h-2 rounded-full bg-white">
+                        <div className="mt-3 space-y-1 text-xs leading-5 text-slate-600">
+                          {affectedTaskIds ? <div>受影响任务 {affectedTaskIds}</div> : null}
+                          {causalTaskIds ? <div>上游致因任务 {causalTaskIds}</div> : null}
+                          {entry.owner_id ? <div>主体ID {entry.owner_id}</div> : null}
+                          {impactDays !== null ? <div>影响生产日 {impactDays}</div> : null}
+                          {weightedCount !== null ? <div>权重贡献 {weightedCount}</div> : null}
+                          {evidenceSources ? <div>证据来源 {evidenceSources}</div> : null}
+                          {confidenceLabel ? <div>证据置信度 {confidenceLabel}</div> : null}
+                        </div>
+                        <div className="mt-2 h-[3px] rounded-full bg-white">
                           <div
-                            className="h-2 rounded-full bg-blue-500"
+                            className="h-[3px] rounded-full bg-blue-600"
                             style={{ width: `${Math.max(entry.percentage, entry.count > 0 ? 8 : 0)}%` }}
                           />
                         </div>
                       </div>
-                    ))
+                    )})
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      当前筛选条件下暂无责任贡献数据。
+                    <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     </div>
                   )}
                 </div>
@@ -1756,20 +2448,19 @@ export default function Reports() {
                     topDeviationCauses.map((cause) => (
                       <div key={cause.reason} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
-                          <div className="text-sm font-medium text-slate-900">{cause.reason}</div>
-                          <div className="text-xs text-slate-500">{cause.count} 项 · {cause.percentage}%</div>
+                          <div className="text-sm font-medium text-slate-900">{getResponsibilityBasisLabel(cause.reason)}</div>
+                          <div className="text-xs text-slate-500">{cause.count} 项 · {formatWholePercent(cause.percentage)}</div>
                         </div>
-                        <div className="mt-2 h-2 rounded-full bg-white">
+                        <div className="mt-2 h-[3px] rounded-full bg-white">
                           <div
-                            className="h-2 rounded-full bg-rose-400"
+                            className="h-[3px] rounded-full bg-rose-400"
                             style={{ width: `${Math.max(cause.percentage, cause.count > 0 ? 8 : 0)}%` }}
                           />
                         </div>
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      当前筛选条件下暂无偏差原因数据。
+                    <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     </div>
                   )}
                 </div>
@@ -1778,10 +2469,8 @@ export default function Reports() {
           </div>
 
           <div className="grid gap-6 xl:grid-cols-2">
-            <Card data-testid="reports-delay-statistics" className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-base">延期统计</CardTitle>
-              </CardHeader>
+            <Card data-testid="reports-delay-statistics" className="surface-card">
+              <ReportSectionHead eyebrow="REPORT" title="延期统计" />
               <CardContent className="space-y-3">
                 {delayStatisticsRows.length > 0 ? (
                   delayStatisticsRows.map((row) => (
@@ -1792,19 +2481,25 @@ export default function Reports() {
                           计划完成 {formatDateLabel(row.plannedEnd)} · 责任 {row.owner}
                         </div>
                       </div>
-                      <div className="text-xs font-medium text-red-600">延期 {row.delayDays} 天</div>
+                      <div className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600">
+                        <DurationBasisBadge basis="production" compact variant="outline" />
+                        延期 {row.delayDays} 个生产日
+                      </div>
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
+                  <EmptyState
+                    variant="filter"
+                    title="暂无延期统计"
+                    description="当前筛选条件下没有可展示的延期任务。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
+                  />
                 )}
               </CardContent>
             </Card>
 
-            <Card data-testid="reports-delay-obstacle-correlation" className="border-slate-200 shadow-sm">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-base">延期与阻碍关联分析</CardTitle>
-              </CardHeader>
+            <Card data-testid="reports-delay-obstacle-correlation" className="surface-card">
+              <ReportSectionHead eyebrow="REPORT" title="延期与阻碍关联" />
               <CardContent className="space-y-3">
                 {delayObstacleCorrelationRows.length > 0 ? (
                   delayObstacleCorrelationRows.map((row) => (
@@ -1815,7 +2510,7 @@ export default function Reports() {
                       </div>
                       <div className="mt-2 flex flex-wrap gap-2">
                         {row.obstacleTypes.map((type) => (
-                          <span key={type} className="rounded-full bg-white px-2.5 py-1 text-[11px] text-slate-600">
+                          <span key={type} className="rounded-full bg-white px-2.5 py-1 text-xs text-slate-600">
                             {type}
                           </span>
                         ))}
@@ -1823,8 +2518,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    当前延期任务尚未与阻碍记录形成明显关联。
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                   </div>
                 )}
               </CardContent>
@@ -1839,34 +2533,35 @@ export default function Reports() {
           >
             <DialogContent
               data-testid="reports-deviation-row-drawer"
-              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-3xl translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-2xl data-[state=open]:slide-in-from-right-0"
+              className="left-auto right-0 top-0 h-full max-h-none w-full max-w-[var(--dialog-lg-width)] translate-x-0 translate-y-0 rounded-none border-l border-slate-200 bg-white p-0 shadow-[var(--el-4)] data-[state=open]:slide-in-from-right-0"
             >
               {selectedDeviationRow ? (
                 <div className="flex h-full flex-col">
-                  <div className="border-b border-slate-200 px-6 py-5">
+                  <div className="px-6 py-5">
                     <DialogHeader className="space-y-2 text-left">
                       <DialogTitle className="text-xl">{selectedDeviationRow.title}</DialogTitle>
                       <DialogDescription className="text-sm text-slate-500">
-                        {deviationMainline?.label || deviationViewLabel} · 偏差 {selectedDeviationRow.deviation_days} 天
+                        {deviationMainline?.label || deviationViewLabel} · 偏差 {selectedDeviationRow.deviation_days} 个生产日
                       </DialogDescription>
                     </DialogHeader>
                   </div>
+                  <Separator />
                   <div className="flex-1 space-y-5 overflow-y-auto px-6 py-5">
-                    <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-5 sm:grid-cols-2">
                       <DetailStatCard
                         label="计划进度"
-                        value={`${selectedDeviationRow.planned_progress ?? 0}%`}
+                        value={formatWholePercent(selectedDeviationRow.planned_progress ?? 0)}
                         hint="计划口径"
                       />
                       <DetailStatCard
                         label="实际进度"
-                        value={`${selectedDeviationRow.actual_progress ?? 0}%`}
+                        value={formatWholePercent(selectedDeviationRow.actual_progress ?? 0)}
                         hint={selectedDeviationRow.actual_date || '无实际日期'}
                       />
                       <DetailStatCard
-                        label="偏差天数"
+                        label="偏差生产日"
                         value={selectedDeviationRow.deviation_days}
-                        hint={`${selectedDeviationRow.deviation_rate}% 偏差率`}
+                        hint={`${formatWholePercent(selectedDeviationRow.deviation_rate)} 偏差率`}
                       />
                       <DetailStatCard
                         label="主线"
@@ -1875,21 +2570,76 @@ export default function Reports() {
                       />
                     </div>
 
-                    <div className="grid gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
+                    {selectedDeviationRow.source_task_id ? (
+                      <Button asChild variant="outline" className="w-full justify-between border-slate-200 bg-white">
+                        <Link
+                          data-testid="reports-open-gantt-from-deviation"
+                          to={`/projects/${projectId}/gantt?view=gantt&highlight=${encodeURIComponent(selectedDeviationRow.source_task_id)}`}
+                        >
+                          查看对应 Gantt
+                          <ArrowRight className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                    ) : null}
+
+                    {selectedDeviationRow.attribution?.cause_chain?.length ? (
+                      <div
+                        data-testid="reports-deviation-cause-chain"
+                        className="space-y-3 rounded-2xl border border-blue-100 bg-blue-50/60 p-4"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-sm font-semibold text-slate-900">责任证据链</div>
+                          <Badge variant="outline">
+                            {selectedDeviationRow.attribution.cause_chain.length} 条证据
+                          </Badge>
+                        </div>
+                        {selectedDeviationRow.attribution.cause_chain.map((item, index) => {
+                          const confidenceLabel = formatEvidenceConfidence(item.confidence)
+                          const impactDays = getCauseImpactDays(item)
+
+                          return (
+                            <div
+                              key={`${item.cause_type}:${item.affected_task_id || index}:${item.upstream_task_id || 'cause'}`}
+                              className="rounded-xl border border-blue-100 bg-white px-4 py-3 text-sm text-slate-700"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <Badge>{getCauseTypeLabel(item.cause_type)}</Badge>
+                                <Badge variant="outline">{getResponsibilityBasisLabel(item.responsibility_basis)}</Badge>
+                              </div>
+                              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                <div>致因责任主体 {item.accountable_owner || '未明确'}</div>
+                                <div>受影响主体 {item.impacted_owner || '未明确'}</div>
+                                {item.affected_task_id ? <div>受影响任务 {item.affected_task_id}</div> : null}
+                                {item.upstream_task_id ? <div>上游致因任务 {item.upstream_task_id}</div> : null}
+                                {impactDays !== null ? <div>等待 {impactDays} 个生产日</div> : null}
+                                {confidenceLabel ? <div>证据置信度 {confidenceLabel}</div> : null}
+                              </div>
+                              {item.evidence_source ? (
+                                <div className="mt-3 break-words text-xs text-slate-500">
+                                  证据来源 {item.evidence_source}
+                                </div>
+                              ) : null}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    ) : null}
+
+                    <div className="grid gap-5 rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm text-slate-700 sm:grid-cols-2">
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">状态</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">状态</div>
                         <div className="mt-1 text-slate-900">{selectedDeviationRow.status}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">映射状态</div>
-                        <div className="mt-1 text-slate-900">{selectedDeviationRow.mapping_status || 'mapped'}</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">{'\u5173\u7cfb\u8bf4\u660e'}</div>
+                        <div className="mt-1 text-slate-900">{relationSummaryLabel(selectedDeviationRow)}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">实际日期</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">实际日期</div>
                         <div className="mt-1 text-slate-900">{formatDateLabel(selectedDeviationRow.actual_date || null)}</div>
                       </div>
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-[0.08em] text-slate-400">原因</div>
+                        <div className="text-xs font-medium uppercase tracking-wider text-slate-500">原因</div>
                         <div className="mt-1 text-slate-900">{selectedDeviationRow.reason || '暂无偏差原因'}</div>
                       </div>
                     </div>
@@ -1919,11 +2669,9 @@ export default function Reports() {
         </>
       )}
       {showConditionSections ? (
-        <Card data-testid="reports-condition-summary" className="border-slate-200 shadow-sm">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">条件未满足分析</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-3">
+        <Card data-testid="reports-condition-summary" className="surface-card">
+          <ReportSectionHead eyebrow="REPORT" title="条件未满足分析" />
+          <CardContent className="grid gap-5 md:grid-cols-3">
             <DetailStatCard label="条件总数" value={projectConditions.length} hint="项目当前条件项总量" />
             <DetailStatCard label="未满足任务" value={summary?.pendingConditionTaskCount ?? 0} hint="仍受条件限制的任务" />
             <DetailStatCard label="活跃条件" value={summary?.pendingConditionCount ?? 0} hint="尚未满足的条件项" />
@@ -1932,11 +2680,9 @@ export default function Reports() {
       ) : null}
 
       {showRiskSections ? (
-        <Card data-testid="reports-risk-linkage-summary" className="border-slate-200 shadow-sm">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">风险联动摘要</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-3">
+        <Card data-testid="reports-risk-linkage-summary" className="surface-card">
+          <ReportSectionHead eyebrow="REPORT" title="风险联动摘要" />
+          <CardContent className="grid gap-5 md:grid-cols-3">
             <DetailStatCard label="活跃风险" value={projectRisks.length} hint={`摘要口径 ${summary?.activeRiskCount ?? projectRisks.length}`} />
             <DetailStatCard label="活跃问题" value={issueSummary.active_issues} hint={`问题总数 ${issueSummary.total_issues}`} />
             <DetailStatCard label="问题来源" value={issueSummary.source_counts.length} hint="来源分布已接入后端摘要" />
@@ -1946,12 +2692,10 @@ export default function Reports() {
 
       {showObstacleSections ? (
         <div className="grid gap-6 xl:grid-cols-2">
-          <MaterialArrivalSummaryCard summary={materialSummary} />
+          <MaterialArrivalSummaryCard summary={materialSummary} projectId={projectId} />
 
-          <Card data-testid="reports-obstacle-type-summary" className="border-slate-200 shadow-sm">
-            <CardHeader className="pb-4">
-              <CardTitle className="text-base">阻碍类型汇总</CardTitle>
-            </CardHeader>
+          <Card data-testid="reports-obstacle-type-summary" className="surface-card">
+            <ReportSectionHead eyebrow="REPORT" title="阻碍类型汇总" />
             <CardContent className="space-y-3">
               {obstacleTypeSummary.length > 0 ? (
                 obstacleTypeSummary.map(([type, count]) => (
@@ -1961,8 +2705,7 @@ export default function Reports() {
                   </div>
                 ))
               ) : (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  当前暂无阻碍类型数据。
+                <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                 </div>
               )}
             </CardContent>
@@ -1974,13 +2717,7 @@ export default function Reports() {
   }
 
   const renderRiskDetail = () => {
-    const riskSourceCounts = Array.from(
-      projectRisks.reduce((map, risk) => {
-        const source = summarizeRiskSource(risk)
-        map.set(source, (map.get(source) || 0) + 1)
-        return map
-      }, new Map<string, number>()),
-    ).sort((left, right) => right[1] - left[1])
+    const riskSourceCounts = buildCountSummary(projectRisks, (risk) => summarizeRiskSource(risk))
     const issueTrend = issueSummary.trend.slice(-10)
     const issueOpenCount = issueSummary.status_counts.open ?? 0
     const issueInvestigatingCount = issueSummary.status_counts.investigating ?? 0
@@ -1988,23 +2725,137 @@ export default function Reports() {
     const issueClosedCount = issueSummary.status_counts.closed ?? 0
     const issueCriticalCount = issueSummary.severity_counts.critical ?? 0
     const issueSourceCounts = issueSummary.source_counts
-    const trendMaxValue = Math.max(
-      1,
-      ...issueTrend.map((point) => Math.max(point.newIssues, point.resolvedIssues, point.activeIssues)),
-    )
-
     return (
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-        <Card className="border-slate-200 shadow-sm">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">风险压力结构</CardTitle>
-          </CardHeader>
+      <>
+      <div className="content-sidebar-grid">
+        <Card data-testid="reports-risk-matrix" variant="surface">
+          <ReportSectionHead eyebrow="REPORT" title="风险矩阵热力图" />
           <CardContent className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-[3.5rem_repeat(5,minmax(0,1fr))] gap-2 text-center text-xs">
+              <div />
+              {[1, 2, 3, 4, 5].map((probability) => (
+                <div key={`probability-${probability}`} className="text-slate-500 num-mono">P{probability}</div>
+              ))}
+              {riskMatrixCells.map((row) => (
+                <Fragment key={`impact-${row[0]?.impact}`}>
+                  <div className="flex items-center justify-end pr-2 text-slate-500 num-mono">I{row[0]?.impact}</div>
+                  {row.map((cell) => (
+                    <div
+                      key={`${cell.impact}-${cell.probability}`}
+                      className={`flex aspect-square min-h-12 items-center justify-center rounded-lg border font-semibold num-mono ${getRiskMatrixCellClass(cell.count, cell.impact, cell.probability)}`}
+                      aria-label={`影响 ${cell.impact} 概率 ${cell.probability} 风险 ${cell.count} 条`}
+                    >
+                      {cell.count}
+                    </div>
+                  ))}
+                </Fragment>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />低</span>
+              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-500" />中</span>
+              <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-500" />高</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card data-testid="reports-risk-list" variant="surface">
+          <ReportSectionHead
+            eyebrow="RISK"
+            action={<Button asChild variant="outline" size="sm">
+                <Link to={projectId ? `/projects/${projectId}/risks` : '/risks'}>
+                  查看全部({filteredRiskRows.length})
+                </Link>
+              </Button>}
+            title="最新风险列表"
+          />
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              {riskLevelChips.map((chip) => (
+                <Button
+                  key={chip.key}
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setRiskLevelFilter(chip.key)}
+                  className={`gap-2 rounded-full px-3 py-1 text-xs font-medium ${
+                    riskLevelFilter === chip.key ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {chip.label}
+                  <span className={`rounded-full px-2 py-0.5 num-mono ${riskLevelFilter === chip.key ? 'bg-white/20 text-white' : 'bg-white text-slate-600'}`}>
+                    {chip.count}
+                  </span>
+                </Button>
+              ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {riskStatusChips.map((chip) => (
+                <Button
+                  key={chip.key}
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setRiskStatusFilter(chip.key)}
+                  className={`gap-2 rounded-full px-3 py-1 text-xs font-medium ${
+                    riskStatusFilter === chip.key ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {chip.label}
+                  <span className={`rounded-full px-2 py-0.5 num-mono ${riskStatusFilter === chip.key ? 'bg-white/20 text-white' : 'bg-white text-slate-600'}`}>
+                    {chip.count}
+                  </span>
+                </Button>
+              ))}
+            </div>
+
+            <div className="space-y-3">
+              {visibleRiskRows.length === 0 ? (
+                <div className="rounded-xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                </div>
+              ) : (
+                visibleRiskRows.map((risk) => {
+                  const tone = getRiskLevelTone(risk.level)
+                  const normalizedStatus = String(risk.status ?? '').trim().toLowerCase()
+                  const normalizedLevel = String(risk.level ?? '').trim().toLowerCase()
+                  const riskHref = projectId
+                    ? `/projects/${projectId}/risks?status=${['identified', 'mitigating', 'closed'].includes(normalizedStatus) ? normalizedStatus : 'all'}&level=${['critical', 'high', 'medium', 'low'].includes(normalizedLevel) ? normalizedLevel : 'all'}`
+                    : '/risks'
+
+                  return (
+                    <Link
+                      key={risk.id}
+                      data-testid={`reports-risk-drilldown-${risk.id}`}
+                      to={riskHref}
+                      className="grid grid-cols-[0.25rem_minmax(0,1fr)] gap-4 rounded-xl border border-slate-100 bg-white px-3 py-3 transition-colors even:bg-slate-50/50 hover:bg-slate-100/60"
+                    >
+                      <span className={`rounded-full ${tone.bar}`} aria-hidden="true" />
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="truncate text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
+                          <span className={`rounded-full border px-2 py-0.5 text-xs ${tone.badge}`}>{getRiskLevelLabel(risk.level)}</span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+                          <span>{risk.assignee || risk.owner_id || '未指定责任人'}</span>
+                          <span className="num-mono">{formatDateLabel(risk.created_at)}</span>
+                        </div>
+                      </div>
+                    </Link>
+                  )
+                })
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="content-sidebar-grid">
+        <Card className="surface-card">
+          <ReportSectionHead eyebrow="REPORT" title="风险压力结构" />
+          <CardContent className="space-y-4">
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
               <DetailStatCard label="活跃风险" value={summary?.activeRiskCount ?? projectRisks.length} hint={`总风险 ${summary?.riskCount ?? projectRisks.length}`} />
               <DetailStatCard label="条件未满足" value={summary?.pendingConditionTaskCount ?? projectConditions.length} hint={`条件项 ${summary?.pendingConditionCount ?? projectConditions.length}`} />
               <DetailStatCard label="阻碍任务" value={summary?.activeObstacleTaskCount ?? projectObstacles.length} hint={`阻碍项 ${summary?.activeObstacleCount ?? projectObstacles.length}`} />
-              <DetailStatCard label="健康度" value={summary?.healthScore ?? '--'} hint={summary?.healthStatus || '共享摘要口径'} />
+              <DetailStatCard label="业务健康" value={summary?.businessHealthScore ?? '--'} hint={summary?.healthStatus || '共享摘要口径'} />
             </div>
             <div className="flex flex-wrap gap-2">
               {riskSourceCounts.length > 0 ? (
@@ -2020,95 +2871,99 @@ export default function Reports() {
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200 shadow-sm">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">处置入口</CardTitle>
-          </CardHeader>
+        <Card className="surface-card">
+          <ReportSectionHead eyebrow="REPORT" title="处置入口" />
           <CardContent className="space-y-3 text-sm leading-6 text-slate-600">
             <Button
               type="button"
               variant="outline"
               className="w-full justify-between"
-              onClick={() => navigate(projectId ? `/projects/${projectId}/risks` : '/company')}
+              onClick={() => navigate(projectId ? `/projects/${projectId}/risks` : '/workspace')}
             >
-              风险与问题
               <ShieldAlert className="h-4 w-4" />
             </Button>
           </CardContent>
         </Card>
 
         <div className="xl:col-span-2">
-          <MaterialArrivalSummaryCard summary={materialSummary} />
+          <MaterialArrivalSummaryCard summary={materialSummary} projectId={projectId} />
         </div>
 
-        <Card className="border-slate-200 shadow-sm xl:col-span-2">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">重点风险与问题清单</CardTitle>
-          </CardHeader>
+        <Card className="surface-card xl:col-span-2">
+          <ReportSectionHead eyebrow="REPORT" title="重点风险与问题清单" />
           <CardContent className="space-y-3">
             {focusRisks.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                暂无重点风险与问题
+              <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
               </div>
             ) : (
-              focusRisks.map((risk) => (
-                <div key={risk.id} className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.3fr)_140px_140px_140px]">
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
-                    <div className="mt-1 text-xs text-slate-500">{risk.description || '暂无备注'}</div>
-                  </div>
-                  <div className="text-sm text-slate-700">等级 {risk.level || '未分类'}</div>
-                  <div className="text-sm text-slate-700">来源 {summarizeRiskSource(risk)}</div>
-                  <div className="text-sm text-slate-700">状态 {parseStatusLabel(risk.status)}</div>
-                </div>
-              ))
+              focusRisks.map((risk) => {
+                const normalizedStatus = String(risk.status ?? '').trim().toLowerCase()
+                const normalizedLevel = String(risk.level ?? '').trim().toLowerCase()
+                const riskHref = projectId
+                  ? `/projects/${projectId}/risks?status=${['identified', 'mitigating', 'closed'].includes(normalizedStatus) ? normalizedStatus : 'all'}&level=${['critical', 'high', 'medium', 'low'].includes(normalizedLevel) ? normalizedLevel : 'all'}`
+                  : '/risks'
+
+                return (
+                  <Link
+                    key={risk.id}
+                    data-testid={`reports-risk-drilldown-${risk.id}`}
+                    to={riskHref}
+                    className="grid gap-5 rounded-2xl border border-slate-100 bg-white px-4 py-4 transition-colors hover:border-blue-200 hover:bg-blue-50/40 md:grid-cols-[minmax(0,1.3fr)_8.75rem_8.75rem_8.75rem]"
+                  >
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">{risk.title || '未命名风险'}</div>
+                      <div className="mt-1 text-xs text-slate-500">{risk.description || '暂无备注'}</div>
+                    </div>
+                    <div className="text-sm text-slate-700">等级 {risk.level || '未分类'}</div>
+                    <div className="text-sm text-slate-700">来源 {summarizeRiskSource(risk)}</div>
+                    <div className="text-sm text-slate-700">状态 {parseStatusLabel(risk.status)}</div>
+                  </Link>
+                )
+              })
             )}
           </CardContent>
         </Card>
 
-        <Card data-testid="reports-issue-analysis" className="border-slate-200 shadow-sm xl:col-span-2">
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">问题独立分析</CardTitle>
-          </CardHeader>
+        <Card data-testid="reports-issue-analysis" className="surface-card xl:col-span-2">
+          <ReportSectionHead eyebrow="REPORT" title="问题独立分析" />
           <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-5 md:grid-cols-4">
               <DetailStatCard label="问题总数" value={issueSummary.total_issues} hint="后端汇总口径" />
               <DetailStatCard label="活跃问题" value={issueSummary.active_issues} hint={`open ${issueOpenCount} · investigating ${issueInvestigatingCount}`} />
               <DetailStatCard label="已解决 / 关闭" value={`${issueResolvedCount}/${issueClosedCount}`} hint={`严重问题 ${issueCriticalCount}`} />
               <DetailStatCard label="来源类型" value={issueSourceCounts.length} hint="后端 issues/summary" />
             </div>
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="grid gap-5 xl:grid-cols-2">
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">近 30 天趋势</div>
                 {issueSummaryLoading ? (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    问题摘要加载中
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                   </div>
                 ) : issueTrend.length > 0 ? (
-                  <div className="rounded-2xl border border-slate-100 bg-white p-4">
-                    <div className="flex items-end gap-2">
-                      {issueTrend.map((point) => (
-                        <div key={point.date} className="flex-1 space-y-2 text-center">
-                          <div className="flex h-40 items-end justify-center gap-1">
-                            <div
-                              className="w-2 rounded-full bg-blue-400"
-                              style={{ height: `${Math.max(6, (point.newIssues / trendMaxValue) * 100)}%` }}
-                              title={`${point.date} · 新增 ${point.newIssues}`}
-                            />
-                            <div
-                              className="w-2 rounded-full bg-emerald-400"
-                              style={{ height: `${Math.max(6, (point.resolvedIssues / trendMaxValue) * 100)}%` }}
-                              title={`${point.date} · 已解决 ${point.resolvedIssues}`}
-                            />
-                            <div
-                              className="w-2 rounded-full bg-slate-700"
-                              style={{ height: `${Math.max(6, (point.activeIssues / trendMaxValue) * 100)}%` }}
-                              title={`${point.date} · 活跃 ${point.activeIssues}`}
-                            />
-                          </div>
-                          <div className="text-[10px] text-slate-500">{point.date.slice(5)}</div>
-                        </div>
-                      ))}
+                  <div className="rounded-2xl bg-white p-3 ring-1 ring-inset ring-slate-100">
+                    <div className="h-44">
+                      <ResponsiveContainer width="100%" height="100%" minWidth={1} minHeight={1} initialDimension={{ width: 520, height: 176 }}>
+                        <BarChart data={issueTrend} margin={{ top: 12, right: 16, bottom: 8, left: 0 }}>
+                        <CartesianGrid stroke={CHART_AXIS_COLORS.neutralGrid} vertical={false} />
+                        <XAxis
+                          dataKey="date"
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                          tickFormatter={(value) => String(value).slice(5)}
+                        />
+                        <YAxis
+                          allowDecimals={false}
+                          tickLine={false}
+                          axisLine={false}
+                          tick={{ fill: CHART_AXIS_COLORS.axisText, fontSize: 11 }}
+                        />
+                        <RechartsTooltip content={<ChartTooltip />} cursor={chartTooltipCursor} />
+                        <Bar dataKey="newIssues" name="新增" fill={CHART_SERIES.primary} radius={[6, 6, 0, 0]} animationDuration={800} />
+                        <Bar dataKey="resolvedIssues" name="已解决" fill={CHART_SERIES.success} radius={[6, 6, 0, 0]} animationDuration={800} />
+                        <Bar dataKey="activeIssues" name="活跃" fill={CHART_AXIS_COLORS.axisText} radius={[6, 6, 0, 0]} animationDuration={800} />
+                        </BarChart>
+                      </ResponsiveContainer>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
                       <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-400" />新增</span>
@@ -2117,8 +2972,7 @@ export default function Reports() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    当前项目暂无问题趋势数据。
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                   </div>
                 )}
               </div>
@@ -2132,13 +2986,12 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    当前项目暂无问题来源数据。
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                   </div>
                 )}
               </div>
             </div>
-            <div className="grid gap-4 xl:grid-cols-2">
+            <div className="grid gap-5 xl:grid-cols-2">
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">严重度分布</div>
                 {Object.entries(issueSummary.severity_counts).length > 0 ? (
@@ -2151,8 +3004,7 @@ export default function Reports() {
                       </div>
                     ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    当前项目暂无问题严重度数据。
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                   </div>
                 )}
               </div>
@@ -2165,7 +3017,7 @@ export default function Reports() {
                         <div>
                           <div className="text-sm font-medium text-slate-900">{row.title}</div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {getIssueStatusLabel(row.status)} · {getIssueSourceLabel(row.source_type)}
+                            {getIssueStatusLabel(row.status)} · {getIssueSourceLabel(row.source_type, row.source_entity_type)}
                           </div>
                         </div>
                         <div className="text-xs text-slate-500">{formatDateTimeLabel(row.created_at)}</div>
@@ -2174,8 +3026,7 @@ export default function Reports() {
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    当前项目暂无问题记录。
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
                   </div>
                 )}
               </div>
@@ -2183,83 +3034,9 @@ export default function Reports() {
           </CardContent>
         </Card>
       </div>
+      </>
     )
   }
-
-  const renderChangeLogDetail = () => (
-    <Card data-testid="change-log-view" className="border-slate-200 shadow-sm">
-      <CardHeader className="pb-4">
-        <CardTitle className="text-base">变更记录分析</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-3">
-          <DetailStatCard
-            label="范围/结构相关"
-            value={changeLogs.filter((record) => ['task', 'milestone', 'baseline'].includes(record.entity_type)).length}
-            hint="任务、节点与基线层变更"
-          />
-          <DetailStatCard
-            label="计划调整相关"
-            value={changeLogs.filter((record) => ['delay_request', 'monthly_plan'].includes(record.entity_type)).length}
-            hint="延期审批与月计划修正"
-          />
-          <DetailStatCard
-            label="执行/异常相关"
-            value={changeLogs.filter((record) => ['risk', 'issue', 'task_condition', 'task_obstacle'].includes(record.entity_type)).length}
-            hint="风险、问题、条件与阻碍联动"
-          />
-        </div>
-        {changeLogError ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-700">
-            {changeLogError}
-          </div>
-        ) : changeLogLoading ? (
-          <LoadingState
-            label="变更记录加载中"
-            className="min-h-24 rounded-2xl border border-dashed border-slate-200 bg-slate-50"
-          />
-        ) : recentChangeLogs.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4" />
-        ) : (
-          <>
-            <div className="flex flex-wrap gap-2">
-              {changeLogSourceSummary.map(([source, count]) => (
-                <span key={source} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-                  {source} {count}
-                </span>
-              ))}
-            </div>
-            <div className="space-y-3">
-              {recentChangeLogs.map((record) => (
-                <div
-                  key={record.id}
-                  className="grid gap-3 rounded-2xl border border-slate-100 bg-white px-4 py-4 md:grid-cols-[minmax(0,1.1fr)_140px_180px]"
-                >
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">
-                      {record.entity_type} · {record.field_name}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {record.change_reason || '未填写变更原因'}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-500">
-                      {record.old_value || '空'} → {record.new_value || '空'}
-                    </div>
-                  </div>
-                  <div className="text-sm text-slate-700">
-                    来源 {record.change_source || 'manual_adjusted'}
-                  </div>
-                  <div className="text-sm text-slate-700">
-                    {record.changed_at || '时间未知'}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  )
 
   const renderActiveDetail = () => {
     switch (activeView) {
@@ -2269,21 +3046,18 @@ export default function Reports() {
         return renderProgressDeviationDetail()
       case 'risk':
         return renderRiskDetail()
-      case 'change_log':
-        return renderChangeLogDetail()
       default:
         return null
     }
   }
 
   return (
-    <div className="page-enter space-y-6 p-6">
-      <div className="max-w-[1600px] space-y-6">
+    <div className="page-shell page-enter">
         <Breadcrumb
           showHome
           items={[
             { label: projectName, href: `/projects/${projectId}/dashboard` },
-            { label: pageHeaderConfig.breadcrumbLabel },
+            { label: '分析报表' },
           ]}
         />
 
@@ -2304,7 +3078,7 @@ export default function Reports() {
             variant="outline"
             size="sm"
             onClick={handleRefreshReports}
-            loading={loading || criticalPathLoading || deviationLoading || changeLogLoading}
+            loading={loading || criticalPathLoading || deviationLoading}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
             刷新
@@ -2317,13 +3091,21 @@ export default function Reports() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onClick={() => handleExportCurrentView('xlsx')}>
+              <DropdownMenuItem onClick={() => { void handleExportCurrentView('xlsx') }}>
                 <FileSpreadsheet className="mr-2 h-4 w-4" />
                 导出 Excel
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleExportCurrentView('pdf')}>
+              <DropdownMenuItem onClick={() => { void handleExportCurrentView('pdf') }}>
                 <Download className="mr-2 h-4 w-4" />
                 导出 PDF
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { void handleExportOwnerMonthly('xlsx') }}>
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+                业主月报 Excel
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { void handleExportOwnerMonthly('pdf') }}>
+                <Download className="mr-2 h-4 w-4" />
+                业主月报 PDF
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -2333,30 +3115,82 @@ export default function Reports() {
           </div>
         </PageHeader>
 
-        {activeView === 'progress_deviation' && dataQualitySummary ? (
-          <Card data-testid="reports-data-quality-banner" className="border-sky-200 bg-sky-50 shadow-sm">
-            <CardContent className="flex flex-col gap-3 p-5 md:flex-row md:items-center md:justify-between">
-              <div className="space-y-1">
-                <div className="text-base font-semibold text-sky-950">
-                  本次分析基于数据置信度 {Math.round(dataQualitySummary.confidence.score)}% 的数据集
-                </div>
-                <div className="text-sm leading-6 text-sky-900">
-                  {dataQualitySummary.confidence.note} · 活跃异常 {dataQualitySummary.confidence.activeFindingCount} 条
-                </div>
+        {/* v1.4.16: data reliability removed from Reports; Dashboard is sole entry */}
+
+        <V14231PageReadinessBoundary pageKey="Reports" className="mb-6 border-amber-200 bg-amber-50/80 text-amber-950" />
+
+        {error ? (
+          <div
+            data-testid="reports-summary-fallback-alert"
+            className="mb-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          >
+            {error}
+          </div>
+        ) : null}
+
+        <div className="mb-6 grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(22rem,1fr)]">
+          <Card className="surface-card border-slate-200/90 bg-white">
+            <CardContent className="space-y-5 p-6 md:p-7">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary" className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">
+                  商业化分析报表中心
+                </Badge>
+                <Badge variant="secondary" className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-600">
+                  项目：{projectName}
+                </Badge>
               </div>
-              <div className="w-full max-w-xl">
-                <DataConfidenceBreakdown
-                  confidence={dataQualitySummary.confidence}
-                  title="本月置信度降分贡献"
-                  compact
-                  testId="reports-data-quality-breakdown"
-                />
+              <div className="space-y-2">
+                <h2 className="text-2xl font-semibold tracking-tight text-slate-900 md:text-[2rem]">先给结论，再给证据，再给动作</h2>
+                <p className="max-w-3xl text-sm leading-6 text-slate-600 md:text-base">
+                  当前报表页按三条主线收口：进度总览、进度偏差、风险与问题。首屏先输出判断和优先事项，再展开趋势证据、偏差来源和下钻入口，适合日常经营查看与对外汇报展示。
+                </p>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500">当前判断</div>
+                  <div className="mt-2 text-base font-semibold text-slate-900">
+                    {(summary?.delayedTaskCount ?? delayedTasks.length) > 0 || activeRiskCount > 0 ? '项目存在偏差与风险压力，需要持续干预' : '项目整体可控，可按当前节奏推进'}
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-slate-600">
+                    结合延期任务、活跃风险、未闭环问题和阻碍项形成当前经营判断。
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500">优先关注</div>
+                  <div className="mt-2 text-base font-semibold text-slate-900">
+                    {(summary?.delayedTaskCount ?? delayedTasks.length) > 0 ? `优先处理 ${(summary?.delayedTaskCount ?? delayedTasks.length)} 个延期任务` : `优先消化 ${activeRiskCount} 个活跃风险`}
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-slate-600">
+                    先看偏差，再定位责任主体、阻碍来源和风险联动对象。
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500">推荐动作</div>
+                  <div className="mt-2 text-base font-semibold text-slate-900">
+                    进入{activeView === 'progress_deviation' ? '偏差分析' : activeView === 'risk' ? '风险与问题' : '进度总览'}主线继续下钻
+                  </div>
+                  <div className="mt-2 text-sm leading-6 text-slate-600">
+                    当前页已保留导出、刷新、明细跳转和业务对象回链，适合直接形成复盘与汇报动作。
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>
-        ) : null}
 
-        {hasSummary ? (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            {reportConclusionCards.map((card) => (
+              <Card key={card.title} className="surface-card border-slate-200/90 bg-white">
+                <CardContent className="p-5">
+                  <div className="text-xs font-medium uppercase tracking-wider text-slate-500">{card.title}</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">{card.value}</div>
+                  <div className="mt-1 text-sm leading-6 text-slate-600">{card.hint}</div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+
+        {showReportModules ? (
           <DeviationShell>
             <Tabs
               data-testid="reports-module-tabs"
@@ -2366,32 +3200,162 @@ export default function Reports() {
                 if (entry) openEntry(entry)
               }}
             >
-              <TabsList className="w-full justify-start">
-                {analysisEntries.map((entry) => (
+              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-6 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
+                {moduleChips.map((entry) => (
                   <TabsTrigger
-                    key={entry.view}
-                    value={entry.view}
-                    data-testid={`analysis-entry-${entry.view}`}
+                    key={entry.key}
+                    value={entry.key}
+                    data-testid={`analysis-entry-${entry.key}`}
+                    className="relative gap-2 rounded-none bg-transparent px-0 pb-3 pt-0 text-sm font-medium text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-700 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600"
                   >
-                    {entry.title}
+                    <span>{entry.label}</span>
+                    {entry.badge != null ? (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-xs font-semibold num-mono ${
+                          activeView === entry.key
+                            ? 'bg-white/20 text-white'
+                            : entry.color === 'red'
+                              ? 'bg-red-50 text-red-700'
+                              : entry.color === 'amber'
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-blue-50 text-blue-700'
+                        }`}
+                      >
+                        {entry.badge}
+                      </span>
+                    ) : null}
                   </TabsTrigger>
                 ))}
               </TabsList>
             </Tabs>
 
-            <div data-testid="reports-current-metrics" className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {currentMetrics.map((metric) => (
-                <MetricCard
-                  key={metric.title}
-                  title={metric.title}
-                  value={metric.value}
-                  hint={metric.hint}
-                  icon={metric.icon}
-                />
-              ))}
-            </div>
+            <Card data-testid="reports-current-metrics-shell" className="surface-card border-slate-200/90 bg-white">
+              <CardContent className="space-y-5 p-5 md:p-6">
+                <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <div className="text-xs font-medium uppercase tracking-widest text-slate-500">核心结论</div>
+                    <h3 className="mt-1 text-lg font-semibold text-slate-900">本页最值得先看的经营指标</h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">先用结论型指标理解当前状态，再进入趋势、偏差和风险明细继续下钻。</p>
+                  </div>
+                  <div className="text-xs text-slate-500">当前主线：{activeEntry?.title || viewConfig.title}</div>
+                </div>
+                <div data-testid="reports-current-metrics" className={metricGridClass}>
+                  {currentMetrics.map((metric) => (
+                    <SharedMetricCard
+                      key={metric.title}
+                      eyebrow="REPORT"
+                      title={metric.title}
+                      value={metric.value}
+                      hint={metric.hint}
+                      icon={metric.icon}
+                    />
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
 
-            {renderActiveDetail()}
+            <Card data-testid="reports-trend-panel" className="surface-card border-slate-200/90 bg-white">
+              <ReportSectionHead eyebrow="REPORT" title="趋势证据与口径筛选" />
+              <CardContent className="space-y-4">
+                <div className="grid gap-5 md:grid-cols-3">
+                  <label className="space-y-1 text-xs text-slate-500">
+                    <span>指标选择器</span>
+                    <Select value={trendMetric} onValueChange={(value) => setTrendMetric(value as ReportMetricKey)}>
+                      <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                        <SelectValue placeholder="选择指标" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {metricOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+
+                  <label className="space-y-1 text-xs text-slate-500">
+                    <span>时间范围</span>
+                    <Select value={trendTimeRange} onValueChange={(value) => setTrendTimeRange(value as ReportTimeRange)}>
+                      <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                        <SelectValue placeholder="选择时间范围" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REPORT_TIME_RANGE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+
+                  <label className="space-y-1 text-xs text-slate-500">
+                    <span>维度选择器</span>
+                    <Select value={trendDimension} onValueChange={(value) => setTrendDimension(value as ReportDimensionKey)}>
+                      <SelectTrigger className="h-10 rounded-xl border-slate-200 bg-white text-sm text-slate-700">
+                        <SelectValue placeholder="选择维度" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">全部维度</SelectItem>
+                        {reportScopeSections.map((section) => (
+                          <SelectItem key={section.key} value={section.key}>
+                            {section.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </label>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="text-xs font-medium uppercase tracking-widest text-slate-500">当前筛选结论</div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                    <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">当前指标 {selectedTrendMetric.label}</span>
+                    <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">时间范围 {selectedTrendRange.label}</span>
+                    <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
+                      维度 {selectedTrendDimension?.label || '全部维度'}
+                    </span>
+                    <span className="rounded-full bg-white px-3 py-1 ring-1 ring-slate-200">
+                      维度切片 {selectedTrendDimension?.options.length ?? reportScopeSections.length} 项
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm leading-6 text-slate-600">
+                    当前趋势模块用于回答“最近一段时间是否在变好、变差，以及问题集中在哪个维度”。筛选后的结果可直接支撑汇报和复盘。
+                  </p>
+                </div>
+
+                {trendError ? (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    {trendError}
+                  </div>
+                ) : trendLoading && trendPoints.length === 0 ? (
+                  <LoadingState label="趋势数据加载中" className="min-h-24 rounded-2xl empty-state-frame border-slate-200 bg-slate-50" />
+                ) : trendPoints.length > 0 ? (
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {trendPoints.slice(0, 9).map((point) => (
+                      <div key={`${point.date}-${point.group || 'none'}`} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-medium text-slate-900">{point.date}</div>
+                          <div className="text-lg font-semibold text-slate-900">{point.value ?? '--'}</div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500">
+                          <span>{selectedTrendMetric.label}</span>
+                          <span>{point.group || '全量'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div key={`${activeView}-${deviationView}`} className="motion-safe:animate-fade-in duration-200">
+              {renderActiveDetail()}
+            </div>
           </DeviationShell>
         ) : loading ? (
           <LoadingState
@@ -2401,13 +3365,13 @@ export default function Reports() {
           />
         ) : (
           <EmptyState
+            variant={error ? 'error' : 'default'}
             icon={BarChart3}
             title={error ? '偏差分析暂不可用' : '暂无偏差分析数据'}
             description={error || '当前项目还没有可展示的偏差分析结果。'}
             className="max-w-none rounded-2xl bg-white"
           />
         )}
-      </div>
     </div>
   )
 }
@@ -2418,10 +3382,8 @@ function CriticalPathSummaryCard({
   summary: CriticalPathSummaryModel | null
 }) {
   return (
-    <Card data-testid="reports-critical-path-summary" className="border-slate-200 shadow-sm">
-      <CardHeader className="pb-4">
-        <CardTitle className="text-base">关键路径摘要</CardTitle>
-      </CardHeader>
+    <Card data-testid="reports-critical-path-summary" className="surface-card">
+      <ReportSectionHead eyebrow="REPORT" title="关键路径摘要" />
       <CardContent className="space-y-3">
         {summary ? (
           <>
@@ -2445,7 +3407,12 @@ function CriticalPathSummaryCard({
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
+          <EmptyState
+            icon={ShieldAlert}
+            title="暂无关键路径摘要"
+            description="当前项目还没有可展示的关键路径统计。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+          />
         )}
       </CardContent>
     </Card>
@@ -2454,8 +3421,10 @@ function CriticalPathSummaryCard({
 
 function MaterialArrivalSummaryCard({
   summary,
+  projectId,
 }: {
   summary: MaterialReportSummary | null
+  projectId?: string
 }) {
   const overview = summary?.overview ?? {
     totalExpectedCount: 0,
@@ -2466,19 +3435,17 @@ function MaterialArrivalSummaryCard({
   const monthlyTrend = Array.isArray(summary?.monthlyTrend) ? summary.monthlyTrend : []
 
   return (
-    <Card data-testid="reports-material-arrival-summary" className="border-slate-200 shadow-sm">
-      <CardHeader className="pb-4">
-        <CardTitle className="text-base">材料到场率分析</CardTitle>
-      </CardHeader>
+    <Card data-testid="reports-material-arrival-summary" className="surface-card">
+      <ReportSectionHead eyebrow="REPORT" title="材料到场率分析" />
       <CardContent className="space-y-4">
         {summary ? (
           <>
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-5 md:grid-cols-3">
               <DetailStatCard label="预计到场总数" value={overview.totalExpectedCount} hint="按预计到场日期口径" />
               <DetailStatCard label="按时到场数" value={overview.onTimeCount} hint="实际到场 <= 预计到场" />
-              <DetailStatCard label="整体到场率" value={`${overview.arrivalRate}%`} hint="近 6 个月与当前项目材料总览" />
+              <DetailStatCard label="整体到场率" value={formatWholePercent(overview.arrivalRate)} hint="近 6 个月与当前项目材料总览" />
             </div>
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+            <div className="content-sidebar-grid">
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">参建单位到场率</div>
                 {byUnit.length > 0 ? (
@@ -2488,45 +3455,72 @@ function MaterialArrivalSummaryCard({
                         <div>
                           <div className="text-sm font-medium text-slate-900">{row.participantUnitName || '无归属单位'}</div>
                           <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
-                            {row.specialtyTypes.map((type) => (
-                              <span key={type} className="rounded-full bg-slate-100 px-2 py-1">{type}</span>
-                            ))}
+                            {row.specialtyTypes.map((type) => {
+                              const specialtyHref = projectId ? `/projects/${projectId}/materials?specialty=${encodeURIComponent(type)}` : '/materials'
+                              return (
+                                <Link
+                                  key={type}
+                                  data-testid={`reports-material-specialty-link-${row.participantUnitId ?? 'unassigned'}-${type}`}
+                                  to={specialtyHref}
+                                  className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                                >
+                                  {type}
+                                </Link>
+                              )
+                            })}
                           </div>
                         </div>
                         <div className="text-right text-sm text-slate-700">
-                          <div className="text-lg font-semibold text-slate-900">{row.arrivalRate}%</div>
+                          <div className="text-lg font-semibold text-slate-900">{formatWholePercent(row.arrivalRate)}</div>
                           <div>{row.onTimeCount} / {row.totalExpectedCount}</div>
                         </div>
                       </div>
                     </div>
                   ))
                 ) : (
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">
-                    当前项目还没有材料到场记录。
-                  </div>
+                  <EmptyState
+                    icon={ClipboardList}
+                    title="暂无单位到场记录"
+                    description="当前项目还没有按参建单位汇总的材料到场数据。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+                  />
                 )}
               </div>
               <div className="space-y-3">
                 <div className="text-sm font-medium text-slate-700">近 6 个月趋势</div>
-                {monthlyTrend.map((row) => (
-                  <div key={row.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-900">{row.month}</div>
-                      <div className="text-sm text-slate-700">{row.arrivalRate}%</div>
+                {monthlyTrend.length > 0 ? (
+                  monthlyTrend.map((row) => (
+                    <div key={row.month} className="rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-slate-900">{row.month}</div>
+                        <div className="text-sm text-slate-700">{formatWholePercent(row.arrivalRate)}</div>
+                      </div>
+                      <div className="mt-2 h-[3px] rounded-full bg-slate-200">
+                        <div className="h-[3px] rounded-full bg-emerald-500" style={{ width: `${Math.max(row.arrivalRate, row.totalExpectedCount > 0 ? 8 : 0)}%` }} />
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        按时 {row.onTimeCount} / 预计 {row.totalExpectedCount}
+                      </div>
                     </div>
-                    <div className="mt-2 h-2 rounded-full bg-slate-200">
-                      <div className="h-2 rounded-full bg-emerald-500" style={{ width: `${Math.max(row.arrivalRate, row.totalExpectedCount > 0 ? 8 : 0)}%` }} />
-                    </div>
-                    <div className="mt-2 text-xs text-slate-500">
-                      按时 {row.onTimeCount} / 预计 {row.totalExpectedCount}
-                    </div>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <EmptyState
+                    icon={BarChart3}
+                    title="暂无趋势数据"
+                    description="当前项目还没有形成材料到场月度趋势。"
+                    className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+                  />
+                )}
               </div>
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5" />
+          <EmptyState
+            icon={ClipboardList}
+            title="暂无材料到场摘要"
+            description="当前项目还没有可展示的材料到场统计。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-5"
+          />
         )}
       </CardContent>
     </Card>

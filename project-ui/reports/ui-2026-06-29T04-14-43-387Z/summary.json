@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "workbuddy-ui-dashboard-summary.v1",
+  "generatedAt": "2026-06-29T04:14:43.388Z",
+  "message": "UI dashboard dry-run completed",
+  "profile": "visual-baseline",
+  "dryRun": true,
+  "executed": false,
+  "reportDir": "C:\\Users\\jjj64\\WorkBuddy\\20260318232610\\project-ui\\reports\\ui-2026-06-29T04-14-43-387Z",
+  "commands": [
+    {
+      "id": "visual-baseline-check",
+      "command": "npm run ui:visual-baseline:check",
+      "execution": "safe",
+      "status": "planned"
+    },
+    {
+      "id": "storybook-build",
+      "command": "npm run build-storybook --workspace=client",
+      "execution": "local",
+      "status": "planned"
+    },
+    {
+      "id": "chromatic-dry-run",
+      "command": "npm run chromatic --workspace=client -- --dry-run --exit-zero-on-changes",
+      "execution": "external",
+      "status": "planned"
+    }
+  ],
+  "results": [],
+  "boundaries": {
+    "allowedUiArtifactWrites": [
+      "project-ui/artifacts/**",
+      "project-ui/reports/**",
+      "project-ui/visual-baselines/**",
+      "client/.storybook/**",
+      "client/src/stories/**",
+      "client/src/mocks/**"
+    ],
+    "forbiddenProductionWrites": [
+      "tasks",
+      "task_baselines",
+      "monthly_plans",
+      "monthly_plan_items",
+      "task_dependencies",
+      "project_daily_snapshot",
+      "published runtime overlay",
+      "production seed data"
+    ],
+    "rule": "UI research, screenshots, Figma extracts, and visual audit outputs can produce reports and candidates only; they cannot directly mutate production runtime data."
+  }
+}

@@ -4,19 +4,31 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import {
+  isIgnorableBrowserConsoleError,
+  maybeBuildMockAuthResponse,
+  primeBrowserAuth,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
 const baseUrl = process.env.BASE_URL || 'http://127.0.0.1:4173'
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
+const shouldUseControlledFailureMock = !shouldUseMockApi && process.env.BROWSER_CONFIRM_FAILURE_REAL_API !== 'true'
+const shouldServeMockApi = shouldUseMockApi || shouldUseControlledFailureMock
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
+const runMode = shouldUseMockApi
+  ? 'mock-api'
+  : shouldUseControlledFailureMock
+    ? 'controlled-mock-confirm-failure'
+    : 'proxy-api'
 
 const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
@@ -25,7 +37,7 @@ let monthlyStatus = 'draft'
 
 const mockProject = {
   id: projectId,
-  name: '鏈堝害纭澶辫触鑱旇皟椤圭洰',
+  name: '月度确认失败联调项目',
   description: 'Planning confirm failure browser verification fixture project',
   status: 'active',
   created_at: now,
@@ -38,7 +50,7 @@ const mockBaselineVersions = [
     project_id: projectId,
     version: 2,
     status: 'confirmed',
-    title: '椤圭洰鍩虹嚎',
+    title: '项目基线',
     source_type: 'manual',
     confirmed_at: '2099-09-01T00:00:00.000Z',
     updated_at: '2099-09-01T00:00:00.000Z',
@@ -49,7 +61,7 @@ const mockTasks = [
   {
     id: 'task-root',
     project_id: projectId,
-    title: '涓讳綋缁撴瀯',
+    title: '主体结构',
     wbs_level: 1,
     sort_order: 0,
     progress: 45,
@@ -66,7 +78,7 @@ const mockMonthlyPlanDetail = {
   version: 9,
   status: 'draft',
   month: '2099-09',
-  title: '2099-09 鏈堝害璁″垝',
+  title: '2099-09 月度计划',
   baseline_version_id: 'baseline-v2',
   source_version_id: 'baseline-v2',
   carryover_item_count: 0,
@@ -78,7 +90,7 @@ const mockMonthlyPlanDetail = {
       project_id: projectId,
       monthly_plan_version_id: 'monthly-v9',
       source_task_id: 'task-root',
-      title: '涓讳綋缁撴瀯',
+      title: '主体结构',
       planned_start_date: '2099-09-01',
       planned_end_date: '2099-09-30',
       target_progress: 60,
@@ -184,6 +196,22 @@ function buildMockResponse(urlString, method) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: mockTasks,
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (pathname === `/api/members/${projectId}/me`) {
     return json({
       success: true,
@@ -208,7 +236,7 @@ function buildMockResponse(urlString, method) {
     return json({ success: true, data: mockTasks })
   }
 
-  if (pathname === '/api/task-conditions' || pathname === '/api/task-obstacles' || pathname === '/api/risks' || pathname === '/api/issues' || pathname === '/api/warnings' || pathname === '/api/delay-requests' || pathname === '/api/change-logs' || pathname === '/api/tasks/progress-snapshots') {
+  if (pathname === '/api/task-conditions' || pathname === '/api/task-obstacles' || pathname === '/api/risks' || pathname === '/api/issues' || pathname === '/api/warnings' || pathname === '/api/change-logs' || pathname === '/api/tasks/progress-snapshots') {
     return json({ success: true, data: [] })
   }
 
@@ -227,7 +255,7 @@ function buildMockResponse(urlString, method) {
         success: false,
         error: {
           code: 'MONTHLY_CONFIRM_FAILED',
-          message: '鏈堝害璁″垝纭澶辫触锛岃鍏堟鏌ュ紓甯告憳瑕佸悗閲嶈瘯銆?',
+          message: '月度计划确认失败，请先检查异常摘要后重试',
         },
       }, 422)
     }
@@ -267,11 +295,16 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    await primeBrowserAuth(page, shouldServeMockApi ? 'browser-verify-token' : undefined)
 
     page.on('console', (message) => {
-      if (message.type() === 'error' && !message.text().includes('422 (Unprocessable Entity)') && !message.text().includes('WebSocket connection')) {
-        consoleErrors.push(message.text())
+      if (message.type() !== 'error') return
+      const text = message.text()
+      if (
+        !text.includes('422 (Unprocessable Entity)')
+        && !isIgnorableBrowserConsoleError(text)
+      ) {
+        consoleErrors.push(text)
       }
     })
 
@@ -283,7 +316,7 @@ async function main() {
       const requestUrl = route.request().url()
       const requestMethod = route.request().method().toUpperCase()
 
-      if (shouldUseMockApi) {
+      if (shouldServeMockApi) {
         await route.fulfill(buildMockResponse(requestUrl, requestMethod))
         return
       }
@@ -291,10 +324,20 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
-        await route.fulfill({ response })
+        const responseBody = response.status() >= 400 ? await response.text() : undefined
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+            body: responseBody ? responseBody.slice(0, 2000) : '',
+          })
+        }
+        await route.fulfill(responseBody === undefined ? { response } : { response, body: responseBody })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -307,19 +350,29 @@ async function main() {
 
     const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/monthly?month=2099-09`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('monthly-plan-source-block').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('monthly-plan-standard-confirm-entry').click()
+    await page.getByTestId('planning-layered-workspace').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('monthly-plan-tree-block').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('monthly-plan-review-block').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('monthly-plan-confirm-summary').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('monthly-plan-confirm-draft-header').click()
     await page.getByTestId('monthly-plan-confirm-dialog').waitFor({ state: 'visible', timeout: 10000 })
 
-    await page.getByRole('button', { name: '确认月度计划' }).click()
     const confirmDialog = page.getByTestId('monthly-plan-confirm-dialog')
-    await confirmDialog.getByText('确认失败', { exact: true }).waitFor({ state: 'visible', timeout: 10000 })
-    await confirmDialog.getByRole('button', { name: '重新尝试' }).waitFor({ state: 'visible', timeout: 10000 })
+    const dialogActionButtons = confirmDialog.locator('button:not([aria-label])')
+    await dialogActionButtons.last().click()
+    await page.waitForFunction(() => {
+      const dialog = document.querySelector('[data-testid="monthly-plan-confirm-dialog"]')
+      return dialog ? dialog.querySelectorAll('button').length >= 4 : false
+    }, null, { timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'planning-confirm-failure-dialog.png'), fullPage: true })
 
-    await confirmDialog.getByRole('button', { name: '重新尝试' }).click()
+    await dialogActionButtons.first().click()
     await confirmDialog.waitFor({ state: 'hidden', timeout: 10000 })
-    await page.getByText('已确认查看态').first().waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('monthly-plan-priority-banner').waitFor({ state: 'visible', timeout: 20000 })
+    assert(
+      await page.getByTestId('monthly-plan-confirm-draft-header').count() === 0,
+      'Confirmed monthly plan should no longer render the draft confirm action',
+    )
     await page.screenshot({ path: join(outputDir, 'planning-confirm-failure-recovered.png'), fullPage: true })
 
     assert(confirmAttempts === 2, `Expected 2 confirm attempts, received ${confirmAttempts}`)
@@ -328,7 +381,7 @@ async function main() {
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
 
     const result = {
-      mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
+      mode: runMode,
       targetUrl,
       confirmAttempts,
       failureVisible: true,
@@ -346,7 +399,7 @@ async function main() {
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
     const failurePayload = {
-      mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
+      mode: runMode,
       error: error instanceof Error ? error.message : String(error),
       apiFailures,
       consoleErrors,

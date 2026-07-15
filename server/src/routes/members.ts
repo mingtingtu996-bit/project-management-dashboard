@@ -2,13 +2,20 @@ import express from 'express'
 
 import { z } from 'zod'
 
+import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
-import { supabase, updateTask as updateTaskRecord } from '../services/dbService.js'
-import { getProjectPermissionLevel, isCompanyAdminRole, normalizeProjectPermissionLevel } from '../auth/access.js'
-import { getAuthUserByUsername, mapLegacyRoleToGlobalRole } from '../auth/session.js'
+import { supabase } from '../services/dbService.js'
+import { updateTaskInMainChain } from '../services/taskWriteChainService.js'
+import {
+  getProjectCompanyId,
+  getProjectPermissionLevel,
+  isActiveCompanyMember,
+  normalizeProjectPermissionLevel,
+} from '../auth/access.js'
+import { getAuthUserByUsername, normalizeGlobalRole } from '../auth/session.js'
 import { query as rawQuery } from '../database.js'
 
 const router = express.Router()
@@ -54,7 +61,6 @@ type MemberRow = {
     username: string
     display_name: string
     email?: string | null
-    role?: string | null
     global_role?: string | null
   } | null
 }
@@ -69,7 +75,6 @@ type MemberListRow = {
   username?: string | null
   display_name?: string | null
   email?: string | null
-  role?: string | null
   global_role?: string | null
 }
 
@@ -102,7 +107,7 @@ function normalizeMemberResponse(member: MemberRow) {
     username: linkedUser?.username || '',
     displayName: linkedUser?.display_name || linkedUser?.username || '',
     email: linkedUser?.email ?? null,
-    globalRole: linkedUser?.global_role || mapLegacyRoleToGlobalRole(linkedUser?.role),
+    globalRole: normalizeGlobalRole(linkedUser?.global_role),
     permissionLevel: normalizeProjectPermissionLevel(member.permission_level),
     joinedAt: member.joined_at ?? null,
     lastActivity: member.last_activity ?? null,
@@ -116,7 +121,7 @@ function normalizeFlatMemberResponse(member: MemberListRow) {
     username: member.username || '',
     displayName: member.display_name || member.username || '',
     email: member.email ?? null,
-    globalRole: member.global_role || mapLegacyRoleToGlobalRole(member.role),
+    globalRole: normalizeGlobalRole(member.global_role),
     permissionLevel: normalizeProjectPermissionLevel(member.permission_level),
     joinedAt: member.joined_at ?? null,
     lastActivity: member.last_activity ?? null,
@@ -221,7 +226,7 @@ async function linkAssigneeToUser(projectId: string, assigneeName: string, targe
   const displayName = readUserDisplayName(targetUser)
 
   for (const task of matchedTasks) {
-    await updateTaskRecord(
+    await updateTaskInMainChain(
       String(task.id),
       {
         assignee_user_id: targetUser.id,
@@ -236,13 +241,13 @@ async function linkAssigneeToUser(projectId: string, assigneeName: string, targe
   return { linkedTaskCount: matchedTasks.length }
 }
 
-async function ensureProjectOwner(userId: string, projectId: string) {
-  const permissionLevel = await getProjectPermissionLevel(userId, projectId)
+async function ensureProjectOwner(userId: string, projectId: string, companyId?: string | null) {
+  const permissionLevel = await getProjectPermissionLevel(userId, projectId, companyId)
   return permissionLevel === 'owner'
 }
 
-async function ensureProjectMember(userId: string, projectId: string) {
-  const permissionLevel = await getProjectPermissionLevel(userId, projectId)
+async function ensureProjectMember(userId: string, projectId: string, companyId?: string | null) {
+  const permissionLevel = await getProjectPermissionLevel(userId, projectId, companyId)
   return permissionLevel !== null
 }
 
@@ -274,6 +279,14 @@ async function listActiveOwners(projectId: string) {
   )
 }
 
+async function ensureTargetUserInProjectCompany(projectId: string, targetUserId: string) {
+  const companyId = await getProjectCompanyId(projectId)
+  if (!companyId) return true
+
+  const isMember = await isActiveCompanyMember(targetUserId, companyId)
+  return isMember !== false
+}
+
 router.get('/:projectId/me', validate(projectIdParamSchema, 'params'), asyncHandler(async (req, res) => {
   const { projectId } = req.params
   const userId = req.user?.id
@@ -282,8 +295,8 @@ router.get('/:projectId/me', validate(projectIdParamSchema, 'params'), asyncHand
     return res.status(401).json({ success: false, message: '未登录' })
   }
 
-  const permissionLevel = await getProjectPermissionLevel(userId, projectId)
-  const effectivePermissionLevel = permissionLevel ?? (isCompanyAdminRole(req.user?.globalRole) ? 'viewer' : null)
+  const permissionLevel = await getProjectPermissionLevel(userId, projectId, getRequestCompanyId(req))
+  const effectivePermissionLevel = permissionLevel
 
   if (!effectivePermissionLevel) {
     return res.status(403).json({ success: false, message: '无权访问此项目' })
@@ -309,7 +322,7 @@ router.get('/:projectId', validate(projectIdParamSchema, 'params'), asyncHandler
     return res.status(401).json({ success: false, message: '未登录' })
   }
 
-  const canView = await ensureProjectMember(userId, projectId)
+  const canView = await ensureProjectMember(userId, projectId, getRequestCompanyId(req))
   if (!canView) {
     return res.status(403).json({ success: false, message: '无权访问此项目' })
   }
@@ -327,7 +340,6 @@ router.get('/:projectId', validate(projectIdParamSchema, 'params'), asyncHandler
           u.username,
           u.display_name,
           u.email,
-          u.role,
           u.global_role
         FROM project_members pm
         LEFT JOIN users u ON u.id = pm.user_id
@@ -359,7 +371,7 @@ router.get(
       return res.status(401).json({ success: false, message: '未登录' })
     }
 
-    const isOwner = await ensureProjectOwner(userId, projectId)
+    const isOwner = await ensureProjectOwner(userId, projectId, getRequestCompanyId(req))
     if (!isOwner) {
       return res.status(403).json({ success: false, message: '只有项目负责人可以查看待关联责任人' })
     }
@@ -386,18 +398,22 @@ router.post(
       return res.status(401).json({ success: false, message: '未登录' })
     }
 
-    const isOwner = await ensureProjectOwner(userId, projectId)
+    const isOwner = await ensureProjectOwner(userId, projectId, getRequestCompanyId(req))
     if (!isOwner) {
       return res.status(403).json({ success: false, message: '只有项目负责人可以添加成员' })
     }
 
-    if (!['editor', 'viewer'].includes(permissionLevel)) {
-      return res.status(400).json({ success: false, message: '仅支持添加编辑成员或只读成员' })
+    if (!permissionLevel || !['editor', 'owner'].includes(permissionLevel)) {
+      return res.status(400).json({ success: false, message: '仅支持添加编辑成员或项目负责人' })
     }
 
     const targetUser = await getAuthUserByUsername(username)
     if (!targetUser) {
       return res.status(404).json({ success: false, message: '目标用户不存在' })
+    }
+
+    if (!await ensureTargetUserInProjectCompany(projectId, targetUser.id)) {
+      return res.status(403).json({ success: false, message: '目标用户需先加入当前公司空间' })
     }
 
     const { data: existingMember } = await supabase
@@ -420,6 +436,7 @@ router.post(
           joined_at: new Date().toISOString(),
         })
         .eq('id', existingMember.id)
+        .eq('project_id', projectId)
 
       if (reactivateError) {
         logger.error('Reactivate member error', { error: reactivateError, projectId, targetUserId: targetUser.id, userId })
@@ -460,7 +477,6 @@ router.post(
               username: targetUser.username,
               display_name: targetUser.display_name,
               email: targetUser.email,
-              role: targetUser.role,
               global_role: targetUser.global_role,
             },
           })
@@ -484,7 +500,7 @@ router.post(
       return res.status(401).json({ success: false, message: '未登录' })
     }
 
-    const isOwner = await ensureProjectOwner(userId, projectId)
+    const isOwner = await ensureProjectOwner(userId, projectId, getRequestCompanyId(req))
     if (!isOwner) {
       return res.status(403).json({ success: false, message: '只有项目负责人可以关联责任人账号' })
     }
@@ -521,13 +537,13 @@ router.patch(
       return res.status(401).json({ success: false, message: '未登录' })
     }
 
-    const isOwner = await ensureProjectOwner(userId, projectId)
+    const isOwner = await ensureProjectOwner(userId, projectId, getRequestCompanyId(req))
     if (!isOwner) {
       return res.status(403).json({ success: false, message: '只有项目负责人可以调整成员权限' })
     }
 
-    if (!['editor', 'viewer'].includes(permissionLevel)) {
-      return res.status(400).json({ success: false, message: '仅支持切换为编辑成员或只读成员' })
+    if (!permissionLevel || !['editor', 'owner'].includes(permissionLevel)) {
+      return res.status(400).json({ success: false, message: '仅支持切换为编辑成员或项目负责人' })
     }
 
     if (targetUserId === userId) {
@@ -551,6 +567,7 @@ router.patch(
       .from('project_members')
       .update({ permission_level: permissionLevel })
       .eq('id', targetMember.id)
+      .eq('project_id', projectId)
 
     if (error) {
       logger.error('Update member permission error', { error, projectId, targetUserId, userId })
@@ -577,7 +594,7 @@ router.post(
       return res.status(401).json({ success: false, message: '未登录' })
     }
 
-    const isOwner = await ensureProjectOwner(userId, projectId)
+    const isOwner = await ensureProjectOwner(userId, projectId, getRequestCompanyId(req))
     if (!isOwner) {
       return res.status(403).json({ success: false, message: '只有项目负责人可以转让负责人' })
     }
@@ -595,6 +612,7 @@ router.post(
       .from('project_members')
       .update({ permission_level: 'owner' })
       .eq('id', targetMember.id)
+      .eq('project_id', projectId)
 
     if (promoteError) {
       logger.error('Promote owner error', { error: promoteError, projectId, targetUserId, userId })
@@ -617,6 +635,7 @@ router.post(
         .from('project_members')
         .update({ permission_level: 'editor' })
         .eq('id', currentOwnerMember.id)
+        .eq('project_id', projectId)
     }
 
     const owners = await listActiveOwners(projectId)
@@ -642,7 +661,7 @@ router.delete(
       return res.status(401).json({ success: false, message: '未登录' })
     }
 
-    const isOwner = await ensureProjectOwner(userId, projectId)
+    const isOwner = await ensureProjectOwner(userId, projectId, getRequestCompanyId(req))
     if (!isOwner) {
       return res.status(403).json({ success: false, message: '只有项目负责人可以移除成员' })
     }
@@ -664,10 +683,15 @@ router.delete(
       return res.status(400).json({ success: false, message: '当前负责人不能直接移除，请先转让负责人' })
     }
 
+    // v1.4.15: record retention decision (soft-remove)
+    const { executeRetention } = await import('../services/deletionRetentionGovernanceService.js')
+    await executeRetention({ entityType: 'project_member', entityId: targetMember.id, projectId, userId, userAction: 'deactivate' })
+
     const { error } = await supabase
       .from('project_members')
       .update({ is_active: false })
       .eq('id', targetMember.id)
+      .eq('project_id', projectId)
 
     if (error) {
       logger.error('Remove member error', { error, projectId, targetUserId, userId })

@@ -1,19 +1,22 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
 import {
   isIgnorableBrowserConsoleError,
   maybeBuildMockAuthResponse,
   primeBrowserAuth,
+  readFullAppTestManifest,
+  resolveBrowserVerifyAuthToken,
 } from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -22,12 +25,17 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+const verificationMonth = resolvePlanningMonthlyVerificationMonth()
 const now = new Date().toISOString()
+
+function isIgnorableRequestFailure(errorText) {
+  return typeof errorText === 'string' && errorText.includes('net::ERR_ABORTED')
+}
 
 const mockProject = {
   id: projectId,
-  name: '鏈堝害璁″垝鑱旇皟椤圭洰',
+  name: '月度计划联调项目',
   description: 'MonthlyPlan browser verification fixture project',
   status: 'active',
   created_at: now,
@@ -40,7 +48,7 @@ const mockBaselineVersions = [
     project_id: projectId,
     version: 2,
     status: 'confirmed',
-    title: '椤圭洰鍩虹嚎',
+    title: '项目基线',
     source_type: 'manual',
     confirmed_at: '2099-09-01T00:00:00.000Z',
     updated_at: '2099-09-01T00:00:00.000Z',
@@ -51,7 +59,7 @@ const mockTasks = [
   {
     id: 'task-root',
     project_id: projectId,
-    title: '涓讳綋缁撴瀯',
+    title: '主体结构',
     wbs_level: 1,
     sort_order: 0,
     progress: 45,
@@ -63,7 +71,7 @@ const mockTasks = [
   {
     id: 'task-leaf',
     project_id: projectId,
-    title: '鏈虹數瀹夎',
+    title: '机电安装',
     parent_id: 'task-root',
     wbs_level: 2,
     sort_order: 1,
@@ -79,7 +87,7 @@ const mockConditions = [
   {
     id: 'condition-1',
     task_id: 'task-root',
-    name: '鏉愭枡鍒板満',
+    name: '材料到场',
     is_satisfied: false,
     created_at: now,
   },
@@ -89,7 +97,7 @@ const mockObstacles = [
   {
     id: 'obstacle-1',
     task_id: 'task-leaf',
-    title: '鍦哄湴鍗忚皟',
+    title: '场地协调',
     is_resolved: false,
     status: '处理中',
     created_at: now,
@@ -102,7 +110,7 @@ const mockMonthlyPlanDetail = {
   version: 9,
   status: 'draft',
   month: '2099-09',
-  title: '2099-09 鏈堝害璁″垝',
+  title: '2099-09 月度计划',
   baseline_version_id: 'baseline-v2',
   source_version_id: 'baseline-v2',
   carryover_item_count: 1,
@@ -114,7 +122,7 @@ const mockMonthlyPlanDetail = {
       project_id: projectId,
       monthly_plan_version_id: 'monthly-v9',
       source_task_id: 'task-root',
-      title: '涓讳綋缁撴瀯',
+      title: '主体结构',
       planned_start_date: '2099-09-01',
       planned_end_date: '2099-09-30',
       target_progress: 60,
@@ -127,7 +135,7 @@ const mockMonthlyPlanDetail = {
       project_id: projectId,
       monthly_plan_version_id: 'monthly-v9',
       source_task_id: 'task-leaf',
-      title: '鏈虹數瀹夎',
+      title: '机电安装',
       planned_start_date: '2099-09-05',
       planned_end_date: '2099-09-25',
       target_progress: 35,
@@ -170,6 +178,58 @@ function json(body, status = 200) {
     contentType: 'application/json; charset=utf-8',
     body: JSON.stringify(body),
   }
+}
+
+export function resolvePlanningMonthlyVerificationMonth({
+  envMonth = process.env.BROWSER_VERIFY_MONTH,
+  mockApi = shouldUseMockApi,
+  nowValue = new Date(),
+} = {}) {
+  if (envMonth) return envMonth
+  return mockApi ? '2099-09' : nowValue.toISOString().slice(0, 7)
+}
+
+export function resolvePlanningMonthlyProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolvePlanningMonthlyProjectId({ manifest })
+  return projectId
+}
+
+async function clearDraftResumeSnapshots(page) {
+  await page.evaluate(() => {
+    try {
+      const draftResumePrefix = 'planning:draft-resume:'
+      for (const key of Object.keys(window.localStorage)) {
+        if (key.startsWith(draftResumePrefix)) {
+          window.localStorage.removeItem(key)
+        }
+      }
+    } catch {
+      // Opaque documents such as about:blank cannot access localStorage.
+    }
+  })
+}
+
+async function dismissDraftResumeDialog(page) {
+  const resumeDialog = page.getByTestId('planning-draft-resume-dialog')
+  const visible = await resumeDialog.waitFor({ state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
+  if (!visible) {
+    return false
+  }
+
+  await resumeDialog.locator('button').filter({ hasText: '放弃本地状态' }).click()
+  await resumeDialog.waitFor({ state: 'detached', timeout: 10000 })
+  return true
 }
 
 async function isHttpReady(url) {
@@ -225,6 +285,22 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: mockTasks,
+        risks: [],
+        conditions: mockConditions,
+        obstacles: mockObstacles,
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (pathname === `/api/members/${projectId}/me`) {
     return json({
       success: true,
@@ -269,7 +345,6 @@ function buildMockResponse(urlString) {
     pathname === '/api/risks'
     || pathname === '/api/issues'
     || pathname === '/api/warnings'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/change-logs'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
@@ -282,6 +357,8 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
+  const authToken = shouldUseMockApi ? null : await resolveBrowserVerifyAuthToken()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -296,19 +373,28 @@ async function main() {
 
   const browser = await chromium.launch({ headless: true })
   const consoleErrors = []
+  const consoleErrorDetails = []
   const pageErrors = []
   const apiFailures = []
+  const requestFailures = []
+  let page = null
+  let pageBodyText = null
+  let failureScreenshot = null
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    await primeBrowserAuth(page, authToken)
     await page.addInitScript(() => {
-      const draftResumePrefix = 'planning:draft-resume:'
-      for (const key of Object.keys(window.localStorage)) {
-        if (key.startsWith(draftResumePrefix)) {
-          window.localStorage.removeItem(key)
+      try {
+        const draftResumePrefix = 'planning:draft-resume:'
+        for (const key of Object.keys(window.localStorage)) {
+          if (key.startsWith(draftResumePrefix)) {
+            window.localStorage.removeItem(key)
+          }
         }
+      } catch {
+        // Opaque documents such as about:blank cannot access localStorage.
       }
     })
 
@@ -317,12 +403,26 @@ async function main() {
         const text = message.text()
         if (!isIgnorableBrowserConsoleError(text)) {
           consoleErrors.push(text)
+          consoleErrorDetails.push({ text, location: message.location() })
         }
       }
     })
 
     page.on('pageerror', (error) => {
       pageErrors.push(error.message)
+    })
+
+    page.on('requestfailed', (request) => {
+      const failure = request.failure()
+      if (isIgnorableRequestFailure(failure?.errorText)) {
+        return
+      }
+      requestFailures.push({
+        method: request.method(),
+        resourceType: request.resourceType(),
+        url: request.url(),
+        errorText: failure?.errorText ?? 'unknown',
+      })
     })
 
     await page.route(`${baseUrl}/api/**`, async (route) => {
@@ -336,10 +436,18 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+          })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -350,10 +458,11 @@ async function main() {
       }
     })
 
-    const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/monthly?month=2099-09`
+    const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/monthly?month=${encodeURIComponent(verificationMonth)}`
+    const freshTargetUrl = `${baseUrl}/?verify=planning-monthly-confirm${new URL(targetUrl).hash}`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('planning-layered-workspace').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('monthly-plan-source-block').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('monthly-plan-edit-actions').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('monthly-plan-batch-strip').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('monthly-plan-tree-block').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('monthly-plan-review-block').waitFor({ state: 'visible', timeout: 20000 })
@@ -365,35 +474,53 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'planning-monthly-page.png'), fullPage: true })
 
     await page.getByTestId('planning-selection-checkbox').first().click()
-    const resumeDialog = page.getByTestId('planning-draft-resume-dialog')
-    const hasResumeDialog = await resumeDialog.waitFor({ state: 'visible', timeout: 1000 }).then(() => true).catch(() => false)
-    if (hasResumeDialog) {
-      await resumeDialog.locator('button').first().click()
-      await resumeDialog.waitFor({ state: 'detached', timeout: 10000 })
-    }
-    await page.getByText('草稿已调整').waitFor({ state: 'visible', timeout: 10000 })
+    await dismissDraftResumeDialog(page)
+    await page.getByTestId('monthly-plan-edit-actions').getByText('有未保存调整').waitFor({ state: 'visible', timeout: 10000 })
     await page.locator('[data-testid="planning-page-tabs"] button').filter({ hasText: '项目基线' }).first().click()
     await page.getByTestId('monthly-plan-unsaved-changes-dialog').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'planning-monthly-unsaved-dialog.png'), fullPage: true })
     await page.getByTestId('monthly-plan-unsaved-changes-dialog').locator('button').first().click()
     await page.getByTestId('monthly-plan-unsaved-changes-dialog').waitFor({ state: 'detached', timeout: 10000 })
 
-    await page.getByTestId('monthly-plan-standard-confirm-entry').click()
+    assert(
+      await page.getByTestId('monthly-plan-confirm-draft-header').isDisabled(),
+      'Monthly confirm should be disabled while unsaved monthly edits are present',
+    )
+
+    await page.locator('[data-testid="planning-page-tabs"] button').filter({ hasText: '项目基线' }).first().click()
+    await page.getByTestId('monthly-plan-unsaved-changes-dialog').waitFor({ state: 'visible', timeout: 10000 })
+    await page.getByTestId('monthly-plan-unsaved-changes-dialog').locator('button').filter({ hasText: '确认离开' }).click()
+    await page.waitForURL(/\/planning\/baseline/, { timeout: 10000 })
+
+    await page.goto(freshTargetUrl, { waitUntil: 'domcontentloaded' })
+    await page.getByTestId('planning-layered-workspace').waitFor({ state: 'visible', timeout: 20000 })
+    await clearDraftResumeSnapshots(page)
+    await dismissDraftResumeDialog(page)
+    await page.getByTestId('monthly-plan-confirm-draft-header').waitFor({ state: 'visible', timeout: 20000 })
+    await page.waitForFunction(() => {
+      const confirmButton = document.querySelector('[data-testid="monthly-plan-confirm-draft-header"]')
+      return confirmButton instanceof HTMLButtonElement && !confirmButton.disabled
+    }, null, { timeout: 10000 })
+    await page.getByTestId('monthly-plan-confirm-draft-header').click()
     await page.getByTestId('monthly-plan-confirm-dialog').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'planning-monthly-confirm-dialog.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
     assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
+    assert(requestFailures.length === 0, `Browser request failures detected: ${JSON.stringify(requestFailures)}`)
 
     const result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       initialUrl,
       unsavedGuardVisible: true,
+      confirmDisabledWithUnsavedChanges: true,
       confirmDialogVisible: true,
       apiFailures,
       consoleErrors,
+      consoleErrorDetails,
       pageErrors,
+      requestFailures,
       screenshots: {
         page: join(outputDir, 'planning-monthly-page.png'),
         unsavedDialog: join(outputDir, 'planning-monthly-unsaved-dialog.png'),
@@ -404,12 +531,31 @@ async function main() {
     await writeFile(join(outputDir, 'planning-monthly-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        pageBodyText = await page.locator('body').innerText()
+      } catch {}
+
+      try {
+        failureScreenshot = join(outputDir, 'planning-monthly-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
+
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      projectId,
+      verificationMonth,
+      pageBodyText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
+      consoleErrorDetails,
       pageErrors,
+      requestFailures,
     }
     await writeFile(join(outputDir, 'planning-monthly-browser-check.failure.json'), `${JSON.stringify(failurePayload, null, 2)}\n`, 'utf8')
     console.error(JSON.stringify(failurePayload, null, 2))
@@ -422,8 +568,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
-
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

@@ -34,12 +34,13 @@ export const DRAWING_REVIEW_MODE_LABELS: Record<ReviewMode, string> = {
 }
 
 export const DRAWING_STATUS_LABELS: Record<string, string> = {
-  pending: '待启动',
-  preparing: '编制中',
-  reviewing: '送审中',
-  revising: '修订中',
-  issued: '已出图',
-  completed: '已完成',
+  pending: '待启动', preparing: '编制中', reviewing: '送审中',
+  revising: '修订中', issued: '已出图', completed: '已完成',
+}
+// v1.4.5: visual tone for backend status DTO compatibility
+export const DRAWING_STATUS_TONES: Record<string, string> = {
+  pending: 'slate', preparing: 'blue', reviewing: 'amber',
+  revising: 'amber', issued: 'blue', completed: 'green',
 }
 
 export const DRAWING_TEMPLATES: DrawingTemplateOption[] = [

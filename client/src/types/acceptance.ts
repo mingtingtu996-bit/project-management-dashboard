@@ -1,3 +1,5 @@
+import { daysUntilLocalDate } from '@/lib/dateDistance'
+
 export interface AcceptanceType {
   id: string
   name: string
@@ -19,7 +21,7 @@ export const DEFAULT_ACCEPTANCE_TYPES: AcceptanceType[] = [
     id: 'pre_acceptance',
     name: '工程竣工预验收',
     shortName: '预验收',
-    color: 'bg-purple-500',
+    color: 'bg-sky-500',
     icon: 'ClipboardCheck',
     isSystem: true,
     description: '监理单位牵头的预验收事项',
@@ -29,7 +31,7 @@ export const DEFAULT_ACCEPTANCE_TYPES: AcceptanceType[] = [
     id: 'four_party',
     name: '单位工程竣工验收',
     shortName: '四方验收',
-    color: 'bg-blue-500',
+    color: 'bg-blue-600',
     icon: 'Users',
     isSystem: true,
     description: '建设单位组织的四方验收',
@@ -140,10 +142,10 @@ export const ACCEPTANCE_STATUS_CONFIG: Record<
 > = {
   draft: {
     icon: 'Circle',
-    color: 'text-gray-500',
-    bg: 'bg-gray-100',
-    borderColor: 'border-gray-300',
-    textColor: 'text-gray-600',
+    color: 'text-slate-500',
+    bg: 'bg-slate-100',
+    borderColor: 'border-slate-300',
+    textColor: 'text-slate-600',
   },
   preparing: {
     icon: 'Loader2',
@@ -228,7 +230,7 @@ export type AcceptanceRequirementStatus = 'open' | 'met' | 'blocked' | 'closed'
 export interface AcceptancePlan {
   id: string
   project_id: string
-  milestone_id?: string | null
+  covered_task_ids: string[]
   catalog_id?: string | null
   type_id: string
   type_name: string
@@ -240,6 +242,7 @@ export interface AcceptancePlan {
   planned_date: string | null
   actual_date?: string | null
   building_id?: string | null
+  building_object_id?: string | null
   scope_level?: 'project' | 'building' | 'unit' | 'specialty' | string | null
   participant_unit_id?: string | null
   status: AcceptanceStatus
@@ -262,7 +265,6 @@ export interface AcceptancePlan {
   warning_level?: 'info' | 'warning' | 'critical' | string | null
   is_custom?: boolean
   responsible_user_id?: string | null
-  responsible_unit?: string | null
   documents?: AcceptanceDocument[] | null
   nodes?: AcceptanceNode[]
   is_system: boolean
@@ -417,6 +419,149 @@ export interface AcceptancePlanRelationBundle {
   linkedTasks?: AcceptanceLinkedTask[]
 }
 
+export type AcceptanceTemplatePreviewAction = 'will_create' | 'will_skip_existing'
+
+export interface AcceptanceTemplatePreviewItem {
+  itemCode: string
+  canonicalType: string
+  itemName: string
+  regionalDisplayName?: string | null
+  phaseCode: string
+  phaseOrder: number
+  sortOrder: number
+  scopeLevel: string
+  typeColor: string
+  authority: string
+  responsibleUnit: string
+  description: string
+  resultDocuments: string[]
+  handlingModes: string[]
+  materialNames: string[]
+  prerequisiteNames: string[]
+  sourceCategories: string[]
+  sourceIndustryCodes: string[]
+  action: AcceptanceTemplatePreviewAction
+  selected: boolean
+  existingPlanId?: string | null
+}
+
+export interface AcceptanceTemplatePreviewDependency {
+  dependencyCode: string
+  sourceItemCode: string
+  targetItemCode: string
+  dependencyKind: AcceptanceDependencyKind
+  reason: string
+  action: AcceptanceTemplatePreviewAction
+  selected: boolean
+}
+
+export interface AcceptanceTemplatePreviewRequirement {
+  requirementCode: string
+  itemCode: string
+  requirementType: string
+  sourceEntityType: string
+  sourceEntityId: string
+  description: string
+  action: AcceptanceTemplatePreviewAction
+  selected: boolean
+}
+
+export type AcceptanceTemplateApplicabilityConditionSource =
+  | 'region_profile'
+  | 'business_profile'
+  | 'project_feature_trigger'
+  | 'acceptance_page_confirmation'
+  | 'candidate'
+
+export interface AcceptanceTemplateApplicabilityCondition {
+  conditionCode: string
+  conditionName: string
+  description: string
+  groupCode: string
+  groupName: string
+  affectedItemCodes: string[]
+  triggerKeywords: string[]
+  applicableIndustryCodes: string[]
+  selected: boolean
+  suggested: boolean
+  confirmationRequired: boolean
+  source: AcceptanceTemplateApplicabilityConditionSource
+  confirmationQuestion: string
+  sourcePolicyHint: string
+}
+
+export interface AcceptanceTemplatePreview {
+  templateCode: string
+  templateName: string
+  seedVersion: string
+  projectId: string
+  summary: {
+    itemCreateCount: number
+    dependencyCreateCount: number
+    requirementCreateCount: number
+    skippedExistingCount: number
+  }
+  deliveryGoal: {
+    targetName: string
+    explanation: string
+  }
+  regionProfile: {
+    provinceCode: string
+    provinceName: string
+    cityCode?: string
+    cityName?: string
+    profileVersion: string
+    source: string
+    deliveryTargetName: string
+    updateMode: string
+    policySources: Array<{
+      sourceName: string
+      sourceUrl: string
+      sourceLevel: string
+      checkedAt: string
+      notes: string[]
+    }>
+  }
+  businessProfile: {
+    businessTypeCode: string
+    businessTypeName: string
+    source: string
+    industryCodes: string[]
+    defaultItemCodes: string[]
+    optionalItemCodes: string[]
+    defaultConditionCodes: string[]
+    sourcePolicyHints: string[]
+  }
+  industryProfile: {
+    codes: string[]
+    labels: string[]
+  }
+  applicabilityConditions: AcceptanceTemplateApplicabilityCondition[]
+  items: AcceptanceTemplatePreviewItem[]
+  dependencies: AcceptanceTemplatePreviewDependency[]
+  requirements: AcceptanceTemplatePreviewRequirement[]
+  warnings: Array<{
+    code: string
+    message: string
+    severity: 'info' | 'warning'
+  }>
+}
+
+export interface ApplyAcceptanceTemplateResult {
+  templateCode: string
+  seedVersion: string
+  projectId: string
+  createdCatalogIds: string[]
+  createdPlanIds: string[]
+  createdDependencyIds: string[]
+  createdRequirementIds: string[]
+  skippedExisting: Array<{
+    entityType: 'item' | 'dependency' | 'requirement'
+    key: string
+    reason: string
+  }>
+}
+
 export interface AcceptanceDependency {
   from: string
   to: string
@@ -507,11 +652,8 @@ export function summarizeAcceptancePlans(plans: AcceptancePlan[]): AcceptanceSta
     if (typeof plan.days_to_due === 'number') {
       return plan.days_to_due >= 0 && plan.days_to_due <= 30
     }
-    if (!plan.planned_date) return false
-    const planned = new Date(plan.planned_date)
-    if (Number.isNaN(planned.getTime())) return false
-    const now = new Date()
-    const diffDays = Math.ceil((planned.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
+    const diffDays = daysUntilLocalDate(plan.planned_date)
+    if (diffDays === null) return false
     return diffDays >= 0 && diffDays <= 30
   }).length
   const keyMilestoneCount = plans.filter((plan) => Boolean(plan.is_hard_prerequisite) || Boolean(plan.is_system)).length
@@ -539,7 +681,7 @@ export function getDefaultAcceptanceType(typeId: string): AcceptanceType | undef
 
 export function getAcceptanceTypeColor(typeId: string, customTypes?: AcceptanceType[]): string {
   const allTypes = [...DEFAULT_ACCEPTANCE_TYPES, ...(customTypes || [])]
-  return allTypes.find((type) => type.id === typeId)?.color || 'bg-gray-500'
+  return allTypes.find((type) => type.id === typeId)?.color || 'bg-slate-500'
 }
 
 export function getAcceptanceTypeName(typeId: string, customTypes?: AcceptanceType[]): string {

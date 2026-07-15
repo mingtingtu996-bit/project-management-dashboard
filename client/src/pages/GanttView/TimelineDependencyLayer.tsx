@@ -1,3 +1,5 @@
+import { GANTT_BAR_PALETTE } from '@/lib/chartPalette'
+
 interface TimelineDependencyEdge {
   id: string
   points: [number, number, number, number]
@@ -17,7 +19,7 @@ export function TimelineDependencyLayer({ edges }: TimelineDependencyLayerProps)
         const [startX, startY, endX, endY] = edge.points
         const bendX = Math.max(startX + 18, startX + (endX - startX) / 2)
         const arrowX = endX - 8
-        const color = edge.highlighted ? '#f97316' : '#94a3b8'
+        const color = edge.highlighted ? GANTT_BAR_PALETTE.dependency.highlight : GANTT_BAR_PALETTE.dependency.normal
 
         return (
           <g key={edge.id}>

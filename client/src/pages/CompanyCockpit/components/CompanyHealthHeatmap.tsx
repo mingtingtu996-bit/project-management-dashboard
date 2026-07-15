@@ -1,29 +1,47 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
+import { EmptyState } from '@/components/EmptyState'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { Separator } from '@/components/ui/separator'
+import { cn } from '@/lib/utils'
 
 type HeatmapItem = {
   id: string
   name: string
-  healthScore: number
-  progress: number
+  businessHealthScore: number | null
+  progress: number | null
   statusLabel: string
 }
 
 interface CompanyHealthHeatmapProps {
   items: HeatmapItem[]
+  averageHealth: number
+  lowHealthProjectCount: number
+  totalItemCount?: number
 }
 
 function getTileTone(score: number) {
-  if (score >= 80) return 'border-emerald-200 bg-emerald-50 text-emerald-900'
-  if (score >= 60) return 'border-blue-200 bg-blue-50 text-blue-900'
-  if (score >= 40) return 'border-amber-200 bg-amber-50 text-amber-900'
-  return 'border-red-200 bg-red-50 text-red-900'
+  if (score >= 80) return 'border-emerald-200 bg-emerald-50 text-emerald-900 ring-1 ring-inset ring-emerald-200/60'
+  if (score >= 60) return 'border-blue-200 bg-blue-50 text-blue-900 ring-1 ring-inset ring-blue-200/60'
+  if (score >= 40) return 'border-amber-200 bg-amber-50 text-amber-900 ring-1 ring-inset ring-amber-200/60'
+  return 'border-red-200 bg-red-50 text-red-900 ring-1 ring-inset ring-red-200/60'
+}
+
+function getNullableTileTone(score: number | null) {
+  return score === null
+    ? 'border-slate-200 bg-slate-50 text-slate-700 ring-1 ring-inset ring-slate-200/60'
+    : getTileTone(score)
 }
 
 function getScoreBarColor(score: number) {
   if (score >= 80) return 'bg-emerald-500'
-  if (score >= 60) return 'bg-blue-500'
+  if (score >= 60) return 'bg-blue-600'
   if (score >= 40) return 'bg-amber-500'
   return 'bg-red-500'
+}
+
+function getNullableScoreBarColor(score: number | null) {
+  return score === null ? 'bg-slate-300' : getScoreBarColor(score)
 }
 
 function compactProjectName(name: string) {
@@ -31,44 +49,49 @@ function compactProjectName(name: string) {
   return compact.length > 12 ? `${compact.slice(0, 12)}…` : compact
 }
 
-export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
-  const sortedItems = [...items].sort((left, right) => right.healthScore - left.healthScore)
-  const avgScore = items.length > 0
-    ? Math.round(items.reduce((sum, item) => sum + item.healthScore, 0) / items.length)
-    : 0
-  const criticalCount = items.filter((item) => item.healthScore < 40).length
-  const stableCount = items.filter((item) => item.healthScore >= 80).length
+export function CompanyHealthHeatmap({ items, averageHealth, lowHealthProjectCount, totalItemCount = items.length }: CompanyHealthHeatmapProps) {
+  const sortedItems = [...items].sort((left, right) => (right.businessHealthScore ?? -1) - (left.businessHealthScore ?? -1))
 
   return (
-    <Card className="rounded-[24px] border border-slate-100 bg-slate-50 shadow-none">
-      <CardHeader className="space-y-1 pb-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <CardTitle className="text-base font-semibold text-slate-900">健康热力分布</CardTitle>
-            <p className="mt-1 text-xs leading-5 text-slate-500">按项目健康度查看公司层面的冷热分布。</p>
-          </div>
-          {items.length > 0 && (
+    <Card className="surface-card">
+      <CardContent padding="md" className="space-y-4">
+        <CardHead
+          eyebrow="信号摘要"
+          title="项目健康分布"
+          action={items.length > 0 ? (
             <div className="flex flex-col items-end gap-1 text-xs text-slate-500">
-              <span className="font-semibold text-slate-900">{avgScore} 分均值</span>
-              {criticalCount > 0 && (
-                <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-600">{criticalCount} 项预警</span>
+              <span className="font-semibold text-slate-900">组合信号 {averageHealth} 分</span>
+              {lowHealthProjectCount > 0 && (
+                <span className="rounded-full bg-red-50 px-2 py-0.5 text-red-600">{lowHealthProjectCount} 项需重点核查</span>
               )}
             </div>
-          )}
+          ) : null}
+        />
+        <div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">展示优先级靠前项目的健康信号摘要，完整明细在下方项目列表查看。</p>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
         {sortedItems.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-8 text-center text-sm text-slate-500">
-            暂无项目健康数据
-          </div>
+          <EmptyState
+            title="暂无项目健康数据"
+            description="项目健康信号形成后会在这里展示公司级分布摘要。"
+            className="rounded-2xl empty-state-frame border-slate-200 bg-white py-10"
+          />
         ) : (
-          <>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <ChartAccessibleWrapper
+            summary="项目健康信号数据"
+            columns={['项目', '状态', '健康信号', '总体进度']}
+            rows={sortedItems.map((item) => [
+              item.name,
+              item.statusLabel,
+              item.businessHealthScore ?? '暂不可用',
+              item.progress === null ? '暂不可用' : `${item.progress}%`,
+            ])}
+          >
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {sortedItems.map((item) => (
                 <div
                   key={item.id}
-                  className={`rounded-2xl border px-4 py-4 transition-colors ${getTileTone(item.healthScore)}`}
+                  className={cn('rounded-xl border px-4 py-4 transition-colors', getNullableTileTone(item.businessHealthScore))}
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -76,25 +99,25 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
                       <div className="mt-1 text-xs opacity-75">{item.statusLabel}</div>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-2xl font-semibold leading-none">{item.healthScore}</div>
-                      <div className="mt-1 text-[11px] opacity-75">健康度</div>
+                      <div className="num-display text-2xl leading-none">{item.businessHealthScore ?? '--'}</div>
+                      <div className="mt-1 text-xs opacity-75">健康信号</div>
                     </div>
                   </div>
                   <div className="mt-3 space-y-2 text-xs">
-                    <div className="h-1.5 rounded-full bg-white/60">
+                    <div className="h-[3px] rounded-full bg-white/60">
                       <div
-                        className={`h-full rounded-full ${getScoreBarColor(item.healthScore)}`}
-                        style={{ width: `${Math.max(0, Math.min(100, item.healthScore))}%` }}
+                        className={`h-full rounded-full ${getNullableScoreBarColor(item.businessHealthScore)}`}
+                        style={{ width: `${item.businessHealthScore === null ? 0 : Math.max(0, Math.min(100, item.businessHealthScore))}%` }}
                       />
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="opacity-75">总体进度</span>
-                      <span className="font-medium">{item.progress}%</span>
+                      <span className="font-medium">{item.progress === null ? '--' : `${item.progress}%`}</span>
                     </div>
-                    <div className="h-1.5 rounded-full bg-white/60">
+                    <div className="h-[3px] rounded-full bg-white/60">
                       <div
                         className="h-full rounded-full bg-current opacity-40"
-                        style={{ width: `${Math.max(0, Math.min(100, item.progress))}%` }}
+                        style={{ width: `${item.progress === null ? 0 : Math.max(0, Math.min(100, item.progress))}%` }}
                       />
                     </div>
                   </div>
@@ -102,18 +125,19 @@ export function CompanyHealthHeatmap({ items }: CompanyHealthHeatmapProps) {
               ))}
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-3">
+            <Separator />
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
               <div className="flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-emerald-700">80+ 稳定</span>
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-blue-700">60-79 良好</span>
-                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-amber-700">40-59 关注</span>
-                <span className="rounded-full border border-red-200 bg-red-50 px-3 py-1 text-red-700">40 以下 预警</span>
+                <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700 ring-1 ring-inset ring-emerald-200/60">80+ 稳定</span>
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 ring-1 ring-inset ring-blue-200/60">60-79 需跟踪</span>
+                <span className="rounded-full bg-amber-50 px-3 py-1 text-amber-700 ring-1 ring-inset ring-amber-200/60">40-59 预警</span>
+                <span className="rounded-full bg-red-50 px-3 py-1 text-red-700 ring-1 ring-inset ring-red-200/60">40 以下 危险</span>
               </div>
               <div className="text-xs text-slate-500">
-                稳定 {stableCount} · 预警 {criticalCount} · 共 {items.length} 项
+                已展示 {items.length} / {totalItemCount} 项
               </div>
             </div>
-          </>
+          </ChartAccessibleWrapper>
         )}
       </CardContent>
     </Card>

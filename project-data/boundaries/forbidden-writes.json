@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "workbuddy-data-forbidden-writes/v1",
+  "mutationBoundary": "boundary_catalog_only_no_db_mutation_no_runtime_write",
+  "forbiddenDirectExternalWrites": [
+    "tasks",
+    "task_baselines",
+    "monthly_plans",
+    "monthly_plan_items",
+    "task_dependencies",
+    "duration_experience_samples",
+    "actual_duration_outcomes",
+    "critical_path",
+    "published_runtime_overlay",
+    "production_seed_rows"
+  ],
+  "appliesTo": [
+    "project-search",
+    "project-evidence",
+    "project-ui",
+    "ungoverned scripts",
+    "external public data",
+    "candidate knowledge assets"
+  ]
+}

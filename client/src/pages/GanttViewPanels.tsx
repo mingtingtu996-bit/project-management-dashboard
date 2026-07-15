@@ -1,53 +1,21 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
+import { QuickBlockageForm } from '@/components/planning/blockages/QuickBlockageForm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { LoadingState } from '@/components/ui/loading-state'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import { formatDate } from '@/lib/utils'
-import { Flag, GitBranch, X } from 'lucide-react'
+import { Separator } from '@/components/ui/separator'
+import { inclusiveDurationDays } from '@/lib/durationDays'
+import { formatDate, formatDateTime } from '@/lib/utils'
+import { getWbsNodeTypeLabel } from '@/lib/wbsLabels'
+import { ArrowRight, Flag, GitBranch, X } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import type { CriticalPathSnapshot } from '@/lib/criticalPath'
 import type { TaskConditionSummary } from '@/lib/taskBusinessStatus'
-import { type Task, MILESTONE_LEVEL_CONFIG, SPECIALTY_TYPES } from './GanttViewTypes'
-
-interface DelayRequestRecord {
-  id: string
-  status: 'pending' | 'approved' | 'rejected' | 'withdrawn' | string
-  delay_days: number
-  original_date?: string | null
-  delayed_date?: string | null
-  reason?: string | null
-  delay_reason?: string | null
-  requested_at?: string | null
-}
-
-interface BaselineVersionOption {
-  id: string
-  version: number
-  title: string
-}
-
-interface DelayRequestFormState {
-  delayedDate: string
-  reason: string
-  baselineVersionId: string
-}
-
-interface DelayRequestFormErrors {
-  baselineVersionId?: string
-  delayedDate?: string
-  reason?: string
-  form?: string
-}
+import { getTaskProgressReadOnlyReason, getTaskWbsNodeType, type Task, MILESTONE_LEVEL_CONFIG } from './GanttViewTypes'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 export interface TaskDetailPanelProps {
   projectId: string
@@ -74,51 +42,13 @@ export interface TaskDetailPanelProps {
   onOpenCriticalPathDialog: () => void
   selectedTaskConditionSummary?: TaskConditionSummary | null
   selectedTaskObstacleCount?: number
-  delayRequests: DelayRequestRecord[]
-  delayRequestsLoading: boolean
-  pendingDelayRequest?: DelayRequestRecord | null
-  rejectedDelayRequest?: DelayRequestRecord | null
-  duplicateRejectedReason: boolean
-  baselineOptions: BaselineVersionOption[]
-  baselineLoading: boolean
-  delayRequestForm: DelayRequestFormState
-  delayFormErrors: DelayRequestFormErrors
-  delayRequestSubmitting: boolean
-  delayRequestWithdrawingId?: string | null
-  delayRequestReviewingId?: string | null
-  delayImpactDays?: number
-  delayImpactSummary?: string
   onSaveProgress: (taskId: string, value: number) => void | Promise<void>
-  onDelayRequestFormChange: (field: keyof DelayRequestFormState, value: string) => void
-  onSubmitDelayRequest: () => void
-  onWithdrawDelayRequest: () => void
-  onApproveDelayRequest: () => void
-  onRejectDelayRequest: () => void
-  canReviewDelayRequest?: boolean
+  onQuickAddObstacle?: (task: Task, data: { description: string; severity: string; expectedResolution?: string }) => void | Promise<void>
   onOpenChangeLogs: () => void
 }
 
-function getDelayStatusLabel(status: string) {
-  switch (status) {
-    case 'pending':
-      return '待审批'
-    case 'approved':
-      return '已批准'
-    case 'rejected':
-      return '已驳回'
-    case 'withdrawn':
-      return '已撤回'
-    default:
-      return status
-  }
-}
-
 function getScheduledDurationDays(task: Task) {
-  if (!task.start_date || !task.end_date) return null
-  const start = new Date(task.start_date)
-  const end = new Date(task.end_date)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null
-  return Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000) + 1)
+  return inclusiveDurationDays(task.start_date, task.end_date)
 }
 
 function formatDateRange(start?: string | null, end?: string | null) {
@@ -140,80 +70,63 @@ export function TaskDetailPanel({
   onOpenCriticalPathDialog,
   selectedTaskConditionSummary = null,
   selectedTaskObstacleCount = 0,
-  delayRequests,
-  delayRequestsLoading,
-  pendingDelayRequest,
-  rejectedDelayRequest,
-  duplicateRejectedReason,
-  baselineOptions,
-  baselineLoading,
-  delayRequestForm,
-  delayFormErrors,
-  delayRequestSubmitting,
-  delayRequestWithdrawingId,
-  delayRequestReviewingId,
-  delayImpactDays,
-  delayImpactSummary,
   onSaveProgress,
-  onDelayRequestFormChange,
-  onSubmitDelayRequest,
-  onWithdrawDelayRequest,
-  onApproveDelayRequest,
-  onRejectDelayRequest,
-  canReviewDelayRequest = false,
+  onQuickAddObstacle,
   onOpenChangeLogs,
 }: TaskDetailPanelProps) {
   const biz = getBusinessStatus(selectedTask)
   const scheduledDuration = getScheduledDurationDays(selectedTask)
-  const specialty = SPECIALTY_TYPES.find((item) => item.value === selectedTask.specialty_type)
   const [progressDraft, setProgressDraft] = useState<number>(Number(selectedTask.progress ?? 0))
   const [progressSaving, setProgressSaving] = useState(false)
-  const latestDelayRequest = delayRequests[0]
-  const pendingDelayRequestAgeDays = pendingDelayRequest?.requested_at
-    ? Math.max(0, Math.floor((Date.now() - new Date(pendingDelayRequest.requested_at).getTime()) / 86400000))
-    : 0
-  const showApprovalReminder = Boolean(pendingDelayRequest && pendingDelayRequestAgeDays >= 3)
-  const showCriticalDelayNotice = Boolean(selectedCriticalPathTask && typeof delayImpactDays === 'number' && delayImpactDays > 0)
+  const [progressFeedbackTaskId, setProgressFeedbackTaskId] = useState<string | null>(null)
+  const [quickObstacleOpen, setQuickObstacleOpen] = useState(false)
+  const [quickObstacleSubmitting, setQuickObstacleSubmitting] = useState(false)
   const selectedTaskProgress = Number(selectedTask.progress ?? 0)
+  const progressReadOnlyReason = getTaskProgressReadOnlyReason(selectedTask.progress_method)
+  const selectedTaskWbsNodeType = getTaskWbsNodeType(selectedTask)
   const pendingConditionCount = Math.max(
     0,
     Number(selectedTaskConditionSummary?.total ?? 0) - Number(selectedTaskConditionSummary?.satisfied ?? 0),
   )
   const selectedTaskObstacleCountValue = Number(selectedTaskObstacleCount ?? 0)
-  const delayPanelId = 'gantt-delay-request-panel'
 
   useEffect(() => {
     setProgressDraft(Number(selectedTask.progress ?? 0))
+    setProgressFeedbackTaskId(null)
+    setQuickObstacleOpen(false)
   }, [selectedTask.id, selectedTask.progress])
 
   return (
     <div className="w-full xl:w-80 xl:flex-shrink-0 xl:sticky xl:top-4" data-testid="gantt-task-detail-panel">
       <Card variant="detail" className="max-h-[calc(100vh-2rem)] overflow-y-auto">
-        <CardHeader className="flex flex-row items-start justify-between space-y-0 border-b border-slate-100 pb-3">
-          <div className="min-w-0 flex-1">
-            <div className="mb-1 flex items-center gap-1.5">
-              {selectedTask.is_milestone && (
-                <Flag
+        <CardContent padding="md" className="space-y-2">
+          <CardHead
+            eyebrow="TASK DETAIL"
+            title={selectedTask.title || '未命名任务'}
+            action={
+              <Button
+                variant="ghost"
+                type="button"
+                aria-label="关闭任务详情"
+                data-testid="gantt-task-detail-panel-close"
+                onClick={onClose}
+                className="ml-2 flex-shrink-0 rounded-lg p-1 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-600"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            }
+          />
+          <div className="flex items-center gap-1.5">
+            {selectedTask.is_milestone && (
+              <Flag
                   className={`h-3.5 w-3.5 flex-shrink-0 ${MILESTONE_LEVEL_CONFIG[selectedTask.milestone_level ?? 1]?.color}`}
-                  fill="currentColor"
-                />
-              )}
-              <CardTitle className="truncate text-sm font-semibold">
-                {selectedTask.title || selectedTask.name}
-              </CardTitle>
-            </div>
-            {selectedTask.wbs_code && (
-              <span className="font-mono text-[10px] text-slate-400">{selectedTask.wbs_code}</span>
+                fill="currentColor"
+              />
             )}
+            {selectedTask.wbs_code && <span className="font-mono text-xs text-slate-500">{selectedTask.wbs_code}</span>}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="ml-2 flex-shrink-0 rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </CardHeader>
+        </CardContent>
+        <Separator />
 
         <CardContent className="space-y-3 pt-3 text-sm">
           <div className="flex items-center justify-between gap-3">
@@ -241,8 +154,8 @@ export function TaskDetailPanel({
                         : selectedTask.lagLevel === 'mild'
                           ? 'bg-yellow-400'
                           : selectedTask.status === 'in_progress'
-                              ? 'bg-blue-500'
-                              : 'bg-gray-300'
+                              ? 'bg-blue-600'
+                              : 'bg-slate-300'
                 }`}
                 style={{ width: `${selectedTask.progress || 0}%` }}
               />
@@ -253,11 +166,11 @@ export function TaskDetailPanel({
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="text-xs font-medium text-blue-700">录进展</p>
-                <p className="text-[11px] leading-4 text-blue-600">
-                  进度、条件、障碍和延期申请都在详情抽屉里处理。
+                <p className="text-xs leading-4 text-blue-600">
+                  进度、条件和障碍都在详情抽屉里处理。
                 </p>
               </div>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${progressDraft === selectedTaskProgress ? 'bg-white text-blue-700' : 'bg-blue-100 text-blue-700'}`}>
+              <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${progressDraft === selectedTaskProgress ? 'bg-white text-blue-700' : 'bg-blue-100 text-blue-700'}`}>
                 {progressDraft}%
               </span>
             </div>
@@ -269,42 +182,77 @@ export function TaskDetailPanel({
                 max={100}
                 step={1}
                 value={progressDraft}
-                onChange={(event) => setProgressDraft(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
-                className="h-1.5 w-full accent-blue-500"
-                aria-label="录进展滑块"
+                disabled={Boolean(progressReadOnlyReason)}
+                onChange={(event) => {
+                  if (!progressReadOnlyReason) setProgressDraft(Math.max(0, Math.min(100, Number(event.target.value) || 0)))
+                }}
+                className="h-1.5 w-full accent-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                aria-label="progress slider"
               />
+              {progressReadOnlyReason ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <p className="inline-flex cursor-help text-xs text-blue-700 underline decoration-dotted underline-offset-4">
+                      {progressReadOnlyReason}
+                    </p>
+                  </TooltipTrigger>
+                  <TooltipContent>{progressReadOnlyReason}</TooltipContent>
+                </Tooltip>
+              ) : null}
               <div className="flex items-center gap-2">
                 <Input
                   type="number"
                   min="0"
                   max="100"
                   value={progressDraft}
-                  onChange={(event) => setProgressDraft(Math.max(0, Math.min(100, Number(event.target.value) || 0)))}
-                  className="h-9 bg-white"
-                  aria-label="录进展数值"
+                  disabled={Boolean(progressReadOnlyReason)}
+                  onChange={(event) => {
+                    if (!progressReadOnlyReason) setProgressDraft(Math.max(0, Math.min(100, Number(event.target.value) || 0)))
+                  }}
+                  className="h-9 bg-white disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
+                  aria-label="progress value"
                 />
                 <Button
                   type="button"
                   size="sm"
                   className="h-9 shrink-0"
-                  disabled={progressDraft === selectedTaskProgress || progressSaving}
+                  disabled={Boolean(progressReadOnlyReason) || progressDraft === selectedTaskProgress || progressSaving}
                   loading={progressSaving}
                   data-testid="gantt-progress-save"
                   onClick={async () => {
+                    if (progressReadOnlyReason) return
                     try {
                       setProgressSaving(true)
                       await onSaveProgress(selectedTask.id, progressDraft)
+                      setProgressFeedbackTaskId(selectedTask.id)
                     } finally {
                       setProgressSaving(false)
                     }
                   }}
                 >
-                  保存进展
+                  暂存进度
                 </Button>
               </div>
             </div>
-
-            <div className="grid gap-2 sm:grid-cols-3">
+            {progressFeedbackTaskId === selectedTask.id ? (
+              <div className="surface-card p-3" data-testid="gantt-progress-health-feedback">
+                <div className="space-y-1">
+                  <p className="text-xs font-medium text-slate-700">进度已暂存</p>
+                  <p className="text-xs leading-4 text-slate-500">
+                    保存编辑后，Dashboard 会按后端健康与偏差口径回读；本页不前端计算健康分。
+                  </p>
+                </div>
+                {projectId ? (
+                  <Button asChild type="button" variant="outline" size="sm" className="mt-3 h-8 w-full justify-between text-xs">
+                    <Link to={`/projects/${projectId}/dashboard`}>
+                      <span>查看 Dashboard</span>
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="grid gap-2 sm:grid-cols-2">
               <Button
                 type="button"
                 variant="outline"
@@ -325,57 +273,58 @@ export function TaskDetailPanel({
                 <span>障碍</span>
                 <span>{selectedTaskObstacleCountValue > 0 ? `${selectedTaskObstacleCountValue}条` : '暂无'}</span>
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 justify-between border-slate-200 bg-white px-3 text-xs text-slate-700"
-                onClick={() => {
-                  document.getElementById(delayPanelId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                }}
-              >
-                <span>延期申请</span>
-                <span>{pendingDelayRequest ? '待审批' : '查看'}</span>
-              </Button>
             </div>
+            {onQuickAddObstacle ? (
+              <div className="space-y-2" data-testid="gantt-progress-quick-obstacle">
+                {quickObstacleOpen ? (
+                  <div aria-busy={quickObstacleSubmitting}>
+                    <QuickBlockageForm
+                      className="border-blue-100 shadow-none"
+                      onCancel={() => setQuickObstacleOpen(false)}
+                      onSubmit={(data) => {
+                        if (quickObstacleSubmitting) return
+                        setQuickObstacleSubmitting(true)
+                        void Promise.resolve(onQuickAddObstacle(selectedTask, data))
+                          .then(() => setQuickObstacleOpen(false))
+                          .catch(() => undefined)
+                          .finally(() => setQuickObstacleSubmitting(false))
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-full justify-between px-3 text-xs text-amber-700 hover:bg-amber-50"
+                    data-testid="gantt-progress-quick-obstacle-toggle"
+                    onClick={() => setQuickObstacleOpen(true)}
+                  >
+                    <span>快记一条阻碍</span>
+                    <span>{selectedTaskObstacleCountValue > 0 ? `${selectedTaskObstacleCountValue}条处理中` : '描述 + 严重度'}</span>
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </div>
 
-          {(selectedTask.reference_duration || selectedTask.ai_duration || scheduledDuration) && (
+          {scheduledDuration && (
             <div className="space-y-1.5 rounded-2xl bg-slate-50 p-3">
-              <p className="mb-1 text-xs font-medium text-slate-600">工期对比</p>
-              {selectedTask.reference_duration && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-500">计划工期</span>
-                  <span className="font-medium text-slate-700">{selectedTask.reference_duration} 天</span>
-                </div>
-              )}
-              {scheduledDuration && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-500">排期工期</span>
-                  <span
-                    className={`font-medium ${
-                      selectedTask.reference_duration && scheduledDuration > selectedTask.reference_duration
-                        ? 'text-red-600'
-                        : 'text-slate-700'
-                    }`}
-                  >
-                    {scheduledDuration} 天
-                  </span>
-                </div>
-              )}
-              {selectedTask.ai_duration && (
-                <div className="flex justify-between text-xs">
-                  <span className="text-slate-500">AI 推荐</span>
-                  <span className="font-medium text-purple-600">{selectedTask.ai_duration} 天</span>
-                </div>
-              )}
+              <p className="mb-1 text-xs font-medium text-slate-600">当前排期</p>
+              <div className="flex justify-between text-xs">
+                <span className="inline-flex items-center gap-1.5 text-slate-500">
+                  <DurationBasisBadge basis="plan" compact variant="outline" />
+                  排期工期
+                </span>
+                <span className="font-medium text-slate-700">{scheduledDuration} 天</span>
+              </div>
             </div>
           )}
 
           {(selectedTask.start_date || selectedTask.end_date) && (
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-500">时间区间</span>
-              <span className="tabular-nums text-slate-700">
+              <span className="num-mono text-slate-700">
                 {formatDateRange(selectedTask.start_date, selectedTask.end_date)}
               </span>
             </div>
@@ -388,41 +337,55 @@ export function TaskDetailPanel({
             </div>
           )}
 
-          {selectedTask.responsible_unit && (
+          {selectedTask.participant_unit_name && (
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-500">责任单位</span>
-              <span className="max-w-[160px] truncate text-slate-700" title={selectedTask.responsible_unit}>
-                {selectedTask.responsible_unit}
+              <Tooltip>
+  <TooltipTrigger asChild>
+    <span className="max-w-40 truncate text-slate-700" >
+                {selectedTask.participant_unit_name}
               </span>
+  </TooltipTrigger>
+  <TooltipContent>{selectedTask.participant_unit_name}</TooltipContent>
+</Tooltip>
             </div>
           )}
 
-          {selectedTask.specialty_type && (
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-500">专业类型</span>
-              <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${specialty?.color || 'bg-slate-100 text-slate-600'}`}>
-                {specialty?.label || selectedTask.specialty_type}
-              </span>
+          {/* v1.4.3: Standard field groups — scope, WBS, responsibility */}
+          <div className="space-y-2">
+            <span className="text-xs font-medium text-slate-400">工程范围</span>
+            <div className="flex flex-wrap gap-1.5">
+              {(selectedTask as any).building_name && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">楼栋: {(selectedTask as any).building_name}</span>}
+              {(selectedTask as any).floor_name && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">楼层: {(selectedTask as any).floor_name}</span>}
+              {(selectedTask as any).zone_name && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">区域: {(selectedTask as any).zone_name}</span>}
+              {(selectedTask as any).phase_name && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">分期: {(selectedTask as any).phase_name}</span>}
+              {(selectedTask as any).section_name && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">标段: {(selectedTask as any).section_name}</span>}
+              {selectedTask.specialty_type && (<span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">专业: {selectedTask.specialty_type}</span>)}
+            </div>
+          </div>
+          {(selectedTaskWbsNodeType || selectedTask.standard_work_code) && (
+            <div className="space-y-1">
+              <span className="text-xs font-medium text-slate-400">WBS 分类</span>
+              <div className="flex flex-wrap gap-1.5">
+                {selectedTaskWbsNodeType && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">{getWbsNodeTypeLabel(selectedTaskWbsNodeType)}</span>}
+                {selectedTask.standard_work_code && <span className="rounded bg-slate-100 text-slate-600 px-1.5 py-0.5 text-xs font-medium">{selectedTask.standard_work_code}</span>}
+              </div>
             </div>
           )}
 
           {selectedTask.first_progress_at && (
             <div className="flex items-center justify-between text-xs">
               <span className="text-slate-500">首次填报</span>
-              <span className="tabular-nums text-slate-600">
-                {new Date(selectedTask.first_progress_at).toLocaleString('zh-CN', {
-                  month: '2-digit',
-                  day: '2-digit',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
+              <span className="num-mono text-slate-600">
+                {formatDateTime(selectedTask.first_progress_at)}
               </span>
             </div>
           )}
 
           {selectedTask.description && (
-            <div className="border-t border-slate-100 pt-3 text-xs leading-relaxed text-slate-600">
-              <p className="mb-1 text-slate-400">描述</p>
+            <div className="text-xs leading-relaxed text-slate-600">
+              <Separator className="mb-3" />
+              <p className="mb-1 text-slate-500">描述</p>
               <p>{selectedTask.description}</p>
             </div>
           )}
@@ -444,12 +407,12 @@ export function TaskDetailPanel({
             <div className="flex items-start justify-between gap-2">
               <div>
                 <p className="text-xs font-medium text-slate-700">关键路径</p>
-                <p className="text-[11px] text-slate-500">
+                <p className="text-xs text-slate-500">
                   {criticalPathSummaryText || '暂无关键路径摘要'}
                 </p>
               </div>
               <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
                   selectedCriticalPathTask ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'
                 }`}
               >
@@ -461,17 +424,17 @@ export function TaskDetailPanel({
               <>
                 <div className="flex flex-wrap gap-1.5">
                   {selectedCriticalPathTask.isAutoCritical && (
-                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-medium text-rose-700">
+                    <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
                       自动关键
                     </span>
                   )}
                   {selectedCriticalPathTask.isManualAttention && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
                       手动关注
                     </span>
                   )}
                   {selectedCriticalPathTask.isManualInserted && (
-                    <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
+                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
                       手动插链
                     </span>
                   )}
@@ -482,7 +445,10 @@ export function TaskDetailPanel({
                     <span className="font-medium text-slate-700">{selectedCriticalPathTask.floatDays ?? 0} 天</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span>链路工期</span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <DurationBasisBadge basis="plan" compact variant="outline" />
+                      链路工期
+                    </span>
                     <span className="font-medium text-slate-700">{selectedCriticalPathTask.durationDays ?? 0} 天</span>
                   </div>
                 </div>
@@ -495,7 +461,7 @@ export function TaskDetailPanel({
               <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-xs font-medium text-slate-700">主链顺序</p>
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">
                     {criticalPathSnapshot.primaryChain.displayLabel}
                   </span>
                 </div>
@@ -504,18 +470,21 @@ export function TaskDetailPanel({
                     const snapshotTask = criticalPathSnapshot.tasks.find((item) => item.taskId === taskId)
                     const active = taskId === selectedTask.id
                     return (
-                      <span
-                        key={taskId}
-                        className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-[11px] ${
-                          active
-                            ? 'border-blue-300 bg-blue-50 text-blue-700'
-                            : 'border-slate-200 bg-slate-50 text-slate-600'
-                        }`}
-                        title={snapshotTask?.title || taskId}
-                      >
-                        <span className="font-semibold">{index + 1}</span>
-                        <span className="max-w-[180px] truncate">{snapshotTask?.title || taskId}</span>
-                      </span>
+                      <Tooltip key={taskId}>
+                        <TooltipTrigger asChild>
+                          <span
+                            className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${
+                              active
+                                ? 'border-blue-300 bg-blue-50 text-blue-700'
+                                : 'border-slate-200 bg-slate-50 text-slate-600'
+                            }`}
+                          >
+                            <span className="font-semibold">{index + 1}</span>
+                            <span className="max-w-44 truncate">{snapshotTask?.title || taskId}</span>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>{snapshotTask?.title || taskId}</TooltipContent>
+                      </Tooltip>
                     )
                   })}
                 </div>
@@ -537,222 +506,8 @@ export function TaskDetailPanel({
             </Button>
           </div>
 
-          <div
-            className="space-y-2 rounded-2xl border border-orange-100 bg-orange-50/60 p-3"
-            id={delayPanelId}
-            data-testid="gantt-delay-request-panel"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-medium text-orange-700">延期申请</p>
-              </div>
-              {pendingDelayRequest ? (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                  待审批
-                </span>
-              ) : rejectedDelayRequest ? (
-                <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700">
-                  最近一次已驳回
-                </span>
-              ) : latestDelayRequest ? (
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                  最近状态 {getDelayStatusLabel(latestDelayRequest.status)}
-                </span>
-              ) : null}
-            </div>
-
-            {delayRequestsLoading ? (
-              <LoadingState
-                label="延期申请加载中"
-                className="min-h-24 border-0 bg-transparent px-0 py-2 shadow-none"
-              />
-            ) : (
-              <>
-                {rejectedDelayRequest && (
-                  <div
-                    className="rounded-md border border-red-200 bg-white px-2.5 py-2 text-xs text-red-700"
-                    data-testid="gantt-delay-request-rejected-hint"
-                  >
-                    最近一次驳回原因：
-                    {rejectedDelayRequest.reason ?? rejectedDelayRequest.delay_reason ?? '未填写'}
-                  </div>
-                )}
-
-                <div className="grid gap-2">
-                  <div className="space-y-1">
-                    <Label className="text-xs text-orange-800">绑定基线版本</Label>
-                    <Select
-                      value={delayRequestForm.baselineVersionId || '__none__'}
-                      onValueChange={(value) =>
-                        onDelayRequestFormChange(
-                          'baselineVersionId',
-                          value === '__none__' ? '' : value,
-                        )
-                      }
-                      disabled={
-                        Boolean(pendingDelayRequest) ||
-                        delayRequestSubmitting ||
-                        baselineLoading ||
-                        baselineOptions.length === 0
-                      }
-                    >
-                      <SelectTrigger
-                        data-testid="gantt-delay-request-baseline"
-                        className="bg-white"
-                      >
-                        <SelectValue
-                          placeholder={baselineLoading ? '加载基线版本中…' : '请选择基线版本'}
-                        />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">未绑定基线版本</SelectItem>
-                        {baselineOptions.map((baseline) => (
-                          <SelectItem key={baseline.id} value={baseline.id}>
-                            V{baseline.version} · {baseline.title}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    {delayFormErrors.baselineVersionId && (
-                      <p className="text-xs text-red-600">{delayFormErrors.baselineVersionId}</p>
-                    )}
-                    {baselineOptions.length === 0 && !baselineLoading && (
-                      <p className="text-xs text-orange-700" />
-                    )}
-                  </div>
-
-                  <Input
-                    type="date"
-                    value={delayRequestForm.delayedDate}
-                    onChange={(event) => onDelayRequestFormChange('delayedDate', event.target.value)}
-                    disabled={
-                      Boolean(pendingDelayRequest) ||
-                      delayRequestSubmitting ||
-                      !(selectedTask.end_date || selectedTask.planned_end_date)
-                    }
-                    data-testid="gantt-delay-request-date"
-                  />
-                  {delayFormErrors.delayedDate && (
-                    <p className="text-xs text-red-600">{delayFormErrors.delayedDate}</p>
-                  )}
-
-                  <textarea
-                    value={delayRequestForm.reason}
-                    onChange={(event) => onDelayRequestFormChange('reason', event.target.value)}
-                    placeholder="填写延期原因"
-                    disabled={Boolean(pendingDelayRequest) || delayRequestSubmitting}
-                    data-testid="gantt-delay-request-reason"
-                    className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-                  />
-                  {delayFormErrors.reason && (
-                    <p className="text-xs text-red-600">{delayFormErrors.reason}</p>
-                  )}
-                </div>
-
-                {delayFormErrors.form && (
-                  <p className="text-xs text-red-600" data-testid="gantt-delay-request-inline-error">
-                    {delayFormErrors.form}
-                  </p>
-                )}
-
-                {pendingDelayRequest && (
-                  <p
-                    className="text-xs text-amber-700"
-                    data-testid="gantt-delay-request-pending-hint"
-                  />
-                )}
-
-                {pendingDelayRequest ? <p className="text-xs text-sky-700" data-testid="gantt-delay-request-warning-downgrade" /> : null}
-
-                {showApprovalReminder ? (
-                  <p
-                    className="text-xs text-red-600"
-                    data-testid="gantt-delay-request-reminder"
-                  >
-                    已待审批 {pendingDelayRequestAgeDays} 天
-                  </p>
-                ) : null}
-
-                {duplicateRejectedReason && (
-                  <p
-                    className="text-xs text-red-600"
-                    data-testid="gantt-delay-request-duplicate-reason-hint"
-                  >
-                    重新提交原因不能与最近一次驳回原因重复。
-                  </p>
-                )}
-
-                <div className="rounded-md border border-orange-200 bg-white px-2.5 py-2 text-xs text-orange-800" data-testid="gantt-delay-impact-summary">
-                  <div className="font-medium">工期影响评估</div>
-                  {delayImpactSummary ? <div className="mt-1">{delayImpactSummary}</div> : null}
-                  {typeof delayImpactDays === 'number' && delayImpactDays > 0 ? (
-                    <div className="mt-1 text-red-600">关键路径已无法完全吸收本次延期。</div>
-                  ) : null}
-                  {showCriticalDelayNotice ? (
-                    <div className="mt-1 text-red-600" data-testid="gantt-critical-delay-notice">
-                      当前任务位于关键路径，本次延期将直接推迟项目关键节点。
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={onSubmitDelayRequest}
-                    loading={delayRequestSubmitting}
-                    disabled={
-                      Boolean(pendingDelayRequest) ||
-                      duplicateRejectedReason ||
-                      !(selectedTask.end_date || selectedTask.planned_end_date) ||
-                      baselineOptions.length === 0
-                    }
-                    data-testid="gantt-delay-request-submit"
-                  >
-                    提交延期申请
-                  </Button>
-                  {pendingDelayRequest && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      onClick={onWithdrawDelayRequest}
-                      loading={delayRequestWithdrawingId === pendingDelayRequest.id}
-                      data-testid="gantt-delay-request-withdraw"
-                    >
-                      撤回待审批申请
-                    </Button>
-                  )}
-                  {pendingDelayRequest && canReviewDelayRequest && (
-                    <>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={onApproveDelayRequest}
-                        loading={delayRequestReviewingId === `approve:${pendingDelayRequest.id}`}
-                        data-testid="gantt-delay-request-approve"
-                      >
-                        批准延期
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={onRejectDelayRequest}
-                        loading={delayRequestReviewingId === `reject:${pendingDelayRequest.id}`}
-                        data-testid="gantt-delay-request-reject"
-                      >
-                        驳回延期
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </>
-            )}
-          </div>
-
-          <div className="grid grid-cols-4 gap-2 border-t border-slate-100 pt-3">
+          <Separator />
+          <div className="grid grid-cols-4 gap-2 pt-3">
             <Button
               size="sm"
               variant="outline"
@@ -761,28 +516,28 @@ export function TaskDetailPanel({
             >
               编辑
             </Button>
-            <button
+            <Button variant="ghost"
               type="button"
               onClick={() => onOpenCondition(selectedTask)}
               className="h-8 rounded-md border border-emerald-200 px-2 text-xs text-emerald-700 transition-colors hover:bg-emerald-50"
             >
               条件
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               type="button"
               onClick={() => onOpenObstacle(selectedTask)}
               className="h-8 rounded-md border border-amber-200 px-2 text-xs text-amber-700 transition-colors hover:bg-amber-50"
             >
               障碍
-            </button>
-            <button
+            </Button>
+            <Button variant="ghost"
               type="button"
               onClick={onOpenChangeLogs}
-              data-testid="gantt-open-change-log"
+              data-testid="gantt-open-progress-deviation"
               className="h-8 rounded-md border border-slate-200 px-2 text-xs text-slate-700 transition-colors hover:bg-slate-50"
             >
-              变更记录
-            </button>
+              偏差分析
+            </Button>
           </div>
         </CardContent>
       </Card>

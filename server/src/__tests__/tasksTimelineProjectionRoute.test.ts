@@ -178,4 +178,27 @@ describe('tasks timeline projection route', () => {
       baseline_is_critical: null,
     })
   })
+
+  it('uses the task-list surface column set for the task list page', async () => {
+    const response = await supertest(buildApp())
+      .get('/api/tasks')
+      .query({
+        projectId: 'project-1',
+        surface: 'task_list',
+        acceptance_impact: 'false',
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.supabaseService.getTasks).toHaveBeenCalledWith(
+      'project-1',
+      expect.objectContaining({
+        columns: expect.arrayContaining(['id', 'project_id', 'title', 'standard_task_metadata']),
+      }),
+    )
+    const columns = ((mocks.supabaseService.getTasks.mock.calls[0] as unknown[])?.[1] as { columns?: string[] } | undefined)?.columns ?? []
+    expect(columns).not.toContain('planning_governance_metadata')
+    expect(columns).not.toContain('readiness_summary')
+    expect(response.body.data[0]).not.toHaveProperty('businessStatus')
+    expect(response.body.data[0]).not.toHaveProperty('dictionaryVersion')
+  })
 })

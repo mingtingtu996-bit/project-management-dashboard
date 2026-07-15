@@ -63,10 +63,12 @@ describe('Drawings ledger contract', () => {
     render(<DrawingLedger drawings={[row]} onSelectRow={onSelectRow} onOpenVersions={onOpenVersions} />)
 
     expect(container.textContent).toContain('图纸台账')
-    expect(container.textContent).toContain('结构施工图包')
     expect(container.textContent).toContain('基础图')
-    expect(container.textContent).toContain('当前版')
+    expect(container.textContent).toContain('更多列')
+    expect(container.textContent).not.toContain('结构施工图包')
+    expect(container.textContent).not.toContain('当前版')
+    expect(container.querySelectorAll('thead th')).toHaveLength(8)
+    expect(container.querySelector('[data-testid="drawing-more-columns-trigger"]')).toBeTruthy()
     expect(container.querySelectorAll('button').length).toBeGreaterThan(0)
   })
 })
-

@@ -1,12 +1,31 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, FileBadge2, Plus, RefreshCw, Search } from 'lucide-react'
+import {
+  ArrowLeft,
+  Building2,
+  CheckCircle2,
+  Download,
+  FileBadge2,
+  Layers3,
+  ListChecks,
+  PackagePlus,
+  Plus,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Upload,
+} from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
+import { ConfirmActionDialog } from '@/components/ConfirmActionDialog'
 import { PageHeader } from '@/components/PageHeader'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { CardHead } from '@/components/ui/card-head'
+import { Checkbox } from '@/components/ui/checkbox'
+import { DisabledReasonTooltip } from '@/components/ui/disabled-reason-tooltip'
 import {
   Dialog,
   DialogContent,
@@ -17,6 +36,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { usePermissions } from '@/hooks/usePermissions'
@@ -26,32 +52,43 @@ import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isAbortError } 
 import { safeJsonParse, safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 import { cn } from '@/lib/utils'
 
-import { DRAWING_DISCIPLINE_OPTIONS, DRAWING_PURPOSE_OPTIONS, DRAWING_REVIEW_MODE_LABELS, DRAWING_TEMPLATES } from './constants'
+import {
+  DRAWING_DISCIPLINE_OPTIONS,
+  DRAWING_PURPOSE_OPTIONS,
+  DRAWING_REVIEW_MODE_LABELS,
+  DRAWING_STATUS_LABELS,
+  DRAWING_TEMPLATES,
+} from './constants'
 import { DrawingDetailDrawer } from './components/DrawingDetailDrawer'
 import { DrawingLedger } from './components/DrawingLedger'
 import { DrawingPackageBoard, type DrawingPackageGroup } from './components/DrawingPackageBoard'
-import { DrawingReadinessSummary } from './components/DrawingReadinessSummary'
+import { DrawingReadinessMetricGrid, type DrawingReadinessMetrics } from './components/DrawingReadinessMetricGrid'
 import { DrawingVersionDialog } from './components/DrawingVersionDialog'
 import type {
   DrawingBoardSummary,
   DrawingLedgerRow,
   DrawingPackageCard,
   DrawingPackageDetailView,
+  DrawingPackageTemplatePreview,
   DrawingSignalView,
   DrawingsBoardResponse,
   DrawingsLedgerResponse,
   DrawingVersionView,
+  ApplyDrawingPackageTemplateResult,
   ReviewMode,
 } from './types'
 
 const API_BASE = ''
 
 type DrawingFocusViewMode = 'overview' | 'missing' | 'review' | 'changes' | 'taskImpact' | 'acceptanceImpact'
+type DrawingVersionFilter = 'all' | 'current' | 'history' | 'changed'
 type SavedDrawingFilters = {
   searchQuery?: string
   disciplineFilter?: string
   purposeFilter?: string
   focusView?: DrawingFocusViewMode
+  statusFilter?: string
+  versionFilter?: DrawingVersionFilter
 }
 
 type ApiFailureEnvelope = {
@@ -157,6 +194,8 @@ const emptyCreateForm = (): CreatePackageFormState => ({
   reviewBasis: '',
 })
 
+const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
+
 function groupPackagesByDiscipline(packages: DrawingPackageCard[]): DrawingPackageGroup[] {
   const grouped = new Map<string, DrawingPackageCard[]>()
   packages.forEach((pkg) => {
@@ -221,11 +260,107 @@ function getFocusViewLabel(mode: DrawingFocusViewMode) {
   return '概览'
 }
 
+function getTemplateBusinessSourceLabel(source: DrawingPackageTemplatePreview['businessProfile']['source']) {
+  if (source === 'project_generation_facts') return '项目画像'
+  if (source === 'project_metadata') return '项目元数据'
+  if (source === 'project_field') return '项目字段'
+  return '通用默认'
+}
+
+function getTemplateActionLabel(action: 'will_create' | 'will_skip_existing') {
+  return action === 'will_create' ? '将创建' : '已存在'
+}
+
+function getTemplateScopeLabel(scope: DrawingPackageTemplatePreview['packages'][number]['scopeLevel'] | null | undefined) {
+  if (scope === 'project') return '项目级'
+  if (scope === 'building') return '单体级'
+  if (scope === 'specialty') return '专项级'
+  return '包级'
+}
+
+function getTemplateRoleLabel(role: DrawingPackageTemplatePreview['packages'][number]['deliverableRole'] | null | undefined) {
+  if (role === 'site_and_building_execution_base') return '施工执行底图'
+  if (role === 'statutory_review_package') return '法定审查包'
+  if (role === 'specialty_execution_package') return '专项执行包'
+  if (role === 'completion_archive_package') return '竣工归档包'
+  return '包级成果'
+}
+
+function getTemplateStageLabel(stage: string | null | undefined) {
+  const labels: Record<string, string> = {
+    completion_handover_archive: '竣工移交归档',
+    design_review_and_preconstruction_clearance: '设计审查 / 开工前置',
+    foundation_and_structure_execution: '基础与主体施工',
+    mep_installation_and_commissioning: '机电安装与调试',
+    site_interface_and_external_works: '场地接口与室外工程',
+    construction_execution: '施工执行',
+  }
+  if (!stage) return '施工执行 / 交付准备'
+  return labels[stage] ?? stage
+}
+
+function getTemplateAcceptancePurposeLabel(purpose: string | null | undefined) {
+  const labels: Record<string, string> = {
+    as_built_archive_and_delivery_handover: '竣工归档与交付移交',
+    statutory_specialty_acceptance_basis: '专项验收依据',
+    fire_acceptance_basis: '消防验收依据',
+    civil_defense_acceptance_basis: '人防验收依据',
+    environmental_acceptance_basis: '环保验收依据',
+    energy_saving_and_green_building_check_basis: '节能 / 绿建检查依据',
+    construction_quality_and_completion_acceptance_basis: '质量与竣工验收依据',
+  }
+  if (!purpose) return '施工图纸交付依据'
+  return labels[purpose] ?? purpose
+}
+
+const focusViewOptions: Array<{ value: DrawingFocusViewMode; label: string; description: string }> = [
+  { value: 'overview', label: '概览', description: '查看全部图纸包和台账记录。' },
+  { value: 'missing', label: '缺漏视图', description: '优先处理应有项未补齐的图纸包。' },
+  { value: 'review', label: '送审视图', description: '聚焦必审、待审和修订中的图纸。' },
+  { value: 'changes', label: '变更视图', description: '检查发生版本变更的图纸影响。' },
+  { value: 'taskImpact', label: '任务影响视图', description: '只看已经关联施工任务的图纸包。' },
+  { value: 'acceptanceImpact', label: '验收影响视图', description: '只看影响验收和归档的图纸包。' },
+]
+
+const statusFilterOptions = [
+  { value: 'all', label: '全部状态' },
+  ...Object.entries(DRAWING_STATUS_LABELS).map(([value, label]) => ({ value, label })),
+]
+
+const versionFilterOptions: Array<{ value: DrawingVersionFilter; label: string }> = [
+  { value: 'all', label: '全部版本' },
+  { value: 'current', label: '当前有效版' },
+  { value: 'history', label: '历史版本' },
+  { value: 'changed', label: '有变更' },
+]
+
+function isApprovedDrawing(row: DrawingLedgerRow) {
+  return row.drawingStatus === 'issued' || row.drawingStatus === 'completed' || row.reviewStatus.includes('通过')
+}
+
+function isOverdueDrawing(row: DrawingLedgerRow) {
+  if (isApprovedDrawing(row)) return false
+  const dateValue = row.plannedPassDate || row.plannedSubmitDate
+  if (!dateValue) return false
+  const dueTime = new Date(dateValue).getTime()
+  if (Number.isNaN(dueTime)) return false
+  return dueTime < Date.now()
+}
+
+function escapeCsvCell(value: string | number | null | undefined) {
+  const text = value === null || value === undefined ? '' : String(value)
+  return `"${text.replace(/"/g, '""')}"`
+}
+
 function isReviewFocusedPackage(pkg: DrawingPackageCard) {
   return pkg.requiresReview || pkg.reviewMode !== 'none' || pkg.status === 'reviewing'
 }
 
 export default function Drawings() {
+  useEffect(() => {
+    document.title = '施工图纸 | WorkBuddy'
+  }, [])
+
   const navigate = useNavigate()
   const { id } = useParams<{ id: string }>()
   const { currentProject, projects } = useStore()
@@ -236,6 +371,7 @@ export default function Drawings() {
   const [board, setBoard] = useState<DrawingsBoardResponse | null>(null)
   const [ledgerRows, setLedgerRows] = useState<DrawingLedgerRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [selectedPackage, setSelectedPackage] = useState<DrawingPackageCard | null>(null)
   const [selectedDetail, setSelectedDetail] = useState<DrawingPackageDetailView | null>(null)
@@ -254,16 +390,38 @@ export default function Drawings() {
   const [searchQuery, setSearchQuery] = useState<string>(savedFilters.searchQuery ?? '')
   const [disciplineFilter, setDisciplineFilter] = useState<string>(savedFilters.disciplineFilter ?? DRAWING_DISCIPLINE_OPTIONS[0] ?? '')
   const [purposeFilter, setPurposeFilter] = useState<string>(savedFilters.purposeFilter ?? DRAWING_PURPOSE_OPTIONS[0] ?? '')
+  const [statusFilter, setStatusFilter] = useState<string>(savedFilters.statusFilter ?? 'all')
+  const [versionFilter, setVersionFilter] = useState<DrawingVersionFilter>(savedFilters.versionFilter ?? 'all')
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [creatingPackage, setCreatingPackage] = useState(false)
   const [createForm, setCreateForm] = useState<CreatePackageFormState>(emptyCreateForm)
   const [createFormErrors, setCreateFormErrors] = useState<CreatePackageFormErrors>({})
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [templatePreview, setTemplatePreview] = useState<DrawingPackageTemplatePreview | null>(null)
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [templateApplying, setTemplateApplying] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [selectedTemplatePackageCodes, setSelectedTemplatePackageCodes] = useState<string[]>([])
+  const selectableTemplatePackages = useMemo(
+    () => templatePreview?.packages.filter((pkg) => pkg.action === 'will_create') ?? [],
+    [templatePreview],
+  )
+  const selectedTemplatePackages = useMemo(
+    () => selectableTemplatePackages.filter((pkg) => selectedTemplatePackageCodes.includes(pkg.packageCode)),
+    [selectableTemplatePackages, selectedTemplatePackageCodes],
+  )
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
+  const selectedTemplateItemCount = useMemo(
+    () => selectedTemplatePackages.reduce((total, pkg) => total + pkg.items.filter((item) => item.isRequired).length, 0),
+    [selectedTemplatePackages],
+  )
   const [focusView, setFocusView] = useState<DrawingFocusViewMode>(savedFilters.focusView ?? 'overview')
   const [reviewRulesDialogOpen, setReviewRulesDialogOpen] = useState(false)
   const [reviewRulesLoading, setReviewRulesLoading] = useState(false)
   const [reviewRulesSaving, setReviewRulesSaving] = useState(false)
   const [reviewRules, setReviewRules] = useState<DrawingReviewRuleRow[]>([])
   const [selectedReviewRuleId, setSelectedReviewRuleId] = useState<string | null>(null)
+  const [pendingDeleteReviewRuleId, setPendingDeleteReviewRuleId] = useState<string | null>(null)
   const [reviewRuleForm, setReviewRuleForm] = useState<DrawingReviewRuleFormState>(emptyReviewRuleForm)
   const [reviewRuleFormError, setReviewRuleFormError] = useState('')
   const boardAbortRef = useRef<AbortController | null>(null)
@@ -280,6 +438,7 @@ export default function Drawings() {
     const controller = new AbortController()
     boardAbortRef.current = controller
     setLoading(true)
+    setLoadError(null)
 
     try {
       const result = await apiGet<DrawingsBoardResponse | ApiFailureEnvelope>(
@@ -293,6 +452,8 @@ export default function Drawings() {
       if (!isAbortError(error)) {
         console.error('Failed to load drawings board', error)
         setBoard(null)
+        setLoadError(getApiErrorMessage(error, '图纸看板加载失败，请刷新后重试。'))
+        toast({ variant: 'destructive', title: '加载图纸数据失败' })
       }
     } finally {
       if (boardAbortRef.current === controller) {
@@ -323,6 +484,8 @@ export default function Drawings() {
       if (!isAbortError(error)) {
         console.error('Failed to load drawings ledger', error)
         setLedgerRows([])
+        setLoadError(getApiErrorMessage(error, '图纸台账加载失败，请刷新后重试。'))
+        toast({ variant: 'destructive', title: '加载图纸数据失败' })
       }
     } finally {
       if (ledgerAbortRef.current === controller) {
@@ -351,6 +514,7 @@ export default function Drawings() {
       } catch (error) {
         if (!isAbortError(error)) {
           console.error('Failed to load drawing package detail', error)
+          toast({ variant: 'destructive', title: '加载图纸数据失败' })
         }
         return null
       } finally {
@@ -396,6 +560,7 @@ export default function Drawings() {
       } catch (error) {
         if (!isAbortError(error)) {
           console.error('Failed to load version rows', error)
+          toast({ variant: 'destructive', title: '加载图纸数据失败' })
         }
         return { packageCard: null, versions: [] }
       } finally {
@@ -406,6 +571,95 @@ export default function Drawings() {
     },
     [id],
   )
+
+  const refreshAll = useCallback(async () => {
+    await loadBoard()
+    await loadLedger()
+  }, [loadBoard, loadLedger])
+
+  const loadTemplatePreview = useCallback(async () => {
+    if (!id) return
+
+    setTemplateLoading(true)
+    setTemplateError(null)
+    try {
+      const result = await apiGet<DrawingPackageTemplatePreview | ApiFailureEnvelope>(
+        `${API_BASE}/api/projects/${id}/drawing-package-templates/system/preview`,
+        { cache: 'no-store' },
+      )
+
+      if (isFailureEnvelope(result)) {
+        const failureMessage = getFailureMessage(result, '系统模板预览加载失败。')
+        setTemplateError(failureMessage)
+        setTemplatePreview(null)
+        return
+      }
+
+      setTemplatePreview(result)
+      setSelectedTemplatePackageCodes(
+        result.packages.filter((pkg) => pkg.action === 'will_create').map((pkg) => pkg.packageCode),
+      )
+    } catch (error) {
+      if (!isAbortError(error)) {
+        const failureMessage = getApiErrorMessage(error, '系统模板预览加载失败，请稍后重试。')
+        setTemplateError(failureMessage)
+        setTemplatePreview(null)
+        toast({ title: '模板加载失败', description: failureMessage, variant: 'destructive' })
+      }
+    } finally {
+      setTemplateLoading(false)
+    }
+  }, [id, toast])
+
+  const openTemplateDialog = useCallback(() => {
+    setTemplateDialogOpen(true)
+    void loadTemplatePreview()
+  }, [loadTemplatePreview])
+
+  const toggleTemplatePackage = useCallback((packageCode: string, checked: boolean) => {
+    setSelectedTemplatePackageCodes((current) => {
+      if (checked) return Array.from(new Set([...current, packageCode]))
+      return current.filter((code) => code !== packageCode)
+    })
+  }, [])
+
+  const handleApplyTemplate = useCallback(async () => {
+    if (!id || !templatePreview) return
+
+    setTemplateApplying(true)
+    setTemplateError(null)
+    try {
+      const result = await apiPost<ApplyDrawingPackageTemplateResult | ApiFailureEnvelope>(
+        `${API_BASE}/api/projects/${id}/drawing-package-templates/system/apply`,
+        {
+          templateCode: templatePreview.templateCode,
+          seedVersion: templatePreview.seedVersion,
+          selectedPackageCodes: selectedTemplatePackageCodes,
+          duplicatePolicy: 'skip_existing',
+        },
+      )
+
+      if (isFailureEnvelope(result)) {
+        const failureMessage = getFailureMessage(result, '系统模板应用失败。')
+        setTemplateError(failureMessage)
+        toast({ title: '模板应用失败', description: failureMessage, variant: 'destructive' })
+        return
+      }
+
+      toast({
+        title: '系统模板已应用',
+        description: `已生成 ${result.createdPackageIds.length} 个图纸包、${result.createdItemIds.length} 个目录项。`,
+      })
+      setTemplateDialogOpen(false)
+      await refreshAll()
+    } catch (error) {
+      const failureMessage = getApiErrorMessage(error, '系统模板应用失败，请稍后重试。')
+      setTemplateError(failureMessage)
+      toast({ title: '模板应用失败', description: failureMessage, variant: 'destructive' })
+    } finally {
+      setTemplateApplying(false)
+    }
+  }, [id, refreshAll, selectedTemplatePackageCodes, templatePreview, toast])
 
   const loadReviewRules = useCallback(async () => {
     if (!id) return
@@ -491,18 +745,21 @@ export default function Drawings() {
     } finally {
       setReviewRulesSaving(false)
     }
-  }, [id, loadReviewRules, reviewRuleForm, selectedReviewRuleId, toast])
+  }, [id, loadReviewRules, refreshAll, reviewRuleForm, selectedReviewRuleId, toast])
 
-  const handleDeleteReviewRule = useCallback(async (ruleId: string) => {
-    if (!id) return
-    if (!window.confirm('确定删除这条审图规则吗？')) return
+  const handleDeleteReviewRule = useCallback((ruleId: string) => {
+    setPendingDeleteReviewRuleId(ruleId)
+  }, [])
+
+  const confirmDeleteReviewRule = useCallback(async () => {
+    if (!id || !pendingDeleteReviewRuleId || reviewRulesSaving) return
 
     setReviewRulesSaving(true)
     try {
-      await apiDelete(`${API_BASE}/api/drawing-review-rules/${ruleId}?projectId=${encodeURIComponent(id)}`, {
+      await apiDelete(`${API_BASE}/api/drawing-review-rules/${pendingDeleteReviewRuleId}?projectId=${encodeURIComponent(id)}`, {
         headers: { 'Content-Type': 'application/json' },
       })
-      if (selectedReviewRuleId === ruleId) {
+      if (selectedReviewRuleId === pendingDeleteReviewRuleId) {
         beginCreateReviewRule()
       }
       await Promise.all([loadReviewRules(), refreshAll()])
@@ -515,12 +772,9 @@ export default function Drawings() {
       })
     } finally {
       setReviewRulesSaving(false)
+      setPendingDeleteReviewRuleId(null)
     }
-  }, [beginCreateReviewRule, id, loadReviewRules, selectedReviewRuleId, toast])
-
-  const refreshAll = useCallback(async () => {
-    await Promise.all([loadBoard(), loadLedger()])
-  }, [loadBoard, loadLedger])
+  }, [beginCreateReviewRule, id, loadReviewRules, pendingDeleteReviewRuleId, refreshAll, reviewRulesSaving, selectedReviewRuleId, toast])
 
   const refreshSelectedDetail = useCallback(async () => {
     const packageId = selectedDetail?.package.packageId ?? selectedPackage?.packageId
@@ -579,10 +833,13 @@ export default function Drawings() {
         matchesText(pkg.currentVersionLabel, normalizedQuery)
       const matchesDiscipline = disciplineFilter === (DRAWING_DISCIPLINE_OPTIONS[0] ?? '') || pkg.disciplineType === disciplineFilter
       const matchesPurpose = purposeFilter === (DRAWING_PURPOSE_OPTIONS[0] ?? '') || pkg.documentPurpose === purposeFilter
+      const matchesStatus = statusFilter === 'all' || pkg.status === statusFilter
+      const matchesVersion =
+        versionFilter === 'all' || versionFilter === 'current' || versionFilter === 'history' || (versionFilter === 'changed' && pkg.hasChange)
 
-      return matchesSearch && matchesDiscipline && matchesPurpose
+      return matchesSearch && matchesDiscipline && matchesPurpose && matchesStatus && matchesVersion
     })
-  }, [board?.packages, disciplineFilter, purposeFilter, searchQuery])
+  }, [board?.packages, disciplineFilter, purposeFilter, searchQuery, statusFilter, versionFilter])
 
   const filteredLedgerRows = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase()
@@ -596,10 +853,16 @@ export default function Drawings() {
         matchesText(row.drawingCode, normalizedQuery)
       const matchesDiscipline = disciplineFilter === (DRAWING_DISCIPLINE_OPTIONS[0] ?? '') || row.disciplineType === disciplineFilter
       const matchesPurpose = purposeFilter === (DRAWING_PURPOSE_OPTIONS[0] ?? '') || row.documentPurpose === purposeFilter
+      const matchesStatus = statusFilter === 'all' || row.drawingStatus === statusFilter
+      const matchesVersion =
+        versionFilter === 'all' ||
+        (versionFilter === 'current' && row.isCurrentVersion) ||
+        (versionFilter === 'history' && !row.isCurrentVersion) ||
+        (versionFilter === 'changed' && row.hasChange)
 
-      return matchesSearch && matchesDiscipline && matchesPurpose
+      return matchesSearch && matchesDiscipline && matchesPurpose && matchesStatus && matchesVersion
     })
-  }, [disciplineFilter, ledgerRows, purposeFilter, searchQuery])
+  }, [disciplineFilter, ledgerRows, purposeFilter, searchQuery, statusFilter, versionFilter])
 
   const focusedPackages = useMemo(() => {
     if (focusView === 'missing') {
@@ -634,9 +897,90 @@ export default function Drawings() {
   }, [filteredLedgerRows, focusedPackages, focusView])
 
   const packageGroups = useMemo(() => groupPackagesByDiscipline(focusedPackages), [focusedPackages])
+  const readinessMetrics = useMemo<DrawingReadinessMetrics>(() => {
+    const packageRows = board?.packages ?? []
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
+    const drawingTotalFallback = packageRows.reduce((total, pkg) => total + (pkg.drawingsCount || 0), 0)
+    const totalDrawings = ledgerRows.length || drawingTotalFallback || summary.totalPackages
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
+    const approvedDrawings = ledgerRows.length
+      ? ledgerRows.filter(isApprovedDrawing).length
+      : packageRows.filter((pkg) => pkg.isReadyForConstruction || pkg.isReadyForAcceptance).length
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
+    const pendingReviewDrawings = ledgerRows.length
+      ? ledgerRows.filter((row) => row.requiresReview && !isApprovedDrawing(row)).length
+      : summary.reviewingPackages
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
+    const overdueDrawings = ledgerRows.length
+      ? ledgerRows.filter(isOverdueDrawing).length
+      : summary.scheduleImpactCount
+
+    const disciplineMap = new Map<string, { total: number; ready: number; overdue: number }>()
+    if (ledgerRows.length) {
+      ledgerRows.forEach((row) => {
+        const current = disciplineMap.get(row.disciplineType) ?? { total: 0, ready: 0, overdue: 0 }
+        current.total += 1
+        if (isApprovedDrawing(row)) current.ready += 1
+        if (isOverdueDrawing(row)) current.overdue += 1
+        disciplineMap.set(row.disciplineType, current)
+      })
+    } else {
+      packageRows.forEach((pkg) => {
+        const current = disciplineMap.get(pkg.disciplineType) ?? { total: 0, ready: 0, overdue: 0 }
+        current.total += pkg.drawingsCount || 1
+        if (pkg.isReadyForConstruction || pkg.isReadyForAcceptance) {
+          current.ready += pkg.drawingsCount || 1
+        }
+        if (pkg.scheduleImpactFlag) current.overdue += 1
+        disciplineMap.set(pkg.disciplineType, current)
+      })
+    }
+
+    return {
+      totalDrawings,
+      approvedDrawings,
+      pendingReviewDrawings,
+      overdueDrawings,
+      plannedSubmitThisMonthCount: summary.plannedSubmitThisMonthCount ?? 0,
+      reviewingPackages: summary.reviewingPackages,
+      scheduleImpactCount: summary.scheduleImpactCount,
+      disciplineReadiness: Array.from(disciplineMap.entries())
+        .map(([disciplineType, item]) => ({
+          disciplineType,
+          total: item.total,
+          ready: item.ready,
+          overdue: item.overdue,
+          ratio: item.total > 0 ? Math.round((item.ready / item.total) * 100) : 0,
+        }))
+        .sort((a, b) => b.total - a.total)
+        .slice(0, 8),
+    }
+  }, [board?.packages, ledgerRows, summary])
 
   const boardTitle = getFocusViewLabel(focusView)
   const boardSubtitle = ''
+  const activeFocusViewOption = focusViewOptions.find((option) => option.value === focusView) ?? focusViewOptions[0]
+
+  const handleExportLedger = useCallback(() => {
+    const header = ['图纸名称', '图纸编号', '专业', '版本', '状态', '审批人', '日期']
+    const rows = focusedLedgerRows.map((row) => [
+      row.drawingName,
+      row.drawingCode,
+      row.disciplineType,
+      row.versionNo,
+      DRAWING_STATUS_LABELS[row.drawingStatus] ?? row.drawingStatus,
+      row.designPerson || row.reviewUnit || '',
+      row.actualPassDate || row.plannedPassDate || row.actualSubmitDate || row.plannedSubmitDate || row.createdAt || '',
+    ])
+    const csv = [header, ...rows].map((row) => row.map(escapeCsvCell).join(',')).join('\n')
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `drawings-ledger-${id ?? 'project'}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }, [focusedLedgerRows, id])
 
   const openPackageDetail = useCallback(
     async (pkg: DrawingPackageCard) => {
@@ -1032,10 +1376,10 @@ export default function Drawings() {
   }, [createForm, id, refreshAll, toast])
 
   const loadingSkeleton = (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="space-y-8">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {[1, 2, 3, 4].map((item) => (
-          <Card key={item} className="border-slate-200 shadow-sm">
+          <Card key={item} className="surface-card">
             <CardContent className="space-y-3 p-5">
               <Skeleton className="h-4 w-20 rounded-full" />
               <Skeleton className="h-8 w-24 rounded-full" />
@@ -1044,7 +1388,7 @@ export default function Drawings() {
           </Card>
         ))}
       </div>
-      <Card className="border-slate-200 shadow-sm">
+      <Card className="surface-card">
         <CardContent className="space-y-3 p-5">
           <Skeleton className="h-5 w-40 rounded-full" />
           <Skeleton className="h-64 w-full rounded-2xl" />
@@ -1054,16 +1398,13 @@ export default function Drawings() {
   )
 
   return (
-    <div className="flex h-full flex-col" data-testid="drawings-page">
-      <div className="px-6 pt-6">
-        <Breadcrumb
-          items={[
-            { label: '项目', href: `/projects/${id}` },
-            { label: '专项管理', href: `/projects/${id}/pre-milestones` },
-            { label: '施工图纸' },
-          ]}
-        />
-      </div>
+    <div className="page-shell" data-testid="drawings-page">
+      <Breadcrumb
+        items={[
+          { label: projectName, href: `/projects/${id}/dashboard` },
+          { label: '施工图纸' },
+        ]}
+      />
 
       <PageHeader
         eyebrow="专项管理"
@@ -1074,7 +1415,7 @@ export default function Drawings() {
             safeStorageSet(
               sessionStorage,
               filterStorageKey,
-              JSON.stringify({ searchQuery, disciplineFilter, purposeFilter, focusView }),
+              JSON.stringify({ searchQuery, disciplineFilter, purposeFilter, focusView, statusFilter, versionFilter }),
             )
           }
           navigate(`/projects/${id}/pre-milestones`)
@@ -1082,48 +1423,66 @@ export default function Drawings() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           返回前期证照
         </Button>
-        <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
-          <Plus className="mr-2 h-4 w-4" />
-          新建图纸包
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            setReviewRulesDialogOpen(true)
-            beginCreateReviewRule()
-          }}
-          disabled={!canEdit}
-        >
-          <FileBadge2 className="mr-2 h-4 w-4" />
-          审图规则管理
-        </Button>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={openTemplateDialog} disabled={!canEdit}>
+            <Layers3 className="mr-2 h-4 w-4" />
+            系统模板
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建图纸包
+          </Button>
+        </DisabledReasonTooltip>
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setReviewRulesDialogOpen(true)
+              beginCreateReviewRule()
+            }}
+            disabled={!canEdit}
+          >
+            <FileBadge2 className="mr-2 h-4 w-4" />
+            审图规则管理
+          </Button>
+        </DisabledReasonTooltip>
         <Button variant="outline" size="sm" onClick={() => void refreshAll()}>
           <RefreshCw className="mr-2 h-4 w-4" />
           刷新
         </Button>
       </PageHeader>
 
-      <div className="flex-1 overflow-auto p-6">
-        {loading ? (
-          loadingSkeleton
-        ) : (
-          <div className="space-y-6">
-            <DrawingReadinessSummary summary={summary} projectName={projectName} />
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
+      ) : null}
 
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="grid gap-4 p-5 lg:grid-cols-[1.6fr_0.8fr_0.8fr]">
+      {loading ? (
+        loadingSkeleton
+      ) : (
+        <div className="space-y-8">
+          <DrawingReadinessMetricGrid summary={summary} projectName={projectName} metrics={readinessMetrics} />
+
+            <Card variant="surface">
+              <CardContent className="space-y-5 p-5">
+                <CardHead eyebrow="FILTER" title="图纸筛选" />
+                <div className="grid gap-5 lg:grid-cols-[minmax(16.25rem,1.6fr)_repeat(4,minmax(10rem,0.8fr))]">
                 <div className="space-y-2">
                   <Label htmlFor="drawing-search" className="text-xs text-slate-500">
                     搜索
                   </Label>
                   <div className="relative">
-                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                     <Input
                       id="drawing-search"
                       data-testid="drawings-search-input"
                       value={searchQuery}
                       onChange={(event) => setSearchQuery(event.target.value)}
+                      aria-label="搜索图纸包或图纸"
                       placeholder="搜索包名、包号、图纸名、图号或版本号"
                       className="pl-9"
                     />
@@ -1134,52 +1493,118 @@ export default function Drawings() {
                   <Label htmlFor="discipline-filter" className="text-xs text-slate-500">
                     专业
                   </Label>
-                  <select
-                    id="discipline-filter"
-                    value={disciplineFilter}
-                    onChange={(event) => setDisciplineFilter(event.target.value)}
-                    className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-offset-white focus:border-blue-300"
-                  >
-                    {DRAWING_DISCIPLINE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
+                  <Select value={disciplineFilter} onValueChange={setDisciplineFilter}>
+                    <SelectTrigger id="discipline-filter" data-testid="drawing-discipline-select">
+                      <SelectValue placeholder="选择专业" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      {DRAWING_DISCIPLINE_OPTIONS.map((option) => (
+                        <SelectItem key={option} value={option}>
+                          {option}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-2">
+                  <Label htmlFor="status-filter" className="text-xs text-slate-500">
+                    状态
+                  </Label>
+                  <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger id="status-filter" data-testid="drawing-status-select">
+                      <SelectValue placeholder="选择状态" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      {statusFilterOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="version-filter" className="text-xs text-slate-500">
+                    版本
+                  </Label>
+                  <Select value={versionFilter} onValueChange={(value) => setVersionFilter(value as DrawingVersionFilter)}>
+                    <SelectTrigger id="version-filter" data-testid="drawing-version-select">
+                      <SelectValue placeholder="选择版本" />
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom">
+                      {versionFilterOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="focus-view-filter" className="text-xs text-slate-500">
+                    Focus View
+                  </Label>
+                  <Select value={focusView} onValueChange={(value) => setFocusView(value as DrawingFocusViewMode)}>
+                    <SelectTrigger id="focus-view-filter" data-testid="drawing-focus-select">
+                      <span className="truncate">{activeFocusViewOption.label}</span>
+                    </SelectTrigger>
+                    <SelectContent align="start" side="bottom" className="w-72">
+                      {focusViewOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value} textValue={option.label} className="py-2">
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs leading-5 text-slate-500">{activeFocusViewOption.description}</p>
+                </div>
+
+                <div className="space-y-2 lg:col-span-5">
                   <Label htmlFor="purpose-filter" className="text-xs text-slate-500">
                     用途 / 属性
                   </Label>
-                  <select
-                    id="purpose-filter"
-                    value={purposeFilter}
-                    onChange={(event) => setPurposeFilter(event.target.value)}
-                    className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-offset-white focus:border-blue-300"
-                  >
-                    {DRAWING_PURPOSE_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-2 lg:col-span-3">
-                  <Label className="text-xs text-slate-500">视图</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {(['overview', 'missing', 'review', 'changes', 'taskImpact', 'acceptanceImpact'] as DrawingFocusViewMode[]).map((mode) => (
-                      <Button
-                        key={mode}
-                        variant={focusView === mode ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => setFocusView(mode)}
-                      >
-                        {getFocusViewLabel(mode)}
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <Select value={purposeFilter} onValueChange={setPurposeFilter}>
+                      <SelectTrigger id="purpose-filter" className="xl:max-w-xs" data-testid="drawing-purpose-select">
+                        <SelectValue placeholder="选择用途" />
+                      </SelectTrigger>
+                      <SelectContent align="start" side="bottom">
+                        {DRAWING_PURPOSE_OPTIONS.map((option) => (
+                          <SelectItem key={option} value={option}>
+                            {option}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <div className="flex flex-wrap gap-2">
+                      {focusViewOptions.map((option) => (
+                        <Button
+                          key={option.value}
+                          variant={focusView === option.value ? 'default' : 'outline'}
+                          size="sm"
+                          onClick={() => setFocusView(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                        <Button variant="outline" size="sm" onClick={() => setCreateDialogOpen(true)} disabled={!canEdit}>
+                          <Upload className="mr-2 h-4 w-4" />
+                          上传
+                        </Button>
+                      </DisabledReasonTooltip>
+                      <Button variant="outline" size="sm" onClick={handleExportLedger} disabled={focusedLedgerRows.length === 0}>
+                        <Download className="mr-2 h-4 w-4" />
+                        导出
                       </Button>
-                    ))}
+                    </div>
                   </div>
+                </div>
                 </div>
               </CardContent>
             </Card>
@@ -1206,9 +1631,8 @@ export default function Drawings() {
               onOpenVersions={(row) => void openVersionWindowFromRow(row)}
               onSetCurrentVersion={canEdit ? (row) => void handleSetCurrentVersion(row.drawingId) : undefined}
             />
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       <DrawingDetailDrawer
         open={drawerOpen}
@@ -1259,7 +1683,7 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-6xl border-slate-200">
+        <DialogContent className="max-w-[var(--dialog-lg-width)] border-slate-200">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-slate-900">
               <FileBadge2 className="h-5 w-5" />
@@ -1270,27 +1694,26 @@ export default function Drawings() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 lg:grid-cols-[0.92fr_1.08fr]">
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-3 p-4">
+          <div className="grid gap-5 lg:grid-cols-[0.92fr_1.08fr]">
+            <Card className="surface-card">
+              <CardContent className="space-y-3 p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">规则列表</div>
-                    <div className="text-xs text-slate-500">当前项目下的可用规则</div>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      beginCreateReviewRule()
-                      if (!reviewRulesDialogOpen) {
-                        setReviewRulesDialogOpen(true)
-                      }
-                    }}
-                    disabled={!canEdit}
-                  >
-                    新增规则
-                  </Button>
+                  <CardHead eyebrow="RULES" title="审图规则列表" />
+                  <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        beginCreateReviewRule()
+                        if (!reviewRulesDialogOpen) {
+                          setReviewRulesDialogOpen(true)
+                        }
+                      }}
+                      disabled={!canEdit}
+                    >
+                      新增规则
+                    </Button>
+                  </DisabledReasonTooltip>
                 </div>
 
                 <div className="max-h-[56vh] space-y-3 overflow-y-auto pr-1">
@@ -1300,12 +1723,12 @@ export default function Drawings() {
                         <div key={item} className="space-y-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
                           <Skeleton className="h-4 w-28 rounded-full" />
                           <Skeleton className="h-3 w-48 rounded-full" />
-                          <Skeleton className="h-3 w-36 rounded-full" />
+                          <Skeleton className="h-3.5 w-3.56 rounded-full" />
                         </div>
                       ))}
                     </>
                   ) : reviewRules.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                    <div className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-500">
                       暂无审图规则，可先新增一条。
                     </div>
                   ) : (
@@ -1359,7 +1782,7 @@ export default function Drawings() {
                               type="button"
                               variant="outline"
                               size="sm"
-                              onClick={() => void handleDeleteReviewRule(rule.id)}
+                              onClick={() => handleDeleteReviewRule(rule.id)}
                               disabled={reviewRulesSaving}
                             >
                               删除
@@ -1373,17 +1796,10 @@ export default function Drawings() {
               </CardContent>
             </Card>
 
-            <Card className="border-slate-200 shadow-sm">
-              <CardContent className="space-y-4 p-4">
+            <Card className="surface-card">
+              <CardContent className="space-y-4 p-5">
                 <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold text-slate-900">
-                      {selectedReviewRuleId ? '编辑审图规则' : '新增审图规则'}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {selectedReviewRuleId ? '修改后会立即覆盖当前规则。' : '先填一条规则，再按需调整。'}
-                    </div>
-                  </div>
+                  <CardHead eyebrow="RULE EDITOR" title={selectedReviewRuleId ? '编辑审图规则' : '新增审图规则'} />
                   {selectedReviewRuleId ? (
                     <Button variant="ghost" size="sm" onClick={beginCreateReviewRule}>
                       取消编辑
@@ -1391,7 +1807,7 @@ export default function Drawings() {
                   ) : null}
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="grid gap-5 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label htmlFor="review-rule-package-code">图纸包编号</Label>
                     <Input
@@ -1433,21 +1849,24 @@ export default function Drawings() {
 
                   <div className="space-y-2">
                     <Label htmlFor="review-rule-mode">默认审图方式</Label>
-                    <select
-                      id="review-rule-mode"
+                    <Select
                       value={reviewRuleForm.defaultReviewMode}
-                      onChange={(event) => {
+                      onValueChange={(value) => {
                         setReviewRuleFormError('')
-                        setReviewRuleForm((current) => ({ ...current, defaultReviewMode: event.target.value as ReviewMode }))
+                        setReviewRuleForm((current) => ({ ...current, defaultReviewMode: value as ReviewMode }))
                       }}
-                      className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
                     >
-                      {reviewModeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
+                      <SelectTrigger id="review-rule-mode">
+                        <SelectValue placeholder="选择默认审图方式" />
+                      </SelectTrigger>
+                      <SelectContent align="start" side="bottom">
+                        {reviewModeOptions.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
 
                   <div className="space-y-2 md:col-span-2">
@@ -1478,12 +1897,11 @@ export default function Drawings() {
                   </div>
 
                   <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 md:col-span-2">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={reviewRuleForm.isActive}
-                      onChange={(event) => {
+                      onCheckedChange={(checked) => {
                         setReviewRuleFormError('')
-                        setReviewRuleForm((current) => ({ ...current, isActive: event.target.checked }))
+                        setReviewRuleForm((current) => ({ ...current, isActive: checked === true }))
                       }}
                     />
                     启用此规则
@@ -1500,13 +1918,239 @@ export default function Drawings() {
                   <Button variant="outline" onClick={beginCreateReviewRule} disabled={reviewRulesSaving}>
                     重置
                   </Button>
-                  <Button onClick={() => void handleSaveReviewRule()} loading={reviewRulesSaving} disabled={!canEdit}>
-                    保存规则
-                  </Button>
+                  <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+                    <Button onClick={() => void handleSaveReviewRule()} loading={reviewRulesSaving} disabled={!canEdit}>
+                      保存规则
+                    </Button>
+                  </DisabledReasonTooltip>
                 </div>
               </CardContent>
             </Card>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={templateDialogOpen}
+        onOpenChange={(open) => {
+          setTemplateDialogOpen(open)
+          if (!open) {
+            setTemplateError(null)
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] max-w-[min(78rem,calc(100vw-2rem))] overflow-hidden border-slate-200">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-slate-900">
+              <PackagePlus className="h-5 w-5 text-blue-600" />
+              系统施工图纸包模板
+            </DialogTitle>
+            <DialogDescription className="text-slate-500">
+              按项目业态生成图纸包工作台；正式图纸版本、审查状态、缺图判断和任务联动仍在施工图纸主页面维护。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+            {templateLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-20 w-full rounded-xl" />
+                <Skeleton className="h-64 w-full rounded-xl" />
+              </div>
+            ) : templatePreview ? (
+              <>
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <Building2 className="h-4 w-4 text-blue-600" />
+                      识别业态
+                    </div>
+                    <p className="mt-2 text-sm font-semibold text-slate-900">{templatePreview.businessProfile.businessTypeName}</p>
+                    <p className="mt-1 text-xs text-slate-500">{getTemplateBusinessSourceLabel(templatePreview.businessProfile.source)}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <Layers3 className="h-4 w-4 text-blue-600" />
+                      本次应用
+                    </div>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{selectedTemplatePackageCodes.length}</p>
+                    <p className="mt-1 text-xs text-slate-500">可创建 {templatePreview.summary.packageCreateCount} 个，已存在 {templatePreview.summary.packageSkipExistingCount} 个</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <ListChecks className="h-4 w-4 text-blue-600" />
+                      包内目录项
+                    </div>
+                    <p className="mt-2 text-2xl font-semibold tabular-nums text-slate-900">{selectedTemplateItemCount}</p>
+                    <p className="mt-1 text-xs text-slate-500">只生成目录项，不生成单张图纸版本</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <ShieldCheck className="h-4 w-4 text-blue-600" />
+                      应用边界
+                    </div>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{templatePreview.seedVersion}</p>
+                    <p className="mt-1 text-xs text-slate-500">跳过已有包，保留主页面状态</p>
+                  </div>
+                </div>
+
+                <Alert className="border-blue-200 bg-blue-50 text-blue-900">
+                  <CheckCircle2 className="h-4 w-4" />
+                  <AlertDescription>
+                    模板只创建缺失图纸包；不会覆盖已有图纸包、不会写入单张图纸、不会改变图纸版本或审查状态。
+                  </AlertDescription>
+                </Alert>
+
+                <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]">
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">图纸包生成范围</p>
+                        <p className="mt-1 text-xs text-slate-500">选择要写入施工图纸主页面的包级资产。</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedTemplatePackageCodes(selectableTemplatePackages.map((pkg) => pkg.packageCode))}
+                          disabled={templateApplying || selectableTemplatePackages.length === 0}
+                        >
+                          全选可创建
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSelectedTemplatePackageCodes([])}
+                          disabled={templateApplying || selectedTemplatePackageCodes.length === 0}
+                        >
+                          清空
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="max-h-[28rem] divide-y divide-slate-200 overflow-y-auto">
+                      {templatePreview.packages.map((pkg) => {
+                        const canSelect = pkg.action === 'will_create'
+                        const checked = selectedTemplatePackageCodes.includes(pkg.packageCode)
+                        return (
+                          <label
+                            key={pkg.packageCode}
+                            className={cn(
+                              'grid cursor-pointer grid-cols-[2rem_minmax(0,1fr)] gap-3 px-4 py-4 text-sm transition-colors',
+                              canSelect ? 'bg-white hover:bg-blue-50/50' : 'cursor-default bg-slate-50 text-slate-500',
+                            )}
+                          >
+                            <Checkbox
+                              checked={checked}
+                              disabled={!canSelect}
+                              onCheckedChange={(checkedValue) => toggleTemplatePackage(pkg.packageCode, checkedValue === true)}
+                              aria-label={`选择${pkg.packageName}`}
+                              className="mt-1"
+                            />
+                            <div className="min-w-0 space-y-2">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className={cn('font-semibold', canSelect ? 'text-slate-900' : 'text-slate-500')}>{pkg.packageName}</p>
+                                  <p className="mt-1 text-xs leading-5 text-slate-500">{pkg.reviewBasis}</p>
+                                </div>
+                                <Badge variant={canSelect ? 'default' : 'secondary'} className="shrink-0">
+                                  {getTemplateActionLabel(pkg.action)}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-wrap gap-2 text-xs">
+                                <Badge variant="outline">{getTemplateRoleLabel(pkg.deliverableRole)}</Badge>
+                                <Badge variant="outline">{getTemplateScopeLabel(pkg.scopeLevel)}</Badge>
+                                <Badge variant="outline">{DRAWING_REVIEW_MODE_LABELS[pkg.reviewMode as ReviewMode] ?? pkg.reviewMode}</Badge>
+                                <span className="rounded-lg bg-slate-100 px-2 py-1 text-slate-600">{pkg.disciplineType}</span>
+                                <span className="rounded-lg bg-slate-100 px-2 py-1 text-slate-600">{pkg.items.length} 项目录</span>
+                              </div>
+                              <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+                                <span>施工阶段：{getTemplateStageLabel(pkg.linkedConstructionStage)}</span>
+                                <span>交付用途：{getTemplateAcceptancePurposeLabel(pkg.linkedAcceptancePurpose)}</span>
+                              </div>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
+                      <p className="text-sm font-semibold text-slate-900">模板应用明细</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        已选 {selectedTemplatePackages.length} 个图纸包，{selectedTemplateItemCount} 个目录项。
+                      </p>
+                    </div>
+                    <div className="max-h-[28rem] space-y-3 overflow-y-auto p-4">
+                      {selectedTemplatePackages.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                          选择左侧图纸包后，这里会展示将写入的包内目录项。
+                        </div>
+                      ) : (
+                        selectedTemplatePackages.map((pkg) => (
+                          <div key={pkg.packageCode} className="rounded-xl border border-slate-200 bg-white p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium text-slate-900">{pkg.packageName}</p>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {getTemplateStageLabel(pkg.linkedConstructionStage)} · {getTemplateAcceptancePurposeLabel(pkg.linkedAcceptancePurpose)}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className="shrink-0">{pkg.items.length} 项</Badge>
+                            </div>
+                            <div className="mt-3 space-y-2">
+                              {pkg.items.slice(0, 5).map((item) => (
+                                <div key={item.itemCode} className="flex items-start gap-2 text-xs text-slate-600">
+                                  <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-600" />
+                                  <span>{item.itemName}</span>
+                                </div>
+                              ))}
+                              {pkg.items.length > 5 ? (
+                                <p className="pl-5 text-xs text-slate-500">另有 {pkg.items.length - 5} 项目录将在应用后写入。</p>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+                暂无可展示的系统模板预览。
+              </div>
+            )}
+
+            {templateError ? (
+              <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {templateError}
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTemplateDialogOpen(false)} disabled={templateApplying}>
+              取消
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => void loadTemplatePreview()}
+              disabled={templateLoading || templateApplying}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              重新预览
+            </Button>
+            <Button
+              onClick={() => void handleApplyTemplate()}
+              loading={templateApplying}
+              disabled={!canEdit || templateLoading || selectedTemplatePackageCodes.length === 0}
+            >
+              <PackagePlus className="mr-2 h-4 w-4" />
+              应用 {selectedTemplatePackageCodes.length} 个图纸包
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1519,21 +2163,20 @@ export default function Drawings() {
           }
         }}
       >
-        <DialogContent className="max-w-2xl border-slate-200">
+        <DialogContent className="max-w-[var(--dialog-md-width)] border-slate-200">
           <DialogHeader>
             <DialogTitle className="text-slate-900">新建图纸包</DialogTitle>
             <DialogDescription className="sr-only">新建图纸包</DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-4 py-2">
+          <div className="grid gap-5 py-2">
             <div className="space-y-2">
               <Label htmlFor="templateCode">模板</Label>
-              <select
-                id="templateCode"
+              <Select
                 value={createForm.templateCode}
-                onChange={(event) => {
+                onValueChange={(value) => {
                   setCreateFormErrors((previous) => ({ ...previous, form: undefined }))
-                  const nextTemplate = DRAWING_TEMPLATES.find((template) => template.templateCode === event.target.value) ?? DRAWING_TEMPLATES[0]
+                  const nextTemplate = DRAWING_TEMPLATES.find((template) => template.templateCode === value) ?? DRAWING_TEMPLATES[0]
                   setCreateForm((previous) => ({
                     ...previous,
                     templateCode: nextTemplate?.templateCode ?? previous.templateCode,
@@ -1542,17 +2185,21 @@ export default function Drawings() {
                     reviewMode: nextTemplate?.defaultReviewMode ?? previous.reviewMode,
                   }))
                 }}
-                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
               >
-                {DRAWING_TEMPLATES.map((template) => (
-                  <option key={template.templateCode} value={template.templateCode}>
-                    {template.templateName}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="templateCode">
+                  <SelectValue placeholder="选择模板" />
+                </SelectTrigger>
+                <SelectContent align="start" side="bottom">
+                  {DRAWING_TEMPLATES.map((template) => (
+                    <SelectItem key={template.templateCode} value={template.templateCode}>
+                      {template.templateName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-5 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="packageName">图纸包名称</Label>
                 <Input
@@ -1581,7 +2228,7 @@ export default function Drawings() {
               </div>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-5 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="disciplineType">专业</Label>
                 <Input
@@ -1611,21 +2258,24 @@ export default function Drawings() {
 
             <div className="space-y-2">
               <Label htmlFor="reviewMode">送审要求</Label>
-              <select
-                id="reviewMode"
+              <Select
                 value={createForm.reviewMode}
-                onChange={(event) => {
+                onValueChange={(value) => {
                   setCreateFormErrors((previous) => ({ ...previous, form: undefined }))
-                  setCreateForm((previous) => ({ ...previous, reviewMode: event.target.value as ReviewMode }))
+                  setCreateForm((previous) => ({ ...previous, reviewMode: value as ReviewMode }))
                 }}
-                className="h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-300"
               >
-                {reviewModeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger id="reviewMode">
+                  <SelectValue placeholder="选择送审要求" />
+                </SelectTrigger>
+                <SelectContent align="start" side="bottom">
+                  {reviewModeOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
@@ -1659,12 +2309,28 @@ export default function Drawings() {
             >
               取消
             </Button>
-            <Button onClick={() => void handleCreatePackage()} loading={creatingPackage} disabled={!canEdit}>
-              创建图纸包
-            </Button>
+            <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+              <Button onClick={() => void handleCreatePackage()} loading={creatingPackage} disabled={!canEdit}>
+                创建图纸包
+              </Button>
+            </DisabledReasonTooltip>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <ConfirmActionDialog
+        open={Boolean(pendingDeleteReviewRuleId)}
+        onOpenChange={(open) => {
+          if (!open && !reviewRulesSaving) setPendingDeleteReviewRuleId(null)
+        }}
+        title="删除审图规则"
+        description="删除后这条审图规则将不再参与图纸包送审判定，规则列表会同步刷新。"
+        confirmLabel="删除规则"
+        loading={reviewRulesSaving}
+        cancelLabel="取消"
+        confirmTone="destructive"
+        testId="drawing-review-rule-delete-confirm"
+        onConfirm={() => void confirmDeleteReviewRule()}
+      />
     </div>
   )
 }

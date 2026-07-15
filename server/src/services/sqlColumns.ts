@@ -14,12 +14,12 @@ export const ACCEPTANCE_CATALOG_COLUMNS = [
 
 export const ACCEPTANCE_PLAN_COLUMNS = [
   'id',
-  'task_id',
   'project_id',
   'plan_name',
   'acceptance_name',
   'acceptance_type',
   'building_id',
+  'building_object_id',
   'scope_level',
   'participant_unit_id',
   'catalog_id',
@@ -51,7 +51,6 @@ export const ACCEPTANCE_PLAN_COLUMNS = [
   'is_custom',
   'responsible_user_id',
   'responsible_person',
-  'responsible_unit',
   'inspection_authority',
   'documents',
   'notes',
@@ -360,7 +359,6 @@ export const DRAWING_TASK_CONDITION_COLUMNS = [
 export const DRAWING_ACCEPTANCE_PLAN_COLUMNS = [
   'id',
   'project_id',
-  'task_id',
   'plan_name',
   'acceptance_name',
   'acceptance_type',

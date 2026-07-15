@@ -555,7 +555,8 @@ describe('PreMilestones linked signals', () => {
 
     await waitForText(container, ['专项管理', '前期证照'])
 
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(0)
+    expect(container.querySelector('[data-testid="pre-milestones-tab-board"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="pre-milestones-tab-ledger"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="pre-milestones-go-drawings"]')).toBeTruthy()
     expect(container.textContent).not.toContain('图纸类型')
     expect(container.textContent).not.toContain('新建施工图纸')

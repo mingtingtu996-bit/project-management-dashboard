@@ -1,4 +1,18 @@
-export type WbsTemplateType = '住宅' | '商业' | '工业' | '公共建筑'
+// v1.4.22.1: expanded from 4 types to 13 to cover 11 formal business types + 1 custom placeholder
+export type WbsTemplateType =
+  | '住宅'
+  | '商业'
+  | '工业'
+  | '公共建筑'
+  | '酒店'
+  | '医院'
+  | '学校'
+  | '数据中心'
+  | '交通枢纽'
+  | '体育文化建筑'
+  | 'TOD上盖'
+  | '改造修缮'
+  | '模块化建筑'
 
 export type WbsTemplateNode = {
   id?: string
@@ -524,9 +538,97 @@ function buildPublicBuildingPreset(
 
   return {
     templateName,
-    templateType: '公共建筑',
+    templateType: specialization === 'hospital'
+      ? '医院'
+      : specialization === 'school'
+        ? '学校'
+        : '公共建筑',
     description: '适用于学校、医院及其他公共建筑项目，覆盖地下结构、主体、机电、专项系统、功能用房、室外配套和专项验收，不含运营管理等非工程节点。',
     nodes: assignNodeIds(nodes, 'P'),
+  }
+}
+
+// v1.4.22.1: new build functions for 9 additional business types
+
+function buildHotelPreset(months: number | null): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 24, 1.05)
+  return {
+    templateName: '酒店WBS模板',
+    templateType: '酒店',
+    description: '酒店建筑模板，覆盖地下结构、主体、机电、精装、客房配套、公区装饰及专项验收。',
+    nodes: assignNodeIds(scaleNodes(publicBuildingBaseNodes, scaleFactor), 'HT'),
+  }
+}
+
+function buildHospitalPreset(months: number | null): BuiltInWbsTemplatePreset {
+  return buildPublicBuildingPreset(months, 'hospital')
+}
+
+function buildSchoolPreset(months: number | null): BuiltInWbsTemplatePreset {
+  return buildPublicBuildingPreset(months, 'school')
+}
+
+function buildDataCenterPreset(months: number | null): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 18, 1.1)
+  return {
+    templateName: '数据中心WBS模板',
+    templateType: '数据中心',
+    description: '数据中心建筑模板，覆盖地下结构、主体、机电、暖通制冷、UPS/配电、DCIM/弱电、消防及Tier验收。',
+    nodes: assignNodeIds(scaleNodes(industrialBaseNodes, scaleFactor), 'DC'),
+  }
+}
+
+function buildTransportationHubPreset(months: number | null): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 30, 1.15)
+  return {
+    templateName: '交通枢纽WBS模板',
+    templateType: '交通枢纽',
+    description: '交通枢纽建筑模板，覆盖地下结构、大跨钢结构、屋面/膜结构、机电、旅客系统及专项验收。',
+    nodes: assignNodeIds(scaleNodes(commercialBaseNodes, scaleFactor), 'TH'),
+  }
+}
+
+function buildSportsCulturePreset(months: number | null): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 26, 1.1)
+  return {
+    templateName: '体育文化建筑WBS模板',
+    templateType: '体育文化建筑',
+    description: '体育/文化建筑模板，覆盖地下结构、大跨空间结构、屋面、机电、看台/舞台/声学及专项验收。',
+    nodes: assignNodeIds(scaleNodes(commercialBaseNodes, scaleFactor), 'SC'),
+  }
+}
+
+function buildTodUpperCoverPreset(months: number | null): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 36, 1.2)
+  return {
+    templateName: 'TOD上盖WBS模板',
+    templateType: 'TOD上盖',
+    description: 'TOD上盖开发模板，覆盖转换层、上盖塔楼、裙房商业、隔振、不停运施工及地铁接口验收。',
+    nodes: assignNodeIds(scaleNodes(commercialBaseNodes, scaleFactor), 'TOD'),
+  }
+}
+
+function buildRenovationPreset(
+  months: number | null,
+  subType: 'seismic' | 'energy' | 'heritage' = 'seismic',
+): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 12, subType === 'heritage' ? 1.15 : 1)
+  const label = subType === 'heritage' ? '文保修缮' : subType === 'energy' ? '节能改造' : '加固抗震'
+  return {
+    templateName: `改造修缮·${label}WBS模板`,
+    templateType: '改造修缮',
+    description: `改造修缮(${label})模板，覆盖鉴定、加固/节能/修缮、机电更新、外立面及专项验收。`,
+    nodes: assignNodeIds(scaleNodes(residentialRawNodes, scaleFactor * 0.5), 'RN'),
+  }
+}
+
+function buildModularPreset(months: number | null): BuiltInWbsTemplatePreset {
+  const scaleFactor = buildScaleFactor(months, 14, 1.05)
+  return {
+    templateName: '模块化建筑WBS模板',
+    templateType: '模块化建筑',
+    description: '模块化建筑模板，覆盖基础、MiC模块吊装、整体卫浴/集成厨房、机电接驳及模块验收。',
+    nodes: assignNodeIds(scaleNodes(residentialRawNodes, scaleFactor * 0.6), 'MOD'),
   }
 }
 
@@ -536,6 +638,15 @@ export function getBuiltInWbsTemplatePresets(): BuiltInWbsTemplatePreset[] {
     buildCommercialPreset(null, null, '商业办公综合体（塔楼+裙房）WBS模板'),
     buildIndustrialPreset(null, true),
     buildPublicBuildingPreset(null, 'general'),
+    buildHotelPreset(null),
+    buildHospitalPreset(null),
+    buildSchoolPreset(null),
+    buildDataCenterPreset(null),
+    buildTransportationHubPreset(null),
+    buildSportsCulturePreset(null),
+    buildTodUpperCoverPreset(null),
+    buildRenovationPreset(null, 'seismic'),
+    buildModularPreset(null),
   ].map((template) => ({
     ...template,
     nodes: cloneNodes(template.nodes),
@@ -544,9 +655,18 @@ export function getBuiltInWbsTemplatePresets(): BuiltInWbsTemplatePreset[] {
 
 export function buildSuggestedWbsTemplate(prompt: string) {
   const normalizedPrompt = prompt.toLowerCase()
-  const isCommercial = /商业|综合体|商场|购物|办公|写字楼|酒店/.test(normalizedPrompt)
+  const isHotel = /酒店|客房|住宿|旅馆/.test(normalizedPrompt)
+  const isHospital = /医院|门诊|病房|医技|手术|ICU|洁净/.test(normalizedPrompt)
+  const isSchool = /学校|教学楼|宿舍楼|实验楼|食堂|操场|体育馆/.test(normalizedPrompt)
+  const isDataCenter = /数据中心|机房|IDC|机柜/.test(normalizedPrompt)
+  const isTransportation = /交通枢纽|车站|地铁|高铁|航站|TOD/.test(normalizedPrompt)
+  const isSports = /体育|体育馆|游泳馆|田径|文化建筑|剧院|音乐厅/.test(normalizedPrompt)
+  const isTod = /TOD|上盖|转换层|地铁上盖/.test(normalizedPrompt)
+  const isRenovation = /改造|修缮|加固|抗震|文保|节能改造/.test(normalizedPrompt)
+  const isModular = /模块化|MiC|整体卫浴|集成厨房|装配式模块/.test(normalizedPrompt)
+  const isCommercial = /商业|综合体|商场|购物|办公|写字楼/.test(normalizedPrompt)
   const isIndustrial = /工业|厂房|仓库|物流|车间|生产/.test(normalizedPrompt)
-  const isPublicBuilding = /学校|教学楼|宿舍楼|实验楼|医院|门诊|病房|医技|图书馆|体育馆|公共建筑/.test(normalizedPrompt)
+  const isPublicBuilding = /图书馆|公共建筑/.test(normalizedPrompt)
   const isSteel = /钢结构|steel/.test(normalizedPrompt)
   const isFrame = /框架|frame/.test(normalizedPrompt)
   const isShearWall = /框剪|剪力墙|shear/.test(normalizedPrompt)
@@ -557,19 +677,33 @@ export function buildSuggestedWbsTemplate(prompt: string) {
   const floors = floorsMatch ? Number.parseInt(floorsMatch[1], 10) : null
   const months = monthsMatch ? Number.parseInt(monthsMatch[1], 10) : null
   const structureTag = isShearWall ? '框剪' : isFrame ? '框架' : null
-  const publicSpecialization = /医院|门诊|病房|医技/.test(normalizedPrompt)
-    ? 'hospital'
-    : /学校|教学楼|宿舍楼|实验楼/.test(normalizedPrompt)
-      ? 'school'
-      : 'general'
+  const renovationSubType = /文保/.test(normalizedPrompt) ? 'heritage' as const : /节能/.test(normalizedPrompt) ? 'energy' as const : 'seismic' as const
 
-  const preset = isCommercial
-    ? buildCommercialPreset(months, isSteel ? '钢结构' : null)
-    : isPublicBuilding
-      ? buildPublicBuildingPreset(months, publicSpecialization)
-      : isIndustrial
-        ? buildIndustrialPreset(months, isSteel || /仓库|物流/.test(normalizedPrompt))
-        : buildResidentialPreset(months, floors, structureTag)
+  const preset = isTod
+    ? buildTodUpperCoverPreset(months)
+    : isModular
+      ? buildModularPreset(months)
+      : isRenovation
+        ? buildRenovationPreset(months, renovationSubType)
+        : isTransportation
+          ? buildTransportationHubPreset(months)
+          : isSports
+            ? buildSportsCulturePreset(months)
+            : isDataCenter
+              ? buildDataCenterPreset(months)
+              : isHospital
+                ? buildHospitalPreset(months)
+                : isSchool
+                  ? buildSchoolPreset(months)
+                  : isHotel
+                    ? buildHotelPreset(months)
+                    : isCommercial
+                      ? buildCommercialPreset(months, isSteel ? '钢结构' : null)
+                      : isPublicBuilding
+                        ? buildPublicBuildingPreset(months, 'general')
+                        : isIndustrial
+                          ? buildIndustrialPreset(months, isSteel || /仓库|物流/.test(normalizedPrompt))
+                          : buildResidentialPreset(months, floors, structureTag)
 
   return {
     suggestedName: preset.templateName,

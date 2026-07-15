@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { supabase, updateProject, updateTask } from '../services/dbService.js'
 
@@ -24,8 +24,13 @@ function createOptimisticMissUpdateChain() {
 }
 
 describe('dbService optimistic lock miss handling', () => {
+  beforeEach(() => {
+    vi.stubEnv('DB_SQL_EXECUTION_MODE', 'rest')
+  })
+
   afterEach(() => {
     vi.restoreAllMocks()
+    vi.unstubAllEnvs()
   })
 
   it('throws VERSION_MISMATCH when task optimistic update matches no row', async () => {

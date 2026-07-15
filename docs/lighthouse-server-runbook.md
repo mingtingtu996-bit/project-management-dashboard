@@ -67,17 +67,26 @@ cp deploy/env/server.production.example deploy/env/server.production.env
 - `SUPABASE_HOST`
 - `SUPABASE_PORT`
 - `SUPABASE_DATABASE`
-- `SUPABASE_USER`
+- `SUPABASE_USER=workbuddy_runtime_login`
 - `SUPABASE_PASSWORD`
+- `DB_CONNECTION_STRING`
+- `SUPABASE_MIGRATION_URL`
 - `CORS_ORIGIN`
 - `JWT_SECRET`
 
 `VITE_SUPABASE_URL` 与 `VITE_SUPABASE_ANON_KEY` 是前端构建参数。部署时统一使用 `--env-file deploy/env/server.production.env`，避免 `docker compose` 读取不到构建变量。
 
+运行态和迁移态必须分开配置：
+
+- `DB_CONNECTION_STRING` 使用 Supabase pooler/session URL，并使用 `workbuddy_runtime_login` 这类非 `BYPASSRLS` 应用登录角色。
+- `SUPABASE_MIGRATION_URL` 只给迁移、治理诊断和受控维护命令使用，可以指向 `postgres` 管理连接。
+- 不要把 `postgres`、`service_role` 或带 `BYPASSRLS` 的连接串放到运行态 `DB_CONNECTION_STRING`。
+- `SUPABASE_USER/SUPABASE_PASSWORD` 仅作为兼容字段保留；新部署优先按 `DB_CONNECTION_STRING` 和 `SUPABASE_MIGRATION_URL` 判断 runtime/migration 权限边界。
+
 如果宿主机已经有别的 `nginx` 或面板占用了 `80` 端口，先把 `WEB_PORT` 改成 `8080` 之类的空闲端口，等服务验证通过后再决定是否切回 `80`。
 
 ```bash
-grep -E '^(SUPABASE_URL|SUPABASE_ANON_KEY|VITE_SUPABASE_URL|VITE_SUPABASE_ANON_KEY|CORS_ORIGIN|JWT_SECRET)=' deploy/env/server.production.env
+grep -E '^(SUPABASE_URL|SUPABASE_ANON_KEY|VITE_SUPABASE_URL|VITE_SUPABASE_ANON_KEY|SUPABASE_USER|DB_CONNECTION_STRING|SUPABASE_MIGRATION_URL|CORS_ORIGIN|JWT_SECRET)=' deploy/env/server.production.env
 ```
 
 ## 5. 启动服务

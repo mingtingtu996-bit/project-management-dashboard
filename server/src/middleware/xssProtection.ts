@@ -14,7 +14,7 @@ const DANGEROUS_PATTERNS = [
   /<input\b[^>]*>/gi,
   /<textarea\b[^<]*(?:(?!<\/textarea>)<[^<]*)*<\/textarea>/gi,
   /javascript:/gi,
-  /on\w+\s*=/gi,  // onclick, onerror, onload 等事件处理器
+  /(?:^|[\s"'`<])on[a-z]+\s*=/gi,  // onclick, onerror, onload 等事件处理器
   /data:text\/html/gi,
 ]
 
@@ -34,6 +34,7 @@ export function containsXss(input: string): boolean {
   
   // 检查危险模式
   for (const pattern of DANGEROUS_PATTERNS) {
+    pattern.lastIndex = 0
     if (pattern.test(input)) {
       return true
     }

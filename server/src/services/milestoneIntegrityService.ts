@@ -3,12 +3,23 @@ import { v4 as uuidv4 } from 'uuid'
 import { listActiveProjectIds } from './activeProjectService.js'
 import { writeLog } from './changeLogs.js'
 import { executeSQL, executeSQLOne } from './dbService.js'
-import { insertNotification, listNotifications, updateNotificationById } from './notificationStore.js'
+import { listNotifications, updateNotificationById } from './notificationStore.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
+import { attachCurrentBaselineProjectionToTasks } from './taskBaselineProjectionService.js'
+import { resolveLiveTaskCriticalityProjection } from './taskCriticalityProjectionService.js'
+import {
+  MILESTONE_INTEGRITY_RULE_SEED,
+  type MilestoneCommitmentAnchor,
+  type MilestoneKey,
+  type MilestoneScenarioType,
+} from '../seeds/milestoneIntegrityRuleSeed.js'
 import type { Notification } from '../types/db.js'
 import type {
   MilestoneIntegrityReport,
   MilestoneIntegrityRow,
   MilestoneIntegrityState,
+  PlanningGovernanceGateLevel,
+  PlanningGovernanceTargetSurface,
 } from '../types/planning.js'
 
 export interface MilestoneIntegritySourceRow {
@@ -24,9 +35,25 @@ export interface MilestoneIntegritySourceRow {
   status?: string | null
   version?: number | null
   milestone_order?: number | null
+  baseline_item_id?: string | null
+  monthly_plan_item_id?: string | null
+  source_mode?: 'baseline' | 'schedule' | 'mixed' | 'manual' | 'imported' | string | null
+  task_source?: 'ad_hoc' | 'baseline' | 'monthly_plan' | 'execution' | string | null
+  mapping_status?: string | null
+  is_critical_path?: boolean | null
+  is_critical?: boolean | null
+  criticality_weight?: number | string | null
+  milestone_distance_days?: number | string | null
+  downstream_milestone_distance_days?: number | string | null
+  acceptance_required?: boolean | null
+  linked_prerequisite_count?: number | string | null
+  bound_prerequisite_count?: number | string | null
 }
 
 const MILESTONE_KEYS = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9'] as const
+const MILESTONE_POLICY_BY_KEY = new Map(
+  MILESTONE_INTEGRITY_RULE_SEED.scenarioPolicies.map((policy) => [policy.milestoneKey, policy]),
+)
 
 interface ProjectOwnerRow {
   id: string
@@ -36,8 +63,12 @@ interface ProjectOwnerRow {
 interface ProjectMemberRow {
   project_id: string
   user_id: string
-  role?: string | null
   permission_level?: string | null
+}
+
+interface SelectedMilestoneIntegritySourceRow {
+  milestone: MilestoneIntegritySourceRow
+  milestoneKey: MilestoneKey
 }
 
 function toTimestamp(value?: string | null): number | null {
@@ -52,11 +83,28 @@ function normalizeDate(value?: string | null): string | null {
   return timestamp === null ? null : new Date(timestamp).toISOString()
 }
 
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function normalizeStatus(value?: string | null): string {
+  return String(value ?? '').trim().toLowerCase()
+}
+
 function selectAnchorDate(milestone: MilestoneIntegritySourceRow): string | null {
   return milestone.current_plan_date || milestone.baseline_date || milestone.target_date || milestone.actual_date || milestone.completed_at || null
 }
 
-function deriveMilestoneKey(index: number, milestone: MilestoneIntegritySourceRow): typeof MILESTONE_KEYS[number] {
+function deriveExplicitMilestoneKey(milestone: MilestoneIntegritySourceRow): MilestoneKey | null {
   const directOrder = Number(milestone.milestone_order ?? NaN)
   if (Number.isFinite(directOrder) && directOrder >= 1 && directOrder <= 9) {
     return MILESTONE_KEYS[directOrder - 1]
@@ -68,15 +116,154 @@ function deriveMilestoneKey(index: number, milestone: MilestoneIntegritySourceRo
     return MILESTONE_KEYS[Number(match[1]) - 1]
   }
 
-  return MILESTONE_KEYS[Math.min(index, MILESTONE_KEYS.length - 1)]
+  return null
 }
 
-function evaluateMilestoneState(milestone: MilestoneIntegritySourceRow): { state: MilestoneIntegrityState; issues: string[] } {
+function deriveMilestoneKey(index: number, milestone: MilestoneIntegritySourceRow): MilestoneKey {
+  return deriveExplicitMilestoneKey(milestone) ?? MILESTONE_KEYS[Math.min(index, MILESTONE_KEYS.length - 1)]
+}
+
+function sortMilestonesByAnchor(milestones: MilestoneIntegritySourceRow[]) {
+  return [...milestones].sort((left, right) => {
+    const leftAnchor = toTimestamp(selectAnchorDate(left)) ?? 0
+    const rightAnchor = toTimestamp(selectAnchorDate(right)) ?? 0
+    if (leftAnchor !== rightAnchor) return leftAnchor - rightAnchor
+    return String(left.id).localeCompare(String(right.id))
+  })
+}
+
+function selectMilestonesForIntegrity(milestones: MilestoneIntegritySourceRow[]): SelectedMilestoneIntegritySourceRow[] {
+  const ordered = sortMilestonesByAnchor(milestones)
+  const explicitByKey = new Map<MilestoneKey, MilestoneIntegritySourceRow>()
+  const selectedIds = new Set<string>()
+
+  for (const milestone of ordered) {
+    const key = deriveExplicitMilestoneKey(milestone)
+    if (!key || explicitByKey.has(key)) continue
+    explicitByKey.set(key, milestone)
+    selectedIds.add(milestone.id)
+  }
+
+  const selected: SelectedMilestoneIntegritySourceRow[] = []
+  const usedKeys = new Set<MilestoneKey>()
+  for (const key of MILESTONE_KEYS) {
+    const milestone = explicitByKey.get(key)
+    if (!milestone) continue
+    selected.push({ milestone, milestoneKey: key })
+    usedKeys.add(key)
+  }
+
+  for (const milestone of ordered) {
+    if (selected.length >= MILESTONE_KEYS.length) break
+    if (selectedIds.has(milestone.id)) continue
+    const fallbackKey = MILESTONE_KEYS.find((key) => !usedKeys.has(key))
+    if (!fallbackKey) break
+    selected.push({ milestone, milestoneKey: fallbackKey })
+    usedKeys.add(fallbackKey)
+    selectedIds.add(milestone.id)
+  }
+
+  return selected.slice(0, MILESTONE_KEYS.length)
+}
+
+function inferCommitmentAnchor(milestone: MilestoneIntegritySourceRow): MilestoneCommitmentAnchor {
+  const sourceMode = normalizeStatus(milestone.source_mode)
+  const taskSource = normalizeStatus(milestone.task_source)
+  if (hasText(milestone.baseline_item_id) || sourceMode === 'baseline' || taskSource === 'baseline') return 'baseline'
+  if (hasText(milestone.monthly_plan_item_id) || sourceMode === 'mixed' || taskSource === 'monthly_plan') return 'monthly_plan'
+  if (sourceMode === 'manual' || taskSource === 'ad_hoc') return 'manual'
+  return 'unanchored'
+}
+
+function hasBrokenCommitmentAnchor(milestone: MilestoneIntegritySourceRow, anchor: MilestoneCommitmentAnchor): boolean {
+  const mappingStatus = normalizeStatus(milestone.mapping_status)
+  if (['missing', 'pending', 'broken', 'orphan', 'unresolved', 'conflict', 'merged'].includes(mappingStatus)) return true
+  if (anchor === 'baseline' && !hasText(milestone.baseline_item_id) && normalizeStatus(milestone.source_mode) === 'baseline') return true
+  if (anchor === 'monthly_plan' && !hasText(milestone.monthly_plan_item_id) && normalizeStatus(milestone.source_mode) === 'mixed') return true
+  return false
+}
+
+function hasCriticalContext(milestone: MilestoneIntegritySourceRow): boolean {
+  const projection = resolveLiveTaskCriticalityProjection(milestone)
+  const criticalityWeight = toNumber(milestone.criticality_weight)
+  const milestoneDistance = toNumber(milestone.milestone_distance_days ?? milestone.downstream_milestone_distance_days)
+  return Boolean(
+    milestone.is_critical_path
+      || projection.isCritical
+      || milestone.acceptance_required
+      || (criticalityWeight !== null && criticalityWeight >= 1)
+      || (milestoneDistance !== null && milestoneDistance <= 7)
+      || (toNumber(milestone.linked_prerequisite_count) ?? 0) > 0
+      || (toNumber(milestone.bound_prerequisite_count) ?? 0) > 0,
+  )
+}
+
+function resolveMilestonePolicy(key: MilestoneKey) {
+  return MILESTONE_POLICY_BY_KEY.get(key) ?? MILESTONE_INTEGRITY_RULE_SEED.scenarioPolicies[0]
+}
+
+function resolveGateLevel(
+  state: MilestoneIntegrityState,
+  policy: ReturnType<typeof resolveMilestonePolicy>,
+  anchor: MilestoneCommitmentAnchor,
+  criticalContext: boolean,
+): PlanningGovernanceGateLevel {
+  if (state === 'aligned') return 'hint'
+  if (state === 'blocked') return 'block_save'
+  if (anchor === 'manual' || anchor === 'unanchored') return 'confirm'
+  if (criticalContext && state === 'missing_data') return 'block_save'
+  return policy.defaultGateLevel
+}
+
+function resolveTargetSurface(gateLevel: PlanningGovernanceGateLevel, policy: ReturnType<typeof resolveMilestonePolicy>): PlanningGovernanceTargetSurface {
+  if (gateLevel === 'block_save') return 'baseline'
+  return policy.defaultTargetSurface
+}
+
+function applyCommitmentAnchorIssues(
+  milestone: MilestoneIntegritySourceRow,
+  issues: string[],
+  anchor: MilestoneCommitmentAnchor,
+  criticalContext: boolean,
+) {
+  const policy = MILESTONE_INTEGRITY_RULE_SEED.commitmentAnchorPolicy
+  if (anchor === 'manual' && !hasText(milestone.baseline_item_id) && !hasText(milestone.monthly_plan_item_id)) {
+    issues.push(policy.manualWithoutAnchorIssue)
+    return
+  }
+
+  if (hasBrokenCommitmentAnchor(milestone, anchor)) {
+    issues.push(policy.formalAnchorBrokenIssue)
+    if (criticalContext) issues.push(policy.criticalAnchorBrokenIssue)
+  }
+}
+
+function getStateFromIssues(issues: string[]): MilestoneIntegrityState {
+  if (issues.length === 0) return 'aligned'
+  const blockingIssue = issues.some((issue) =>
+    issue.includes('actual date exceeds')
+      || issue.includes('missing actual date')
+      || issue.includes('commitment anchor missing')
+      || issue.includes('requires repair before publishing'),
+  )
+  if (blockingIssue) return 'blocked'
+  if (issues.some((issue) => issue.includes('missing') && !issue.includes('manual milestone'))) return 'missing_data'
+  return 'needs_attention'
+}
+
+function evaluateMilestoneState(milestone: MilestoneIntegritySourceRow): {
+  state: MilestoneIntegrityState
+  issues: string[]
+  commitmentAnchor: MilestoneCommitmentAnchor
+  criticalContext: boolean
+} {
+  const commitmentAnchor = inferCommitmentAnchor(milestone)
+  const criticalContext = hasCriticalContext(milestone)
   const issues: string[] = []
   const plannedDate = normalizeDate(milestone.baseline_date || milestone.target_date)
   const currentPlannedDate = normalizeDate(milestone.current_plan_date || milestone.baseline_date || milestone.target_date)
   const actualDate = normalizeDate(milestone.actual_date || milestone.completed_at)
-  const status = String(milestone.status || '').trim().toLowerCase()
+  const status = normalizeStatus(milestone.status)
 
   if (!plannedDate) issues.push('missing planned date')
   if (!currentPlannedDate) issues.push('missing current planned date')
@@ -101,41 +288,52 @@ function evaluateMilestoneState(milestone: MilestoneIntegritySourceRow): { state
     }
   }
 
-  const state: MilestoneIntegrityState =
-    issues.length === 0
-      ? 'aligned'
-      : issues.some((issue) => issue.includes('actual date exceeds') || issue.includes('missing actual date'))
-        ? 'blocked'
-        : issues.some((issue) => issue.includes('missing'))
-          ? 'missing_data'
-          : 'needs_attention'
+  applyCommitmentAnchorIssues(milestone, issues, commitmentAnchor, criticalContext)
 
-  return { state, issues }
+  return {
+    state: getStateFromIssues(issues),
+    issues: [...new Set(issues)],
+    commitmentAnchor,
+    criticalContext,
+  }
+}
+
+function buildMilestoneIntegrityRow(milestone: MilestoneIntegritySourceRow, milestoneKey: MilestoneKey): MilestoneIntegrityRow {
+  const stateResult = evaluateMilestoneState(milestone)
+  const policy = resolveMilestonePolicy(milestoneKey)
+  const gateLevel = resolveGateLevel(
+    stateResult.state,
+    policy,
+    stateResult.commitmentAnchor,
+    stateResult.criticalContext,
+  )
+  const targetSurface = resolveTargetSurface(gateLevel, policy)
+
+  return {
+    milestone_id: milestone.id,
+    milestone_key: milestoneKey,
+    title: milestone.title || milestone.name || milestone.id,
+    planned_date: normalizeDate(milestone.baseline_date || milestone.target_date),
+    current_planned_date: normalizeDate(milestone.current_plan_date || milestone.baseline_date || milestone.target_date),
+    actual_date: normalizeDate(milestone.actual_date || milestone.completed_at),
+    state: stateResult.state,
+    issues: stateResult.issues,
+    scenario_type: policy.scenarioType,
+    scenario_label: policy.label,
+    suggested_action: policy.suggestedAction,
+    gate_level: gateLevel,
+    target_surface: targetSurface,
+    commitment_anchor: stateResult.commitmentAnchor,
+    critical_context: stateResult.criticalContext,
+  }
 }
 
 export function evaluateMilestoneIntegrityRows(
   projectId: string,
   milestones: MilestoneIntegritySourceRow[],
 ): MilestoneIntegrityReport {
-  const ordered = [...milestones].sort((left, right) => {
-    const leftAnchor = toTimestamp(selectAnchorDate(left)) ?? 0
-    const rightAnchor = toTimestamp(selectAnchorDate(right)) ?? 0
-    return leftAnchor - rightAnchor
-  })
-
-  const items: MilestoneIntegrityRow[] = ordered.slice(0, 9).map((milestone, index) => {
-    const stateResult = evaluateMilestoneState(milestone)
-    return {
-      milestone_id: milestone.id,
-      milestone_key: deriveMilestoneKey(index, milestone),
-      title: milestone.title || milestone.name || milestone.id,
-      planned_date: normalizeDate(milestone.baseline_date || milestone.target_date),
-      current_planned_date: normalizeDate(milestone.current_plan_date || milestone.baseline_date || milestone.target_date),
-      actual_date: normalizeDate(milestone.actual_date || milestone.completed_at),
-      state: stateResult.state,
-      issues: stateResult.issues,
-    }
-  })
+  const items: MilestoneIntegrityRow[] = selectMilestonesForIntegrity(milestones)
+    .map(({ milestone, milestoneKey }) => buildMilestoneIntegrityRow(milestone, milestoneKey))
 
   const summary = {
     total: items.length,
@@ -160,67 +358,21 @@ function uniqueStrings(values: Array<string | null | undefined>) {
   return [...new Set(values.filter((value): value is string => Boolean(value && value.trim())))]
 }
 
-type MilestoneScenarioType =
-  | 'milestone_mapping_pending'      // M1
-  | 'milestone_pending_takeover'     // M2
-  | 'milestone_execution_closed'     // M5
-  | 'milestone_baseline_removed'     // M6
-  | 'milestone_data_incomplete'      // M7
-  | 'milestone_deviation_excessive'  // M8
-  | 'milestone_no_baseline'          // M9
-
-const MILESTONE_SCENARIO_LABELS: Record<MilestoneScenarioType, string> = {
-  milestone_mapping_pending: 'M1 基线映射待补',
-  milestone_pending_takeover: 'M2 待承接',
-  milestone_execution_closed: 'M5 执行层已关闭',
-  milestone_baseline_removed: 'M6 基线已移除',
-  milestone_data_incomplete: 'M7 数据不完整',
-  milestone_deviation_excessive: 'M8 偏差过大',
-  milestone_no_baseline: 'M9 未关联基线',
-}
-
-const MILESTONE_SCENARIO_ACTIONS: Record<MilestoneScenarioType, string> = {
-  milestone_mapping_pending: '请补齐基线映射并回到基线页确认。',
-  milestone_pending_takeover: '请确认承接关系并补齐执行层节点。',
-  milestone_execution_closed: '请改为关闭/取消或重新激活执行层节点。',
-  milestone_baseline_removed: '请重新确认基线版本并修复映射。',
-  milestone_data_incomplete: '请补全三时间字段后再继续跟踪。',
-  milestone_deviation_excessive: '请纳入修订观察池并评估偏差原因。',
-  milestone_no_baseline: '请补充基线来源或标记为临时新增。',
-}
-
-const MILESTONE_NOTIFICATION_TYPES: MilestoneScenarioType[] = [
-  'milestone_mapping_pending',
-  'milestone_pending_takeover',
-  'milestone_execution_closed',
-  'milestone_baseline_removed',
-  'milestone_data_incomplete',
-  'milestone_deviation_excessive',
-  'milestone_no_baseline',
-]
-
-const MILESTONE_NOTIFICATION_TYPE_BY_KEY: Record<typeof MILESTONE_KEYS[number], MilestoneScenarioType | null> = {
-  M1: 'milestone_mapping_pending',
-  M2: 'milestone_pending_takeover',
-  M3: null,
-  M4: null,
-  M5: 'milestone_execution_closed',
-  M6: 'milestone_baseline_removed',
-  M7: 'milestone_data_incomplete',
-  M8: 'milestone_deviation_excessive',
-  M9: 'milestone_no_baseline',
-}
+const MILESTONE_NOTIFICATION_TYPES: MilestoneScenarioType[] = MILESTONE_INTEGRITY_RULE_SEED.scenarioPolicies
+  .map((policy) => policy.scenarioType)
+  .filter((type): type is MilestoneScenarioType => Boolean(type))
 
 function resolveMilestoneScenarioType(item: MilestoneIntegrityRow): MilestoneScenarioType | null {
-  return MILESTONE_NOTIFICATION_TYPE_BY_KEY[item.milestone_key] ?? null
+  const policy = resolveMilestonePolicy(item.milestone_key)
+  return policy.scenarioType
 }
 
 function getMilestoneScenarioLabel(type: MilestoneScenarioType): string {
-  return MILESTONE_SCENARIO_LABELS[type]
+  return MILESTONE_INTEGRITY_RULE_SEED.scenarioPolicies.find((policy) => policy.scenarioType === type)?.label ?? type
 }
 
 function deriveSuggestedAction(type: MilestoneScenarioType): string {
-  return MILESTONE_SCENARIO_ACTIONS[type]
+  return MILESTONE_INTEGRITY_RULE_SEED.scenarioPolicies.find((policy) => policy.scenarioType === type)?.suggestedAction ?? ''
 }
 
 function buildMilestoneNotificationType(item: MilestoneIntegrityRow): MilestoneScenarioType | null {
@@ -232,9 +384,9 @@ function buildMilestoneNotificationTitle(item: MilestoneIntegrityRow) {
 }
 
 function buildMilestoneNotificationContent(item: MilestoneIntegrityRow, scenarioType: MilestoneScenarioType) {
-  const issueSummary = item.issues.join('；')
+  const issueSummary = item.issues.join('、')
   const suggestedAction = deriveSuggestedAction(scenarioType)
-  return `里程碑「${item.title}」触发 ${getMilestoneScenarioLabel(scenarioType)}，当前状态：${item.state}；问题：${issueSummary}；建议动作：${suggestedAction}`
+  return `里程碑「${item.title}」${getMilestoneScenarioLabel(scenarioType)}当前状态为「${item.state}」，存在问题：${issueSummary}。建议：${suggestedAction}`
 }
 
 function readMilestoneStateFromNotification(notification?: Notification | null): MilestoneIntegrityState | null {
@@ -295,14 +447,14 @@ async function writeMilestoneIntegrityLog(params: {
 async function getProjectRecipients(projectId: string) {
   const [project, members] = await Promise.all([
     executeSQLOne<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
-    executeSQL<ProjectMemberRow>('SELECT project_id, user_id, role, permission_level FROM project_members WHERE project_id = ?', [projectId]),
+    executeSQL<ProjectMemberRow>('SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?', [projectId]),
   ])
 
   return uniqueStrings([
     project?.owner_id ?? null,
     ...(members ?? [])
       .filter((member) => {
-        const role = normalizeProjectPermissionLevel(member.permission_level ?? member.role)
+        const role = normalizeProjectPermissionLevel(member.permission_level)
         return role === 'owner'
       })
       .map((member) => member.user_id),
@@ -361,18 +513,46 @@ async function buildMilestoneNotificationRow(projectId: string, item: MilestoneI
 
 export class MilestoneIntegrityService {
   async scanProjectMilestones(projectId: string): Promise<MilestoneIntegrityReport> {
-    const milestones = await executeSQL<MilestoneIntegritySourceRow>(
-      'SELECT id, project_id, title, planned_end_date as target_date, baseline_end as baseline_date, planned_end_date as current_plan_date, actual_end_date as actual_date, status, version FROM tasks WHERE project_id = ? AND is_milestone = true',
+    const taskRows = await executeSQL<MilestoneIntegritySourceRow & {
+      baseline_start?: string | null
+      baseline_end?: string | null
+      baseline_is_critical?: boolean | null
+    }>(
+      `SELECT
+        id,
+        project_id,
+        title,
+        planned_end_date as target_date,
+        planned_end_date as current_plan_date,
+        actual_end_date as actual_date,
+        status,
+        version,
+        milestone_order,
+        monthly_plan_item_id,
+        task_source,
+        is_critical as is_critical_path,
+        is_critical,
+        criticality_weight,
+        milestone_distance_days,
+        downstream_milestone_distance_days,
+        acceptance_required
+      FROM tasks
+      WHERE project_id = ? AND is_milestone = true`,
       [projectId]
     )
+    const milestones = (await attachCurrentBaselineProjectionToTasks(taskRows)).map((row) => ({
+      ...row,
+      baseline_date: row.baseline_end ?? row.baseline_start ?? null,
+      is_critical_path: row.is_critical_path ?? row.baseline_is_critical ?? null,
+    }))
     return evaluateMilestoneIntegrityRows(projectId, milestones)
   }
 
-  async scanAllProjectMilestones(): Promise<MilestoneIntegrityReport[]> {
-    const projectIds = await listActiveProjectIds()
+  async scanAllProjectMilestones(projectIds?: string[] | null): Promise<MilestoneIntegrityReport[]> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const reports: MilestoneIntegrityReport[] = []
 
-    for (const projectId of projectIds) {
+    for (const projectId of activeProjectIds) {
       reports.push(await this.scanProjectMilestones(projectId))
     }
 
@@ -408,13 +588,20 @@ export class MilestoneIntegrityService {
 
       const existing = existingByMilestoneId.get(item.milestone_id)
       if (!existing) {
-        persisted.push(await insertNotification(next))
+        persisted.push(await notificationTouchpointService.emit({
+          ...next,
+          touchpoint_type: 'dashboard_todo',
+          scope_type: 'project',
+          dedupe_key: `milestone_integrity:${projectId}:${item.milestone_id}`,
+          target_route: `/projects/${projectId}/milestones`,
+          target_label: '查看里程碑',
+        }))
         await writeMilestoneIntegrityLog({
           projectId,
           item,
           previousState: null,
           nextState: item.state,
-          changeReason: item.issues.join('；') || '里程碑一致性异常',
+          changeReason: item.issues.join('、') || '里程碑一致性异常',
         })
         continue
       }
@@ -437,14 +624,14 @@ export class MilestoneIntegrityService {
         metadata: next.metadata,
         updated_at: timestamp,
       } satisfies Partial<Notification>
-      await updateNotificationById(existing.id, patch)
+      await updateNotificationById(existing.id, patch, existing)
       persisted.push({ ...existing, ...patch } as Notification)
       await writeMilestoneIntegrityLog({
         projectId,
         item,
         previousState,
         nextState: item.state,
-        changeReason: item.issues.join('；') || '里程碑一致性异常',
+        changeReason: item.issues.join('、') || '里程碑一致性异常',
       })
     }
 
@@ -460,7 +647,7 @@ export class MilestoneIntegrityService {
         resolved_at: timestamp,
         is_read: true,
         updated_at: timestamp,
-      })
+      }, existing)
       await writeMilestoneIntegrityLog({
         projectId,
         item: {
@@ -477,10 +664,10 @@ export class MilestoneIntegrityService {
     return persisted
   }
 
-  async syncAllProjectMilestoneNotifications(): Promise<Notification[]> {
-    const projectIds = await listActiveProjectIds()
+  async syncAllProjectMilestoneNotifications(projectIds?: string[] | null): Promise<Notification[]> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const persisted: Notification[] = []
-    for (const projectId of projectIds) {
+    for (const projectId of activeProjectIds) {
       persisted.push(...await this.syncProjectMilestoneNotifications(projectId))
     }
     return persisted
