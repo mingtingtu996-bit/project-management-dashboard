@@ -214,7 +214,7 @@ describe('deploy workflow contract', () => {
     expect(workflow.slice(preflightIndex, applyIndex)).toContain('--advisor-max-age-hours 24')
   })
 
-  it('pins node 20, node24-compatible actions, explicit quality gates, and self-hosted server deployment', () => {
+  it('pins node 22, node24-compatible actions, explicit quality gates, and self-hosted server deployment', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
 
     expect(workflow).toContain('concurrency:')
@@ -226,7 +226,8 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('actions/upload-artifact@v7')
     expect(workflow).toContain('actions/download-artifact@v7')
     expect(workflow).toContain('actions/cache@v5')
-    expect(workflow).toContain("node-version: '20'")
+    expect(workflow).toContain("node-version: '22'")
+    expect(workflow).not.toContain("node-version: '20'")
 
     expect(workflow).toContain('Enable pnpm via Corepack')
     expect(workflow).toContain('corepack prepare pnpm@9 --activate')
@@ -987,7 +988,8 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true')
     expect(workflowGuard).toContain('actions/checkout@v6')
     expect(workflowGuard).toContain('actions/setup-node@v6')
-    expect(workflowGuard).toContain("node-version: '20'")
+    expect(workflowGuard).toContain("node-version: '22'")
+    expect(workflowGuard).not.toContain("node-version: '20'")
     expect(workflowGuard).toContain('Enable pnpm via Corepack')
     expect(workflowGuard).toContain('corepack prepare pnpm@9 --activate')
     expect(workflowGuard).toContain('Install client dependencies for readiness contract')
@@ -1147,6 +1149,28 @@ describe('mainline production workflow integration', () => {
     expect(workflow).not.toContain('secrets.DEPLOY_HOST')
     expect(guard).toContain('.github/workflows/production-livegate-execution.yml')
     expect(guard).toContain('project-testing/tools/run-production-livegate-evidence.test.mjs')
+  })
+
+  it('uses the Node 22 runtime baseline across release workflows and build images', () => {
+    const workflowPaths = [
+      '.github/workflows/deploy.yml',
+      '.github/workflows/workflow-guard.yml',
+      '.github/workflows/production-closeout-readiness.yml',
+      '.github/workflows/production-livegate-execution.yml',
+    ]
+
+    for (const workflowPath of workflowPaths) {
+      const workflow = readFileSync(resolve(workspaceRoot, workflowPath), 'utf8')
+      expect(workflow, workflowPath).toContain("node-version: '22'")
+      expect(workflow, workflowPath).not.toMatch(/node-version:\s*['\"]?20['\"]?/)
+    }
+
+    const serverDockerfile = readFileSync(resolve(workspaceRoot, 'server', 'Dockerfile'), 'utf8')
+    const clientDockerfile = readFileSync(resolve(workspaceRoot, 'client', 'Dockerfile'), 'utf8')
+    expect(serverDockerfile.match(/FROM node:22-bookworm-slim/g)).toHaveLength(2)
+    expect(serverDockerfile).not.toContain('FROM node:20')
+    expect(clientDockerfile).toContain('FROM node:22-alpine AS builder')
+    expect(clientDockerfile).not.toContain('FROM node:20')
   })
 
   it('repairs only recognized Docker builder cache corruption before deploy', () => {
