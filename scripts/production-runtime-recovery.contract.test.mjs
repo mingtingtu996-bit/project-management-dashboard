@@ -52,6 +52,23 @@ test('runtime recovery workflow probes production hourly and preserves current d
   assert.doesNotMatch(workflow, /deploy-lighthouse-server/)
 })
 
+test('private runtime recovery requires local verification and treats public HTTPS as optional', () => {
+  const workflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
+  const script = readOwnedFile('scripts/recover-production-runtime.sh')
+  const requiredSecretLoop = workflow.match(/for required_name in ([^;]+); do/)?.[1] ?? ''
+
+  assert.doesNotMatch(requiredSecretLoop, /DEPLOY_HEALTH_URL/)
+  assert.match(workflow, /if \[ -n "\$DEPLOY_HEALTH_URL" \]; then/)
+  assert.match(workflow, /PUBLIC_PROBE_CONFIGURED/)
+  assert.match(workflow, /publicProbeConfigured/)
+  assert.match(workflow, /!publicProbeConfigured \|\| publicProbeAfterPassed/)
+  assert.match(script, /PUBLIC_PROBE_CONFIGURED/)
+  assert.match(
+    script,
+    /\[ "\$PUBLIC_PROBE_CONFIGURED" != "true" \] \|\| \[ "\$PUBLIC_PROBE_HEALTHY" = "true" \]/,
+  )
+})
+
 test('manual restart is guarded by environment, exact confirmation, and an allow-listed target', () => {
   const workflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
   const script = readOwnedFile('scripts/recover-production-runtime.sh')

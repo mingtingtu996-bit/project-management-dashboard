@@ -15,9 +15,10 @@ available to local container and deployment probes.
 
 ## Production runtime recovery
 
-`.github/workflows/production-runtime-recovery.yml` runs an hourly public
-HTTPS `/api/readyz` probe and then inspects the existing Web, API, and worker
-containers. The workflow uses the protected `production` GitHub environment
+`.github/workflows/production-runtime-recovery.yml` runs an hourly SSH-based
+inspection of the existing Web, API, and worker containers and their local
+`/api/readyz` probes. When a public health URL is configured, it also verifies
+that HTTPS endpoint. The workflow uses the protected `production` GitHub environment
 and the same production secret names as the release workflow:
 
 - `PRODUCTION_DEPLOY_HOST`
@@ -26,7 +27,7 @@ and the same production secret names as the release workflow:
 - `PRODUCTION_DEPLOY_PATH`
 - `PRODUCTION_DEPLOY_SSH_PRIVATE_KEY`
 - `PRODUCTION_DEPLOY_KNOWN_HOSTS`
-- `PRODUCTION_DEPLOY_HEALTH_URL` (required to be an HTTPS `/api/readyz` URL)
+- `PRODUCTION_DEPLOY_HEALTH_URL` (optional; when set, must be an HTTPS `/api/readyz` URL)
 - `PRODUCTION_SLACK_WEBHOOK` (optional notification channel)
 
 Recovery is fail closed. SSH credentials, pinned host trust, the runtime env
@@ -34,8 +35,9 @@ file, `SUPABASE_RUNTIME_KEY`, the absence of `SUPABASE_SERVICE_KEY`, Docker
 access, container Compose identities, the `production` target, and matching
 API/worker release identities must all pass preflight. A scheduled run may
 recover only a service with an explicit stopped, unhealthy, or failed local
-`readyz` diagnosis. A public failure with all three local services healthy is
-reported as an ingress boundary failure and does not restart containers.
+`readyz` diagnosis. When a public probe is configured, its failure with all
+three local services healthy is reported as an ingress boundary failure and
+does not restart containers. Without it, local container verification is authoritative.
 
 Manual dispatch additionally requires environment `production`, one of the
 `api`, `web`, `worker`, or `all` targets, and the exact confirmation phrase

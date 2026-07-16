@@ -8,6 +8,7 @@ RECOVERY_MODE="${RECOVERY_MODE:-scheduled}"
 RECOVERY_TARGET="${RECOVERY_TARGET:-auto}"
 RECOVERY_CONFIRMATION="${RECOVERY_CONFIRMATION:-}"
 DEPLOY_TARGET="${DEPLOY_TARGET:-}"
+PUBLIC_PROBE_CONFIGURED="${PUBLIC_PROBE_CONFIGURED:-false}"
 PUBLIC_PROBE_HEALTHY="${PUBLIC_PROBE_HEALTHY:-false}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
@@ -71,6 +72,7 @@ write_report() {
     printf 'recovery_mode=%s\n' "$RECOVERY_MODE"
     printf 'requested_target=%s\n' "$RECOVERY_TARGET"
     printf 'release_sha=%s\n' "$release_sha"
+    printf 'public_probe_configured=%s\n' "$PUBLIC_PROBE_CONFIGURED"
     printf 'public_probe_before_passed=%s\n' "$PUBLIC_PROBE_HEALTHY"
     printf 'diagnosis_codes=%s\n' "$diagnosis_codes"
     printf 'apiUnhealthy=%s\n' "$apiUnhealthy"
@@ -150,6 +152,10 @@ if [ "$RECOVERY_MODE" = "manual" ]; then
   fi
 fi
 
+case "$PUBLIC_PROBE_CONFIGURED" in
+  true|false) ;;
+  *) refuse "public_probe_configured_input_invalid" "Public probe configured input must be true or false." ;;
+esac
 case "$PUBLIC_PROBE_HEALTHY" in
   true|false) ;;
   *) refuse "public_probe_input_invalid" "Public probe input must be true or false." ;;
@@ -319,7 +325,7 @@ fi
 if [ "$web_status_before" = "running" ] && [ "$web_probe_before" != "true" ]; then
   webUnavailable="true"
 fi
-if [ "$PUBLIC_PROBE_HEALTHY" != "true" ] || [ "$web_probe_before" != "true" ]; then
+if { [ "$PUBLIC_PROBE_CONFIGURED" = "true" ] && [ "$PUBLIC_PROBE_HEALTHY" != "true" ]; } || [ "$web_probe_before" != "true" ]; then
   healthCurlFailed="true"
 fi
 
@@ -403,7 +409,7 @@ if [ "$recovery_allowed" != "true" ]; then
   worker_probe_after="$worker_probe_before"
   if [ "$all_runtime_healthy" = "true" ]; then
     local_verification_passed="true"
-    if [ "$PUBLIC_PROBE_HEALTHY" = "true" ]; then
+    if [ "$PUBLIC_PROBE_CONFIGURED" != "true" ] || [ "$PUBLIC_PROBE_HEALTHY" = "true" ]; then
       recovery_outcome="healthy_no_action"
       failure_reason="none"
       exit 0

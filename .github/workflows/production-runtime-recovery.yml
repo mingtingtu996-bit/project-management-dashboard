@@ -98,7 +98,7 @@ jobs:
             fi
           fi
 
-          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HEALTH_URL; do
+          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
             if [ -z "${!required_name}" ]; then
               echo "Missing required production recovery secret: $required_name" >&2
               blocked="true"
@@ -110,13 +110,15 @@ jobs:
               blocked="true"
               ;;
           esac
-          case "$DEPLOY_HEALTH_URL" in
-            https://*/api/readyz) ;;
-            *)
-              echo "PRODUCTION_DEPLOY_HEALTH_URL must be an HTTPS /api/readyz endpoint." >&2
-              blocked="true"
-              ;;
-          esac
+          if [ -n "$DEPLOY_HEALTH_URL" ]; then
+            case "$DEPLOY_HEALTH_URL" in
+              https://*/api/readyz) ;;
+              *)
+                echo "When configured, PRODUCTION_DEPLOY_HEALTH_URL must be an HTTPS /api/readyz endpoint." >&2
+                blocked="true"
+                ;;
+            esac
+          fi
 
           if [ "$blocked" = "true" ]; then
             echo "passed=false" >> "$GITHUB_OUTPUT"
@@ -124,19 +126,24 @@ jobs:
           fi
           echo "passed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Probe public runtime readiness endpoint
+      - name: Probe optional public runtime readiness endpoint
         id: public_probe
         if: ${{ steps.preflight.outcome == 'success' }}
         run: |
           set -euo pipefail
+          configured="false"
           healthy="false"
-          for attempt in 1 2 3; do
-            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
-              healthy="true"
-              break
-            fi
-            if [ "$attempt" -lt 3 ]; then sleep 5; fi
-          done
+          if [ -n "$DEPLOY_HEALTH_URL" ]; then
+            configured="true"
+            for attempt in 1 2 3; do
+              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+                healthy="true"
+                break
+              fi
+              if [ "$attempt" -lt 3 ]; then sleep 5; fi
+            done
+          fi
+          echo "configured=$configured" >> "$GITHUB_OUTPUT"
           echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
 
       - name: Configure pinned production SSH trust
@@ -158,6 +165,7 @@ jobs:
           RECOVERY_MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'scheduled' }}
           RECOVERY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'auto' }}
           RECOVERY_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
+          PUBLIC_PROBE_CONFIGURED: ${{ steps.public_probe.outputs.configured }}
           PUBLIC_PROBE_HEALTHY: ${{ steps.public_probe.outputs.healthy }}
         run: |
           set -euo pipefail
@@ -179,9 +187,9 @@ jobs:
             scripts/recover-production-runtime.sh "$DEPLOY_USER@$DEPLOY_HOST:$remote_script"
 
           printf -v remote_command \
-            'APP_DIR=%q REPORT_FILE=%q RECOVERY_MODE=%q RECOVERY_TARGET=%q RECOVERY_CONFIRMATION=%q DEPLOY_TARGET=%q PUBLIC_PROBE_HEALTHY=%q bash %q' \
+            'APP_DIR=%q REPORT_FILE=%q RECOVERY_MODE=%q RECOVERY_TARGET=%q RECOVERY_CONFIRMATION=%q DEPLOY_TARGET=%q PUBLIC_PROBE_CONFIGURED=%q PUBLIC_PROBE_HEALTHY=%q bash %q' \
             "$DEPLOY_PATH" "$remote_report" "$RECOVERY_MODE" "$RECOVERY_TARGET" "$RECOVERY_CONFIRMATION" \
-            'production' "$PUBLIC_PROBE_HEALTHY" "$remote_script"
+            'production' "$PUBLIC_PROBE_CONFIGURED" "$PUBLIC_PROBE_HEALTHY" "$remote_script"
 
           set +e
           ssh -i ~/.ssh/workbuddy-production-recovery -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
@@ -198,19 +206,24 @@ jobs:
           fi
           exit "$remote_status"
 
-      - name: Verify public runtime readiness after diagnosis and recovery
+      - name: Verify optional public runtime readiness after diagnosis and recovery
         id: public_verify
         if: ${{ always() && steps.preflight.outcome == 'success' }}
         run: |
           set -euo pipefail
+          configured="false"
           healthy="false"
-          for attempt in $(seq 1 12); do
-            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
-              healthy="true"
-              break
-            fi
-            if [ "$attempt" -lt 12 ]; then sleep 5; fi
-          done
+          if [ -n "$DEPLOY_HEALTH_URL" ]; then
+            configured="true"
+            for attempt in $(seq 1 12); do
+              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+                healthy="true"
+                break
+              fi
+              if [ "$attempt" -lt 12 ]; then sleep 5; fi
+            done
+          fi
+          echo "configured=$configured" >> "$GITHUB_OUTPUT"
           echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
 
       - name: Build sanitized runtime recovery summary
@@ -218,6 +231,7 @@ jobs:
         if: ${{ always() }}
         env:
           PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          PUBLIC_PROBE_CONFIGURED: ${{ steps.public_verify.outputs.configured }}
           PUBLIC_PROBE_BEFORE: ${{ steps.public_probe.outputs.healthy }}
           PUBLIC_PROBE_AFTER: ${{ steps.public_verify.outputs.healthy }}
           REMOTE_STEP_OUTCOME: ${{ steps.remote_recovery.outcome }}
@@ -241,16 +255,19 @@ jobs:
             )
             : {};
           const preflightPassed = process.env.PREFLIGHT_OUTCOME === 'success' && meta.preflight_passed === 'true';
+          const publicProbeConfigured = process.env.PUBLIC_PROBE_CONFIGURED === 'true';
           const publicProbeBeforePassed = process.env.PUBLIC_PROBE_BEFORE === 'true';
           const publicProbeAfterPassed = process.env.PUBLIC_PROBE_AFTER === 'true';
           const localVerificationPassed = meta.local_verification_passed === 'true';
           const recoveryAttempted = meta.recovery_attempted === 'true';
-          const runtimeHealthy = preflightPassed && localVerificationPassed && publicProbeAfterPassed;
+          const runtimeHealthy = preflightPassed && localVerificationPassed && (!publicProbeConfigured || publicProbeAfterPassed);
           const recoverySucceeded = recoveryAttempted && meta.recovery_succeeded === 'true' && runtimeHealthy;
           const overallStatus = runtimeHealthy ? (recoverySucceeded ? 'recovered' : 'healthy') : 'failed';
           const probeStatus = process.env.PREFLIGHT_OUTCOME !== 'success'
             ? 'blocked'
-            : publicProbeBeforePassed ? 'passed' : 'failed';
+            : publicProbeConfigured
+              ? (publicProbeBeforePassed ? 'passed' : 'failed')
+              : (localVerificationPassed ? 'passed' : 'failed');
           const recoveryStatus = !preflightPassed
             ? 'blocked'
             : recoveryAttempted ? (recoverySucceeded ? 'succeeded' : 'failed') : 'not-needed';
@@ -270,6 +287,7 @@ jobs:
             verificationStatus,
             overallStatus,
             publicProbeBeforePassed,
+            publicProbeConfigured,
             publicProbeAfterPassed,
             localVerificationPassed,
             recoveryAttempted,
@@ -346,9 +364,9 @@ jobs:
           console.log('# Production Runtime Recovery');
           console.log('');
           console.log(`- Overall: ${summary.overallStatus}`);
-          console.log(`- Public probe before: ${summary.publicProbeBeforePassed ? 'passed' : 'failed'}`);
+          console.log(`- Public probe: ${summary.publicProbeConfigured ? (summary.publicProbeBeforePassed ? 'passed' : 'failed') : 'not configured'}`);
           console.log(`- Recovery: ${summary.recoveryStatus} (${summary.selectedTargets})`);
-          console.log(`- Local and public verification: ${summary.verificationStatus}`);
+          console.log(`- Private runtime verification: ${summary.verificationStatus}`);
           console.log(`- Diagnosis: ${summary.diagnosisCodes}`);
           NODE
 
