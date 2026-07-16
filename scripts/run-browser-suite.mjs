@@ -1,5 +1,5 @@
 ﻿import { mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { access, readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -7,7 +7,10 @@ import { spawnSync } from 'node:child_process'
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
+const scriptOutputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
+const configuredOutputDir = process.env.BROWSER_ARTIFACTS_DIR?.trim()
+const outputDir = configuredOutputDir ? resolve(repoRoot, configuredOutputDir) : scriptOutputDir
+const redirectsArtifacts = outputDir !== scriptOutputDir
 const scripts = process.argv.slice(2)
 const suiteKey = process.env.BROWSER_SUITE_KEY || process.env.npm_lifecycle_event || 'adhoc-browser-suite'
 const suiteRuns = []
@@ -25,11 +28,11 @@ async function collectScriptArtifacts(script) {
   const scriptDir = join(outputDir, toSuiteFolderName(script))
   await mkdir(scriptDir, { recursive: true })
 
-  const entries = await readdir(outputDir, { withFileTypes: true })
+  const entries = await readdir(scriptOutputDir, { withFileTypes: true })
   const filesToMove = entries.filter((entry) => entry.isFile() && entry.name !== 'suite-manifest.json')
 
   for (const file of filesToMove) {
-    await rename(join(outputDir, file.name), join(scriptDir, file.name))
+    await rename(join(scriptOutputDir, file.name), join(scriptDir, file.name))
   }
 
   await rewriteMovedJsonArtifactPaths(scriptDir)
@@ -46,7 +49,7 @@ async function collectScriptArtifacts(script) {
 }
 
 function maybeRewriteMovedPath(value, scriptDir) {
-  if (typeof value !== 'string' || !value.includes(outputDir)) return value
+  if (typeof value !== 'string' || !value.includes(scriptOutputDir)) return value
   const fileName = value.split(/[\\/]/).filter(Boolean).at(-1)
   return fileName ? join(scriptDir, fileName) : value
 }
@@ -114,6 +117,12 @@ async function writeManifest() {
   )
 }
 
+async function cleanupRedirectedScriptOutput() {
+  if (redirectsArtifacts) {
+    await rm(scriptOutputDir, { recursive: true, force: true })
+  }
+}
+
 if (scripts.length === 0) {
   console.error('Usage: node scripts/run-browser-suite.mjs <npm-script> [more-scripts...]')
   process.exit(1)
@@ -121,6 +130,10 @@ if (scripts.length === 0) {
 
 await rm(outputDir, { recursive: true, force: true })
 await mkdir(outputDir, { recursive: true })
+if (redirectsArtifacts) {
+  await rm(scriptOutputDir, { recursive: true, force: true })
+  await mkdir(scriptOutputDir, { recursive: true })
+}
 await writeManifest()
 
 for (const [index, script] of scripts.entries()) {
@@ -150,6 +163,7 @@ for (const [index, script] of scripts.entries()) {
     suiteRuns[suiteRuns.length - 1].status = 'failed'
     suiteRuns[suiteRuns.length - 1].error = String(result.error)
     await writeManifest()
+    await cleanupRedirectedScriptOutput()
     console.error(`[run-browser-suite] failed to launch ${script}:`, result.error)
     process.exit(1)
   }
@@ -159,6 +173,7 @@ for (const [index, script] of scripts.entries()) {
     suiteRuns[suiteRuns.length - 1].exitCode = result.status ?? 1
     await collectScriptArtifacts(script)
     await writeManifest()
+    await cleanupRedirectedScriptOutput()
     process.exit(result.status ?? 1)
   }
 
@@ -167,3 +182,5 @@ for (const [index, script] of scripts.entries()) {
   suiteRuns[suiteRuns.length - 1].exitCode = 0
   await writeManifest()
 }
+
+await cleanupRedirectedScriptOutput()

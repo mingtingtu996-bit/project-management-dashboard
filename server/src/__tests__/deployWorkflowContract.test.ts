@@ -261,6 +261,10 @@ describe('deploy workflow contract', () => {
 
   it('pins node 22, node24-compatible actions, explicit quality gates, and self-hosted server deployment', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const browserSuiteRunner = readFileSync(
+      resolve(workspaceRoot, 'scripts', 'run-browser-suite.mjs'),
+      'utf8',
+    )
 
     expect(workflow).toContain('concurrency:')
     expect(workflow).not.toMatch(/^\s+description:\s+[^'"\n]+:\s+/m)
@@ -288,10 +292,13 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('npx playwright install --with-deps chromium')
     expect(workflow).toContain('Publish browser suite summary')
     expect(workflow).toContain('write-browser-suite-summary.mjs')
-    expect(workflow).toContain('project-testing/artifacts/browser-checks/suite-manifest.json')
-    expect(workflow).toContain('path: project-testing/artifacts/browser-checks')
-    expect(workflow).not.toMatch(/(?:^|\s)artifacts\/browser-checks\/suite-manifest\.json(?:\s|$)/m)
-    expect(workflow).not.toMatch(/^\s+path: artifacts\/browser-checks\s*$/m)
+    expect(workflow).toContain('BROWSER_ARTIFACTS_DIR: artifacts/browser-checks')
+    expect(workflow).toContain('artifacts/browser-checks/suite-manifest.json')
+    expect(workflow).toMatch(/^\s+path: artifacts\/browser-checks\s*$/m)
+    expect(workflow).not.toContain('project-testing/')
+    expect(browserSuiteRunner).toContain('process.env.BROWSER_ARTIFACTS_DIR?.trim()')
+    expect(browserSuiteRunner).toContain('const redirectsArtifacts = outputDir !== scriptOutputDir')
+    expect(browserSuiteRunner).toContain('await cleanupRedirectedScriptOutput()')
     expect(workflow).toContain('$GITHUB_STEP_SUMMARY')
     expect(workflow).toContain('browser-checks-summary:')
     expect(workflow).toContain('name: Browser Checks Overview')
