@@ -80,3 +80,20 @@ test('gantt mock verification targets the fixture row that owns the expected ass
     },
   )
 })
+
+test('gantt mock verification grants the fixture user explicit project edit access', () => {
+  const response = ganttBrowser.buildMockResponse(
+    'http://127.0.0.1:4173/api/members/422ba093-7a94-4e91-a47a-c1b865185e86/me',
+  )
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(JSON.parse(response.body), {
+    success: true,
+    data: {
+      permissionLevel: 'owner',
+      globalRole: 'company_admin',
+      canManageTeam: true,
+      canEdit: true,
+    },
+  })
+})

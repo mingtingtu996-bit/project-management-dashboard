@@ -185,7 +185,7 @@ function startPreviewServer() {
   })
 }
 
-function buildMockResponse(urlString, method) {
+export function buildMockResponse(urlString, method) {
   const url = new URL(urlString)
   const { pathname, searchParams } = url
 
@@ -208,6 +208,18 @@ function buildMockResponse(urlString, method) {
 
   if (pathname === `/api/projects/${projectId}`) {
     return json({ success: true, data: mockProject })
+  }
+
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canManageTeam: true,
+        canEdit: true,
+      },
+    })
   }
 
   if (pathname === `/api/projects/${projectId}/critical-path`) {

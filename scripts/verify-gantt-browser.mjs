@@ -323,7 +323,7 @@ function startPreviewServer() {
   })
 }
 
-function buildMockResponse(urlString, method = 'GET', postData = null) {
+export function buildMockResponse(urlString, method = 'GET', postData = null) {
   const url = new URL(urlString)
   const { pathname } = url
   const authResponse = maybeBuildMockAuthResponse(pathname, json)
@@ -387,6 +387,18 @@ function buildMockResponse(urlString, method = 'GET', postData = null) {
     || pathname === '/api/tasks/progress-snapshots'
   ) {
     return json({ success: true, data: [] })
+  }
+
+  if (pathname === `/api/members/${projectId}/me`) {
+    return json({
+      success: true,
+      data: {
+        permissionLevel: 'owner',
+        globalRole: 'company_admin',
+        canManageTeam: true,
+        canEdit: true,
+      },
+    })
   }
 
   if (pathname === `/api/members/${projectId}`) {
