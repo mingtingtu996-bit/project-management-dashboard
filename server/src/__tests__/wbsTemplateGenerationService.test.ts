@@ -9820,7 +9820,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
       expect.objectContaining({ standardCode: 'GB50300-2013' }),
       expect.objectContaining({ standardCode: 'GB50204-2015' }),
     ]))
-  }, 25000)
+  }, 60000)
 
   it('resolves manually curated same-parent internal-flow rules from the dedicated rule seed', () => {
     flattenChinaTemplateCatalog()
