@@ -202,6 +202,7 @@ const wizardPayloadSchema = z.object({
 
 const wizardCreateSchema = z.object({
   projectId: z.string().trim().min(1).optional(),
+  newProjectId: z.string().uuid().optional(),
   name: z.string().trim().min(1).max(200).optional(),
   companyId: z.string().trim().min(1).optional(),
   status: z.enum(['未开始', PROJECT_DRAFT_STATUS, PROJECT_ACTIVE_STATUS]).optional(),
@@ -216,6 +217,9 @@ const wizardCreateSchema = z.object({
   asyncGeneration: z.boolean().optional(),
   saveAsCompanyTemplate: z.boolean().optional(),
   companyTemplateName: z.string().trim().max(200).optional(),
+}).refine((value) => !(value.projectId && value.newProjectId), {
+  message: 'projectId and newProjectId cannot be provided together',
+  path: ['newProjectId'],
 })
 
 const wizardDraftSchema = z.object({
@@ -6151,6 +6155,7 @@ async function saveCompanyTemplateIfRequested(params: {
 
 async function createOrUpdateWizardProject(params: {
   projectId?: string
+  newProjectId?: string
   companyId: string | null
   actorId?: string | null
   body: z.infer<typeof wizardCreateSchema>
@@ -6158,7 +6163,7 @@ async function createOrUpdateWizardProject(params: {
   commit: boolean
 }) {
   const ts = now()
-  const projectId = params.projectId ?? uuidv4()
+  const projectId = params.projectId ?? params.newProjectId ?? uuidv4()
   const existing = params.projectId
     ? (await readProjectMetadata(params.projectId)).project
     : null
@@ -8324,6 +8329,7 @@ router.post('/api/projects/wizard', authenticate, asyncHandler(async (req, res) 
   })
   const created = await createOrUpdateWizardProject({
     projectId: body.projectId,
+    newProjectId: body.newProjectId,
     companyId,
     actorId,
     body,

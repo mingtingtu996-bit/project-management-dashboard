@@ -238,6 +238,9 @@ describe('deploy workflow contract', () => {
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_ANON_KEY'")
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_MIGRATION_URL'")
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON'")
+    expect(preflightJob).toContain('actions/checkout@v6')
+    expect(preflightJob).toContain('Verify deployment target database identity')
+    expect(preflightJob).toContain('node scripts/check-deployment-target-identity.mjs')
     expect(preflightJob).toContain('Target deployment preflight blocked')
     expect(preflightJob).toContain('Public HTTPS health is optional')
     expect(preflightJob).toContain(
@@ -250,6 +253,12 @@ describe('deploy workflow contract', () => {
 
     const migrationJob = workflow.slice(migrationStart, workflow.indexOf('  workspace-isolation-live:'))
     expect(migrationJob).toContain('needs: [server-quality, deployment-target-preflight]')
+
+    const identityCheckIndex = workflow.indexOf('Verify deployment target database identity')
+    const applyIndex = workflow.indexOf('Apply pending migrations')
+    expect(identityCheckIndex).toBeGreaterThan(preflightStart)
+    expect(identityCheckIndex).toBeLessThan(migrationStart)
+    expect(applyIndex).toBeGreaterThan(migrationStart)
   })
 
   it('fails before applying migrations when current governance inputs are missing', () => {
@@ -266,6 +275,40 @@ describe('deploy workflow contract', () => {
     expect(workflow.slice(preflightIndex, applyIndex)).toContain('--advisor-max-age-hours 24')
   })
 
+  it('scopes privileged database and advisor secrets to the run steps that consume them', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const migrationJob = workflow.slice(
+      workflow.indexOf('  database-migration:'),
+      workflow.indexOf('  workspace-isolation-live:'),
+    )
+    const isolationJob = workflow.slice(
+      workflow.indexOf('  workspace-isolation-live:'),
+      workflow.indexOf('  deploy-server:'),
+    )
+    const migrationJobEnv = migrationJob.slice(migrationJob.indexOf('    env:'), migrationJob.indexOf('    if: >'))
+    const isolationInstallStep = isolationJob.slice(
+      isolationJob.indexOf('      - name: Install root dependencies'),
+      isolationJob.indexOf('      - name: Run live workspace isolation regression'),
+    )
+
+    expect(migrationJobEnv).not.toContain('DATABASE_URL:')
+    expect(migrationJobEnv).not.toContain('SUPABASE_ADVISOR_EXPORT_JSON:')
+    expect(migrationJob.slice(
+      migrationJob.indexOf('      - name: Install server dependencies'),
+      migrationJob.indexOf('      - name: Confirm production deployment'),
+    )).not.toContain('DATABASE_URL:')
+    expect(migrationJob.slice(
+      migrationJob.indexOf('      - name: Apply pending migrations'),
+      migrationJob.indexOf('      - name: Check migration pending zero after apply'),
+    )).toContain('DATABASE_URL: ${{ secrets[')
+    expect(isolationJob).not.toMatch(/^    env:\r?\n\s+DATABASE_URL:/m)
+    expect(isolationInstallStep).not.toContain('DATABASE_URL:')
+    expect(isolationJob.slice(
+      isolationJob.indexOf('      - name: Run live workspace isolation regression'),
+      isolationJob.indexOf('      - name: Publish live isolation summary'),
+    )).toContain('DATABASE_URL: ${{ secrets[')
+  })
+
   it('pins node 22, node24-compatible actions, explicit quality gates, and self-hosted server deployment', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const browserSuiteRunner = readFileSync(
@@ -274,8 +317,11 @@ describe('deploy workflow contract', () => {
     )
 
     expect(workflow).toContain('concurrency:')
+    expect(workflow).toContain("format('target-{0}', github.event.inputs.environment)")
+    expect(workflow).toContain("format('preview-{0}', github.ref)")
+    expect(workflow).not.toContain("${{ github.workflow }}-${{ github.ref }}-${{ github.event_name")
     expect(workflow).not.toMatch(/^\s+description:\s+[^'"\n]+:\s+/m)
-    expect(workflow).toContain('cancel-in-progress: true')
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.environment == 'preview' }}")
     expect(workflow).toContain('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true')
     expect(workflow).toContain('actions/checkout@v6')
     expect(workflow).toContain('actions/setup-node@v6')
@@ -344,7 +390,7 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('DEPLOY_KNOWN_HOSTS')
     expect(workflow).toContain('DEPLOY_HEALTH_URL')
     expect(workflow).toContain('Configure SSH')
-    expect(workflow).toContain('ssh-keyscan')
+    expect(workflow).not.toContain('ssh-keyscan')
     expect(workflow).toContain('Deploy to self-hosted server')
     expect(workflow).toContain('scripts/deploy-lighthouse-server.sh')
     expect(workflow).toContain('RELEASE_SHA: ${{ github.sha }}')
@@ -356,8 +402,38 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('ssh -N -L')
     expect(workflow).toContain('workbuddy-build.json')
     expect(workflow).toContain('releaseSha')
+    expect(workflow).toContain('readiness.build?.releaseSha !== process.env.RELEASE_SHA')
+    expect(workflow).toContain('readiness.build?.deployTarget !== process.env.DEPLOY_TARGET')
+    expect(workflow).toContain('readiness.build?.supabaseProjectRef !== expectedDatabaseProjectRef')
+    expect(workflow).toContain('readiness.build?.databaseProjectRef !== expectedDatabaseProjectRef')
+    expect(workflow).toContain('Run authenticated staging wizard and baseline smoke through SSH tunnel')
+    expect(workflow).toContain('scripts/run-wizard-baseline-revision-staging.mjs')
+    expect(workflow).toContain('--deployed-staging-code')
+    expect(workflow).toContain('--release-sha "$RELEASE_SHA"')
+    expect(workflow).toContain('STAGING_TEST_USER_EMAIL')
+    expect(workflow).toContain('STAGING_TEST_USER_PASSWORD')
+    expect(workflow).toContain("env.DEPLOY_TARGET == 'staging'")
+    expect(workflow).toContain('steps.staging-smoke.outcome')
+    expect(workflow).toContain('staging-wizard-baseline-revision-${{ github.run_id }}')
     expect(workflow).toContain('Public HTTPS health is optional')
     expect(workflow).not.toContain("needs.database-migration.result == 'skipped'")
+
+    const deployJob = workflow.slice(workflow.indexOf('  deploy-server:'))
+    const deployJobEnv = deployJob.slice(deployJob.indexOf('    env:'), deployJob.indexOf('    if: >'))
+    const stagingSmokeStep = deployJob.slice(
+      deployJob.indexOf('      - name: Run authenticated staging wizard and baseline smoke through SSH tunnel'),
+      deployJob.indexOf('      - name: Upload authenticated staging wizard smoke'),
+    )
+    expect(deployJobEnv).not.toContain('STAGING_TEST_USER_PASSWORD')
+    expect(deployJobEnv).not.toContain('STAGING_TEST_USER_EMAIL')
+    expect(deployJobEnv).not.toMatch(/\n      DEPLOY_(?:HOST|USER|PORT|PATH|SSH_PRIVATE_KEY|KNOWN_HOSTS|HEALTH_URL):/)
+    expect(deployJobEnv).not.toContain('\n      SLACK_WEBHOOK:')
+    expect(stagingSmokeStep).toContain('STAGING_SMOKE_TEST_USER_PASSWORD: ${{ secrets.STAGING_TEST_USER_PASSWORD }}')
+    expect(stagingSmokeStep).toContain('STAGING_SMOKE_TEST_USER_EMAIL: ${{ secrets.STAGING_TEST_USER_EMAIL }}')
+    expect(stagingSmokeStep).toContain('STAGING_SMOKE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}')
+    expect(stagingSmokeStep).toContain('DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}')
+    expect(stagingSmokeStep).toContain('--cleanup-report "$smoke_report"')
+    expect(stagingSmokeStep).toContain('smoke_completed=false')
 
     const deployScript = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
     const compose = readFileSync(resolve(workspaceRoot, 'deploy', 'docker-compose.lighthouse.yml'), 'utf8')

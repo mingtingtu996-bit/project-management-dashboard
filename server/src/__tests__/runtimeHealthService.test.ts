@@ -8,11 +8,34 @@ import {
 
 describe('runtime health service', () => {
   it('keeps liveness independent from database readiness and exposes build identity', () => {
-    expect(buildLivenessPayload({ RELEASE_SHA: 'abc123' })).toMatchObject({
+    expect(buildLivenessPayload({
+      RELEASE_SHA: 'abc123',
+      DEPLOY_TARGET: 'staging',
+      SUPABASE_URL: 'https://staging-ref.supabase.co',
+      DB_CONNECTION_STRING: 'postgresql://workbuddy_runtime_login.staging-ref:secret@aws-1.pooler.supabase.com:5432/postgres',
+    })).toMatchObject({
       status: 'live',
-      build: { releaseSha: 'abc123' },
+      build: {
+        releaseSha: 'abc123',
+        deployTarget: 'staging',
+        supabaseProjectRef: 'staging-ref',
+        databaseProjectRef: 'staging-ref',
+      },
     })
-    expect(resolveBuildIdentity({})).toEqual({ releaseSha: 'unknown', imageDigest: null })
+    expect(resolveBuildIdentity({})).toEqual({
+      releaseSha: 'unknown',
+      imageDigest: null,
+      deployTarget: null,
+      supabaseProjectRef: null,
+      databaseProjectRef: null,
+    })
+    expect(resolveBuildIdentity({
+      SUPABASE_URL: 'https://staging-ref.supabase.co',
+      DB_CONNECTION_STRING: 'postgresql://workbuddy_runtime_login.production-ref:secret@aws-1.pooler.supabase.com:5432/postgres',
+    })).toMatchObject({
+      supabaseProjectRef: 'staging-ref',
+      databaseProjectRef: 'production-ref',
+    })
   })
 
   it('reports ready only when the database probe succeeds', async () => {

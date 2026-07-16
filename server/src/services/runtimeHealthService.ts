@@ -24,10 +24,47 @@ export function markRuntimeSchedulerReady(ready = true) {
   runtimeSchedulerReady = ready
 }
 
+function projectRefFromSupabaseHost(hostname: string) {
+  const normalized = hostname.trim().toLowerCase()
+  return normalized.match(/^db\.([a-z0-9-]+)\.supabase\.co$/)?.[1]
+    ?? normalized.match(/^([a-z0-9-]+)\.supabase\.co$/)?.[1]
+    ?? null
+}
+
+function projectRefFromRuntimeConnection(env: RuntimeHealthEnv, supabaseProjectRef: string | null) {
+  const connectionString = env.DB_CONNECTION_STRING?.trim()
+  if (connectionString) {
+    try {
+      const parsed = new URL(connectionString)
+      const directRef = projectRefFromSupabaseHost(parsed.hostname)
+      if (directRef) return directRef
+      if (parsed.hostname.toLowerCase().endsWith('.pooler.supabase.com')) {
+        return decodeURIComponent(parsed.username).match(/\.([a-z0-9-]+)$/i)?.[1]?.toLowerCase() ?? null
+      }
+      return null
+    } catch {
+      return null
+    }
+  }
+
+  const configuredHost = env.DB_HOST?.trim() || env.SUPABASE_HOST?.trim()
+  return configuredHost ? projectRefFromSupabaseHost(configuredHost) : supabaseProjectRef
+}
+
 export function resolveBuildIdentity(env: RuntimeHealthEnv = process.env) {
+  let supabaseProjectRef: string | null = null
+  try {
+    supabaseProjectRef = projectRefFromSupabaseHost(new URL(env.SUPABASE_URL?.trim() || '').hostname)
+  } catch {
+    supabaseProjectRef = null
+  }
+
   return {
     releaseSha: env.RELEASE_SHA?.trim() || env.BUILD_SHA?.trim() || env.GITHUB_SHA?.trim() || 'unknown',
     imageDigest: env.IMAGE_DIGEST?.trim() || null,
+    deployTarget: env.DEPLOY_TARGET?.trim() || null,
+    supabaseProjectRef,
+    databaseProjectRef: projectRefFromRuntimeConnection(env, supabaseProjectRef),
   }
 }
 

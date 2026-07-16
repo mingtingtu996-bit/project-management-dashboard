@@ -23,4 +23,12 @@ describe('project wizard access guard contract', () => {
     expect(routeSource).toMatch(/await assertWizardProjectEditor[\s\S]*?DELETE FROM projects/)
     expect(routeSource).toMatch(/await assertWizardProjectEditor[\s\S]*?await rollbackWizardGeneratedArtifacts/)
   })
+
+  it('uses a client-generated id only for a new project and never as an existing-project permission bypass', () => {
+    expect(routeSource).toContain('newProjectId: z.string().uuid().optional()')
+    expect(routeSource).toContain('projectId and newProjectId cannot be provided together')
+    expect(routeSource).toContain('params.projectId ?? params.newProjectId ?? uuidv4()')
+    expect(routeSource).toMatch(/assertWizardProjectEditor\(\{[\s\S]*?projectId: body\.projectId,[\s\S]*?\}\)/)
+    expect(routeSource).not.toContain('projectId: body.newProjectId')
+  })
 })

@@ -1,10 +1,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
-const workspaceRoot = path.resolve(scriptDir, '..', '..')
+const workspaceRoot = path.resolve(scriptDir, '..')
 
 function parseArgs(argv) {
   const values = new Map()
@@ -68,30 +69,60 @@ const args = parseArgs(process.argv.slice(2))
 const envPath = path.resolve(workspaceRoot, args.get('env-file') ?? 'deploy/env/staging.env')
 const env = loadEnvFile(envPath)
 const apiBaseUrl = requireValue(args.get('api-base-url') ?? 'http://127.0.0.1:3107', 'api-base-url').replace(/\/$/, '')
+const deployedStagingCode = args.get('deployed-staging-code') === 'true'
+const releaseSha = String(args.get('release-sha') ?? '').trim()
+if (deployedStagingCode && !/^[0-9a-f]{40}$/i.test(releaseSha)) {
+  throw new Error('release-sha must be a 40-character Git SHA for deployed staging code')
+}
 const requestedCompanyId = String(args.get('company-id') ?? '').trim()
 let companyId = ''
 const reportPath = path.resolve(
   workspaceRoot,
   args.get('report')
-    ?? 'project-testing/reports/wizard-candidate-baseline-current-20260713/staging-wizard-baseline-revision-current.json',
+    ?? 'runtime-evidence/staging-smoke/staging-wizard-baseline-revision-current.json',
 )
+const cleanupSourceReportPath = args.get('cleanup-report')
+  ? path.resolve(workspaceRoot, args.get('cleanup-report'))
+  : null
 const supabaseUrl = requireValue(env.SUPABASE_URL, 'SUPABASE_URL')
 const testUsername = requireValue(env.TEST_USERNAME, 'TEST_USERNAME')
 const testUserPassword = requireValue(env.TEST_USER_PASSWORD, 'TEST_USER_PASSWORD')
+const requestTimeoutMs = Number(args.get('request-timeout-ms') ?? 120_000)
+if (!Number.isInteger(requestTimeoutMs) || requestTimeoutMs < 1_000 || requestTimeoutMs > 300_000) {
+  throw new Error('request-timeout-ms must be an integer between 1000 and 300000')
+}
+const recoveryAttempts = Number(args.get('recovery-attempts') ?? 30)
+const recoveryDelayMs = Number(args.get('recovery-delay-ms') ?? 2_000)
+if (!Number.isInteger(recoveryAttempts) || recoveryAttempts < 1 || recoveryAttempts > 150) {
+  throw new Error('recovery-attempts must be an integer between 1 and 150')
+}
+if (!Number.isInteger(recoveryDelayMs) || recoveryDelayMs < 10 || recoveryDelayMs > 10_000) {
+  throw new Error('recovery-delay-ms must be an integer between 10 and 10000')
+}
 const runId = `staging-baseline-${Date.now()}`
+const diagnosticProjectName = `Disposable Residential Baseline ${runId}`
+const plannedProjectId = String(args.get('project-id') ?? randomUUID()).trim()
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(plannedProjectId)) {
+  throw new Error('project-id must be a UUID when provided')
+}
 
 const result = {
   generatedAt: new Date().toISOString(),
   source: 'wizard_baseline_revision_live_probe',
-  environmentClassification: 'staging_db_with_local_current_workspace_code',
+  environmentClassification: deployedStagingCode
+    ? 'deployed_staging_private_server'
+    : 'staging_db_with_local_current_workspace_code',
   stagingProjectRef: new URL(supabaseUrl).hostname.split('.')[0],
-  deployedStagingCode: false,
+  deployedStagingCode,
+  releaseSha: releaseSha || null,
   productionLive: false,
   mutationBoundary: 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted',
   diagnosticRunId: runId,
+  projectName: diagnosticProjectName,
+  createRequestOutcome: 'not_started',
   status: 'running',
   companyId: null,
-  projectId: null,
+  projectId: plannedProjectId,
   baselineId: null,
   revisionId: null,
   steps: {},
@@ -100,11 +131,19 @@ const result = {
 }
 
 let accessToken = null
-let projectId = null
+let projectId = plannedProjectId
+let createRequestOutcome = 'not_started'
+
+function writeResultReport() {
+  result.generatedAt = new Date().toISOString()
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true })
+  fs.writeFileSync(reportPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+}
 
 async function apiRequest(method, requestPath, body, extraHeaders = {}) {
   const response = await fetch(`${apiBaseUrl}${requestPath}`, {
     method,
+    signal: AbortSignal.timeout(requestTimeoutMs),
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
@@ -124,10 +163,226 @@ function assertApi(label, apiResult, allowedStatuses) {
   return apiResult.body?.data
 }
 
+async function authenticate(expectedCompanyId = requestedCompanyId) {
+  const authResponse = await fetch(`${apiBaseUrl}/api/auth/login`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(requestTimeoutMs),
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-Proto': 'https',
+    },
+    body: JSON.stringify({ username: testUsername, password: testUserPassword }),
+  })
+  const authBody = await readJsonResponse(authResponse)
+  if (!authResponse.ok || !authBody?.data?.token) {
+    throw apiFailure('staging auth', authResponse, authBody)
+  }
+  accessToken = authBody.data.token
+  const activeCompanyId = requireValue(
+    authBody?.data?.user?.currentCompanyId,
+    'authenticated active company id',
+  )
+  if (expectedCompanyId && expectedCompanyId !== activeCompanyId) {
+    throw new Error('company-id does not match the authenticated active company')
+  }
+  companyId = activeCompanyId
+  result.companyId = companyId
+}
+
+async function cleanupProject(targetProjectId = projectId) {
+  if (!targetProjectId || !accessToken) return
+  try {
+    const preDeleteReadCall = await apiRequest('GET', `/api/projects/${targetProjectId}`)
+    if (preDeleteReadCall.response.status === 404) {
+      result.cleanup = {
+        status: 'pass',
+        deleteHttpStatus: null,
+        postDeleteReadHttpStatus: 404,
+        projectPhysicallyDeleted: true,
+        projectUnreadable: true,
+        entityAlreadyAbsent: true,
+      }
+      return
+    }
+    const projectBeforeDelete = assertApi('read diagnostic project before cleanup', preDeleteReadCall, [200])
+    if (!projectMatchesDiagnosticRun(projectBeforeDelete, result.diagnosticRunId, result.projectName)) {
+      throw new Error('cleanup refused because the project diagnostic identity does not match')
+    }
+
+    let deleteCall = await apiRequest(
+      'DELETE',
+      `/api/projects/${targetProjectId}`,
+      undefined,
+      { 'X-WorkBuddy-Confirm-Action': `delete-project:${targetProjectId}` },
+    )
+    const initialDeleteHttpStatus = deleteCall.response.status
+    let rollbackHttpStatus = null
+    let draftDeleteHttpStatus = null
+    if (![200, 204, 404].includes(deleteCall.response.status)) {
+      const rollbackCall = await apiRequest('POST', `/api/projects/${targetProjectId}/wizard/rollback`, {})
+      rollbackHttpStatus = rollbackCall.response.status
+      const draftDeleteCall = await apiRequest('DELETE', `/api/projects/${targetProjectId}/wizard/draft`)
+      draftDeleteHttpStatus = draftDeleteCall.response.status
+      if ([200, 204, 404].includes(draftDeleteCall.response.status)) deleteCall = draftDeleteCall
+    }
+    const readCall = await apiRequest('GET', `/api/projects/${targetProjectId}`)
+    const physicallyDeleted = [200, 204, 404].includes(deleteCall.response.status)
+      && readCall.response.status === 404
+    result.cleanup = {
+      status: physicallyDeleted ? 'pass' : 'fail',
+      deleteHttpStatus: initialDeleteHttpStatus,
+      rollbackHttpStatus,
+      draftDeleteHttpStatus,
+      postDeleteReadHttpStatus: readCall.response.status,
+      projectPhysicallyDeleted: physicallyDeleted,
+      projectUnreadable: readCall.response.status === 404,
+    }
+    if (!physicallyDeleted) result.status = 'fail'
+  } catch (cleanupError) {
+    result.cleanup = {
+      status: 'fail',
+      message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+    }
+    result.status = 'fail'
+  }
+}
+
+function readProjectMetadata(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function projectMatchesDiagnosticRun(project, expectedRunId, expectedProjectName) {
+  const metadata = readProjectMetadata(project?.metadata)
+  const metadataRunId = String(metadata.diagnosticRunId ?? '').trim()
+  if (metadataRunId) return metadataRunId === expectedRunId
+  return String(project?.name ?? '').trim() === expectedProjectName
+}
+
+async function recoverProjectIdByDiagnosticRunId(expectedRunId, expectedProjectName) {
+  let lastHttpStatus = null
+  for (let attempt = 1; attempt <= recoveryAttempts; attempt += 1) {
+    const listCall = await apiRequest('GET', '/api/projects')
+    lastHttpStatus = listCall.response.status
+    const projects = assertApi('recover diagnostic wizard project', listCall, [200])
+    const matches = Array.isArray(projects)
+      ? projects.filter((candidate) => projectMatchesDiagnosticRun(candidate, expectedRunId, expectedProjectName))
+      : []
+    if (matches.length > 1) {
+      throw new Error(`diagnostic project recovery matched ${matches.length} projects`)
+    }
+    if (matches.length === 1) {
+      const recoveredId = requireValue(matches[0]?.id, 'recovered project id')
+      projectId = recoveredId
+      result.projectId = recoveredId
+      result.steps.projectRecovery = {
+        status: 'pass',
+        strategy: 'authenticated_company_project_list_diagnostic_run_id',
+        attempt,
+        httpStatus: listCall.response.status,
+        projectId: recoveredId,
+      }
+      writeResultReport()
+      return recoveredId
+    }
+    if (attempt < recoveryAttempts) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, recoveryDelayMs))
+    }
+  }
+
+  result.steps.projectRecovery = {
+    status: 'fail',
+    strategy: 'authenticated_company_project_list_diagnostic_run_id',
+    attempts: recoveryAttempts,
+    lastHttpStatus,
+    projectId: null,
+  }
+  writeResultReport()
+  return null
+}
+
+async function waitForUncertainProjectCreation(targetProjectId) {
+  for (let attempt = 1; attempt <= recoveryAttempts; attempt += 1) {
+    const readCall = await apiRequest('GET', `/api/projects/${targetProjectId}`)
+    if (readCall.response.status === 200) {
+      const recoveredProject = assertApi('read recovered diagnostic wizard project', readCall, [200])
+      if (!projectMatchesDiagnosticRun(recoveredProject, result.diagnosticRunId, result.projectName)) {
+        throw new Error('preallocated project id resolved to a different diagnostic project')
+      }
+      result.steps.projectRecovery = {
+        status: 'pass',
+        strategy: 'preallocated_project_id_readback_after_uncertain_create_response',
+        attempt,
+        httpStatus: readCall.response.status,
+        projectId: targetProjectId,
+      }
+      writeResultReport()
+      return true
+    }
+    if (readCall.response.status !== 404) {
+      throw apiFailure('recover preallocated diagnostic wizard project', readCall.response, readCall.body)
+    }
+    if (attempt < recoveryAttempts) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, recoveryDelayMs))
+    }
+  }
+  result.steps.projectRecovery = {
+    status: 'fail',
+    strategy: 'preallocated_project_id_readback_after_uncertain_create_response',
+    attempts: recoveryAttempts,
+    projectId: targetProjectId,
+    message: 'project was not observable before the recovery window closed',
+  }
+  writeResultReport()
+  return false
+}
+
+if (cleanupSourceReportPath) {
+  try {
+    const previousResult = JSON.parse(fs.readFileSync(cleanupSourceReportPath, 'utf8'))
+    projectId = String(previousResult?.projectId ?? '').trim() || null
+    result.projectId = projectId
+    result.diagnosticRunId = requireValue(previousResult?.diagnosticRunId, 'cleanup report diagnostic run id')
+    result.projectName = String(previousResult?.projectName ?? '').trim()
+      || `Disposable Residential Baseline ${result.diagnosticRunId}`
+    result.createRequestOutcome = String(previousResult?.createRequestOutcome ?? 'unknown')
+    await authenticate(String(previousResult?.companyId ?? '').trim())
+    if (!projectId) {
+      await recoverProjectIdByDiagnosticRunId(result.diagnosticRunId, result.projectName)
+    } else if (
+      result.createRequestOutcome === 'awaiting_response'
+      && previousResult?.steps?.projectRecovery?.status !== 'pass'
+    ) {
+      const observed = await waitForUncertainProjectCreation(projectId)
+      if (!observed) {
+        await cleanupProject(projectId)
+        throw new Error('cleanup could not prove that the uncertain project creation settled')
+      }
+    }
+    if (!projectId) throw new Error('cleanup could not recover the diagnostic project id')
+    await cleanupProject(projectId)
+    result.status = result.cleanup?.status === 'pass' ? 'pass' : 'fail'
+  } catch (error) {
+    result.status = 'fail'
+    result.error = {
+      message: error instanceof Error ? error.message : String(error),
+      details: error && typeof error === 'object' ? error.details ?? null : null,
+    }
+  } finally {
+    writeResultReport()
+    process.stdout.write(`${JSON.stringify({ status: result.status, reportPath, projectId: result.projectId, cleanup: result.cleanup })}\n`)
+  }
+} else {
 const wizardPayload = {
   step: 6,
   mode: 'new',
-  projectName: `Disposable Residential Baseline ${runId}`,
+  projectName: diagnosticProjectName,
   location: 'Shanghai',
   plannedStartDate: '2026-08-01',
   plannedEndDate: '2028-09-30',
@@ -184,28 +439,8 @@ const wizardPayload = {
 }
 
 try {
-  const authResponse = await fetch(`${apiBaseUrl}/api/auth/login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Forwarded-Proto': 'https',
-    },
-    body: JSON.stringify({ username: testUsername, password: testUserPassword }),
-  })
-  const authBody = await readJsonResponse(authResponse)
-  if (!authResponse.ok || !authBody?.data?.token) {
-    throw apiFailure('staging auth', authResponse, authBody)
-  }
-  accessToken = authBody.data.token
-  const activeCompanyId = requireValue(
-    authBody?.data?.user?.currentCompanyId,
-    'authenticated active company id',
-  )
-  if (requestedCompanyId && requestedCompanyId !== activeCompanyId) {
-    throw new Error('company-id does not match the authenticated active company')
-  }
-  companyId = activeCompanyId
-  result.companyId = companyId
+  await authenticate()
+  writeResultReport()
 
   let previewCall = await apiRequest('POST', '/api/projects/wizard/preview', wizardPayload)
   let preview = assertApi('preview wizard candidate plan', previewCall, [200])
@@ -235,27 +470,41 @@ try {
   }
 
   const createRequest = {
+    newProjectId: projectId,
     companyId,
     name: wizardPayload.projectName,
     location: wizardPayload.location,
     total_area: wizardPayload.totalAreaM2,
     planned_start_date: wizardPayload.plannedStartDate,
     planned_end_date: wizardPayload.plannedEndDate,
+    metadata: {
+      diagnosticRunId: runId,
+      diagnosticSource: 'wizard_baseline_revision_live_probe',
+      diagnosticProjectName,
+    },
     wizardPayload,
     commit: false,
   }
+  createRequestOutcome = 'awaiting_response'
+  result.createRequestOutcome = createRequestOutcome
+  writeResultReport()
   const createdCall = await apiRequest('POST', '/api/projects/wizard', createRequest)
+  createRequestOutcome = 'response_received'
+  result.createRequestOutcome = createRequestOutcome
   const created = assertApi('create wizard draft', createdCall, [201])
-  projectId = requireValue(created?.projectId ?? created?.id, 'created project id')
+  const createdProjectId = requireValue(created?.projectId ?? created?.id, 'created project id')
+  if (createdProjectId !== projectId) throw new Error('wizard draft returned a different project id')
   result.projectId = projectId
   result.steps.createWizardDraft = {
     status: 'pass',
     httpStatus: createdCall.response.status,
     projectId,
   }
+  writeResultReport()
 
   const committedCall = await apiRequest('POST', '/api/projects/wizard', {
     ...createRequest,
+    newProjectId: undefined,
     projectId,
     commit: true,
     asyncGeneration: false,
@@ -523,49 +772,31 @@ try {
     details: error && typeof error === 'object' ? error.details ?? null : null,
   }
 } finally {
-  if (projectId && accessToken) {
+  if (createRequestOutcome === 'awaiting_response' && projectId && accessToken) {
     try {
-      let deleteCall = await apiRequest(
-        'DELETE',
-        `/api/projects/${projectId}`,
-        undefined,
-        { 'X-WorkBuddy-Confirm-Action': `delete-project:${projectId}` },
-      )
-      const initialDeleteHttpStatus = deleteCall.response.status
-      let rollbackHttpStatus = null
-      let draftDeleteHttpStatus = null
-      if (deleteCall.response.status !== 200) {
-        const rollbackCall = await apiRequest('POST', `/api/projects/${projectId}/wizard/rollback`, {})
-        rollbackHttpStatus = rollbackCall.response.status
-        const draftDeleteCall = await apiRequest('DELETE', `/api/projects/${projectId}/wizard/draft`)
-        draftDeleteHttpStatus = draftDeleteCall.response.status
-        if ([200, 204].includes(draftDeleteCall.response.status)) deleteCall = draftDeleteCall
-      }
-      const readCall = await apiRequest('GET', `/api/projects/${projectId}`)
-      const physicallyDeleted = [200, 204].includes(deleteCall.response.status) && readCall.response.status === 404
-      result.cleanup = {
-        status: physicallyDeleted ? 'pass' : 'fail',
-        deleteHttpStatus: initialDeleteHttpStatus,
-        rollbackHttpStatus,
-        draftDeleteHttpStatus,
-        postDeleteReadHttpStatus: readCall.response.status,
-        projectPhysicallyDeleted: physicallyDeleted,
-        projectUnreadable: readCall.response.status === 404,
-      }
-      if (!physicallyDeleted) result.status = 'fail'
-    } catch (cleanupError) {
-      result.cleanup = {
+      await waitForUncertainProjectCreation(projectId)
+    } catch (recoveryError) {
+      result.steps.projectRecovery = {
         status: 'fail',
-        message: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+        strategy: 'preallocated_project_id_readback_after_uncertain_create_response',
+        message: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
       }
-      result.status = 'fail'
+    }
+  } else if (!projectId && accessToken) {
+    try {
+      await recoverProjectIdByDiagnosticRunId(result.diagnosticRunId, result.projectName)
+    } catch (recoveryError) {
+      result.steps.projectRecovery = {
+        status: 'fail',
+        strategy: 'authenticated_company_project_list_diagnostic_run_id',
+        message: recoveryError instanceof Error ? recoveryError.message : String(recoveryError),
+      }
     }
   }
-
-  result.generatedAt = new Date().toISOString()
-  fs.mkdirSync(path.dirname(reportPath), { recursive: true })
-  fs.writeFileSync(reportPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+  await cleanupProject()
+  writeResultReport()
   process.stdout.write(`${JSON.stringify({ status: result.status, reportPath, projectId: result.projectId, baselineId: result.baselineId, revisionId: result.revisionId, cleanup: result.cleanup })}\n`)
+}
 }
 
 if (result.status !== 'pass') process.exitCode = 1
