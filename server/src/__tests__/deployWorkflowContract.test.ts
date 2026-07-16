@@ -141,6 +141,21 @@ describe('deploy workflow contract', () => {
     expect(deployJob).toContain('run: npm run verify:workflow-contract')
   })
 
+  it('installs the client toolchain before the combined governance gate in server quality', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const serverQualityStart = workflow.indexOf('  server-quality:')
+    const serverQualityEnd = workflow.indexOf('  build-frontend:', serverQualityStart)
+    const serverQualityJob = workflow.slice(serverQualityStart, serverQualityEnd)
+    const clientInstallIndex = serverQualityJob.indexOf('pnpm --dir client install --frozen-lockfile')
+    const governanceGateIndex = serverQualityJob.indexOf('name: v1.4.22.3 Governance Gate')
+
+    expect(serverQualityStart).toBeGreaterThanOrEqual(0)
+    expect(serverQualityEnd).toBeGreaterThan(serverQualityStart)
+    expect(serverQualityJob).toContain('corepack prepare pnpm@9 --activate')
+    expect(clientInstallIndex).toBeGreaterThanOrEqual(0)
+    expect(governanceGateIndex).toBeGreaterThan(clientInstallIndex)
+  })
+
   it('keeps migration governance evidence in deployment preflight and attests runtime from the release migration ledger', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const compose = readFileSync(resolve(workspaceRoot, 'deploy', 'docker-compose.lighthouse.yml'), 'utf8')

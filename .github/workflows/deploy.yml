@@ -122,6 +122,16 @@ jobs:
       - name: Install server dependencies
         run: npm ci --workspaces=false
 
+      - name: Enable pnpm for the combined governance gate
+        working-directory: .
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
+
+      - name: Install client dependencies for the combined governance gate
+        working-directory: .
+        run: pnpm --dir client install --frozen-lockfile
+
       - name: Server typecheck
         run: npm run typecheck
 
