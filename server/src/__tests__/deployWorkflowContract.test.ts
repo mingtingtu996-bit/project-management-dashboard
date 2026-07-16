@@ -146,12 +146,15 @@ describe('deploy workflow contract', () => {
     const serverQualityStart = workflow.indexOf('  server-quality:')
     const serverQualityEnd = workflow.indexOf('  build-frontend:', serverQualityStart)
     const serverQualityJob = workflow.slice(serverQualityStart, serverQualityEnd)
-    const clientInstallIndex = serverQualityJob.indexOf('pnpm --dir client install --frozen-lockfile')
+    const isolatedClientInstall =
+      'pnpm --dir client install --frozen-lockfile --ignore-workspace'
+    const clientInstallIndex = serverQualityJob.indexOf(isolatedClientInstall)
     const governanceGateIndex = serverQualityJob.indexOf('name: v1.4.22.3 Governance Gate')
 
     expect(serverQualityStart).toBeGreaterThanOrEqual(0)
     expect(serverQualityEnd).toBeGreaterThan(serverQualityStart)
     expect(serverQualityJob).toContain('corepack prepare pnpm@9 --activate')
+    expect(serverQualityJob).toContain(isolatedClientInstall)
     expect(clientInstallIndex).toBeGreaterThanOrEqual(0)
     expect(governanceGateIndex).toBeGreaterThan(clientInstallIndex)
   })

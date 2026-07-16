@@ -130,7 +130,7 @@ jobs:
 
       - name: Install client dependencies for the combined governance gate
         working-directory: .
-        run: pnpm --dir client install --frozen-lockfile
+        run: pnpm --dir client install --frozen-lockfile --ignore-workspace
 
       - name: Server typecheck
         run: npm run typecheck
