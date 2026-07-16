@@ -239,6 +239,13 @@ describe('deploy workflow contract', () => {
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_MIGRATION_URL'")
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON'")
     expect(preflightJob).toContain('Target deployment preflight blocked')
+    expect(preflightJob).toContain('Public HTTPS health is optional')
+    expect(preflightJob).toContain(
+      'if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]',
+    )
+    expect(preflightJob).not.toMatch(
+      /DEPLOY_SSH_PRIVATE_KEY \\\r?\n\s+DEPLOY_HEALTH_URL \\/,
+    )
     expect(preflightJob).toContain('exit 1')
 
     const migrationJob = workflow.slice(migrationStart, workflow.indexOf('  workspace-isolation-live:'))
@@ -345,9 +352,15 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('can_deploy=true')
     expect(workflow).toContain('exit 1')
     expect(workflow).toContain('steps.deployment-eligibility.outputs.can_deploy == \'true\'')
+    expect(workflow).toContain('Verify deployed release through SSH tunnel')
+    expect(workflow).toContain('ssh -N -L')
+    expect(workflow).toContain('workbuddy-build.json')
+    expect(workflow).toContain('releaseSha')
+    expect(workflow).toContain('Public HTTPS health is optional')
     expect(workflow).not.toContain("needs.database-migration.result == 'skipped'")
 
     const deployScript = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
+    const compose = readFileSync(resolve(workspaceRoot, 'deploy', 'docker-compose.lighthouse.yml'), 'utf8')
 
     expect(deployScript).toContain('ALLOW_DIRTY_DEPLOY')
     expect(deployScript).toContain('git status --porcelain --untracked-files=no')
@@ -358,6 +371,13 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('read_env_value SUPABASE_URL')
     expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
     expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
+    expect(deployScript).toContain('INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"')
+    expect(deployScript).toContain('curl --fail --silent --show-error "$INTERNAL_HEALTH_URL"')
+    expect(deployScript).toContain('/api/performance-reports/summary')
+    expect(deployScript).toContain('External deployment health URL must use https://')
+    expect(compose).toContain('container_name: ${COMPOSE_PROJECT_NAME:-project-management}-api')
+    expect(compose).toContain('container_name: ${COMPOSE_PROJECT_NAME:-project-management}-worker')
+    expect(compose).toContain('container_name: ${COMPOSE_PROJECT_NAME:-project-management}-web')
 
     expect(workflow).not.toContain('passWithNoTests')
     expect(workflow).toContain('npm run migrate:pending')

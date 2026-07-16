@@ -3,7 +3,7 @@ services:
     build:
       context: ../server
       dockerfile: Dockerfile
-    container_name: project-management-api
+    container_name: ${COMPOSE_PROJECT_NAME:-project-management}-api
     restart: unless-stopped
     expose:
       - "3001"
@@ -37,7 +37,7 @@ services:
     build:
       context: ../server
       dockerfile: Dockerfile
-    container_name: project-management-worker
+    container_name: ${COMPOSE_PROJECT_NAME:-project-management}-worker
     restart: unless-stopped
     env_file:
       - ./env/server.production.env
@@ -74,7 +74,7 @@ services:
       context: ../client
       dockerfile: Dockerfile
       target: prebuilt-runtime
-    container_name: project-management-web
+    container_name: ${COMPOSE_PROJECT_NAME:-project-management}-web
     restart: unless-stopped
     depends_on:
       api:

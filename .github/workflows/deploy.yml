@@ -424,7 +424,6 @@ jobs:
             DEPLOY_USER \
             DEPLOY_PATH \
             DEPLOY_SSH_PRIVATE_KEY \
-            DEPLOY_HEALTH_URL \
             SUPABASE_URL \
             SUPABASE_ANON_KEY \
             SUPABASE_MIGRATION_URL \
@@ -434,7 +433,12 @@ jobs:
             fi
           done
 
-          if [ "${#missing[@]}" -gt 0 ] || [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+          health_url_invalid=false
+          if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+            health_url_invalid=true
+          fi
+
+          if [ "${#missing[@]}" -gt 0 ] || [ "$health_url_invalid" = "true" ]; then
             {
               echo "### Target deployment preflight blocked"
               echo ""
@@ -442,7 +446,7 @@ jobs:
                 printf '%s\n' "- Missing target-specific secrets: ${missing[*]}"
               fi
               if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
-                echo "- DEPLOY_HEALTH_URL must begin with https://."
+                echo "- When DEPLOY_HEALTH_URL is configured it must begin with https://."
               fi
               echo "- Database migrations were not started."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -454,6 +458,7 @@ jobs:
             echo ""
             echo "- Target: ${{ github.event.inputs.environment }}"
             echo "- Deployment, runtime, migration, and governance inputs are present."
+            echo "- Public HTTPS health is optional; remote internal readiness and performance checks remain mandatory."
           } >> "$GITHUB_STEP_SUMMARY"
 
   database-migration:
@@ -787,14 +792,25 @@ jobs:
       - name: Check server deployment credentials
         id: deployment-eligibility
         run: |
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [[ "$DEPLOY_HEALTH_URL" == https://* ]]; then
+          health_url_valid=true
+          if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+            health_url_valid=false
+          fi
+
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ "$health_url_valid" = "true" ]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Self-hosted deployment eligible"
+              echo ""
+              echo "- Public HTTPS health is optional; the deploy script must pass remote internal readiness and performance checks."
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "can_deploy=false" >> "$GITHUB_OUTPUT"
             {
               echo "### Self-hosted deployment blocked"
               echo ""
-              echo "- Missing deployment credentials or an HTTPS \`DEPLOY_HEALTH_URL\`: \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`, and a health URL beginning with \`https://\` are required."
+              echo "- \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, and \`DEPLOY_SSH_PRIVATE_KEY\` are required."
+              echo "- When \`DEPLOY_HEALTH_URL\` is configured it must begin with \`https://\`; otherwise the release uses mandatory remote internal health checks."
               echo "- Quality gates and browser checks completed, but no server deployment was attempted."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -839,6 +855,63 @@ jobs:
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" bash -s" < scripts/deploy-lighthouse-server.sh
+
+      - name: Verify deployed release through SSH tunnel
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          remote_web_port="$(ssh \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "awk -F= '\$1 == \"WEB_PORT\" { value=\$2 } END { gsub(/\\r/, \"\", value); print value }' \"$DEPLOY_PATH/deploy/env/server.production.env\"")"
+          remote_web_port="${remote_web_port:-8080}"
+          if [[ ! "$remote_web_port" =~ ^[0-9]{2,5}$ ]]; then
+            echo "Invalid remote WEB_PORT; refusing to open a release tunnel." >&2
+            exit 1
+          fi
+
+          local_smoke_port=18080
+          ssh -N -L "127.0.0.1:${local_smoke_port}:127.0.0.1:${remote_web_port}" \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            -o ExitOnForwardFailure=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" &
+          tunnel_pid=$!
+          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error "http://127.0.0.1:${local_smoke_port}/api/readyz" > "$RUNNER_TEMP/deployed-readyz.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              echo "Remote readiness tunnel did not become healthy." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:${local_smoke_port}/api/performance-reports/summary" \
+            > "$RUNNER_TEMP/deployed-performance-summary.json"
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:${local_smoke_port}/workbuddy-build.json" \
+            > "$RUNNER_TEMP/deployed-build.json"
+          node -e "const fs=require('fs'); const manifest=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (manifest.releaseSha !== process.env.RELEASE_SHA) { console.error('Deployed release SHA mismatch'); process.exit(1) }" \
+            "$RUNNER_TEMP/deployed-build.json"
+
+          {
+            echo "### Remote release readback passed"
+            echo ""
+            echo "- Internal readiness: pass"
+            echo "- Performance summary: pass"
+            echo "- Release SHA: \`$RELEASE_SHA\`"
+            echo "- Public HTTPS was not inferred from the private SSH tunnel."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}
