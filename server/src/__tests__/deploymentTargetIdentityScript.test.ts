@@ -19,7 +19,13 @@ function advisor(projectRef: string, environment = 'staging') {
   })
 }
 
-function runIdentityCheck(migrationUrl: string, projectRef = 'stagingref', environment = 'staging') {
+function runIdentityCheck(
+  migrationUrl: string,
+  projectRef = 'stagingref',
+  environment = 'staging',
+  runtimeDatabaseUrl =
+    'postgresql://workbuddy_runtime_login.stagingref:runtime-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+) {
   return spawnSync(process.execPath, [scriptPath], {
     encoding: 'utf8',
     env: {
@@ -27,6 +33,7 @@ function runIdentityCheck(migrationUrl: string, projectRef = 'stagingref', envir
       DEPLOY_TARGET: 'staging',
       SUPABASE_URL: 'https://stagingref.supabase.co',
       SUPABASE_MIGRATION_URL: migrationUrl,
+      RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
       SUPABASE_ADVISOR_EXPORT_JSON: advisor(projectRef, environment),
     },
   })
@@ -59,6 +66,24 @@ describe('deployment target database identity preflight', () => {
       'postgresql://postgres.stagingref:secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
       'stagingref',
       'production',
+    ).status).not.toBe(0)
+    expect(runIdentityCheck(
+      'postgresql://postgres.stagingref:secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      'stagingref',
+      'staging',
+      '',
+    ).status).not.toBe(0)
+    expect(runIdentityCheck(
+      'postgresql://postgres.stagingref:secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      'stagingref',
+      'staging',
+      'postgresql://postgres.stagingref:runtime-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+    ).status).not.toBe(0)
+    expect(runIdentityCheck(
+      'postgresql://postgres.stagingref:secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      'stagingref',
+      'staging',
+      'postgresql://workbuddy_runtime_login.productionref:runtime-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
     ).status).not.toBe(0)
   })
 })
