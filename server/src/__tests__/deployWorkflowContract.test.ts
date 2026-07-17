@@ -218,6 +218,22 @@ describe('deploy workflow contract', () => {
     expect(applyIndex).toBeGreaterThan(confirmationIndex)
   })
 
+  it('only approves the 311 DROP when that migration is actually pending', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const stepStart = workflow.indexOf('      - name: Preflight pending migration DROP targets')
+    const stepEnd = workflow.indexOf('\n      - name:', stepStart + 10)
+    const dropStep = workflow.slice(stepStart, stepEnd)
+
+    expect(stepStart).toBeGreaterThan(-1)
+    expect(dropStep).toContain('plan_output="$(npm run --silent migrate:plan)"')
+    expect(dropStep).toContain('drop_guard_args=()')
+    expect(dropStep).toContain('grep -Fqx -- "- $migration"')
+    expect(dropStep).toContain(
+      'drop_guard_args+=(--approve-existing-drop-targets-for "$migration")',
+    )
+    expect(dropStep).toContain('npm run guard:pending-migration-drop-targets -- "${drop_guard_args[@]}"')
+  })
+
   it('blocks target database mutation until deployment and runtime secrets pass preflight', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const preflightStart = workflow.indexOf('  deployment-target-preflight:')

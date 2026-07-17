@@ -602,9 +602,15 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
-          set -o pipefail
-          npm run guard:pending-migration-drop-targets -- \
-            --approve-existing-drop-targets-for 311_retire_product_runtime_progress_knowledge_governance.sql \
+          set -euo pipefail
+          plan_output="$(npm run --silent migrate:plan)"
+          drop_guard_args=()
+          for migration in 311_retire_product_runtime_progress_knowledge_governance.sql; do
+            if grep -Fqx -- "- $migration" <<< "$plan_output"; then
+              drop_guard_args+=(--approve-existing-drop-targets-for "$migration")
+            fi
+          done
+          npm run guard:pending-migration-drop-targets -- "${drop_guard_args[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Backup progress knowledge retirement data
