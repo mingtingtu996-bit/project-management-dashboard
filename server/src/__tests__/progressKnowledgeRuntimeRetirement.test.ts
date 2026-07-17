@@ -61,7 +61,11 @@ describe('progress knowledge runtime retirement', () => {
     expect(migration).toContain("readiness_status IN ('auto_canary_active', 'auto_published')")
     expect(migration).not.toMatch(/DROP TABLE[\s\S]*CASCADE/i)
     expect(workflow).toContain(
-      '--approve-existing-drop-targets-for 311_retire_product_runtime_progress_knowledge_governance.sql',
+      'for migration in 311_retire_product_runtime_progress_knowledge_governance.sql; do',
+    )
+    expect(workflow).toContain('grep -Fqx -- "- $migration"')
+    expect(workflow).toContain(
+      'drop_guard_args+=(--approve-existing-drop-targets-for "$migration")',
     )
     expect(workflow).toContain('npm run backup:progress-knowledge-retirement -- --if-pending')
     expect(workflow.indexOf('npm run backup:progress-knowledge-retirement -- --if-pending')).toBeLessThan(
