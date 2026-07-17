@@ -51,6 +51,7 @@
     "migrate:diagnose": "tsx -r dotenv/config src/scripts/check-migration-release-readiness.ts",
     "migrate:drift": "tsx -r dotenv/config src/scripts/check-schema-drift.ts",
     "backup:progress-knowledge-retirement": "tsx -r dotenv/config src/scripts/backup-progress-knowledge-retirement.ts",
+    "backup:notification-task-reference-retirement": "tsx -r dotenv/config src/scripts/backup-notification-task-reference-retirement.ts",
     "restore:progress-knowledge-retirement": "tsx -r dotenv/config src/scripts/restore-progress-knowledge-retirement.ts",
     "backup:v1420-closeout": "tsx -r dotenv/config src/scripts/backup-v1420-legacy-closeout.ts",
     "verify:v1420-closeout-live": "tsx -r dotenv/config src/scripts/check-v1420-legacy-closeout.ts",

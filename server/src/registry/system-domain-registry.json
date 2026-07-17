@@ -3079,6 +3079,13 @@
     },
     {
       "kind": "migration",
+      "id": "320_notification_task_reference_retirement",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "preserve notifications while retiring deleted-task references and enforcing ON DELETE SET NULL"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",

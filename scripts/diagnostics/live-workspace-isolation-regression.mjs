@@ -69,6 +69,7 @@ const client = new Client(connection)
 const errors = []
 const warnings = []
 const checks = []
+const retainedHistoricalProjectReferenceTables = new Set(['operation_logs'])
 
 function recordCheck(name, status, details = {}) {
   checks.push({ name, status, ...details })
@@ -168,6 +169,8 @@ async function checkCompanyAndProjectBoundaries(tables, columnsByTable) {
     }
   }
 
+  const retainedHistoricalProjectReferences = []
+
   for (const table of tables) {
     if (table === 'companies' || table === 'projects') continue
 
@@ -209,7 +212,11 @@ async function checkCompanyAndProjectBoundaries(tables, columnsByTable) {
             and p.id is null
           limit 10
         `)
-        recordIssue('error', 'orphan_project_id', table, 'Rows reference a missing project_id.', { count, sample })
+        if (!retainedHistoricalProjectReferenceTables.has(table)) {
+          recordIssue('error', 'orphan_project_id', table, 'Rows reference a missing project_id.', { count, sample })
+        } else {
+          retainedHistoricalProjectReferences.push({ table, count, sample })
+        }
       }
     }
 
@@ -240,6 +247,9 @@ async function checkCompanyAndProjectBoundaries(tables, columnsByTable) {
     }
   }
 
+  recordCheck('retained historical project references', 'done', {
+    tables: retainedHistoricalProjectReferences,
+  })
   recordCheck('company/project boundary checks', 'done')
 }
 
