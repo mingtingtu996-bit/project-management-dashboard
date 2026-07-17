@@ -328,16 +328,73 @@ async function readPrivilegedProbe(client: InstanceType<typeof Client>) {
            pg_is_in_recovery() AS pg_is_in_recovery
   `)
   const row = result.rows[0]
+  const migrationUrl = process.env.SUPABASE_MIGRATION_URL || process.env.DATABASE_URL
   return {
     attempted: true,
     ok: row?.rol_bypass_rls === true,
-    migrationUrlConfigured: Boolean(process.env.SUPABASE_MIGRATION_URL || process.env.DATABASE_URL),
-    runtimeUrlSeparated: Boolean(process.env.SUPABASE_MIGRATION_URL),
+    migrationUrlConfigured: Boolean(migrationUrl),
+    runtimeUrlSeparated: areRuntimeAndMigrationDatabaseUrlsSeparated(process.env),
     currentUser: row?.current_user ?? null,
     sessionUser: row?.session_user ?? null,
     rolBypassRls: row?.rol_bypass_rls ?? false,
     pgIsInRecovery: row?.pg_is_in_recovery ?? false,
     failureCategory: row?.rol_bypass_rls === true ? null : 'privileged_probe_rolbypassrls_required',
+  }
+}
+
+type DatabaseUrlEnvironment = {
+  SUPABASE_MIGRATION_URL?: string
+  DATABASE_URL?: string
+  RUNTIME_DATABASE_URL?: string
+  WORKBUDDY_RUNTIME_DATABASE_URL?: string
+  DB_CONNECTION_STRING?: string
+}
+
+function parseSupabaseDatabaseIdentity(value: string) {
+  const parsed = new URL(value)
+  const hostname = parsed.hostname.toLowerCase()
+  const username = decodeURIComponent(parsed.username).trim()
+  if (!username) return null
+
+  const directMatch = hostname.match(/^db\.([a-z0-9-]+)\.supabase\.co$/)
+  if (directMatch) {
+    return {
+      projectRef: directMatch[1],
+      roleName: username.toLowerCase(),
+    }
+  }
+
+  if (hostname.endsWith('.pooler.supabase.com') || hostname.endsWith('.pooler.supabase.co')) {
+    const separator = username.lastIndexOf('.')
+    const projectRef = separator >= 0 ? username.slice(separator + 1).trim().toLowerCase() : ''
+    const roleName = separator >= 0 ? username.slice(0, separator).trim().toLowerCase() : ''
+    if (projectRef && roleName && /^[a-z0-9-]+$/.test(projectRef)) {
+      return { projectRef, roleName }
+    }
+  }
+
+  return null
+}
+
+export function areRuntimeAndMigrationDatabaseUrlsSeparated(env: DatabaseUrlEnvironment) {
+  const migrationUrl = (env.SUPABASE_MIGRATION_URL || env.DATABASE_URL || '').trim()
+  const runtimeUrl = (
+    env.RUNTIME_DATABASE_URL
+    || env.WORKBUDDY_RUNTIME_DATABASE_URL
+    || env.DB_CONNECTION_STRING
+    || ''
+  ).trim()
+  if (!migrationUrl || !runtimeUrl) return false
+
+  try {
+    const migrationIdentity = parseSupabaseDatabaseIdentity(migrationUrl)
+    const runtimeIdentity = parseSupabaseDatabaseIdentity(runtimeUrl)
+    if (!migrationIdentity || !runtimeIdentity) return false
+    return migrationIdentity.projectRef === runtimeIdentity.projectRef
+      && migrationIdentity.roleName !== runtimeIdentity.roleName
+      && !['postgres', 'service_role', 'supabase_admin'].includes(runtimeIdentity.roleName)
+  } catch {
+    return false
   }
 }
 
@@ -386,13 +443,20 @@ async function readAlgorithmAssetRegistryViewReadback(client: InstanceType<typeo
     public_select: boolean | null
     anon_select: boolean | null
     authenticated_select: boolean | null
+    service_role_select: boolean | null
     runtime_select: boolean | null
   }>(`
     SELECT to_regclass('public.algorithm_asset_registry_view') IS NOT NULL AS exists,
            c.reloptions,
-           CASE WHEN to_regrole('PUBLIC') IS NULL THEN false ELSE has_table_privilege('PUBLIC', 'public.algorithm_asset_registry_view', 'SELECT') END AS public_select,
+           EXISTS (
+             SELECT 1
+               FROM aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) acl
+              WHERE acl.grantee = 0
+                AND acl.privilege_type = 'SELECT'
+           ) AS public_select,
            CASE WHEN to_regrole('anon') IS NULL THEN false ELSE has_table_privilege('anon', 'public.algorithm_asset_registry_view', 'SELECT') END AS anon_select,
            CASE WHEN to_regrole('authenticated') IS NULL THEN false ELSE has_table_privilege('authenticated', 'public.algorithm_asset_registry_view', 'SELECT') END AS authenticated_select,
+           CASE WHEN to_regrole('service_role') IS NULL THEN false ELSE has_table_privilege('service_role', 'public.algorithm_asset_registry_view', 'SELECT') END AS service_role_select,
            CASE WHEN to_regrole('workbuddy_runtime') IS NULL THEN false ELSE has_table_privilege('workbuddy_runtime', 'public.algorithm_asset_registry_view', 'SELECT') END AS runtime_select
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -407,7 +471,8 @@ async function readAlgorithmAssetRegistryViewReadback(client: InstanceType<typeo
     && row.public_select !== true
     && row.anon_select !== true
     && row.authenticated_select !== true
-    && row.runtime_select !== true
+    && row.service_role_select === true
+    && row.runtime_select === true
 }
 
 async function readAdvisorPublicRlsReadback(client: InstanceType<typeof Client>) {
@@ -617,8 +682,6 @@ async function readSupabaseAdvisorSecurityCloseoutReadback(client: InstanceType<
     'task_progress_snapshots',
     'trigger_execution_logs',
     'warning_acknowledgments',
-    'wbs_structure',
-    'wbs_task_links',
     'wbs_template_nodes',
     'wbs_templates',
     'weekly_digests',

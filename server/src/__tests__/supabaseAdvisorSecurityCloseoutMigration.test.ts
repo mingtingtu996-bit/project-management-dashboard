@@ -195,4 +195,53 @@ describe('Supabase Advisor security closeout migration', () => {
     expect(evidenceScript).toContain("extensionNamespace !== 'public'")
     expect(evidenceScript).toContain("p.polname IN ('health_history_insert', 'health_history_update')")
   })
+
+  it('evaluates the final catalog after the 304 WBS legacy retirement', () => {
+    const evidenceScript = readFileSync(
+      resolve(serverRoot, 'src/scripts/generate-production-migration-governance-evidence.ts'),
+      'utf8',
+    )
+    const readbackStart = evidenceScript.indexOf(
+      'async function readSupabaseAdvisorSecurityCloseoutReadback',
+    )
+    const readbackEnd = evidenceScript.indexOf(
+      'async function readDefaultMasterPlanRuntimePublicationAssetKindReadback',
+      readbackStart,
+    )
+    const currentCatalogReadback = evidenceScript.slice(readbackStart, readbackEnd)
+    const retirement = readMigration('304_v1420_viewer_wbs_legacy_closeout.sql')
+
+    expect(retirement).toContain('DROP TABLE IF EXISTS public.wbs_task_links')
+    expect(retirement).toContain('DROP TABLE IF EXISTS public.wbs_structure')
+    expect(currentCatalogReadback).not.toContain("'wbs_task_links'")
+    expect(currentCatalogReadback).not.toContain("'wbs_structure'")
+  })
+
+  it('evaluates the final registry ACL after the 298 backend read grant', () => {
+    const evidenceScript = readFileSync(
+      resolve(serverRoot, 'src/scripts/generate-production-migration-governance-evidence.ts'),
+      'utf8',
+    )
+    const readbackStart = evidenceScript.indexOf(
+      'async function readAlgorithmAssetRegistryViewReadback',
+    )
+    const readbackEnd = evidenceScript.indexOf(
+      'async function readAdvisorPublicRlsReadback',
+      readbackStart,
+    )
+    const currentAclReadback = evidenceScript.slice(readbackStart, readbackEnd)
+    const reconciliation = readMigration('298_extended_schema_drift_reconciliation.sql')
+
+    expect(reconciliation).toContain(
+      'GRANT SELECT ON TABLE public.algorithm_asset_registry_view TO service_role',
+    )
+    expect(reconciliation).toContain(
+      'GRANT SELECT ON TABLE public.algorithm_asset_registry_view TO workbuddy_runtime',
+    )
+    expect(currentAclReadback).toContain('row.service_role_select === true')
+    expect(currentAclReadback).toContain('row.runtime_select === true')
+    expect(currentAclReadback).toContain('row.public_select !== true')
+    expect(currentAclReadback).toContain('row.anon_select !== true')
+    expect(currentAclReadback).toContain('row.authenticated_select !== true')
+  })
 })

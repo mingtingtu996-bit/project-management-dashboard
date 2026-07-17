@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
+  areRuntimeAndMigrationDatabaseUrlsSeparated,
   readVerifiedAdvisorExport,
   type AdvisorUiOrApiExportEvidence,
 } from '../scripts/generate-production-migration-governance-evidence.js'
@@ -47,6 +48,32 @@ afterEach(() => {
 })
 
 describe('Advisor UI/API export evidence', () => {
+  it('requires runtime and migration URLs to target the same project with different database roles', () => {
+    expect(areRuntimeAndMigrationDatabaseUrlsSeparated({
+      SUPABASE_MIGRATION_URL:
+        'postgresql://postgres.stagingref:migration-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      RUNTIME_DATABASE_URL:
+        'postgresql://workbuddy_runtime_login.stagingref:runtime-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+    })).toBe(true)
+
+    expect(areRuntimeAndMigrationDatabaseUrlsSeparated({
+      SUPABASE_MIGRATION_URL:
+        'postgresql://postgres.stagingref:migration-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+    })).toBe(false)
+    expect(areRuntimeAndMigrationDatabaseUrlsSeparated({
+      SUPABASE_MIGRATION_URL:
+        'postgresql://postgres.stagingref:migration-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      RUNTIME_DATABASE_URL:
+        'postgresql://postgres.stagingref:runtime-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+    })).toBe(false)
+    expect(areRuntimeAndMigrationDatabaseUrlsSeparated({
+      SUPABASE_MIGRATION_URL:
+        'postgresql://postgres.stagingref:migration-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+      RUNTIME_DATABASE_URL:
+        'postgresql://workbuddy_runtime_login.productionref:runtime-secret@aws-1-ap-northeast-1.pooler.supabase.com:5432/postgres',
+    })).toBe(false)
+  })
+
   it('accepts a current Supabase Management API export with zero security issues', async () => {
     const file = writeAdvisorExport(validAdvisorExport())
 
