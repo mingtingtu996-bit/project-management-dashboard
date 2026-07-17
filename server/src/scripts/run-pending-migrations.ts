@@ -29,6 +29,11 @@ import {
   prepareProgressKnowledgeRetirementApplySession,
   validateProgressKnowledgeRetirementBackup,
 } from './progressKnowledgeRetirementSupport.js'
+import {
+  NOTIFICATION_TASK_REFERENCE_RETIREMENT_MIGRATION,
+  prepareNotificationTaskReferenceRetirementApplySession,
+  validateNotificationTaskReferenceRetirementBackup,
+} from './notificationTaskReferenceRetirementSupport.js'
 
 const { Client } = pg
 
@@ -154,6 +159,28 @@ async function main() {
         const expectedSha256 = checksumFile.trim().split(/\s+/)[0] ?? ''
         const backup = validateProgressKnowledgeRetirementBackup(serialized, expectedSha256)
         await prepareProgressKnowledgeRetirementApplySession(
+          (sql, values) => client.query(sql, values),
+          backup,
+          expectedSha256,
+        )
+      }
+      if (migration.filename === NOTIFICATION_TASK_REFERENCE_RETIREMENT_MIGRATION) {
+        const backupPath = String(
+          process.env.NOTIFICATION_TASK_REFERENCE_RETIREMENT_BACKUP_FILE ?? '',
+        ).trim()
+        if (!backupPath) {
+          throw new Error('NOTIFICATION_TASK_REFERENCE_RETIREMENT_BACKUP_FILE_REQUIRED')
+        }
+        const [serialized, checksumFile] = await Promise.all([
+          readFile(resolve(backupPath), 'utf8'),
+          readFile(`${resolve(backupPath)}.sha256`, 'utf8'),
+        ])
+        const expectedSha256 = checksumFile.trim().split(/\s+/)[0] ?? ''
+        const backup = validateNotificationTaskReferenceRetirementBackup(
+          serialized,
+          expectedSha256,
+        )
+        await prepareNotificationTaskReferenceRetirementApplySession(
           (sql, values) => client.query(sql, values),
           backup,
           expectedSha256,
