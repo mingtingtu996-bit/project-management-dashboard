@@ -37,6 +37,15 @@ function buildPassingResults(): WbsTemplateGoldenBenchmarkRunResult[] {
 }
 
 describe('verify WBS template golden benchmark CLI', () => {
+  it('resolves the tsx CLI from the server dependency installation', () => {
+    const scriptPath = join(__dirname, '../../..', 'scripts/verify-wbs-template-golden-benchmark.mjs')
+    const source = readFileSync(scriptPath, 'utf8')
+
+    expect(source).toContain("createRequire(resolve(repoRoot, 'server/package.json'))")
+    expect(source).toContain("serverRequire.resolve('tsx/cli')")
+    expect(source).not.toContain("import.meta.resolve('tsx/cli')")
+  })
+
   it('accepts a complete external runtime replay result file and blocks on the same commercial gate', () => {
     const runtimeOutputPath = join(
       __dirname,
