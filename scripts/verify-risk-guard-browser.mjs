@@ -260,6 +260,19 @@ function buildMockResponse(urlString, method, fixtureRisks = mockRisks) {
     }, 422)
   }
 
+  if (
+    pathname === `/api/cause-attributions/projects/${projectId}/subjects/risk/risk-pending/confirm`
+    && method === 'POST'
+  ) {
+    return json({
+      success: true,
+      data: {
+        id: 'cause-risk-pending',
+        status: 'confirmed',
+      },
+    }, 201)
+  }
+
   if (pathname.startsWith('/api/risks/') && method === 'PUT') {
     return json({ success: true, data: {} })
   }
@@ -404,6 +417,13 @@ async function main() {
     await page.screenshot({ path: join(outputDir, 'risk-guard-detail.png'), fullPage: true })
 
     await detailDialog.getByTestId(`confirm-close-risk-${pendingRisk.id}`).click()
+    const structuredCloseDialog = page.getByTestId('structured-close-dialog')
+    await structuredCloseDialog.waitFor({ state: 'visible', timeout: 10000 })
+    await structuredCloseDialog.getByTestId('closure-result-summary').fill(
+      '受控浏览器验收：验证过期版本会被关闭保护门禁拒绝。',
+    )
+    await structuredCloseDialog.getByTestId('structured-close-submit').click()
+
     const guardDialog = page.getByTestId('risk-action-guard-dialog')
     await guardDialog.waitFor({ state: 'visible', timeout: 10000 })
     const guardText = await guardDialog.innerText()
