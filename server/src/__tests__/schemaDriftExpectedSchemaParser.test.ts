@@ -714,12 +714,43 @@ describe('schemaDriftExpectedSchemaParser', () => {
     expect(publications?.constraints).toEqual(expect.arrayContaining([
       expect.objectContaining({
         constraintName: 'policy_template_entity_runtime_publications_status_check',
-        definition: "CHECK (runtime_publication_status IN ('runtime_stable_published', 'runtime_rolled_back')) NOT VALID",
+        definition: "CHECK (runtime_publication_status IN ('runtime_stable_published', 'runtime_rolled_back'))",
       }),
     ]))
     expect(publications?.constraints).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
         constraintName: 'policy_template_entity_runtime_publications_runtime_publication_status_check',
+      }),
+    ]))
+  })
+
+  it('marks a NOT VALID constraint as validated after VALIDATE CONSTRAINT', () => {
+    const expectedTables = buildExpectedSchemaFromMigrationSql(`
+      CREATE TABLE public.tasks (
+        id UUID PRIMARY KEY
+      );
+
+      CREATE TABLE public.notifications (
+        id UUID PRIMARY KEY,
+        task_id UUID
+      );
+
+      ALTER TABLE public.notifications
+        ADD CONSTRAINT notifications_task_id_fkey
+        FOREIGN KEY (task_id)
+        REFERENCES public.tasks(id) ON DELETE SET NULL
+        NOT VALID;
+
+      ALTER TABLE public.notifications
+        VALIDATE CONSTRAINT notifications_task_id_fkey;
+    `)
+
+    const notifications = expectedTables.find((item) => item.tableName === 'notifications')
+    expect(notifications?.constraints).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        constraintName: 'notifications_task_id_fkey',
+        constraintType: 'foreign_key',
+        definition: 'FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL',
       }),
     ]))
   })
