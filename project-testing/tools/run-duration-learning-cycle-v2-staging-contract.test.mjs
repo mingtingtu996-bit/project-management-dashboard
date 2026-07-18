@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -10,6 +11,72 @@ const toolsRoot = path.dirname(fileURLToPath(import.meta.url))
 const releaseRoot = process.env.RELEASE_ROOT ?? path.resolve(toolsRoot, '..', '..')
 const scriptPath = path.join(releaseRoot, 'server', 'scripts', 'workbuddy-staging-duration-learning-cycle-v2.mjs')
 const workflowPath = path.join(releaseRoot, '.github', 'workflows', 'staging-duration-learning-cycle-v2.yml')
+const requireFromServer = createRequire(path.join(releaseRoot, 'server', 'package.json'))
+const yaml = requireFromServer('js-yaml')
+const SELF_TEST_CONNECTION_ENV_KEYS = [
+  'DATABASE_URL',
+  'MIGRATION_DATABASE_URL',
+  'RUNTIME_DATABASE_URL',
+  'WORKBUDDY_RUNTIME_DATABASE_URL',
+  'SUPABASE_MIGRATION_URL',
+  'SUPABASE_SERVICE_KEY',
+  'DB_HOST',
+  'DB_PORT',
+  'DB_NAME',
+  'DB_USER',
+  'DB_PASSWORD',
+  'SUPABASE_HOST',
+  'SUPABASE_PORT',
+  'SUPABASE_DATABASE',
+  'SUPABASE_USER',
+  'SUPABASE_PASSWORD',
+  'PGHOST',
+  'PGPORT',
+  'PGDATABASE',
+  'PGUSER',
+  'PGPASSWORD',
+  'PGSERVICE',
+  'PGSERVICEFILE',
+  'POSTGRES_URL',
+  'POSTGRES_PRISMA_URL',
+  'POSTGRES_URL_NON_POOLING',
+]
+
+function createSelfTestEnv(parentEnv = process.env) {
+  const isolatedEnv = { ...parentEnv }
+  for (const key of SELF_TEST_CONNECTION_ENV_KEYS) delete isolatedEnv[key]
+  return {
+    ...isolatedEnv,
+    NODE_ENV: 'test',
+    SUPABASE_URL: 'http://127.0.0.1:1',
+    SUPABASE_RUNTIME_KEY: 'workbuddy-learning-v2-self-test-runtime-key',
+    SUPABASE_ANON_KEY: 'workbuddy-learning-v2-self-test-anon-key',
+    VITE_SUPABASE_URL: 'http://127.0.0.1:1',
+    VITE_SUPABASE_ANON_KEY: 'workbuddy-learning-v2-self-test-anon-key',
+  }
+}
+const selfTestEnv = createSelfTestEnv()
+
+test('pure self-test environment cannot inherit live database credentials', () => {
+  const inherited = Object.fromEntries(SELF_TEST_CONNECTION_ENV_KEYS.map((key) => [key, `live-${key}`]))
+  const isolated = createSelfTestEnv({
+    ...inherited,
+    NODE_ENV: 'production',
+    SUPABASE_URL: 'https://xemqmqpifsstkovbkatp.supabase.co',
+    SUPABASE_RUNTIME_KEY: 'live-runtime-key',
+    SUPABASE_ANON_KEY: 'live-anon-key',
+    VITE_SUPABASE_URL: 'https://xemqmqpifsstkovbkatp.supabase.co',
+    VITE_SUPABASE_ANON_KEY: 'live-vite-anon-key',
+  })
+
+  assert.equal(isolated.NODE_ENV, 'test')
+  assert.equal(isolated.SUPABASE_URL, 'http://127.0.0.1:1')
+  assert.equal(isolated.SUPABASE_RUNTIME_KEY, 'workbuddy-learning-v2-self-test-runtime-key')
+  assert.equal(isolated.SUPABASE_ANON_KEY, 'workbuddy-learning-v2-self-test-anon-key')
+  assert.equal(isolated.VITE_SUPABASE_URL, 'http://127.0.0.1:1')
+  assert.equal(isolated.VITE_SUPABASE_ANON_KEY, 'workbuddy-learning-v2-self-test-anon-key')
+  for (const key of SELF_TEST_CONNECTION_ENV_KEYS) assert.equal(isolated[key], undefined, `${key} must be removed`)
+})
 
 test('v2 harness is isolated from the retired v1 flow and covers the full matrix', () => {
   const source = fs.readFileSync(scriptPath, 'utf8')
@@ -165,8 +232,6 @@ test('v2 cleanup is prefix-scoped and checks every table for zero residue', () =
 
 test('workflow is manual, same-SHA bound, and cleanup is always-run', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8')
-  const requireFromRelease = createRequire(path.join(releaseRoot, 'package.json'))
-  const yaml = requireFromRelease('js-yaml')
   let parsedWorkflow
   assert.doesNotThrow(() => { parsedWorkflow = yaml.load(workflow) })
   assert.match(workflow, /workflow_dispatch:/)
@@ -201,8 +266,6 @@ test('workflow is manual, same-SHA bound, and cleanup is always-run', () => {
 
 test('workflow report acceptance rejects a missing global cell and disabled policy evaluation', () => {
   const workflow = fs.readFileSync(workflowPath, 'utf8')
-  const requireFromRelease = createRequire(path.join(releaseRoot, 'package.json'))
-  const yaml = requireFromRelease('js-yaml')
   const parsedWorkflow = yaml.load(workflow)
   const acceptanceStep = parsedWorkflow.jobs.verify.steps.find((step) => (
     step.name === 'Verify mandatory real aggregation floor and controlled fixture disclosure'
@@ -255,7 +318,7 @@ test('workflow report acceptance rejects a missing global cell and disabled poli
       realAccuracyClaimed: false,
     },
   }
-  const temporaryRoot = fs.mkdtempSync(path.join(process.env.TEMP ?? root, 'wb-learning-v2-r3-'))
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wb-learning-v2-r3-'))
   const bashExecutable = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash'
   const runAcceptance = (report) => {
     const reportFile = path.join(temporaryRoot, 'report.json')
@@ -292,7 +355,7 @@ test('same-SHA release modules pass the pure six-family/four-scope self-test', (
     '--release-root', releaseRoot,
     '--expected-release-sha', expectedReleaseSha,
     '--operation-prefix', 'wb-learning-v2-self-test',
-  ], { encoding: 'utf8' })
+  ], { encoding: 'utf8', env: selfTestEnv })
   const result = JSON.parse(output.trim())
   assert.equal(result.status, 'pass')
   assert.equal(result.publicationCount, 24)
