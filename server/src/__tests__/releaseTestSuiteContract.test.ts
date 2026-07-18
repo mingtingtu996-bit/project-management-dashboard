@@ -71,7 +71,9 @@ describe('release server test suite contract', () => {
 
     expect(packageJson.scripts?.['test:release']).toBe('node scripts/run-release-tests.mjs')
     expect(runnerSource).toContain("new URL('..', import.meta.url)")
-    expect(runnerSource).toContain("[vitestCli, 'run']")
+    expect(runnerSource).toContain("[vitestCli, 'run',")
+    expect(runnerSource).toContain("'--maxWorkers=4'")
+    expect(runnerSource).toContain("'--minWorkers=1'")
     expect(runnerSource).toContain('cwd: serverRoot')
     expect(runnerSource).not.toContain("'--config'")
     expect(configuredProjectSearchOwnedTests).toEqual(

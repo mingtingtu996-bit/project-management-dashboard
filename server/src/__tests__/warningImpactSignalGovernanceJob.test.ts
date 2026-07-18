@@ -4,6 +4,9 @@ const mocks = vi.hoisted(() => ({
   activeProjectIds: ['project-1'] as string[],
   calls: [] as Array<{ method: string; projectId: string; options?: Record<string, unknown> }>,
   failures: [] as Error[],
+  leaseAcquired: true,
+  leaseCalls: [] as Array<{ jobName: string; jobId?: string }>,
+  leaseAssertions: 0,
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -19,6 +22,28 @@ vi.mock('../services/activeProjectService.js', () => ({
   listActiveProjectIds: vi.fn(async (projectIds?: string[] | null) => {
     if (Array.isArray(projectIds)) return mocks.activeProjectIds.filter((projectId) => projectIds.includes(projectId))
     return mocks.activeProjectIds
+  }),
+}))
+
+vi.mock('../services/jobRuntime.js', () => ({
+  runJobWithRetry: vi.fn(async (_options: unknown, runner: () => Promise<unknown>) => ({
+    attempts: 1,
+    value: await runner(),
+  })),
+  runWithJobLease: vi.fn(async (
+    options: { jobName: string; jobId?: string },
+    runner: (lease: { assertActive: () => void }) => Promise<unknown>,
+  ) => {
+    mocks.leaseCalls.push(options)
+    if (!mocks.leaseAcquired) return { acquired: false, reason: 'lease_not_acquired' }
+    return {
+      acquired: true,
+      value: await runner({
+        assertActive: () => {
+          mocks.leaseAssertions += 1
+        },
+      }),
+    }
   }),
 }))
 
@@ -55,12 +80,19 @@ describe('warningImpactSignalGovernanceJob', () => {
     mocks.activeProjectIds = ['project-1']
     mocks.calls = []
     mocks.failures = []
+    mocks.leaseAcquired = true
+    mocks.leaseCalls = []
+    mocks.leaseAssertions = 0
   })
 
   it('runs lifecycle sync and governance artifact recording for each active project', async () => {
     const result = await warningImpactSignalGovernanceJob.executeNow()
 
     expect(result).toMatchObject({ total: 1, scanned: 1, failed: 0 })
+    expect(mocks.leaseCalls).toEqual([
+      expect.objectContaining({ jobName: 'warningImpactSignalGovernanceJob' }),
+    ])
+    expect(mocks.leaseAssertions).toBeGreaterThanOrEqual(2)
     expect(mocks.calls).toEqual([
       { method: 'syncImpactSignalWarningLifecycle', projectId: 'project-1', options: expect.objectContaining({
         scanOptions: expect.objectContaining({
@@ -120,5 +152,14 @@ describe('warningImpactSignalGovernanceJob', () => {
         },
       },
     })
+  })
+
+  it('skips the governance sweep when another instance owns the lease', async () => {
+    mocks.leaseAcquired = false
+
+    const result = await warningImpactSignalGovernanceJob.executeNow()
+
+    expect(result).toEqual(expect.objectContaining({ total: 0, scanned: 0, failed: 0 }))
+    expect(mocks.calls).toEqual([])
   })
 })

@@ -440,6 +440,7 @@ jobs:
             DEPLOY_PATH \
             DEPLOY_SSH_PRIVATE_KEY \
             DEPLOY_KNOWN_HOSTS \
+            DEPLOY_HEALTH_URL \
             SUPABASE_URL \
             SUPABASE_ANON_KEY \
             SUPABASE_MIGRATION_URL \
@@ -451,7 +452,7 @@ jobs:
           done
 
           health_url_invalid=false
-          if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+          if [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
             health_url_invalid=true
           fi
 
@@ -462,8 +463,8 @@ jobs:
               if [ "${#missing[@]}" -gt 0 ]; then
                 printf '%s\n' "- Missing target-specific secrets: ${missing[*]}"
               fi
-              if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
-                echo "- When DEPLOY_HEALTH_URL is configured it must begin with https://."
+              if [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+                echo "- External HTTPS health URL is required and must begin with https://."
               fi
               echo "- Database migrations were not started."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -484,7 +485,7 @@ jobs:
             echo ""
             echo "- Target: $DEPLOY_TARGET"
             echo "- Runtime API, runtime database, migration, and advisor project identities match; database roles are separated."
-            echo "- Public HTTPS health is optional; remote internal readiness and performance checks remain mandatory."
+            echo "- External HTTPS health URL is required; remote internal readiness and performance checks also remain mandatory."
           } >> "$GITHUB_STEP_SUMMARY"
 
   database-migration:
@@ -907,17 +908,17 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
-          health_url_valid=true
-          if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
-            health_url_valid=false
+          health_url_valid=false
+          if [[ "$DEPLOY_HEALTH_URL" == https://* ]]; then
+            health_url_valid=true
           fi
 
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ "$health_url_valid" = "true" ]; then
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ -n "$DEPLOY_HEALTH_URL" ] && [ "$health_url_valid" = "true" ]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
             {
               echo "### Self-hosted deployment eligible"
               echo ""
-              echo "- Public HTTPS health is optional; the deploy script must pass remote internal readiness and performance checks."
+              echo "- Public HTTPS health, HSTS, HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory."
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "can_deploy=false" >> "$GITHUB_OUTPUT"
@@ -925,7 +926,7 @@ jobs:
               echo "### Self-hosted deployment blocked"
               echo ""
               echo "- \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`, and pinned \`DEPLOY_KNOWN_HOSTS\` are required."
-              echo "- When \`DEPLOY_HEALTH_URL\` is configured it must begin with \`https://\`; otherwise the release uses mandatory remote internal health checks."
+              echo "- \`DEPLOY_HEALTH_URL\` is required and must begin with \`https://\`."
               echo "- Quality gates and browser checks completed, but no server deployment was attempted."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1

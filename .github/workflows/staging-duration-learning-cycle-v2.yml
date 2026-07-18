@@ -1,0 +1,280 @@
+name: Staging Duration Learning Cycle V2
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact deployed staging release SHA
+        required: true
+        type: string
+      fixture_project_id:
+        description: Existing disposable staging project UUID used only as scoped FK/context
+        required: true
+        type: string
+      fixture_industry_key:
+        description: Optional explicit industry key; otherwise read from the project
+        required: false
+        type: string
+      mutation_approval:
+        description: Enter I_ACKNOWLEDGE_DISPOSABLE_STAGING_LEARNING_MUTATIONS to approve prefix-scoped fixture writes
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-duration-learning-cycle-v2
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: staging
+    env:
+      EXPECTED_RELEASE_SHA: ${{ inputs.release_sha }}
+      DEPLOY_TARGET: staging
+      WORKBUDDY_TARGET_ENVIRONMENT: staging
+      WORKBUDDY_LEARNING_V2_MUTATION_APPROVED: ${{ inputs.mutation_approval }}
+      WORKBUDDY_LEARNING_V2_PROJECT_ID: ${{ inputs.fixture_project_id }}
+      WORKBUDDY_LEARNING_V2_INDUSTRY_KEY: ${{ inputs.fixture_industry_key }}
+      RUNTIME_DATABASE_URL: ${{ secrets.STAGING_RUNTIME_DATABASE_URL }}
+      MIGRATION_DATABASE_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+      SUPABASE_MIGRATION_URL: ${{ secrets.STAGING_SUPABASE_MIGRATION_URL }}
+      SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+      SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets.STAGING_SUPABASE_ADVISOR_EXPORT_JSON }}
+      DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.STAGING_DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ secrets.STAGING_DEPLOY_PATH }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.STAGING_DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.STAGING_DEPLOY_KNOWN_HOSTS }}
+      API_BASE_URL: http://127.0.0.1:18083
+
+    steps:
+      - name: Checkout exact release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Initialize immutable operation identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          test "$actual_sha" = "$EXPECTED_RELEASE_SHA"
+          short_sha="${EXPECTED_RELEASE_SHA:0:12}"
+          echo "LEARNING_V2_OPERATION_PREFIX=wb-learning-v2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${short_sha}" >> "$GITHUB_ENV"
+          echo "REPORT_PATH=$RUNNER_TEMP/staging-duration-learning-cycle-v2.json" >> "$GITHUB_ENV"
+          echo "STATE_PATH=$RUNNER_TEMP/staging-duration-learning-cycle-v2.state.json" >> "$GITHUB_ENV"
+          echo "CLEANUP_REPORT_PATH=$RUNNER_TEMP/staging-duration-learning-cycle-v2.cleanup.json" >> "$GITHUB_ENV"
+          echo "DEPLOYED_READYZ_JSON=$RUNNER_TEMP/staging-duration-learning-cycle-v2.readyz.json" >> "$GITHUB_ENV"
+
+      - name: Validate secrets and inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$WORKBUDDY_LEARNING_V2_PROJECT_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+          test "$WORKBUDDY_LEARNING_V2_MUTATION_APPROVED" = "I_ACKNOWLEDGE_DISPOSABLE_STAGING_LEARNING_MUTATIONS"
+          for required_name in \
+            RUNTIME_DATABASE_URL MIGRATION_DATABASE_URL SUPABASE_MIGRATION_URL \
+            SUPABASE_URL SUPABASE_ADVISOR_EXPORT_JSON \
+            DEPLOY_HOST DEPLOY_USER DEPLOY_PORT DEPLOY_PATH \
+            DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required_name}" ]; then
+              echo "Missing required staging input: $required_name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install and build same-SHA server
+        run: |
+          npm ci --prefix server --ignore-scripts
+          npm run build --prefix server
+
+      - name: Verify staging database and Advisor project identity
+        run: node scripts/check-deployment-target-identity.mjs
+
+      - name: Configure private staging tunnel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-learning-v2
+          chmod 600 ~/.ssh/workbuddy-learning-v2
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          remote_web_port="$(ssh \
+            -i ~/.ssh/workbuddy-learning-v2 \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "awk -F= '\$1 == \"WEB_PORT\" { value=\$2 } END { gsub(/\\r/, \"\", value); print value }' \"$DEPLOY_PATH/deploy/env/server.production.env\"")"
+          remote_web_port="${remote_web_port:-8080}"
+          [[ "$remote_web_port" =~ ^[0-9]{2,5}$ ]]
+          ssh -N -L "127.0.0.1:18083:127.0.0.1:${remote_web_port}" \
+            -i ~/.ssh/workbuddy-learning-v2 \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            -o ExitOnForwardFailure=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" &
+          echo "TUNNEL_PID=$!" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error "$API_BASE_URL/api/readyz" > "$DEPLOYED_READYZ_JSON"; then
+              break
+            fi
+            test "$attempt" -lt 20
+            sleep 2
+          done
+          node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync(process.env.DEPLOYED_READYZ_JSON,'utf8'));if(r?.build?.releaseSha!==process.env.EXPECTED_RELEASE_SHA||r?.build?.deployTarget!=='staging')throw new Error('deployed same-SHA staging identity mismatch')"
+
+      - name: Pure contract self-test
+        run: |
+          node server/scripts/workbuddy-staging-duration-learning-cycle-v2.mjs \
+            self-test \
+            --release-root "$GITHUB_WORKSPACE" \
+            --expected-release-sha "$EXPECTED_RELEASE_SHA" \
+            --operation-prefix "wb-learning-v2-self-${GITHUB_RUN_ID}"
+
+      - name: Run six-family four-scope lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          industry_args=()
+          if [ -n "$WORKBUDDY_LEARNING_V2_INDUSTRY_KEY" ]; then
+            industry_args=(--industry-key "$WORKBUDDY_LEARNING_V2_INDUSTRY_KEY")
+          fi
+          node server/scripts/workbuddy-staging-duration-learning-cycle-v2.mjs \
+            run \
+            --release-root "$GITHUB_WORKSPACE" \
+            --expected-release-sha "$EXPECTED_RELEASE_SHA" \
+            --operation-prefix "$LEARNING_V2_OPERATION_PREFIX" \
+            --project-id "$WORKBUDDY_LEARNING_V2_PROJECT_ID" \
+            "${industry_args[@]}" \
+            --readyz-json "$DEPLOYED_READYZ_JSON" \
+            --report "$REPORT_PATH" \
+            --state "$STATE_PATH"
+
+      - name: Verify mandatory real aggregation floor and controlled fixture disclosure
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs')
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'))
+          const coverage = report.realCandidateAggregationCoverage
+          const fail = (code) => { throw new Error(code) }
+          if (report.status !== 'pass') fail('DURATION_LEARNING_V2_LIFECYCLE_NOT_PASS')
+          if (coverage?.status !== 'complete') fail('REAL_CANDIDATE_AGGREGATION_COVERAGE_INCOMPLETE')
+          if (coverage?.proposalAuditSchema !== 'workbuddy-duration-learning-real-proposal-audit/v1') {
+            fail('REAL_CANDIDATE_PROPOSAL_AUDIT_SCHEMA_MISSING')
+          }
+          if (!Array.isArray(coverage?.proposalAuditRecords) || coverage.proposalAuditRecords.length < 24) {
+            fail('REAL_CANDIDATE_PROPOSAL_AUDIT_RECORDS_INCOMPLETE')
+          }
+          if ((coverage?.missingCoverageCells ?? []).length !== 0) {
+            fail('REAL_CANDIDATE_AGGREGATION_COVERAGE_INCOMPLETE')
+          }
+          if ((coverage?.policyViolations ?? []).length !== 0) {
+            fail('REAL_CANDIDATE_POLICY_EVALUATION_INVALID')
+          }
+          if (!/^[0-9a-f]{64}$/.test(String(coverage?.collectorOutputHash ?? ''))) {
+            fail('REAL_CANDIDATE_COLLECTOR_OUTPUT_HASH_INVALID')
+          }
+          if (!/^[0-9a-f]{64}$/.test(String(coverage?.realCoverageProofHash ?? ''))) {
+            fail('REAL_CANDIDATE_AGGREGATION_PROOF_INVALID')
+          }
+          const assetKeys = [
+            'base_duration_benchmark',
+            'standard_work_duration_seed',
+            'special_work_duration_seed',
+            'wbs_reference_days',
+            'dependency_rule_candidate',
+            'critical_path_rule_candidate',
+          ]
+          const scopeLevels = ['project', 'company', 'industry', 'global']
+          for (const record of coverage.proposalAuditRecords) {
+            if (!/^[0-9a-f]{64}$/.test(String(record?.proposalIdentityHash ?? ''))) {
+              fail('REAL_CANDIDATE_PROPOSAL_IDENTITY_HASH_INVALID')
+            }
+            if (!record?.scope?.level || !record?.observed || !record?.policyEvaluator) {
+              fail('REAL_CANDIDATE_PROPOSAL_AUDIT_RECORD_INCOMPLETE')
+            }
+            if (record.policyEvaluator.decisionMatchesSameShaEvaluator !== true) {
+              fail('REAL_CANDIDATE_POLICY_EVALUATION_INVALID')
+            }
+          }
+          for (const assetKey of assetKeys) {
+            for (const scopeLevel of scopeLevels) {
+              if (Number(coverage?.matrix?.[assetKey]?.[scopeLevel]?.eligibleCount ?? 0) < 1) {
+                fail('REAL_CANDIDATE_AGGREGATION_COVERAGE_INCOMPLETE')
+              }
+              const eligibleAuditRecord = coverage.proposalAuditRecords.some((record) => (
+                record.assetKey === assetKey
+                && record.scope?.level === scopeLevel
+                && record.enteredCanaryDryRun === true
+                && record.policyEvaluationRequired === true
+                && record.policyEvaluator?.sourceDecisionPresent === true
+                && record.policyEvaluator?.decisionMatchesSameShaEvaluator === true
+                && record.policyEvaluator?.autoPromotionAllowed === true
+                && record.policyEvaluator?.manualReviewRequired === false
+              ))
+              if (!eligibleAuditRecord) fail('REAL_CANDIDATE_POLICY_EVALUATION_INVALID')
+            }
+          }
+          const controlled = report.controlledScopeLifecycle
+          if (controlled?.evidenceClass !== 'synthetic_staging_fixture'
+            || controlled?.aggregationClaim !== 'not_real_candidate_aggregation'
+            || controlled?.accuracyClaim !== 'not_measured'
+            || controlled?.realCandidateAggregationClaimed !== false
+            || controlled?.realAccuracyClaimed !== false) {
+            fail('CONTROLLED_SCOPE_LIFECYCLE_DISCLOSURE_INVALID')
+          }
+          NODE
+
+      - name: Always-run exact cleanup and zero-residue readback
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${LEARNING_V2_OPERATION_PREFIX:-}" ] && [ -f server/scripts/workbuddy-staging-duration-learning-cycle-v2.mjs ]; then
+            node server/scripts/workbuddy-staging-duration-learning-cycle-v2.mjs \
+              cleanup \
+              --release-root "$GITHUB_WORKSPACE" \
+              --operation-prefix "$LEARNING_V2_OPERATION_PREFIX" \
+              --report "$REPORT_PATH" \
+              --state "$STATE_PATH" \
+              --cleanup-report "$CLEANUP_REPORT_PATH"
+            node -e "const fs=require('fs');const r=JSON.parse(fs.readFileSync(process.env.CLEANUP_REPORT_PATH,'utf8'));if(r.status!=='pass'||Object.values(r.cleanup.residue).some(Number))throw new Error('non-zero learning v2 residue')"
+          fi
+
+      - name: Upload lifecycle and cleanup evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-duration-learning-cycle-v2-${{ github.run_id }}
+          path: |
+            ${{ env.REPORT_PATH }}
+            ${{ env.STATE_PATH }}
+            ${{ env.CLEANUP_REPORT_PATH }}
+            ${{ env.DEPLOYED_READYZ_JSON }}
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Close private tunnel
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${TUNNEL_PID:-}" ]; then
+            kill "$TUNNEL_PID" 2>/dev/null || true
+          fi

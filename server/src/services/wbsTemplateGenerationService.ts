@@ -14,6 +14,7 @@ import {
   type ResolveDurationLearningRuntimePublicationResult,
 } from './durationLearningRuntimePublicationService.js'
 import { signedDurationDayDelta } from '../utils/durationDays.js'
+import { isValidUUID } from '../utils/id.js'
 import {
   evaluateDurationOutputPromotion,
   evaluateDurationOutputWrite,
@@ -1554,6 +1555,11 @@ export function recordWbsTemplateGenerationRuntimeConsumption(
 function normalizeId(value: unknown) {
   const text = normalizeText(value)
   return text || null
+}
+
+function normalizeDurationLearningProjectId(value: unknown) {
+  const projectId = normalizeText(value)
+  return isValidUUID(projectId) ? projectId : null
 }
 
 function normalizeDependencyType(value: unknown): GeneratedTemplateDependency['dependencyType'] {
@@ -3395,12 +3401,12 @@ function buildWbsDurationLearningRuntimeArtifactPublication(
 }
 
 async function resolveProjectCompanyIdForDurationLearning(input: {
-  projectId: string
+  projectId: string | null
   projectFacts: Record<string, unknown>
   queryExec: DurationLearningRuntimePublicationQueryExec | null
 }) {
   const explicitCompanyId = normalizeId(input.projectFacts.companyId ?? input.projectFacts.company_id)
-  if (explicitCompanyId || !input.queryExec || !normalizeId(input.projectId)) return explicitCompanyId
+  if (explicitCompanyId || !input.queryExec || !input.projectId) return explicitCompanyId
   const rows = await input.queryExec<Record<string, unknown>>(
     `select company_id
        from public.projects
@@ -19783,6 +19789,7 @@ async function generateWbsTemplateRowsInternal(params: {
   runtimeConsumerObservedAt?: string | null
   runtimeConsumerErrorHandler?: (error: unknown) => void
   algorithmSeedSourcePolicy?: AlgorithmSeedResolveContext['sourcePolicy']
+  runtimePublicationResolution?: 'enabled' | 'disabled'
 }): Promise<{
   generationBatchId: string
   templateId: string
@@ -19844,10 +19851,13 @@ async function generateWbsTemplateRowsInternal(params: {
     })
   }
 
-  const durationLearningQueryExec = params.runtimeConsumerObservationQueryExec
-    ?? (process.env.NODE_ENV === 'test' ? null : executeDurationLearningRuntimePublicationQuery)
+  const durationLearningProjectId = normalizeDurationLearningProjectId(params.projectId)
+  const durationLearningQueryExec = params.runtimePublicationResolution === 'disabled'
+    ? null
+    : params.runtimeConsumerObservationQueryExec
+      ?? (process.env.NODE_ENV === 'test' ? null : executeDurationLearningRuntimePublicationQuery)
   const durationLearningCompanyId = await resolveProjectCompanyIdForDurationLearning({
-    projectId: params.projectId,
+    projectId: durationLearningProjectId,
     projectFacts,
     queryExec: durationLearningQueryExec,
   })
@@ -19885,7 +19895,7 @@ async function generateWbsTemplateRowsInternal(params: {
           assetKey,
           artifactKey: templateId,
           companyId: durationLearningCompanyId,
-          projectId: params.projectId,
+          projectId: durationLearningProjectId,
           industryKey: durationLearningIndustryKey,
         })
         const applied = applyDurationLearningPublicationToTemplateNodes({
@@ -19987,7 +19997,7 @@ async function generateWbsTemplateRowsInternal(params: {
         queryExec: durationLearningQueryExec,
         assetKey: 'dependency_rule_candidate',
         companyId: durationLearningCompanyId,
-        projectId: params.projectId,
+        projectId: durationLearningProjectId,
         industryKey: durationLearningIndustryKey,
       })
     : []

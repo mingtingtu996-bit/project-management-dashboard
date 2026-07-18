@@ -10,6 +10,15 @@ ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
 HEALTH_URL="${HEALTH_URL:-}"
 PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 
+: "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"
+case "$HEALTH_URL" in
+  https://*) ;;
+  *)
+    echo "External deployment health URL must use https://: $HEALTH_URL" >&2
+    exit 1
+    ;;
+esac
+
 case "$APP_DIR" in
   "~") APP_DIR="$HOME" ;;
   "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;;
@@ -88,7 +97,6 @@ fi
 WEB_PORT_VALUE="$(read_env_value WEB_PORT)"
 WEB_PORT_VALUE="${WEB_PORT_VALUE:-8080}"
 INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"
-HEALTH_URL="${HEALTH_URL:-$INTERNAL_HEALTH_URL}"
 
 if [ -z "${VITE_SUPABASE_URL:-}" ]; then
   VITE_SUPABASE_URL="$(read_env_value VITE_SUPABASE_URL)"

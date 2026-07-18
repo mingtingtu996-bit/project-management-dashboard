@@ -72,8 +72,12 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       monitoringPassed: 1,
       monitoringFailed: 0,
       stablePromoted: 1,
+      stablePromotionReused: 0,
       rollbackExecuted: 0,
+      rollbackReused: 0,
       failed: 0,
+      failureRefs: [],
+      collectionCursorAdvanced: true,
     }))
     const job = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
       candidateProvider: async () => [],
@@ -88,6 +92,55 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       durationLearningRuntimeLifecycle: expect.objectContaining({
         canaryPublished: 2,
         stablePromoted: 1,
+      }),
+    }))
+  })
+
+  it('retries a structured duration lifecycle partial failure before logging the parent job as completed', async () => {
+    const partial = {
+      candidateCount: 2,
+      expandedCandidateCount: 2,
+      canaryPublished: 1,
+      candidateCheckpointReused: 0,
+      candidateCollecting: 0,
+      manualFallback: 0,
+      monitoringPending: 0,
+      monitoringPassed: 0,
+      monitoringFailed: 0,
+      stablePromoted: 0,
+      stablePromotionReused: 0,
+      rollbackExecuted: 0,
+      rollbackReused: 0,
+      failed: 1,
+      failureRefs: [{
+        phase: 'candidate_publication',
+        reference: 'benchmark:p2',
+        message: 'transient publication failure',
+      }],
+    }
+    const recovered = {
+      ...partial,
+      canaryPublished: 1,
+      candidateCheckpointReused: 1,
+      failed: 0,
+      failureRefs: [],
+    }
+    const durationLearningRuntimeLifecycleSweep = vi.fn()
+      .mockResolvedValueOnce(partial)
+      .mockResolvedValueOnce(recovered)
+    const job = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
+      candidateProvider: async () => [],
+      durationLearningRuntimeLifecycleSweep,
+    })
+
+    const result = await job.executeNow()
+
+    expect(durationLearningRuntimeLifecycleSweep).toHaveBeenCalledTimes(2)
+    expect(result).toEqual(expect.objectContaining({
+      durationLearningRuntimeLifecycle: expect.objectContaining({
+        failed: 0,
+        candidateCheckpointReused: 1,
+        failureRefs: [],
       }),
     }))
   })

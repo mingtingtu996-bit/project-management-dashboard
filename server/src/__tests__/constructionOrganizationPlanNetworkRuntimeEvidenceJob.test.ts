@@ -34,6 +34,20 @@ function buildCandidate(
 }
 
 describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
+  it('records top-level execution failures through the shared job runtime', () => {
+    const jobSource = readFileSync(
+      new URL('../jobs/constructionOrganizationPlanNetworkRuntimeEvidenceJob.ts', import.meta.url),
+      'utf8',
+    )
+
+    expect(jobSource).toContain("import { runJobWithRetry } from '../services/jobRuntime.js'")
+    expect(jobSource).toContain('const { attempts, value } = await runJobWithRetry(')
+    expect(jobSource).toContain("jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob'")
+    expect(jobSource).toContain('triggeredBy,')
+    expect(jobSource).toContain('jobId,')
+    expect(jobSource).toContain('async () => runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options)')
+  })
+
   it('is registered in the scheduler and manual jobs route', () => {
     const schedulerSource = readFileSync(new URL('../scheduler.ts', import.meta.url), 'utf8')
     const jobsRouteSource = readFileSync(new URL('../routes/jobs.ts', import.meta.url), 'utf8')

@@ -6,6 +6,7 @@ import {
   type ConstructionOrganizationPlanNetworkRuntimeEngineCode,
   type ConstructionOrganizationPlanNetworkRuntimeEvidenceQueryExec,
 } from '../services/constructionOrganizationPlanNetworkRuntimeEvidenceService.js'
+import { runJobWithRetry } from '../services/jobRuntime.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 
 const RUNTIME_ENGINE_CODES: ConstructionOrganizationPlanNetworkRuntimeEngineCode[] = [
@@ -624,10 +625,18 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
     const jobId = createJobId()
     try {
       this.lastRun = new Date()
-      const value = await runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options)
+      const { attempts, value } = await runJobWithRetry(
+        {
+          jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob',
+          triggeredBy,
+          jobId,
+        },
+        async () => runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options),
+      )
       logger.info('constructionOrganizationPlanNetworkRuntimeEvidenceJob completed', {
         triggeredBy,
         jobId,
+        attempts,
         ...value,
       })
       return value

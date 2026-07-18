@@ -7010,6 +7010,12 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     expect(generation.candidateDurationAssetPreview.durationAssetReviewRows).toEqual(expect.arrayContaining([
       expect.objectContaining({ clientRowId: 'row-6' }),
     ]))
+    expect(mocks.generateWbsTemplateRows).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'wizard-preview',
+      operation: expect.objectContaining({
+        projectFacts: expect.objectContaining({ companyId: 'company-1' }),
+      }),
+    }))
 
   })
 

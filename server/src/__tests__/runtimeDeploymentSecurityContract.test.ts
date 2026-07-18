@@ -40,7 +40,7 @@ describe('runtime deployment security contract', () => {
     expect(workerSection).not.toContain('expose:')
   })
 
-  it('uses dependency readiness, optional public HTTPS, and mandatory private release readback', () => {
+  it('requires public HTTPS and private release readback in addition to dependency readiness', () => {
     const compose = readFileSync(resolve(workspaceRoot, 'deploy/docker-compose.lighthouse.yml'), 'utf8')
     const dockerfile = readFileSync(resolve(workspaceRoot, 'server/Dockerfile'), 'utf8')
     const deployScript = readFileSync(resolve(workspaceRoot, 'scripts/deploy-lighthouse-server.sh'), 'utf8')
@@ -49,8 +49,10 @@ describe('runtime deployment security contract', () => {
     expect(compose).toContain('/api/readyz')
     expect(dockerfile).toContain('/api/readyz')
     expect(deployScript).toContain('http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz')
+    expect(deployScript).toContain(': "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"')
     expect(workflow).toContain('HEALTH_URL=\\\"${DEPLOY_HEALTH_URL:-}\\\"')
-    expect(workflow).toContain('if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then')
+    expect(workflow).toContain('if [[ "$DEPLOY_HEALTH_URL" != https://* ]]')
+    expect(workflow).not.toContain('Public HTTPS health is optional')
     expect(workflow).toContain('- name: Verify deployed release through SSH tunnel')
     expect(workflow).toContain('"http://127.0.0.1:${local_smoke_port}/api/readyz"')
     expect(workflow).toContain('/api/performance-reports/summary')

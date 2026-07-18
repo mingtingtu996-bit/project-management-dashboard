@@ -244,6 +244,33 @@ describe('durationLearningRuntimePublicationService', () => {
     expect(queryMock.mock.calls.some(([sql]) => String(sql).includes('with superseded as'))).toBe(true)
   })
 
+  it('reuses an already-promoted stable terminal state after an ambiguous canary response', async () => {
+    const queryMock = vi.fn(async (sql: string) => {
+      if (sql.includes("publication_stage = 'canary'")) return []
+      if (sql.includes('where publication_key = $1')) {
+        return [{
+          publication_key: 'duration-learning:canary-ambiguous',
+          publication_stage: 'stable',
+          monitoring_status: 'passed',
+          previous_publication_key: 'duration-learning:stable-0',
+        }]
+      }
+      return []
+    })
+
+    const result = await promoteDurationLearningRuntimeCanary({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration-learning:canary-ambiguous',
+    })
+
+    expect(result).toEqual({
+      status: 'stable_already_promoted',
+      previousPublicationKey: 'duration-learning:stable-0',
+      reasons: [],
+    })
+    expect(queryMock.mock.calls.some(([sql]) => String(sql).includes('with superseded as'))).toBe(false)
+  })
+
   it('records measured impact and restores the previous stable publication on rollback', async () => {
     const queryMock = vi.fn(async (sql: string) => {
       if (sql.includes('set impact_metrics')) {
@@ -281,5 +308,32 @@ describe('durationLearningRuntimePublicationService', () => {
     expect(impact.status).toBe('impact_recorded')
     expect(rollback.status).toBe('rollback_executed')
     expect(rollback.restoredPublicationKey).toBe('duration-learning:stable-0')
+  })
+
+  it('reuses an already-rolled-back terminal state without restoring the prior stable twice', async () => {
+    const queryMock = vi.fn(async (sql: string) => {
+      if (sql.includes('with rolled_back as')) return []
+      if (sql.includes('where publication_key = $1')) {
+        return [{
+          publication_key: 'duration-learning:rollback-ambiguous',
+          publication_stage: 'rolled_back',
+          previous_publication_key: 'duration-learning:stable-0',
+        }]
+      }
+      return []
+    })
+
+    const result = await rollbackDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration-learning:rollback-ambiguous',
+      reason: 'retry_after_ambiguous_response',
+    })
+
+    expect(result).toEqual({
+      status: 'rollback_already_executed',
+      restoredPublicationKey: 'duration-learning:stable-0',
+      reasons: [],
+    })
+    expect(queryMock).toHaveBeenCalledTimes(2)
   })
 })
