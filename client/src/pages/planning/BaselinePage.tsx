@@ -28,7 +28,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { MetricCard } from '@/components/ui/metric-card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { usePlanningPresence, type PlanningPresenceCell } from '@/hooks/usePlanningPresence'
 import { usePlanningFieldRegistry } from '@/hooks/usePlanningFieldRegistry'
 import { usePlanningValidation, type ValidationIssue, type ValidationInput } from '@/hooks/usePlanningValidation'
@@ -55,6 +64,62 @@ import { PlanTreeEditor as BaselineTreeEditor } from './components/PlanTreeEdito
 
 type BaselineDetail = BaselineVersion & {
   items: BaselineItem[]
+}
+
+type BaselinePublishCauseCode =
+  | 'predecessor_delay'
+  | 'material_shortage'
+  | 'labor_shortage'
+  | 'equipment_unavailable'
+  | 'design_change'
+  | 'drawing_delay'
+  | 'quality_rework'
+  | 'weather_impact'
+  | 'owner_decision'
+  | 'government_inspection'
+  | 'site_capacity_pressure'
+  | 'workflow_sequence'
+  | 'external_readiness'
+  | 'other'
+
+const BASELINE_PUBLISH_CAUSE_OPTIONS: Array<{ value: BaselinePublishCauseCode; label: string }> = [
+  { value: 'predecessor_delay', label: '前置工作传导' },
+  { value: 'material_shortage', label: '材料短缺或晚到' },
+  { value: 'labor_shortage', label: '劳动力不足' },
+  { value: 'equipment_unavailable', label: '设备机械不可用' },
+  { value: 'design_change', label: '设计变更' },
+  { value: 'drawing_delay', label: '图纸或审批延误' },
+  { value: 'quality_rework', label: '质量返工' },
+  { value: 'weather_impact', label: '天气影响' },
+  { value: 'owner_decision', label: '业主决策等待' },
+  { value: 'government_inspection', label: '政府检查审批' },
+  { value: 'site_capacity_pressure', label: '现场承载不足' },
+  { value: 'workflow_sequence', label: '工序顺序调整' },
+  { value: 'external_readiness', label: '外部条件未就绪' },
+  { value: 'other', label: '其他' },
+]
+
+export function inferBaselinePublishCauseCode(baseline: BaselineVersion | null): BaselinePublishCauseCode {
+  const token = [
+    baseline?.description,
+    baseline?.source_type,
+    baseline?.source_version_label,
+    JSON.stringify(baseline?.governance_metadata ?? {}),
+  ].map((value) => String(value ?? '').trim()).join(' ').toLowerCase()
+
+  if (/(material.shortage|late.material|材料短缺|材料晚到|到货延误|供应中断)/.test(token)) return 'material_shortage'
+  if (/(labor.shortage|workforce.shortage|劳动力不足|人员短缺|班组不足)/.test(token)) return 'labor_shortage'
+  if (/(equipment.unavailable|machine.breakdown|设备不可用|机械故障|设备故障)/.test(token)) return 'equipment_unavailable'
+  if (/(drawing.delay|approval.delay|图纸延误|出图延误|审图延误|审批延误)/.test(token)) return 'drawing_delay'
+  if (/(design.change|设计变更)/.test(token)) return 'design_change'
+  if (/(quality.rework|质量返工|返工整改)/.test(token)) return 'quality_rework'
+  if (/(weather.impact|天气影响|极端天气)/.test(token)) return 'weather_impact'
+  if (/(owner.decision|client.decision|业主决策|发包人决策)/.test(token)) return 'owner_decision'
+  if (/(government.inspection|government.approval|政府检查|政府审批)/.test(token)) return 'government_inspection'
+  if (/(site.capacity|现场承载不足|作业面冲突)/.test(token)) return 'site_capacity_pressure'
+  if (/(predecessor.delay|dependency.delay|前置延误|依赖延误)/.test(token)) return 'predecessor_delay'
+  if (/(external.readiness|外部条件未就绪|开工条件未满足)/.test(token)) return 'external_readiness'
+  return 'workflow_sequence'
 }
 
 type TemplateGeneratedBaselineItem = BaselineItem & {
@@ -737,6 +802,8 @@ export default function BaselinePage() {
   const [candidateDetailsOpen, setCandidateDetailsOpen] = useState(false)
   const [dismissedCandidateBaselineId, setDismissedCandidateBaselineId] = useState<string | null>(null)
   const [publishOpen, setPublishOpen] = useState(false)
+  const [publishCauseCode, setPublishCauseCode] = useState<BaselinePublishCauseCode>('workflow_sequence')
+  const [publishChangeReason, setPublishChangeReason] = useState('')
   const [exportOpen, setExportOpen] = useState(false)
   const [templateGenerateOpen, setTemplateGenerateOpen] = useState(false)
   const [inlineTemplateGenerateItemId, setInlineTemplateGenerateItemId] = useState<string | null>(null)
@@ -1409,7 +1476,8 @@ export default function BaselinePage() {
   }, [activeBaseline?.items, resetBaselineHistory])
 
   const handlePublishBaseline = useCallback(async () => {
-    if (!projectId || !activeBaseline || publishing || isEditable) return
+    const normalizedChangeReason = publishChangeReason.trim()
+    if (!projectId || !activeBaseline || publishing || isEditable || !normalizedChangeReason) return
     setPublishing(true)
     setError(null)
     try {
@@ -1417,6 +1485,8 @@ export default function BaselinePage() {
         `/api/task-baselines/${activeBaseline.id}/publish`,
         {
           project_id: projectId,
+          cause_code: publishCauseCode,
+          change_reason: normalizedChangeReason,
         },
       )
 
@@ -1432,6 +1502,7 @@ export default function BaselinePage() {
       ])
       setIsEditable(false)
       setPublishOpen(false)
+      setPublishChangeReason('')
       setStatusNotice('已发布新版项目基线。')
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : '发布项目基线失败'
@@ -1443,6 +1514,8 @@ export default function BaselinePage() {
     activeBaseline,
     isEditable,
     projectId,
+    publishCauseCode,
+    publishChangeReason,
     publishing,
     resetBaselineHistory,
   ])
@@ -1612,6 +1685,8 @@ export default function BaselinePage() {
           disabled={isEditable}
           title={isEditable ? '请先保存或取消当前编辑' : '发布已保存的项目基线草稿'}
           onClick={() => {
+            setPublishCauseCode(inferBaselinePublishCauseCode(activeBaseline))
+            setPublishChangeReason('')
             setPublishOpen(true)
           }}
         >
@@ -2216,6 +2291,35 @@ export default function BaselinePage() {
             <p className="text-sm leading-6 text-slate-600">
               系统会先同步最新服务端数据并自动合并无关修改；如同一计划条目刚被他人更新，会提示确认后再继续。
             </p>
+            <div className="space-y-2">
+              <Label htmlFor="baseline-publish-cause-code">变更原因分类</Label>
+              <Select
+                value={publishCauseCode}
+                onValueChange={(value) => setPublishCauseCode(value as BaselinePublishCauseCode)}
+              >
+                <SelectTrigger id="baseline-publish-cause-code" aria-label="变更原因分类">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent side="bottom" align="start">
+                  {BASELINE_PUBLISH_CAUSE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="baseline-publish-change-reason">原因原话</Label>
+              <Textarea
+                id="baseline-publish-change-reason"
+                value={publishChangeReason}
+                onChange={(event) => setPublishChangeReason(event.target.value)}
+                maxLength={4000}
+                required
+                aria-required="true"
+              />
+            </div>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => setPublishOpen(false)}>
                 取消
@@ -2223,6 +2327,8 @@ export default function BaselinePage() {
               <Button
                 type="button"
                 loading={publishing}
+                disabled={publishing || !publishChangeReason.trim()}
+                title={!publishChangeReason.trim() ? '请填写原因原话' : '确认发布项目基线'}
                 onClick={handlePublishBaseline}
               >
                 确认发布

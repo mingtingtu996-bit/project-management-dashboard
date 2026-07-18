@@ -107,16 +107,24 @@ describe('responsibility health rules', () => {
     })
   })
 
-  it('keeps direct responsibility insight SQL on fixed query branches', () => {
+  it('consumes project facts through the shared responsibility read model', () => {
     const source = readFileSync(
       resolve(fileURLToPath(new URL('..', import.meta.url)), 'services', 'responsibilityInsightService.ts'),
       'utf8',
     )
+    const readModelSource = readFileSync(
+      resolve(fileURLToPath(new URL('..', import.meta.url)), 'services', 'responsibilityInsightFactReadModelService.ts'),
+      'utf8',
+    )
 
-    expect(source).not.toContain('responsibilityDirectRows')
-    expect(source).not.toContain('rawQuery(sql')
-    expect(source).not.toContain('rawQuery(\n    sql')
-    expect(source).toContain('rawQuery(')
+    expect(source).toContain('readResponsibilityInsightFacts')
+    expect(source).not.toContain('async function loadParticipantUnitNameMap')
+    expect(source).not.toContain('async function loadTasks')
+    expect(source).not.toContain('async function loadRisks')
+    expect(source).not.toContain('async function loadObstacles')
+    expect(readModelSource).toContain('WHERE project_id = $1')
+    expect(readModelSource).toContain('WHERE t.project_id = $1')
+    expect(readModelSource).not.toContain('rawQuery(sql')
   })
 
   it('does not expose updated_at as a responsibility actual finish date', () => {

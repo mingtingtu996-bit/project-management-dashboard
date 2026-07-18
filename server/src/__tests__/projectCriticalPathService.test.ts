@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => {
         id: 'task-a',
         project_id: 'project-1',
         title: 'A',
+        standard_work_code: 'SW-A',
         start_date: '2026-04-01',
         end_date: '2026-04-03',
         planned_end_date: '2026-04-03',
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
         id: 'task-b',
         project_id: 'project-1',
         title: 'B',
+        standard_work_code: 'SW-B',
         start_date: '2026-04-01',
         end_date: '2026-04-08',
         planned_end_date: '2026-04-08',
@@ -29,6 +31,7 @@ const mocks = vi.hoisted(() => {
         id: 'task-c',
         project_id: 'project-1',
         title: 'C',
+        standard_work_code: 'SW-C',
         start_date: '2026-04-04',
         end_date: '2026-04-06',
         planned_end_date: '2026-04-06',
@@ -48,6 +51,7 @@ const mocks = vi.hoisted(() => {
       },
     ],
     task_critical_overrides: [],
+    duration_learning_runtime_publications: [],
   }
   const updates: Array<{ sql: string; params: any[] }> = []
 
@@ -74,6 +78,12 @@ const mocks = vi.hoisted(() => {
         .filter((row) => taskIds.size === 0 || taskIds.has(row.task_id))
         .filter((row) => String(row.status ?? 'active') === 'active')
         .filter((row) => row.required_for_start !== false)
+        .map((row) => ({ ...row }))
+    }
+
+    if (sql.startsWith('select') && sql.includes('from public.duration_learning_runtime_publications')) {
+      return tables.duration_learning_runtime_publications
+        .filter((row) => row.asset_key === params[0])
         .map((row) => ({ ...row }))
     }
 
@@ -242,6 +252,7 @@ describe('project critical path service', () => {
         id: 'task-a',
         project_id: 'project-1',
         title: 'A',
+        standard_work_code: 'SW-A',
         start_date: '2026-04-01',
         end_date: '2026-04-03',
         planned_end_date: '2026-04-03',
@@ -251,6 +262,7 @@ describe('project critical path service', () => {
         id: 'task-b',
         project_id: 'project-1',
         title: 'B',
+        standard_work_code: 'SW-B',
         start_date: '2026-04-01',
         end_date: '2026-04-08',
         planned_end_date: '2026-04-08',
@@ -260,6 +272,7 @@ describe('project critical path service', () => {
         id: 'task-c',
         project_id: 'project-1',
         title: 'C',
+        standard_work_code: 'SW-C',
         start_date: '2026-04-04',
         end_date: '2026-04-06',
         planned_end_date: '2026-04-06',
@@ -279,6 +292,7 @@ describe('project critical path service', () => {
       },
     ]
     mocks.tables.task_critical_overrides = []
+    mocks.tables.duration_learning_runtime_publications = []
     mocks.updates.length = 0
     mocks.recordDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.recordDurationAccuracyBacktest.mockResolvedValue(null)
@@ -295,6 +309,67 @@ describe('project critical path service', () => {
     expect(result.criticalTaskIds).toEqual(['task-b'])
     expect(result.projectDuration).toBe(8)
     expect(result.snapshot.autoTaskIds).toEqual(['task-b'])
+  })
+
+  it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {
+    mocks.tables.tasks = mocks.tables.tasks.map((task) => task.id === 'task-a'
+      ? { ...task, standard_work_code: 'SW-LEARNED-WATCH' }
+      : task)
+    mocks.tables.duration_learning_runtime_publications = [{
+      publication_key: 'duration_learning_runtime:critical_path_rule_candidate:global-watch-v1',
+      asset_key: 'critical_path_rule_candidate',
+      artifact_key: 'critical-watch-v1',
+      scope_level: 'global',
+      company_id: null,
+      project_id: null,
+      industry_key: null,
+      publication_stage: 'stable',
+      runtime_payload: {
+        criticalStableCodes: ['SW-LEARNED-WATCH'],
+        watchReason: 'historically_near_critical',
+      },
+      previous_publication_key: null,
+      traffic_percent: 100,
+      monitoring_status: 'passed',
+      published_at: '2026-07-17T00:00:00.000Z',
+    }]
+
+    const result = await recalculateProjectCriticalPath('project-1')
+
+    expect(result.snapshot.autoTaskIds).toEqual(['task-b'])
+    expect(result.snapshot.displayTaskIds).toEqual(['task-b'])
+    expect(result.snapshot.watchedTaskIds).toEqual(['task-a'])
+    expect(result.snapshot.tasks.find((task) => task.taskId === 'task-a')).toEqual(expect.objectContaining({
+      isAutoCritical: false,
+      isLearnedCriticalPathWatch: true,
+      durationLearningPublicationKeys: [
+        'duration_learning_runtime:critical_path_rule_candidate:global-watch-v1',
+      ],
+    }))
+    expect((result.snapshot as any).criticalPathLearningPublications).toEqual([
+      expect.objectContaining({
+        publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:global-watch-v1',
+        appliedTaskIds: ['task-a'],
+      }),
+    ])
+    expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      engineCode: 'critical_path_cpm',
+      predictionContext: expect.objectContaining({
+        runtimePublicationKeys: [
+          'duration_learning_runtime:critical_path_rule_candidate:global-watch-v1',
+        ],
+        criticalPathLearningPublications: [
+          expect.objectContaining({
+            publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:global-watch-v1',
+            role: 'watched_task_prior',
+          }),
+        ],
+      }),
+    }))
+    expect(mocks.executeSQL.mock.calls.some((call) => (
+      String(call[0]).includes('runtime_consumer_observations')
+      && call[1]?.[0] === 'critical_path_rule_candidate'
+    ))).toBe(true)
   })
 
   it('propagates effective duration publication receipts into CPM while keeping candidates evidence-only', async () => {
@@ -905,6 +980,8 @@ describe('project critical path service', () => {
         duration_error_days: 0,
         outcome_tolerance_days: 2,
         critical_task_count: 1,
+        auto_task_stable_codes: ['SW-B'],
+        primary_chain_stable_codes: ['SW-B'],
         projected_float_task_count: 1,
         writes_runtime_directly: false,
         writes_fact_directly: false,

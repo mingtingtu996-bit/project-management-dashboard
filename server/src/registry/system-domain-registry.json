@@ -809,7 +809,71 @@
     },
     {
       "kind": "metric",
+      "id": "structured_cause_other_rate",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-14-v14231-learning-asset-architecture-closure-design.md#4-结构化原因输入方案"
+    },
+    {
+      "kind": "metric",
+      "id": "structured_cause_prefill_modification_rate",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-14-v14231-learning-asset-architecture-closure-design.md#4-结构化原因输入方案"
+    },
+    {
+      "kind": "metric",
       "id": "task_progress",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "task_summary_delayed_count",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "task_summary_on_time_rate",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "task_summary_progress_change",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "task_summary_tasks_completed",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "task_summary_tasks_progressed",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "task_summary_tasks_updated",
       "architectureUnit": "主执行环：描述分析",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
@@ -3079,10 +3143,52 @@
     },
     {
       "kind": "migration",
+      "id": "314_duration_day_basis_contract",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "adds explicit calendar-day and construction-production-day lineage to duration learning facts"
+    },
+    {
+      "kind": "migration",
+      "id": "315_duration_learning_runtime_publications",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "stores scoped reversible runtime overlays for the six duration-learning asset families"
+    },
+    {
+      "kind": "migration",
+      "id": "316_task_fact_write_integrity",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "generated_from_server_migration_inventory_platform_schema_change"
+    },
+    {
+      "kind": "migration",
+      "id": "317_structured_cause_attribution",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "generated_from_server_migration_inventory_platform_schema_change"
+    },
+    {
+      "kind": "migration",
+      "id": "318_risk_issue_structured_closure_outcome",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "generated_from_server_migration_inventory_platform_schema_change"
+    },
+    {
+      "kind": "migration",
       "id": "320_notification_task_reference_retirement",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "preserve notifications while retiring deleted-task references and enforcing ON DELETE SET NULL"
+    },
+    {
+      "kind": "migration",
+      "id": "321_retire_duplicate_t2_schedule_runtime",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "retires the duplicate T2 task/date mutation tables after verified backup; canonical WBS generation remains authoritative"
     },
     {
       "kind": "migration",
@@ -3259,6 +3365,14 @@
       "architectureUnit": "底座：组织权限",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
+    },
+    {
+      "kind": "route",
+      "id": "cause-attributions",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "scoped structured-cause attribution classifies existing task, risk, issue, and change facts into governed candidate or confirmed analysis; it may feed confirmed learning metadata but does not write plans, seeds, or runtime publications",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
     },
     {
       "kind": "route",
@@ -4594,22 +4708,6 @@
     },
     {
       "kind": "service",
-      "id": "defaultMasterPlanIndependentTaskNetworkMaterializationService",
-      "architectureUnit": "主执行环：计划编制",
-      "runtimeScope": "business_core",
-      "assignmentReason": "materializes approved independent default-master-plan task-network candidates through the existing guarded task/dependency writer boundary",
-      "production_readiness_source": "docs/superpowers/plans/2026-07-11-v14231-runtime-consumption-learning-autonomy.md#implementation-integrity-audit-mapping"
-    },
-    {
-      "kind": "service",
-      "id": "defaultMasterPlanIndependentTaskNetworkService",
-      "architectureUnit": "主执行环：计划编制",
-      "runtimeScope": "business_core",
-      "assignmentReason": "builds and validates independent default-master-plan task-network candidates for explicit commit; preview remains no-write",
-      "production_readiness_source": "docs/superpowers/plans/2026-07-11-v14231-runtime-consumption-learning-autonomy.md#implementation-integrity-audit-mapping"
-    },
-    {
-      "kind": "service",
       "id": "defaultMasterPlanRowVolumePolicy",
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
@@ -4707,6 +4805,14 @@
       "architectureUnit": "主执行环：建模",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "durationAccuracyGovernanceReadModelService",
+      "architectureUnit": "预测桥",
+      "runtimeScope": "business_core",
+      "assignmentReason": "company-admin read model for sanitized accuracy samples, governed runtime publications, calls and observations; scopes project data to the current company visible-project allow-list and degrades each read source independently without mutating learning or runtime assets",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
@@ -5053,11 +5159,17 @@
     },
     {
       "kind": "service",
-      "id": "durationLearningScopeEvidenceWriterService",
-      "architectureUnit": "主执行环：建模",
-      "runtimeScope": "business_core",
-      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
-      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+      "id": "durationLearningRuntimeLifecycleService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "collects six duration-learning asset families, expands project/company/industry/global scope, checkpoints canary publication, monitors impact and promotes or rolls back reversible overlays"
+    },
+    {
+      "kind": "service",
+      "id": "durationLearningRuntimePublicationService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "persists and resolves reversible project, company, industry, and global runtime overlays for the six duration-learning asset families with idempotent publication lineage"
     },
     {
       "kind": "service",
@@ -5089,6 +5201,14 @@
       "architectureUnit": "主执行环：建模",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "durationNetworkMonteCarloService",
+      "architectureUnit": "预测桥",
+      "runtimeScope": "business_core",
+      "assignmentReason": "samples governed task duration distributions through the existing dependency network to derive project probability bands while retaining analytic PERT as an explicit fallback",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
@@ -6013,6 +6133,14 @@
     },
     {
       "kind": "service",
+      "id": "responsibilityInsightFactReadModelService",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "service",
       "id": "responsibilityInsightService",
       "architectureUnit": "主执行环：描述分析",
       "runtimeScope": "business_core",
@@ -6086,6 +6214,13 @@
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "scheduledDurationJobResultPolicyService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "fail-closed scheduled-job completion policy that converts partial task-progress reconciliation, project snapshot, and duration-forecast results into retryable failures without directly reading or writing tenant data"
     },
     {
       "kind": "service",
@@ -6238,6 +6373,14 @@
     },
     {
       "kind": "service",
+      "id": "structuredCauseAttributionService",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "tenant-scoped structured-cause analysis infers and confirms governed cause labels from execution facts; confirmed labels may be snapshotted by learning without making the service a model, plan, seed, or publication writer",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "service",
       "id": "supabaseService",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
@@ -6310,14 +6453,6 @@
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
       "assignmentReason": "C-19.13 read-only multi-network phase-1 selector for T2 rhythm schedule candidates; requires templateAssemblyCompatibilityReceipt before ranking, blocks assembly conflicts and missing receipts from automatic selection, and never writes task dependencies, plan dates, critical-path facts, seeds, baselines, or runtime publications",
-      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
-    },
-    {
-      "kind": "service",
-      "id": "t2RhythmScheduleRuntimePublicationService",
-      "architectureUnit": "主执行环：计划编制",
-      "runtimeScope": "business_core",
-      "assignmentReason": "C-19 gated runtime publication domain writer for approved T2 rhythm schedules; may materialize task_dependencies and plan-date patches only after release artifact verification and approval, while preserving no seed, baseline, or critical-path-fact writes",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
@@ -6532,6 +6667,14 @@
       "runtimeScope": "business_core",
       "assignmentReason": "materializes governed T2 rhythm children inside the parent window and emits duration/dependency consumption receipts for explicit commit",
       "production_readiness_source": "docs/superpowers/plans/2026-07-11-v14231-runtime-consumption-learning-autonomy.md#implementation-integrity-audit-mapping"
+    },
+    {
+      "kind": "service",
+      "id": "taskProgressSnapshotReconciliationService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
     },
     {
       "kind": "service",

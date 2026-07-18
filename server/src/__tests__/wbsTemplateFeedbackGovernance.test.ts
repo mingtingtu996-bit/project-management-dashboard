@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   executeSQL: vi.fn(),
   executeSQLOne: vi.fn(),
   rawQuery: vi.fn(),
+  resolveConstructionCalendarContext: vi.fn(),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -18,6 +19,14 @@ vi.mock('../database.js', () => ({
   query: mocks.rawQuery,
 }))
 
+vi.mock('../services/constructionCalendar.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/constructionCalendar.js')>('../services/constructionCalendar.js')
+  return {
+    ...actual,
+    resolveConstructionCalendarContext: mocks.resolveConstructionCalendarContext,
+  }
+})
+
 const { collectWbsTemplateFeedback } = await import('../services/wbsTemplateFeedback.js')
 const serviceSourcePath = fileURLToPath(new URL('../services/wbsTemplateFeedback.ts', import.meta.url))
 
@@ -25,6 +34,14 @@ describe('wbsTemplateFeedback governance bridge', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.rawQuery.mockResolvedValue({ rows: [{ id: 'wbs-feedback-candidate-event-id' }] })
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      windows: [{
+        startDate: '2026-05-03',
+        endDate: '2026-05-03',
+        shutdown: true,
+      }],
+    })
     mocks.executeSQLOne.mockResolvedValue({
       id: 'template-1',
       template_name: 'Commercial WBS template',
@@ -56,6 +73,10 @@ describe('wbsTemplateFeedback governance bridge', () => {
             actual_end_date: '2026-05-05',
             planned_start_date: '2026-05-01',
             planned_end_date: '2026-05-06',
+            standard_task_metadata: {
+              durationLearningAssetKey: 'wbs_reference_days',
+              durationLearningPublicationKey: 'duration-learning:wbs-reference:stable-1',
+            },
           },
         ]
       }
@@ -95,7 +116,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
       'base_duration',
       'governed_candidate',
       'candidate_only',
-      'manual_required',
+      'auto_shadow',
       'review_required',
       'candidate_only',
     ]))
@@ -104,11 +125,13 @@ describe('wbsTemplateFeedback governance bridge', () => {
         templateId: 'template-1',
         sampleTaskCount: 1,
         completedProjectCount: 1,
+        automationLifecycle: 'duration_learning_runtime_candidate',
+        humanFallbackPolicy: 'conflict_or_exception_only',
         nodes: expect.arrayContaining([
           expect.objectContaining({
             title: '主体结构',
             sampleCount: 1,
-            suggestedReferenceDays: 5,
+            suggestedReferenceDays: 4,
           }),
         ]),
       }),
@@ -130,7 +153,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
     expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('on conflict (id) do update')
     expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('learning_scope_source')
     expect(outcomeInsert?.[1]).toEqual([
-      'wbs-reference-days:template-1:project-1',
+      'wbs-reference-days:template-1:project-1:duration-learning:wbs-reference:stable-1',
       'wbs_reference_days',
       'weak',
       'wbs_template_feedback:template-1',
@@ -138,13 +161,15 @@ describe('wbsTemplateFeedback governance bridge', () => {
       'project_business_outcome_writer',
       '10000000-0000-4000-8000-000000000001',
       'project-1',
-      null,
+      'duration-learning:wbs-reference:stable-1',
       expect.objectContaining({
         source: 'wbs_template_feedback',
         template_id: 'template-1',
         sample_task_count: 1,
         completed_project_count: 1,
         actionable_node_count: 1,
+        publication_lineage_status: 'linked',
+        consumed_runtime_publication_keys: ['duration-learning:wbs-reference:stable-1'],
         writes_runtime_directly: false,
         writes_fact_directly: false,
       }),
@@ -153,7 +178,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
     ])
   })
 
-  it('marks WBS reference-days outcome samples as legacy inclusive calendar-day provenance', async () => {
+  it('stores WBS reference-day outcomes in construction production days with calendar lineage', async () => {
     await collectWbsTemplateFeedback('template-1', {
       projectIds: ['project-1'],
       companyId: '10000000-0000-4000-8000-000000000001',
@@ -165,18 +190,23 @@ describe('wbsTemplateFeedback governance bridge', () => {
     const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
 
     expect(metadata).toEqual(expect.objectContaining({
-      day_count_basis: 'legacy_inclusive_calendar_day',
+      day_count_basis: 'construction_production_day',
       reference_day_basis: 'wbs_template_reference_days',
-      construction_calendar_basis: 'not_applied',
-      production_day_conversion_applied: false,
-      provenance_gap_code: 'C-19.11',
+      construction_calendar_basis: 'per_project_resolved_construction_calendar',
+      production_day_conversion_applied: true,
+      construction_calendar_by_project: {
+        'project-1': expect.objectContaining({
+          basis: 'official_construction_calendar_seed',
+        }),
+      },
     }))
     expect(metadata.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        dayCountBasis: 'legacy_inclusive_calendar_day',
-        productionDayConversionApplied: false,
+        dayCountBasis: 'construction_production_day',
+        productionDayConversionApplied: true,
       }),
     ]))
+    expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledWith({ projectId: 'project-1' })
   })
 
   it('falls back to template-only reference-day inference when optional task feedback reads time out', async () => {

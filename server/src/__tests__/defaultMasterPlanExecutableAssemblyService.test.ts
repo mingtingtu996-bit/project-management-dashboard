@@ -558,6 +558,95 @@ describe('default master-plan executable assembly duration assets', () => {
     expect(detailedRow.values.title).toBe('大跨屋盖钢结构安装（改造分区2）')
   })
 
+  it('marks an inferred earlier-phase predecessor as a semantic fallback instead of standard rule evidence', () => {
+    const foundation = governedDurationRow({
+      code: 'FALLBACK-FOUNDATION',
+      title: '基础结构施工',
+      phase: 'foundation_pit_pile',
+      start: '2026-01-11',
+      end: '2026-02-10',
+      parentClientRowId: 'diagnostic:logical-parent',
+      sortOrder: 10,
+    })
+    const structure = governedDurationRow({
+      code: 'FALLBACK-STRUCTURE',
+      title: '主体结构施工',
+      phase: 'superstructure_rhythm',
+      start: '2026-02-11',
+      end: '2026-04-10',
+      parentClientRowId: 'diagnostic:logical-parent',
+      sortOrder: 20,
+    })
+
+    const result = assembleExecutableDefaultMasterPlanRows({
+      rows: [foundation, structure] as any,
+      businessType: 'industrial',
+      masterPlanProfile: { rowCountRange: [2, 2] },
+    })
+
+    expect(structure.predecessorDependencies).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        clientRowId: foundation.clientRowId,
+        source: 'execution_phase_order_fallback',
+        sequencingBasis: 'execution_phase_order_fallback',
+        dependencyRuleEvidence: expect.objectContaining({
+          evidenceLevel: 'semantic_fallback_l0',
+          createsProductionTaskDependency: true,
+        }),
+      }),
+    ]))
+    expect(result.semanticFallbackDependencyCount).toBeGreaterThan(0)
+    expect(result.sequencingGapCount).toBeGreaterThan(0)
+    expect(result.nonBlockingGovernanceWarningCodes).toContain('master_plan_dependency_rule_gap_present')
+    expect(result.readyForWizardCommit).toBe(true)
+  })
+
+  it('labels code-order sibling staggering as heuristic and exposes a bounded governance gap sample', () => {
+    const zoneOne = governedDurationRow({
+      code: 'ZONE-01',
+      title: '一分区主体结构施工',
+      phase: 'superstructure_rhythm',
+      start: '2026-01-11',
+      end: '2026-03-10',
+      parentClientRowId: 'diagnostic:logical-parent',
+      sortOrder: 10,
+    })
+    const zoneTwo = governedDurationRow({
+      code: 'ZONE-02',
+      title: '二分区主体结构施工',
+      phase: 'superstructure_rhythm',
+      start: '2026-01-11',
+      end: '2026-03-10',
+      parentClientRowId: 'diagnostic:logical-parent',
+      sortOrder: 20,
+    })
+
+    const result = assembleExecutableDefaultMasterPlanRows({
+      rows: [zoneOne, zoneTwo] as any,
+      businessType: 'industrial',
+      masterPlanProfile: { rowCountRange: [2, 2] },
+    })
+
+    expect(zoneTwo.predecessorDependencies).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        clientRowId: zoneOne.clientRowId,
+        source: 'heuristic_stagger',
+        sequencingBasis: 'heuristic_stagger',
+        dependencyRuleEvidence: expect.objectContaining({
+          evidenceLevel: 'heuristic_fallback_l0',
+        }),
+      }),
+    ]))
+    expect(result.heuristicStaggerDependencyCount).toBeGreaterThan(0)
+    expect(result.sequencingGapSamples).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        predecessorStableCode: 'ZONE-01',
+        successorStableCode: 'ZONE-02',
+        sequencingBasis: 'heuristic_stagger',
+      }),
+    ]))
+  })
+
   it('prevents a promoted subdivision from inheriting an implausible process-rollup duration', () => {
     const phaseAuthority = withWindow(scheduleRow({
       code: 'BTMP-SPC-01',
@@ -847,4 +936,82 @@ function withDependency<T extends ReturnType<typeof withWindow>>(
       intentCode: 'test_business_dependency',
     }],
   }
+}
+
+function governedDurationRow(params: {
+  code: string
+  title: string
+  phase: string
+  start: string
+  end: string
+  parentClientRowId: string | null
+  sortOrder: number
+  projectionMode?: 'schedule_row' | 'linked_projection'
+}) {
+  const base = withWindow(scheduleRow({
+    code: params.code,
+    title: params.title,
+    phase: params.phase,
+  }), params.start, params.end)
+  const projectionMode = params.projectionMode ?? 'linked_projection'
+  return {
+    ...base,
+    parentClientRowId: params.parentClientRowId,
+    sortOrder: params.sortOrder,
+    rowProjectionMode: projectionMode,
+    scheduleParticipation: projectionMode === 'schedule_row' ? 'primary_schedule' : 'read_only_projection',
+    linkedProjectionSource: projectionMode === 'schedule_row'
+      ? null
+      : { originalRowProjectionMode: 'schedule_row' },
+    durationSuggestion: {
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 25,
+      businessReasonCode: 'MANAGED_FRONTIER_DESCENDANT_ROLLUP',
+      businessReasonParams: {
+        descendantRollup: {
+          durationSeedStableCodes: [`seed:${params.code}`],
+          childProcessStableCodes: [`${params.code}:process`],
+        },
+      },
+      factorAvailability: {
+        standard_work_duration_seed: true,
+        managed_frontier_descendant_rollup: true,
+      },
+    },
+    values: {
+      ...base.values,
+      execution_lane: 'shared_main_lane',
+      category_type: 'item_work',
+      wbs_node_type: 'item_work',
+      plan_item_kind: 'work_task',
+      execution_nature: 'physical_work',
+      duration_contribution_mode: 'duration_bearing',
+      template_group: 'building_main',
+      duration_asset_mapping: {
+        standardWorkDurationSeedStableCode: `test_duration_seed:${params.code}`,
+        standardWorkDurationSeedResolverSource: 'ts_seed_fallback',
+      },
+      duration_asset_calculation: {
+        standardWorkDurationSeedStableCode: `test_duration_seed:${params.code}`,
+        selectedDurationDays: 20,
+      },
+      standard_task_metadata: {
+        stableCode: params.code,
+        durationContributionMode: 'duration_bearing',
+        executionNature: 'physical_work',
+        masterPlanVisibilityDecision: {
+          policyVersion: 'v1.4.23.1-master-plan-visibility-v1',
+          visibleOnMasterPlan: projectionMode === 'schedule_row',
+        },
+        masterControlPromotionEligibility: {
+          eligible: true,
+          score: 100,
+          scopeMode: 'project_control',
+        },
+        masterPlanProjectionPolicy: {
+          originalRowProjectionMode: 'schedule_row',
+        },
+      },
+    },
+  } satisfies ExecutableDefaultMasterPlanAssemblyRow
 }

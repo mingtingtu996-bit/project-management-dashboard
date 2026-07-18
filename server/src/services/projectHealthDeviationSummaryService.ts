@@ -3,6 +3,8 @@
 
 import { supabase } from './dbService.js'
 import { logger } from '../middleware/logger.js'
+import { resolveProgressDeviationCauseRule } from '../seeds/progressDeviationCauseRegistry.js'
+import { normalizeDurationContributionMode } from '../seeds/durationContributionMode.js'
 
 export interface HealthDeviationSummary {
   projectId: string
@@ -54,25 +56,44 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
     count: number
     maxDelayDays: number
     reasons: string[]
+    factorKeys: string[]
+    responsibilityBasis: string
+    confidenceWeight: number
   }>()
 
   for (const row of data as Array<Record<string, unknown>>) {
     const summary = readForecastFactorSummary(row.factor_summary)
     const delayDays = Math.max(0, Number(row.forecast_delay_days ?? 0) || 0)
+    const countedReasonTypes = new Set<string>()
     for (const factor of summary.factors) {
       const key = normalizeText(factor.key)
-      if (key !== 'resource_conflict') continue
       const metadata = readObject(factor.metadata)
+      const contributionMode = normalizeDurationContributionMode(
+        factor.durationContributionMode
+          ?? factor.duration_contribution_mode
+          ?? metadata.durationContributionMode
+          ?? metadata.duration_contribution_mode,
+      ) ?? 'duration_bearing'
+      const rule = resolveProgressDeviationCauseRule(key, contributionMode)
+      if (!rule) continue
       const reason = normalizeText(factor.reason) || summary.businessReasons[0] || '现场承载压力影响当前工期预测。'
-      const existing = causes.get(key) ?? {
-        code: key,
+      const existing = causes.get(rule.reasonType) ?? {
+        code: rule.reasonType,
         label: '现场承载压力',
         count: 0,
         maxDelayDays: 0,
         reasons: [],
+        factorKeys: [],
+        responsibilityBasis: rule.responsibilityBasis,
+        confidenceWeight: rule.confidenceWeight,
       }
-      existing.count += 1
+      existing.label = rule.reason
+      if (!countedReasonTypes.has(rule.reasonType)) {
+        existing.count += 1
+        countedReasonTypes.add(rule.reasonType)
+      }
       existing.maxDelayDays = Math.max(existing.maxDelayDays, delayDays)
+      existing.factorKeys = Array.from(new Set([...existing.factorKeys, key]))
       existing.reasons = Array.from(new Set([
         ...existing.reasons,
         reason,
@@ -80,7 +101,7 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
         Number(metadata.overdueMaterialCount ?? 0) > 0 ? '关联材料到货逾期' : '',
         Number(metadata.sameResponsibleUnitCount ?? 0) > 0 ? '同责任单位任务集中' : '',
       ].filter(Boolean))).slice(0, 5)
-      causes.set(key, existing)
+      causes.set(rule.reasonType, existing)
     }
   }
 

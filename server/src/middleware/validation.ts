@@ -329,6 +329,28 @@ export const taskUpdateSchema = taskBaseSchema.partial().extend({
   applyTaskDateValidation(data, ctx, { requireBothDates: false })
   rejectClientManagedTaskFields(data as Record<string, unknown>, ctx)
 })
+
+export const riskIssueClosureOutcomeSchema = z.object({
+  resultCode: z.enum([
+    'resolved',
+    'mitigated',
+    'transferred',
+    'accepted',
+    'duplicate',
+    'invalidated',
+  ]),
+  resultSummary: z.string().trim().min(1).max(2000),
+  effectiveness: z.enum([
+    'resolved',
+    'partially_resolved',
+    'transferred',
+    'accepted',
+    'undetermined',
+  ]),
+  evidenceRefs: z.array(z.string().trim().min(1).max(500)).max(50).default([]),
+  causeAttributionId: uuidSchema.optional().nullable(),
+})
+
 export const riskSchema = z.object({
   project_id: uuidSchema,
   title: z.string().min(1).max(500),
@@ -351,6 +373,11 @@ export const riskSchema = z.object({
   linked_issue_id: uuidSchema.optional().nullable(),
   closed_reason: z.string().max(100).optional().nullable(),
   closed_at: z.string().datetime().optional().nullable(),
+  closure_result_code: z.enum(['resolved', 'mitigated', 'transferred', 'accepted', 'duplicate', 'invalidated']).optional().nullable(),
+  closure_result_summary: z.string().trim().min(1).max(2000).optional().nullable(),
+  closure_effectiveness: z.enum(['resolved', 'partially_resolved', 'transferred', 'accepted', 'undetermined']).optional().nullable(),
+  closure_evidence_refs: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  closure_cause_attribution_id: uuidSchema.optional().nullable(),
 })
 
 export const riskUpdateSchema = riskSchema.partial().extend({
@@ -381,6 +408,11 @@ export const issueSchema = z.object({
   status: z.enum(['open', 'investigating', 'resolved', 'closed']).default('open'),
   closed_reason: z.string().max(100).optional().nullable(),
   closed_at: z.string().datetime().optional().nullable(),
+  closure_result_code: z.enum(['resolved', 'mitigated', 'transferred', 'accepted', 'duplicate', 'invalidated']).optional().nullable(),
+  closure_result_summary: z.string().trim().min(1).max(2000).optional().nullable(),
+  closure_effectiveness: z.enum(['resolved', 'partially_resolved', 'transferred', 'accepted', 'undetermined']).optional().nullable(),
+  closure_evidence_refs: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  closure_cause_attribution_id: uuidSchema.optional().nullable(),
 })
 
 export const issueUpdateSchema = issueSchema.partial().extend({

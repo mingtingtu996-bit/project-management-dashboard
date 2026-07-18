@@ -14,6 +14,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
   const options = {
     envFile: DEFAULT_ENV_FILE,
     projectId: '',
+    canonicalWizardSmokeFile: null,
     output: null,
     help: false,
   };
@@ -22,9 +23,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     const arg = argv[index];
     const nextValue = () => {
       const value = argv[index + 1];
-      if (!value || value.startsWith('--')) {
-        throw new Error(`${arg} requires a value`);
-      }
+      if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`);
       index += 1;
       return value;
     };
@@ -33,6 +32,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.envFile = path.resolve(nextValue());
     } else if (arg === '--project-id') {
       options.projectId = nextValue();
+    } else if (arg === '--wizard-smoke-file') {
+      options.canonicalWizardSmokeFile = path.resolve(nextValue());
     } else if (arg === '--output') {
       options.output = path.resolve(nextValue());
     } else if (arg === '--help' || arg === '-h') {
@@ -48,6 +49,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
 export async function checkC19RuntimePreflight({
   envFile = DEFAULT_ENV_FILE,
   projectId = '',
+  canonicalWizardSmokeFile = null,
   output = null,
   queryExec = null,
   now = new Date(),
@@ -56,37 +58,36 @@ export async function checkC19RuntimePreflight({
   try {
     const normalizedProjectId = normalizeText(projectId);
     const replaySampleReadiness = await readReplaySampleReadiness(exec, normalizedProjectId);
-    const publicationReadiness = await readPublicationReadiness(exec, normalizedProjectId);
-    const runtimeEventReadiness = await readRuntimeEventReadiness(exec);
     const taskReadiness = await readTaskReadiness(exec, normalizedProjectId);
-    const reasonCodes = buildReasonCodes({
-      replaySampleReadiness,
-      publicationReadiness,
-      runtimeEventReadiness,
-      taskReadiness,
+    const canonicalWizardWbsReadiness = await readCanonicalWizardSmokeReadiness({
+      canonicalWizardSmokeFile,
+      projectId: normalizedProjectId,
     });
+    const reasonCodes = canonicalWizardWbsReadiness.reasonCodes;
+    const advisoryCodes = buildAdvisoryCodes({ replaySampleReadiness, taskReadiness });
     const report = {
-      schemaVersion: 'workbuddy-c19-runtime-preflight/v1',
+      schemaVersion: 'workbuddy-c19-runtime-preflight/v2',
       status: reasonCodes.length === 0 ? 'ready' : 'blocked',
       generatedAt: now.toISOString(),
       projectId: normalizedProjectId,
       dbMutation: false,
       liveMutation: false,
       replaySampleReadiness,
-      publicationReadiness,
-      runtimeEventReadiness,
       taskReadiness,
+      canonicalWizardWbsReadiness,
       readiness: {
-        replaySamplesReady: replaySampleReadiness.durationSampleCount > 0
+        canonicalWizardCommitReady: canonicalWizardWbsReadiness.wizardCommitReady,
+        dependencyReadbackReady: canonicalWizardWbsReadiness.dependencyReadbackReady,
+        criticalPathReady: canonicalWizardWbsReadiness.criticalPathReady,
+        baselineRevisionRollbackReady: canonicalWizardWbsReadiness.baselineRevisionRollbackReady,
+        cleanupReady: canonicalWizardWbsReadiness.cleanupReady,
+        replaySamplesAvailable: replaySampleReadiness.durationSampleCount > 0
           && replaySampleReadiness.t2WindowSampleCount > 0,
-        runtimePublicationReady: publicationReadiness.publicationCount > 0
-          && Boolean(publicationReadiness.latestPublicationKey),
-        monitoringReady: runtimeEventReadiness.monitoringCount > 0,
-        rollbackReady: runtimeEventReadiness.rollbackCount > 0,
-        taskMetadataReady: taskReadiness.t2MetadataTaskCount > 0,
+        taskMetadataAvailable: taskReadiness.t2MetadataTaskCount > 0,
       },
       reasonCodes,
-      boundary: 'Read-only C19 runtime preflight. This report does not generate release packages, publish runtime records, patch tasks, write dependencies, monitor, or rollback.',
+      advisoryCodes,
+      boundary: 'Read-only canonical wizard/WBS preflight. Duplicate T2 runtime publication tables and their direct writer are retired; real samples remain advisory for learning and do not block cold-start plan generation.',
     };
 
     if (output) {
@@ -104,7 +105,7 @@ async function createPgQueryExec(envFile) {
   const env = dotenv.parse(await readFile(envFile, 'utf8'));
   const connectionString = normalizeText(env.SUPABASE_MIGRATION_URL) || normalizeText(env.DB_CONNECTION_STRING);
   if (!connectionString) {
-    throw new Error('SUPABASE_MIGRATION_URL or DB_CONNECTION_STRING is required for C19 runtime preflight');
+    throw new Error('SUPABASE_MIGRATION_URL or DB_CONNECTION_STRING is required for C19 canonical preflight');
   }
   const client = new pg.Client({
     connectionString,
@@ -118,9 +119,7 @@ async function createPgQueryExec(envFile) {
     const result = await client.query(sql, params);
     return result.rows;
   };
-  exec.close = async () => {
-    await client.end();
-  };
+  exec.close = async () => client.end();
   return exec;
 }
 
@@ -146,39 +145,6 @@ async function readReplaySampleReadiness(queryExec, projectId) {
   return {
     durationSampleCount: readInt(row.duration_sample_count),
     t2WindowSampleCount: readInt(row.t2_window_sample_count),
-  };
-}
-
-async function readPublicationReadiness(queryExec, projectId) {
-  const whereProject = projectId ? 'AND project_id = $1' : '';
-  const params = projectId ? [projectId] : [];
-  const rows = await queryExec(
-    `SELECT count(*)::int AS publication_count,
-            (array_agg(publication_key ORDER BY published_at DESC NULLS LAST, updated_at DESC NULLS LAST))[1]::text AS latest_publication_key
-       FROM public.t2_rhythm_schedule_runtime_publications
-      WHERE runtime_publication_status IN ('runtime_published', 'runtime_rolled_back')
-        ${whereProject}`,
-    params,
-  );
-  const row = rows[0] ?? {};
-  return {
-    publicationCount: readInt(row.publication_count),
-    latestPublicationKey: normalizeText(row.latest_publication_key) || null,
-  };
-}
-
-async function readRuntimeEventReadiness(queryExec) {
-  const rows = await queryExec(
-    `SELECT count(*)::int AS event_count,
-            count(*) FILTER (WHERE event_type = 'impact_monitoring')::int AS monitoring_count,
-            count(*) FILTER (WHERE event_type = 'rollback_execution')::int AS rollback_count
-       FROM public.t2_rhythm_schedule_runtime_events`,
-  );
-  const row = rows[0] ?? {};
-  return {
-    eventCount: readInt(row.event_count),
-    monitoringCount: readInt(row.monitoring_count),
-    rollbackCount: readInt(row.rollback_count),
   };
 }
 
@@ -216,26 +182,117 @@ async function readTaskReadiness(queryExec, projectId) {
   };
 }
 
-function buildReasonCodes({
-  replaySampleReadiness,
-  publicationReadiness,
-  runtimeEventReadiness,
-  taskReadiness,
-}) {
-  const reasons = [];
-  if (replaySampleReadiness.durationSampleCount < 1) reasons.push('duration_experience_samples_missing');
-  if (replaySampleReadiness.t2WindowSampleCount < 1) reasons.push('duration_experience_t2_window_samples_missing');
-  if (taskReadiness.completedActualTaskCount > 0 && taskReadiness.t2MetadataTaskCount < 1) reasons.push('t2_window_metadata_missing');
-  if (publicationReadiness.publicationCount < 1 || !publicationReadiness.latestPublicationKey) reasons.push('runtime_publication_missing');
-  if (runtimeEventReadiness.monitoringCount < 1) reasons.push('impact_monitoring_event_missing');
-  if (runtimeEventReadiness.rollbackCount < 1) reasons.push('rollback_event_missing');
-  return Array.from(new Set(reasons));
+async function readCanonicalWizardSmokeReadiness({ canonicalWizardSmokeFile, projectId }) {
+  if (!canonicalWizardSmokeFile) return emptyCanonicalReadiness(['canonical_wizard_smoke_file_required']);
+
+  let smoke;
+  try {
+    smoke = JSON.parse((await readFile(canonicalWizardSmokeFile, 'utf8')).replace(/^\uFEFF/, ''));
+  } catch (error) {
+    return emptyCanonicalReadiness([
+      `canonical_wizard_smoke_invalid:${error instanceof Error ? error.message : String(error)}`,
+    ]);
+  }
+
+  const reasonCodes = [];
+  if (normalizeText(smoke.source) !== 'wizard_baseline_revision_live_probe') {
+    reasonCodes.push('canonical_wizard_smoke_source_invalid');
+  }
+  if (normalizeText(smoke.status) !== 'pass') reasonCodes.push('canonical_wizard_smoke_not_pass');
+  if (projectId && normalizeText(smoke.projectId) !== projectId) {
+    reasonCodes.push('canonical_wizard_smoke_project_mismatch');
+  }
+
+  const steps = smoke.steps ?? {};
+  const commit = steps.commitWizardGeneration ?? {};
+  const dependency = steps.taskDependencyReadback ?? {};
+  const criticalPath = steps.criticalPathReadback ?? {};
+  const baseline = steps.readCandidateBaseline ?? {};
+  const publish = steps.publishBaseline ?? {};
+  const revision = steps.startRevision ?? {};
+  const rollback = steps.rollbackRevisionDraft ?? {};
+  const cleanup = smoke.cleanup ?? {};
+  const wizardCommitReady = commit.status === 'pass' && readInt(commit.createdTaskCount) > 0;
+  const dependencyReadbackReady = dependency.status === 'pass'
+    && readInt(dependency.dependencyReadbackCount) > 0
+    && readInt(dependency.dependencyReadbackCount) === readInt(dependency.inventoryDependencyCount)
+    && readInt(dependency.danglingDependencyCount) === 0;
+  const criticalPathReady = criticalPath.status === 'pass'
+    && criticalPath.calculationStatus === 'fresh'
+    && readInt(criticalPath.dependencyEdgeCount) > 0
+    && readInt(criticalPath.projectDurationDays) > 0;
+  const baselineRevisionRollbackReady = baseline.status === 'pass'
+    && readInt(baseline.itemCount) > 0
+    && publish.status === 'pass'
+    && publish.baselineStatus === 'confirmed'
+    && revision.status === 'pass'
+    && revision.idempotent === true
+    && rollback.status === 'pass'
+    && rollback.revisionPhysicallyDeleted === true
+    && rollback.confirmedBaselineStatus === 'confirmed';
+  const cleanupReady = cleanup.status === 'pass'
+    && cleanup.projectPhysicallyDeleted === true
+    && cleanup.projectUnreadable === true;
+
+  if (!wizardCommitReady) reasonCodes.push('canonical_wizard_commit_missing');
+  if (!dependencyReadbackReady) reasonCodes.push('canonical_dependency_readback_missing');
+  if (!criticalPathReady) reasonCodes.push('canonical_critical_path_readback_missing');
+  if (!baselineRevisionRollbackReady) reasonCodes.push('canonical_baseline_revision_rollback_missing');
+  if (!cleanupReady) reasonCodes.push('canonical_smoke_cleanup_missing');
+
+  return {
+    canonicalWizardSmokeFile: path.resolve(canonicalWizardSmokeFile),
+    environmentClassification: normalizeText(smoke.environmentClassification) || null,
+    deployedStagingCode: smoke.deployedStagingCode === true,
+    productionLive: smoke.productionLive === true,
+    projectId: normalizeText(smoke.projectId) || null,
+    createdTaskCount: readInt(commit.createdTaskCount),
+    dependencyReadbackCount: readInt(dependency.dependencyReadbackCount),
+    criticalPathDependencyEdgeCount: readInt(criticalPath.dependencyEdgeCount),
+    projectDurationDays: readInt(criticalPath.projectDurationDays),
+    baselineItemCount: readInt(baseline.itemCount),
+    wizardCommitReady,
+    dependencyReadbackReady,
+    criticalPathReady,
+    baselineRevisionRollbackReady,
+    cleanupReady,
+    reasonCodes: Array.from(new Set(reasonCodes)),
+  };
+}
+
+function emptyCanonicalReadiness(reasonCodes) {
+  return {
+    canonicalWizardSmokeFile: null,
+    environmentClassification: null,
+    deployedStagingCode: false,
+    productionLive: false,
+    projectId: null,
+    createdTaskCount: 0,
+    dependencyReadbackCount: 0,
+    criticalPathDependencyEdgeCount: 0,
+    projectDurationDays: 0,
+    baselineItemCount: 0,
+    wizardCommitReady: false,
+    dependencyReadbackReady: false,
+    criticalPathReady: false,
+    baselineRevisionRollbackReady: false,
+    cleanupReady: false,
+    reasonCodes,
+  };
+}
+
+function buildAdvisoryCodes({ replaySampleReadiness, taskReadiness }) {
+  const advisoryCodes = [];
+  if (replaySampleReadiness.durationSampleCount < 1) advisoryCodes.push('duration_experience_samples_missing');
+  if (replaySampleReadiness.t2WindowSampleCount < 1) advisoryCodes.push('duration_experience_t2_window_samples_missing');
+  if (taskReadiness.completedActualTaskCount > 0 && taskReadiness.t2MetadataTaskCount < 1) {
+    advisoryCodes.push('t2_window_metadata_missing');
+  }
+  return Array.from(new Set(advisoryCodes));
 }
 
 async function closeQueryExec(queryExec) {
-  if (typeof queryExec?.close === 'function') {
-    await queryExec.close();
-  }
+  if (typeof queryExec?.close === 'function') await queryExec.close();
 }
 
 function readInt(value) {
@@ -250,9 +307,9 @@ function normalizeText(value) {
 function renderHelp() {
   return `
 Usage:
-  node project-testing/tools/check-c19-runtime-preflight.mjs --project-id <id> --output <json>
+  node project-testing/tools/check-c19-runtime-preflight.mjs --project-id <id> --wizard-smoke-file <staging-wizard-baseline-revision.json> --output <json>
 
-Runs read-only DB preflight for C19 runtime publication. It does not publish, monitor, rollback, or mutate tasks/dependencies.
+Runs a read-only canonical wizard/WBS preflight. It never writes tasks, dependencies, baselines, forecasts, or runtime publications.
 `.trim();
 }
 
@@ -264,9 +321,10 @@ async function main() {
       return;
     }
     const report = await checkC19RuntimePreflight(options);
-    console.log(`C19 runtime preflight: ${report.status}`);
+    console.log(`C19 canonical wizard/WBS preflight: ${report.status}`);
     console.log(`DB mutation: ${report.dbMutation ? 'yes' : 'no'}`);
     if (report.reasonCodes.length > 0) console.log(`Reasons: ${report.reasonCodes.join(', ')}`);
+    if (report.advisoryCodes.length > 0) console.log(`Advisories: ${report.advisoryCodes.join(', ')}`);
     process.exitCode = report.status === 'ready' ? 0 : 1;
   } catch (error) {
     console.error(error.message);
@@ -274,6 +332,4 @@ async function main() {
   }
 }
 
-if (process.argv[1] === __filename) {
-  await main();
-}
+if (process.argv[1] === __filename) await main();

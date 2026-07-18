@@ -85,6 +85,68 @@ describe('risk statistics snapshot atomicity', () => {
     ).rejects.toThrow('risk source unavailable')
   })
 
+  it('reconstructs historical stock from lifecycle timestamps instead of today inventory', async () => {
+    const riskResults = [
+      { data: [], error: null },
+      { data: [], error: null },
+      {
+        data: [
+          {
+            level: 'high',
+            status: 'closed',
+            source_type: 'manual',
+            created_at: '2026-07-01T00:00:00.000Z',
+            updated_at: '2026-07-12T00:00:00.000Z',
+          },
+          {
+            level: 'medium',
+            status: 'open',
+            source_type: 'manual',
+            created_at: '2026-07-12T00:00:00.000Z',
+            updated_at: '2026-07-12T00:00:00.000Z',
+          },
+          {
+            level: 'low',
+            status: 'open',
+            source_type: 'manual',
+            created_at: '2026-07-13T00:00:00.000Z',
+            updated_at: '2026-07-13T00:00:00.000Z',
+          },
+          {
+            level: 'critical',
+            status: 'closed',
+            source_type: 'manual',
+            created_at: '2026-07-01T00:00:00.000Z',
+            updated_at: '2026-07-10T00:00:00.000Z',
+          },
+        ],
+        error: null,
+      },
+    ]
+    const snapshotBuilder = createBuilder({
+      data: { id: 'snapshot-history', project_id: 'project-1', stat_date: '2026-07-11' },
+      error: null,
+    })
+
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'risks') return createBuilder(riskResults.shift() ?? { data: [], error: null })
+      if (table === 'risk_statistics') return snapshotBuilder
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    await riskStatisticsService.generateDailySnapshot('project-1', '2026-07-11')
+
+    expect(snapshotBuilder.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        total_risks: 1,
+        high_risk_count: 1,
+        medium_risk_count: 0,
+        critical_risk_count: 0,
+      }),
+      { onConflict: 'project_id,stat_date' },
+    )
+  })
+
   it('rejects when the atomic upsert returns a fulfilled Supabase error', async () => {
     const upsertError = new Error('snapshot write unavailable')
     const riskResults = [

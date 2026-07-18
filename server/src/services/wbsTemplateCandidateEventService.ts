@@ -4,6 +4,7 @@ import {
   createAndPersistAlgorithmAssetCandidateEvent,
 } from './algorithmAssetCandidateEventAdapterService.js'
 import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernancePersistenceService.js'
+import type { GeneratedTemplateRow } from './wbsTemplateGenerationService.js'
 import {
   collectDurationLiveLearningProductionEvidenceRecordsFromRows,
   collectDurationLiveLearningProductionEvidenceRefs,
@@ -29,10 +30,20 @@ export interface RecordWbsTemplateCandidateEventInput {
   rejectedRowCount?: number
   pendingRowCount?: number
   generatedEntityIds?: string[]
+  durationCandidateNodes?: SpecialWorkDurationCandidateNode[]
   actorId?: string | null
   metadata?: Record<string, unknown>
   scheduleTrustGate?: GenerationDepthPolicyScheduleTrustGate | null
   governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
+}
+
+export interface SpecialWorkDurationCandidateNode {
+  sourceId: string
+  stableCode?: string | null
+  p50Days: number
+  p80Days?: number | null
+  durationDayBasis: 'construction_production_day'
+  runtimePublicationKey?: string | null
 }
 
 export type GenerationDepthPolicyScheduleTrustGate = {
@@ -197,6 +208,73 @@ function normalizeObject(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {}
+}
+
+function readPositiveDuration(value: unknown) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : null
+}
+
+function normalizeDurationCandidateNodes(values: readonly SpecialWorkDurationCandidateNode[] | undefined) {
+  const bySourceId = new Map<string, SpecialWorkDurationCandidateNode>()
+  for (const value of values ?? []) {
+    const sourceId = normalizeString(value.sourceId)
+    const p50Days = readPositiveDuration(value.p50Days)
+    if (!sourceId || !p50Days || value.durationDayBasis !== 'construction_production_day') continue
+    const p80Days = readPositiveDuration(value.p80Days)
+    bySourceId.set(sourceId, {
+      sourceId,
+      stableCode: normalizeString(value.stableCode),
+      p50Days,
+      p80Days: p80Days ? Math.max(p50Days, p80Days) : null,
+      durationDayBasis: 'construction_production_day',
+      runtimePublicationKey: normalizeString(value.runtimePublicationKey),
+    })
+  }
+  return [...bySourceId.values()]
+}
+
+export function buildSpecialWorkDurationCandidateNodes(
+  rows: readonly GeneratedTemplateRow[],
+): SpecialWorkDurationCandidateNode[] {
+  return normalizeDurationCandidateNodes(rows.map((row) => {
+    const values = normalizeObject(row.values)
+    const standardTaskMetadata = normalizeObject(values.standard_task_metadata)
+    const suggestion = row.durationSuggestion
+    const sourceId = normalizeString(
+      values.sourceId
+        ?? values.source_id
+        ?? values.standardWorkCode
+        ?? values.standard_work_code
+        ?? values.stableCode
+        ?? values.stable_code
+        ?? row.clientRowId,
+    ) ?? ''
+    return {
+      sourceId,
+      stableCode: normalizeString(
+        values.stableCode
+          ?? values.stable_code
+          ?? values.standardWorkCode
+          ?? values.standard_work_code,
+      ),
+      p50Days: readPositiveDuration(
+        suggestion?.riskP50DurationDays
+          ?? suggestion?.planReferenceDays
+          ?? suggestion?.recommendedDurationDays,
+      ) ?? 0,
+      p80Days: readPositiveDuration(
+        suggestion?.riskP80DurationDays
+          ?? suggestion?.conservativeDurationDays,
+      ),
+      durationDayBasis: 'construction_production_day' as const,
+      runtimePublicationKey: normalizeString(
+        standardTaskMetadata.durationLearningAssetKey,
+      ) === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
+        ? normalizeString(standardTaskMetadata.durationLearningPublicationKey)
+        : null,
+    }
+  }))
 }
 
 function readPositiveInteger(value: unknown, fallback = 0) {
@@ -495,6 +573,25 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
     if (typeof table?.upsert !== 'function') return
 
     const metadata = normalizeObject(input.metadata)
+    const durationCandidateNodes = normalizeDurationCandidateNodes(input.durationCandidateNodes)
+    const explicitPublicationKey = readRuntimePublicationKeyFromMetadata(metadata)
+    const nodePublicationKeys = uniqueValues(durationCandidateNodes
+      .map((node) => normalizeString(node.runtimePublicationKey) ?? '')
+      .filter(Boolean))
+    const publicationLineageMismatch = Boolean(
+      explicitPublicationKey
+        && nodePublicationKeys.some((publicationKey) => publicationKey !== explicitPublicationKey),
+    )
+    const runtimePublicationKey = publicationLineageMismatch
+      ? null
+      : explicitPublicationKey ?? (nodePublicationKeys.length === 1 ? nodePublicationKeys[0]! : null)
+    const publicationLineageStatus = publicationLineageMismatch
+      ? 'mismatched'
+      : runtimePublicationKey
+        ? 'linked'
+        : nodePublicationKeys.length > 1
+          ? 'ambiguous'
+          : 'cold_start_unpublished'
     const generationBatchId = normalizeString(input.generationBatchId)
     const outcomeId = buildWbsTemplateCandidateOutcomeId(input)
     const { error } = await table.upsert({
@@ -508,7 +605,7 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
       learning_scope_source: 'project_business_outcome_writer',
       company_id: normalizeString(input.companyId),
       project_id: input.projectId,
-      publication_key: readRuntimePublicationKeyFromMetadata(metadata),
+      publication_key: runtimePublicationKey,
       metadata: {
         ...metadata,
         source: 'wbs_template_candidate_event',
@@ -517,6 +614,9 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
         generation_batch_id: generationBatchId,
         selected_node_ids: selectedNodeIds,
         generated_entity_ids: generatedEntityIds,
+        duration_candidate_nodes: durationCandidateNodes,
+        consumed_runtime_publication_keys: nodePublicationKeys,
+        publication_lineage_status: publicationLineageStatus,
         generated_row_count: counts.generatedRowCount,
         retained_row_count: counts.retainedRowCount,
         rejected_row_count: counts.rejectedRowCount,
@@ -664,6 +764,7 @@ async function persistUnifiedAlgorithmAssetCandidateEvent(
         rejectedRowCount: counts.rejectedRowCount,
         pendingRowCount: counts.pendingRowCount,
         generatedEntityIds,
+        durationCandidateNodes: normalizeDurationCandidateNodes(input.durationCandidateNodes),
         metadata: normalizeObject(input.metadata),
       },
       learningTarget: 'template_structure',

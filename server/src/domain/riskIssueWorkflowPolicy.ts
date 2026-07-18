@@ -1,4 +1,9 @@
-import type { Issue, Risk } from '../types/db.js'
+import type {
+  Issue,
+  Risk,
+  RiskIssueClosureEffectiveness,
+  RiskIssueClosureResultCode,
+} from '../types/db.js'
 import { signedDurationDayDelta } from '../utils/durationDays.js'
 
 const ISSUE_SOURCE_WEIGHT: Record<Issue['source_type'], number> = {
@@ -85,11 +90,78 @@ export function buildIssuePendingManualClosePatch(issue: Pick<Issue, 'status'>) 
   } satisfies Partial<Issue>
 }
 
-export function buildIssueConfirmClosePatch() {
+export type RiskIssueClosureOutcomeInput = {
+  resultCode: Exclude<RiskIssueClosureResultCode, 'retention_close' | 'legacy_close'>
+  resultSummary: string
+  effectiveness: RiskIssueClosureEffectiveness
+  evidenceRefs?: string[]
+  causeAttributionId?: string | null
+}
+
+export type RetentionClosureContext = {
+  actorId?: string | null
+  evidenceRefs?: string[]
+  recordedAt?: string
+  resultSummary?: string
+}
+
+function buildStructuredClosureOutcomePatch(outcome: RiskIssueClosureOutcomeInput, actorId: string) {
+  return {
+    closure_result_code: outcome.resultCode,
+    closure_result_summary: String(outcome.resultSummary ?? '').trim(),
+    closure_effectiveness: outcome.effectiveness,
+    closure_evidence_refs: [...new Set(outcome.evidenceRefs ?? [])],
+    closure_cause_attribution_id: outcome.causeAttributionId ?? null,
+    closed_by: actorId || null,
+    closure_recorded_at: new Date().toISOString(),
+  }
+}
+
+function clearStructuredClosureOutcomePatch() {
+  return {
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
+  }
+}
+
+function buildRetentionClosureOutcomePatch(context: RetentionClosureContext = {}) {
+  const recordedAt = context.recordedAt ?? new Date().toISOString()
+  return {
+    status: 'closed' as const,
+    pending_manual_close: false,
+    closed_reason: 'retention_close',
+    closed_at: recordedAt,
+    closure_result_code: 'retention_close' as const,
+    closure_result_summary: String(
+      context.resultSummary ?? 'Closed by deletion retention governance instead of physical deletion.',
+    ).trim(),
+    closure_effectiveness: 'undetermined' as const,
+    closure_evidence_refs: [...new Set(context.evidenceRefs ?? [])],
+    closure_cause_attribution_id: null,
+    closed_by: context.actorId || null,
+    closure_recorded_at: recordedAt,
+  }
+}
+
+export function buildIssueRetentionClosePatch(context: RetentionClosureContext = {}) {
+  return buildRetentionClosureOutcomePatch(context) satisfies Partial<Issue>
+}
+
+export function buildRiskRetentionClosePatch(context: RetentionClosureContext = {}) {
+  return buildRetentionClosureOutcomePatch(context) satisfies Partial<Risk>
+}
+
+export function buildIssueConfirmClosePatch(outcome: RiskIssueClosureOutcomeInput, actorId: string) {
   return {
     status: 'closed',
     pending_manual_close: false,
     closed_reason: 'manual_confirmed_close',
+    ...buildStructuredClosureOutcomePatch(outcome, actorId),
   } satisfies Partial<Issue>
 }
 
@@ -99,6 +171,7 @@ export function buildIssueKeepProcessingPatch() {
     pending_manual_close: false,
     closed_reason: null,
     closed_at: null,
+    ...clearStructuredClosureOutcomePatch(),
   } satisfies Partial<Issue>
 }
 
@@ -111,11 +184,12 @@ export function buildRiskPendingManualClosePatch() {
   } satisfies Partial<Risk>
 }
 
-export function buildRiskConfirmClosePatch() {
+export function buildRiskConfirmClosePatch(outcome: RiskIssueClosureOutcomeInput, actorId: string) {
   return {
     status: 'closed',
     pending_manual_close: false,
     closed_reason: 'manual_confirmed_close',
+    ...buildStructuredClosureOutcomePatch(outcome, actorId),
   } satisfies Partial<Risk>
 }
 
@@ -125,5 +199,6 @@ export function buildRiskKeepProcessingPatch() {
     pending_manual_close: false,
     closed_reason: null,
     closed_at: null,
+    ...clearStructuredClosureOutcomePatch(),
   } satisfies Partial<Risk>
 }

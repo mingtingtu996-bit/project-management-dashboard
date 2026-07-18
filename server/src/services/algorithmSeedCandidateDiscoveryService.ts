@@ -33,6 +33,11 @@ export interface AlgorithmSeedDiscoverySample {
   wbs_node_type?: string | null
   actual_duration?: number | null
   planned_duration?: number | null
+  duration_day_basis?: string | null
+  actual_duration_calendar_days?: number | null
+  actual_duration_production_days?: number | null
+  planned_duration_calendar_days?: number | null
+  planned_duration_production_days?: number | null
   started_at?: string | null
   completed_at?: string | null
   confidence_score?: number | null
@@ -2696,9 +2701,10 @@ async function loadDiscoverySamples(options: AlgorithmSeedDiscoveryOptions) {
 
   let query = (supabase as any)
     .from('duration_experience_samples')
-    .select('id, project_id, task_id, template_node_id, standard_work_code, standard_work_name, wbs_node_type, actual_duration, planned_duration, started_at, completed_at, confidence_score, metadata')
+    .select('id, project_id, task_id, template_node_id, standard_work_code, standard_work_name, wbs_node_type, actual_duration, planned_duration, duration_day_basis, actual_duration_calendar_days, actual_duration_production_days, planned_duration_calendar_days, planned_duration_production_days, started_at, completed_at, confidence_score, metadata')
     .eq('sample_status', 'active')
     .eq('included_in_benchmark', true)
+    .eq('duration_day_basis', 'construction_production_day')
     .order('completed_at', { ascending: false })
     .limit(options.maxSamples ?? DEFAULT_MAX_SAMPLES)
 

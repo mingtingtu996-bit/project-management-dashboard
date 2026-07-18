@@ -150,6 +150,7 @@ export interface PlanningTreeRow {
   durationRiskRangeLabel?: string
   criticalFloatLabel?: string
   durationAssetEvidenceLabel?: string
+  sequencingBasis?: 'execution_phase_order_fallback' | 'heuristic_stagger' | null
   progressLabel?: string
   assigneeLabel?: string
   unitLabel?: string
@@ -581,6 +582,13 @@ function getTaskIssueChips(row: PlanningTreeRow): TaskIssueChip[] {
   }
   if (row.durationRiskRangeLabel) {
     chips.push({ key: 'duration-risk', label: '工期', toneClass: 'border-slate-200 bg-slate-50 text-slate-700' })
+  }
+  if (row.sequencingBasis === 'heuristic_stagger') {
+    chips.push({
+      key: 'heuristic-sequencing',
+      label: '排序待确认',
+      toneClass: 'border-amber-200 bg-amber-50 text-amber-700',
+    })
   }
   return chips
 }

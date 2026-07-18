@@ -77,17 +77,33 @@ describe('BI status utilities', () => {
   it('keeps completion checks delegated to the shared taskStatus utility', () => {
     const dbServiceSource = readFileSync(sourcePath('services/dbService.ts'), 'utf8')
     const taskSummarySource = readFileSync(sourcePath('routes/task-summaries.ts'), 'utf8')
+    const taskSummaryServiceSource = readFileSync(sourcePath('services/taskSummaryService.ts'), 'utf8')
+    const taskSummaryCompareSource = readFileSync(sourcePath('services/taskSummaryCompareService.ts'), 'utf8')
+    const taskAttributionSummarySource = readFileSync(sourcePath('services/taskAttributionSummaryService.ts'), 'utf8')
 
     expect(dbServiceSource).toContain("from '../utils/taskStatus.js'")
     expect(dbServiceSource).not.toContain('function isCompletedTaskLike')
     expect(dbServiceSource).not.toContain('function isCompletedState')
 
-    expect(taskSummarySource).toContain("from '../utils/taskStatus.js'")
+    const completionSources = [
+      taskSummarySource,
+      taskSummaryServiceSource,
+      taskSummaryCompareSource,
+      taskAttributionSummarySource,
+    ]
+    completionSources.forEach((source) => {
+      expect(source).toContain("from '../utils/taskStatus.js'")
+    })
     expect(COMPLETED_TASK_STATUS_SQL_LIST).toContain("'已完成'")
     expect(taskSummarySource).not.toContain("IN ('completed', 'done')")
     expect(taskSummarySource).not.toContain('COMPLETED_TASK_STATUS_SQL_LIST')
-    expect((taskSummarySource.match(/\bisCompletedTask\(/g) ?? []).length).toBeGreaterThanOrEqual(8)
+    expect(completionSources.reduce(
+      (count, source) => count + (source.match(/\bisCompletedTask\(/g) ?? []).length,
+      0,
+    )).toBeGreaterThanOrEqual(8)
     expect((taskSummarySource.match(/\bisCompletedMilestone\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
+    expect(taskSummaryServiceSource).not.toContain("String(task.status ?? '').toLowerCase() === 'completed'")
+    expect(taskAttributionSummarySource).not.toContain("['completed', 'done', 'finished', 'on_time', 'delayed'].includes(status)")
     expect(taskSummarySource).not.toContain("status === '已完成' ||")
     expect(taskSummarySource).not.toContain("status === 'completed' ||")
     expect(taskSummarySource).not.toContain(".in('status', ['已完成', 'completed'])")

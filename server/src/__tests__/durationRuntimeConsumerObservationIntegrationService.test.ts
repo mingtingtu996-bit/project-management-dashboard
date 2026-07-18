@@ -83,6 +83,12 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
       },
       {
         assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'projectCriticalPathService',
+        consumerSurface: 'critical_path_watch_prior',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'critical_path_rule_candidate',
         consumerKey: 'projectRemainingDurationForecastService',
         consumerSurface: 'remaining_duration_forecast',
         acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
@@ -116,9 +122,9 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
     const emptyAudit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage()
 
     expect(emptyAudit.status).toBe('runtime_consumer_observation_integration_not_ready')
-    expect(emptyAudit.requiredContracts).toHaveLength(16)
+    expect(emptyAudit.requiredContracts).toHaveLength(17)
     expect(emptyAudit.integratedContracts).toEqual([])
-    expect(emptyAudit.missingContracts).toHaveLength(16)
+    expect(emptyAudit.missingContracts).toHaveLength(17)
 
     const partialAudit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage({
       adapterRegistrations: [
@@ -203,6 +209,10 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
         ],
       },
       {
+        consumerKey: 'projectCriticalPathService',
+        assetKeys: ['critical_path_rule_candidate'],
+      },
+      {
         consumerKey: 'wbsTemplateGenerationService',
         assetKeys: [
           'special_work_duration_seed',
@@ -234,7 +244,7 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
     })
 
     expect(audit.status).toBe('runtime_consumer_observation_integration_ready')
-    expect(audit.integratedContracts).toHaveLength(16)
+    expect(audit.integratedContracts).toHaveLength(17)
     expect(audit.missingContracts).toEqual([])
     expect(audit.rejectedRegistrations).toEqual([])
   })

@@ -34,6 +34,7 @@ import {
   type ConstructionCalendarWindow,
 } from './constructionCalendar.js'
 import { delayDayDelta, normalizeDateOnlyText, signedDurationDayDelta } from '../utils/durationDays.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
 import {
   buildAcceptancePlanImpactSignals,
   buildConditionImpactSignals,
@@ -3499,14 +3500,11 @@ function obstacleImpactDays(obstacles: ForecastObstacleRow[], now: Date) {
 }
 
 function isCompletedTaskLike(task: ForecastTaskRow | null | undefined) {
-  const status = normalizeStatus(task?.status)
-  return status === 'completed'
-    || status === 'done'
-    || status === 'closed'
-    || status === '\u5df2\u5b8c\u6210'
-    || status === '\u5df2\u5173\u95ed'
-    || clampProgress(task?.progress) >= 100
-    || Boolean(task?.actual_end_date)
+  return isCompletedTask({
+    status: task?.status,
+    progress: clampProgress(task?.progress),
+    actual_end_date: task?.actual_end_date,
+  })
 }
 
 function dependencyExpectedFinishDate(
@@ -4872,7 +4870,11 @@ async function buildRemainingForecastModel(params: {
   const learnableParameterRuntimeGate = runtimeParameterApplication.runtimeGate
   const learnableParameterRegistry = buildTaskRemainingForecastLearnableParameterRegistry(modelProfile)
 
-  if (progress >= 100) {
+  if (isCompletedTask({
+    status: params.task?.status,
+    progress,
+    actual_end_date: params.input.actualEndDate as string | null | undefined,
+  })) {
     const finish = actualEnd ?? plannedEnd ?? today
     const forecastDelayDays = delayProductionDaysAfter(plannedEnd, finish, params.workCalendar)
     return {
@@ -5964,6 +5966,7 @@ export async function refreshDailyActiveTaskDurationForecasts(
     .select('id, project_id')
     .in('status', ['todo', 'pending', 'in_progress', 'blocked'])
     .lt('progress', 100)
+    .is('actual_end_date', null)
     .order('updated_at', { ascending: false })
     .limit(params.limit)
 

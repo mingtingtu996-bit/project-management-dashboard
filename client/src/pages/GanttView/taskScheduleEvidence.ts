@@ -38,6 +38,16 @@ function readTaskDurationSuggestion(task: Pick<Task, 'standard_task_metadata'> &
     : null
 }
 
+export type TaskSequencingBasis = 'execution_phase_order_fallback' | 'heuristic_stagger'
+
+export function getTaskSequencingBasis(task: Pick<Task, 'standard_task_metadata'>): TaskSequencingBasis | null {
+  const metadata = readRecord(task.standard_task_metadata)
+  const basis = String(metadata.sequencingBasis ?? metadata.sequencing_basis ?? '').trim()
+  return basis === 'execution_phase_order_fallback' || basis === 'heuristic_stagger'
+    ? basis
+    : null
+}
+
 export function getTaskDurationRiskRangeLabel(task: Pick<
   Task,
   'duration_risk_p20_days' | 'duration_risk_p50_days' | 'duration_risk_p80_days' | 'duration_risk_range' | 'standard_task_metadata'
@@ -120,6 +130,7 @@ export function withTaskScheduleEvidence<TTask extends Task>(task: TTask) {
   return {
     ...task,
     ...(durationSuggestion ? { durationSuggestion } : {}),
+    sequencingBasis: getTaskSequencingBasis(task),
     durationRiskRangeLabel: getTaskDurationRiskRangeLabel(task),
     criticalFloatLabel: getTaskCriticalFloatLabel(task),
     durationAssetEvidenceLabel: getTaskDurationAssetEvidenceLabel(task),

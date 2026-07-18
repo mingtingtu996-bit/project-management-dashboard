@@ -49,6 +49,7 @@ vi.mock('../services/supabaseService.js', () => ({
 }))
 
 vi.mock('../services/dbService.js', () => ({
+  closeRiskByRetention: vi.fn(),
   confirmRiskPendingManualClose: vi.fn(),
   executeSQLOne: mocks.executeSQLOne,
   keepRiskProcessing: vi.fn(),

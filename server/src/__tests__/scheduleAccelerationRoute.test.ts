@@ -20,6 +20,15 @@ vi.mock('../middleware/auth.js', () => ({
     next()
   }),
   requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  requireProjectEditor: vi.fn(() => (req: any, res: any, next: () => void) => {
+    if (req.headers['x-test-project-permission'] === 'viewer') {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Project editor permission required' },
+      })
+    }
+    next()
+  }),
 }))
 
 vi.mock('../services/scheduleAccelerationRuntimeService.js', () => ({
@@ -406,5 +415,23 @@ describe('schedule acceleration route', () => {
       }),
       runtimeConsumerObservationQueryExec: 'runtime-observation-query-exec',
     }))
+  })
+
+  it('rejects recommendation adoption by read-only project members', async () => {
+    const response = await request(buildApp())
+      .post('/api/projects/project-1/schedule-acceleration/recommendations/adopt')
+      .set('x-test-project-permission', 'viewer')
+      .send({
+        proposal: {
+          source: 'target_end_compression',
+          targetEndDate: '2027-03-31',
+          naturalEndDate: '2027-04-30',
+          totalRecoverDays: 12,
+        },
+      })
+
+    expect(response.status).toBe(403)
+    expect(response.body.error.code).toBe('FORBIDDEN')
+    expect(mocks.recordScheduleAccelerationRecommendationAdoption).not.toHaveBeenCalled()
   })
 })

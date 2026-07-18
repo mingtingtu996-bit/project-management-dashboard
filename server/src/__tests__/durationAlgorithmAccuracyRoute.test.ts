@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getProjectCompanyId: vi.fn(),
   getVisibleProjectIds: vi.fn(),
   getDurationAlgorithmAccuracySummary: vi.fn(),
+  getDurationAccuracyGovernanceReadModel: vi.fn(),
 }))
 
 vi.mock('../middleware/auth.js', () => ({
@@ -30,6 +31,10 @@ vi.mock('../auth/access.js', async () => {
 
 vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
   getDurationAlgorithmAccuracySummary: mocks.getDurationAlgorithmAccuracySummary,
+}))
+
+vi.mock('../services/durationAccuracyGovernanceReadModelService.js', () => ({
+  getDurationAccuracyGovernanceReadModel: mocks.getDurationAccuracyGovernanceReadModel,
 }))
 
 const { default: router } = await import('../routes/duration-accuracy.js')
@@ -62,6 +67,22 @@ describe('duration accuracy governance route', () => {
           status: 'active_candidate',
         },
       ],
+    })
+    mocks.getDurationAccuracyGovernanceReadModel.mockResolvedValue({
+      source: 'duration_accuracy_governance_read_model',
+      generatedAt: '2026-07-18T00:00:00.000Z',
+      scope: { companyId: 'company-1', projectId: null, projectIds: ['project-1', 'project-3'] },
+      samples: [],
+      publications: [],
+      runtimeCalls: [],
+      observations: [],
+      sourceStatus: {
+        samples: 'available',
+        publications: 'available',
+        runtimeCalls: 'available',
+        observations: 'available',
+      },
+      sourceErrors: {},
     })
   })
 
@@ -225,5 +246,31 @@ describe('duration accuracy governance route', () => {
       projectIds: ['project-1', 'project-3'],
       engineCode: 'critical_path_cpm',
     })
+  })
+
+  it('exposes the sanitized governance read model within the current company visible-project scope', async () => {
+    const response = await request(buildApp())
+      .get('/api/admin/duration-accuracy/governance-read-model')
+      .query({ limit: '12', companyId: 'company-2' })
+      .expect(200)
+
+    expect(response.body.success).toBe(true)
+    expect(mocks.getDurationAccuracyGovernanceReadModel).toHaveBeenCalledWith({
+      companyId: 'company-1',
+      projectId: null,
+      projectIds: ['project-1', 'project-3'],
+      limit: 12,
+    })
+  })
+
+  it('rejects cross-company project access for the governance read model', async () => {
+    mocks.getProjectCompanyId.mockResolvedValue('company-2')
+
+    await request(buildApp())
+      .get('/api/admin/duration-accuracy/governance-read-model')
+      .query({ projectId: 'project-2' })
+      .expect(403)
+
+    expect(mocks.getDurationAccuracyGovernanceReadModel).not.toHaveBeenCalled()
   })
 })

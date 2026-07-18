@@ -3004,7 +3004,34 @@ function mapDependencySourceType(source: GeneratedTemplateDependency['source'] |
   if (source === 'sibling_sequence' || source === 'internal_flow') return 'template_internal_flow'
   if (source === 'cross_item_workflow') return 'template_cross_item_workflow'
   if (source === 'dependency_intent_template') return 'template_dependency_intent'
+  if (source === 'duration_learning_runtime_publication') return 'duration_learning_runtime_publication'
   return 'template_generated'
+}
+
+function generatedDependencyMetadata(dependency: GeneratedTemplateDependency) {
+  const raw = dependency as GeneratedTemplateDependency & Record<string, unknown>
+  const evidence = readRecord(raw.dependencyRuleEvidence)
+  const publicationKey = normalizeText(raw.publicationKey ?? raw.publication_key) || null
+  const publicationStage = normalizeText(raw.publicationStage ?? raw.publication_stage) || null
+  const selectionBasis = normalizeText(raw.selectionBasis ?? raw.selection_basis) || null
+  const artifactKey = normalizeText(raw.artifactKey ?? raw.artifact_key) || null
+  return {
+    source: normalizeText(raw.source) || 'generated_dependency_network',
+    intentCode: normalizeText(raw.intentCode) || null,
+    predecessorStableCode: normalizeText(raw.predecessorStableCode) || null,
+    sequencingBasis: normalizeText(raw.sequencingBasis) || null,
+    governanceGapCode: normalizeText(raw.governanceGapCode) || null,
+    dependencyRuleEvidence: Object.keys(evidence).length > 0 ? evidence : null,
+    publicationKey,
+    publicationStage,
+    selectionBasis,
+    artifactKey,
+    learningPolicy: normalizeText(raw.sequencingBasis)
+      ? 'candidate_only_until_dependency_rule_replay_publication'
+      : publicationKey
+        ? 'published_duration_learning_runtime_dependency'
+        : 'published_or_template_generated_dependency',
+  }
 }
 
 function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<string, string>) {
@@ -3020,9 +3047,17 @@ function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<s
         dependencyType: normalizeDependencyType(dependency.dependencyType),
         lagDays: Number(dependency.lagDays ?? 0) || 0,
         sourceType: mapDependencySourceType(dependency.source),
+        metadata: generatedDependencyMetadata(dependency),
       }
     })
-    .filter((item): item is { taskId: string; dependencyTaskId: string; dependencyType: GeneratedTemplateDependency['dependencyType']; lagDays: number; sourceType: string } => Boolean(item))
+    .filter((item): item is {
+      taskId: string
+      dependencyTaskId: string
+      dependencyType: GeneratedTemplateDependency['dependencyType']
+      lagDays: number
+      sourceType: string
+      metadata: ReturnType<typeof generatedDependencyMetadata>
+    } => Boolean(item))
 }
 
 async function writePassedMilestones(params: {

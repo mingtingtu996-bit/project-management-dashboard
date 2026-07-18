@@ -423,7 +423,7 @@ function readGanttProjectDataApiSource() {
 
   for (const candidate of candidates) {
     try {
-      return readFileSync(candidate, 'utf8')
+      return readFileSync(candidate, 'utf8').replace(/\r\n/g, '\n')
     } catch {
       // Try the next workspace root.
     }
@@ -491,7 +491,7 @@ function readGanttFiltersSource() {
 
   for (const candidate of candidates) {
     try {
-      return readFileSync(candidate, 'utf8')
+      return readFileSync(candidate, 'utf8').replace(/\r\n/g, '\n')
     } catch {
       // Try the next workspace root.
     }

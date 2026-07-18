@@ -2470,7 +2470,7 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       consumerVerificationRefs: ['wizard-preview-and-commit:verified'],
       impactMonitoringRefs: ['duration-accuracy-monitoring:armed'],
       rollbackWriterRefs: ['algorithmSeedLearningService.rollbackAlgorithmSeedOverrideRuntimePublication'],
-      domainWriterKey: 'algorithmSeedOverrideReleaseExecutionService.publishApprovedCandidate',
+      domainWriterKey: 'algorithmSeedOverrideReleaseExecutionService.publishApprovedAlgorithmSeedOverride',
       companyId: 'company-1',
       projectId: 'project-1',
       requestedByUserId: 'user-1',
@@ -2486,7 +2486,7 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       writesRuntimeDirectly: false,
       workbenchDoesNotGrantPublishRights: true,
       delegatedToDomainWriter: true,
-      domainWriterKey: 'algorithmSeedOverrideReleaseExecutionService.publishApprovedCandidate',
+      domainWriterKey: 'algorithmSeedOverrideReleaseExecutionService.publishApprovedAlgorithmSeedOverride',
       domainResult: expect.objectContaining({
         status: 'algorithm_seed_override_published',
         writesSeedOverrideRuntime: true,

@@ -80,6 +80,9 @@ export interface ConstructionDependencyReplayItem {
   observedWaitDays: number | null
   replayStatus: ConstructionDependencyReplayStatus
   recommendation: ConstructionDependencyReplayRecommendation
+  runtimePublicationKey?: string | null
+  runtimePublicationStage?: string | null
+  runtimePublicationSelectionBasis?: string | null
   predecessor: {
     taskId: string | null
     taskCode: string | null
@@ -103,8 +106,14 @@ export interface ConstructionDependencyReplayItem {
 }
 
 export interface ConstructionDependencyReplayQueueItem {
-  matchedLayer: Exclude<ConstructionDependencyReplayLayer, 'unmatched'>
+  matchedLayer: ConstructionDependencyReplayLayer
   matchedSeedCode: string
+  predecessorStableCode?: string | null
+  successorStableCode?: string | null
+  dependencyType?: 'FS' | 'SS' | 'FF' | 'SF'
+  runtimePublicationKey?: string | null
+  runtimePublicationStage?: string | null
+  runtimePublicationSelectionBasis?: string | null
   sampleCount: number
   projectCount: number
   conflictCount: number
@@ -143,6 +152,7 @@ export interface ConstructionDependencyReplayCalibrationReport {
     l3LagCalibrationCandidates: ConstructionDependencyReplayQueueItem[]
     l4ConflictQuarantineCandidates: ConstructionDependencyReplayQueueItem[]
     evidenceCollectionCandidates: ConstructionDependencyReplayQueueItem[]
+    dependencyRuleGapCandidates?: ConstructionDependencyReplayQueueItem[]
   }
   items: ConstructionDependencyReplayItem[]
 }
@@ -462,6 +472,20 @@ function readMetadata(row: ConstructionDependencyReplayRow) {
   return readRecord(row.metadata)
 }
 
+function readRuntimePublicationLineage(row: ConstructionDependencyReplayRow) {
+  const metadata = readMetadata(row)
+  const runtimePublicationKey = normalizeNullableText(metadata.publicationKey ?? metadata.publication_key)
+  return {
+    runtimePublicationKey,
+    runtimePublicationStage: runtimePublicationKey
+      ? normalizeNullableText(metadata.publicationStage ?? metadata.publication_stage)
+      : null,
+    runtimePublicationSelectionBasis: runtimePublicationKey
+      ? normalizeNullableText(metadata.selectionBasis ?? metadata.selection_basis)
+      : null,
+  }
+}
+
 function readSourceSeedRuleIds(row: ConstructionDependencyReplayRow) {
   const metadata = readMetadata(row)
   return Array.from(new Set([
@@ -584,7 +608,7 @@ function groupQueueItems(
   const groups = new Map<string, ConstructionDependencyReplayItem[]>()
   for (const item of items) {
     if (!filter(item) || !item.matchedSeedCode || item.matchedLayer === 'unmatched') continue
-    const key = `${item.matchedLayer}:${item.matchedSeedCode}`
+    const key = `${item.matchedLayer}:${item.matchedSeedCode}:${item.runtimePublicationKey ?? 'cold-start-or-manual'}`
     const group = groups.get(key) ?? []
     group.push(item)
     groups.set(key, group)
@@ -602,6 +626,12 @@ function groupQueueItems(
     return {
       matchedLayer: first.matchedLayer as Exclude<ConstructionDependencyReplayLayer, 'unmatched'>,
       matchedSeedCode: first.matchedSeedCode ?? '',
+      predecessorStableCode: first.predecessor.taskCode,
+      successorStableCode: first.successor.taskCode,
+      dependencyType: first.dependencyType,
+      runtimePublicationKey: first.runtimePublicationKey ?? null,
+      runtimePublicationStage: first.runtimePublicationStage ?? null,
+      runtimePublicationSelectionBasis: first.runtimePublicationSelectionBasis ?? null,
       sampleCount: groupItems.length,
       projectCount: new Set(groupItems.map((item) => item.projectId).filter(Boolean)).size,
       conflictCount,
@@ -650,7 +680,51 @@ function buildCalibrationQueues(items: ConstructionDependencyReplayItem[]) {
         promotionPolicy: 'Collect actual start/end, acceptance/handover, and dependency edit evidence before considering seed promotion or quarantine.',
       }),
     ),
+    dependencyRuleGapCandidates: buildDependencyRuleGapCandidates(items),
   }
+}
+
+function buildDependencyRuleGapCandidates(items: ConstructionDependencyReplayItem[]) {
+  const groups = new Map<string, ConstructionDependencyReplayItem[]>()
+  for (const item of items) {
+    if (item.matchedLayer !== 'unmatched') continue
+    if (normalizeLower(item.evidence.sourceType) !== 'manual') continue
+    const predecessorCode = normalizeUpper(item.predecessor.taskCode)
+    const successorCode = normalizeUpper(item.successor.taskCode)
+    if (!predecessorCode || !successorCode) continue
+    const candidateKey = `candidate:${predecessorCode}->${successorCode}:${item.dependencyType}`
+    groups.set(candidateKey, [...(groups.get(candidateKey) ?? []), item])
+  }
+
+  return [...groups.entries()].map(([candidateKey, groupItems]) => {
+    const observedWaits = groupItems
+      .map((item) => item.observedWaitDays)
+      .filter((value): value is number => value != null)
+    return {
+      matchedLayer: 'unmatched' as const,
+      matchedSeedCode: candidateKey,
+      predecessorStableCode: groupItems[0]?.predecessor.taskCode ?? null,
+      successorStableCode: groupItems[0]?.successor.taskCode ?? null,
+      dependencyType: groupItems[0]?.dependencyType ?? 'FS',
+      runtimePublicationKey: groupItems[0]?.runtimePublicationKey ?? null,
+      runtimePublicationStage: groupItems[0]?.runtimePublicationStage ?? null,
+      runtimePublicationSelectionBasis: groupItems[0]?.runtimePublicationSelectionBasis ?? null,
+      sampleCount: groupItems.length,
+      projectCount: new Set(groupItems.map((item) => item.projectId).filter(Boolean)).size,
+      conflictCount: 0,
+      seedLagDays: null,
+      medianObservedWaitDays: median(observedWaits),
+      suggestedLagDays: median(observedWaits),
+      queueStatus: 'evidence_collection_required' as const,
+      recommendation: 'map_dependency_to_l3_or_l4_seed' as const,
+      promotionPolicy: 'Aggregate manual dependency corrections by stable predecessor/successor code, then require replay, conflict checks, canary, monitoring, and rollback before publishing a reusable rule.',
+      sampleDependencyIds: groupItems.map((item) => item.dependencyId).filter(Boolean).slice(0, 20),
+      projectIds: Array.from(new Set(groupItems.map((item) => item.projectId).filter(Boolean))).slice(0, 20),
+    }
+  }).sort((left, right) => (
+    right.sampleCount - left.sampleCount
+      || left.matchedSeedCode.localeCompare(right.matchedSeedCode)
+  ))
 }
 
 function buildReplayItem(
@@ -679,6 +753,7 @@ function buildReplayItem(
     zeroLagReviewThresholdDays: options.zeroLagReviewThresholdDays,
   })
   const sourceSeedRuleIds = readSourceSeedRuleIds(row)
+  const runtimePublicationLineage = readRuntimePublicationLineage(row)
   const matchedSeedCode = l4Match?.template.templateCode ?? l3Match?.rule.stableCode ?? null
   const l3Rule: V1475CrossItemWorkflowRule | null = l3Match?.rule ?? null
 
@@ -692,6 +767,7 @@ function buildReplayItem(
     seedLagDays,
     observedWaitDays: waitDays,
     ...replay,
+    ...runtimePublicationLineage,
     predecessor: {
       taskId: normalizeText(row.predecessor_task_id) || null,
       taskCode: predecessorCodes(row)[0] ?? null,
@@ -856,6 +932,7 @@ function flattenCalibrationQueueCandidates(report: ConstructionDependencyReplayC
     ...report.calibrationQueues.l3LagCalibrationCandidates,
     ...report.calibrationQueues.l4ConflictQuarantineCandidates,
     ...report.calibrationQueues.evidenceCollectionCandidates,
+    ...(report.calibrationQueues.dependencyRuleGapCandidates ?? []),
   ]
 }
 
@@ -891,6 +968,7 @@ function buildDependencyRuleOutcomeId(
     queueItem.matchedSeedCode,
     companyId ?? 'no-company',
     projectId ?? 'multi-project',
+    ...(queueItem.runtimePublicationKey ? [queueItem.runtimePublicationKey] : []),
   ].join(':')
 }
 
@@ -914,6 +992,9 @@ async function recordDependencyRulePlanNetworkOutcomes(
       report_code: report.reportCode,
       matched_layer: queueItem.matchedLayer,
       matched_seed_code: queueItem.matchedSeedCode,
+      predecessor_stable_code: queueItem.predecessorStableCode,
+      successor_stable_code: queueItem.successorStableCode,
+      dependency_type: queueItem.dependencyType,
       sample_count: queueItem.sampleCount,
       project_count: queueItem.projectCount,
       conflict_count: queueItem.conflictCount,
@@ -929,6 +1010,9 @@ async function recordDependencyRulePlanNetworkOutcomes(
       sample_dependency_ids: queueItem.sampleDependencyIds,
       project_ids: queueItem.projectIds,
       comparable_actual_date_count: report.summary.comparableActualDateCount,
+      runtime_publication_key: queueItem.runtimePublicationKey ?? null,
+      runtime_publication_stage: queueItem.runtimePublicationStage ?? null,
+      runtime_publication_selection_basis: queueItem.runtimePublicationSelectionBasis ?? null,
       writes_runtime_directly: false,
       writes_fact_directly: false,
     }
@@ -943,7 +1027,7 @@ async function recordDependencyRulePlanNetworkOutcomes(
         'project_business_outcome_writer',
         companyId,
         projectId,
-        null,
+        queueItem.runtimePublicationKey ?? null,
         metadata,
         false,
         false,
@@ -1102,6 +1186,7 @@ export function evaluateConstructionDependencyRuleCandidateLiveLearningEvidence(
     && report.summary.comparableActualDateCount > 0
   const dependencyRuleCandidatePresent = report.calibrationQueues.l3LagCalibrationCandidates.length > 0
     || report.calibrationQueues.l4ConflictQuarantineCandidates.length > 0
+    || (report.calibrationQueues.dependencyRuleGapCandidates?.length ?? 0) > 0
 
   if (!predictionEventRecorded) missingReasons.push('dependency_replay_report_required')
   if (!actualOutcomeEventRecorded) missingReasons.push('dependency_actual_outcome_required')
@@ -1153,6 +1238,7 @@ export function buildConstructionDependencyRulePublicationReadiness(
   const candidateQueues = [
     ...input.replayReport.calibrationQueues.l3LagCalibrationCandidates,
     ...input.replayReport.calibrationQueues.l4ConflictQuarantineCandidates,
+    ...(input.replayReport.calibrationQueues.dependencyRuleGapCandidates ?? []),
   ]
   const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
   const sourceDependencyIds = normalizeStringList(candidateQueues.flatMap((candidate) => candidate.sampleDependencyIds))
@@ -1222,6 +1308,7 @@ export function buildConstructionDependencyRulePublicationReadinessFromProductio
   const candidateQueues = [
     ...input.replayReport.calibrationQueues.l3LagCalibrationCandidates,
     ...input.replayReport.calibrationQueues.l4ConflictQuarantineCandidates,
+    ...(input.replayReport.calibrationQueues.dependencyRuleGapCandidates ?? []),
   ]
   const approvedCandidateEventIds = normalizeStringList(input.approvedCandidateEventIds)
   const sourceDependencyIds = normalizeStringList(candidateQueues.flatMap((candidate) => candidate.sampleDependencyIds))

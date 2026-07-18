@@ -20,11 +20,13 @@ import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { Pagination } from '@/components/ui/Pagination'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
@@ -110,10 +112,37 @@ type IssueRow = {
   sourceEntityId?: string | null
 }
 
+type ClosureResultCode = 'resolved' | 'mitigated' | 'transferred' | 'accepted' | 'duplicate' | 'invalidated'
+type ClosureEffectiveness = 'resolved' | 'partially_resolved' | 'transferred' | 'accepted' | 'undetermined'
+type ClosureCauseCode =
+  | 'predecessor_delay'
+  | 'material_shortage'
+  | 'labor_shortage'
+  | 'equipment_unavailable'
+  | 'design_change'
+  | 'drawing_delay'
+  | 'quality_rework'
+  | 'weather_impact'
+  | 'owner_decision'
+  | 'government_inspection'
+  | 'site_capacity_pressure'
+  | 'workflow_sequence'
+  | 'external_readiness'
+  | 'other'
+type ClosureResponsibilityClass =
+  | 'none'
+  | 'owner_attributable'
+  | 'contractor_attributable'
+  | 'force_majeure'
+  | 'shared'
+  | 'undetermined'
+
 type DialogState =
   | { type: 'convert-risk'; row: RiskRow }
   | { type: 'create-manual-risk' }
   | { type: 'create-manual-issue' }
+  | { type: 'structured-close'; entityType: 'risk'; row: RiskRow; pendingManualClose: boolean }
+  | { type: 'structured-close'; entityType: 'issue'; row: IssueRow; pendingManualClose: boolean }
   | null
 
 type ProtectionDialogState = {
@@ -189,6 +218,45 @@ const WARNING_TYPE_LABELS: Record<string, string> = {
 const RISK_STATUS_LABELS: Record<RiskRow['status'], string> = { identified: '已识别', mitigating: '处理中', closed: '已关闭' }
 const ISSUE_STATUS_LABELS: Record<IssueRow['status'], string> = { open: '待处理', investigating: '调查中', resolved: '已解决（待确认）', closed: '已关闭' }
 const SEVERITY_LABELS: Record<RiskRow['severity'], string> = { low: '低', medium: '中', high: '高', critical: '严重' }
+const CLOSURE_RESULT_OPTIONS: Array<{ value: ClosureResultCode; label: string }> = [
+  { value: 'resolved', label: '已解决' },
+  { value: 'mitigated', label: '已缓解' },
+  { value: 'transferred', label: '已转移' },
+  { value: 'accepted', label: '已接受' },
+  { value: 'duplicate', label: '重复记录' },
+  { value: 'invalidated', label: '已失效' },
+]
+const CLOSURE_EFFECTIVENESS_OPTIONS: Array<{ value: ClosureEffectiveness; label: string }> = [
+  { value: 'resolved', label: '完全解决' },
+  { value: 'partially_resolved', label: '部分解决' },
+  { value: 'transferred', label: '已转移' },
+  { value: 'accepted', label: '已接受' },
+  { value: 'undetermined', label: '待观察' },
+]
+const CLOSURE_CAUSE_OPTIONS: Array<{ value: ClosureCauseCode; label: string }> = [
+  { value: 'predecessor_delay', label: '前置工作传导' },
+  { value: 'material_shortage', label: '材料短缺或晚到' },
+  { value: 'labor_shortage', label: '劳动力不足' },
+  { value: 'equipment_unavailable', label: '设备机械不可用' },
+  { value: 'design_change', label: '设计变更' },
+  { value: 'drawing_delay', label: '图纸或审批延误' },
+  { value: 'quality_rework', label: '质量返工' },
+  { value: 'weather_impact', label: '天气影响' },
+  { value: 'owner_decision', label: '业主决策等待' },
+  { value: 'government_inspection', label: '政府检查审批' },
+  { value: 'site_capacity_pressure', label: '现场承载不足' },
+  { value: 'workflow_sequence', label: '工序顺序约束' },
+  { value: 'external_readiness', label: '外部条件未就绪' },
+  { value: 'other', label: '其他' },
+]
+const CLOSURE_RESPONSIBILITY_OPTIONS: Array<{ value: ClosureResponsibilityClass; label: string }> = [
+  { value: 'none', label: '暂不判定' },
+  { value: 'owner_attributable', label: '发包人原因' },
+  { value: 'contractor_attributable', label: '承包人原因' },
+  { value: 'force_majeure', label: '不可抗力' },
+  { value: 'shared', label: '共同原因' },
+  { value: 'undetermined', label: '责任待定' },
+]
 const PENDING_MANUAL_CLOSE_LABEL = '待确认关闭'
 const SOURCE_WEIGHT: Record<string, number> = { condition_expired: 4, obstacle_escalated: 3, risk_converted: 2, risk_auto_escalated: 2, manual: 1 }
 const SEVERITY_WEIGHT: Record<RiskRow['severity'], number> = { critical: 4, high: 3, medium: 2, low: 1 }
@@ -209,6 +277,20 @@ function normalizeSeverity(value: unknown): RiskRow['severity'] {
   if (raw === 'high') return 'high'
   if (raw === 'low') return 'low'
   return 'medium'
+}
+
+function inferClosureCauseCode(row: RiskRow | IssueRow): ClosureCauseCode {
+  const token = `${row.sourceType} ${row.title} ${row.description ?? ''}`.toLowerCase()
+  if (/(material|supplier|材料|到货|供应商)/.test(token)) return 'material_shortage'
+  if (/(labor|worker|personnel|人员|劳动力|班组)/.test(token)) return 'labor_shortage'
+  if (/(equipment|machine|机械|设备)/.test(token)) return 'equipment_unavailable'
+  if (/(drawing|图纸|出图|审图)/.test(token)) return 'drawing_delay'
+  if (/(design.change|设计变更)/.test(token)) return 'design_change'
+  if (/(quality|rework|质量|返工)/.test(token)) return 'quality_rework'
+  if (/(weather|rain|storm|天气|降雨|高温|低温)/.test(token)) return 'weather_impact'
+  if (/(predecessor|dependency|前置|依赖)/.test(token)) return 'predecessor_delay'
+  if (/(condition|obstacle|warning|条件|阻碍|预警)/.test(token)) return 'external_readiness'
+  return 'other'
 }
 
 function normalizeRiskStatusFilter(value: string | null): 'all' | RiskRow['status'] {
@@ -744,6 +826,13 @@ export default function RiskManagement() {
   const [manualIssueTitle, setManualIssueTitle] = useState('')
   const [manualIssueDescription, setManualIssueDescription] = useState('')
   const [manualIssueSeverity, setManualIssueSeverity] = useState<IssueRow['severity']>('medium')
+  const [closureResultCode, setClosureResultCode] = useState<ClosureResultCode>('resolved')
+  const [closureEffectiveness, setClosureEffectiveness] = useState<ClosureEffectiveness>('resolved')
+  const [closureCauseCode, setClosureCauseCode] = useState<ClosureCauseCode>('other')
+  const [closureResponsibilityClass, setClosureResponsibilityClass] = useState<ClosureResponsibilityClass>('none')
+  const [closureResultSummary, setClosureResultSummary] = useState('')
+  const [closureResponsibilityBasis, setClosureResponsibilityBasis] = useState('')
+  const [closureError, setClosureError] = useState<string | null>(null)
   const [priorityDrafts, setPriorityDrafts] = useState<Record<string, number>>({})
   const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
   const routeRiskFilters = useMemo(() => {
@@ -1084,6 +1173,98 @@ export default function RiskManagement() {
     })
   }, [toast])
 
+  const openStructuredCloseDialog = useCallback((
+    row: RiskRow | IssueRow,
+    entityType: 'risk' | 'issue',
+    pendingManualClose = row.pendingManualClose,
+  ) => {
+    setClosureResultCode(entityType === 'risk' ? 'mitigated' : 'resolved')
+    setClosureEffectiveness('resolved')
+    setClosureCauseCode(inferClosureCauseCode(row))
+    setClosureResponsibilityClass('none')
+    setClosureResultSummary('')
+    setClosureResponsibilityBasis('')
+    setClosureError(null)
+    if (entityType === 'risk') {
+      setDialogState({ type: 'structured-close', entityType, row: row as RiskRow, pendingManualClose })
+    } else {
+      setDialogState({ type: 'structured-close', entityType, row: row as IssueRow, pendingManualClose })
+    }
+  }, [])
+
+  const handleSubmitStructuredClose = useCallback(async () => {
+    if (!projectId || dialogState?.type !== 'structured-close') return
+    const summary = closureResultSummary.trim()
+    if (!summary) {
+      setClosureError('请填写实际处理结果。')
+      return
+    }
+
+    setClosureError(null)
+    setSaving(true)
+    const { entityType, row, pendingManualClose } = dialogState
+    try {
+      const confirmedCause = await apiPost<{ id?: string }>(
+        `/api/cause-attributions/projects/${encodeURIComponent(projectId)}/subjects/${entityType}/${encodeURIComponent(row.id)}/confirm`,
+        {
+          causeCode: closureCauseCode,
+          causeRole: 'primary',
+          rawText: summary,
+          ...(closureResponsibilityClass === 'none'
+            ? {}
+            : { responsibilityClass: closureResponsibilityClass }),
+          ...(closureResponsibilityClass !== 'none' && closureResponsibilityBasis.trim()
+            ? { responsibilityBasis: closureResponsibilityBasis.trim() }
+            : {}),
+        },
+      )
+      const causeAttributionId = String(confirmedCause?.id ?? '').trim()
+      if (!causeAttributionId) throw new Error('原因归因记录创建失败，请重试。')
+
+      if (pendingManualClose) {
+        await apiPost(`/api/${entityType === 'risk' ? 'risks' : 'issues'}/${row.id}/confirm-close`, {
+          version: row.version,
+          resultCode: closureResultCode,
+          resultSummary: summary,
+          effectiveness: closureEffectiveness,
+          evidenceRefs: [],
+          causeAttributionId,
+        })
+      } else {
+        await apiPut(`/api/${entityType === 'risk' ? 'risks' : 'issues'}/${row.id}`, {
+          status: 'closed',
+          version: row.version,
+          closed_reason: summary,
+          closure_result_code: closureResultCode,
+          closure_result_summary: summary,
+          closure_effectiveness: closureEffectiveness,
+          closure_evidence_refs: [],
+          closure_cause_attribution_id: causeAttributionId,
+        })
+      }
+
+      setDialogState(null)
+      await refresh()
+      toast({ title: entityType === 'risk' ? '风险已关闭' : '问题已关闭', description: row.title })
+    } catch (error) {
+      presentMutationError(error, entityType === 'risk' ? '确认关闭风险' : '确认关闭问题')
+    } finally {
+      setSaving(false)
+    }
+  }, [
+    closureCauseCode,
+    closureEffectiveness,
+    closureResponsibilityBasis,
+    closureResponsibilityClass,
+    closureResultCode,
+    closureResultSummary,
+    dialogState,
+    presentMutationError,
+    projectId,
+    refresh,
+    toast,
+  ])
+
   const handleAcknowledgeWarning = useCallback(async (item: WarningItem) => {
     if (!canEdit) return
     try {
@@ -1193,32 +1374,12 @@ export default function RiskManagement() {
     }
   }, [presentMutationError, refresh])
 
-  const handleConfirmCloseRisk = useCallback(async (row: RiskRow) => {
-    try {
-      await apiPost(`/api/risks/${row.id}/confirm-close`, { version: row.version })
-      return true
-    } catch (error) {
-      presentMutationError(error, `确认关闭风险「${row.title}」`)
-      return false
-    }
-  }, [presentMutationError])
-
   const handleKeepProcessingRisk = useCallback(async (row: RiskRow) => {
     try {
       await apiPost(`/api/risks/${row.id}/keep-processing`, { version: row.version })
       return true
     } catch (error) {
       presentMutationError(error, `保持风险处理中「${row.title}」`)
-      return false
-    }
-  }, [presentMutationError])
-
-  const handleConfirmCloseIssue = useCallback(async (row: IssueRow) => {
-    try {
-      await apiPost(`/api/issues/${row.id}/confirm-close`, { version: row.version })
-      return true
-    } catch (error) {
-      presentMutationError(error, `确认关闭问题「${row.title}」`)
       return false
     }
   }, [presentMutationError])
@@ -1234,18 +1395,18 @@ export default function RiskManagement() {
   }, [presentMutationError])
 
   const handlePendingManualCloseDecision = useCallback(async (row: RiskRow | IssueRow, entityType: 'risk' | 'issue', keepProcessing: boolean) => {
+    if (!keepProcessing) {
+      openStructuredCloseDialog(row, entityType, true)
+      return
+    }
     const success = entityType === 'risk'
-      ? keepProcessing
-        ? await handleKeepProcessingRisk(row as RiskRow)
-        : await handleConfirmCloseRisk(row as RiskRow)
-      : keepProcessing
-        ? await handleKeepProcessingIssue(row as IssueRow)
-        : await handleConfirmCloseIssue(row as IssueRow)
+      ? await handleKeepProcessingRisk(row as RiskRow)
+      : await handleKeepProcessingIssue(row as IssueRow)
 
     if (!success) return
     await refresh()
-    toast({ title: keepProcessing ? '已保持处理中' : '已确认关闭', description: row.title })
-  }, [handleConfirmCloseIssue, handleConfirmCloseRisk, handleKeepProcessingIssue, handleKeepProcessingRisk, refresh, toast])
+    toast({ title: '已保持处理中', description: row.title })
+  }, [handleKeepProcessingIssue, handleKeepProcessingRisk, openStructuredCloseDialog, refresh, toast])
 
   const handleDeleteSelectedEntity = useCallback(async () => {
     if (!deleteDialog) return
@@ -1637,7 +1798,7 @@ export default function RiskManagement() {
           {!row.pendingManualClose ? (
             <>
               {row.status === 'identified' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateRisk(row, { status: 'mitigating' })}>开始处理</Button> : null}
-              {row.status === 'mitigating' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateRisk(row, { status: 'closed' })}>关闭风险</Button> : null}
+              {row.status === 'mitigating' ? <Button size="sm" variant="outline" onClick={() => openStructuredCloseDialog(row, 'risk', false)}>关闭风险</Button> : null}
               {row.status === 'closed' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateRisk(row, { status: 'mitigating', linked_issue_id: null, closed_reason: null, closed_at: null })}>恢复处理</Button> : null}
               {row.status !== 'closed' ? <Button size="sm" onClick={() => setDialogState({ type: 'convert-risk', row })}>转为问题</Button> : null}
             </>
@@ -1684,7 +1845,7 @@ export default function RiskManagement() {
               {row.status === 'open' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'investigating' })}>开始调查</Button> : null}
               {row.status === 'investigating' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'open' })}>退回待处理</Button> : null}
               {row.status === 'investigating' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'resolved' })}>标记已解决</Button> : null}
-              {row.status === 'resolved' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'closed' })}>确认关闭</Button> : null}
+              {row.status === 'resolved' ? <Button size="sm" variant="outline" onClick={() => openStructuredCloseDialog(row, 'issue', false)}>确认关闭</Button> : null}
             </>
           ) : null}
           {row.sourceEntityType === 'risk' && row.sourceEntityId ? (
@@ -2075,6 +2236,99 @@ export default function RiskManagement() {
         </section>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
+        {dialogState?.type === 'structured-close' ? (
+          <DialogContent className="max-w-[var(--dialog-lg-width)]" data-testid="structured-close-dialog">
+            <DialogHeader>
+              <DialogTitle>{dialogState.entityType === 'risk' ? '关闭风险' : '关闭问题'}</DialogTitle>
+              <DialogDescription className="sr-only">
+                记录关闭结果、原因分类和可选责任判断
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-sm font-medium text-slate-900">{dialogState.row.title}</p>
+                {dialogState.row.description ? (
+                  <p className="mt-1 text-xs leading-5 text-slate-600">{dialogState.row.description}</p>
+                ) : null}
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="closure-result-code">处理结果</Label>
+                  <Select value={closureResultCode} onValueChange={(value) => setClosureResultCode(value as ClosureResultCode)}>
+                    <SelectTrigger id="closure-result-code"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_RESULT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="closure-effectiveness">处置效果</Label>
+                  <Select value={closureEffectiveness} onValueChange={(value) => setClosureEffectiveness(value as ClosureEffectiveness)}>
+                    <SelectTrigger id="closure-effectiveness"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_EFFECTIVENESS_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="closure-cause-code">原因分类</Label>
+                  <Select value={closureCauseCode} onValueChange={(value) => setClosureCauseCode(value as ClosureCauseCode)}>
+                    <SelectTrigger id="closure-cause-code"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_CAUSE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="closure-responsibility-class">责任判断</Label>
+                  <Select value={closureResponsibilityClass} onValueChange={(value) => setClosureResponsibilityClass(value as ClosureResponsibilityClass)}>
+                    <SelectTrigger id="closure-responsibility-class"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_RESPONSIBILITY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="closure-result-summary">实际处理结果</Label>
+                <Textarea
+                  id="closure-result-summary"
+                  data-testid="closure-result-summary"
+                  value={closureResultSummary}
+                  onChange={(event) => setClosureResultSummary(event.target.value)}
+                  maxLength={2000}
+                  aria-invalid={Boolean(closureError)}
+                  className={cn('min-h-24', closureError && 'border-red-500')}
+                />
+              </div>
+              {closureResponsibilityClass !== 'none' ? (
+                <div className="space-y-2">
+                  <Label htmlFor="closure-responsibility-basis">责任判断依据</Label>
+                  <Textarea
+                    id="closure-responsibility-basis"
+                    value={closureResponsibilityBasis}
+                    onChange={(event) => setClosureResponsibilityBasis(event.target.value)}
+                    maxLength={1000}
+                    className="min-h-20"
+                  />
+                </div>
+              ) : null}
+              {closureError ? <p className="text-sm text-red-600" role="alert">{closureError}</p> : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button>
+              <Button data-testid="structured-close-submit" onClick={() => void handleSubmitStructuredClose()} loading={saving}>确认关闭</Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
         {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[var(--dialog-md-width)]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
         {dialogState?.type === 'create-manual-risk' ? (
           <DialogContent className="max-w-[var(--dialog-md-width)]">

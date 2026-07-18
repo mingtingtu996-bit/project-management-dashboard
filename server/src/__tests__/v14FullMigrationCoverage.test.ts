@@ -10,14 +10,19 @@ function readMigration(name: string) {
 }
 
 describe('v1.4 canonical clean migration coverage', () => {
-  it('keeps the canonical clean bundle current through migration 310', () => {
+  it('keeps the canonical clean bundle current through the latest numbered migration', () => {
     const cleanMigration = readMigration('CLEAN_MIGRATION_V4.sql')
     const post279Migrations = readdirSync(migrationsRoot)
-      .filter((name) => /^(?:28[0-3]|29\d|30\d|310)_.*\.sql$/.test(name))
+      .filter((name) => /^(?:2[89]\d|3\d{2})_.*\.sql$/.test(name))
       .sort((left, right) => left.localeCompare(right, 'en'))
+    const latestMigration = post279Migrations.at(-1)
+    const latestMigrationNumber = latestMigration?.match(/^(\d+)_/)?.[1]
 
-    expect(cleanMigration).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 310')
-    expect(post279Migrations).toHaveLength(25)
+    expect(latestMigration).toBeDefined()
+    expect(latestMigrationNumber).toBeDefined()
+    expect(cleanMigration).toContain(
+      `CANONICAL: current clean bootstrap bundle, synchronized through migration ${latestMigrationNumber}`,
+    )
 
     let previousSourceIndex = -1
     for (const filename of post279Migrations) {
@@ -27,7 +32,7 @@ describe('v1.4 canonical clean migration coverage', () => {
     }
 
     const cleanupIndex = cleanMigration.indexOf('Source: 300_runtime_legacy_compatibility_cleanup.sql')
-    expect(cleanMigration.trimEnd().endsWith(readMigration('310_v14231_project_entity_links_runtime_rls.sql').trim())).toBe(true)
+    expect(cleanMigration.trimEnd().endsWith(readMigration(latestMigration!).trim())).toBe(true)
     expect(cleanMigration).toContain('CREATE INDEX idx_tasks_milestone_id')
     expect(cleanMigration).toContain('CREATE INDEX idx_task_baseline_items_source_milestone_id')
     for (const finalCleanup of [

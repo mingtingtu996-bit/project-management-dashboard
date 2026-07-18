@@ -6,11 +6,16 @@ import {
   validateDurationContextPolicyStateBucket,
   type DurationContextPolicyExperienceTier,
 } from './durationContextPolicyStateBucketService.js'
-import { orderedInclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
 import {
   loadProgressVelocityCompanyDurationExperienceSamples,
   loadProgressVelocityProjectDurationExperienceSamples,
 } from './durationContextSampleReadModelService.js'
+import {
+  productionDaysBetweenInclusive,
+  resolveConstructionCalendarContext,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 
 export type ProgressVelocityLearningConfidence = 'high' | 'medium' | 'low'
 export type ProgressVelocityLearningActionPolicy = 'auto_apply' | 'candidate_only' | 'confidence_only'
@@ -27,6 +32,7 @@ export interface ProgressVelocityLearningInput {
   structureTypeCode?: string | null
   baseDurationDays?: number | null
   now?: Date
+  constructionCalendarResolver?: typeof resolveConstructionCalendarContext
 }
 
 export interface ProgressVelocityLearningResult {
@@ -255,13 +261,22 @@ function isInLearningWindow(row: CompletedTaskSampleRow, now: Date, learningWind
   return ageDays >= 0 && ageDays <= learningWindowDays
 }
 
-function buildRatioSample(row: CompletedTaskSampleRow, now: Date, learningWindowDays = LEARNING_WINDOW_DAYS): RatioSample | null {
+function buildRatioSample(
+  row: CompletedTaskSampleRow,
+  now: Date,
+  learningWindowDays = LEARNING_WINDOW_DAYS,
+  constructionCalendar?: ConstructionCalendarContext | null,
+): RatioSample | null {
   const actualStart = parseDate(row.actual_start_date)
   const actualEnd = completedSampleEndDate(row)
   const plannedStart = parseDate(row.planned_start_date ?? row.start_date)
   const plannedEnd = parseDate(row.planned_end_date ?? row.end_date)
-  const actualDuration = orderedInclusiveDurationDays(actualStart, actualEnd)
-  const plannedDuration = orderedInclusiveDurationDays(plannedStart, plannedEnd)
+  const actualDuration = actualStart && actualEnd
+    ? productionDaysBetweenInclusive(actualStart, actualEnd, constructionCalendar)
+    : null
+  const plannedDuration = plannedStart && plannedEnd
+    ? productionDaysBetweenInclusive(plannedStart, plannedEnd, constructionCalendar)
+    : null
   if (!actualDuration || !plannedDuration) return null
 
   const ratio = actualDuration / plannedDuration
@@ -723,6 +738,12 @@ export async function buildProjectProgressVelocityLearning(
       experienceRowsByTaskId.set(taskId, { row, weightMultiplier: CROSS_PROJECT_SAMPLE_WEIGHT })
     }
   }
+  const hasRawTaskSamples = selectedGroup.rows.some((row) => (
+    !experienceRowsByTaskId.has(normalizeText(row.id))
+  ))
+  const constructionCalendar = hasRawTaskSamples
+    ? await (input.constructionCalendarResolver ?? resolveConstructionCalendarContext)({ projectId })
+    : null
   const taskIds = selectedGroup.rows
     .map((row) => normalizeText(row.id))
     .filter((taskId) => taskId && !experienceRowsByTaskId.has(taskId))
@@ -746,7 +767,7 @@ export async function buildProjectProgressVelocityLearning(
       continue
     }
 
-    const sample = buildRatioSample(row, now, learningWindowDays)
+    const sample = buildRatioSample(row, now, learningWindowDays, constructionCalendar)
     if (sample) {
       sample.weight *= learningAdjustment.weightMultiplier
       sample.qualityWeightMultiplier = learningAdjustment.weightMultiplier
@@ -804,6 +825,8 @@ export async function buildProjectProgressVelocityLearning(
         },
       })),
       learningWindowDays,
+      rawTaskDurationDayBasis: 'construction_production_day',
+      constructionCalendarBasis: constructionCalendar?.basis ?? 'duration_experience_sample_basis',
       learningScope: companyFallbackRows.length > 0 ? 'project_plus_company' : 'project',
       experienceTier: PROGRESS_VELOCITY_EXPECTED_EXPERIENCE_TIER,
       learningBucketValidation: 'duration_context_policy_state_bucket_T1_only',

@@ -17,6 +17,11 @@ import { getProjectTimelineEvents, isTaskTimelineEventStoreReady } from '../serv
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
 import { executeSQLOne, supabase } from '../services/dbService.js'
 import {
+  buildDailyTaskProgressSummary,
+  buildTaskSummaryCompareResults,
+  getTaskActualEndDate,
+  getTaskPlannedEndDate,
+  isTaskDelayedByPeriodEnd,
   normalizeTaskSummaryCompareGranularity,
   normalizeTaskSummaryComparePeriods,
 } from '../services/taskSummaryCompareService.js'
@@ -29,11 +34,16 @@ import {
 } from '../middleware/auth.js'
 import { validate, validateIdParam } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
-import { calculateProgressMetrics } from '../utils/progressCalculation.js'
 import { delayDayDelta } from '../utils/durationDays.js'
 import { isCompletedMilestone, isCompletedTask } from '../utils/taskStatus.js'
 import type { ApiResponse } from '../types/index.js'
 import type { TaskCompletionReport } from '../types/db.js'
+
+export {
+  getTaskActualEndDate,
+  getTaskPlannedEndDate,
+  isTaskDelayedByPeriodEnd,
+}
 
 const router = Router()
 router.use(authenticate)
@@ -850,48 +860,6 @@ router.get('/projects/:id/task-summary/assignees', validateIdParam, requireProje
 // GET /projects/:id/task-summary/compare — N段时段对比（进度变化量对比）
 // 参数: periods (JSON数组，每个元素 {label, from, to})，granularity ("day"|"week"|"month")
 // 返回: 每个时段的进度变化统计
-function toDateOnly(value: unknown): string {
-  return String(value ?? '').slice(0, 10)
-}
-
-export function getTaskPlannedEndDate(task: Record<string, unknown> | null | undefined): string {
-  return toDateOnly(task?.planned_end_date || task?.end_date)
-}
-
-export function getTaskActualEndDate(task: Record<string, unknown> | null | undefined): string {
-  return toDateOnly(task?.actual_end_date)
-}
-
-export function isTaskDelayedByPeriodEnd(
-  task: Record<string, unknown> | null | undefined,
-  periodEnd: string,
-  calendar?: Awaited<ReturnType<typeof resolveConstructionCalendarContext>> | null,
-): boolean {
-  if (!task) return false
-  const plannedEnd = getTaskPlannedEndDate(task)
-  if (!plannedEnd || plannedEnd > periodEnd) return false
-
-  if (isCompletedTask(task)) {
-    const actualEnd = getTaskActualEndDate(task)
-    if (!actualEnd) return false
-    return Math.max(0, delayDayDelta(plannedEnd, actualEnd, calendar) ?? 0) > 0
-  }
-
-  return plannedEnd <= periodEnd
-}
-
-type TaskSummaryCompareSummaryRow = {
-  period_label: string
-  from: string
-  to: string
-  total_progress_change: number | string | null
-  tasks_updated: number | string | null
-  tasks_progressed: number | string | null
-  tasks_completed: number | string | null
-  delayed: number | string | null
-  task_ids?: string[] | null
-}
-
 function isSummaryOnlyQuery(value: unknown) {
   const text = normalizeText(value).toLowerCase()
   return text === 'true' || text === '1' || text === 'yes'
@@ -951,16 +919,13 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, requireProject
   }
 
   // 获取所有时段覆盖的日期范围
-  const allFroms = normalizedPeriods.map((p) => p.from)
   const allTos = normalizedPeriods.map((p) => p.to)
-  const globalFrom = allFroms.sort()[0]
   const globalTo = allTos.sort().reverse()[0]
 
   // 1. 先获取项目下的所有任务；复用任务总结主链路，真实环境走 PostgreSQL 直连，避免旧 REST 链路拖慢仪表盘。
   const projectTasks = await loadTaskSummaryTaskRows(projectId)
 
   const taskIds = (projectTasks || []).map(t => t.id)
-  const taskMap = new Map((projectTasks || []).map(t => [t.id, t]))
   const [participantUnitNameMap, projectMemberNameMap, workCalendar] = await Promise.all([
     loadParticipantUnitNameMap(
       projectId,
@@ -984,7 +949,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, requireProject
   }
 
   // 2. 从 task_progress_snapshots 获取所有可作为周期基线/周期内变化的快照。
-  // 注意：这里不能从 globalFrom 开始查，否则首个周期 from 之前的基线快照会丢失。
+  // Query all snapshots up to the period end so the service can resolve the first baseline.
   let snapshots: Array<{ task_id: string; progress: number; snapshot_date: string; notes?: string | null }> = []
   if (taskIds.length > 0) {
     const snapshotResult = await supabase
@@ -1000,132 +965,12 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, requireProject
     snapshots = (snapshotResult.data ?? []) as typeof snapshots
   }
 
-  const snapshotsByTask = new Map<string, Array<{ progress: number; snapshot_date: string }>>()
-  for (const snap of snapshots) {
-    const taskId = snap.task_id as string
-    if (!snapshotsByTask.has(taskId)) snapshotsByTask.set(taskId, [])
-    snapshotsByTask.get(taskId)!.push({
-      progress: Number(snap.progress ?? 0),
-      snapshot_date: String(snap.snapshot_date ?? ''),
-    })
-  }
-
-  const getBaselineProgress = (taskId: string, from: string) => {
-    const rows = snapshotsByTask.get(taskId) ?? []
-    let baseline = 0
-    for (const row of rows) {
-      if (row.snapshot_date >= from) break
-      baseline = row.progress
-    }
-    return baseline
-  }
-
-  const getProgressAtOrBefore = (taskId: string, date: string) => {
-    const rows = snapshotsByTask.get(taskId) ?? []
-    let progress = 0
-    for (const row of rows) {
-      if (row.snapshot_date > date) break
-      progress = row.progress
-    }
-    return progress
-  }
-
-  const buildProjectProgressTasks = (date: string, mode: 'before' | 'at') =>
-    (projectTasks || []).map((task: any) => ({
-      id: task.id,
-      parent_id: task.parent_id,
-      planned_start_date: task.planned_start_date,
-      planned_end_date: task.planned_end_date,
-      start_date: task.start_date,
-      end_date: task.end_date,
-      progress: mode === 'before'
-        ? getBaselineProgress(task.id, date)
-        : getProgressAtOrBefore(task.id, date),
-    }))
-
-  // 4. 对每个时段计算进度变化
-  const results = normalizedPeriods.map((p) => {
-    const { label, from, to } = p
-    
-    // 筛选该时段内的快照
-    const periodSnapshots = snapshots.filter((s: any) => {
-      const snapDate = s.snapshot_date as string
-      return snapDate >= from && snapDate <= to
-    })
-
-    // 按任务分组，计算每个任务的进度变化
-    const taskChanges = new Map<string, {
-      task_id: string
-      task_title: string
-      assignee: string
-      progress_before: number
-      progress_after: number
-      progress_delta: number
-    }>()
-
-    for (const snap of periodSnapshots) {
-      const taskId = snap.task_id as string
-      const task = taskMap.get(taskId)
-      const progress = snap.progress as number
-
-      if (!taskChanges.has(taskId)) {
-        // 第一次遇到这个任务，记录初始进度
-        const baselineProgress = getBaselineProgress(taskId, from)
-        taskChanges.set(taskId, {
-          task_id: taskId,
-          task_title: task?.title || '未命名任务',
-          assignee: getTaskResponsibleLabel(task),
-          progress_before: baselineProgress,
-          progress_after: progress,
-          progress_delta: progress - baselineProgress,
-        })
-      } else {
-        // 更新最终进度
-        const existing = taskChanges.get(taskId)!
-        existing.progress_after = progress
-        existing.progress_delta = progress - existing.progress_before
-      }
-    }
-
-    // 汇总统计
-    const taskDetails = Array.from(taskChanges.values())
-    const baselineProjectProgress = calculateProgressMetrics(buildProjectProgressTasks(from, 'before'), new Date(`${from}T00:00:00.000Z`)).currentProgress
-    const currentProjectProgress = calculateProgressMetrics(buildProjectProgressTasks(to, 'at'), new Date(`${to}T00:00:00.000Z`)).currentProgress
-    const totalProgressChange = Number((currentProjectProgress - baselineProjectProgress).toFixed(2))
-    const tasksUpdated = taskDetails.length
-    const tasksCompleted = taskDetails.filter(t => t.progress_after >= 100).length
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    const delayedTasks = (projectTasks || []).filter((task: any) => isTaskDelayedByPeriodEnd(task, to, workCalendar)).length
-
-    // 计算进度增加 > 0 的任务数（正向进展）
-    const tasksProgressed = taskDetails.filter(t => t.progress_delta > 0).length
-
-    return {
-      period_label: label,
-      from,
-      to,
-      summary: {
-        total_progress_change: totalProgressChange,  // 总进度变化（百分比和）
-        tasks_updated: tasksUpdated,                 // 有进度更新的任务数
-        tasks_progressed: tasksProgressed,           // 有正向进展的任务数
-        tasks_completed: tasksCompleted,             // 期间完成的任务数
-        delayed: delayedTasks,    // 真实延期任务数（截至该时段结束日）
-        on_time_rate: tasksUpdated > 0 ? Math.round((tasksProgressed / tasksUpdated) * 100) : 0,
-      },
-      task_ids: taskDetails.map(t => t.task_id),
-      task_details: taskDetails.map(t => ({
-        id: t.task_id,
-        title: t.task_title,
-        progress: t.progress_after,
-        progress_before: t.progress_before,
-        progress_delta: t.progress_delta,
-        assignee: t.assignee,
-        end_date: getTaskPlannedEndDate(taskMap.get(t.task_id) as Record<string, unknown>),
-        completed_at: getTaskActualEndDate(taskMap.get(t.task_id) as Record<string, unknown>),
-        specialty_type: '',
-        is_on_time: !isTaskDelayedByPeriodEnd(taskMap.get(t.task_id) as Record<string, unknown>, to, workCalendar),
-      })),
-    }
+  const results = buildTaskSummaryCompareResults({
+    periods: normalizedPeriods,
+    tasks: projectTasks,
+    snapshots,
+    resolveResponsibleLabel: getTaskResponsibleLabel,
+    workCalendar,
   })
 
   const response: ApiResponse = { success: true, data: results, timestamp: new Date().toISOString() }
@@ -1176,8 +1021,7 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
   const { data: snapshots, error: snapErr } = snapshotResult
 
   if (snapErr) {
-    // 如果快照表不存在或为空，降级为从 tasks 表获取当日更新的任务
-    logger.warn('task_progress_snapshots query failed, falling back to tasks table', { error: snapErr.message })
+    logger.warn('task_progress_snapshots query failed; daily progress will return insufficient_data', { error: snapErr.message })
   }
 
   const snapshotByDateAndTask = new Map<string, Map<string, any>>()
@@ -1192,7 +1036,7 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
   const todaySnapshotMap = snapshotByDateAndTask.get(targetDate) ?? new Map<string, any>()
   const previousSnapshotMap = snapshotByDateAndTask.get(previousDateStr) ?? new Map<string, any>()
 
-  // 2. 降级方案：从 tasks 表获取当日更新的任务
+  // Task rows provide labels and ownership only; progress deltas remain snapshot-derived.
   const dayStart = `${targetDate} 00:00:00`
   const dayEnd = `${targetDate} 23:59:59`
   
@@ -1204,6 +1048,23 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
     .lte('updated_at', dayEnd)
 
   if (taskErr) throw new Error(`[daily-progress] 查询失败: ${taskErr.message}`)
+
+  const { data: projectDailySnapshot, error: projectDailySnapshotError } = await supabase
+    .from('project_daily_snapshot')
+    .select('active_delayed_tasks')
+    .eq('project_id', projectId)
+    .eq('snapshot_date', targetDate)
+    .maybeSingle()
+  if (projectDailySnapshotError) {
+    logger.warn('project_daily_snapshot query failed for daily progress', {
+      projectId,
+      targetDate,
+      error: projectDailySnapshotError.message,
+    })
+  }
+  const delayedTaskCount = Number.isFinite(Number(projectDailySnapshot?.active_delayed_tasks))
+    ? Number(projectDailySnapshot?.active_delayed_tasks)
+    : null
 
   const [updatedTaskParticipantUnitNameMap, updatedTaskProjectMemberNameMap] = await Promise.all([
     loadParticipantUnitNameMap(
@@ -1226,108 +1087,15 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
     return '未关联责任人'
   }
 
-  // 3. 计算进度变化
-  // 由于没有历史进度快照，我们用一个简化的方案：
-  // - 假设当日完成的任务进度变化 = 100% - 当日之前的进度
-  // - 对于仍在进行中的任务，记录当前进度
-  // - 对于已完成任务，标记完成
-  
-  const details: {
-    task_id: string
-    task_title: string
-    progress_before: number
-    progress_after: number
-    progress_delta: number
-    assignee: string
-  }[] = []
-
-  let totalProgressChange = 0
-  let tasksCompleted = 0
-  let conditionsAdded = 0
-  let conditionsClosed = 0
-  let obstaclesAdded = 0
-  let obstaclesClosed = 0
-
-  const allTaskIds = new Set<string>([
-    ...Array.from(todaySnapshotMap.keys()),
-    ...Array.from(previousSnapshotMap.keys()),
-  ])
-
-  for (const taskId of allTaskIds) {
-    const todaySnapshot = todaySnapshotMap.get(taskId)
-    const previousSnapshot = previousSnapshotMap.get(taskId)
-    const todayConditions = Number(todaySnapshot?.conditions_total_count ?? 0)
-    const previousConditions = Number(previousSnapshot?.conditions_total_count ?? 0)
-    const todayObstacles = Number(todaySnapshot?.obstacles_active_count ?? 0)
-    const previousObstacles = Number(previousSnapshot?.obstacles_active_count ?? 0)
-
-    if (todayConditions > previousConditions) {
-      conditionsAdded += todayConditions - previousConditions
-    } else {
-      conditionsClosed += previousConditions - todayConditions
-    }
-
-    if (todayObstacles > previousObstacles) {
-      obstaclesAdded += todayObstacles - previousObstacles
-    } else {
-      obstaclesClosed += previousObstacles - todayObstacles
-    }
-  }
-
-  for (const task of (updatedTasks || [])) {
-    // 简化计算：当天更新的任务，进度变化基于当前状态
-    // 对于已完成的任务，假设进度从更新前变为100%
-    // 对于进行中的任务，假设进度有变化（实际应该从快照表对比）
-    
-    const todaySnapshot = todaySnapshotMap.get(task.id) as any
-    const previousSnapshot = previousSnapshotMap.get(task.id) as any
-    const currentProgress = todaySnapshot?.progress ?? task.progress ?? 0
-    const isCompleted = isCompletedTask({ status: task.status, progress: currentProgress })
-    
-    // 尝试从快照获取之前的进度
-    const prevProgress = previousSnapshot?.progress ?? Math.max(0, currentProgress - 10) // 降级：假设进度增加10%
-    
-    const progressDelta = currentProgress - prevProgress
-    
-    if (isCompleted) {
-      tasksCompleted++
-    }
-
-    // 只记录有实际进度变化的任务
-    if (progressDelta !== 0 || isCompleted) {
-      totalProgressChange += progressDelta
-      
-      details.push({
-        task_id: task.id,
-        task_title: task.title || '未命名任务',
-        progress_before: prevProgress,
-        progress_after: currentProgress,
-        progress_delta: progressDelta,
-        assignee: getUpdatedTaskResponsibleLabel(task),
-      })
-    }
-  }
-
-  // 4. 返回结果
-  const result = {
-    date: targetDate,
-    previous_date: previousDateStr,
-    progress_change: totalProgressChange,
-    tasks_updated: details.length,
-    tasks_completed: tasksCompleted,
-    snapshot_summary: {
-      conditions_added: conditionsAdded,
-      conditions_closed: conditionsClosed,
-      obstacles_added: obstaclesAdded,
-      obstacles_closed: obstaclesClosed,
-      delayed_tasks: (updatedTasks || []).filter((task: any) => {
-        const endDate = task.end_date ? String(task.end_date).slice(0, 10) : ''
-        const isCompleted = isCompletedTask(task)
-        return Boolean(endDate) && !isCompleted && endDate <= targetDate
-      }).length,
-    },
-    details: details.sort((a, b) => Math.abs(b.progress_delta) - Math.abs(a.progress_delta)),
-  }
+  const result = buildDailyTaskProgressSummary({
+    targetDate,
+    previousDate: previousDateStr,
+    tasks: updatedTasks || [],
+    todaySnapshots: todaySnapshotMap,
+    previousSnapshots: previousSnapshotMap,
+    delayedTaskCount,
+    resolveResponsibleLabel: getUpdatedTaskResponsibleLabel,
+  })
 
   res.json({ success: true, data: result, timestamp: new Date().toISOString() })
 }))

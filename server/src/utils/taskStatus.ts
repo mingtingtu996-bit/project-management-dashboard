@@ -3,6 +3,7 @@ import { normalizeStatus } from './statusHelpers.js'
 export type TaskStatusLike = {
   status?: string | null
   progress?: number | null
+  actual_end_date?: string | Date | null
   is_milestone?: boolean | null
 }
 
@@ -30,7 +31,9 @@ export function isCompletedTaskStatus(status?: string | null): boolean {
 }
 
 export function isCompletedTask(task: TaskStatusLike): boolean {
-  return isCompletedTaskStatus(task.status) || Number(task.progress ?? 0) >= 100
+  return isCompletedTaskStatus(task.status)
+    || Number(task.progress ?? 0) >= 100
+    || Boolean(task.actual_end_date)
 }
 
 export function isInProgressTask(task: TaskStatusLike): boolean {

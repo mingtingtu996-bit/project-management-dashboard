@@ -20,7 +20,7 @@ const requiredV14231CloseoutTests = [
   'src/__tests__/migrationProductionGovernanceService.test.ts',
   'src/__tests__/t2RhythmLiveReplayDiagnostic.test.ts',
   'src/__tests__/diagnoseConstructionOrganizationCloseoutLive.test.ts',
-  'src/__tests__/durationSuggestionE2E.test.ts',
+  'src/__tests__/durationSuggestionSimulation.test.ts',
   'src/__tests__/productionReadyClaimsGuard.test.ts',
 ]
 

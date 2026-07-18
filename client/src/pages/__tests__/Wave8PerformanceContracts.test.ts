@@ -11,7 +11,7 @@ function readWorkspaceSource(relativePath: string) {
 
   for (const candidate of candidates) {
     try {
-      return readFileSync(candidate, 'utf8')
+      return normalizeSource(readFileSync(candidate, 'utf8'))
     } catch {
       // Try the next workspace root.
     }

@@ -10,7 +10,6 @@ import {
 import {
   delayDayDelta,
   normalizeDurationDateUtc,
-  orderedInclusiveDurationDays,
 } from '../utils/durationDays.js'
 
 export type T2RhythmTemplateReplayEvidenceSample = {
@@ -68,6 +67,7 @@ export type T2RhythmReplayTaskActualRow = {
 export type T2RhythmReplayTaskActualAdapterInput = {
   candidatePackage: T2RhythmScheduleCandidatePackage
   tasks: T2RhythmReplayTaskActualRow[]
+  calendar?: ConstructionCalendarContext | null
 }
 
 export type T2RhythmReplayTaskActualRejectedRow = {
@@ -153,8 +153,19 @@ function actualWindowDurationDays(
   const end = normalizeDurationDateUtc(sample.actualEndDate)
   if (!start || !end) return null
   if (end.getTime() < start.getTime()) return null
-  if (calendar?.windows?.length) return productionDaysBetweenInclusive(start, end, calendar)
-  return orderedInclusiveDurationDays(start, end)
+  return productionDaysBetweenInclusive(start, end, calendar)
+}
+
+function plannedWindowDurationDays(
+  startValue: string | Date | null | undefined,
+  endValue: string | Date | null | undefined,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const start = normalizeDurationDateUtc(startValue)
+  const end = normalizeDurationDateUtc(endValue)
+  if (!start || !end || end.getTime() < start.getTime()) return null
+  const days = productionDaysBetweenInclusive(start, end, calendar)
+  return days > 0 ? days : null
 }
 
 function collectEvidenceRefs(samples: T2RhythmTemplateReplayEvidenceSample[]) {
@@ -325,8 +336,8 @@ export function buildT2RhythmReplaySamplesFromTaskActuals(
 
     const plannedStartDate = readTaskDate(task, 'plannedStartDate', 'planned_start_date', 'start_date')
     const plannedEndDate = readTaskDate(task, 'plannedEndDate', 'planned_end_date', 'end_date')
-    const plannedWindowDurationDays = orderedInclusiveDurationDays(plannedStartDate, plannedEndDate)
-    if (plannedWindowDurationDays === null) {
+    const plannedDurationDays = plannedWindowDurationDays(plannedStartDate, plannedEndDate, input.calendar)
+    if (plannedDurationDays === null) {
       rejectRow(rejectedRows, rowId, 'invalid_planned_window_dates', 'Task actual row needs ordered planned start and end dates before replay.')
       continue
     }
@@ -341,7 +352,7 @@ export function buildT2RhythmReplaySamplesFromTaskActuals(
       projectId: readFirstText(task.project_id, task.projectId),
       workfaceKey: readFirstText(metadata.workfaceKey, metadata.workface_key, metadata.scopeKey, metadata.scope_key),
       windowCode: packageWindow.windowCode,
-      plannedWindowDurationDays,
+      plannedWindowDurationDays: plannedDurationDays,
       templateP80WindowDurationDays,
       plannedGateDate: plannedEndDate,
       actualGateDate: actualEndDate,

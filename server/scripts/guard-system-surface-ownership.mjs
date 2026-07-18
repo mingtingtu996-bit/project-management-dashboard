@@ -269,7 +269,7 @@ function inferTableAssignment(table) {
   if (/^(job_|operation_logs|schema_migrations|system_settings|trigger_execution_logs|dialog_frequency|status_|data_import|data_lineage|governance_approval|official_holiday|site_shutdown)/.test(id)) {
     return assignment("底座：平台运行观测", "platform_foundation", "platform operation table surface")
   }
-  if (/^(project_daily_snapshot|project_data_quality|project_health|project_key_node_snapshots|project_productivity|data_quality|data_confidence|metric_|risk_statistics|responsibility|delay_requests|warning_coverage_snapshots)/.test(id)) {
+  if (/^(project_daily_snapshot|project_data_quality|project_health|project_key_node_snapshots|project_productivity|data_quality|data_confidence|metric_|risk_statistics|responsibility|structured_cause|delay_requests|warning_coverage_snapshots)/.test(id)) {
     return assignment("主执行环：描述分析", "business_core", "summary and analytic table surface")
   }
   if (/^(risks|issues|warning|warnings|notification|notifications|reminder|alerts|deletion_retention|change_|weekly_digests|recommendation_actions)/.test(id)) {
@@ -305,7 +305,7 @@ function inferMigrationSurfaceAssignmentSafe(surface) {
   if (/forecast|climate|weather|runtime_consumer/.test(id)) {
     return assignment(UNIT_FORECAST, "business_core", "forecast and runtime-consumer SQL surface")
   }
-  if (/dashboard|health|summary|snapshot|statistics|metric|score|report/.test(id)) {
+  if (/dashboard|health|summary|snapshot|statistics|metric|score|report|structured_cause|cause_attribution/.test(id)) {
     return assignment(UNIT_ANALYSIS, "business_core", "summary and analytic SQL surface")
   }
   if (/task|condition|obstacle|progress|completion|timeline|dependency|milestone|delay/.test(id)) {

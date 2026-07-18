@@ -11,6 +11,7 @@ import { RESPONSIBILITY_HEALTH_RULE_SEED } from '../seeds/responsibilityHealthRu
 import { isCompletedTask } from '../utils/taskStatus.js'
 import { getDateOnly, isTaskDelayedAgainstPlan } from '../utils/taskPerformance.js'
 import { signedDurationDayDelta } from '../utils/durationDays.js'
+import { readResponsibilityInsightFacts } from './responsibilityInsightFactReadModelService.js'
 import type {
   ProjectMember,
   ResponsibilityAlertState,
@@ -367,100 +368,6 @@ async function loadProjectMembers(projectId: string) {
     }
   }
   return memberMap
-}
-
-async function loadParticipantUnitNameMap(projectId: string) {
-  if (RESPONSIBILITY_DIRECT_SQL_ENABLED) {
-    const result = await rawQuery(
-      `SELECT id, unit_name
-       FROM participant_units
-       WHERE project_id = $1
-       ORDER BY unit_name ASC`,
-      [projectId],
-    )
-    const rows = (result.rows ?? []) as Array<{ id: string; unit_name: string | null }>
-
-    return new Map(
-      rows
-        .map((row) => [String(row.id), normalizeText(row.unit_name)] as const)
-        .filter((row) => row[1].length > 0),
-    )
-  }
-
-  const { data, error } = await supabase
-    .from('participant_units')
-    .select('id, unit_name')
-    .eq('project_id', projectId)
-    .order('unit_name', { ascending: true })
-
-  if (error) throw new Error(error.message)
-
-  return new Map(
-    ((data ?? []) as Array<{ id: string; unit_name: string | null }>)
-      .map((row) => [String(row.id), normalizeText(row.unit_name)] as const)
-      .filter((row) => row[1].length > 0),
-  )
-}
-
-async function loadTasks(projectId: string) {
-  if (RESPONSIBILITY_DIRECT_SQL_ENABLED) {
-    const result = await rawQuery(
-      `SELECT *
-       FROM tasks
-       WHERE project_id = $1`,
-      [projectId],
-    )
-    return (result.rows ?? []) as ResponsibilityTaskRow[]
-  }
-
-  const { data, error } = await supabase
-    .from('tasks')
-    .select('*')
-    .eq('project_id', projectId)
-
-  if (error) throw new Error(error.message)
-  return (data ?? []) as ResponsibilityTaskRow[]
-}
-
-async function loadRisks(projectId: string) {
-  if (RESPONSIBILITY_DIRECT_SQL_ENABLED) {
-    const result = await rawQuery(
-      `SELECT id, task_id, status, project_id, level, created_at, updated_at
-       FROM risks
-       WHERE project_id = $1`,
-      [projectId],
-    )
-    return (result.rows ?? []) as ResponsibilityRiskRow[]
-  }
-
-  const { data, error } = await supabase
-    .from('risks')
-    .select('id, task_id, status, project_id, level, created_at, updated_at')
-    .eq('project_id', projectId)
-
-  if (error) throw new Error(error.message)
-  return (data ?? []) as ResponsibilityRiskRow[]
-}
-
-async function loadObstacles(projectId: string) {
-  if (RESPONSIBILITY_DIRECT_SQL_ENABLED) {
-    const result = await rawQuery(
-      `SELECT o.id, o.task_id, o.status, o.severity, o.created_at, o.severity_escalated_at
-       FROM task_obstacles o
-       INNER JOIN tasks t ON t.id = o.task_id
-       WHERE t.project_id = $1`,
-      [projectId],
-    )
-    return (result.rows ?? []) as ResponsibilityObstacleRow[]
-  }
-
-  const { data, error } = await supabase
-    .from('task_obstacles')
-    .select('id, task_id, status, severity, created_at, severity_escalated_at, tasks!inner(project_id)')
-    .eq('tasks.project_id', projectId)
-
-  if (error) throw new Error(error.message)
-  return (data ?? []) as unknown as ResponsibilityObstacleRow[]
 }
 
 async function loadWatchlist(projectId: string) {
@@ -1115,12 +1022,9 @@ export class ResponsibilityInsightService {
   }
 
   private async computeProjectInsights(projectId: string, options: ResponsibilityInsightOptions = {}): Promise<ResponsibilityInsightsResponse> {
-    const [memberMap, unitNameMap, tasks, risks, obstacles, watchlist, alertStates, criticalTaskIds, calendar] = await Promise.all([
+    const [memberMap, facts, watchlist, alertStates, criticalTaskIds, calendar] = await Promise.all([
       loadProjectMembers(projectId),
-      loadParticipantUnitNameMap(projectId),
-      loadTasks(projectId),
-      loadRisks(projectId),
-      loadObstacles(projectId),
+      readResponsibilityInsightFacts(projectId),
       loadWatchlist(projectId),
       loadAlertStates(projectId),
       getCriticalPathTaskIds(projectId),
@@ -1132,6 +1036,12 @@ export class ResponsibilityInsightService {
         }),
       }),
     ])
+    const {
+      participantUnitNameMap: unitNameMap,
+      tasks,
+      risks,
+      obstacles,
+    } = facts
     const ownerRecipients = uniqueRecipients(
       Array.from(memberMap.values())
         .filter((member) => member.permission_level === 'owner')

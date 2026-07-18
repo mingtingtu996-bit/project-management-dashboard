@@ -118,6 +118,7 @@ const expectedRuntimeConsumerObservations = [
   { assetKey: 'wbs_reference_days' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'wbsTemplateGenerationService' },
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectCriticalPathService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
 ]
@@ -134,6 +135,10 @@ const runtimeCallEvidence = [
   {
     consumerKey: 'projectRemainingDurationForecastService',
     runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+  },
+  {
+    consumerKey: 'projectCriticalPathService',
+    runtimeEntryRef: 'projectCriticalPathService:resolveCriticalPathLearningPublications',
   },
   {
     consumerKey: 'wbsTemplateGenerationService',

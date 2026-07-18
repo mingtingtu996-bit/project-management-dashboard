@@ -106,6 +106,33 @@ function createDateRange(startDateStr: string, endDateStr: string) {
   return dates
 }
 
+type RiskStockRow = {
+  created_at?: string | null
+  updated_at?: string | null
+  closed_at?: string | null
+  status?: string | null
+  [key: string]: unknown
+}
+
+function toTimestamp(value: unknown) {
+  const timestamp = Date.parse(String(value ?? ''))
+  return Number.isFinite(timestamp) ? timestamp : null
+}
+
+export function buildRiskStockAsOf(rows: RiskStockRow[], asOf: string) {
+  const asOfTimestamp = toTimestamp(asOf)
+  if (asOfTimestamp === null) return []
+
+  return rows.filter((risk) => {
+    const createdAt = toTimestamp(risk.created_at)
+    if (createdAt === null || createdAt > asOfTimestamp) return false
+    if (isActiveRisk(risk)) return true
+
+    const closedAt = toTimestamp(risk.closed_at ?? risk.updated_at)
+    return closedAt !== null && closedAt > asOfTimestamp
+  })
+}
+
 type RiskTrendSourceRows = {
   riskStats: any[]
   currentRisks: any[]
@@ -256,15 +283,17 @@ class RiskStatisticsService {
       // 3. 获取当前风险存量（快照）
       const { data: currentRisks, error: currentRisksError } = await supabase
         .from('risks')
-        .select('level, status, source_type, title')
-        .eq('project_id', projectId);
+        .select('level, status, source_type, title, created_at, updated_at, closed_at')
+        .eq('project_id', projectId)
+        .lte('created_at', endOfDay);
       if (currentRisksError) throw currentRisksError;
 
       // 4. 计算统计数据
+      const historicalRiskStock = buildRiskStockAsOf(currentRisks || [], endOfDay)
       const stats = this.calculateStatistics(
         newRisks || [],
         resolvedRisks || [],
-        currentRisks || []
+        historicalRiskStock
       );
 
       const now = new Date().toISOString();
@@ -333,7 +362,7 @@ class RiskStatisticsService {
     const resolvedCritical = resolvedRisks.filter(r => r.level === 'critical').length;
 
     // 当前存量统计
-    const activeRisks = currentRisks.filter(isActiveRisk);
+    const activeRisks = currentRisks;
     const highCount = activeRisks.filter(r => r.level === 'high').length;
     const mediumCount = activeRisks.filter(r => r.level === 'medium').length;
     const lowCount = activeRisks.filter(r => r.level === 'low').length;

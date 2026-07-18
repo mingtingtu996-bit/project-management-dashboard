@@ -81,6 +81,7 @@ import {
   getTaskCriticalFloatLabel,
   getTaskDurationAssetEvidenceLabel,
   getTaskDurationRiskRangeLabel,
+  getTaskSequencingBasis,
 } from './GanttView/taskScheduleEvidence'
 
 type BusinessStatusView = {
@@ -604,6 +605,7 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
       scheduleParticipation: getScheduleParticipationFromMetadata(standardTaskMetadata),
       scopeExpansionMode: getScopeExpansionModeFromMetadata(standardTaskMetadata),
       linkedProjectionSource,
+      sequencingBasis: getTaskSequencingBasis(task),
       startingLineClass: getTaskStartingLineClass(standardTaskMetadata),
       reconcilePhase: reconcileEntry?.phase ?? null,
       selected: props.selectedIds.has(task.id),

@@ -121,7 +121,7 @@ describe('projectHealthDeviationSummaryService', () => {
       delayedTasks: 2,
       durationDeviationCauses: [
         expect.objectContaining({
-          code: 'resource_conflict',
+          code: 'site_capacity_pressure',
           label: '现场承载压力',
           count: 1,
           maxDelayDays: 5,
@@ -134,6 +134,63 @@ describe('projectHealthDeviationSummaryService', () => {
         }),
       ],
     }))
+  })
+
+  it('uses the shared cause registry, dedupes a reason type per forecast, and ignores unknown factors', async () => {
+    mocks.tables.task_duration_forecasts.push(
+      {
+        project_id: 'project-1',
+        task_id: 'task-1',
+        is_current: true,
+        generated_at: '2026-05-20T08:00:00.000Z',
+        forecast_delay_days: 6,
+        factor_summary: {
+          factors: [
+            { key: 'resource_conflict', reason: 'resource contention' },
+            { key: 'progress_velocity', reason: 'slow progress' },
+            { key: 'external_readiness', reason: 'drawing approval pending' },
+            { key: 'weather_forecast_impact', reason: 'heavy rain window' },
+            { key: 'unregistered_factor', reason: 'must not create a parallel cause code' },
+          ],
+        },
+      },
+      {
+        project_id: 'project-1',
+        task_id: 'task-2',
+        is_current: true,
+        generated_at: '2026-05-20T07:00:00.000Z',
+        forecast_delay_days: 3,
+        factor_summary: {
+          factors: [{ key: 'resource_conflict', reason: 'crew overlap' }],
+        },
+      },
+    )
+
+    const summary = await buildProjectHealthDeviationSummary('project-1')
+    const causes = summary.deviationSummary.durationDeviationCauses as Array<Record<string, unknown>>
+
+    expect(causes.map((cause) => cause.code)).toEqual([
+      'site_capacity_pressure',
+      'external_readiness',
+      'calendar_productivity',
+    ])
+    expect(causes[0]).toEqual(expect.objectContaining({
+      count: 2,
+      maxDelayDays: 6,
+      factorKeys: ['resource_conflict', 'progress_velocity'],
+      responsibilityBasis: 'site_capacity',
+    }))
+    expect(causes[1]).toEqual(expect.objectContaining({
+      count: 1,
+      factorKeys: ['external_readiness'],
+      responsibilityBasis: 'external_wait',
+    }))
+    expect(causes[2]).toEqual(expect.objectContaining({
+      count: 1,
+      factorKeys: ['weather_forecast_impact'],
+      responsibilityBasis: 'calendar_productivity',
+    }))
+    expect(causes.some((cause) => cause.code === 'unregistered_factor')).toBe(false)
   })
 
   it('prefers latest snapshot health fields and falls back to persisted project health', async () => {

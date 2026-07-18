@@ -189,6 +189,46 @@ async function authenticate(expectedCompanyId = requestedCompanyId) {
   result.companyId = companyId
 }
 
+async function readDurationAccuracySummary() {
+  const accuracyCall = await apiRequest('GET', '/api/admin/duration-accuracy/summary')
+  const accuracySummary = assertApi('read staging duration accuracy summary', accuracyCall, [200])
+  const metrics = accuracySummary?.metrics
+  if (!Array.isArray(metrics)) {
+    throw new Error('duration accuracy summary metrics are unavailable')
+  }
+
+  const metricSummaries = metrics.map((metric) => {
+    const sampleCount = Number(metric?.sampleCount ?? 0)
+    const maeDays = metric?.maeDays == null ? null : Number(metric.maeDays)
+    const mape = metric?.mape == null ? null : Number(metric.mape)
+    return {
+      engineCode: String(metric?.engineCode ?? '').trim() || null,
+      source: String(metric?.source ?? '').trim() || null,
+      status: String(metric?.status ?? '').trim() || null,
+      sampleCount: Number.isFinite(sampleCount) && sampleCount > 0 ? sampleCount : 0,
+      maeDays: Number.isFinite(maeDays) ? maeDays : null,
+      mape: Number.isFinite(mape) ? mape : null,
+    }
+  })
+  const totalSampleCount = metricSummaries.reduce((sum, metric) => sum + metric.sampleCount, 0)
+  const metricsWithMae = metricSummaries.filter((metric) => metric.maeDays !== null).length
+  const metricsWithMape = metricSummaries.filter((metric) => metric.mape !== null).length
+
+  result.steps.durationAccuracyReadback = {
+    status: 'pass',
+    httpStatus: accuracyCall.response.status,
+    dataState: totalSampleCount > 0
+      ? 'staging_accuracy_rows_available'
+      : 'empty_no_completed_samples',
+    claimBoundary: 'readback_only_not_accuracy_acceptance',
+    metricCount: metricSummaries.length,
+    totalSampleCount,
+    metricsWithMae,
+    metricsWithMape,
+    metrics: metricSummaries,
+  }
+}
+
 async function cleanupProject(targetProjectId = projectId) {
   if (!targetProjectId || !accessToken) return
   try {
@@ -440,6 +480,7 @@ const wizardPayload = {
 
 try {
   await authenticate()
+  await readDurationAccuracySummary()
   writeResultReport()
 
   let previewCall = await apiRequest('POST', '/api/projects/wizard/preview', wizardPayload)

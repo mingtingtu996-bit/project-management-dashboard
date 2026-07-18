@@ -82,6 +82,19 @@ export type ExecutableDefaultMasterPlanAssemblySummary = {
   syntheticDependencyPhaseInversionCount: number
   lateActivityPhaseMisclassificationCount: number
   skippedCyclicSiblingDependencyCount: number
+  semanticFallbackDependencyCount: number
+  heuristicStaggerDependencyCount: number
+  sequencingGapCount: number
+  sequencingGapSamples: Array<{
+    predecessorStableCode: string
+    predecessorTitle: string
+    successorStableCode: string
+    successorTitle: string
+    executionPhase: string
+    executionLane: string
+    sequencingBasis: 'execution_phase_order_fallback' | 'heuristic_stagger'
+  }>
+  nonBlockingGovernanceWarningCodes: string[]
   primaryNetworkBridgeDependencyCount: number
   primaryControlSpineDependencyCount: number
   readinessReasonCodes: string[]
@@ -2041,33 +2054,78 @@ function applyPromotedSiblingReleaseRhythm(
     const baseStart = parentStart ?? dateTextOf(siblings[0], 'start')
     let cumulativeReleaseLagDays = 0
     for (let index = 1; index < siblings.length; index += 1) {
-      const previous = siblings[index - 1]
       const current = siblings[index]
       const dependencies = current.predecessorDependencies ?? []
       if (dependencies.length > 0) continue
-      if ((previous.predecessorDependencies ?? []).some((dependency) => text(dependency.clientRowId) === current.clientRowId)) {
-        continue
-      }
-      if (hasSelectedDependencyPath(rows, selectedIds, current.clientRowId, previous.clientRowId)) {
+      const currentPhaseRank = EXECUTION_PHASE_SEQUENCE[executionPhaseOf(current)]
+      const priorSiblings = siblings.slice(0, index)
+      const semanticCandidates = currentPhaseRank === undefined
+        ? []
+        : priorSiblings
+          .filter((candidate) => {
+            const candidateRank = EXECUTION_PHASE_SEQUENCE[executionPhaseOf(candidate)]
+            return candidateRank !== undefined && candidateRank < currentPhaseRank
+          })
+          .sort((left, right) => (
+            (EXECUTION_PHASE_SEQUENCE[executionPhaseOf(right)] ?? 0)
+              - (EXECUTION_PHASE_SEQUENCE[executionPhaseOf(left)] ?? 0)
+            || right.sortOrder - left.sortOrder
+            || compareRows(right, left)
+          ))
+      const safePredecessor = (candidates: ExecutableDefaultMasterPlanAssemblyRow[]) => (
+        candidates.find((candidate) => (
+          !(candidate.predecessorDependencies ?? []).some((dependency) => (
+            text(dependency.clientRowId) === current.clientRowId
+          ))
+          && !hasSelectedDependencyPath(rows, selectedIds, current.clientRowId, candidate.clientRowId)
+        )) ?? null
+      )
+      const semanticPredecessor = safePredecessor(semanticCandidates)
+      const predecessor = semanticPredecessor ?? safePredecessor([siblings[index - 1]])
+      if (!predecessor) {
         skippedCyclicDependencyCount += 1
         continue
       }
-      const releaseLagDays = Math.max(1, Math.min(7, Math.round((referenceDurationDaysOf(previous) ?? 10) * 0.15)))
-      cumulativeReleaseLagDays += releaseLagDays
+      const sequencingBasis = semanticPredecessor
+        ? 'execution_phase_order_fallback'
+        : 'heuristic_stagger'
+      const predecessorStartDay = dateDayNumber(dateTextOf(predecessor, 'start'))
+      const predecessorEndDay = dateDayNumber(dateTextOf(predecessor, 'end'))
+      const currentStartDay = dateDayNumber(dateTextOf(current, 'start'))
+      const semanticCanUseFinishStart = sequencingBasis === 'execution_phase_order_fallback'
+        && predecessorEndDay !== null
+        && currentStartDay !== null
+        && predecessorEndDay < currentStartDay
+      const dependencyType = semanticCanUseFinishStart ? 'FS' : 'SS'
+      const releaseLagDays = sequencingBasis === 'execution_phase_order_fallback'
+        ? dependencyType === 'FS'
+          ? 0
+          : predecessorStartDay !== null && currentStartDay !== null
+            ? Math.max(0, currentStartDay - predecessorStartDay)
+            : 0
+        : Math.max(1, Math.min(7, Math.round((referenceDurationDaysOf(predecessor) ?? 10) * 0.15)))
+      if (sequencingBasis === 'heuristic_stagger') cumulativeReleaseLagDays += releaseLagDays
       current.predecessorDependencies = [
         {
-          clientRowId: previous.clientRowId,
-          dependencyType: 'SS',
+          clientRowId: predecessor.clientRowId,
+          dependencyType,
           lagDays: releaseLagDays,
-          intentCode: 'executable_default_master_plan_sibling_release_rhythm',
-          source: 'dependency_intent_template',
+          intentCode: `sequencing_fallback:${sequencingBasis}`,
+          source: sequencingBasis,
+          sequencingBasis,
+          governanceGapCode: 'master_plan_dependency_rule_gap',
           dependencyRuleEvidence: {
-            source: 'construction_task_dependency_constraint_rule_system',
-            evidenceLevel: 'system_standard_dependency_l1',
+            source: sequencingBasis,
+            evidenceLevel: sequencingBasis === 'execution_phase_order_fallback'
+              ? 'semantic_fallback_l0'
+              : 'heuristic_fallback_l0',
             productionWritePolicy: 'wizard_commit_transactional_tasks_and_dependencies',
             mutationBoundary: 'preview_no_write_wizard_commit_transactional',
             createsProductionTaskDependency: true,
-            releasePolicy: 'same_parent_same_lane_staggered_start_without_resource_count_assumption',
+            publicationStatus: 'fallback_not_published_dependency_rule',
+            releasePolicy: sequencingBasis === 'execution_phase_order_fallback'
+              ? 'earlier_execution_phase_coarse_release_until_governed_rule_is_published'
+              : 'same_parent_same_lane_code_order_stagger_until_governed_rule_is_published',
           },
         },
       ]
@@ -2077,21 +2135,29 @@ function applyPromotedSiblingReleaseRhythm(
       const metadata = metadataOf(current)
       current.values = {
         ...current.values,
-        schedule_authority_policy: 'package_child_rhythm_window',
+        schedule_authority_policy: sequencingBasis,
+        sequencing_basis: sequencingBasis,
+        sequencing_governance_gap_code: 'master_plan_dependency_rule_gap',
         sibling_release_lag_days: releaseLagDays,
         sibling_release_cumulative_lag_days: cumulativeReleaseLagDays,
         standard_task_metadata: {
           ...metadata,
-          scheduleAuthorityPolicy: 'package_child_rhythm_window',
+          scheduleAuthorityPolicy: sequencingBasis,
+          sequencingBasis,
+          sequencingGovernanceGapCode: 'master_plan_dependency_rule_gap',
           executableDefaultMasterPlanSiblingRelease: {
-            predecessorClientRowId: previous.clientRowId,
-            dependencyType: 'SS',
+            predecessorClientRowId: predecessor.clientRowId,
+            dependencyType,
             lagDays: releaseLagDays,
             cumulativeLagDays: cumulativeReleaseLagDays,
-            policy: 'same_parent_same_lane_staggered_start_without_resource_count_assumption',
+            sequencingBasis,
+            policy: sequencingBasis === 'execution_phase_order_fallback'
+              ? 'earlier_execution_phase_coarse_release_until_governed_rule_is_published'
+              : 'same_parent_same_lane_code_order_stagger_until_governed_rule_is_published',
           },
         },
       }
+      if (sequencingBasis !== 'heuristic_stagger') continue
       const currentStart = dateTextOf(current, 'start')
       const currentEnd = dateTextOf(current, 'end')
       const targetStart = baseStart ? shiftDate(baseStart, cumulativeReleaseLagDays) : null
@@ -2107,6 +2173,42 @@ function applyPromotedSiblingReleaseRhythm(
     }
   }
   return skippedCyclicDependencyCount
+}
+
+function summarizeSequencingFallbacks(rows: ExecutableDefaultMasterPlanAssemblyRow[]) {
+  const rowById = new Map(rows.map((row) => [row.clientRowId, row]))
+  const samples: ExecutableDefaultMasterPlanAssemblySummary['sequencingGapSamples'] = []
+  let semanticFallbackDependencyCount = 0
+  let heuristicStaggerDependencyCount = 0
+  for (const successor of rows) {
+    for (const dependency of successor.predecessorDependencies ?? []) {
+      const sequencingBasis = text(dependency.sequencingBasis)
+      if (sequencingBasis === 'execution_phase_order_fallback') semanticFallbackDependencyCount += 1
+      else if (sequencingBasis === 'heuristic_stagger') heuristicStaggerDependencyCount += 1
+      else continue
+      if (samples.length >= 24) continue
+      const predecessor = rowById.get(text(dependency.clientRowId))
+      samples.push({
+        predecessorStableCode: predecessor ? stableCodeOf(predecessor) : text(dependency.clientRowId),
+        predecessorTitle: predecessor ? titleOf(predecessor) : '',
+        successorStableCode: stableCodeOf(successor),
+        successorTitle: titleOf(successor),
+        executionPhase: executionPhaseOf(successor),
+        executionLane: text(successor.values.execution_lane ?? successor.executionLane),
+        sequencingBasis,
+      } as ExecutableDefaultMasterPlanAssemblySummary['sequencingGapSamples'][number])
+    }
+  }
+  const sequencingGapCount = semanticFallbackDependencyCount + heuristicStaggerDependencyCount
+  return {
+    semanticFallbackDependencyCount,
+    heuristicStaggerDependencyCount,
+    sequencingGapCount,
+    sequencingGapSamples: samples,
+    nonBlockingGovernanceWarningCodes: sequencingGapCount > 0
+      ? ['master_plan_dependency_rule_gap_present']
+      : [],
+  }
 }
 
 function dependencyCoverage(
@@ -2593,6 +2695,7 @@ export function refreshExecutableDefaultMasterPlanAssemblySummary(
   const schedulePropagationNetwork = analyzeExecutableDefaultMasterPlanSchedulePropagation(scheduleRows)
   const syntheticDependencyPhaseInversionCount = countSyntheticDependencyPhaseInversions(scheduleRows)
   const lateActivityPhaseMisclassificationCount = countLateActivityPhaseMisclassifications(scheduleRows)
+  const sequencingFallbacks = summarizeSequencingFallbacks(scheduleRows)
   const expectedExecutionPhases = unique([
     ...summary.coveredExecutionPhases,
     ...summary.missingExecutionPhases,
@@ -2667,6 +2770,7 @@ export function refreshExecutableDefaultMasterPlanAssemblySummary(
     networkSinkCount: primaryNetwork.sinkIds.length,
     syntheticDependencyPhaseInversionCount,
     lateActivityPhaseMisclassificationCount,
+    ...sequencingFallbacks,
     readinessReasonCodes,
     readyForWizardCommit,
   })
@@ -2894,6 +2998,11 @@ export function assembleExecutableDefaultMasterPlanRows(
       attachMasterControlDrilldownLineage(row)
     }
   }
+  const skippedCyclicSiblingDependencyCount = applyPromotedSiblingReleaseRhythm(
+    input.rows,
+    selectedIds,
+    initialScheduleRowIds,
+  )
   preservePromotedRowLogicalAnchorsWithoutTaskParenting(
     input.rows,
     selectedIds,
@@ -2913,11 +3022,6 @@ export function assembleExecutableDefaultMasterPlanRows(
   )
   applyGovernedBusinessTypeSpecialtySequence(input.rows, selectedIds, businessType)
   connectContractualCloseoutMilestones(
-    input.rows,
-    selectedIds,
-    initialScheduleRowIds,
-  )
-  const skippedCyclicSiblingDependencyCount = applyPromotedSiblingReleaseRhythm(
     input.rows,
     selectedIds,
     initialScheduleRowIds,
@@ -2942,6 +3046,7 @@ export function assembleExecutableDefaultMasterPlanRows(
   const schedulePropagationNetwork = analyzeExecutableDefaultMasterPlanSchedulePropagation(scheduleRows)
   const syntheticDependencyPhaseInversionCount = countSyntheticDependencyPhaseInversions(scheduleRows)
   const lateActivityPhaseMisclassificationCount = countLateActivityPhaseMisclassifications(scheduleRows)
+  const sequencingFallbacks = summarizeSequencingFallbacks(scheduleRows)
   const scheduleIds = new Set(scheduleRows.map((row) => row.clientRowId))
   coverage = dependencyCoverage(input.rows, scheduleIds)
   const durationRows = scheduleRows.filter((row) => durationModeOf(row) === 'duration_bearing')
@@ -3034,6 +3139,7 @@ export function assembleExecutableDefaultMasterPlanRows(
     syntheticDependencyPhaseInversionCount,
     lateActivityPhaseMisclassificationCount,
     skippedCyclicSiblingDependencyCount,
+    ...sequencingFallbacks,
     primaryNetworkBridgeDependencyCount: primaryNetworkStabilization.primaryNetworkBridgeDependencyCount,
     primaryControlSpineDependencyCount: primaryNetworkStabilization.primaryControlSpineDependencyCount,
     readinessReasonCodes,

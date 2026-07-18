@@ -1095,6 +1095,8 @@ const db = vi.hoisted(() => {
     preMilestones.splice(0, preMilestones.length, ...(seed.preMilestones ?? []).map((row) => ({ ...row })))
   }
 
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => work())
+
   return {
     packages,
     drawings,
@@ -1106,6 +1108,7 @@ const db = vi.hoisted(() => {
     getMembers,
     executeSQL,
     executeSQLOne,
+    withDatabaseTransaction,
     reset,
   }
 })
@@ -1135,6 +1138,10 @@ vi.mock('../services/dbService.js', () => ({
   executeSQL: db.executeSQL,
   executeSQLOne: db.executeSQLOne,
   getMembers: db.getMembers,
+}))
+
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: db.withDatabaseTransaction,
 }))
 
 vi.mock('../auth/access.js', () => ({

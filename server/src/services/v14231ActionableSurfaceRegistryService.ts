@@ -41,6 +41,22 @@ const REQUIRED_FIELDS = [
   'testEvidence',
 ]
 
+function defineActionableSurface(
+  input: Omit<V14231ActionableSurface, 'owningUnit' | 'boundaryPolicy'>,
+): V14231ActionableSurface {
+  const stable = input.status === 'stable_action'
+  return {
+    ...input,
+    owningUnit: '主执行环：行动闭环',
+    boundaryPolicy: {
+      canUseAsStableAction: stable,
+      writesRuntimePublication: false,
+      declaresProductionReady: false,
+      requiresLiveEvidenceForUpgrade: !stable,
+    },
+  }
+}
+
 export const RULE_ASSET_RUNTIME_ACTIONS_ENABLED_ENV = 'WORKBUDDY_RULE_ASSET_RUNTIME_ACTIONS_ENABLED'
 
 const ACTIONABLE_SURFACES: V14231ActionableSurface[] = [
@@ -155,6 +171,146 @@ const ACTIONABLE_SURFACES: V14231ActionableSurface[] = [
       'server/src/__tests__/progressDeviation.test.ts',
     ],
   },
+  defineActionableSurface({
+    key: 'workspace_progress_entry_action',
+    sourceCloseoutItems: ['C-07', 'C-12', 'C-13'],
+    status: 'stable_action',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'progress entry navigates to the authenticated project task surface where task write permissions are enforced',
+    auditTrail: 'taskWriteChainService records the scoped task fact mutation after the workspace navigation handoff',
+    failureRecovery: 'workspace navigation performs no write; task entry failures remain visible and recoverable on the owning task surface',
+    userVisibleEntry: 'Workspace project progress entry',
+    stableTargetRoute: '/projects/:projectId/gantt',
+    codeEvidence: [
+      'client/src/pages/WorkspacePage.tsx',
+      'server/src/services/taskWriteChainService.ts',
+    ],
+    testEvidence: [
+      'client/src/pages/__tests__/WorkspacePage.test.tsx',
+      'server/src/__tests__/taskWriteChainService.participantUnit.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'workspace_governance_prediction_todo_action',
+    sourceCloseoutItems: ['C-07', 'C-12', 'C-13'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'each governance or prediction todo requires its own backend command and project/company permission check',
+    auditTrail: 'notification source identity alone does not prove execution audit or command idempotency',
+    failureRecovery: 'workspace exposes reminder navigation but withholds execute controls until command-specific retry and reconciliation semantics exist',
+    userVisibleEntry: 'Workspace governance and prediction todo actions',
+    stableTargetRoute: '/workspace',
+    codeEvidence: [
+      'client/src/pages/WorkspacePage.tsx',
+      'server/src/services/notificationTouchpointService.ts',
+    ],
+    testEvidence: [
+      'client/src/pages/__tests__/WorkspacePage.test.tsx',
+      'server/src/__tests__/notificationTouchpointService.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'rule_asset_governance_review_action',
+    sourceCloseoutItems: ['C-12', 'C-13', 'C-18'],
+    status: 'stable_action',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'governance review operations require current-company admin and project ownership checks',
+    auditTrail: 'review, conflict decision, approval, and release-exit handoff persist evidence tokens and candidate lineage without runtime apply',
+    failureRecovery: 'blocked operation results preserve missing reasons and do not mutate runtime publications or project facts',
+    userVisibleEntry: 'RuleAssetGovernanceWorkbenchAdmin review and release-exit preparation',
+    stableTargetRoute: '/admin/rule-assets/governance-workbench',
+    codeEvidence: [
+      'server/src/routes/algorithm-seeds.ts',
+      'server/src/services/algorithmAssetGovernanceWorkbenchOperationService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
+      'client/src/pages/__tests__/RuleAssetGovernanceWorkbenchAdmin.test.tsx',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'rule_asset_stable_publication_action',
+    sourceCloseoutItems: ['C-13', 'C-18', 'C-19'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'stable publication requires asset-specific publisher permission, release evidence, canary monitoring, and rollback readiness',
+    auditTrail: 'publication writers preserve candidate, evidence, scope, stage, and prior-publication lineage',
+    failureRecovery: 'stable publication remains disabled until atomic supersede and tested rollback evidence are closed for the selected asset family',
+    userVisibleEntry: 'RuleAssetGovernanceWorkbenchAdmin stable publication actions',
+    stableTargetRoute: '/admin/rule-assets/governance-workbench',
+    codeEvidence: [
+      'server/src/services/algorithmAssetGovernanceWorkbenchOperationService.ts',
+      'server/src/services/durationLearningRuntimePublicationService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
+      'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'rule_asset_template_replacement_action',
+    sourceCloseoutItems: ['C-13', 'C-18', 'C-19'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'template replacement requires company admin, exact template target identity, impact scan, and compatibility checks',
+    auditTrail: 'template publication services retain source candidate and replaced-template lineage',
+    failureRecovery: 'replacement remains disabled until affected-project replay and atomic rollback are available for the exact template family',
+    userVisibleEntry: 'RuleAssetGovernanceWorkbenchAdmin template replacement actions',
+    stableTargetRoute: '/admin/rule-assets/governance-workbench',
+    codeEvidence: [
+      'server/src/services/algorithmAssetGovernanceWorkbenchOperationService.ts',
+      'server/src/services/wbsTemplateRuntimePublicationService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
+      'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'rule_asset_runtime_evidence_action',
+    sourceCloseoutItems: ['C-12', 'C-13', 'C-19'],
+    status: 'stable_action',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'runtime evidence and site decisions require current-company admin and scoped publication/project identity',
+    auditTrail: 'runtime call, observation, monitoring, engine evidence, saved outcome, and site decision ledgers retain source lineage',
+    failureRecovery: 'evidence writes return explicit blocked results and never apply a publication, dependency, date, baseline, or fact mutation',
+    userVisibleEntry: 'RuleAssetGovernanceWorkbenchAdmin runtime evidence recording',
+    stableTargetRoute: '/admin/rule-assets/governance-workbench',
+    codeEvidence: [
+      'server/src/services/algorithmAssetGovernanceWorkbenchOperationService.ts',
+      'server/src/services/durationRuntimeConsumerObservationService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
+      'server/src/__tests__/durationRuntimeConsumerObservationService.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'rule_asset_runtime_rollback_action',
+    sourceCloseoutItems: ['C-13', 'C-18', 'C-19'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'rollback requires exact active publication, prior target, company/project scope, operator identity, and asset-specific writer permission',
+    auditTrail: 'rollback writers preserve source publication, rollback target, reason, operator, and execution result',
+    failureRecovery: 'rollback remains disabled until same-release rollback smoke and post-rollback consumer readback are closed',
+    userVisibleEntry: 'RuleAssetGovernanceWorkbenchAdmin runtime rollback actions',
+    stableTargetRoute: '/admin/rule-assets/governance-workbench',
+    codeEvidence: [
+      'server/src/services/algorithmAssetGovernanceWorkbenchOperationService.ts',
+      'server/src/services/durationLearningRuntimePublicationService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
+      'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
+    ],
+  }),
   {
     key: 'construction_organization_runtime_publication_action',
     sourceCloseoutItems: ['C-13', 'C-18', 'C-19'],
@@ -184,6 +340,66 @@ const ACTIONABLE_SURFACES: V14231ActionableSurface[] = [
       'server/src/__tests__/constructionOrganizationPlanNetworkRuntimeEvidenceService.test.ts',
     ],
   },
+  defineActionableSurface({
+    key: 'duration_accuracy_auto_publish_action',
+    sourceCloseoutItems: ['C-13', 'C-19', 'C-19.01'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'auto publish requires the asset-level automation policy, repeat-change threshold, replay, conflict, canary, and tenant scope gates',
+    auditTrail: 'automation decisions retain policy version, sample lineage, threshold evidence, and selected publication scope',
+    failureRecovery: 'auto publish remains unavailable from the admin page until retry, compensation, monitoring, and rollback are proven for that asset level',
+    userVisibleEntry: 'DurationAccuracyAdmin automatic publication',
+    stableTargetRoute: '/admin/duration-accuracy',
+    codeEvidence: [
+      'server/src/services/durationLearningAssetAutomationPolicyService.ts',
+      'server/src/services/durationLearningRuntimeLifecycleService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/durationLearningAssetAutomationPolicyService.test.ts',
+      'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'duration_accuracy_force_stable_action',
+    sourceCloseoutItems: ['C-13', 'C-19', 'C-19.01'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'force stable requires explicit admin authority plus passed canary monitoring and exact publication scope',
+    auditTrail: 'stable promotion persists prior publication, monitoring result, operator intent, and immutable publication identity',
+    failureRecovery: 'force stable remains unavailable until atomic promotion and rollback readback are verified in the target environment',
+    userVisibleEntry: 'DurationAccuracyAdmin force stable action',
+    stableTargetRoute: '/admin/duration-accuracy',
+    codeEvidence: [
+      'server/src/services/durationLearningRuntimePublicationService.ts',
+      'server/src/services/durationLearningRuntimeLifecycleService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
+      'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
+    ],
+  }),
+  defineActionableSurface({
+    key: 'duration_accuracy_rollback_close_action',
+    sourceCloseoutItems: ['C-13', 'C-19', 'C-19.01'],
+    status: 'needs-gating',
+    sourceIdentityRequired: true,
+    targetIdentityRequired: true,
+    permissionGate: 'rollback close requires an executed rollback, restored prior publication, consumer readback, and operator authority',
+    auditTrail: 'rollback execution and lifecycle checkpoint preserve publication, reason, restored target, and observation lineage',
+    failureRecovery: 'close remains unavailable while rollback compensation, retry, or consumer reconciliation is pending',
+    userVisibleEntry: 'DurationAccuracyAdmin rollback close action',
+    stableTargetRoute: '/admin/duration-accuracy',
+    codeEvidence: [
+      'server/src/services/durationLearningRuntimePublicationService.ts',
+      'server/src/services/durationLearningRuntimeLifecycleService.ts',
+    ],
+    testEvidence: [
+      'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
+      'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
+    ],
+  }),
 ]
 
 const SURFACES_BY_KEY = new Map(ACTIONABLE_SURFACES.map((surface) => [surface.key, surface]))

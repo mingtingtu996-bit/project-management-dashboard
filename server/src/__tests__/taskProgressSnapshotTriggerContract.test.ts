@@ -12,27 +12,59 @@ function readServerFile(...segments: string[]) {
 }
 
 describe('task progress snapshot trigger contract', () => {
-  it('ships a live migration that makes the legacy db trigger idempotent', () => {
-    const migration = readServerFile('migrations', '105_make_task_progress_snapshot_trigger_idempotent.sql')
+  it('retires the legacy db writer and adds auditable reconcile rollback state', () => {
+    const migration = readServerFile('migrations', '316_task_fact_write_integrity.sql')
 
-    expect(migration).toContain('CREATE OR REPLACE FUNCTION public.auto_record_progress_snapshot()')
-    expect(migration).toContain('ON CONFLICT (task_id, snapshot_date, event_type, event_source)')
-    expect(migration).toContain('recorded_by = COALESCE(EXCLUDED.recorded_by, public.task_progress_snapshots.recorded_by)')
+    expect(migration).toContain('DROP TRIGGER IF EXISTS trigger_auto_record_snapshot ON public.tasks')
+    expect(migration).toContain('DROP FUNCTION IF EXISTS public.auto_record_progress_snapshot()')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS rolled_back_at TIMESTAMPTZ')
+    expect(migration).toContain('ADD COLUMN IF NOT EXISTS rolled_back_by UUID')
+    expect(migration).toContain("ADD COLUMN IF NOT EXISTS rollback_result JSONB NOT NULL DEFAULT '{}'::jsonb")
   })
 
-  it('keeps canonical clean and full bundles aligned with trigger upsert semantics', () => {
-    const sources = [
-      readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql'),
-      readServerFile('migrations', 'FULL_MIGRATION_ALL_IN_ONE.sql'),
-      readServerFile('migrations', 'FULL_MIGRATION_ALL_IN_ONE_FIXED.sql'),
-    ]
+  it('keeps the canonical clean bundle final state on the application-owned writer', () => {
+    const source = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const finalDrop = source.lastIndexOf('DROP TRIGGER IF EXISTS trigger_auto_record_snapshot ON public.tasks')
+    const lastCreate = source.lastIndexOf('CREATE TRIGGER trigger_auto_record_snapshot')
 
-    for (const source of sources) {
-      expect(source).toContain('CREATE OR REPLACE FUNCTION auto_record_progress_snapshot()')
-      expect(source).toContain('ON CONFLICT (task_id, snapshot_date, event_type, event_source)')
-      expect(source).toContain('progress = EXCLUDED.progress')
-      expect(source).toContain('notes = EXCLUDED.notes')
-      expect(source).toMatch(/VALUES\s*\([\s\S]*?\)\s+ON CONFLICT \(task_id, snapshot_date, event_type, event_source\)/)
-    }
+    expect(finalDrop).toBeGreaterThan(lastCreate)
+    expect(source.slice(finalDrop)).toContain('DROP FUNCTION IF EXISTS public.auto_record_progress_snapshot()')
+    expect(source.slice(finalDrop)).toContain('ADD COLUMN IF NOT EXISTS rolled_back_at TIMESTAMPTZ')
+  })
+
+  it('keeps migration 316 byte-equivalent in the canonical clean bundle', () => {
+    const migrationName = '316_task_fact_write_integrity.sql'
+    const migration = readServerFile('migrations', migrationName)
+      .replace(/\r\n/g, '\n')
+      .trim()
+    const cleanBundle = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+      .replace(/\r\n/g, '\n')
+    const header = [
+      '-- ============================================================',
+      `-- Source: ${migrationName}`,
+      '-- ============================================================',
+    ].join('\n')
+    const sourceIndex = cleanBundle.indexOf(header)
+
+    expect(sourceIndex).toBeGreaterThan(-1)
+    const bodyStart = sourceIndex + header.length
+    const nextSourceIndex = cleanBundle.indexOf(
+      '\n-- ============================================================\n-- Source:',
+      bodyStart,
+    )
+    const bundledBody = cleanBundle.slice(
+      bodyStart,
+      nextSourceIndex >= 0 ? nextSourceIndex : undefined,
+    ).trim()
+
+    expect(bundledBody).toBe(migration)
+  })
+
+  it('provides an explicit rollback for the trigger retirement', () => {
+    const rollback = readServerFile('migrations', 'rollback', '316_task_fact_write_integrity.sql')
+
+    expect(rollback).toContain('CREATE OR REPLACE FUNCTION public.auto_record_progress_snapshot()')
+    expect(rollback).toContain('CREATE TRIGGER trigger_auto_record_snapshot')
+    expect(rollback).toContain('DROP COLUMN IF EXISTS rollback_result')
   })
 })

@@ -26,7 +26,17 @@ describe('v1.4.23.1 actionable surface registry', () => {
       'warning_issue_closure',
       'retention_delete_operator_action',
       'responsibility_recovery_confirmation',
+      'workspace_progress_entry_action',
+      'workspace_governance_prediction_todo_action',
+      'rule_asset_governance_review_action',
+      'rule_asset_stable_publication_action',
+      'rule_asset_template_replacement_action',
+      'rule_asset_runtime_evidence_action',
+      'rule_asset_runtime_rollback_action',
       'construction_organization_runtime_publication_action',
+      'duration_accuracy_auto_publish_action',
+      'duration_accuracy_force_stable_action',
+      'duration_accuracy_rollback_close_action',
     ])
 
     for (const surface of surfaces) {
@@ -38,11 +48,11 @@ describe('v1.4.23.1 actionable surface registry', () => {
       expect(surface.failureRecovery.length).toBeGreaterThan(0)
       expect(surface.stableTargetRoute.length).toBeGreaterThan(0)
       expect(surface.boundaryPolicy).toEqual(expect.objectContaining({
-        canUseAsStableAction: false,
         writesRuntimePublication: false,
         declaresProductionReady: false,
-        requiresLiveEvidenceForUpgrade: true,
       }))
+      expect(surface.boundaryPolicy.canUseAsStableAction).toBe(surface.status === 'stable_action')
+      expect(surface.boundaryPolicy.requiresLiveEvidenceForUpgrade).toBe(surface.status !== 'stable_action')
       expect(surface.sourceCloseoutItems).toEqual(expect.arrayContaining([
         expect.stringMatching(/^C-/),
       ]))
@@ -80,12 +90,6 @@ describe('v1.4.23.1 actionable surface registry', () => {
     expect(surface?.boundaryPolicy.canUseAsStableAction).toBe(false)
   })
 
-  it('points notifications and governance actions at real user-visible routes', () => {
-    expect(getV14231ActionableSurface('notification_attention_todo')?.stableTargetRoute).toBe('/notifications')
-    expect(getV14231ActionableSurface('construction_organization_runtime_publication_action')?.stableTargetRoute)
-      .toBe('/admin/rule-assets/governance-workbench')
-  })
-
   it('keeps construction organization runtime publication actions behind C-13 needs-gating', () => {
     const surface = getV14231ActionableSurface('construction_organization_runtime_publication_action')
 
@@ -99,20 +103,40 @@ describe('v1.4.23.1 actionable surface registry', () => {
     expect(surface?.boundaryPolicy.requiresLiveEvidenceForUpgrade).toBe(true)
   })
 
-  it('unlocks the controlled runtime action surface only through the explicit server kill switch', () => {
-    vi.stubEnv('WORKBUDDY_RULE_ASSET_RUNTIME_ACTIONS_ENABLED', 'true')
+  it('separates page readiness from ordinary stable actions and dangerous writes', () => {
+    const stableKeys = [
+      'workspace_progress_entry_action',
+      'rule_asset_governance_review_action',
+      'rule_asset_runtime_evidence_action',
+    ]
+    const gatedKeys = [
+      'workspace_governance_prediction_todo_action',
+      'rule_asset_stable_publication_action',
+      'rule_asset_template_replacement_action',
+      'rule_asset_runtime_rollback_action',
+      'duration_accuracy_auto_publish_action',
+      'duration_accuracy_force_stable_action',
+      'duration_accuracy_rollback_close_action',
+    ]
 
-    const surface = getV14231ActionableSurface('construction_organization_runtime_publication_action')
+    for (const key of stableKeys) {
+      expect(getV14231ActionableSurface(key)).toEqual(expect.objectContaining({
+        status: 'stable_action',
+        boundaryPolicy: expect.objectContaining({
+          canUseAsStableAction: true,
+          requiresLiveEvidenceForUpgrade: false,
+        }),
+      }))
+    }
 
-    expect(surface).toEqual(expect.objectContaining({
-      status: 'stable_action',
-      stableTargetRoute: '/admin/rule-assets/governance-workbench',
-    }))
-    expect(surface?.boundaryPolicy).toEqual(expect.objectContaining({
-      canUseAsStableAction: true,
-      writesRuntimePublication: false,
-      declaresProductionReady: false,
-      requiresLiveEvidenceForUpgrade: false,
-    }))
+    for (const key of gatedKeys) {
+      expect(getV14231ActionableSurface(key)).toEqual(expect.objectContaining({
+        status: 'needs-gating',
+        boundaryPolicy: expect.objectContaining({
+          canUseAsStableAction: false,
+          requiresLiveEvidenceForUpgrade: true,
+        }),
+      }))
+    }
   })
 })

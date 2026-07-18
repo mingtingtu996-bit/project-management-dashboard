@@ -76,6 +76,11 @@ import {
   evaluateDurationPlausibility,
   type DurationPlausibilityWarning,
 } from './durationEngineeringPlausibilityGuardrailService.js'
+import {
+  executeDurationLearningRuntimePublicationQuery,
+  resolveDurationLearningRuntimePublication,
+  type DurationLearningRuntimePublicationQueryExec,
+} from './durationLearningRuntimePublicationService.js'
 import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
@@ -92,6 +97,7 @@ import {
   readConstructionOrganizationPlanNetworkRuntimeLineage,
   type ConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
+import { resolveDurationDayBasis } from '../utils/durationDayBasis.js'
 
 export type DurationCalibrationSource =
   | 'enterprise_override'
@@ -103,6 +109,7 @@ export type DurationCalibrationSource =
   | 'standard_work_duration_seed+system_history_sample'
   | 'standard_work_duration_seed+project_history_sample'
   | 'standard_work_duration_seed+mixed_history_sample'
+  | 'runtime_learning_publication'
   | 'cold_start_baseline'
   | 'unavailable'
 
@@ -159,7 +166,7 @@ export interface DurationSuggestion {
   confidenceScore: number
   forecastSource: string
   durationCalibrationSource: DurationCalibrationSource
-  durationProvenance: 'manual_override' | 'historical_benchmark' | 'standard_work_duration_seed' | 'unavailable'
+  durationProvenance: 'manual_override' | 'historical_benchmark' | 'standard_work_duration_seed' | 'runtime_learning_publication' | 'unavailable'
   businessReason: string | null
   businessReasonCode?: DurationBusinessReasonCode | null
   businessReasonCodes?: DurationBusinessReasonCode[]
@@ -299,6 +306,10 @@ type DurationBenchmarkRow = {
   cv?: number | null
   coefficient_of_variation?: number | null
   coefficientOfVariation?: number | null
+  duration_day_basis?: 'calendar_day' | 'construction_production_day' | null
+  __durationLearningPublicationKey?: string | null
+  __durationLearningPublicationStage?: string | null
+  __durationLearningSelectionBasis?: string | null
 }
 
 type DurationOverrideRow = {
@@ -485,6 +496,21 @@ function buildStandardSeedRuntimePublication(
   standardSeed: Record<string, unknown> | null | undefined,
 ): DurationSuggestionRuntimeArtifactPublication | null {
   if (!standardSeed) return null
+  const learnedPublicationKey = normalizeId(standardSeed.__durationLearningPublicationKey)
+  if (learnedPublicationKey) {
+    const stage = normalizeId(standardSeed.__durationLearningPublicationStage)
+    return {
+      assetKey: 'standard_work_duration_seed',
+      publicationKey: learnedPublicationKey,
+      publicationStatus: stage === 'canary' ? 'canary' : 'published',
+      sourceEvidenceRefs: [`duration_learning_runtime_publications:${learnedPublicationKey}`],
+      observationContext: {
+        seedSource: normalizeId(standardSeed.__resolverSource),
+        seedStableCode: normalizeId(standardSeed.__stableCode ?? standardSeed.stableCode ?? standardSeed.stable_code),
+        selectionBasis: normalizeId(standardSeed.__durationLearningSelectionBasis),
+      },
+    }
+  }
   const seedSource = normalizeId(standardSeed.__resolverSource)
   if (seedSource !== 'active_seed') return null
   const seedVersion = normalizeId(
@@ -508,8 +534,73 @@ function buildStandardSeedRuntimePublication(
   }
 }
 
+function buildLearnedBenchmarkRuntimePublication(
+  benchmark: DurationBenchmarkRow | null | undefined,
+): DurationSuggestionRuntimeArtifactPublication | null {
+  const publicationKey = normalizeId(benchmark?.__durationLearningPublicationKey)
+  if (!publicationKey) return null
+  const stage = normalizeId(benchmark?.__durationLearningPublicationStage)
+  return {
+    assetKey: 'base_duration_benchmark',
+    publicationKey,
+    publicationStatus: stage === 'canary' ? 'canary' : 'published',
+    sourceEvidenceRefs: [`duration_learning_runtime_publications:${publicationKey}`],
+    observationContext: {
+      selectionBasis: normalizeId(benchmark?.__durationLearningSelectionBasis),
+      durationDayBasis: benchmark?.duration_day_basis ?? null,
+    },
+  }
+}
+
+function createDurationLearningRuntimeQueryExec(
+  input: DurationSuggestionInput,
+): DurationLearningRuntimePublicationQueryExec | null {
+  if (process.env.NODE_ENV === 'test' && input.runtimeEvidenceMode === 'no_write') return null
+  if (input.runtimeConsumerObservationQueryExec) return input.runtimeConsumerObservationQueryExec
+  if (process.env.NODE_ENV === 'test') return null
+  return executeDurationLearningRuntimePublicationQuery
+}
+
+async function applyLearnedStandardDurationPublication(input: {
+  suggestionInput: DurationSuggestionInput
+  companyId: string | null
+  seed: Record<string, unknown> | null
+}) {
+  const stableCode = normalizeId(
+    input.seed?.__stableCode
+      ?? input.seed?.stableCode
+      ?? input.seed?.stable_code
+      ?? input.suggestionInput.standardWorkCode
+      ?? input.suggestionInput.templateStableCode,
+  )
+  const queryExec = createDurationLearningRuntimeQueryExec(input.suggestionInput)
+  if (!stableCode || !queryExec) return input.seed
+  const resolution = await resolveDurationLearningRuntimePublication({
+    queryExec,
+    assetKey: 'standard_work_duration_seed',
+    artifactKey: stableCode,
+    companyId: input.companyId,
+    projectId: input.suggestionInput.projectId,
+    industryKey: input.suggestionInput.projectTypeCode,
+  })
+  if (!resolution.runtimeConsumable || !resolution.publication) return input.seed
+  return {
+    ...(input.seed ?? {}),
+    ...resolution.publication.runtimePayload,
+    stableCode,
+    __stableCode: stableCode,
+    __resolverSource: `duration_learning_${resolution.selectionBasis}`,
+    __seedVersion: resolution.publicationKey,
+    __resolverVersionId: resolution.publicationKey,
+    __durationLearningPublicationKey: resolution.publicationKey,
+    __durationLearningPublicationStage: resolution.publication.publicationStage,
+    __durationLearningSelectionBasis: resolution.selectionBasis,
+  }
+}
+
 function buildDurationSuggestionRuntimeArtifactPublications(input: {
   benchmarkBlendRuntimeParameter?: BenchmarkBlendRuntimeParameter | null
+  benchmark?: DurationBenchmarkRow | null
   coldStartDecision?: AlgorithmAssetColdStartRuntimeDecision | null
   coldStartBaselines?: AlgorithmAssetColdStartBaseline[]
   standardSeed?: Record<string, unknown> | null
@@ -540,6 +631,8 @@ function buildDurationSuggestionRuntimeArtifactPublications(input: {
       },
     })
   }
+
+  push(buildLearnedBenchmarkRuntimePublication(input.benchmark))
 
   if (input.benchmarkBlendRuntimeParameter?.p50P75BlendRatioPublicationKey) {
     push({
@@ -1527,7 +1620,7 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
 async function findBenchmark(benchKey: string, companyId: string | null): Promise<DurationBenchmarkRow | null> {
   let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
+    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, duration_day_basis, metadata')
     .eq('benchmark_key', benchKey)
     .eq('is_current', true)
     .eq('is_active', true)
@@ -1546,7 +1639,7 @@ async function findProjectBenchmark(benchKey: string, projectId: string | null):
 
   const { data, error } = await (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
+    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, duration_day_basis, metadata')
     .eq('benchmark_key', benchKey)
     .eq('project_id', normalizedProjectId)
     .eq('is_current', true)
@@ -1605,9 +1698,11 @@ async function collectBenchmarkCandidates(params: {
     const benchKey = [params.benchmarkIdentity, params.wbsNodeType, contextKey].join(':')
     const specificity = benchmarkContextSpecificity(contextKey)
     const candidates: DurationBenchmarkCandidate[] = []
+    const occupiedScopes = new Set<BenchmarkScope>()
 
     const addCandidate = (benchmark: DurationBenchmarkRow | null, scope: BenchmarkScope) => {
       if (!benchmark || !isBenchmarkCandidateScopeConsistent(benchmark, scope, params.input, params.companyId)) return
+      if (resolveDurationDayBasis(benchmark as Record<string, unknown>) !== 'construction_production_day') return
       const sampleSize = Number(benchmark.sample_count ?? 0)
       if (!isBenchmarkCandidateUsable(scope, sampleSize, specificity)) return
       candidates.push({
@@ -1618,15 +1713,61 @@ async function collectBenchmarkCandidates(params: {
         sampleSize,
         specificity,
       })
+      occupiedScopes.add(scope)
     }
 
-    addCandidate(await findProjectBenchmark(benchKey, params.input.projectId ?? null), 'project')
+    const queryExec = createDurationLearningRuntimeQueryExec(params.input)
+    if (queryExec) {
+      const resolution = await resolveDurationLearningRuntimePublication({
+        queryExec,
+        assetKey: 'base_duration_benchmark',
+        artifactKey: benchKey,
+        companyId: params.companyId,
+        projectId: params.input.projectId,
+        industryKey: params.input.projectTypeCode,
+      })
+      if (resolution.runtimeConsumable && resolution.publication) {
+        const payload = resolution.publication.runtimePayload
+        const scope: BenchmarkScope = resolution.publication.scopeLevel === 'project'
+          ? 'project'
+          : resolution.publication.scopeLevel === 'company'
+            ? 'company'
+            : 'system'
+        addCandidate({
+          p50_days: readPositiveNumber(payload.p50Days ?? payload.p50_days),
+          p75_days: readPositiveNumber(payload.p75Days ?? payload.p75_days),
+          p80_days: readPositiveNumber(payload.p80Days ?? payload.p80_days),
+          mean_days: readPositiveNumber(payload.meanDays ?? payload.mean_days),
+          sample_count: Number(payload.sampleCount ?? payload.sample_count ?? 0),
+          variance: Number(payload.variance ?? payload.coefficientOfVariation ?? payload.coefficient_of_variation ?? 0),
+          coefficient_of_variation: Number(payload.coefficientOfVariation ?? payload.coefficient_of_variation ?? payload.variance ?? 0),
+          confidence_level: (normalizeId(payload.confidenceLevel ?? payload.confidence_level) || 'medium') as DurationBenchmarkRow['confidence_level'],
+          confidence_score: Number(payload.confidenceScore ?? payload.confidence_score ?? 0),
+          company_id: resolution.publication.companyId,
+          project_id: resolution.publication.projectId,
+          duration_day_basis: 'construction_production_day',
+          metadata: {
+            source: 'duration_learning_runtime_publication',
+            publication_key: resolution.publicationKey,
+          },
+          __durationLearningPublicationKey: resolution.publicationKey,
+          __durationLearningPublicationStage: resolution.publication.publicationStage,
+          __durationLearningSelectionBasis: resolution.selectionBasis,
+        }, scope)
+      }
+    }
 
-    if (params.companyId) {
+    if (!occupiedScopes.has('project')) {
+      addCandidate(await findProjectBenchmark(benchKey, params.input.projectId ?? null), 'project')
+    }
+
+    if (params.companyId && !occupiedScopes.has('company')) {
       addCandidate(await findBenchmark(benchKey, params.companyId), 'company')
     }
 
-    addCandidate(await findBenchmark(benchKey, null), 'system')
+    if (!occupiedScopes.has('system')) {
+      addCandidate(await findBenchmark(benchKey, null), 'system')
+    }
 
     if (candidates.length > 0) return candidates
   }
@@ -4747,7 +4888,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       trustedMethodCodes.length > 0 ? { methodVariantCodes: trustedMethodCodes } : null,
       trustedElementCodes.length > 0 ? { elementVariantCodes: trustedElementCodes } : null,
     )
-    const standardSeed = await resolveStandardWorkDurationSeed(resolvedBaselineMatchText || baselineMatchText, {
+    const resolvedStandardSeed = await resolveStandardWorkDurationSeed(resolvedBaselineMatchText || baselineMatchText, {
       projectId,
       companyId,
       standardWorkCode: normalizedInput.standardWorkCode,
@@ -4763,6 +4904,11 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       structureTypeCode: normalizedInput.structureTypeCode,
       applicableGranularity: normalizedInput.wbsNodeType === 'summary' ? 'summary' : 'task',
       featureProfile: seedFeatureProfile,
+    })
+    const standardSeed = await applyLearnedStandardDurationPublication({
+      suggestionInput: normalizedInput,
+      companyId,
+      seed: resolvedStandardSeed as Record<string, unknown> | null,
     })
     if (standardSeed) {
       const standardWorkConflictGuard = getStandardWorkConflictGuard(normalizedInput, standardSeed as Record<string, unknown>)
@@ -4922,6 +5068,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           p80: benchmarkDistributionCandidate.p80,
           mean: readPositiveNumber(benchmarkDistributionCandidate.benchmark.mean_days) ?? benchmarkDistributionCandidate.p50,
           variance: benchmarkDistributionCandidate.variance,
+          dayBasis: 'construction_production_day',
           source: 'duration_benchmarks',
           scope: benchmarkDistributionCandidate.scope,
           sampleCount: benchmarkDistributionCandidate.sampleSize,
@@ -4942,6 +5089,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const standardForecastSource = scale.factor === 1 ? baseForecastSource : appendForecastSourceSuffix(baseForecastSource, 'scale_proxy')
       const runtimeArtifactPublications = buildDurationSuggestionRuntimeArtifactPublications({
         benchmarkBlendRuntimeParameter,
+        benchmark: benchmarkDistributionCandidate?.benchmark ?? null,
         coldStartDecision,
         coldStartBaselines,
         standardSeed: standardSeed as Record<string, unknown>,
@@ -5010,6 +5158,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           benchmarkP80: benchmarkDistributionCandidate?.p80,
           benchmarkP80Source: benchmarkDistributionCandidate?.p80Source,
           benchmarkVariance: benchmarkDistributionCandidate?.variance,
+          benchmarkDurationDayBasis: benchmarkDistributionCandidate ? 'construction_production_day' : null,
           benchmarkReferenceDays: benchmarkDistributionCandidate?.referenceDays,
           benchmarkReferenceSource: benchmarkDistributionCandidate?.referenceSource,
           benchmarkSampleCount: benchmarkBlend?.sampleCount,

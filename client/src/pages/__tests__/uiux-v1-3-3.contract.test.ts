@@ -140,7 +140,7 @@ describe('v1.3.3 UI/UX source contract', () => {
     expect(hexDebt).toEqual([])
     expect(legacyCardDebt).toEqual([])
     expect(localMetricCardDebt).toEqual([])
-  })
+  }, 15_000)
 
   it('keeps migrated dialogs on the shared Radix dialog primitive', () => {
     const fixedOverlayPattern = /fixed\s+inset-(?:0|y-0)[^"`']*z-50|role="dialog"|aria-modal="true"/

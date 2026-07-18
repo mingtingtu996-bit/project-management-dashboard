@@ -10,6 +10,11 @@ import {
 } from './constructionCalendar.js'
 import { orderDurationBand } from './durationEngineeringPlausibilityGuardrailService.js'
 import { delayDayDelta, normalizeDateOnlyText } from '../utils/durationDays.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
+import {
+  simulateDurationNetworkProbability,
+  type DurationNetworkProbabilityResult,
+} from './durationNetworkMonteCarloService.js'
 
 export type ScopedDurationForecastDimension = 'division' | 'subdivision' | 'specialty'
 export type ScopedDurationForecastState = 'not_started' | 'in_progress' | 'completed'
@@ -40,6 +45,15 @@ export type ScopedDurationForecastGroup = {
   confidenceScore: number | null
   forecastCoverageRate: number
   probabilityCoverageRate: number
+  probabilityBasis: 'monte_carlo' | 'pert_analytic' | 'deterministic_completed'
+  networkProbability: (DurationNetworkProbabilityResult & {
+    p20RemainingDays: number | null
+    p50RemainingDays: number | null
+    p80RemainingDays: number | null
+    p20FinishDate: string | null
+    p50FinishDate: string | null
+    p80FinishDate: string | null
+  }) | null
   forecastState: ScopedDurationForecastState
   dataStatus: ScopedDurationForecastDataStatus
   degradationReasons: string[]
@@ -155,10 +169,11 @@ function latestDate(values: Array<string | null | undefined>) {
 }
 
 function isCompleted(row: ScheduleAccelerationRow) {
-  const status = normalizeText(row.values.status).toLowerCase()
-  return COMPLETED_STATUSES.has(status)
-    || normalizeDate(row.values.actual_end_date) !== null
-    || Number(row.values.progress ?? 0) >= 100
+  return isCompletedTask({
+    status: normalizeText(row.values.status),
+    progress: Number(row.values.progress ?? 0),
+    actual_end_date: normalizeDate(row.values.actual_end_date),
+  })
 }
 
 function isEligibleRow(row: ScheduleAccelerationRow) {
@@ -369,6 +384,21 @@ function productionDaysFromAsOf(
   return productionDaysBetweenInclusive(asOf, finish, calendar)
 }
 
+function forecastProbabilityRemainingDays(
+  forecast: TaskDurationForecast | undefined,
+  percentile: 'p20' | 'p50' | 'p80',
+) {
+  const probability = forecast?.probabilityDuration
+  if (!probability) return null
+  const value = percentile === 'p20'
+    ? probability.p20RemainingDays
+    : percentile === 'p50'
+      ? probability.p50RemainingDays
+      : probability.p80RemainingDays
+  const normalized = readFiniteNumber(value)
+  return normalized !== null && normalized > 0 ? normalized : null
+}
+
 function forecastState(tasks: EligibleTask[]): ScopedDurationForecastState {
   if (tasks.every((task) => task.completed)) return 'completed'
   if (tasks.some((task) => {
@@ -461,6 +491,7 @@ function governingConfidence(
 
 function buildGroupForecast(input: {
   bucket: GroupBucket
+  projectId: string
   asOfDate: string
   forecastByTaskId: Map<string, TaskDurationForecast>
   criticalTaskIds: Set<string>
@@ -531,6 +562,8 @@ function buildGroupForecast(input: {
       confidenceScore: null,
       forecastCoverageRate: 1,
       probabilityCoverageRate: 1,
+      probabilityBasis: 'deterministic_completed',
+      networkProbability: null,
       forecastState: 'completed',
       dataStatus: completionFinishDate
         ? (reasons.length > 0 ? 'degraded' : 'ready')
@@ -551,16 +584,59 @@ function buildGroupForecast(input: {
   const rawP20 = hasUnboundedActiveTask ? null : latestDate(bands.map((band) => band.p20))
   const rawP50 = hasUnboundedActiveTask ? null : latestDate(bands.map((band) => band.p50))
   const rawP80 = hasUnboundedActiveTask ? null : latestDate(bands.map((band) => band.p80))
-  const ordered = orderFinishBand(rawP20, rawP50, rawP80)
+  const analyticOrdered = orderFinishBand(rawP20, rawP50, rawP80)
+  const activeTaskIds = new Set(activeTasks.map((task) => task.id))
+  const networkDependencies = activeTasks.flatMap((task) => task.row.predecessorDependencies
+    .filter((dependency) => activeTaskIds.has(normalizeText(dependency.clientRowId)))
+    .map((dependency) => ({
+      predecessorTaskId: normalizeText(dependency.clientRowId),
+      successorTaskId: task.id,
+      dependencyType: dependency.dependencyType,
+      lagDays: dependency.lagDays,
+    })))
+  const networkProbabilityResult = simulateDurationNetworkProbability({
+    seed: [input.projectId, bucket.dimension, bucket.id, asOfDate].join(':'),
+    tasks: activeTasks.map((task) => {
+      const forecast = forecastByTaskId.get(task.id)
+      const plannedStart = normalizeDate(task.row.values.planned_start_date ?? task.row.values.start_date)
+      const plannedReleaseDays = plannedStart
+        ? productionDaysFromAsOf(asOfDate, plannedStart, calendar)
+        : null
+      return {
+        id: task.id,
+        p20Days: forecastProbabilityRemainingDays(forecast, 'p20'),
+        p50Days: forecastProbabilityRemainingDays(forecast, 'p50'),
+        p80Days: forecastProbabilityRemainingDays(forecast, 'p80'),
+        releaseOffsetDays: plannedReleaseDays === null ? 0 : Math.max(0, plannedReleaseDays - 1),
+      }
+    }),
+    dependencies: networkDependencies,
+    simulationCount: 1000,
+    scenarioCorrelation: 0.35,
+  })
+  const monteCarloApplied = networkProbabilityResult.probabilityBasis === 'monte_carlo'
+    && networkProbabilityResult.p20DurationDays !== null
+    && networkProbabilityResult.p50DurationDays !== null
+    && networkProbabilityResult.p80DurationDays !== null
+  const monteCarloBand = monteCarloApplied
+    ? orderFinishBand(
+        shiftProductionDays(asOfDate, networkProbabilityResult.p20DurationDays! - 1, calendar),
+        shiftProductionDays(asOfDate, networkProbabilityResult.p50DurationDays! - 1, calendar),
+        shiftProductionDays(asOfDate, networkProbabilityResult.p80DurationDays! - 1, calendar),
+      )
+    : null
+  const ordered = monteCarloBand ?? analyticOrdered
   if (ordered.reordered) reasons.push('duration_band_reordered')
 
   const forecastCoverageRate = bands.filter((band) => band.forecastCovered).length / activeTasks.length
   const probabilityCoverageRate = bands.filter((band) => band.probabilityCovered).length / activeTasks.length
-  const governingIds = governingTaskIds(
-    bands,
-    { p20: rawP20, p50: rawP50, p80: rawP80 },
-    [ordered.p20, ordered.p50, ordered.p80],
-  )
+  const governingIds = monteCarloApplied
+    ? activeTasks.map((task) => task.id)
+    : governingTaskIds(
+        bands,
+        { p20: rawP20, p50: rawP50, p80: rawP80 },
+        [ordered.p20, ordered.p50, ordered.p80],
+      )
   const confidence = governingConfidence(governingIds, forecastByTaskId)
   const remainingDurationDays = productionDaysFromAsOf(asOfDate, ordered.p50, calendar)
   const targetGapDays = delayDayDelta(targetFinishDate, ordered.p50, calendar)
@@ -605,6 +681,16 @@ function buildGroupForecast(input: {
     confidenceScore: confidence.score,
     forecastCoverageRate,
     probabilityCoverageRate,
+    probabilityBasis: monteCarloApplied ? 'monte_carlo' : 'pert_analytic',
+    networkProbability: {
+      ...networkProbabilityResult,
+      p20RemainingDays: networkProbabilityResult.p20DurationDays,
+      p50RemainingDays: networkProbabilityResult.p50DurationDays,
+      p80RemainingDays: networkProbabilityResult.p80DurationDays,
+      p20FinishDate: monteCarloBand?.p20 ?? analyticOrdered.p20,
+      p50FinishDate: monteCarloBand?.p50 ?? analyticOrdered.p50,
+      p80FinishDate: monteCarloBand?.p80 ?? analyticOrdered.p80,
+    },
     forecastState: forecastState(bucket.tasks),
     dataStatus,
     degradationReasons,
@@ -677,6 +763,7 @@ export function buildScopedDurationForecasts(
     dimensions[dimension] = buildBuckets(eligibleTasks, dimension).map((bucket) => {
       return buildGroupForecast({
         bucket,
+        projectId: normalizeText(input.projectId),
         asOfDate,
         forecastByTaskId,
         criticalTaskIds: input.criticalTaskIds,

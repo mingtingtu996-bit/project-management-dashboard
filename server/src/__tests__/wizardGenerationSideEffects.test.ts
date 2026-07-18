@@ -749,7 +749,15 @@ describe('v1.4.22.1 project wizard route side effects', () => {
           clientRowId: 'row-2',
           parentClientRowId: 'row-1',
           sortOrder: 2,
-          predecessorDependencies: [{ clientRowId: 'row-1', dependencyType: 'FS', lagDays: 0, source: 'sibling_sequence' }],
+          predecessorDependencies: [{
+            clientRowId: 'row-1',
+            dependencyType: 'FS',
+            lagDays: 0,
+            source: 'duration_learning_runtime_publication',
+            publicationKey: 'duration_learning_runtime:dependency_rule_candidate:canary-1',
+            publicationStage: 'canary',
+            selectionBasis: 'project_canary',
+          }],
           values: {
             title: '鎵嬫湳閮ㄦ満鐢甸鐣?',
             row_projection_mode: 'schedule_row',
@@ -3315,7 +3323,17 @@ describe('v1.4.22.1 project wizard route side effects', () => {
         release: mocks.txClientRelease,
       }),
       dependencies: expect.arrayContaining([
-        expect.objectContaining({ taskId: 'task-2', dependencyTaskId: 'task-1', dependencyType: 'FS' }),
+        expect.objectContaining({
+          taskId: 'task-2',
+          dependencyTaskId: 'task-1',
+          dependencyType: 'FS',
+          sourceType: 'duration_learning_runtime_publication',
+          metadata: expect.objectContaining({
+            publicationKey: 'duration_learning_runtime:dependency_rule_candidate:canary-1',
+            publicationStage: 'canary',
+            selectionBasis: 'project_canary',
+          }),
+        }),
       ]),
     }))
 
@@ -3779,6 +3797,54 @@ describe('v1.4.22.1 project wizard route side effects', () => {
         writesCriticalPathFacts: false,
         writesAccelerationDraft: false,
       }),
+    }))
+  })
+
+  it('preserves sequencing fallback basis and gap lineage in wizard dependency writes', async () => {
+    const generated = structuredClone(await mocks.generateWbsTemplateRows()) as any
+    mocks.generateWbsTemplateRows.mockClear()
+    generated.rows[1].predecessorDependencies = [{
+      clientRowId: 'row-1',
+      dependencyType: 'SS',
+      lagDays: 3,
+      intentCode: 'sequencing_fallback:heuristic_stagger',
+      source: 'heuristic_stagger',
+      sequencingBasis: 'heuristic_stagger',
+      governanceGapCode: 'master_plan_dependency_rule_gap',
+      dependencyRuleEvidence: {
+        source: 'heuristic_stagger',
+        evidenceLevel: 'heuristic_fallback_l0',
+        publicationStatus: 'fallback_not_published_dependency_rule',
+      },
+    }]
+    mocks.generateWbsTemplateRows.mockResolvedValueOnce(generated)
+
+    await request(buildApp())
+      .post('/api/projects/wizard')
+      .send({
+        companyId: 'company-1',
+        commit: true,
+        wizardPayload: makeWizardPayload(),
+      })
+      .expect(201)
+
+    expect(mocks.replaceWizardGeneratedTaskDependenciesBatch).toHaveBeenCalledWith(expect.objectContaining({
+      dependencies: expect.arrayContaining([
+        expect.objectContaining({
+          taskId: 'task-2',
+          dependencyTaskId: 'task-1',
+          sourceType: 'template_generated',
+          metadata: expect.objectContaining({
+            source: 'heuristic_stagger',
+            sequencingBasis: 'heuristic_stagger',
+            governanceGapCode: 'master_plan_dependency_rule_gap',
+            intentCode: 'sequencing_fallback:heuristic_stagger',
+            dependencyRuleEvidence: expect.objectContaining({
+              evidenceLevel: 'heuristic_fallback_l0',
+            }),
+          }),
+        }),
+      ]),
     }))
   })
 

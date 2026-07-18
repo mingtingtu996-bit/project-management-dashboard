@@ -79,10 +79,10 @@ export type StatusDictionaryBootstrapResult = { transitionCount: number }
     expect(risksRoute).toContain("assertTransition('risk.lifecycle'")
     expect(issuesRoute).toContain("assertTransition('issue.lifecycle'")
     expect(risksRoute.indexOf("assertTransition('risk.lifecycle'")).toBeLessThan(
-      risksRoute.indexOf("status: 'closed'"),
+      risksRoute.indexOf('await closeRiskByRetention('),
     )
     expect(issuesRoute.indexOf("assertTransition('issue.lifecycle'")).toBeLessThan(
-      issuesRoute.indexOf("status: 'closed'"),
+      issuesRoute.indexOf('await closeIssueByRetentionInMainChain('),
     )
   })
 

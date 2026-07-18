@@ -2,7 +2,7 @@
 // 10.1 base model and route skeleton; no upgrade-chain resolution logic yet.
 import { Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { validate, validateIdParam, issueSchema, issueUpdateSchema } from '../middleware/validation.js'
+import { validate, validateIdParam, issueSchema, issueUpdateSchema, riskIssueClosureOutcomeSchema } from '../middleware/validation.js'
 import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
@@ -17,13 +17,13 @@ import {
 import { isActiveIssue } from '../utils/issueStatus.js'
 import {
   confirmIssuePendingManualCloseInMainChain,
+  closeIssueByRetentionInMainChain,
   createIssueInMainChain,
   deleteIssueInMainChain,
   keepIssueProcessingInMainChain,
   syncIssueNotificationInMainChain,
   updateIssueInMainChain,
 } from '../services/issueWriteChainService.js'
-import { enqueueProjectHealthUpdate } from '../services/projectHealthService.js'
 import { isProtectedIssue } from '../services/upgradeChainService.js'
 import { assertTransition } from '../services/statusDictionaryService.js'
 import { getProjectCompanyId, getVisibleProjectIds } from '../auth/access.js'
@@ -535,7 +535,7 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
 router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (req) => {
   const existing = await getIssue(req.params.id)
   return existing?.project_id
-}), asyncHandler(async (req, res) => {
+}), validate(riskIssueClosureOutcomeSchema), asyncHandler(async (req, res) => {
   const { id } = req.params
   const version = parseExpectedVersion(req.body?.version)
   if (version === null) {
@@ -547,7 +547,13 @@ router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (r
   }
   logger.info('Confirming issue pending manual close', { id, version })
 
-  const issue = await confirmIssuePendingManualCloseInMainChain(id, version)
+  const issue = await confirmIssuePendingManualCloseInMainChain(id, {
+    resultCode: req.body.resultCode,
+    resultSummary: req.body.resultSummary,
+    effectiveness: req.body.effectiveness,
+    evidenceRefs: req.body.evidenceRefs,
+    causeAttributionId: req.body.causeAttributionId,
+  }, String(req.user?.id ?? ''), version)
   if (!issue) {
     const response: ApiResponse = {
       success: false,
@@ -638,8 +644,7 @@ router.delete('/:id', validateIdParam, requireProjectEditor(async (req) => {
   }
   if (retention.result.resolvedAction === 'close') {
     await assertTransition('issue.lifecycle', String(existing.status ?? 'open'), 'closed')
-    await supabase.from('issues').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', id).eq('project_id', existing.project_id)
-    enqueueProjectHealthUpdate(existing.project_id, 'issue_closed_by_retention')
+    await closeIssueByRetentionInMainChain(id, existing.project_id, { actorId: req.user?.id ?? null })
   } else {
     await deleteIssueInMainChain(id)
   }

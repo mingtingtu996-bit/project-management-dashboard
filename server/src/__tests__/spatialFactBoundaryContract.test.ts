@@ -40,16 +40,17 @@ describe('spatial fact boundary contract', () => {
     expect(row).not.toContain('收口选择二选一')
   })
 
-  it('keeps both v1.4 closeout ledgers aligned on the task-level spatial boundary', () => {
-    const supplementalPlan = readWorkspaceFile('docs', 'plans', "v1.4.23.1-A体系收口台账与验收门禁矩阵.md")
-    const row = extractC143Row(supplementalPlan)
+  it('keeps the v1.4 authoritative release ledger honest about spatial drill-down limits', () => {
+    const planDoc = readWorkspaceFile(
+      'docs',
+      'plans',
+      'v1.4.23.1-A体系收口台账与验收门禁矩阵.md',
+    )
+    const row = extractC143Row(planDoc)
 
-    expect(row).toContain('by-design')
-    expect(row).toContain('`tasks`')
-    expect(row).toContain('`risks`')
-    expect(row).toContain('`project_materials`')
-    expect(row).toContain('`construction_drawings`')
-    expect(row).toContain('UI')
-    expect(row).toContain('API')
+    expect(row).toContain('当前产品只承诺“任务级空间分析”')
+    expect(row).toContain('禁止系统级空间下钻')
+    expect(row).toContain('禁止楼栋/楼层/区域维度聚合风险/材料/图纸等 UI 或 API 宣称')
+    expect(row).toContain('必须另立专项补空间 FK + 回填 + 权限 + 聚合出口 + 回归门禁')
   })
 })

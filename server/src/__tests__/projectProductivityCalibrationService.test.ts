@@ -140,6 +140,7 @@ function makeDurationSamples(count: number, actualDuration = 8) {
     task_id: `task-${index + 1}`,
     planned_duration: 10,
     actual_duration: actualDuration,
+    duration_day_basis: 'construction_production_day',
     sample_status: 'active',
     included_in_benchmark: true,
     completed_at: new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),

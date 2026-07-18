@@ -139,6 +139,11 @@ const state = vi.hoisted(() => {
       skippedConditionCount: 0,
       skippedAcceptanceGateCount: 0,
     })),
+    inferAndPersistTaskStructuredCauseAttributions: vi.fn(async () => []),
+    collectDurationExperienceSampleFromTask: vi.fn(async () => true),
+    retireDurationExperienceSampleForTask: vi.fn(async () => true),
+    enqueueDurationExperienceCollectionFailure: vi.fn(async () => undefined),
+    applyTaskMaterialLifecycleFeedback: vi.fn(async () => undefined),
     supabase: { from },
     from,
     participantUnitSelect,
@@ -184,8 +189,33 @@ vi.mock('../services/warningChainService.js', () => ({
   persistNotification: vi.fn(async () => null),
 }))
 
+vi.mock('../services/statusDictionaryService.js', () => ({
+  assertTransition: vi.fn(async () => undefined),
+}))
+
 vi.mock('../services/executionGateSeedService.js', () => ({
   syncExecutionGateSeedTemplatesForTask: state.syncExecutionGateSeedTemplatesForTask,
+}))
+
+vi.mock('../services/structuredCauseAttributionService.js', () => ({
+  inferAndPersistTaskStructuredCauseAttributions: state.inferAndPersistTaskStructuredCauseAttributions,
+}))
+
+vi.mock('../services/durationExperienceService.js', () => ({
+  collectDurationExperienceSampleFromTask: state.collectDurationExperienceSampleFromTask,
+  retireDurationExperienceSampleForTask: state.retireDurationExperienceSampleForTask,
+}))
+
+vi.mock('../services/durationExperienceReconciliationService.js', () => ({
+  enqueueDurationExperienceCollectionFailure: state.enqueueDurationExperienceCollectionFailure,
+}))
+
+vi.mock('../services/materialTaskFeedbackService.js', () => ({
+  applyTaskMaterialLifecycleFeedback: state.applyTaskMaterialLifecycleFeedback,
+}))
+
+vi.mock('../services/upgradeChainService.js', () => ({
+  closeDelaySourceRisksForCompletedTask: vi.fn(async () => []),
 }))
 
 vi.mock('../services/taskStandardInferenceService.js', () => ({
@@ -573,6 +603,50 @@ describe('taskWriteChainService participant unit lookup', () => {
       expect.objectContaining({ recordedBy: 'user-1' }),
       expect.objectContaining({ progress: 100 }),
     )
+  })
+
+  it('infers structured task causes before collecting the completion learning sample', async () => {
+    state.getTask.mockResolvedValue({
+      id: 'task-1',
+      project_id: 'project-1',
+      title: 'material-delayed task',
+      status: 'in_progress',
+      progress: 80,
+      planned_start_date: '2026-04-01',
+      planned_end_date: '2026-04-10',
+      actual_start_date: '2026-04-01',
+      building_object_id: 'building-1',
+      version: 3,
+    })
+    state.updateTaskWithCodeInTransaction.mockResolvedValue({
+      task: {
+        id: 'task-1',
+        project_id: 'project-1',
+        title: 'material-delayed task',
+        status: 'completed',
+        progress: 100,
+        planned_start_date: '2026-04-01',
+        planned_end_date: '2026-04-10',
+        actual_start_date: '2026-04-01',
+        actual_end_date: '2026-04-18',
+        building_object_id: 'building-1',
+        version: 4,
+      },
+    } as never)
+
+    await updateTaskInMainChain('task-1', {
+      status: 'completed',
+      progress: 100,
+      actual_end_date: '2026-04-18',
+      updated_by: 'user-1',
+    }, 3)
+
+    expect(state.inferAndPersistTaskStructuredCauseAttributions).toHaveBeenCalledWith({
+      task: expect.objectContaining({ id: 'task-1', status: 'completed' }),
+    })
+    expect(state.collectDurationExperienceSampleFromTask).toHaveBeenCalled()
+    expect(state.inferAndPersistTaskStructuredCauseAttributions.mock.invocationCallOrder[0])
+      .toBeLessThan(state.collectDurationExperienceSampleFromTask.mock.invocationCallOrder[0])
   })
 
   it('rejects disabled participant units before creating the task row', async () => {

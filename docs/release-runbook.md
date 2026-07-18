@@ -94,6 +94,10 @@ npm run migrate:plan
 - 支持 `plan` 和 `apply` 两种模式
 - 避免继续维护“手写固定 SQL 列表”的方式
 
+### 阻塞式索引变更约定
+
+历史 migration 中仍存在 non-concurrent `CREATE INDEX`。已登记 migration 的字节和 checksum 不得为改写历史而变化，因此 staging / production 只允许在受控低流量窗口执行迁移，并在 workflow dispatch 中显式确认 `MIGRATION_MAINTENANCE_WINDOW_CONFIRMED=true`。执行前需检查活跃流量、长事务与锁等待；任一项不满足即停止发布。新增大表索引应使用独立在线迁移方案，不能继续追加普通阻塞式索引。
+
 ### 常用命令
 
 ```bash

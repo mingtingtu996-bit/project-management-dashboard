@@ -7,6 +7,22 @@ import type { WorkspaceData } from '@/hooks/useWorkspaceData'
 
 const workspaceMock = vi.hoisted(() => ({
   state: null as WorkspaceData | null,
+  attention: {
+    summary: {
+      totalAttentionCount: 4,
+      unreadNotificationCount: 2,
+      todayTodoCount: 1,
+      criticalCount: 0,
+      warningCount: 1,
+      workspacePendingCount: 3,
+      byTouchpointType: {},
+    },
+    loading: false,
+    loaded: true,
+    error: null as string | null,
+    refetch: vi.fn(),
+  },
+  fetchV14231ActionableSurface: vi.fn(),
 }))
 
 const apiMocks = vi.hoisted(() => ({
@@ -32,6 +48,18 @@ vi.mock('@/hooks/useWorkspaceData', () => ({
     return workspaceMock.state
   },
 }))
+
+vi.mock('@/hooks/useAttentionSummary', () => ({
+  useAttentionSummary: () => workspaceMock.attention,
+}))
+
+vi.mock('@/services/v14231ReadinessApi', async () => {
+  const actual = await vi.importActual<typeof import('@/services/v14231ReadinessApi')>('@/services/v14231ReadinessApi')
+  return {
+    ...actual,
+    fetchV14231ActionableSurface: workspaceMock.fetchV14231ActionableSurface,
+  }
+})
 
 vi.mock('@/hooks/use-toast', () => ({
   toast: vi.fn(),
@@ -89,7 +117,16 @@ describe('WorkspacePage v1.4.20.1', () => {
   beforeEach(() => {
     workspaceMock.state = null
     vi.clearAllMocks()
-    apiMocks.apiGet.mockResolvedValue({})
+    workspaceMock.fetchV14231ActionableSurface.mockImplementation(async (key: string) => ({
+      key,
+      status: key === 'workspace_progress_entry_action' ? 'stable_action' : 'needs-gating',
+      boundaryPolicy: {
+        canUseAsStableAction: key === 'workspace_progress_entry_action',
+        writesRuntimePublication: false,
+        declaresProductionReady: false,
+        requiresLiveEvidenceForUpgrade: key !== 'workspace_progress_entry_action',
+      },
+    }))
   })
 
   it('renders the no-company start card with user context and preview entry', () => {
@@ -193,8 +230,40 @@ describe('WorkspacePage v1.4.20.1', () => {
     expect(screen.getByTestId('workspace-pending')).toHaveTextContent('你已申请加入 精装修样板段')
     expect(screen.getByTestId('workspace-joinable')).toHaveTextContent('屋面工程')
     expect(screen.getByTestId('workspace-preview-entry')).toBeInTheDocument()
-    expect(screen.queryByTestId('v14231-page-readiness-boundary')).not.toBeInTheDocument()
-    expect(apiMocks.apiGet).not.toHaveBeenCalled()
+  })
+
+  it('keeps reminders and progress entry usable while governance execution is action-gated', async () => {
+    const project = {
+      id: 'project-1',
+      name: '总部基地一期',
+      projectType: '房建',
+      stage: '主体结构',
+      ownerName: '张工',
+      location: '南京',
+      healthScore: 88,
+      progress: 42,
+      criticalPathCount: 3,
+      lastActivityAt: '2026-05-15T08:00:00.000Z',
+      myRole: 'company_admin' as const,
+    }
+
+    renderPage({ myProjects: [project], recentProjects: [project], companyProjects: [project] })
+
+    const actionPanel = await screen.findByTestId('workspace-action-readiness')
+    expect(within(actionPanel).getByText('2')).toBeInTheDocument()
+    expect(within(actionPanel).getByRole('button', { name: '查看提醒' })).toBeEnabled()
+    expect(within(actionPanel).getByRole('button', { name: '录入进度' })).toBeEnabled()
+    expect(within(actionPanel).getByRole('button', { name: '录入进度' }))
+      .toHaveAttribute('data-action-readiness', 'stable_action')
+    expect(within(actionPanel).getByTestId('workspace-attention-read-status')).toHaveTextContent('已加载')
+    expect(within(actionPanel).getByTestId('workspace-attention-read-status')).not.toHaveTextContent('needs-gating')
+    expect(within(actionPanel).getByTestId('workspace-governance-action-status')).toHaveTextContent('needs-gating')
+    expect(within(actionPanel).queryByRole('button', { name: /执行治理|执行预测/ })).not.toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(workspaceMock.fetchV14231ActionableSurface).toHaveBeenCalledWith('workspace_progress_entry_action')
+      expect(workspaceMock.fetchV14231ActionableSurface).toHaveBeenCalledWith('workspace_governance_prediction_todo_action')
+    })
   })
 
   it('submits a join request with the entered reason', async () => {

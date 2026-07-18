@@ -113,6 +113,7 @@ import {
   contributesToWbsPlannedWindow,
   distributePlanDurationAcrossActivitySteps,
 } from '../services/wbsPlanRollupService.js'
+import { buildSpecialWorkDurationCandidateNodes } from '../services/wbsTemplateCandidateEventService.js'
 
 const previousDisablePermissionSystem = process.env.DISABLE_PERMISSION_SYSTEM
 
@@ -629,6 +630,233 @@ describe('v1.4.7.2 WBS template generation service', () => {
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
+    ])
+  }, 30000)
+
+  it('applies a scoped WBS reference-days publication before schedule rows are generated', async () => {
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      if (
+        sql.includes('from public.duration_learning_runtime_publications')
+        && params[0] === 'wbs_reference_days'
+        && params[1] === 'china-facade-curtain-wall'
+      ) {
+        return [{
+          publication_key: 'duration_learning_runtime:wbs_reference_days:facade-company-canary',
+          asset_key: 'wbs_reference_days',
+          artifact_key: 'china-facade-curtain-wall',
+          scope_level: 'company',
+          company_id: '00000000-0000-4000-8000-000000000010',
+          project_id: null,
+          industry_key: null,
+          publication_stage: 'canary',
+          runtime_payload: {
+            nodes: [{ sourceId: 'FAC-01-01-01-P04', referenceDays: 99 }],
+            durationDayBasis: 'construction_production_day',
+          },
+          previous_publication_key: 'wbs_reference_days_runtime:facade-v1',
+          traffic_percent: 100,
+          monitoring_status: 'collecting',
+          published_at: '2026-07-17T00:00:00.000Z',
+        }] as T[]
+      }
+      return [] as T[]
+    }
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-learned-reference-days',
+        templateId: 'china-facade-curtain-wall',
+        selectedNodeIds: ['FAC-01-01-01'],
+        plannedStartDate: '2026-06-01',
+        projectFacts: {
+          businessType: 'commercial',
+          projectTypeCode: 'commercial',
+          companyId: '00000000-0000-4000-8000-000000000010',
+        },
+        scope: { building_object_id: 'building-1' },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    const target = generated.rows.find((row) => (
+      String((row.values.standard_task_metadata as Record<string, unknown> | undefined)?.stableCode ?? '')
+        === 'FAC-01-01-01-P04'
+    ))
+    expect(calls.some((call) => (
+      call.sql.includes('from public.duration_learning_runtime_publications')
+      && call.params[0] === 'wbs_reference_days'
+      && call.params[1] === 'china-facade-curtain-wall'
+    ))).toBe(true)
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toContainEqual([
+      'wbs_reference_days',
+      'duration_learning_runtime:wbs_reference_days:facade-company-canary',
+      'wbsTemplateGenerationService',
+      'wbs_template_generation',
+    ])
+    expect(target?.values.standard_task_metadata).toEqual(expect.objectContaining({
+      durationLearningPublicationKey: 'duration_learning_runtime:wbs_reference_days:facade-company-canary',
+    }))
+    expect(target?.values.duration_suggestion).toEqual(expect.objectContaining({
+      durationOutputCode: 'plan_reference',
+      planReferenceDays: 99,
+    }))
+    expect(target?.values.smart_reference_days).toBe(99)
+  }, 30000)
+
+  it('carries a consumed special-work publication from generated rows into learning candidate nodes', async () => {
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      if (
+        sql.includes('from public.duration_learning_runtime_publications')
+        && params[0] === 'special_work_duration_seed'
+        && params[1] === 'china-facade-curtain-wall'
+      ) {
+        return [{
+          publication_key: 'duration_learning_runtime:special_work_duration_seed:facade-company-canary',
+          asset_key: 'special_work_duration_seed',
+          artifact_key: 'china-facade-curtain-wall',
+          scope_level: 'company',
+          company_id: '00000000-0000-4000-8000-000000000010',
+          project_id: null,
+          industry_key: null,
+          publication_stage: 'canary',
+          runtime_payload: {
+            nodes: [{ sourceId: 'FAC-01-01-01-P04', p50Days: 77, p80Days: 93 }],
+            durationDayBasis: 'construction_production_day',
+          },
+          previous_publication_key: null,
+          traffic_percent: 100,
+          monitoring_status: 'collecting',
+          published_at: '2026-07-17T00:00:00.000Z',
+        }] as T[]
+      }
+      return [] as T[]
+    }
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-learned-special-work',
+        templateId: 'china-facade-curtain-wall',
+        selectedNodeIds: ['FAC-01-01-01'],
+        plannedStartDate: '2026-06-01',
+        projectFacts: {
+          businessType: 'commercial',
+          projectTypeCode: 'commercial',
+          companyId: '00000000-0000-4000-8000-000000000010',
+        },
+        scope: { building_object_id: 'building-1' },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    const candidate = buildSpecialWorkDurationCandidateNodes(generated.rows)
+      .find((node) => node.sourceId === 'FAC-01-01-01-P04')
+
+    expect(candidate).toEqual(expect.objectContaining({
+      sourceId: 'FAC-01-01-01-P04',
+      stableCode: 'FAC-01-01-01-P04',
+      p50Days: 77,
+      durationDayBasis: 'construction_production_day',
+      runtimePublicationKey: 'duration_learning_runtime:special_work_duration_seed:facade-company-canary',
+    }))
+  }, 30000)
+
+  it('applies a published dependency rule to the matching generated scope without cartesian edges', async () => {
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      if (
+        sql.includes('from public.duration_learning_runtime_publications')
+        && params[0] === 'dependency_rule_candidate'
+      ) {
+        return [{
+          publication_key: 'duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
+          asset_key: 'dependency_rule_candidate',
+          artifact_key: 'facade-p04-p05',
+          scope_level: 'project',
+          company_id: '00000000-0000-4000-8000-000000000010',
+          project_id: '00000000-0000-4000-8000-000000000001',
+          industry_key: null,
+          publication_stage: 'stable',
+          runtime_payload: {
+            predecessorCode: 'FAC-01-01-01-P04',
+            successorCode: 'FAC-01-01-01-P05',
+            dependencyType: 'SS',
+            lagDays: 13,
+            scopeRule: 'same_scope_instance',
+          },
+          previous_publication_key: null,
+          traffic_percent: 100,
+          monitoring_status: 'passed',
+          published_at: '2026-07-17T00:00:00.000Z',
+        }] as T[]
+      }
+      return [] as T[]
+    }
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'benchmark_plan_reference',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-learned-dependency',
+        templateId: 'china-facade-curtain-wall',
+        selectedNodeIds: ['FAC-01-01-01'],
+        plannedStartDate: '2026-06-01',
+        projectFacts: {
+          businessType: 'commercial',
+          projectTypeCode: 'commercial',
+          companyId: '00000000-0000-4000-8000-000000000010',
+        },
+        scope: {
+          scope_expansion_mode: 'explicit',
+          scope_combos: [
+            { building_object_id: 'building-1' },
+            { building_object_id: 'building-2' },
+          ],
+        },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    const rowsByStableCode = new Map<string, typeof generated.rows>()
+    for (const row of generated.rows) {
+      const stableCode = String((row.values.standard_task_metadata as Record<string, unknown> | undefined)?.stableCode ?? '')
+      rowsByStableCode.set(stableCode, [...(rowsByStableCode.get(stableCode) ?? []), row])
+    }
+    const predecessors = rowsByStableCode.get('FAC-01-01-01-P04') ?? []
+    const successors = rowsByStableCode.get('FAC-01-01-01-P05') ?? []
+    expect(predecessors).toHaveLength(2)
+    expect(successors).toHaveLength(2)
+    for (const successor of successors) {
+      const learned = successor.predecessorDependencies.filter((dependency) => (
+        dependency.source === 'duration_learning_runtime_publication'
+      ))
+      expect(learned).toHaveLength(1)
+      expect(learned[0]).toEqual(expect.objectContaining({
+        dependencyType: 'SS',
+        lagDays: 13,
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
+      }))
+      const predecessor = predecessors.find((row) => row.clientRowId === learned[0]?.clientRowId)
+      expect(predecessor?.values.building_object_id).toBe(successor.values.building_object_id)
+    }
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 2))).toContainEqual([
+      'dependency_rule_candidate',
+      'duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
     ])
   }, 30000)
 

@@ -5,7 +5,12 @@ import type {
 } from '../types/planning.js'
 import { query as rawQuery } from '../database.js'
 import { logger } from '../middleware/logger.js'
-import { inclusiveDurationDays } from '../utils/durationDays.js'
+import {
+  parseConstructionCalendarDate,
+  productionDaysBetweenInclusive,
+  resolveConstructionCalendarContext,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 import {
   createAndPersistAlgorithmAssetCandidateEvent,
 } from './algorithmAssetCandidateEventAdapterService.js'
@@ -38,6 +43,8 @@ interface TaskRow {
   actual_end_date?: string | null
   planned_start_date?: string | null
   planned_end_date?: string | null
+  standard_task_metadata?: unknown
+  duration_suggestion?: unknown
 }
 
 interface TemplateTreeNode {
@@ -64,6 +71,9 @@ interface CollectWbsTemplateFeedbackOptions {
   projectIds?: string[] | null
   companyId?: string | null
   governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
+  constructionCalendarResolver?: typeof resolveConstructionCalendarContext
+  constructionCalendarsByProjectId?: Record<string, ConstructionCalendarContext>
+  runtimePublicationKeysByAsset?: Record<string, string[]>
 }
 
 function normalizeText(value?: string | null): string {
@@ -72,6 +82,19 @@ function normalizeText(value?: string | null): string {
 
 function normalizeCompactText(value?: string | null): string {
   return normalizeText(value).replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '')
+}
+
+function readObject(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string') {
+    try {
+      return readObject(JSON.parse(value))
+    } catch {
+      return {}
+    }
+  }
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
 }
 
 const COMPLETED_PROJECT_STATUSES = new Set([
@@ -85,9 +108,9 @@ const COMPLETED_PROJECT_STATUSES = new Set([
 
 const WBS_REFERENCE_DAYS_ASSET_KEY = 'wbs_reference_days'
 const WBS_REFERENCE_DAYS_ACCEPTED_SAMPLE_THRESHOLD = 5
-const WBS_REFERENCE_DAYS_DAY_COUNT_BASIS = 'legacy_inclusive_calendar_day'
+const WBS_REFERENCE_DAYS_DAY_COUNT_BASIS = 'construction_production_day'
 const WBS_REFERENCE_DAYS_REFERENCE_DAY_BASIS = 'wbs_template_reference_days'
-const WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS = 'not_applied'
+const WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS = 'per_project_resolved_construction_calendar'
 
 function isCompletedProjectStatus(status?: string | null): boolean {
   return COMPLETED_PROJECT_STATUSES.has(normalizeText(status))
@@ -200,18 +223,20 @@ function findUniqueAdHocSourceId(params: {
     || findUniqueCandidate(params.templateSourceCandidates)
 }
 
-function getDurationDays(task: TaskRow): number | null {
-  const fromActual = task.actual_start_date && task.actual_end_date
-    ? inclusiveDurationDays(task.actual_start_date, task.actual_end_date)
-    : null
-  if (fromActual !== null && Number.isFinite(fromActual) && fromActual >= 1) return fromActual
-
-  const fromPlanned = task.planned_start_date && task.planned_end_date
-    ? inclusiveDurationDays(task.planned_start_date, task.planned_end_date)
-    : null
-  if (fromPlanned !== null && Number.isFinite(fromPlanned) && fromPlanned >= 1) return fromPlanned
-
-  return null
+function getDurationDays(
+  task: TaskRow,
+  constructionCalendarsByProjectId: Record<string, ConstructionCalendarContext>,
+): number | null {
+  if (!task.actual_start_date || !task.actual_end_date) return null
+  const start = parseConstructionCalendarDate(task.actual_start_date)
+  const end = parseConstructionCalendarDate(task.actual_end_date)
+  if (!start || !end) return null
+  const duration = productionDaysBetweenInclusive(
+    start,
+    end,
+    constructionCalendarsByProjectId[task.project_id] ?? null,
+  )
+  return Number.isFinite(duration) && duration >= 1 ? duration : null
 }
 
 function median(values: number[]): number {
@@ -239,17 +264,19 @@ function collectSamplesByStructuredSource(params: {
   knownTemplateSourceIds: Set<string>
   templateTitleLookup: Map<string, string[]>
   templateSourceCandidates: TemplateSourceCandidate[]
+  constructionCalendarsByProjectId: Record<string, ConstructionCalendarContext>
 }) {
   const bySourceId = new Map<string, number[]>()
   let matchedTaskCount = 0
   let matchedAdHocTaskCount = 0
   const matchedProjectIds = new Set<string>()
+  const matchedTasks: TaskRow[] = []
   const baselineItemById = new Map(
     params.baselineItems.map((item) => [String(item.id), normalizeText(item.source_task_id)]),
   )
 
   for (const task of params.tasks) {
-    const duration = getDurationDays(task)
+    const duration = getDurationDays(task, params.constructionCalendarsByProjectId)
     if (duration === null) continue
 
     const baselineSourceId = task.baseline_item_id
@@ -281,11 +308,42 @@ function collectSamplesByStructuredSource(params: {
     bucket.push(duration)
     bySourceId.set(matchedSourceId, bucket)
     matchedTaskCount += 1
+    matchedTasks.push(task)
     if (adHocFallbackSourceId) matchedAdHocTaskCount += 1
     matchedProjectIds.add(task.project_id)
   }
 
-  return { bySourceId, matchedTaskCount, matchedAdHocTaskCount, matchedProjectIds }
+  return { bySourceId, matchedTaskCount, matchedAdHocTaskCount, matchedProjectIds, matchedTasks }
+}
+
+function collectRuntimePublicationKeysByAsset(tasks: readonly TaskRow[]) {
+  const byAsset = new Map<string, Set<string>>()
+  for (const task of tasks) {
+    const metadata = readObject(task.standard_task_metadata)
+    const suggestion = readObject(task.duration_suggestion)
+    const reasonParams = readObject(suggestion.businessReasonParams ?? suggestion.business_reason_params)
+    const assetKey = String(
+      metadata.durationLearningAssetKey
+        ?? metadata.duration_learning_asset_key
+        ?? reasonParams.durationLearningAssetKey
+        ?? reasonParams.duration_learning_asset_key
+        ?? '',
+    ).trim()
+    const publicationKey = String(
+      metadata.durationLearningPublicationKey
+        ?? metadata.duration_learning_publication_key
+        ?? reasonParams.durationLearningPublicationKey
+        ?? reasonParams.duration_learning_publication_key
+        ?? '',
+    ).trim()
+    if (!assetKey || !publicationKey) continue
+    const keys = byAsset.get(assetKey) ?? new Set<string>()
+    keys.add(publicationKey)
+    byAsset.set(assetKey, keys)
+  }
+  return Object.fromEntries(
+    [...byAsset.entries()].map(([assetKey, keys]) => [assetKey, [...keys].sort()]),
+  )
 }
 
 function aggregateTreeFeedback(
@@ -392,7 +450,7 @@ function mapFeedbackNodeForCandidate(node: WbsTemplateReferenceDayFeedbackNode) 
     dayCountBasis: WBS_REFERENCE_DAYS_DAY_COUNT_BASIS,
     referenceDayBasis: WBS_REFERENCE_DAYS_REFERENCE_DAY_BASIS,
     constructionCalendarBasis: WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS,
-    productionDayConversionApplied: false,
+    productionDayConversionApplied: true,
   }
 }
 
@@ -472,7 +530,19 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
   const projectId = getScopedProjectId(options.projectIds)
   if (!projectId) return
   const actionableNodes = getActionableReferenceDayFeedbackNodes(report)
-  const outcomeId = `wbs-reference-days:${report.template_id}:${projectId ?? 'multi-project'}`
+  const consumedPublicationKeys = options.runtimePublicationKeysByAsset?.[WBS_REFERENCE_DAYS_ASSET_KEY] ?? []
+  const runtimePublicationKey = consumedPublicationKeys.length === 1 ? consumedPublicationKeys[0]! : null
+  const publicationLineageStatus = runtimePublicationKey
+    ? 'linked'
+    : consumedPublicationKeys.length > 1
+      ? 'ambiguous'
+      : 'cold_start_unpublished'
+  const lineageIdentity = runtimePublicationKey
+    ? `:${runtimePublicationKey}`
+    : consumedPublicationKeys.length > 1
+      ? `:mixed:${consumedPublicationKeys.join('+')}`
+      : ''
+  const outcomeId = `wbs-reference-days:${report.template_id}:${projectId ?? 'multi-project'}${lineageIdentity}`
   const metadata = {
     source: 'wbs_template_feedback',
     template_id: report.template_id,
@@ -488,8 +558,10 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
     day_count_basis: WBS_REFERENCE_DAYS_DAY_COUNT_BASIS,
     reference_day_basis: WBS_REFERENCE_DAYS_REFERENCE_DAY_BASIS,
     construction_calendar_basis: WBS_REFERENCE_DAYS_CONSTRUCTION_CALENDAR_BASIS,
-    production_day_conversion_applied: false,
-    provenance_gap_code: 'C-19.11',
+    production_day_conversion_applied: true,
+    construction_calendar_by_project: options.constructionCalendarsByProjectId ?? {},
+    consumed_runtime_publication_keys: consumedPublicationKeys,
+    publication_lineage_status: publicationLineageStatus,
     writes_runtime_directly: false,
     writes_fact_directly: false,
   }
@@ -502,7 +574,7 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
     'project_business_outcome_writer',
     normalizeId(options.companyId),
     projectId,
-    null,
+    runtimePublicationKey,
     metadata,
     false,
     false,
@@ -598,13 +670,15 @@ async function persistWbsTemplateFeedbackCandidateEvent(
         sampleTaskCount: report.sample_task_count,
         matchedAdHocTaskCount: report.matched_ad_hoc_task_count,
         nodeCount: report.node_count,
+        automationLifecycle: 'duration_learning_runtime_candidate',
+        humanFallbackPolicy: 'conflict_or_exception_only',
         nodes: report.nodes.map(mapFeedbackNodeForCandidate),
         projectIds: normalizeProjectScope(options.projectIds),
       },
       learningTarget: 'base_duration',
       learningMaturity: 'governed_candidate',
       publishAnchor: 'candidate_only',
-      automationMaturity: 'manual_required',
+      automationMaturity: 'auto_shadow',
       requestedRuntimeEffect: 'candidate_only',
       generatedBy: 'service',
       queryExec: options.governanceQueryExec,
@@ -650,6 +724,17 @@ export async function collectWbsTemplateFeedback(
       .filter((project) => isCompletedProjectStatus(project.status))
       .map((project) => project.id),
   )
+  const constructionCalendarResolver = options.constructionCalendarResolver ?? resolveConstructionCalendarContext
+  const constructionCalendarsByProjectId = Object.fromEntries(await Promise.all(
+    [...completedProjectIds].map(async (projectId) => [
+      projectId,
+      await constructionCalendarResolver({ projectId }),
+    ] as const),
+  ))
+  const effectiveOptions: CollectWbsTemplateFeedbackOptions = {
+    ...options,
+    constructionCalendarsByProjectId,
+  }
 
   const templateNodes = buildTemplateTree(parseTemplateNodes(template.wbs_nodes ?? template.template_data ?? []))
   const templateTitleLookup = buildTemplateTitleLookup(templateNodes)
@@ -659,7 +744,10 @@ export async function collectWbsTemplateFeedback(
       .map((node) => node.source_id)
       .filter((value): value is string => Boolean(value)),
   )
-  const completedTasks = tasks.filter((task) => completedProjectIds.has(task.project_id) && getDurationDays(task) !== null)
+  const completedTasks = tasks.filter((task) => (
+    completedProjectIds.has(task.project_id)
+    && getDurationDays(task, constructionCalendarsByProjectId) !== null
+  ))
   const baselineItemIds = Array.from(new Set(completedTasks.map((task) => normalizeText(task.baseline_item_id)).filter(Boolean)))
   const baselineItemScope = buildBaselineItemScopeClause(baselineItemIds, normalizedProjectScope)
   const baselineItems = await readOptionalFeedbackRows<BaselineItemRow>(
@@ -674,7 +762,9 @@ export async function collectWbsTemplateFeedback(
     knownTemplateSourceIds,
     templateTitleLookup,
     templateSourceCandidates,
+    constructionCalendarsByProjectId,
   })
+  effectiveOptions.runtimePublicationKeysByAsset = collectRuntimePublicationKeysByAsset(sampleMaps.matchedTasks)
   const flattenedRows = aggregateTreeFeedback(templateNodes, sampleMaps)
   const nodeCount = flattenTree(templateNodes).length
 
@@ -688,8 +778,8 @@ export async function collectWbsTemplateFeedback(
     nodes: flattenedRows,
   }
 
-  await persistWbsTemplateFeedbackCandidateEvent(report, options)
-  await recordWbsReferenceDaysPlanNetworkOutcome(report, options)
+  await persistWbsTemplateFeedbackCandidateEvent(report, effectiveOptions)
+  await recordWbsReferenceDaysPlanNetworkOutcome(report, effectiveOptions)
 
   return report
 }

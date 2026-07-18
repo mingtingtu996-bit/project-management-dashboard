@@ -5,6 +5,7 @@ const RULE_ASSET_GOVERNANCE_COMPLETION_AUDIT_ENDPOINT = '/api/planning/algorithm
 const RULE_ASSET_GOVERNANCE_WORKBENCH_OPERATION_ENDPOINT = `${RULE_ASSET_GOVERNANCE_WORKBENCH_ENDPOINT}/operations`
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_DRAFTS_ENDPOINT =
   `${RULE_ASSET_GOVERNANCE_WORKBENCH_ENDPOINT}/construction-organization/plan-network-drafts`
+const STRUCTURED_CAUSE_QUALITY_ENDPOINT = '/api/cause-attributions/projects'
 
 export type RuleAssetGovernanceWorkbenchStatus = 'workbench_ready' | 'workbench_incomplete'
 export type RuleAssetGovernanceWorkbenchGateStatus = 'ready' | 'needs_work'
@@ -103,6 +104,34 @@ export interface RuleAssetGovernanceWorkbenchReadiness {
   governanceDefaultReviewItems: RuleAssetGovernanceDefaultReviewItem[]
   gates: RuleAssetGovernanceWorkbenchGate[]
   boundaryPolicy: string[]
+}
+
+export interface StructuredCauseQualityMetric {
+  metricKey: 'structured_cause_other_rate' | 'structured_cause_prefill_modification_rate'
+  numerator: number
+  denominator: number
+  value: number | null
+  availability: 'ready' | 'insufficient_data'
+}
+
+export interface StructuredCauseQualityMetrics {
+  companyId: string
+  projectId: string
+  policy: {
+    minimumSampleCount: number
+    otherRateRevisionThresholdPercent: number
+    prefillModificationRateRevisionThresholdPercent: number
+  }
+  otherRate: StructuredCauseQualityMetric
+  prefillModificationRate: StructuredCauseQualityMetric
+  revisionSignals: Array<{
+    candidateType: 'taxonomy_revision' | 'inference_rule_revision'
+    reasonCode: string
+    metricKey: StructuredCauseQualityMetric['metricKey']
+    observedPercent: number
+    thresholdPercent: number
+    sampleCount: number
+  }>
 }
 
 export interface RuleAssetGovernanceCompletionAuditRecordResult {
@@ -1645,6 +1674,69 @@ export async function getRuleAssetGovernanceWorkbenchReadiness() {
     gates: Array.isArray(report?.gates) ? report.gates.map(normalizeGate) : [],
     boundaryPolicy: toStringArray(report?.boundaryPolicy),
   } satisfies RuleAssetGovernanceWorkbenchReadiness
+}
+
+function normalizeCauseQualityMetric(
+  raw: any,
+  metricKey: StructuredCauseQualityMetric['metricKey'],
+): StructuredCauseQualityMetric {
+  const rawValue = Number(raw?.value)
+  return {
+    metricKey,
+    numerator: toNumber(raw?.numerator),
+    denominator: toNumber(raw?.denominator),
+    value: raw?.value != null && Number.isFinite(rawValue) ? rawValue : null,
+    availability: raw?.availability === 'ready' ? 'ready' : 'insufficient_data',
+  }
+}
+
+export async function getStructuredCauseQualityMetrics(projectIdInput: string): Promise<StructuredCauseQualityMetrics> {
+  const projectId = String(projectIdInput ?? '').trim()
+  if (!projectId) throw new Error('Project ID is required to read structured-cause quality metrics.')
+  const report = await apiGet<any>(
+    `${STRUCTURED_CAUSE_QUALITY_ENDPOINT}/${encodeURIComponent(projectId)}/quality-metrics`,
+    { runtimeCache: 'off' },
+  )
+  const policy = report?.policy ?? {}
+  const revisionSignals = Array.isArray(report?.revisionSignals)
+    ? report.revisionSignals.flatMap((raw: any) => {
+        const candidateType = raw?.candidateType === 'taxonomy_revision'
+          ? 'taxonomy_revision' as const
+          : raw?.candidateType === 'inference_rule_revision'
+            ? 'inference_rule_revision' as const
+            : null
+        const metricKey = raw?.metricKey === 'structured_cause_other_rate'
+          ? 'structured_cause_other_rate' as const
+          : raw?.metricKey === 'structured_cause_prefill_modification_rate'
+            ? 'structured_cause_prefill_modification_rate' as const
+            : null
+        if (!candidateType || !metricKey) return []
+        return [{
+          candidateType,
+          reasonCode: String(raw?.reasonCode ?? ''),
+          metricKey,
+          observedPercent: toNumber(raw?.observedPercent),
+          thresholdPercent: toNumber(raw?.thresholdPercent),
+          sampleCount: toNumber(raw?.sampleCount),
+        }]
+      })
+    : []
+
+  return {
+    companyId: String(report?.companyId ?? ''),
+    projectId: String(report?.projectId ?? projectId),
+    policy: {
+      minimumSampleCount: toNumber(policy.minimumSampleCount),
+      otherRateRevisionThresholdPercent: toNumber(policy.otherRateRevisionThresholdPercent),
+      prefillModificationRateRevisionThresholdPercent: toNumber(policy.prefillModificationRateRevisionThresholdPercent),
+    },
+    otherRate: normalizeCauseQualityMetric(report?.otherRate, 'structured_cause_other_rate'),
+    prefillModificationRate: normalizeCauseQualityMetric(
+      report?.prefillModificationRate,
+      'structured_cause_prefill_modification_rate',
+    ),
+    revisionSignals,
+  }
 }
 
 function normalizeCompletionRecordResult(raw: any): RuleAssetGovernanceCompletionAuditRecordResult {

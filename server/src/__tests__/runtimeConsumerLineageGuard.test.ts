@@ -116,7 +116,7 @@ describe('runtime consumer lineage guard', () => {
     writeFileSync(
       join(servicesDir, 't2RhythmTaskWindowAnnotationReviewPackageService.ts'),
       `
-        import { publish } from './t2RhythmScheduleRuntimePublicationService.js'
+        import { publish } from './durationLearningRuntimePublicationService.js'
 
         export function bypass() {
           return publish

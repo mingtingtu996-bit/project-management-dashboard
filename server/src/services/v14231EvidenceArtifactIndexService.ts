@@ -547,7 +547,7 @@ const ARTIFACT_INDEX: V14231EvidenceArtifactIndexEntry[] = [
       'server/src/__tests__/durationContextSampleReadModelService.test.ts',
       'server/src/__tests__/durationSuggestionService.test.ts',
       'server/src/__tests__/scheduleAccelerationService.test.ts',
-      'server/src/__tests__/durationSuggestionE2E.test.ts',
+      'server/src/__tests__/durationSuggestionSimulation.test.ts',
       'server/src/__tests__/durationArchitectureBoundaryGuard.test.ts',
     ],
     scriptEvidence: [],
@@ -582,7 +582,7 @@ const ARTIFACT_INDEX: V14231EvidenceArtifactIndexEntry[] = [
       'server/src/__tests__/wbsTemplateFeedbackGovernance.test.ts',
       'server/src/__tests__/weatherForecastImpactService.test.ts',
       'server/src/__tests__/contracts/durationConsistency.contract.test.ts',
-      'server/src/__tests__/durationLearningScopeEvidenceWriterService.test.ts',
+      'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       'server/src/__tests__/wbsTemplateCandidateEventService.test.ts',
     ],
     scriptEvidence: [

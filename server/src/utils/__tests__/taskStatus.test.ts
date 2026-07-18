@@ -14,6 +14,7 @@ describe('taskStatus utilities', () => {
     expect(isCompletedTask({ status: 'done' })).toBe(true)
     expect(isCompletedTask({ status: '已完成' })).toBe(true)
     expect(isCompletedTask({ status: 'in_progress', progress: 100 })).toBe(true)
+    expect(isCompletedTask({ status: 'in_progress', progress: 99, actual_end_date: '2026-07-18' })).toBe(true)
     expect(isCompletedTask({ status: 'in_progress', progress: 99 })).toBe(false)
   })
 

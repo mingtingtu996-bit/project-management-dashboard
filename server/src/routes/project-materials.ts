@@ -8,6 +8,7 @@ import { authenticate } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
+import { withDatabaseTransaction } from '../database.js'
 import { executeSQL, SupabaseService, supabase } from '../services/dbService.js'
 import { writeLifecycleLog, writeLog } from '../services/changeLogs.js'
 import { buildMaterialReportSummary, clearMaterialReportCache, listProjectMaterials } from '../services/materialReportsService.js'
@@ -386,7 +387,10 @@ router.post(
     return res.status(400).json(validationError('至少需要一条材料记录'))
   }
 
-  const createdRows = []
+  const preparedItems: Array<{
+    record: ReturnType<typeof normalizeCreatePayload>
+    changeReason: string | null
+  }> = []
   for (const item of items) {
     const record = normalizeCreatePayload(projectId, (item ?? {}) as MaterialMutationPayload)
     const message = validateMaterialPayload(record)
@@ -399,18 +403,55 @@ router.post(
       return res.status(400).json(validationError(unitMessage))
     }
 
-    const created = await supabaseService.create<Record<string, unknown>>('project_materials', record)
-    createdRows.push(created ?? record)
-    await writeLifecycleLog({
-      project_id: projectId,
-      entity_type: 'project_material',
-      entity_id: record.id,
-      action: 'created',
-      changed_by: req.user?.id ?? null,
-      change_reason: normalizeNullableText((item as MaterialMutationPayload)?.change_reason) ?? '材料创建',
+    preparedItems.push({
+      record,
+      changeReason: normalizeNullableText((item as MaterialMutationPayload)?.change_reason),
     })
   }
 
+  const createdRows = await withDatabaseTransaction(async () => {
+    const rows: Array<Record<string, unknown>> = []
+    for (const { record, changeReason } of preparedItems) {
+      const [created] = await executeSQL<Record<string, unknown>>(
+        `INSERT INTO project_materials (
+           id, project_id, participant_unit_id, material_name, specialty_type,
+           requires_sample_confirmation, sample_confirmed, expected_arrival_date,
+           actual_arrival_date, requires_inspection, inspection_done, version,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         RETURNING *`,
+        [
+          record.id,
+          record.project_id,
+          record.participant_unit_id,
+          record.material_name,
+          record.specialty_type,
+          record.requires_sample_confirmation,
+          record.sample_confirmed,
+          record.expected_arrival_date,
+          record.actual_arrival_date,
+          record.requires_inspection,
+          record.inspection_done,
+          record.version,
+          record.created_at,
+          record.updated_at,
+        ],
+      )
+      if (!created) throw new Error(`Material ${record.id} was not returned after insert`)
+      rows.push(created)
+      await writeLifecycleLog({
+        project_id: projectId,
+        entity_type: 'project_material',
+        entity_id: record.id,
+        action: 'created',
+        changed_by: req.user?.id ?? null,
+        change_reason: changeReason ?? '材料创建',
+      })
+    }
+    return rows
+  })
+
+  clearMaterialReportCache(projectId)
   const data = await listProjectMaterials(projectId)
   const createdIds = new Set(createdRows.map((row) => String((row as Record<string, unknown>).id ?? '')))
   const createdMaterials = data.filter((item) => createdIds.has(item.id))

@@ -1174,6 +1174,7 @@ describe('RiskManagement', () => {
     issuesData = []
     warningsData = []
     obstaclesData = []
+    mockedApiPost.mockResolvedValueOnce({ id: 'cause-risk-guard-1', status: 'confirmed' } as never)
     mockedApiPut.mockRejectedValueOnce(
       Object.assign(new Error('当前风险仍在待处理链路中，暂不能确认关闭。'), { status: 422 }),
     )
@@ -1190,11 +1191,167 @@ describe('RiskManagement', () => {
     clickButtonText(container, '关闭风险')
 
     await waitForCondition(
+      () => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')),
+      document.body,
+    )
+    const summary = document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement | null
+    expect(summary).not.toBeNull()
+    setElementValue(summary!, '材料到场后已恢复施工，风险已解除。')
+    clickTestId(document.body, 'structured-close-submit')
+
+    await waitForCondition(
       () =>
         Boolean(document.body.querySelector('[data-testid="risk-action-guard-dialog"]')) &&
-        document.body.textContent?.includes('更新风险') &&
+        document.body.textContent?.includes('确认关闭风险') &&
         document.body.textContent?.includes('当前风险仍在待处理链路中，暂不能确认关闭。'),
       document.body,
+    )
+  })
+
+  it('records a controlled cause before submitting a structured risk closure outcome', async () => {
+    risksData = [
+      {
+        id: 'risk-close-1',
+        project_id: projectId,
+        task_id: 'task-7',
+        title: '材料到货延期风险',
+        description: '幕墙材料未按计划到场',
+        source_type: 'obstacle_escalated',
+        level: 'high',
+        probability: 70,
+        impact: 80,
+        status: 'mitigating',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-03T00:00:00.000Z',
+        version: 5,
+      },
+    ]
+    issuesData = []
+    warningsData = []
+    obstaclesData = []
+    mockedApiPost.mockResolvedValueOnce({ id: 'cause-risk-close-1', status: 'confirmed' } as never)
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('材料到货延期风险'), container)
+    clickButtonText(container, '关闭风险')
+
+    await waitForCondition(
+      () => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')),
+      document.body,
+    )
+    const summary = document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement | null
+    expect(summary).not.toBeNull()
+    setElementValue(summary!, '材料已到场并完成复验，现场施工已恢复。')
+    clickTestId(document.body, 'structured-close-submit')
+
+    await waitForCondition(
+      () => mockedApiPut.mock.calls.some(([url]) => String(url).includes('/api/risks/risk-close-1')),
+      document.body,
+    )
+
+    expect(mockedApiPost).toHaveBeenCalledWith(
+      '/api/cause-attributions/projects/project-1/subjects/risk/risk-close-1/confirm',
+      expect.objectContaining({
+        causeCode: 'material_shortage',
+        causeRole: 'primary',
+        rawText: '材料已到场并完成复验，现场施工已恢复。',
+      }),
+    )
+    expect(mockedApiPut).toHaveBeenCalledWith(
+      '/api/risks/risk-close-1',
+      expect.objectContaining({
+        status: 'closed',
+        version: 5,
+        closure_result_code: 'mitigated',
+        closure_result_summary: '材料已到场并完成复验，现场施工已恢复。',
+        closure_effectiveness: 'resolved',
+        closure_cause_attribution_id: 'cause-risk-close-1',
+      }),
+    )
+  })
+
+  it('records a controlled cause before submitting a structured issue closure outcome', async () => {
+    risksData = []
+    issuesData = [
+      {
+        id: 'issue-close-1',
+        project_id: projectId,
+        task_id: 'task-7',
+        title: '材料复验问题',
+        description: '材料到场后复验未通过',
+        source_type: 'manual',
+        severity: 'high',
+        priority: 3,
+        status: 'investigating',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-03T00:00:00.000Z',
+        version: 6,
+      },
+    ]
+    warningsData = []
+    obstaclesData = []
+    mockedApiPost.mockResolvedValueOnce({ id: 'cause-issue-close-1', status: 'confirmed' } as never)
+    mockedApiPut.mockImplementationOnce(async () => {
+      issuesData = issuesData.map((item) => item.id === 'issue-close-1'
+        ? { ...item, status: 'resolved' }
+        : item)
+      return {} as never
+    })
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+
+    clickTestId(container, 'risk-stream-issues')
+    await waitForCondition(() => container.textContent?.includes('材料复验问题'), container)
+    clickButtonText(container, '标记已解决')
+    await waitForCondition(
+      () => Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.trim() === '确认关闭'),
+      container,
+    )
+    clickExactButtonText(container, '确认关闭')
+
+    await waitForCondition(
+      () => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')),
+      document.body,
+    )
+    const summary = document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement | null
+    expect(summary).not.toBeNull()
+    setElementValue(summary!, '更换材料后复验通过，问题已处理完成。')
+    clickTestId(document.body, 'structured-close-submit')
+
+    await waitForCondition(
+      () => mockedApiPut.mock.calls.some(([url]) => String(url).includes('/api/issues/issue-close-1')),
+      document.body,
+    )
+
+    expect(mockedApiPost).toHaveBeenCalledWith(
+      '/api/cause-attributions/projects/project-1/subjects/issue/issue-close-1/confirm',
+      expect.objectContaining({
+        causeCode: 'material_shortage',
+        causeRole: 'primary',
+        rawText: '更换材料后复验通过，问题已处理完成。',
+      }),
+    )
+    expect(mockedApiPut).toHaveBeenCalledWith(
+      '/api/issues/issue-close-1',
+      expect.objectContaining({
+        status: 'closed',
+        version: 6,
+        closed_reason: '更换材料后复验通过，问题已处理完成。',
+        closure_result_code: 'resolved',
+        closure_result_summary: '更换材料后复验通过，问题已处理完成。',
+        closure_effectiveness: 'resolved',
+        closure_cause_attribution_id: 'cause-issue-close-1',
+      }),
     )
   })
 })

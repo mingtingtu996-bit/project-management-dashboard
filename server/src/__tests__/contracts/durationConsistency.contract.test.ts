@@ -154,7 +154,7 @@ describe('duration consistency contract scaffold', () => {
 
     for (const file of analysisServices) {
       const source = readSource(file)
-      expect(source, file).toMatch(/inclusiveDurationDays|orderedInclusiveDurationDays|signedDurationDayDelta|delayDayDelta/)
+      expect(source, file).toMatch(/inclusiveDurationDays|orderedInclusiveDurationDays|signedDurationDayDelta|delayDayDelta|productionDaysBetweenInclusive/)
       expect(source, file).not.toMatch(privateInclusiveFormula)
       expect(source, file).not.toMatch(privateDayMathFormula)
       expect(source, file).not.toMatch(privateInclusiveFunction)
@@ -449,7 +449,7 @@ describe('duration consistency contract scaffold', () => {
 
     expect(lagSource).toContain('normalizeDurationDateUtc')
     expect(lagSource).toContain('inclusiveDurationDays')
-    expect(feedbackSource).toContain('inclusiveDurationDays')
+    expect(feedbackSource).toContain('productionDaysBetweenInclusive')
     expect(feedbackSource).not.toContain('86400000')
     expect(feedbackSource).not.toContain('Math.ceil((new Date')
   })

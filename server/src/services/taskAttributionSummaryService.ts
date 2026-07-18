@@ -1,5 +1,6 @@
 import { isCompletedTaskDelayedAgainstPlan } from '../utils/taskPerformance.js'
 import { delayDayDelta } from '../utils/durationDays.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
 import {
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -164,7 +165,13 @@ function getUnassignedLabel(dimension: TaskSummaryAttributionDimension) {
 
 function isCompletedAttributionTask(task: TaskSummaryAttributionTask) {
   const status = normalizeText(task.status_label).toLowerCase()
-  return Boolean(toDateOnly(task.completed_at)) || ['completed', 'done', 'finished', 'on_time', 'delayed'].includes(status)
+  const taskStatus = status === 'finished' || status === 'on_time' || status === 'delayed'
+    ? 'completed'
+    : status
+  return isCompletedTask({
+    status: taskStatus,
+    actual_end_date: toDateOnly(task.completed_at) || null,
+  })
 }
 
 export function isDelayedAttributionTask(

@@ -23,7 +23,61 @@ const state = vi.hoisted(() => {
     writeLog: vi.fn(async () => undefined),
     writeLifecycleLog: vi.fn(async () => undefined),
   }
-  const executeSQL = vi.fn(async (_sql: string, _params: unknown[] = []) => [])
+  let failMaterialInsertAt: number | null = null
+  let materialInsertCount = 0
+  const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
+    const normalized = sql.trim().replace(/\s+/g, ' ').toLowerCase()
+    if (normalized.startsWith('insert into project_materials')) {
+      materialInsertCount++
+      if (failMaterialInsertAt === materialInsertCount) {
+        throw new Error('simulated material insert failure')
+      }
+      const [
+        id,
+        projectId,
+        participantUnitId,
+        materialName,
+        specialtyType,
+        requiresSampleConfirmation,
+        sampleConfirmed,
+        expectedArrivalDate,
+        actualArrivalDate,
+        requiresInspection,
+        inspectionDone,
+        version,
+        createdAt,
+        updatedAt,
+      ] = params
+      const row = {
+        id,
+        project_id: projectId,
+        participant_unit_id: participantUnitId,
+        material_name: materialName,
+        specialty_type: specialtyType,
+        requires_sample_confirmation: requiresSampleConfirmation,
+        sample_confirmed: sampleConfirmed,
+        expected_arrival_date: expectedArrivalDate,
+        actual_arrival_date: actualArrivalDate,
+        requires_inspection: requiresInspection,
+        inspection_done: inspectionDone,
+        version,
+        created_at: createdAt,
+        updated_at: updatedAt,
+      }
+      materials.push(row)
+      return [row]
+    }
+    return []
+  })
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+    const snapshot = materials.map((row) => ({ ...row }))
+    try {
+      return await work()
+    } catch (error) {
+      materials.splice(0, materials.length, ...snapshot)
+      throw error
+    }
+  })
 
   const supabaseInstance = {
     query: vi.fn(async (table: string, conditions: Record<string, unknown> = {}) => {
@@ -102,7 +156,21 @@ const state = vi.hoisted(() => {
     })),
   }
 
-  return { materials, participantUnits, authState, supabaseInstance, supabaseDb, materialReportsService, changeLogs, executeSQL }
+  return {
+    materials,
+    participantUnits,
+    authState,
+    supabaseInstance,
+    supabaseDb,
+    materialReportsService,
+    changeLogs,
+    executeSQL,
+    withDatabaseTransaction,
+    setFailMaterialInsertAt(value: number | null) {
+      failMaterialInsertAt = value
+      materialInsertCount = 0
+    },
+  }
 })
 
 function joinedSql(calls: ReadonlyArray<ReadonlyArray<unknown>>) {
@@ -129,6 +197,10 @@ vi.mock('../services/dbService.js', () => ({
   SupabaseService: vi.fn(() => state.supabaseInstance),
   executeSQL: state.executeSQL,
   supabase: state.supabaseDb,
+}))
+
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: state.withDatabaseTransaction,
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -206,6 +278,7 @@ describe('project materials routes', () => {
     state.authState.userId = 'user-1'
     state.authState.globalRole = 'regular'
     state.authState.permissionLevel = 'owner'
+    state.setFailMaterialInsertAt(null)
     vi.clearAllMocks()
   })
 
@@ -284,6 +357,32 @@ describe('project materials routes', () => {
     const deleteRes = await request.delete(`/api/projects/project-1/materials/${createRes.body.data.id}`)
     expect(deleteRes.status).toBe(200)
     expect(deleteRes.body.success).toBe(true)
+  })
+
+  it('rolls back the whole material batch when a later insert fails', async () => {
+    state.setFailMaterialInsertAt(2)
+
+    const response = await supertest(buildApp())
+      .post('/api/projects/project-1/materials')
+      .send([
+        {
+          participant_unit_id: 'unit-1',
+          material_name: 'first material',
+          specialty_type: 'facade',
+          expected_arrival_date: '2026-04-25',
+        },
+        {
+          participant_unit_id: 'unit-1',
+          material_name: 'second material',
+          specialty_type: 'facade',
+          expected_arrival_date: '2026-04-26',
+        },
+      ])
+
+    expect(response.status).toBe(500)
+    expect(state.withDatabaseTransaction).toHaveBeenCalledTimes(1)
+    expect(state.materials).toHaveLength(0)
+    expect(state.supabaseInstance.create).not.toHaveBeenCalled()
   })
 
   it('allows editor reads but blocks writes after project permission is removed', async () => {

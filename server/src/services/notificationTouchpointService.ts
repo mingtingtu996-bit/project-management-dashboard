@@ -15,6 +15,7 @@ import {
   NOTIFICATION_TOUCHPOINT_RULE_REGISTRY,
   TOUCHPOINT_PROJECTION_RULE_VERSION,
   TOUCHPOINT_PROJECTION_SOURCE,
+  buildNotificationDedupeKey,
 } from './notificationTouchpointRules.js'
 
 type TouchpointType = 'persistent' | 'dashboard_todo' | 'popup' | 'page_banner' | 'system_record'
@@ -107,27 +108,13 @@ function normalizeLifecycleStatus(value: unknown): LifecycleStatus {
 }
 
 function buildDedupeKey(input: NotificationTouchpointInput) {
-  const explicit = normalizeNullableText(input.dedupe_key)
-  if (explicit) return explicit
-
-  const sourceEntityType = normalizeNullableText(input.source_entity_type)
-  const sourceEntityId = normalizeNullableText(input.source_entity_id)
-  if (sourceEntityType && sourceEntityId) {
-    return [
-      normalizeNullableText(input.company_id) ?? 'no-company',
-      normalizeNullableText(input.project_id) ?? 'no-project',
-      sourceEntityType,
-      sourceEntityId,
-      normalizeNullableText(input.type) ?? 'notification',
-    ].join(':')
-  }
-
-  return null
+  return buildNotificationDedupeKey(input)
 }
 
-function getDedupeStrategy(input: NotificationTouchpointInput) {
+function getDedupeStrategy(input: NotificationTouchpointInput, dedupeKey: string | null) {
   if (normalizeNullableText(input.dedupe_key)) return 'explicit'
   if (normalizeNullableText(input.source_entity_type) && normalizeNullableText(input.source_entity_id)) return 'source_entity'
+  if (dedupeKey) return 'content_fingerprint'
   return 'none'
 }
 
@@ -162,7 +149,7 @@ function buildTouchpointMetadata(input: NotificationTouchpointInput, touchpointT
     touchpoint_source: input.source ?? existingMetadata.touchpoint_source ?? TOUCHPOINT_PROJECTION_SOURCE,
     projection_source: TOUCHPOINT_PROJECTION_SOURCE,
     projection_rule_version: TOUCHPOINT_PROJECTION_RULE_VERSION,
-    dedupe_strategy: getDedupeStrategy(input),
+    dedupe_strategy: getDedupeStrategy(input, dedupeKey),
     dedupe_required: dedupeRequired,
     dedupe_missing: dedupeRequired && !dedupeKey,
   }

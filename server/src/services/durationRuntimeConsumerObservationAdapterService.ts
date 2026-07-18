@@ -39,6 +39,7 @@ const RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY: Record<string, string> = {
   durationSuggestionService: 'durationSuggestionService:getTaskDurationSuggestion',
   taskDurationForecastService: 'taskDurationForecastService:forecastTaskDuration',
   projectRemainingDurationForecastService: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+  projectCriticalPathService: 'projectCriticalPathService:resolveCriticalPathLearningPublications',
   projectWizard: 'projectWizard:commitWizardGeneration',
   wbsTemplateGenerationService: 'wbsTemplateGenerationService:generateWbsTemplateRows',
   scheduleAccelerationService: 'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
@@ -69,6 +70,10 @@ const FACADE_REGISTRATIONS: DurationRuntimeConsumerObservationFacadeRegistration
       'wbs_reference_days',
       'critical_path_rule_candidate',
     ],
+  },
+  {
+    consumerKey: 'projectCriticalPathService',
+    assetKeys: ['critical_path_rule_candidate'],
   },
   {
     consumerKey: 'wbsTemplateGenerationService',
@@ -170,6 +175,12 @@ export function recordProjectRemainingDurationForecastConsumedArtifacts(
   input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
 ) {
   return recordConsumerArtifacts('projectRemainingDurationForecastService', input)
+}
+
+export function recordProjectCriticalPathConsumedArtifacts(
+  input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
+) {
+  return recordConsumerArtifacts('projectCriticalPathService', input)
 }
 
 export function recordWbsTemplateGenerationConsumedArtifacts(
