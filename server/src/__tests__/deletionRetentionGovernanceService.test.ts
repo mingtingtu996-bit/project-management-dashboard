@@ -88,8 +88,8 @@ describe('deletionRetentionGovernanceService governance contracts', () => {
     expect(registry.version).toBe('v1.4.15-retention-executors')
     expect(registry.entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ entityType: 'task', supportedResolvedActions: expect.arrayContaining(['close', 'soft_delete']), idempotent: true }),
-      expect.objectContaining({ entityType: 'risk', supportedResolvedActions: expect.arrayContaining(['close', 'soft_delete']), transactionMode: 'single_table_update' }),
-      expect.objectContaining({ entityType: 'issue', supportedResolvedActions: expect.arrayContaining(['close', 'soft_delete']), idempotent: true }),
+      expect.objectContaining({ entityType: 'risk', supportedResolvedActions: expect.arrayContaining(['close', 'soft_delete']), transactionMode: 'service_call' }),
+      expect.objectContaining({ entityType: 'issue', supportedResolvedActions: expect.arrayContaining(['close', 'soft_delete']), idempotent: true, transactionMode: 'service_call' }),
       expect.objectContaining({ entityType: 'task_obstacle', supportedResolvedActions: expect.arrayContaining(['close', 'soft_delete']), idempotent: true }),
       expect.objectContaining({ entityType: 'acceptance_plan', supportedResolvedActions: expect.arrayContaining(['close', 'archive']), idempotent: true }),
       expect.objectContaining({ entityType: 'project_material', supportedResolvedActions: expect.arrayContaining(['archive', 'soft_delete']), dryRunSupported: true }),
@@ -509,6 +509,37 @@ describe('deletionRetentionGovernanceService governance contracts', () => {
       ],
     })
     expect(mocks.supabase.from).not.toHaveBeenCalledWith('project_materials')
+  })
+
+  it('previews risk and issue retention closure with a complete structured outcome', async () => {
+    for (const entityType of ['risk', 'issue'] as const) {
+      const preview = await previewRetentionConfirmedAction({
+        projectId: 'project-1',
+        entityType,
+        entityId: `${entityType}-1`,
+        resolvedAction: 'close',
+        actorId: 'owner-1',
+      })
+
+      expect(preview.mutations).toEqual([
+        expect.objectContaining({
+          table: entityType === 'risk' ? 'risks' : 'issues',
+          filters: { id: `${entityType}-1`, project_id: 'project-1' },
+          patch: expect.objectContaining({
+            status: 'closed',
+            pending_manual_close: false,
+            closed_reason: 'retention_close',
+            closure_result_code: 'retention_close',
+            closure_result_summary: expect.any(String),
+            closure_effectiveness: 'undetermined',
+            closure_evidence_refs: [],
+            closure_cause_attribution_id: null,
+            closed_by: 'owner-1',
+            closure_recorded_at: expect.any(String),
+          }),
+        }),
+      ])
+    }
   })
 
   it('previews participant unit archival through the shared retention executor registry', async () => {

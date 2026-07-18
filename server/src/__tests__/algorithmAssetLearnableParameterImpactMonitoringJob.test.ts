@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
+  AlgorithmAssetLearnableParameterImpactMonitoringJob,
+  collectLearnableParameterImpactMonitoringCandidates,
   runAlgorithmAssetLearnableParameterImpactMonitoringSweep,
   type AlgorithmAssetLearnableParameterMonitoringCandidate,
 } from '../jobs/algorithmAssetLearnableParameterImpactMonitoringJob.js'
@@ -58,6 +60,109 @@ const defaultStopConditionViolationCandidate: AlgorithmAssetLearnableParameterMo
 }
 
 describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
+  it('runs the duration learning runtime lifecycle from the production monitoring job while injected jobs opt in explicitly', async () => {
+    const durationLearningRuntimeLifecycleSweep = vi.fn(async () => ({
+      candidateCount: 3,
+      expandedCandidateCount: 5,
+      canaryPublished: 2,
+      candidateCheckpointReused: 0,
+      candidateCollecting: 1,
+      manualFallback: 0,
+      monitoringPending: 1,
+      monitoringPassed: 1,
+      monitoringFailed: 0,
+      stablePromoted: 1,
+      rollbackExecuted: 0,
+      failed: 0,
+    }))
+    const job = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
+      candidateProvider: async () => [],
+      durationLearningRuntimeLifecycleSweep,
+    })
+
+    const result = await job.executeNow()
+
+    expect(durationLearningRuntimeLifecycleSweep).toHaveBeenCalledOnce()
+    expect(result).toEqual(expect.objectContaining({
+      total: 0,
+      durationLearningRuntimeLifecycle: expect.objectContaining({
+        canaryPublished: 2,
+        stablePromoted: 1,
+      }),
+    }))
+  })
+
+  it('binds runtime publications to scoped consumer observations and measured accuracy outcomes', async () => {
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      return [{
+        publication_key: 'learnable-parameter-runtime:duration-blend:company',
+        rollback_target: 'duration-blend-v1',
+        parameter_key: 'duration.benchmark_blend_weight',
+        owner_algorithm: 'durationSuggestionService',
+        scope_level: 'company',
+        target_surface: 'company_override',
+        publication_status: 'published',
+        monitoring_window_hours: 72,
+        monitoring_elapsed_hours: 96,
+        consumer_count: 44,
+        sample_count: 38,
+        mae_before: 8.5,
+        mae_after: 7.1,
+        overcompensation_rate: 0.04,
+        regression_rate: 0.21,
+      }] as T[]
+    }
+
+    const candidates = await collectLearnableParameterImpactMonitoringCandidates(queryExec)
+
+    expect(candidates).toEqual([expect.objectContaining({
+      sourcePublicationKey: 'learnable-parameter-runtime:duration-blend:company',
+      monitoredAssetCount: 38,
+      monitoringWindowHours: 72,
+      monitoringElapsedHours: 96,
+      metrics: expect.objectContaining({
+        consumerCount: 44,
+        maeBefore: 8.5,
+        maeAfter: 7.1,
+        overcompensationRate: 0.04,
+        forecastErrorRegressionRate: 0.21,
+      }),
+    })])
+    expect(calls).toHaveLength(1)
+    expect(calls[0].sql).toContain('runtime_consumer_observations')
+    expect(calls[0].sql).toContain('duration_algorithm_accuracy_events')
+    expect(calls[0].sql).toContain('observed_project.company_id = publication.company_id')
+  })
+
+  it('does not treat null aggregate metrics as measured zero regression', async () => {
+    const queryExec = async <T = Record<string, unknown>>(): Promise<T[]> => [{
+      publication_key: 'learnable-parameter-runtime:duration-blend:pending',
+      rollback_target: 'duration-blend-v1',
+      parameter_key: 'duration.benchmark_blend_weight',
+      scope_level: 'company',
+      publication_status: 'canary',
+      monitoring_window_hours: 72,
+      monitoring_elapsed_hours: 96,
+      consumer_count: 40,
+      sample_count: 40,
+      mae_before: null,
+      mae_after: null,
+      overcompensation_rate: null,
+      regression_rate: null,
+    }] as T[]
+
+    const candidates = await collectLearnableParameterImpactMonitoringCandidates(queryExec)
+
+    expect(candidates[0]?.metrics).toEqual(expect.objectContaining({
+      maeBefore: null,
+      maeAfter: null,
+      overcompensationRate: null,
+      forecastErrorRegressionRate: null,
+    }))
+  })
+
   it('keeps publications pending when no measured accuracy or overcompensation metric exists', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
 

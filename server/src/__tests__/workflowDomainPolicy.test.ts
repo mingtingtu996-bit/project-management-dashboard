@@ -9,6 +9,14 @@ import {
 } from '../services/workflowDomainPolicy.js'
 
 describe('workflow domain policy', () => {
+  const closureOutcome = {
+    resultCode: 'resolved' as const,
+    resultSummary: 'Corrective action completed and verified.',
+    effectiveness: 'resolved' as const,
+    evidenceRefs: ['inspection:inspection-1'],
+    causeAttributionId: null,
+  }
+
   it('protects obstacle_escalated and condition_expired issues from hard delete', () => {
     expect(PROTECTED_ISSUE_SOURCE_TYPES.has('obstacle_escalated')).toBe(true)
     expect(PROTECTED_ISSUE_SOURCE_TYPES.has('condition_expired')).toBe(true)
@@ -43,10 +51,12 @@ describe('workflow domain policy', () => {
   })
 
   it('returns dedicated pending_manual_close action patches', () => {
-    expect(buildIssueConfirmClosePatch()).toMatchObject({
+    expect(buildIssueConfirmClosePatch(closureOutcome, 'user-1')).toMatchObject({
       status: 'closed',
       pending_manual_close: false,
       closed_reason: 'manual_confirmed_close',
+      closure_result_code: 'resolved',
+      closed_by: 'user-1',
     })
     expect(buildIssueKeepProcessingPatch()).toMatchObject({
       status: 'investigating',
@@ -58,4 +68,3 @@ describe('workflow domain policy', () => {
     })
   })
 })
-

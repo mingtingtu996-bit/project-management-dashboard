@@ -1,4 +1,5 @@
 import {
+  closeIssueByRetention,
   confirmIssuePendingManualClose,
   createIssue,
   deleteIssue,
@@ -12,6 +13,7 @@ import {
 } from './notificationStore.js'
 import { notificationTouchpointService } from './notificationTouchpointService.js'
 import type { Issue, Notification } from '../types/db.js'
+import type { RetentionClosureContext, RiskIssueClosureOutcomeInput } from '../domain/riskIssueWorkflowPolicy.js'
 
 function mapIssueSeverityToNotificationSeverity(severity?: Issue['severity'] | null): Notification['severity'] {
   if (severity === 'critical') return 'critical'
@@ -152,9 +154,22 @@ export async function updateIssueInMainChain(
 
 export async function confirmIssuePendingManualCloseInMainChain(
   id: string,
+  outcome: RiskIssueClosureOutcomeInput,
+  actorId: string,
   expectedVersion?: number,
 ): Promise<Issue | null> {
-  const updated = await confirmIssuePendingManualClose(id, expectedVersion)
+  const updated = await confirmIssuePendingManualClose(id, outcome, actorId, expectedVersion)
+  await syncIssueNotification(updated)
+  return updated
+}
+
+export async function closeIssueByRetentionInMainChain(
+  id: string,
+  projectId: string,
+  context: RetentionClosureContext = {},
+  expectedVersion?: number,
+): Promise<Issue | null> {
+  const updated = await closeIssueByRetention(id, projectId, context, expectedVersion)
   await syncIssueNotification(updated)
   return updated
 }

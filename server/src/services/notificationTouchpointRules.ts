@@ -1,4 +1,5 @@
 import type { Notification } from '../types/db.js'
+import { createHash } from 'node:crypto'
 
 export type TouchpointType = 'persistent' | 'dashboard_todo' | 'popup' | 'page_banner' | 'system_record'
 export type ScopeType = 'project' | 'company' | 'workspace' | 'system'
@@ -20,6 +21,7 @@ export const NOTIFICATION_TOUCHPOINT_RULE_REGISTRY = {
   dedupe: {
     activeUniqueIndex: 'uq_notifications_active_touchpoint_dedupe',
     canonicalParts: ['company_id', 'project_id', 'source_entity_type', 'source_entity_id', 'type'],
+    fallbackCanonicalParts: ['company_id', 'project_id', 'user_id', 'type', 'notification_type', 'title', 'content', 'recipients'],
   },
 } as const
 
@@ -131,15 +133,33 @@ export function buildNotificationDedupeKey(notification: NotificationLike) {
 
   const sourceEntityType = normalizeNullableText(notification.source_entity_type)
   const sourceEntityId = normalizeNullableText(notification.source_entity_id)
-  if (!sourceEntityType || !sourceEntityId) return null
+  if (sourceEntityType && sourceEntityId) {
+    return [
+      normalizeNullableText(notification.company_id) ?? 'no-company',
+      normalizeNullableText(notification.project_id) ?? 'no-project',
+      sourceEntityType,
+      sourceEntityId,
+      normalizeNullableText(notification.type) ?? 'notification',
+    ].join(':')
+  }
 
-  return [
-    normalizeNullableText(notification.company_id) ?? 'no-company',
-    normalizeNullableText(notification.project_id) ?? 'no-project',
-    sourceEntityType,
-    sourceEntityId,
-    normalizeNullableText(notification.type) ?? 'notification',
-  ].join(':')
+  const touchpointType = inferTouchpointType(notification)
+  if (!NOTIFICATION_TOUCHPOINT_RULE_REGISTRY.touchpoints[touchpointType].requiresDedupe) return null
+
+  const recipients = Array.isArray(notification.recipients)
+    ? notification.recipients.map(normalizeText).filter(Boolean).sort()
+    : []
+  const canonical = JSON.stringify({
+    companyId: normalizeNullableText(notification.company_id) ?? 'no-company',
+    projectId: normalizeNullableText(notification.project_id) ?? 'no-project',
+    userId: normalizeNullableText(notification.user_id) ?? 'no-user',
+    type: normalizeNullableText(notification.type) ?? 'notification',
+    notificationType: normalizeNullableText(notification.notification_type) ?? inferNotificationType(notification),
+    title: normalizeText(notification.title),
+    content: normalizeText(notification.content),
+    recipients,
+  })
+  return `content:${createHash('sha256').update(canonical).digest('hex').slice(0, 32)}`
 }
 
 export function inferNotificationTarget(notification: NotificationLike) {

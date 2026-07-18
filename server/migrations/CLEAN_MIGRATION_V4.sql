@@ -1,4 +1,4 @@
--- CANONICAL: current clean bootstrap bundle, synchronized through migration 310
+-- CANONICAL: current clean bootstrap bundle, synchronized through migration 321
 -- CLEAN MIGRATION (UTF-8, no encoding issues)
 -- Generated: 2026-03-26 02:39
 -- All 17 migration files merged
@@ -17519,6 +17519,1098 @@ CREATE POLICY project_entity_links_backend_runtime_policy
 COMMENT ON POLICY project_entity_links_backend_runtime_policy
   ON public.project_entity_links IS
   'Backend runtime maintains project-scoped polymorphic links; browser-facing access remains governed by existing membership policies.';
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 311_retire_product_runtime_progress_knowledge_governance.sql
+-- ============================================================
+-- Retire repository-research candidate governance from the product database.
+-- External knowledge remains a development input that is encoded into reviewed
+-- seeds/rules/templates before normal code release. It is not a runtime subsystem.
+
+BEGIN;
+
+LOCK TABLE public.progress_asset_publication_readiness IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.progress_asset_calibration_results IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.progress_asset_calibration_runs IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.progress_asset_candidates IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.progress_knowledge_documents IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.progress_knowledge_sources IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+DECLARE
+  backup_sha256 TEXT := current_setting('workbuddy.progress_knowledge_retirement_backup_sha256', true);
+  expected_fingerprint TEXT := current_setting('workbuddy.progress_knowledge_retirement_data_fingerprint', true);
+  actual_fingerprint TEXT;
+BEGIN
+  IF backup_sha256 IS NULL OR backup_sha256 !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 'progress_knowledge_retirement_backup_required';
+  END IF;
+  IF expected_fingerprint IS NULL OR expected_fingerprint !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 'progress_knowledge_retirement_fingerprint_required';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.progress_asset_publication_readiness
+    WHERE readiness_status IN ('auto_canary_active', 'auto_published')
+  ) THEN
+    RAISE EXCEPTION 'progress_knowledge_retirement_active_runtime_publication_present';
+  END IF;
+
+  SELECT encode(
+           digest(
+             convert_to(
+               jsonb_build_object(
+                 'progress_knowledge_sources', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.progress_knowledge_sources source_row
+                 ),
+                 'progress_knowledge_documents', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.progress_knowledge_documents source_row
+                 ),
+                 'progress_asset_candidates', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.progress_asset_candidates source_row
+                 ),
+                 'progress_asset_calibration_runs', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.progress_asset_calibration_runs source_row
+                 ),
+                 'progress_asset_calibration_results', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.progress_asset_calibration_results source_row
+                 ),
+                 'progress_asset_publication_readiness', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.progress_asset_publication_readiness source_row
+                 )
+               )::text,
+               'UTF8'
+             ),
+             'sha256'
+           ),
+           'hex'
+         )
+  INTO actual_fingerprint;
+
+  IF actual_fingerprint <> expected_fingerprint THEN
+    RAISE EXCEPTION 'progress_knowledge_retirement_data_changed_after_backup';
+  END IF;
+END
+$$;
+
+DROP TABLE public.progress_asset_publication_readiness;
+DROP TABLE public.progress_asset_calibration_results;
+DROP TABLE public.progress_asset_calibration_runs;
+DROP TABLE public.progress_asset_candidates;
+DROP TABLE public.progress_knowledge_documents;
+DROP TABLE public.progress_knowledge_sources;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 312_runtime_login_rls_helper_acl.sql
+-- ============================================================
+-- Ensure the concrete production runtime login can execute the non-exposed RLS
+-- helper. Public helper RPCs remain unavailable to browser-facing roles.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF to_regprocedure('workbuddy_private.is_active_company_member(uuid,text[])') IS NULL THEN
+    RAISE EXCEPTION 'workbuddy_private.is_active_company_member(uuid,text[]) is required before migration 312';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    EXECUTE 'GRANT USAGE ON SCHEMA workbuddy_private TO workbuddy_runtime';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO workbuddy_runtime';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime_login') THEN
+    EXECUTE 'ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS';
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+      EXECUTE 'GRANT workbuddy_runtime TO workbuddy_runtime_login';
+    END IF;
+
+    EXECUTE 'GRANT USAGE ON SCHEMA workbuddy_private TO workbuddy_runtime_login';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO workbuddy_runtime_login';
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ============================================================
+-- Source: 313_grant_rls_helper_execute_to_runtime_roles.sql
+-- ============================================================
+-- Ensure every role that can evaluate project RLS can execute the non-exposed
+-- active-company helper. Keep the legacy public helper backend-only so PostgREST
+-- cannot expose its SECURITY DEFINER surface to anon/authenticated callers.
+
+BEGIN;
+
+DO $$
+DECLARE
+  target_role text;
+BEGIN
+  IF to_regprocedure('workbuddy_private.is_active_company_member(uuid,text[])') IS NULL THEN
+    RAISE EXCEPTION 'workbuddy_private.is_active_company_member(uuid,text[]) is required before migration 313';
+  END IF;
+
+  FOREACH target_role IN ARRAY ARRAY[
+    'anon',
+    'authenticated',
+    'service_role',
+    'workbuddy_runtime',
+    'workbuddy_runtime_login'
+  ] LOOP
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
+      EXECUTE format('GRANT USAGE ON SCHEMA workbuddy_private TO %I', target_role);
+      EXECUTE format(
+        'GRANT EXECUTE ON FUNCTION workbuddy_private.is_active_company_member(UUID, TEXT[]) TO %I',
+        target_role
+      );
+    END IF;
+  END LOOP;
+
+  IF to_regprocedure('public.is_active_company_member(uuid,text[])') IS NOT NULL THEN
+    EXECUTE 'REVOKE ALL ON FUNCTION public.is_active_company_member(UUID, TEXT[]) FROM PUBLIC';
+
+    FOREACH target_role IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
+        EXECUTE format(
+          'REVOKE ALL ON FUNCTION public.is_active_company_member(UUID, TEXT[]) FROM %I',
+          target_role
+        );
+      END IF;
+    END LOOP;
+
+    FOREACH target_role IN ARRAY ARRAY['service_role', 'workbuddy_runtime', 'workbuddy_runtime_login'] LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target_role) THEN
+        EXECUTE format(
+          'GRANT EXECUTE ON FUNCTION public.is_active_company_member(UUID, TEXT[]) TO %I',
+          target_role
+        );
+      END IF;
+    END LOOP;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime_login') THEN
+    EXECUTE 'ALTER ROLE workbuddy_runtime_login WITH INHERIT NOBYPASSRLS';
+
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+      EXECUTE 'GRANT workbuddy_runtime TO workbuddy_runtime_login';
+    END IF;
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ============================================================
+-- Source: 314_duration_day_basis_contract.sql
+-- ============================================================
+-- Make duration sample and benchmark day semantics explicit.
+-- Existing values were collected as inclusive calendar days, so the migration
+-- labels them without changing the historical actual_duration/planned_duration facts.
+
+BEGIN;
+
+ALTER TABLE public.duration_experience_samples
+  ADD COLUMN IF NOT EXISTS duration_day_basis TEXT NOT NULL DEFAULT 'calendar_day',
+  ADD COLUMN IF NOT EXISTS actual_duration_calendar_days INTEGER,
+  ADD COLUMN IF NOT EXISTS actual_duration_production_days INTEGER,
+  ADD COLUMN IF NOT EXISTS planned_duration_calendar_days INTEGER,
+  ADD COLUMN IF NOT EXISTS planned_duration_production_days INTEGER,
+  ADD COLUMN IF NOT EXISTS construction_calendar_basis TEXT;
+
+UPDATE public.duration_experience_samples
+SET actual_duration_calendar_days = COALESCE(actual_duration_calendar_days, actual_duration),
+    planned_duration_calendar_days = COALESCE(planned_duration_calendar_days, planned_duration)
+WHERE duration_day_basis = 'calendar_day';
+
+ALTER TABLE public.duration_experience_samples
+  DROP CONSTRAINT IF EXISTS duration_experience_samples_duration_day_basis_check,
+  DROP CONSTRAINT IF EXISTS duration_experience_samples_dual_duration_days_check,
+  DROP CONSTRAINT IF EXISTS duration_experience_samples_construction_calendar_basis_check;
+
+ALTER TABLE public.duration_experience_samples
+  ADD CONSTRAINT duration_experience_samples_duration_day_basis_check
+    CHECK (duration_day_basis IN ('calendar_day', 'construction_production_day')),
+  ADD CONSTRAINT duration_experience_samples_dual_duration_days_check
+    CHECK (
+      (actual_duration_calendar_days IS NULL OR actual_duration_calendar_days > 0)
+      AND (actual_duration_production_days IS NULL OR actual_duration_production_days > 0)
+      AND (planned_duration_calendar_days IS NULL OR planned_duration_calendar_days > 0)
+      AND (planned_duration_production_days IS NULL OR planned_duration_production_days > 0)
+    ),
+  ADD CONSTRAINT duration_experience_samples_construction_calendar_basis_check
+    CHECK (
+      construction_calendar_basis IS NULL
+      OR construction_calendar_basis IN ('calendar_day', 'official_construction_calendar_seed')
+    );
+
+ALTER TABLE public.duration_benchmarks
+  ADD COLUMN IF NOT EXISTS duration_day_basis TEXT NOT NULL DEFAULT 'calendar_day';
+
+ALTER TABLE public.duration_benchmarks
+  DROP CONSTRAINT IF EXISTS duration_benchmarks_duration_day_basis_check;
+
+ALTER TABLE public.duration_benchmarks
+  ADD CONSTRAINT duration_benchmarks_duration_day_basis_check
+    CHECK (duration_day_basis IN ('calendar_day', 'construction_production_day'));
+
+CREATE INDEX IF NOT EXISTS idx_duration_experience_samples_day_basis
+  ON public.duration_experience_samples(duration_day_basis, sample_status, included_in_benchmark);
+
+CREATE INDEX IF NOT EXISTS idx_duration_benchmarks_day_basis_current
+  ON public.duration_benchmarks(duration_day_basis, is_current, is_active, benchmark_key);
+
+COMMENT ON COLUMN public.duration_experience_samples.duration_day_basis IS
+  'Authoritative semantics of actual_duration and planned_duration. New governed samples use construction_production_day; pre-314 values remain calendar_day.';
+COMMENT ON COLUMN public.duration_benchmarks.duration_day_basis IS
+  'Authoritative semantics of p50/p75/p80/mean day values. Production forecast consumers require construction_production_day.';
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 315_duration_learning_runtime_publications.sql
+-- ============================================================
+-- Governed runtime payloads for duration-learning assets.
+-- Cold-start seeds and templates remain valid fallbacks. Only learned overlays
+-- enter this table after replay/policy gates and remain reversible.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 315';
+  END IF;
+END
+$$;
+
+CREATE TABLE IF NOT EXISTS public.duration_learning_runtime_publications (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  publication_key TEXT NOT NULL UNIQUE,
+  asset_key TEXT NOT NULL
+    CHECK (asset_key IN (
+      'base_duration_benchmark',
+      'standard_work_duration_seed',
+      'special_work_duration_seed',
+      'wbs_reference_days',
+      'dependency_rule_candidate',
+      'critical_path_rule_candidate'
+    )),
+  artifact_key TEXT NOT NULL,
+  scope_level TEXT NOT NULL
+    CHECK (scope_level IN ('project', 'company', 'industry', 'global')),
+  company_id UUID NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  industry_key TEXT NULL,
+  publication_stage TEXT NOT NULL
+    CHECK (publication_stage IN ('canary', 'stable', 'superseded', 'rolled_back')),
+  runtime_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  source_candidate_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  automation_decision JSONB NOT NULL DEFAULT '{}'::jsonb,
+  previous_publication_key TEXT NULL
+    REFERENCES public.duration_learning_runtime_publications(publication_key) ON DELETE SET NULL,
+  traffic_percent INTEGER NOT NULL DEFAULT 100
+    CHECK (traffic_percent BETWEEN 1 AND 100),
+  monitoring_window_hours INTEGER NOT NULL DEFAULT 72
+    CHECK (monitoring_window_hours BETWEEN 1 AND 2160),
+  monitoring_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (monitoring_status IN ('pending', 'collecting', 'passed', 'failed', 'rollback_pending')),
+  monitoring_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  impact_metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+  rollback_execution JSONB NULL,
+  published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  rolled_back_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT duration_learning_runtime_publications_scope_consistency CHECK (
+    (
+      scope_level = 'project'
+      AND company_id IS NOT NULL
+      AND project_id IS NOT NULL
+      AND industry_key IS NULL
+    )
+    OR (
+      scope_level = 'company'
+      AND company_id IS NOT NULL
+      AND project_id IS NULL
+      AND industry_key IS NULL
+    )
+    OR (
+      scope_level = 'industry'
+      AND company_id IS NULL
+      AND project_id IS NULL
+      AND NULLIF(industry_key, '') IS NOT NULL
+    )
+    OR (
+      scope_level = 'global'
+      AND company_id IS NULL
+      AND project_id IS NULL
+      AND industry_key IS NULL
+    )
+  )
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_learning_runtime_publications_active_scope
+  ON public.duration_learning_runtime_publications (
+    asset_key,
+    artifact_key,
+    scope_level,
+    COALESCE(company_id, '00000000-0000-0000-0000-000000000000'::UUID),
+    COALESCE(project_id, '00000000-0000-0000-0000-000000000000'::UUID),
+    COALESCE(industry_key, ''),
+    publication_stage
+  )
+  WHERE publication_stage IN ('canary', 'stable');
+
+CREATE INDEX IF NOT EXISTS idx_duration_learning_runtime_publications_resolution
+  ON public.duration_learning_runtime_publications (
+    asset_key,
+    artifact_key,
+    publication_stage,
+    scope_level,
+    published_at DESC
+  );
+
+CREATE INDEX IF NOT EXISTS idx_duration_learning_runtime_publications_monitoring
+  ON public.duration_learning_runtime_publications (
+    monitoring_status,
+    monitoring_started_at,
+    publication_stage
+  )
+  WHERE publication_stage IN ('canary', 'stable');
+
+ALTER TABLE public.duration_learning_runtime_publications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.duration_learning_runtime_publications FORCE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON TABLE public.duration_learning_runtime_publications
+  TO workbuddy_runtime;
+
+DROP POLICY IF EXISTS duration_learning_runtime_publications_backend_runtime_policy
+  ON public.duration_learning_runtime_publications;
+CREATE POLICY duration_learning_runtime_publications_backend_runtime_policy
+  ON public.duration_learning_runtime_publications
+  FOR ALL
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  )
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+COMMENT ON TABLE public.duration_learning_runtime_publications IS
+  'Executable, scoped and reversible duration-learning overlays. This table never stores task, dependency, baseline or progress facts.';
+COMMENT ON COLUMN public.duration_learning_runtime_publications.runtime_payload IS
+  'Validated runtime payload consumed by the owning duration or plan-network resolver.';
+COMMENT ON COLUMN public.duration_learning_runtime_publications.previous_publication_key IS
+  'Previously stable publication retained for atomic rollback.';
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 316_task_fact_write_integrity.sql
+-- ============================================================
+-- 316: Make the application task write chain the sole progress snapshot writer
+-- and persist task-reconcile rollback execution state.
+
+BEGIN;
+
+DROP TRIGGER IF EXISTS trigger_auto_record_snapshot ON public.tasks;
+DROP FUNCTION IF EXISTS public.auto_record_progress_snapshot();
+
+ALTER TABLE public.task_reconcile_backups
+  ADD COLUMN IF NOT EXISTS rolled_back_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS rolled_back_by UUID,
+  ADD COLUMN IF NOT EXISTS rollback_result JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE INDEX IF NOT EXISTS idx_task_reconcile_backups_rollback_state
+  ON public.task_reconcile_backups(project_id, reconcile_batch_id, rolled_back_at);
+
+COMMENT ON COLUMN public.task_reconcile_backups.rolled_back_at IS
+  'Timestamp of the first successful atomic reconcile rollback.';
+COMMENT ON COLUMN public.task_reconcile_backups.rolled_back_by IS
+  'Actor that executed the first successful atomic reconcile rollback.';
+COMMENT ON COLUMN public.task_reconcile_backups.rollback_result IS
+  'Counts and outcome metadata from the atomic reconcile rollback.';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 317_structured_cause_attribution.sql
+-- ============================================================
+-- Structured business-cause attribution with evidence-first inference and
+-- explicit separation between business cause and contractual responsibility.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 317';
+  END IF;
+END
+$$;
+
+CREATE TABLE IF NOT EXISTS public.structured_cause_attributions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  subject_type TEXT NOT NULL
+    CHECK (subject_type IN ('task', 'risk', 'issue', 'baseline_change')),
+  subject_id TEXT NOT NULL,
+  event_type TEXT NOT NULL
+    CHECK (event_type IN ('delay', 'completion', 'closure', 'baseline_change')),
+  cause_code TEXT NOT NULL
+    CHECK (cause_code IN (
+      'predecessor_delay', 'material_shortage', 'labor_shortage',
+      'equipment_unavailable', 'design_change', 'drawing_delay',
+      'quality_rework', 'weather_impact', 'owner_decision',
+      'government_inspection', 'site_capacity_pressure',
+       'workflow_sequence', 'external_readiness', 'other'
+     )),
+  prefilled_cause_code TEXT NULL
+    CHECK (prefilled_cause_code IS NULL OR prefilled_cause_code IN (
+      'predecessor_delay', 'material_shortage', 'labor_shortage',
+      'equipment_unavailable', 'design_change', 'drawing_delay',
+      'quality_rework', 'weather_impact', 'owner_decision',
+      'government_inspection', 'site_capacity_pressure',
+      'workflow_sequence', 'external_readiness', 'other'
+    )),
+  prefill_modified BOOLEAN NULL,
+  cause_role TEXT NOT NULL
+    CHECK (cause_role IN ('primary', 'contributing', 'transmitted')),
+  taxonomy_version TEXT NOT NULL,
+  responsibility_class TEXT NULL
+    CHECK (responsibility_class IS NULL OR responsibility_class IN (
+      'owner_attributable', 'contractor_attributable', 'force_majeure',
+      'shared', 'undetermined'
+    )),
+  responsibility_basis TEXT NULL,
+  raw_text TEXT NULL,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb
+    CHECK (jsonb_typeof(evidence_refs) = 'array'),
+  evidence_source_types JSONB NOT NULL DEFAULT '[]'::jsonb
+    CHECK (jsonb_typeof(evidence_source_types) = 'array'),
+  overlap_start TIMESTAMPTZ NULL,
+  overlap_end TIMESTAMPTZ NULL,
+  rule_version TEXT NULL,
+  confidence NUMERIC(5,4) NOT NULL DEFAULT 0
+    CHECK (confidence >= 0 AND confidence <= 1),
+  status TEXT NOT NULL DEFAULT 'candidate'
+    CHECK (status IN ('candidate', 'confirmed', 'rejected', 'superseded')),
+  auto_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+  confirmation_source TEXT NOT NULL DEFAULT 'candidate'
+    CHECK (confirmation_source IN ('candidate', 'deterministic_policy', 'user_confirmed')),
+  review_reason_codes JSONB NOT NULL DEFAULT '[]'::jsonb
+    CHECK (jsonb_typeof(review_reason_codes) = 'array'),
+  confirmed_by UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  confirmed_at TIMESTAMPTZ NULL,
+  rejected_by UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  rejected_at TIMESTAMPTZ NULL,
+  rejection_reason TEXT NULL,
+  dedupe_key TEXT NOT NULL,
+  created_by UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (company_id, dedupe_key),
+  CHECK (overlap_end IS NULL OR overlap_start IS NULL OR overlap_end >= overlap_start),
+  CHECK (responsibility_class IS NULL OR status = 'confirmed'),
+  CHECK (prefill_modified IS NULL OR prefilled_cause_code IS NOT NULL),
+  CHECK (NOT auto_confirmed OR (status = 'confirmed' AND responsibility_class IS NULL))
+);
+
+ALTER TABLE public.structured_cause_attributions
+  ADD COLUMN IF NOT EXISTS prefilled_cause_code TEXT NULL
+    CHECK (prefilled_cause_code IS NULL OR prefilled_cause_code IN (
+      'predecessor_delay', 'material_shortage', 'labor_shortage',
+      'equipment_unavailable', 'design_change', 'drawing_delay',
+      'quality_rework', 'weather_impact', 'owner_decision',
+      'government_inspection', 'site_capacity_pressure',
+      'workflow_sequence', 'external_readiness', 'other'
+    )),
+  ADD COLUMN IF NOT EXISTS prefill_modified BOOLEAN NULL;
+
+UPDATE public.structured_cause_attributions
+   SET prefilled_cause_code = cause_code
+ WHERE prefilled_cause_code IS NULL
+   AND confirmation_source IN ('candidate', 'deterministic_policy');
+
+ALTER TABLE public.structured_cause_attributions
+  DROP CONSTRAINT IF EXISTS structured_cause_prefill_modified_requires_prefill;
+ALTER TABLE public.structured_cause_attributions
+  ADD CONSTRAINT structured_cause_prefill_modified_requires_prefill
+  CHECK (prefill_modified IS NULL OR prefilled_cause_code IS NOT NULL);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_structured_cause_confirmed_primary
+  ON public.structured_cause_attributions (
+    company_id, project_id, subject_type, subject_id, event_type
+  )
+  WHERE cause_role = 'primary' AND status = 'confirmed';
+
+CREATE INDEX IF NOT EXISTS idx_structured_cause_project_subject
+  ON public.structured_cause_attributions (
+    company_id, project_id, subject_type, subject_id, created_at DESC
+  );
+
+CREATE INDEX IF NOT EXISTS idx_structured_cause_review_queue
+  ON public.structured_cause_attributions (
+    company_id, project_id, status, confidence DESC, created_at ASC
+  )
+  WHERE status = 'candidate';
+
+CREATE INDEX IF NOT EXISTS idx_structured_cause_quality_metrics
+  ON public.structured_cause_attributions (
+    company_id, project_id, confirmed_at
+  )
+  WHERE confirmed_at IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.ensure_structured_cause_attribution_tenant()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  project_company_id UUID;
+BEGIN
+  SELECT project.company_id
+    INTO project_company_id
+    FROM public.projects project
+   WHERE project.id = NEW.project_id;
+
+  IF project_company_id IS NULL THEN
+    RAISE EXCEPTION 'structured cause attribution project not found';
+  END IF;
+  IF NEW.company_id IS DISTINCT FROM project_company_id THEN
+    RAISE EXCEPTION 'structured cause attribution tenant mismatch';
+  END IF;
+
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS ensure_structured_cause_attribution_tenant_trigger
+  ON public.structured_cause_attributions;
+CREATE TRIGGER ensure_structured_cause_attribution_tenant_trigger
+  BEFORE INSERT OR UPDATE OF company_id, project_id
+  ON public.structured_cause_attributions
+  FOR EACH ROW
+  EXECUTE FUNCTION public.ensure_structured_cause_attribution_tenant();
+
+ALTER TABLE public.structured_cause_attributions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.structured_cause_attributions FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.structured_cause_attributions FROM PUBLIC, anon;
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON TABLE public.structured_cause_attributions
+  TO authenticated, workbuddy_runtime;
+
+DROP POLICY IF EXISTS structured_cause_attributions_member_read
+  ON public.structured_cause_attributions;
+CREATE POLICY structured_cause_attributions_member_read
+  ON public.structured_cause_attributions
+  FOR SELECT
+  TO authenticated
+  USING (
+    auth.uid() IS NOT NULL
+    AND workbuddy_private.is_active_company_member(structured_cause_attributions.company_id, NULL::TEXT[])
+    AND (
+      workbuddy_private.is_active_company_member(
+        structured_cause_attributions.company_id,
+        ARRAY['company_admin']::TEXT[]
+      )
+      OR workbuddy_private.is_active_project_member(
+        structured_cause_attributions.project_id,
+        NULL::TEXT[]
+      )
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.projects project
+      WHERE project.id = structured_cause_attributions.project_id
+        AND project.company_id = structured_cause_attributions.company_id
+    )
+  );
+
+DROP POLICY IF EXISTS structured_cause_attributions_editor_insert
+  ON public.structured_cause_attributions;
+CREATE POLICY structured_cause_attributions_editor_insert
+  ON public.structured_cause_attributions
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    workbuddy_private.is_active_company_member(
+      structured_cause_attributions.company_id,
+      NULL::TEXT[]
+    )
+    AND (
+      workbuddy_private.is_active_company_member(
+        structured_cause_attributions.company_id,
+        ARRAY['company_admin']::TEXT[]
+      )
+      OR workbuddy_private.is_active_project_member(
+        structured_cause_attributions.project_id,
+        ARRAY['owner', 'editor']::TEXT[]
+      )
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.projects project
+      WHERE project.id = structured_cause_attributions.project_id
+        AND project.company_id = structured_cause_attributions.company_id
+    )
+  );
+
+DROP POLICY IF EXISTS structured_cause_attributions_editor_update
+  ON public.structured_cause_attributions;
+CREATE POLICY structured_cause_attributions_editor_update
+  ON public.structured_cause_attributions
+  FOR UPDATE
+  TO authenticated
+  USING (
+    workbuddy_private.is_active_company_member(
+      structured_cause_attributions.company_id,
+      NULL::TEXT[]
+    )
+    AND (
+      workbuddy_private.is_active_company_member(
+        structured_cause_attributions.company_id,
+        ARRAY['company_admin']::TEXT[]
+      )
+      OR workbuddy_private.is_active_project_member(
+        structured_cause_attributions.project_id,
+        ARRAY['owner', 'editor']::TEXT[]
+      )
+    )
+  )
+  WITH CHECK (
+    workbuddy_private.is_active_company_member(
+      structured_cause_attributions.company_id,
+      NULL::TEXT[]
+    )
+    AND (
+      workbuddy_private.is_active_company_member(
+        structured_cause_attributions.company_id,
+        ARRAY['company_admin']::TEXT[]
+      )
+      OR workbuddy_private.is_active_project_member(
+        structured_cause_attributions.project_id,
+        ARRAY['owner', 'editor']::TEXT[]
+      )
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.projects project
+      WHERE project.id = structured_cause_attributions.project_id
+        AND project.company_id = structured_cause_attributions.company_id
+    )
+  );
+
+DROP POLICY IF EXISTS structured_cause_attributions_editor_delete
+  ON public.structured_cause_attributions;
+CREATE POLICY structured_cause_attributions_editor_delete
+  ON public.structured_cause_attributions
+  FOR DELETE
+  TO authenticated
+  USING (
+    workbuddy_private.is_active_company_member(
+      structured_cause_attributions.company_id,
+      NULL::TEXT[]
+    )
+    AND (
+      workbuddy_private.is_active_company_member(
+        structured_cause_attributions.company_id,
+        ARRAY['company_admin']::TEXT[]
+      )
+      OR workbuddy_private.is_active_project_member(
+        structured_cause_attributions.project_id,
+        ARRAY['owner', 'editor']::TEXT[]
+      )
+    )
+  );
+
+DROP POLICY IF EXISTS structured_cause_attributions_backend_runtime
+  ON public.structured_cause_attributions;
+CREATE POLICY structured_cause_attributions_backend_runtime
+  ON public.structured_cause_attributions
+  FOR ALL
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  )
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+COMMENT ON TABLE public.structured_cause_attributions IS
+  'Evidence-backed business causes. Contractual responsibility remains null until explicit user confirmation.';
+COMMENT ON COLUMN public.structured_cause_attributions.raw_text IS
+  'Original field wording retained for human context; aggregation uses cause_code and taxonomy_version.';
+COMMENT ON COLUMN public.structured_cause_attributions.confirmation_source IS
+  'Offline model labels remain candidate; deterministic policy may confirm causes but never contractual responsibility.';
+COMMENT ON COLUMN public.structured_cause_attributions.prefilled_cause_code IS
+  'Original inferred cause shown to the reviewer; retained when the confirmed cause is changed.';
+COMMENT ON COLUMN public.structured_cause_attributions.prefill_modified IS
+  'User-confirmed comparison result used only for inference-rule quality governance.';
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 318_risk_issue_structured_closure_outcome.sql
+-- ============================================================
+-- Persist how a risk or issue was closed. Free text remains available for
+-- context, while controlled result/effectiveness fields support reporting and learning.
+
+BEGIN;
+
+ALTER TABLE public.risks
+  ADD COLUMN IF NOT EXISTS closure_result_code TEXT,
+  ADD COLUMN IF NOT EXISTS closure_result_summary TEXT,
+  ADD COLUMN IF NOT EXISTS closure_effectiveness TEXT,
+  ADD COLUMN IF NOT EXISTS closure_evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS closure_cause_attribution_id UUID
+    REFERENCES public.structured_cause_attributions(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS closed_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS closure_recorded_at TIMESTAMPTZ;
+
+ALTER TABLE public.issues
+  ADD COLUMN IF NOT EXISTS closure_result_code TEXT,
+  ADD COLUMN IF NOT EXISTS closure_result_summary TEXT,
+  ADD COLUMN IF NOT EXISTS closure_effectiveness TEXT,
+  ADD COLUMN IF NOT EXISTS closure_evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS closure_cause_attribution_id UUID
+    REFERENCES public.structured_cause_attributions(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS closed_by UUID REFERENCES public.users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS closure_recorded_at TIMESTAMPTZ;
+
+UPDATE public.risks
+   SET closure_result_code = COALESCE(closure_result_code, 'legacy_close'),
+       closure_result_summary = COALESCE(NULLIF(closure_result_summary, ''), NULLIF(closed_reason, ''), 'Historical close record'),
+       closure_effectiveness = COALESCE(closure_effectiveness, 'undetermined'),
+       closure_recorded_at = COALESCE(closure_recorded_at, closed_at, updated_at)
+ WHERE status = 'closed';
+
+UPDATE public.issues
+   SET closure_result_code = COALESCE(closure_result_code, 'legacy_close'),
+       closure_result_summary = COALESCE(NULLIF(closure_result_summary, ''), NULLIF(closed_reason, ''), 'Historical close record'),
+       closure_effectiveness = COALESCE(closure_effectiveness, 'undetermined'),
+       closure_recorded_at = COALESCE(closure_recorded_at, closed_at, updated_at)
+ WHERE status = 'closed';
+
+ALTER TABLE public.risks
+  DROP CONSTRAINT IF EXISTS risks_closure_result_code_check,
+  DROP CONSTRAINT IF EXISTS risks_closure_effectiveness_check,
+  DROP CONSTRAINT IF EXISTS risks_closure_evidence_refs_array_check,
+  DROP CONSTRAINT IF EXISTS risks_closed_outcome_required_check;
+ALTER TABLE public.risks
+  ADD CONSTRAINT risks_closure_result_code_check
+    CHECK (closure_result_code IS NULL OR closure_result_code IN ('resolved', 'mitigated', 'transferred', 'accepted', 'duplicate', 'invalidated', 'retention_close', 'legacy_close')),
+  ADD CONSTRAINT risks_closure_effectiveness_check
+    CHECK (closure_effectiveness IS NULL OR closure_effectiveness IN ('resolved', 'partially_resolved', 'transferred', 'accepted', 'undetermined')),
+  ADD CONSTRAINT risks_closure_evidence_refs_array_check
+    CHECK (jsonb_typeof(closure_evidence_refs) = 'array'),
+  ADD CONSTRAINT risks_closed_outcome_required_check
+    CHECK (status <> 'closed' OR (
+      closure_result_code IS NOT NULL
+      AND NULLIF(closure_result_summary, '') IS NOT NULL
+      AND closure_effectiveness IS NOT NULL
+      AND closure_recorded_at IS NOT NULL
+    ));
+
+ALTER TABLE public.issues
+  DROP CONSTRAINT IF EXISTS issues_closure_result_code_check,
+  DROP CONSTRAINT IF EXISTS issues_closure_effectiveness_check,
+  DROP CONSTRAINT IF EXISTS issues_closure_evidence_refs_array_check,
+  DROP CONSTRAINT IF EXISTS issues_closed_outcome_required_check;
+ALTER TABLE public.issues
+  ADD CONSTRAINT issues_closure_result_code_check
+    CHECK (closure_result_code IS NULL OR closure_result_code IN ('resolved', 'mitigated', 'transferred', 'accepted', 'duplicate', 'invalidated', 'retention_close', 'legacy_close')),
+  ADD CONSTRAINT issues_closure_effectiveness_check
+    CHECK (closure_effectiveness IS NULL OR closure_effectiveness IN ('resolved', 'partially_resolved', 'transferred', 'accepted', 'undetermined')),
+  ADD CONSTRAINT issues_closure_evidence_refs_array_check
+    CHECK (jsonb_typeof(closure_evidence_refs) = 'array'),
+  ADD CONSTRAINT issues_closed_outcome_required_check
+    CHECK (status <> 'closed' OR (
+      closure_result_code IS NOT NULL
+      AND NULLIF(closure_result_summary, '') IS NOT NULL
+      AND closure_effectiveness IS NOT NULL
+      AND closure_recorded_at IS NOT NULL
+    ));
+
+CREATE OR REPLACE FUNCTION public.validate_risk_issue_closure_cause_attribution()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  attribution public.structured_cause_attributions%ROWTYPE;
+BEGIN
+  IF NEW.closure_cause_attribution_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT * INTO attribution
+    FROM public.structured_cause_attributions
+   WHERE id = NEW.closure_cause_attribution_id;
+
+  IF attribution.id IS NULL
+     OR attribution.status <> 'confirmed'
+     OR attribution.project_id <> NEW.project_id
+     OR attribution.subject_type <> TG_ARGV[0]
+     OR attribution.subject_id <> NEW.id::TEXT THEN
+    RAISE EXCEPTION 'closure cause attribution does not match the closed record';
+  END IF;
+
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS validate_risk_closure_cause_attribution_trigger ON public.risks;
+CREATE TRIGGER validate_risk_closure_cause_attribution_trigger
+  BEFORE INSERT OR UPDATE OF closure_cause_attribution_id, project_id
+  ON public.risks
+  FOR EACH ROW
+  EXECUTE FUNCTION public.validate_risk_issue_closure_cause_attribution('risk');
+
+DROP TRIGGER IF EXISTS validate_issue_closure_cause_attribution_trigger ON public.issues;
+CREATE TRIGGER validate_issue_closure_cause_attribution_trigger
+  BEFORE INSERT OR UPDATE OF closure_cause_attribution_id, project_id
+  ON public.issues
+  FOR EACH ROW
+  EXECUTE FUNCTION public.validate_risk_issue_closure_cause_attribution('issue');
+
+CREATE INDEX IF NOT EXISTS idx_risks_closure_result
+  ON public.risks(project_id, closure_result_code, closure_recorded_at DESC)
+  WHERE status = 'closed';
+CREATE INDEX IF NOT EXISTS idx_issues_closure_result
+  ON public.issues(project_id, closure_result_code, closure_recorded_at DESC)
+  WHERE status = 'closed';
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 320_notification_task_reference_retirement.sql
+-- ============================================================
+-- Preserve notifications when their source task has already been deleted.
+-- The immutable pre-apply backup is required because this migration retires
+-- dangling references and resolves warning rows in place.
+
+BEGIN;
+
+LOCK TABLE public.tasks IN SHARE MODE;
+LOCK TABLE public.notifications IN SHARE ROW EXCLUSIVE MODE;
+
+DO $$
+DECLARE
+  backup_sha256 TEXT := current_setting('workbuddy.notification_task_reference_retirement_backup_sha256', true);
+  expected_fingerprint TEXT := current_setting('workbuddy.notification_task_reference_retirement_data_fingerprint', true);
+  actual_fingerprint TEXT;
+BEGIN
+  IF backup_sha256 IS NULL OR backup_sha256 !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 'notification_task_reference_retirement_backup_required';
+  END IF;
+  IF expected_fingerprint IS NULL OR expected_fingerprint !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 'notification_task_reference_retirement_fingerprint_required';
+  END IF;
+
+  WITH captured AS (
+    SELECT COALESCE(
+      jsonb_agg(to_jsonb(notification_row) ORDER BY notification_row.id),
+      '[]'::jsonb
+    ) AS snapshot
+    FROM public.notifications notification_row
+    LEFT JOIN public.tasks task_row
+      ON task_row.id::text = notification_row.task_id::text
+    WHERE notification_row.task_id IS NOT NULL
+      AND task_row.id IS NULL
+  )
+  SELECT encode(
+           digest(convert_to(snapshot::text, 'UTF8'), 'sha256'),
+           'hex'
+         )
+    INTO actual_fingerprint
+    FROM captured;
+
+  IF actual_fingerprint <> expected_fingerprint THEN
+    RAISE EXCEPTION 'notification_task_reference_retirement_data_changed_after_backup';
+  END IF;
+END
+$$;
+
+WITH orphaned AS (
+  SELECT notification_row.id
+  FROM public.notifications notification_row
+  LEFT JOIN public.tasks task_row
+    ON task_row.id::text = notification_row.task_id::text
+  WHERE notification_row.task_id IS NOT NULL
+    AND task_row.id IS NULL
+)
+UPDATE public.notifications notification_row
+SET
+  warning_lifecycle_status = 'resolved',
+  status = 'resolved',
+  resolved_source = 'source_deleted',
+  resolved_at = COALESCE(notification_row.resolved_at, transaction_timestamp()),
+  updated_at = transaction_timestamp()
+FROM orphaned
+WHERE notification_row.id = orphaned.id
+  AND notification_row.source_entity_type = 'warning';
+
+WITH orphaned AS (
+  SELECT notification_row.id
+  FROM public.notifications notification_row
+  LEFT JOIN public.tasks task_row
+    ON task_row.id::text = notification_row.task_id::text
+  WHERE notification_row.task_id IS NOT NULL
+    AND task_row.id IS NULL
+)
+UPDATE public.notifications notification_row
+SET
+  metadata = jsonb_set(
+    CASE
+      WHEN jsonb_typeof(COALESCE(notification_row.metadata, '{}'::jsonb)) = 'object'
+        THEN COALESCE(notification_row.metadata, '{}'::jsonb)
+      ELSE jsonb_build_object('legacy_metadata', notification_row.metadata)
+    END,
+    '{retired_task_reference}',
+    jsonb_build_object(
+      'task_id', notification_row.task_id::text,
+      'retired_at', transaction_timestamp(),
+      'reason', 'source_deleted'
+    ),
+    true
+  ),
+  updated_at = transaction_timestamp(),
+  task_id = NULL
+FROM orphaned
+WHERE notification_row.id = orphaned.id;
+
+ALTER TABLE public.notifications
+  DROP CONSTRAINT IF EXISTS notifications_task_id_fkey;
+
+ALTER TABLE public.notifications
+  ADD CONSTRAINT notifications_task_id_fkey
+  FOREIGN KEY (task_id)
+  REFERENCES public.tasks(id) ON DELETE SET NULL
+  NOT VALID;
+
+ALTER TABLE public.notifications
+  VALIDATE CONSTRAINT notifications_task_id_fkey;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM public.notifications notification_row
+    LEFT JOIN public.tasks task_row
+      ON task_row.id::text = notification_row.task_id::text
+    WHERE notification_row.task_id IS NOT NULL
+      AND task_row.id IS NULL
+  ) THEN
+    RAISE EXCEPTION 'notification_task_reference_retirement_postcondition_failed';
+  END IF;
+END
+$$;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 321_retire_duplicate_t2_schedule_runtime.sql
+-- ============================================================
+-- Retire the duplicate T2 task/date mutation surface. T2 rhythm remains a
+-- governed WBS generation input and is committed through the canonical task,
+-- dependency, baseline revision and rollback chain.
+
+BEGIN;
+
+LOCK TABLE public.t2_rhythm_schedule_runtime_publications IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE public.t2_rhythm_schedule_runtime_events IN ACCESS EXCLUSIVE MODE;
+
+DO $$
+DECLARE
+  backup_sha256 TEXT := current_setting('workbuddy.t2_schedule_runtime_retirement_backup_sha256', true);
+  expected_fingerprint TEXT := current_setting('workbuddy.t2_schedule_runtime_retirement_data_fingerprint', true);
+  actual_fingerprint TEXT;
+BEGIN
+  IF backup_sha256 IS NULL OR backup_sha256 !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 't2_schedule_runtime_retirement_backup_required';
+  END IF;
+  IF expected_fingerprint IS NULL OR expected_fingerprint !~ '^[a-f0-9]{64}$' THEN
+    RAISE EXCEPTION 't2_schedule_runtime_retirement_fingerprint_required';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.t2_rhythm_schedule_runtime_publications
+    WHERE runtime_publication_status = 'runtime_published'
+  ) THEN
+    RAISE EXCEPTION 't2_schedule_runtime_retirement_active_publication_present';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM public.task_dependencies
+    WHERE source_type = 't2_rhythm_schedule_runtime'
+  ) THEN
+    RAISE EXCEPTION 't2_schedule_runtime_retirement_dependency_residue_present';
+  END IF;
+
+  SELECT encode(
+           digest(
+             convert_to(
+               jsonb_build_object(
+                 't2_rhythm_schedule_runtime_publications', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.t2_rhythm_schedule_runtime_publications source_row
+                 ),
+                 't2_rhythm_schedule_runtime_events', (
+                   SELECT COALESCE(jsonb_agg(to_jsonb(source_row) ORDER BY source_row.id), '[]'::jsonb)
+                   FROM public.t2_rhythm_schedule_runtime_events source_row
+                 )
+               )::text,
+               'UTF8'
+             ),
+             'sha256'
+           ),
+           'hex'
+         )
+  INTO actual_fingerprint;
+
+  IF actual_fingerprint <> expected_fingerprint THEN
+    RAISE EXCEPTION 't2_schedule_runtime_retirement_data_changed_after_backup';
+  END IF;
+END
+$$;
+
+DROP TABLE public.t2_rhythm_schedule_runtime_events;
+DROP TABLE public.t2_rhythm_schedule_runtime_publications;
 
 NOTIFY pgrst, 'reload schema';
 

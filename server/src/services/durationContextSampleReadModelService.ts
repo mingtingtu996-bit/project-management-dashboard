@@ -12,6 +12,12 @@ export type DurationExperienceSampleRow = {
   wbs_node_type?: string | null
   planned_duration?: number | string | null
   actual_duration?: number | string | null
+  duration_day_basis?: string | null
+  actual_duration_calendar_days?: number | string | null
+  actual_duration_production_days?: number | string | null
+  planned_duration_calendar_days?: number | string | null
+  planned_duration_production_days?: number | string | null
+  construction_calendar_basis?: string | null
   sample_strength?: string | null
   sample_status?: string | null
   confidence_level?: string | null
@@ -77,6 +83,12 @@ const DURATION_EXPERIENCE_SAMPLE_COLUMNS = [
   'wbs_node_type',
   'planned_duration',
   'actual_duration',
+  'duration_day_basis',
+  'actual_duration_calendar_days',
+  'actual_duration_production_days',
+  'planned_duration_calendar_days',
+  'planned_duration_production_days',
+  'construction_calendar_basis',
   'sample_strength',
   'sample_status',
   'confidence_level',
@@ -147,6 +159,7 @@ async function loadDurationExperienceSamples(
   }
   sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+  sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
   sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
   if (query.orderCompletedAt) {
     sampleQuery = chainCall(sampleQuery, 'order', 'completed_at', { ascending: query.orderCompletedAt === 'asc' })
@@ -176,6 +189,7 @@ async function loadTenantScopedProgressVelocitySamples(input: {
   if (projectId) sampleQuery = chainCall(sampleQuery, 'eq', 'project_id', projectId)
   sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+  sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
   sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
   const requestedLimit = Number(input.limit ?? 200)
   sampleQuery = chainCall(sampleQuery, 'limit', Number.isFinite(requestedLimit) ? Math.max(1, Math.floor(requestedLimit)) : 200)
@@ -224,6 +238,7 @@ export async function loadTemplateDurationGovernanceSamples(
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
   sampleQuery = chainCall(sampleQuery, 'eq', 'experience_tier', 'T1')
   sampleQuery = chainCall(sampleQuery, 'eq', 'reuse_scope', 'project')
+  sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
   sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
   sampleQuery = chainCall(sampleQuery, 'order', 'completed_at', { ascending: false })
   const requestedLimit = Number(input.limit ?? 1000)
@@ -254,6 +269,7 @@ export async function loadProjectProductivityCalibrationDurationExperienceSample
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
   sampleQuery = chainCall(sampleQuery, 'eq', 'experience_tier', 'T1')
   sampleQuery = chainCall(sampleQuery, 'eq', 'reuse_scope', 'project')
+  sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
   sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
   sampleQuery = chainCall(sampleQuery, 'order', 'completed_at', { ascending: true })
   const requestedLimit = Number(input.limit ?? 180)

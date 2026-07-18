@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
+import { withDatabaseTransaction } from '../database.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import {
   buildDrawingBoardView,
@@ -1142,8 +1143,9 @@ export function registerDrawingPackageRoutes(router: Router) {
     const packageId = uuidv4()
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
 
-    await executeSQL(
-      `INSERT INTO drawing_packages
+    const { createdPackage, createdItems } = await withDatabaseTransaction(async () => {
+      await executeSQL(
+        `INSERT INTO drawing_packages
          (id, project_id, package_code, package_name, discipline_type, document_purpose,
           status, requires_review, review_mode, review_basis, completeness_ratio,
           missing_required_count, current_version_drawing_id, has_change, schedule_impact_flag,
@@ -1169,8 +1171,8 @@ export function registerDrawingPackageRoutes(router: Router) {
         0,
         now,
         now,
-      ],
-    )
+        ],
+      )
 
     const items = requestedItems.length > 0
       ? requestedItems.map((item: Record<string, unknown>, index: number) => ({
@@ -1182,9 +1184,9 @@ export function registerDrawingPackageRoutes(router: Router) {
       }))
       : buildDrawingPackageTemplateItems(template)
 
-    for (const item of items) {
-      await executeSQL(
-        `INSERT INTO drawing_package_items
+      for (const item of items) {
+        await executeSQL(
+          `INSERT INTO drawing_package_items
            (id, package_id, item_code, item_name, discipline_type, is_required, current_drawing_id,
             current_version, status, notes, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1202,12 +1204,14 @@ export function registerDrawingPackageRoutes(router: Router) {
           item.sortOrder,
           now,
           now,
-        ],
-      )
-    }
+          ],
+        )
+      }
 
-    const createdPackage = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
-    const createdItems = await executeSQL<DrawingPackageItemSource>(`${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? ORDER BY sort_order ASC`, [packageId])
+      const createdPackage = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
+      const createdItems = await executeSQL<DrawingPackageItemSource>(`${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? ORDER BY sort_order ASC`, [packageId])
+      return { createdPackage, createdItems }
+    })
     clearDrawingBoardCache(projectId)
 
     res.status(201).json({
@@ -1386,26 +1390,10 @@ export function registerDrawingPackageRoutes(router: Router) {
       })
     }
 
-    let targetVersion = target.targetVersion
-    let targetDrawingId = target.targetDrawingId
-
-    if (!targetVersion && target.needsSnapshot && target.targetDrawing && targetDrawingId) {
-      targetVersion = await ensureDrawingVersionSnapshot({
-        projectId: normalizeText(packageRow.project_id) || normalizeText(target.targetDrawing.project_id) || '',
-        packageId: packageRow.id || packageId,
-        drawingId: targetDrawingId,
-        versionNo: normalizeText(target.targetDrawing.version_no ?? target.targetDrawing.version, '1.0'),
-        parentDrawingId: normalizeText(target.targetDrawing.parent_drawing_id),
-        revisionNo: normalizeText(target.targetDrawing.revision_no ?? target.targetDrawing.version_no ?? target.targetDrawing.version),
-        issuedFor: normalizeText(target.targetDrawing.issued_for ?? target.targetDrawing.document_purpose),
-        effectiveDate: normalizeText(target.targetDrawing.effective_date ?? target.targetDrawing.actual_pass_date ?? ((target.targetDrawing as DrawingRecordSource & { drawing_date?: string | null }).drawing_date)),
-        changeReason: normalizeText(target.targetDrawing.change_reason),
-        createdBy: null,
-        isCurrentVersion: true,
-      })
-    }
-
-    if (!targetVersion || !targetDrawingId) {
+    if (
+      !target.targetDrawingId
+      || (!target.targetVersion && !(target.needsSnapshot && target.targetDrawing))
+    ) {
       return res.status(400).json({
         success: false,
         error: { code: 'MISSING_TARGET_DRAWING', message: '当前有效版不能为空' },
@@ -1413,35 +1401,64 @@ export function registerDrawingPackageRoutes(router: Router) {
       })
     }
 
-    for (const drawing of drawings) {
-      await executeSQL(
-        'UPDATE construction_drawings SET is_current_version = ? WHERE id = ? AND project_id = ?',
-        [drawing.id === targetDrawingId ? 1 : 0, drawing.id, normalizeText(packageRow.project_id)],
+    const mutation = await withDatabaseTransaction(async () => {
+      const lockedPackage = await executeSQLOne<{ id?: string | null }>(
+        'SELECT id FROM drawing_packages WHERE id = ? AND project_id = ? LIMIT 1 FOR UPDATE',
+        [packageRow.id || packageId, normalizeText(packageRow.project_id)],
       )
-    }
-    await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE package_id = ? AND project_id = ?', [0, packageRow.id || packageId, normalizeText(packageRow.project_id)])
-    await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = ? WHERE id = ? AND project_id = ?', [1, null, targetVersion.id, normalizeText(packageRow.project_id)])
-    await executeSQL(
-      'UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?',
-      [targetDrawingId, packageRow.id || packageId, normalizeText(packageRow.project_id)],
-    )
-    await syncPackageItemCurrentDrawing({
-      packageId: packageRow.id || packageId,
-      drawingId: targetDrawingId,
-      drawingCode: normalizeText(target.targetDrawing?.drawing_code),
-      versionNo: normalizeText(targetVersion.version_no),
+      if (!lockedPackage) throw new Error('Drawing package disappeared before current-version switch')
+
+      let targetVersion = target.targetVersion
+      const targetDrawingId = target.targetDrawingId as string
+      if (!targetVersion && target.needsSnapshot && target.targetDrawing) {
+        targetVersion = await ensureDrawingVersionSnapshot({
+          projectId: normalizeText(packageRow.project_id) || normalizeText(target.targetDrawing.project_id) || '',
+          packageId: packageRow.id || packageId,
+          drawingId: targetDrawingId,
+          versionNo: normalizeText(target.targetDrawing.version_no ?? target.targetDrawing.version, '1.0'),
+          parentDrawingId: normalizeText(target.targetDrawing.parent_drawing_id),
+          revisionNo: normalizeText(target.targetDrawing.revision_no ?? target.targetDrawing.version_no ?? target.targetDrawing.version),
+          issuedFor: normalizeText(target.targetDrawing.issued_for ?? target.targetDrawing.document_purpose),
+          effectiveDate: normalizeText(target.targetDrawing.effective_date ?? target.targetDrawing.actual_pass_date ?? ((target.targetDrawing as DrawingRecordSource & { drawing_date?: string | null }).drawing_date)),
+          changeReason: normalizeText(target.targetDrawing.change_reason),
+          createdBy: null,
+          isCurrentVersion: true,
+        })
+      }
+      if (!targetVersion) throw new Error('Drawing version snapshot was not persisted')
+
+      for (const drawing of drawings) {
+        await executeSQL(
+          'UPDATE construction_drawings SET is_current_version = ? WHERE id = ? AND project_id = ?',
+          [drawing.id === targetDrawingId ? 1 : 0, drawing.id, normalizeText(packageRow.project_id)],
+        )
+      }
+      await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE package_id = ? AND project_id = ?', [0, packageRow.id || packageId, normalizeText(packageRow.project_id)])
+      await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = ? WHERE id = ? AND project_id = ?', [1, null, targetVersion.id, normalizeText(packageRow.project_id)])
+      await executeSQL(
+        'UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?',
+        [targetDrawingId, packageRow.id || packageId, normalizeText(packageRow.project_id)],
+      )
+      await syncPackageItemCurrentDrawing({
+        packageId: packageRow.id || packageId,
+        drawingId: targetDrawingId,
+        drawingCode: normalizeText(target.targetDrawing?.drawing_code),
+        versionNo: normalizeText(targetVersion.version_no),
+      })
+      await syncPackageCurrentDrawingCertificateLink(
+        normalizeText(packageRow.project_id),
+        normalizeText(packageRow.id || packageId),
+      )
+      return { targetDrawingId, targetVersion }
     })
-    await syncPackageCurrentDrawingCertificateLink(
-      normalizeText(packageRow.project_id),
-      normalizeText(packageRow.id || packageId),
-    )
+
     await recordDrawingVersionSampleHealthEvidence({
       projectId: normalizeText(packageRow.project_id),
-      drawingId: targetDrawingId,
-      versionId: normalizeText(targetVersion.id),
+      drawingId: mutation.targetDrawingId,
+      versionId: normalizeText(mutation.targetVersion.id),
       drawingCode: normalizeText(target.targetDrawing?.drawing_code),
-      versionNo: normalizeText(targetVersion.version_no),
-      confirmedAt: normalizeText(targetVersion.updated_at ?? targetVersion.created_at),
+      versionNo: normalizeText(mutation.targetVersion.version_no),
+      confirmedAt: normalizeText(mutation.targetVersion.updated_at ?? mutation.targetVersion.created_at),
     })
 
     const updatedPackage = await executeSQLOne<DrawingPackageSource>(

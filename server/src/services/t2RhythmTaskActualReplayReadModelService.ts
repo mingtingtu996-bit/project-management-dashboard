@@ -179,6 +179,7 @@ export async function buildT2RhythmTaskActualReplayEvidence(
   const adapter = buildT2RhythmReplaySamplesFromTaskActuals({
     candidatePackage: input.candidatePackage,
     tasks: taskRows,
+    calendar: input.calendar,
   })
   const evidence = buildT2RhythmTemplateReplayEvidence({
     templateId: input.templateId,

@@ -3,7 +3,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
 
 import {
   checkReleaseHandoffReadiness,
@@ -94,7 +93,6 @@ export async function runC19RuntimePublicationEvidence({
   now = new Date(),
   runtimeWriter = null,
   queryExec = null,
-  env = process.env,
 } = {}) {
   if (!handoffFile) {
     throw new Error('handoffFile is required');
@@ -128,6 +126,20 @@ export async function runC19RuntimePublicationEvidence({
   });
   if (!includeLive || !confirmLiveHandoff || !handoff.unlockFlags?.includeLive || !handoff.unlockFlags?.confirmLiveHandoff || !readiness.readyToRun) {
     throw new Error('C19 handoff is not ready for live runtime publication writes');
+  }
+
+  if (!runtimeWriter) {
+    return writeBlockedEvidence({
+      root,
+      metadata,
+      now,
+      reasons: [
+        'C19_DIRECT_RUNTIME_WRITER_RETIRED_USE_CANONICAL_WIZARD_WBS_SMOKE',
+        'canonical_wizard_wbs_smoke_required',
+      ],
+      metadataReasons,
+      outputSummary,
+    });
   }
 
   const missingInputs = [
@@ -178,8 +190,7 @@ export async function runC19RuntimePublicationEvidence({
     });
   }
 
-  const writer = runtimeWriter ?? defaultRuntimeWriter;
-  const writerResult = await writer({
+  const writerResult = await runtimeWriter({
     metadata,
     files: {
       releaseArtifactFile,
@@ -189,7 +200,7 @@ export async function runC19RuntimePublicationEvidence({
       migrationGovernanceFile,
     },
     now,
-    queryExec: queryExec ?? await createPgQueryExec(env),
+    queryExec,
   });
 
   return writeWriterEvidence({
@@ -200,27 +211,6 @@ export async function runC19RuntimePublicationEvidence({
     metadataReasons,
     outputSummary,
   });
-}
-
-async function createPgQueryExec(env) {
-  const connectionString = normalizeText(env.SUPABASE_MIGRATION_URL) || normalizeText(env.DB_CONNECTION_STRING);
-  if (!connectionString) {
-    throw new Error('SUPABASE_MIGRATION_URL or DB_CONNECTION_STRING is required for guarded C19 runtime publication writes');
-  }
-
-  const client = new pg.Client({
-    connectionString,
-    ssl: env.PGSSLMODE === 'disable' ? false : { rejectUnauthorized: false },
-  });
-  await client.connect();
-
-  return async (sql, params = []) => {
-    const result = await client.query(sql, params);
-    if (sql === 'COMMIT' || sql === 'ROLLBACK') {
-      await client.end();
-    }
-    return result.rows;
-  };
 }
 
 async function writeBlockedEvidence({
@@ -508,84 +498,6 @@ export function assessC19RuntimePublicationMigrationGovernance(governance) {
   };
 }
 
-async function defaultRuntimeWriter({
-  metadata,
-  files,
-  now,
-  queryExec,
-}) {
-  if (!queryExec) {
-    throw new Error('queryExec is required for guarded C19 runtime publication writes');
-  }
-  const [
-    artifact,
-    verification,
-    evaluation,
-    runtimeInput,
-    productionMigrationGovernanceReport,
-  ] = await Promise.all([
-    readJson(files.releaseArtifactFile),
-    readJson(files.releaseVerificationFile),
-    readJson(files.phase1EvaluationFile),
-    readJson(files.runtimeInputFile),
-    readJson(files.migrationGovernanceFile),
-  ]);
-  const service = await import('../../server/src/services/t2RhythmScheduleRuntimePublicationService.ts');
-  const approval = {
-    approved: true,
-    approvalMode: 'manual_governance_approval',
-    approvedByUserId: normalizeText(runtimeInput.approvedByUserId) || null,
-    approvalEvidenceRefs: nonEmptyArray(runtimeInput.approvalEvidenceRefs, metadata.approvalRef),
-    canWriteTaskDependencies: runtimeInput.canWriteTaskDependencies !== false,
-    canWritePlanDates: runtimeInput.canWritePlanDates !== false,
-    rollbackTarget: normalizeText(runtimeInput.rollbackTarget) || metadata.rollbackRef,
-    consumerVerificationRefs: nonEmptyArray(runtimeInput.consumerVerificationRefs, metadata.consumerObservationRef),
-    impactMonitoringRefs: nonEmptyArray(runtimeInput.impactMonitoringRefs, metadata.monitoringWindow),
-  };
-  const executedAt = now.toISOString();
-  const apply = await service.applyT2RhythmScheduleRuntimePublication({
-    artifact,
-    verification,
-    evaluation,
-    networkNodes: runtimeInput.networkNodes,
-    networkEdges: runtimeInput.networkEdges,
-    taskMappings: runtimeInput.taskMappings,
-    projectStartDate: runtimeInput.projectStartDate,
-    companyId: metadata.companyId,
-    projectId: metadata.projectId,
-    approval,
-    productionMigrationGovernanceReport,
-    executedAt,
-    queryExec,
-  });
-  const monitoring = await service.recordT2RhythmScheduleRuntimeImpactMonitoring({
-    queryExec,
-    publicationKey: apply.publicationKey,
-    eventStatus: normalizeText(runtimeInput.eventStatus) || 'monitoring_observed',
-    eventPayload: {
-      ...(runtimeInput.eventPayload ?? {}),
-      runtimeCallEvidenceRefs: nonEmptyArray(runtimeInput.impactMonitoringRefs, metadata.monitoringWindow),
-    },
-    productionMigrationGovernanceReport,
-    executedAt,
-  });
-  const rollback = await service.rollbackT2RhythmScheduleRuntimePublication({
-    queryExec,
-    publicationKey: apply.publicationKey,
-    rollbackReason: normalizeText(runtimeInput.rollbackReason) || 'c19_runtime_publication_rollback_drill',
-    rollbackEvidenceRefs: nonEmptyArray(runtimeInput.rollbackEvidenceRefs, metadata.rollbackRef),
-    executedByUserId: normalizeText(runtimeInput.approvedByUserId) || null,
-    productionMigrationGovernanceReport,
-    executedAt,
-  });
-
-  return {
-    apply,
-    monitoring,
-    rollback,
-  };
-}
-
 async function writeC19RuntimeArtifacts(root, {
   replay,
   releaseArtifact,
@@ -669,22 +581,14 @@ function normalizeText(value) {
   return String(value ?? '').trim();
 }
 
-function nonEmptyArray(value, fallback = '') {
-  const items = Array.isArray(value) ? value : [];
-  const normalized = items.map(normalizeText).filter(Boolean);
-  const fallbackText = normalizeText(fallback);
-  return normalized.length > 0 || !fallbackText ? normalized : [fallbackText];
-}
-
 function renderHelp() {
   return `
 Usage:
   node project-testing/tools/run-c19-runtime-publication-evidence.mjs --handoff-file <handoff.json> --artifact-root <dir>
 
-Defaults to fail-closed evidence generation. To enter guarded write mode, pass:
-  --include-live --confirm-live-handoff --allow-write
-
-Write mode still requires release, verification, phase1, runtime input, and migration-governance files.
+The duplicate C19 direct runtime writer is retired. This compatibility command
+only emits fail-closed evidence. Use run-wizard-baseline-revision-staging.mjs
+for canonical wizard/WBS task, dependency, CPM, baseline, revision, and rollback smoke.
 `.trim();
 }
 

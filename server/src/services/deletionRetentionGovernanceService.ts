@@ -9,6 +9,7 @@ import { logger } from '../middleware/logger.js'
 import { isDatabaseTransactionActive, query } from '../database.js'
 import { supabase } from './dbService.js'
 import { writeChangeLog } from './changeAuditService.js'
+import { buildIssueRetentionClosePatch, buildRiskRetentionClosePatch } from '../domain/riskIssueWorkflowPolicy.js'
 
 export type RetentionRequestedAction =
   | 'delete'
@@ -374,8 +375,8 @@ const RETENTION_COVERAGE_MATRIX: RetentionCoverageMatrixEntry[] = [
 
 const RETENTION_EXECUTOR_REGISTRY: RetentionExecutorRegistryEntry[] = [
   { entityType: 'task', supportedResolvedActions: ['close', 'soft_delete'], effect: 'closeTaskInMainChain', idempotent: true, transactionMode: 'service_call', transactionReady: false, dryRunSupported: false },
-  { entityType: 'risk', supportedResolvedActions: ['close', 'soft_delete'], effect: 'update risks.status=closed', idempotent: true, transactionMode: 'single_table_update', transactionReady: false, dryRunSupported: false },
-  { entityType: 'issue', supportedResolvedActions: ['close', 'soft_delete'], effect: 'update issues.status=closed', idempotent: true, transactionMode: 'single_table_update', transactionReady: false, dryRunSupported: false },
+  { entityType: 'risk', supportedResolvedActions: ['close', 'soft_delete'], effect: 'closeRiskByRetention', idempotent: true, transactionMode: 'service_call', transactionReady: false, dryRunSupported: false },
+  { entityType: 'issue', supportedResolvedActions: ['close', 'soft_delete'], effect: 'closeIssueByRetentionInMainChain', idempotent: true, transactionMode: 'service_call', transactionReady: false, dryRunSupported: false },
   { entityType: 'task_obstacle', supportedResolvedActions: ['close', 'soft_delete'], effect: 'update task_obstacles.status=resolved', idempotent: true, transactionMode: 'single_table_update', transactionReady: false, dryRunSupported: false },
   { entityType: 'acceptance_plan', supportedResolvedActions: ['close', 'archive', 'soft_delete'], effect: 'update acceptance_plans.status=archived', idempotent: true, transactionMode: 'single_table_update', transactionReady: false, dryRunSupported: true },
   { entityType: 'project', supportedResolvedActions: ['archive', 'deactivate', 'soft_delete'], effect: 'update projects.status=archived', idempotent: true, transactionMode: 'single_table_update', transactionReady: false, dryRunSupported: true },
@@ -745,9 +746,17 @@ function buildConfirmedRetentionMutationPreview(input: PreviewRetentionConfirmed
   const projectScopedFilters = { id: entityId, project_id: projectId }
   switch (entityType) {
     case 'risk':
-      return [{ table: 'risks', filters: projectScopedFilters, patch: { status: 'closed', updated_at: now } }]
+      return [{
+        table: 'risks',
+        filters: projectScopedFilters,
+        patch: buildRiskRetentionClosePatch({ actorId, recordedAt: now }),
+      }]
     case 'issue':
-      return [{ table: 'issues', filters: projectScopedFilters, patch: { status: 'closed', updated_at: now } }]
+      return [{
+        table: 'issues',
+        filters: projectScopedFilters,
+        patch: buildIssueRetentionClosePatch({ actorId, recordedAt: now }),
+      }]
     case 'task_obstacle':
       return [{ table: 'task_obstacles', filters: projectScopedFilters, patch: { status: 'resolved', is_resolved: true, updated_at: now } }]
     case 'acceptance_plan':
@@ -837,27 +846,23 @@ async function executeConfirmedRetentionAction(
   }
 
   if (entityType === 'risk') {
-    const { data, error } = await (supabase as any)
-      .from('risks')
-      .update({ status: 'closed', updated_at: now })
-      .eq('id', entityId)
-      .eq('project_id', projectId)
-      .select('*')
-      .maybeSingle()
-    if (error) throw error
-    return { applied: true, entityType, entityId, action: 'close', risk: data ?? null }
+    const { closeRiskByRetention } = await import('./dbService.js')
+    const risk = await closeRiskByRetention(entityId, projectId, {
+      actorId: actorId ?? null,
+      evidenceRefs: event.id ? [`retention_event:${event.id}`] : [],
+      recordedAt: now,
+    })
+    return { applied: true, entityType, entityId, action: 'close', risk }
   }
 
   if (entityType === 'issue') {
-    const { data, error } = await (supabase as any)
-      .from('issues')
-      .update({ status: 'closed', updated_at: now })
-      .eq('id', entityId)
-      .eq('project_id', projectId)
-      .select('*')
-      .maybeSingle()
-    if (error) throw error
-    return { applied: true, entityType, entityId, action: 'close', issue: data ?? null }
+    const { closeIssueByRetentionInMainChain } = await import('./issueWriteChainService.js')
+    const issue = await closeIssueByRetentionInMainChain(entityId, projectId, {
+      actorId: actorId ?? null,
+      evidenceRefs: event.id ? [`retention_event:${event.id}`] : [],
+      recordedAt: now,
+    })
+    return { applied: true, entityType, entityId, action: 'close', issue }
   }
 
   if (entityType === 'task_obstacle') {

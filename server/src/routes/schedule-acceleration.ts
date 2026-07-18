@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { authenticate, requireProjectMember } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
@@ -425,7 +425,7 @@ router.post(
 
 router.post(
   '/recommendations/adopt',
-  requireProjectMember((req) => req.params.projectId || req.body?.projectId || req.body?.project_id),
+  requireProjectEditor((req) => req.params.projectId || req.body?.projectId || req.body?.project_id),
   asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.params.projectId || req.body?.projectId || req.body?.project_id)
 

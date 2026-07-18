@@ -6,7 +6,7 @@ const mockSupabase = vi.hoisted(() => ({
 
 const learningAssetMocks = vi.hoisted(() => ({
   loadGovernanceSamples: vi.fn(),
-  replaceBenchmark: vi.fn(),
+  stageBenchmark: vi.fn(),
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -18,7 +18,7 @@ vi.mock('../services/durationContextSampleReadModelService.js', () => ({
 }))
 
 vi.mock('../services/durationLearningAssetAtomicStoreService.js', () => ({
-  replaceDurationBenchmarkAtomically: learningAssetMocks.replaceBenchmark,
+  stageDurationBenchmarkCandidateAtomically: learningAssetMocks.stageBenchmark,
 }))
 
 import {
@@ -27,13 +27,22 @@ import {
   type DurationExperienceSampleRow,
 } from '../services/templateDurationGovernanceService.js'
 
+function asProductionSample(sample: DurationExperienceSampleRow): DurationExperienceSampleRow {
+  return {
+    ...sample,
+    duration_day_basis: 'construction_production_day',
+    actual_duration_production_days: sample.actual_duration ?? null,
+    planned_duration_production_days: sample.planned_duration ?? null,
+  }
+}
+
 describe('templateDurationGovernanceService', () => {
   beforeEach(() => {
     mockSupabase.from.mockReset()
     learningAssetMocks.loadGovernanceSamples.mockReset()
     learningAssetMocks.loadGovernanceSamples.mockResolvedValue([])
-    learningAssetMocks.replaceBenchmark.mockReset()
-    learningAssetMocks.replaceBenchmark.mockResolvedValue({ id: 'benchmark-new' })
+    learningAssetMocks.stageBenchmark.mockReset()
+    learningAssetMocks.stageBenchmark.mockResolvedValue({ id: 'benchmark-new' })
   })
 
   it('builds company-scoped process benchmarks from active duration samples', () => {
@@ -42,7 +51,7 @@ describe('templateDurationGovernanceService', () => {
       { id: 's2', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 6, metadata: { company_id: 'company-1' } },
       { id: 's3', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 8, metadata: { company_id: 'company-1' } },
       { id: 's4', template_node_id: 'node-1', wbs_node_type: 'activity_step', actual_duration: 2, metadata: { company_id: 'company-1' } },
-    ]
+    ].map(asProductionSample)
 
     const candidates = buildDurationBenchmarkCandidates(samples)
 
@@ -66,7 +75,7 @@ describe('templateDurationGovernanceService', () => {
       { id: 's1', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 3 },
       { id: 's2', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 5 },
       { id: 's3', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 7 },
-    ]
+    ].map(asProductionSample)
 
     const [candidate] = buildDurationBenchmarkCandidates(samples)
 
@@ -84,7 +93,7 @@ describe('templateDurationGovernanceService', () => {
       { id: 'planned-only', standard_work_code: '01-02-03', wbs_node_type: 'process', planned_duration: 3, actual_duration: null },
       { id: 'actual-1', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 5 },
       { id: 'actual-2', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 7 },
-    ]
+    ].map(asProductionSample)
 
     const candidates = buildDurationBenchmarkCandidates(samples)
 
@@ -103,7 +112,7 @@ describe('templateDurationGovernanceService', () => {
       { id: 's1', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 4, metadata: featureMetadata },
       { id: 's2', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 5, metadata: featureMetadata },
       { id: 's3', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 6, metadata: featureMetadata },
-    ]
+    ].map(asProductionSample)
 
     const [candidate] = buildDurationBenchmarkCandidates(samples)
 
@@ -122,7 +131,7 @@ describe('templateDurationGovernanceService', () => {
       { id: 's1', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 4, metadata: { company_id: 'company-1' } },
       { id: 's2', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 6, metadata: { company_id: 'company-1' } },
       { id: 's3', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 8, metadata: { company_id: 'company-1' } },
-    ]
+    ].map(asProductionSample)
 
     const chain = (result: unknown) => {
       const query: Record<string, unknown> = {
@@ -139,7 +148,7 @@ describe('templateDurationGovernanceService', () => {
     }
 
     learningAssetMocks.loadGovernanceSamples.mockResolvedValue(governanceSamples)
-    learningAssetMocks.replaceBenchmark.mockImplementation(async (payload: Record<string, unknown>) => {
+    learningAssetMocks.stageBenchmark.mockImplementation(async (payload: Record<string, unknown>) => {
       insertedBenchmarks.push(payload)
       return { id: 'benchmark-new' }
     })
@@ -155,13 +164,16 @@ describe('templateDurationGovernanceService', () => {
       mean_days: 6,
       variance: 0.272,
       coefficient_of_variation: 0.272,
+      is_current: false,
       metadata: expect.objectContaining({
+        runtime_publication_status: 'candidate',
+        candidate_operation_id: expect.any(String),
         variance: 0.272,
         coefficientOfVariation: 0.272,
       }),
     })
     expect(learningAssetMocks.loadGovernanceSamples).toHaveBeenCalledWith({ limit: 1000 })
-    expect(learningAssetMocks.replaceBenchmark).toHaveBeenCalledOnce()
+    expect(learningAssetMocks.stageBenchmark).toHaveBeenCalledOnce()
   })
 
   it('returns a C-19.10 non-live governance contract for sample-to-benchmark promotion without runtime mutation', async () => {
@@ -170,7 +182,7 @@ describe('templateDurationGovernanceService', () => {
       { id: 's1', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 4 },
       { id: 's2', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 6 },
       { id: 's3', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 8 },
-    ]
+    ].map(asProductionSample)
     const touchedTables: string[] = []
 
     const chain = (result: unknown) => {
@@ -188,7 +200,7 @@ describe('templateDurationGovernanceService', () => {
     }
 
     learningAssetMocks.loadGovernanceSamples.mockResolvedValue(governanceSamples)
-    learningAssetMocks.replaceBenchmark.mockResolvedValue({ id: 'benchmark-new' })
+    learningAssetMocks.stageBenchmark.mockResolvedValue({ id: 'benchmark-new' })
     mockSupabase.from.mockImplementation((table: string) => {
       touchedTables.push(table)
       if (table === 'wbs_template_nodes') {
@@ -219,7 +231,7 @@ describe('templateDurationGovernanceService', () => {
 
     expect(result.benchmarksWritten).toBe(1)
     expect(learningAssetMocks.loadGovernanceSamples).toHaveBeenCalledWith({ limit: 1000 })
-    expect(learningAssetMocks.replaceBenchmark).toHaveBeenCalledOnce()
+    expect(learningAssetMocks.stageBenchmark).toHaveBeenCalledOnce()
     expect(touchedTables).toEqual(expect.arrayContaining(['duration_suggestion_overrides']))
     expect(touchedTables).not.toEqual(expect.arrayContaining([
       'duration_experience_samples',

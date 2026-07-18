@@ -160,4 +160,24 @@ describe('metric registry', () => {
       })
     }
   })
+
+  it('registers the six task-summary period metrics with the service-owned source', () => {
+    const metricKeys = [
+      'task_summary_progress_change',
+      'task_summary_tasks_updated',
+      'task_summary_tasks_progressed',
+      'task_summary_tasks_completed',
+      'task_summary_delayed_count',
+      'task_summary_on_time_rate',
+    ]
+
+    for (const metricKey of metricKeys) {
+      expect(getMetricDefinition(metricKey)).toEqual(expect.objectContaining({
+        metricKey,
+        source: 'taskSummaryService',
+        defaultGranularity: 'daily',
+        supportedGroupBy: ['project'],
+      }))
+    }
+  })
 })

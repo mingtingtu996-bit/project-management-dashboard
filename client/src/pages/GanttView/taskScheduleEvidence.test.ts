@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Task } from '../GanttViewTypes'
-import { withTaskScheduleEvidence } from './taskScheduleEvidence'
+import { getTaskSequencingBasis, withTaskScheduleEvidence } from './taskScheduleEvidence'
 
 describe('withTaskScheduleEvidence', () => {
   it('hydrates planning-row labels from wizard task metadata duration evidence', () => {
@@ -44,6 +44,25 @@ describe('withTaskScheduleEvidence', () => {
     expect(row.durationAssetEvidenceLabel).not.toMatch(/P20|P50|P80/)
     expect(row.durationSuggestion).toEqual(expect.objectContaining({
       riskP50DurationDays: 230,
+    }))
+  })
+
+  it('surfaces heuristic sequencing lineage from persisted wizard metadata', () => {
+    const task = {
+      id: 'task-heuristic-sequencing',
+      project_id: 'project-1',
+      title: 'Facade follow-up work',
+      standard_task_metadata: {
+        sequencingBasis: 'heuristic_stagger',
+        sequencingGovernanceGapCode: 'master_plan_dependency_rule_gap',
+      },
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-18T00:00:00.000Z',
+    } satisfies Task
+
+    expect(getTaskSequencingBasis(task)).toBe('heuristic_stagger')
+    expect(withTaskScheduleEvidence(task)).toEqual(expect.objectContaining({
+      sequencingBasis: 'heuristic_stagger',
     }))
   })
 })

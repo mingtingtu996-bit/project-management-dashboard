@@ -190,7 +190,7 @@ vi.mock('../services/dbService.js', async () => {
       store[idx] = { ...store[idx], ...updates, updated_at: new Date().toISOString() }
       return store[idx]
     }),
-    confirmIssuePendingManualClose: vi.fn(async (id: string) => {
+    confirmIssuePendingManualClose: vi.fn(async (id: string, outcome: any, actorId: string) => {
       const idx = store.findIndex(i => i.id === id)
       if (idx === -1) return null
       store[idx] = {
@@ -199,6 +199,13 @@ vi.mock('../services/dbService.js', async () => {
         pending_manual_close: false,
         closed_reason: 'manual_confirmed_close',
         closed_at: new Date().toISOString(),
+        closure_result_code: outcome.resultCode,
+        closure_result_summary: outcome.resultSummary,
+        closure_effectiveness: outcome.effectiveness,
+        closure_evidence_refs: outcome.evidenceRefs ?? [],
+        closure_cause_attribution_id: outcome.causeAttributionId ?? null,
+        closed_by: actorId,
+        closure_recorded_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }
       return store[idx]
@@ -229,9 +236,11 @@ vi.mock('../services/dbService.js', async () => {
       updated_at: new Date().toISOString(),
     })),
     updateRisk: vi.fn(async () => null),
+    closeRiskByRetention: vi.fn(async () => null),
     confirmRiskPendingManualClose: vi.fn(async () => null),
     keepRiskProcessing: vi.fn(async () => null),
     deleteRisk: vi.fn(async () => {}),
+    closeIssueByRetention: vi.fn(async () => null),
 
     // Task obstacles stub
     getTaskObstacles: vi.fn(async () => []),
@@ -248,7 +257,10 @@ vi.mock('../middleware/auditLogger.js', () => ({
 }))
 
 vi.mock('../middleware/auth.js', () => ({
-  authenticate: vi.fn((_req: any, _res: any, next: any) => next()),
+  authenticate: vi.fn((req: any, _res: any, next: any) => {
+    req.user = { id: '00000000-0000-4000-8000-000000000001' }
+    next()
+  }),
   optionalAuthenticate: vi.fn((_req: any, _res: any, next: any) => next()),
   requireProjectMember: vi.fn(() => (_req: any, _res: any, next: any) => next()),
   requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: any) => next()),
@@ -302,6 +314,13 @@ import supertest from 'supertest'
 const request = supertest(app)
 
 const testProjectId = '00000000-0000-0000-0000-000000000001'
+const closureOutcome = {
+  resultCode: 'resolved',
+  resultSummary: 'Corrective action completed and verified on site.',
+  effectiveness: 'resolved',
+  evidenceRefs: ['inspection:inspection-1'],
+  causeAttributionId: null,
+}
 
 function joinedSql(calls: ReadonlyArray<ReadonlyArray<unknown>>) {
   return calls.map((call) => String(call[0]).toLowerCase()).join('\n')
@@ -791,11 +810,16 @@ describe('10.1 Issues 域模型', () => {
         version: 1,
       })
 
-      const res = await request.post(`/api/issues/${issueId}/confirm-close`).send({ version: 1 })
+      const res = await request.post(`/api/issues/${issueId}/confirm-close`).send({
+        version: 1,
+        ...closureOutcome,
+      })
 
       expect(res.status).toBe(200)
       expect(res.body.data.status).toBe('closed')
       expect(res.body.data.pending_manual_close).toBe(false)
+      expect(res.body.data.closure_result_code).toBe('resolved')
+      expect(res.body.data.closed_by).toBe('00000000-0000-4000-8000-000000000001')
     })
 
     it('POST /api/issues/:id/keep-processing 通过专用动作恢复处理中', async () => {
@@ -845,7 +869,10 @@ describe('10.1 Issues 域模型', () => {
         version: 1,
       })
 
-      const res = await request.post(`/api/issues/${issueId}/confirm-close`).send({ version: 1 })
+      const res = await request.post(`/api/issues/${issueId}/confirm-close`).send({
+        version: 1,
+        ...closureOutcome,
+      })
 
       expect(res.status).toBe(200)
       expect(res.body.data.status).toBe('closed')

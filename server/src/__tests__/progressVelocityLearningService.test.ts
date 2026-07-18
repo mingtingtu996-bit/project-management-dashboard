@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { buildDurationContextPolicyStateBucket } from '../services/durationContextPolicyStateBucketService.js'
+import type { ProgressVelocityLearningInput } from '../services/progressVelocityLearningService.js'
 
 const state = vi.hoisted(() => ({
   tasks: [] as Array<Record<string, unknown>>,
@@ -52,7 +53,15 @@ vi.mock('../services/durationContextSampleReadModelService.js', () => ({
   }),
 }))
 
-const { buildProjectProgressVelocityLearning } = await import('../services/progressVelocityLearningService.js')
+const { buildProjectProgressVelocityLearning: buildProjectProgressVelocityLearningRuntime } = await import('../services/progressVelocityLearningService.js')
+
+function buildProjectProgressVelocityLearning(input: ProgressVelocityLearningInput) {
+  return buildProjectProgressVelocityLearningRuntime({
+    ...input,
+    constructionCalendarResolver: input.constructionCalendarResolver
+      ?? (async () => ({ basis: 'calendar_day', windows: [] })),
+  })
+}
 
 function completedTask(index: number, actualEndDate: string) {
   return {

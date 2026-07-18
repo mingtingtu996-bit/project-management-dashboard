@@ -237,6 +237,7 @@ const mocks = vi.hoisted(() => {
     enqueueProjectHealthUpdate: vi.fn(async () => undefined),
     syncProjectDataQuality: vi.fn(async () => undefined),
     evaluateTaskConstraint: vi.fn(async () => undefined),
+    finalizeTaskWrite: vi.fn(async () => undefined),
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -296,6 +297,7 @@ registerDbServiceBusinessSideEffectAdapters({
   enqueueProjectHealthUpdate: mocks.enqueueProjectHealthUpdate,
   syncProjectDataQuality: mocks.syncProjectDataQuality,
   evaluateTaskConstraint: mocks.evaluateTaskConstraint,
+  finalizeTaskWrite: mocks.finalizeTaskWrite,
 })
 
 function resetTables() {
@@ -554,6 +556,23 @@ describe('shared infrastructure contract', () => {
     expect(task?.progress).toBe(100)
   })
 
+  it('runs canonical task finalization for low-level completion updates', async () => {
+    const completed = await updateTask('task-1', {
+      status: 'completed',
+      progress: 100,
+      updated_by: 'user-1',
+    } as any, 1)
+
+    expect(completed?.status).toBe('completed')
+    await vi.waitFor(() => {
+      expect(mocks.finalizeTaskWrite).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'task-1', status: 'completed', progress: 100 }),
+        expect.objectContaining({ id: 'task-1', status: 'todo', progress: 0 }),
+        'user-1',
+      )
+    })
+  })
+
   it('writes change logs when risk and issue states change', async () => {
     const risk = await updateRisk('risk-1', { status: 'mitigating' })
     const issue = await updateIssue('issue-1', { status: 'investigating' })
@@ -617,6 +636,41 @@ describe('shared infrastructure contract', () => {
       code: 'INVALID_ISSUE_STATUS_TRANSITION',
       statusCode: 422,
     })
+  })
+
+  it('requires structured outcomes when generic writes enter a terminal risk or issue state', async () => {
+    mocks.tables.risks[0].status = 'mitigating'
+    mocks.tables.issues[0].status = 'resolved'
+
+    await expect(updateRisk('risk-1', { status: 'closed' })).rejects.toMatchObject({
+      code: 'CLOSURE_OUTCOME_REQUIRED',
+      statusCode: 422,
+    })
+    await expect(updateIssue('issue-1', { status: 'closed' })).rejects.toMatchObject({
+      code: 'CLOSURE_OUTCOME_REQUIRED',
+      statusCode: 422,
+    })
+  })
+
+  it('persists complete structured outcomes when generic writes enter a terminal state', async () => {
+    mocks.tables.risks[0].status = 'mitigating'
+    mocks.tables.issues[0].status = 'resolved'
+    const structuredOutcome = {
+      status: 'closed' as const,
+      closure_result_code: 'resolved' as const,
+      closure_result_summary: 'Corrective work completed and checked.',
+      closure_effectiveness: 'resolved' as const,
+      closure_evidence_refs: ['inspection:inspection-1'],
+      closure_cause_attribution_id: null,
+      closed_by: 'user-1',
+      closure_recorded_at: '2026-07-17T00:00:00.000Z',
+    }
+
+    const risk = await updateRisk('risk-1', structuredOutcome)
+    const issue = await updateIssue('issue-1', structuredOutcome)
+
+    expect(risk).toEqual(expect.objectContaining(structuredOutcome))
+    expect(issue).toEqual(expect.objectContaining(structuredOutcome))
   })
 
 })

@@ -142,6 +142,74 @@ describe('scopedDurationForecastService', () => {
     })
   })
 
+  it('uses the same correlated Monte Carlo basis for a dependency-backed scoped network', () => {
+    const rows = [
+      row('a1', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-22' }),
+      row('a2', { planned_start_date: '2026-07-23', planned_end_date: '2026-08-01' }, [
+        { clientRowId: 'a1', dependencyType: 'FS', lagDays: 0 },
+      ]),
+      row('b1', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-22' }),
+      row('b2', { planned_start_date: '2026-07-23', planned_end_date: '2026-08-01' }, [
+        { clientRowId: 'b1', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22', [8, 10, 15])),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(['a1', 'a2', 'b1', 'b2']),
+      constructionCalendar: calendar,
+    })
+
+    const division = result.dimensions.division[0]
+    expect(division.probabilityBasis).toBe('monte_carlo')
+    expect(division.networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'monte_carlo',
+      simulationCount: 1000,
+      taskCount: 4,
+      dependencyCount: 2,
+    }))
+    expect(division.p80FinishDate).toBe(division.networkProbability?.p80FinishDate)
+    expect(division.p80FinishDate).not.toBe(division.p50FinishDate)
+  })
+
+  it('does not count a future task release offset twice in scoped Monte Carlo', () => {
+    const rows = [
+      row('first', {
+        planned_start_date: '2026-07-13',
+        planned_end_date: '2026-07-17',
+      }),
+      row('second', {
+        planned_start_date: '2026-07-18',
+        planned_end_date: '2026-07-22',
+      }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: [
+        forecast('first', '2026-07-17', [5, 5, 5]),
+        forecast('second', '2026-07-22', [5, 5, 5]),
+      ],
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    })
+
+    const division = result.dimensions.division[0]
+    expect(division.probabilityBasis).toBe('monte_carlo')
+    expect(division.networkProbability).toEqual(expect.objectContaining({
+      p50RemainingDays: 10,
+      p50FinishDate: '2026-07-22',
+    }))
+  })
+
   it('walks probability bands across shutdown days and orders an inverted band', () => {
     const result = buildScopedDurationForecasts({
       projectId: 'project-1',

@@ -34,7 +34,6 @@ const TABLES_TO_PROBE = [
   'task_dependencies',
   'tasks',
   'schedule_runtime_publications',
-  't2_rhythm_schedule_runtime_publications',
   'schema_migrations',
 ];
 

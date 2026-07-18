@@ -227,6 +227,16 @@ const dbMock = vi.hoisted(() => ({
 }))
 
 vi.mock('../services/dbService.js', () => dbMock)
+vi.mock('../services/constructionCalendar.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/constructionCalendar.js')>()
+  return {
+    ...actual,
+    resolveConstructionCalendarContext: vi.fn(async () => ({
+      basis: 'calendar_day',
+      windows: [],
+    })),
+  }
+})
 vi.mock('../database.js', () => ({
   query: state.rawQuery,
 }))

@@ -4,7 +4,7 @@ export type V14231ReadinessRouteMetadata = {
   importPath: string
   sourcePath: string
   pageKey: string
-  readinessBinding: 'page-boundary' | 'domain-data-status' | 'stable-workspace'
+  readinessBinding: 'page-boundary' | 'domain-data-status' | 'stable-workspace' | 'action-level-readiness'
 }
 
 export const V14231_READINESS_ROUTE_METADATA = [
@@ -38,7 +38,7 @@ export const V14231_READINESS_ROUTE_METADATA = [
     importPath: '@/pages/RuleAssetGovernanceWorkbenchAdmin',
     sourcePath: 'src/pages/RuleAssetGovernanceWorkbenchAdmin.tsx',
     pageKey: '规则资产 / 治理工作台',
-    readinessBinding: 'page-boundary',
+    readinessBinding: 'action-level-readiness',
   },
   {
     routePath: 'dashboard',

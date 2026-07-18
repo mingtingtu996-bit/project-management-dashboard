@@ -422,7 +422,34 @@ export interface TaskDependency {
   updated_at: string
 }
 
-export interface Risk {
+export type RiskIssueClosureResultCode =
+  | 'resolved'
+  | 'mitigated'
+  | 'transferred'
+  | 'accepted'
+  | 'duplicate'
+  | 'invalidated'
+  | 'retention_close'
+  | 'legacy_close'
+
+export type RiskIssueClosureEffectiveness =
+  | 'resolved'
+  | 'partially_resolved'
+  | 'transferred'
+  | 'accepted'
+  | 'undetermined'
+
+export interface RiskIssueClosureOutcomeFields {
+  closure_result_code?: RiskIssueClosureResultCode | null
+  closure_result_summary?: string | null
+  closure_effectiveness?: RiskIssueClosureEffectiveness | null
+  closure_evidence_refs?: string[]
+  closure_cause_attribution_id?: string | null
+  closed_by?: string | null
+  closure_recorded_at?: string | null
+}
+
+export interface Risk extends RiskIssueClosureOutcomeFields {
   id: string
   project_id: string
   task_id?: string | null
@@ -454,7 +481,7 @@ export interface Risk {
 }
 
 /** 独立问题域（§六 issues 表，10.1 建立基础模型，10.2a 实现来源链路） */
-export interface Issue {
+export interface Issue extends RiskIssueClosureOutcomeFields {
   id: string
   project_id: string
   task_id?: string | null

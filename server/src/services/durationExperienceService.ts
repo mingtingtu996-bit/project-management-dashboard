@@ -2,6 +2,7 @@
 
 import { createHash } from 'node:crypto'
 
+import { query } from '../database.js'
 import type { Task } from '../types/db.js'
 import { getProjectCompanyId } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
@@ -22,9 +23,27 @@ import {
   mergeConstructionOrganizationLineageIntoContext,
   readConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
+import {
+  productionDaysBetweenInclusive,
+  resolveConstructionCalendarContext,
+} from './constructionCalendar.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
 
 type SampleStrength = 'strong' | 'medium' | 'weak' | 'unusable'
+
+type StructuredCauseAttributionSnapshotRow = {
+  id?: unknown
+  company_id?: unknown
+  project_id?: unknown
+  subject_type?: unknown
+  subject_id?: unknown
+  status?: unknown
+  cause_code?: unknown
+  cause_role?: unknown
+  taxonomy_version?: unknown
+  confirmation_source?: unknown
+  responsibility_class?: unknown
+}
 
 export interface DurationExperienceCollectionOptions {
   previousTask?: Task | null
@@ -52,6 +71,95 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function emptyStructuredCauseSnapshot() {
+  return {
+    schema_version: 'structured_cause_snapshot/v1',
+    confirmed_count: 0,
+    candidate_count: 0,
+    confirmed_causes: [] as Array<Record<string, unknown>>,
+  }
+}
+
+async function readTaskStructuredCauseSnapshot(params: {
+  companyId: string
+  projectId: string
+  taskId: string
+}) {
+  try {
+    const result = await query(
+      `SELECT id, company_id, project_id, subject_type, subject_id, status,
+              cause_code, cause_role, taxonomy_version, confirmation_source,
+              responsibility_class
+         FROM public.structured_cause_attributions
+        WHERE company_id = $1
+          AND project_id = $2
+          AND subject_type = 'task'
+          AND subject_id = $3
+          AND status IN ('confirmed', 'candidate')
+        ORDER BY CASE WHEN cause_role = 'primary' THEN 0 ELSE 1 END,
+                 cause_role ASC,
+                 id ASC`,
+      [params.companyId, params.projectId, params.taskId],
+    )
+    const rows = (Array.isArray(result) ? result : result?.rows ?? []) as StructuredCauseAttributionSnapshotRow[]
+    const scopedRows = rows.filter((row) => (
+      normalizeText(row.company_id) === params.companyId
+      && normalizeText(row.project_id) === params.projectId
+      && normalizeText(row.subject_type) === 'task'
+      && normalizeText(row.subject_id) === params.taskId
+    ))
+    const confirmedCauses = scopedRows
+      .filter((row) => normalizeText(row.status) === 'confirmed')
+      .map((row) => {
+        const confirmationSource = normalizeText(row.confirmation_source) || null
+        const responsibilityClass = normalizeText(row.responsibility_class) || null
+        return {
+          attribution_id: normalizeText(row.id) || null,
+          cause_code: normalizeText(row.cause_code) || null,
+          cause_role: normalizeText(row.cause_role) || null,
+          taxonomy_version: normalizeText(row.taxonomy_version) || null,
+          confirmation_source: confirmationSource,
+          ...(confirmationSource === 'user_confirmed' && responsibilityClass
+            ? {
+                user_confirmed_context: {
+                  responsibility_class: responsibilityClass,
+                },
+              }
+            : {}),
+        }
+      })
+      .filter((row) => Boolean(
+        row.attribution_id
+        && row.cause_code
+        && row.cause_role
+        && row.taxonomy_version,
+      ))
+      .sort((left, right) => {
+        const leftPrimary = left.cause_role === 'primary' ? 0 : 1
+        const rightPrimary = right.cause_role === 'primary' ? 0 : 1
+        return leftPrimary - rightPrimary
+          || String(left.cause_role).localeCompare(String(right.cause_role))
+          || String(left.cause_code).localeCompare(String(right.cause_code))
+          || String(left.attribution_id).localeCompare(String(right.attribution_id))
+      })
+
+    return {
+      schema_version: 'structured_cause_snapshot/v1',
+      confirmed_count: confirmedCauses.length,
+      candidate_count: scopedRows.filter((row) => normalizeText(row.status) === 'candidate').length,
+      confirmed_causes: confirmedCauses,
+    }
+  } catch (error) {
+    logger.warn('[durationExperienceService] failed to read structured causes for duration sample', {
+      companyId: params.companyId,
+      projectId: params.projectId,
+      taskId: params.taskId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return emptyStructuredCauseSnapshot()
+  }
 }
 
 function buildDurationExperienceEvidenceFingerprint(input: {
@@ -298,14 +406,6 @@ function resolveActualEnd(task: Task): { date: Date | null; source: string; stre
   }
 
   return { date: null, source: 'missing', strength: 'weak' }
-}
-
-function resolvePlannedDuration(task: Task, actualDuration: number): number {
-  const plannedDays = orderedInclusiveDurationDays(
-    toDurationDate(task.planned_start_date ?? task.start_date ?? null),
-    toDurationDate(task.planned_end_date ?? task.end_date ?? null),
-  )
-  return plannedDays ?? actualDuration
 }
 
 function confidenceForStrength(strength: SampleStrength) {
@@ -614,16 +714,41 @@ export async function collectDurationExperienceSampleFromTask(
   options: DurationExperienceCollectionOptions = {},
 ): Promise<boolean> {
   if (!task?.id || !task.project_id) return false
-  if (!isCompletedTask({ status: task.status, progress: task.progress })) return false
+  if (!isCompletedTask({
+    status: task.status,
+    progress: task.progress,
+    actual_end_date: task.actual_end_date,
+  })) return false
 
   const actualEnd = resolveActualEnd(task)
   const actualStart = resolveActualStart(task)
-  const actualDuration = orderedInclusiveDurationDays(actualStart.date, actualEnd.date)
-  if (!actualEnd.date || !actualDuration || !actualStart.date) return false
+  const actualDurationCalendarDays = orderedInclusiveDurationDays(actualStart.date, actualEnd.date)
+  if (!actualEnd.date || !actualDurationCalendarDays || !actualStart.date) return false
   const actualStartDate = actualStart.date
   const actualEndDate = actualEnd.date
-
-  const plannedDuration = resolvePlannedDuration(task, actualDuration)
+  const plannedStartDate = toDurationDate(task.planned_start_date ?? task.start_date ?? null)
+  const plannedEndDate = toDurationDate(task.planned_end_date ?? task.end_date ?? null)
+  const plannedDurationCalendarDays = orderedInclusiveDurationDays(plannedStartDate, plannedEndDate)
+    ?? actualDurationCalendarDays
+  const constructionCalendar = await resolveConstructionCalendarContext({
+    projectId: String(task.project_id),
+    standardWorkCode: normalizeText(task.standard_work_code) || null,
+    templateNodeId: normalizeText(task.template_node_id) || null,
+    onError: (error) => logger.warn('[durationExperienceService] failed to resolve construction calendar for duration sample', {
+      projectId: task.project_id,
+      taskId: task.id,
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
+  const actualDurationProductionDays = Math.max(
+    1,
+    productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar),
+  )
+  const plannedDurationProductionDays = plannedStartDate && plannedEndDate
+    ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
+    : actualDurationProductionDays
+  const actualDuration = actualDurationProductionDays
+  const plannedDuration = plannedDurationProductionDays
   const progressQuality = await resolveProgressQualityForSample(task)
   const dateSampleStrength = weakerSampleStrength(actualStart.strength, actualEnd.strength)
   const finalSampleStrength = progressQuality.sampleStrength
@@ -634,6 +759,11 @@ export async function collectDurationExperienceSampleFromTask(
   if (!companyId) {
     throw new Error('Duration experience sample tenant ownership could not be resolved.')
   }
+  const structuredCauseSnapshot = await readTaskStructuredCauseSnapshot({
+    companyId,
+    projectId: String(task.project_id),
+    taskId: String(task.id),
+  })
   const climate = await resolveProjectClimateRegion(String(task.project_id))
   const forecastLearningObservation = await buildForecastLearningObservation({
     task,
@@ -677,6 +807,7 @@ export async function collectDurationExperienceSampleFromTask(
     structure_type_code: structureTypeCode,
     method_variant_codes: methodVariantCodes,
     element_variant_codes: elementVariantCodes,
+    structured_cause_snapshot: structuredCauseSnapshot,
     algorithm_fact_context: summarizeAlgorithmFactContext(factContext),
     climate_region: climate.regionCode,
     thermal_zone: climate.thermalZone,
@@ -712,6 +843,13 @@ export async function collectDurationExperienceSampleFromTask(
     previous_progress: options.previousTask?.progress ?? null,
     completed_status: task.status ?? null,
     completed_progress: task.progress ?? null,
+    duration_day_basis: 'construction_production_day',
+    actual_duration_calendar_days: actualDurationCalendarDays,
+    actual_duration_production_days: actualDurationProductionDays,
+    planned_duration_calendar_days: plannedDurationCalendarDays,
+    planned_duration_production_days: plannedDurationProductionDays,
+    construction_calendar_basis: constructionCalendar.basis,
+    construction_calendar_window_count: constructionCalendar.windows.length,
     raw_task_title: task.title ?? null,
     title_weak_alias: normalizeText(backendStandardMapping.source) === 'algorithm_seed_rule'
       ? task.title ?? null
@@ -797,6 +935,12 @@ export async function collectDurationExperienceSampleFromTask(
     standard_work_code: task.standard_work_code ?? null,
     standard_work_name: task.standard_work_name ?? task.title ?? null,
     engineering_category_id: task.engineering_category_id ?? null,
+    duration_day_basis: 'construction_production_day',
+    actual_duration_calendar_days: actualDurationCalendarDays,
+    actual_duration_production_days: actualDurationProductionDays,
+    planned_duration_calendar_days: plannedDurationCalendarDays,
+    planned_duration_production_days: plannedDurationProductionDays,
+    construction_calendar_basis: constructionCalendar.basis,
     planned_duration: plannedDuration,
     actual_duration: actualDuration,
     started_at: actualStartDate.toISOString(),
@@ -816,7 +960,7 @@ export async function collectDurationExperienceSampleFromTask(
       standardWorkCode: normalizeText(task.standard_work_code) || null,
     }),
     source_lineage: {
-      schemaVersion: 'duration_experience.task_completion.v1',
+      schemaVersion: 'duration_experience.task_completion.v2',
       sourceService: 'durationExperienceService',
       sourceType: 'task_completion',
       companyId,
@@ -824,6 +968,9 @@ export async function collectDurationExperienceSampleFromTask(
       taskId: String(task.id),
       actualStartSource: actualStart.source,
       actualEndSource: actualEnd.source,
+      durationDayBasis: 'construction_production_day',
+      constructionCalendarBasis: constructionCalendar.basis,
+      constructionCalendarWindowCount: constructionCalendar.windows.length,
       collectedTrigger: options.trigger ?? 'task_completion',
       collectedBy: options.actorId ?? null,
     },

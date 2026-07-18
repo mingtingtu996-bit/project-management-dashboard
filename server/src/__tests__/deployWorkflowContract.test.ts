@@ -665,7 +665,7 @@ describe('deploy workflow contract', () => {
       'src/__tests__/verifyT2RhythmReleaseClosureArtifact.test.ts',
       'src/__tests__/preflightT2RhythmReleaseReview.test.ts',
       'src/__tests__/runT2RhythmReleaseReviewPackage.test.ts',
-      'src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts',
+      'src/__tests__/durationRuntimeOrphanRetirement.test.ts',
       'src/__tests__/systemSurfaceOwnershipGuard.test.ts',
       'src/__tests__/algorithmRuleAssetRelationshipMatrix.test.ts',
       'src/__tests__/algorithmRuleAssetInventoryService.test.ts',
@@ -708,7 +708,7 @@ describe('deploy workflow contract', () => {
       'src/__tests__/durationContextSampleReadModelService.test.ts',
       'src/__tests__/durationSuggestionService.test.ts',
       'src/__tests__/scheduleAccelerationService.test.ts',
-      'src/__tests__/durationSuggestionE2E.test.ts',
+      'src/__tests__/durationSuggestionSimulation.test.ts',
       'src/__tests__/contracts/durationConsistency.contract.test.ts',
       'src/__tests__/durationAlgorithmClosureGovernanceService.test.ts',
       'src/__tests__/domainReleaseRuntimeClosureMatrixService.test.ts',
@@ -723,7 +723,7 @@ describe('deploy workflow contract', () => {
       'src/__tests__/templateAssemblyCompatibilityCheckService.test.ts',
       'src/__tests__/t2RhythmSchedulePhase1SelectionService.test.ts',
       'src/__tests__/durationInputAssemblerService.test.ts',
-      'src/__tests__/durationLearningScopeEvidenceWriterService.test.ts',
+      'src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       'src/__tests__/wbsTemplateCandidateEventService.test.ts',
       'src/__tests__/routeAggregationGuard.test.ts',
       'src/__tests__/summaryServiceAggregationGuard.test.ts',
@@ -864,7 +864,7 @@ describe('deploy workflow contract', () => {
       'server/src/__tests__/verifyT2RhythmReleaseClosureArtifact.test.ts',
       'server/src/__tests__/preflightT2RhythmReleaseReview.test.ts',
       'server/src/__tests__/runT2RhythmReleaseReviewPackage.test.ts',
-      'server/src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts',
+      'server/src/__tests__/durationRuntimeOrphanRetirement.test.ts',
       'server/src/__tests__/systemSurfaceOwnershipGuard.test.ts',
       'server/src/__tests__/algorithmRuleAssetRelationshipMatrix.test.ts',
       'server/src/__tests__/algorithmRuleAssetInventoryService.test.ts',
@@ -906,7 +906,7 @@ describe('deploy workflow contract', () => {
       'server/src/__tests__/durationContextSampleReadModelService.test.ts',
       'server/src/__tests__/durationSuggestionService.test.ts',
       'server/src/__tests__/scheduleAccelerationService.test.ts',
-      'server/src/__tests__/durationSuggestionE2E.test.ts',
+      'server/src/__tests__/durationSuggestionSimulation.test.ts',
       'server/src/__tests__/contracts/durationConsistency.contract.test.ts',
       'server/src/__tests__/durationAlgorithmClosureGovernanceService.test.ts',
       'server/src/__tests__/domainReleaseRuntimeClosureMatrixService.test.ts',
@@ -921,7 +921,7 @@ describe('deploy workflow contract', () => {
       'server/src/__tests__/templateAssemblyCompatibilityCheckService.test.ts',
       'server/src/__tests__/t2RhythmSchedulePhase1SelectionService.test.ts',
       'server/src/__tests__/durationInputAssemblerService.test.ts',
-      'server/src/__tests__/durationLearningScopeEvidenceWriterService.test.ts',
+      'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       'server/src/__tests__/wbsTemplateCandidateEventService.test.ts',
       'server/src/__tests__/rlsProaclLiveDiagnostic.test.ts',
       'server/src/__tests__/executeSqlAnonPocLiveDiagnostic.test.ts',
@@ -987,12 +987,12 @@ describe('deploy workflow contract', () => {
       'server/src/services/constructionOrganizationPlanNetworkDomainWriter.ts',
       'server/src/services/durationColdStartTemplateRegistryService.ts',
       'server/src/services/durationInputAssemblerService.ts',
-      'server/src/services/durationLearningScopeEvidenceWriterService.ts',
+      'server/src/services/durationLearningRuntimeLifecycleService.ts',
       'server/src/services/domainReleaseRuntimeClosureMatrixService.ts',
       'server/src/services/t2RhythmReleaseClosureDiagnosticService.ts',
       'server/src/services/t2RhythmScheduleCandidateNetworkService.ts',
       'server/src/services/t2RhythmSchedulePhase1SelectionService.ts',
-      'server/src/services/t2RhythmScheduleRuntimePublicationService.ts',
+      'server/src/services/durationLearningRuntimePublicationService.ts',
       'server/src/services/t2RhythmStandardLibraryL5ReleaseGateService.ts',
       'server/src/services/t2RhythmStandardLibraryTrustGateService.ts',
       'server/src/services/templateAssemblyCompatibilityCheckService.ts',
@@ -1204,11 +1204,12 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('server/src/__tests__/routeOwnershipGuard.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/systemRegistryGuard.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/architectureBoundaryGuard.test.ts')
-    expect(workflowGuard).toContain('server/src/__tests__/t2RhythmScheduleRuntimePublicationService.test.ts')
+    expect(workflowGuard).toContain('server/src/__tests__/durationRuntimeOrphanRetirement.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/systemSurfaceOwnershipGuard.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/durationRuntimeConsumerObservationService.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/durationInputAssemblerService.test.ts')
-    expect(workflowGuard).toContain('server/src/__tests__/durationLearningScopeEvidenceWriterService.test.ts')
+    expect(workflowGuard).toContain('server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts')
+    expect(workflowGuard).toContain('server/src/__tests__/durationLearningRuntimePublicationService.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/wbsTemplateCandidateEventService.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/rlsProaclLiveDiagnostic.test.ts')
     expect(workflowGuard).toContain('server/src/__tests__/spreadsheetMigrationLiveDiagnostic.test.ts')
@@ -1219,11 +1220,11 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('server/scripts/run-vitest-guard.mjs')
     expect(workflowGuard).toContain('server/src/services/durationColdStartTemplateRegistryService.ts')
     expect(workflowGuard).toContain('server/src/services/durationInputAssemblerService.ts')
-    expect(workflowGuard).toContain('server/src/services/durationLearningScopeEvidenceWriterService.ts')
+    expect(workflowGuard).toContain('server/src/services/durationLearningRuntimeLifecycleService.ts')
     expect(workflowGuard).toContain('server/src/services/t2RhythmReleaseClosureDiagnosticService.ts')
     expect(workflowGuard).toContain('server/src/services/t2RhythmScheduleCandidateNetworkService.ts')
     expect(workflowGuard).toContain('server/src/services/t2RhythmSchedulePhase1SelectionService.ts')
-    expect(workflowGuard).toContain('server/src/services/t2RhythmScheduleRuntimePublicationService.ts')
+    expect(workflowGuard).toContain('server/src/services/durationLearningRuntimePublicationService.ts')
     expect(workflowGuard).toContain('server/src/services/t2RhythmStandardLibraryL5ReleaseGateService.ts')
     expect(workflowGuard).toContain('server/src/services/t2RhythmStandardLibraryTrustGateService.ts')
     expect(workflowGuard).toContain('server/src/services/templateAssemblyCompatibilityCheckService.ts')

@@ -5,6 +5,14 @@ import {
   getTaskDurationSuggestion,
   type DurationSuggestion,
 } from './durationSuggestionService.js'
+import {
+  executeDurationLearningRuntimePublicationQuery,
+  listApplicableDurationLearningRuntimePublications,
+  resolveDurationLearningRuntimePublication,
+  type DurationLearningRuntimeAssetKey,
+  type DurationLearningRuntimePublicationQueryExec,
+  type ResolveDurationLearningRuntimePublicationResult,
+} from './durationLearningRuntimePublicationService.js'
 import { signedDurationDayDelta } from '../utils/durationDays.js'
 import {
   evaluateDurationOutputPromotion,
@@ -706,7 +714,19 @@ export type GeneratedTemplateDependency = {
   intentCode?: string | null
   relationRole?: V1475DependencyIntentTemplate['relationRole'] | null
   strength?: V1475DependencyIntentTemplate['strength']
-  source?: 'sibling_sequence' | 'dependency_intent_template' | 'cross_item_workflow' | 'internal_flow' | 'phase_chain'
+  source?: 'sibling_sequence'
+    | 'dependency_intent_template'
+    | 'cross_item_workflow'
+    | 'internal_flow'
+    | 'phase_chain'
+    | 'execution_phase_order_fallback'
+    | 'heuristic_stagger'
+    | 'duration_learning_runtime_publication'
+  sequencingBasis?: 'execution_phase_order_fallback' | 'heuristic_stagger' | null
+  governanceGapCode?: string | null
+  publicationKey?: string | null
+  publicationStage?: string | null
+  selectionBasis?: string | null
   confidenceScore?: number | null
   confidenceLevel?: V1475DependencyIntentTemplate['confidenceLevel'] | null
   matchedReferenceField?: string | null
@@ -3230,6 +3250,167 @@ function selectTemplateNodes(roots: TemplateNode[], selectedNodeIds: string[]) {
   ))
 }
 
+function cloneTemplateNode(node: TemplateNode): TemplateNode {
+  return {
+    ...node,
+    metadata: { ...node.metadata },
+    children: node.children.map(cloneTemplateNode),
+  }
+}
+
+function readDurationLearningNodeIdentity(value: Record<string, unknown>) {
+  return normalizeText(
+    value.sourceId
+      ?? value.source_id
+      ?? value.stableCode
+      ?? value.stable_code
+      ?? value.standardWorkCode
+      ?? value.standard_work_code
+      ?? value.path,
+  )
+}
+
+function readDurationLearningNodeDays(
+  assetKey: Extract<DurationLearningRuntimeAssetKey, 'wbs_reference_days' | 'special_work_duration_seed'>,
+  value: Record<string, unknown>,
+) {
+  const candidates = assetKey === 'wbs_reference_days'
+    ? [
+        value.referenceDays,
+        value.reference_days,
+        value.suggestedReferenceDays,
+        value.suggested_reference_days,
+      ]
+    : [
+        value.p50Days,
+        value.p50_days,
+        value.baseDurationDays,
+        value.base_duration_days,
+        value.referenceDays,
+        value.reference_days,
+      ]
+  for (const candidate of candidates) {
+    const days = readPositiveNumber(candidate)
+    if (days) return days
+  }
+  return null
+}
+
+function durationLearningNodeMatches(
+  node: TemplateNode,
+  identity: string,
+  ancestorStableCodes: readonly string[],
+) {
+  const normalizedIdentity = normalizeText(identity).toLowerCase()
+  if (!normalizedIdentity) return false
+  const directIdentities = [
+    node.id,
+    node.stableCode,
+    node.standardWorkCode,
+    readRecord(node.metadata).sourceId,
+    readRecord(node.metadata).source_id,
+  ].map((value) => normalizeText(value).toLowerCase()).filter(Boolean)
+  if (directIdentities.includes(normalizedIdentity)) return true
+
+  const pathSegments = normalizedIdentity.split(/[/>|]/).map((value) => value.trim()).filter(Boolean)
+  if (pathSegments.length === 0) return false
+  const stablePath = [...ancestorStableCodes, node.stableCode]
+    .map((value) => normalizeText(value).toLowerCase())
+    .filter(Boolean)
+  return pathSegments.length <= stablePath.length
+    && pathSegments.every((segment, index) => segment === stablePath[stablePath.length - pathSegments.length + index])
+}
+
+function applyDurationLearningPublicationToTemplateNodes(input: {
+  nodes: readonly TemplateNode[]
+  assetKey: Extract<DurationLearningRuntimeAssetKey, 'wbs_reference_days' | 'special_work_duration_seed'>
+  resolution: ResolveDurationLearningRuntimePublicationResult
+}) {
+  if (!input.resolution.runtimeConsumable || !input.resolution.publication) {
+    return { nodes: input.nodes.map(cloneTemplateNode), appliedNodeCount: 0 }
+  }
+  const payload = input.resolution.publication.runtimePayload
+  const rawEntries = readArray(payload.nodes).length > 0
+    ? readArray(payload.nodes)
+    : [payload]
+  const entries = rawEntries
+    .map(readRecord)
+    .map((entry) => ({
+      entry,
+      identity: readDurationLearningNodeIdentity(entry),
+      days: readDurationLearningNodeDays(input.assetKey, entry),
+    }))
+    .filter((entry) => Boolean(entry.identity && entry.days))
+  let appliedNodeCount = 0
+
+  const visit = (node: TemplateNode, ancestorStableCodes: readonly string[]): TemplateNode => {
+    const clone = cloneTemplateNode(node)
+    const matched = entries.find((entry) => durationLearningNodeMatches(node, entry.identity, ancestorStableCodes))
+    if (matched?.days) {
+      appliedNodeCount += 1
+      clone.defaultDurationDays = matched.days
+      clone.metadata = {
+        ...clone.metadata,
+        durationLearningPublicationKey: input.resolution.publicationKey,
+        durationLearningPublicationStage: input.resolution.publication.publicationStage,
+        durationLearningSelectionBasis: input.resolution.selectionBasis,
+        durationLearningAssetKey: input.assetKey,
+        durationDayBasis: normalizeText(
+          matched.entry.durationDayBasis
+            ?? matched.entry.duration_day_basis
+            ?? payload.durationDayBasis
+            ?? payload.duration_day_basis,
+        ) || 'construction_production_day',
+      }
+    }
+    clone.children = node.children.map((child) => visit(child, [...ancestorStableCodes, node.stableCode]))
+    return clone
+  }
+
+  return {
+    nodes: input.nodes.map((node) => visit(node, [])),
+    appliedNodeCount,
+  }
+}
+
+function buildWbsDurationLearningRuntimeArtifactPublication(
+  assetKey: Extract<DurationLearningRuntimeAssetKey, 'wbs_reference_days' | 'special_work_duration_seed'>,
+  resolution: ResolveDurationLearningRuntimePublicationResult,
+  templateId: string,
+  appliedNodeCount: number,
+): WbsTemplateGenerationRuntimeArtifactPublication | null {
+  if (!resolution.runtimeConsumable || !resolution.publication || !resolution.publicationKey || appliedNodeCount <= 0) return null
+  return {
+    assetKey,
+    publicationKey: resolution.publicationKey,
+    publicationStatus: resolution.publication.publicationStage === 'canary' ? 'canary' : 'published',
+    sourceEvidenceRefs: [`duration_learning_runtime_publications:${resolution.publicationKey}`],
+    observationContext: {
+      templateId,
+      appliedNodeCount,
+      selectionBasis: resolution.selectionBasis,
+      durationDayBasis: 'construction_production_day',
+    },
+  }
+}
+
+async function resolveProjectCompanyIdForDurationLearning(input: {
+  projectId: string
+  projectFacts: Record<string, unknown>
+  queryExec: DurationLearningRuntimePublicationQueryExec | null
+}) {
+  const explicitCompanyId = normalizeId(input.projectFacts.companyId ?? input.projectFacts.company_id)
+  if (explicitCompanyId || !input.queryExec || !normalizeId(input.projectId)) return explicitCompanyId
+  const rows = await input.queryExec<Record<string, unknown>>(
+    `select company_id
+       from public.projects
+      where id = $1::uuid
+      limit 1`,
+    [input.projectId],
+  )
+  return normalizeId(rows[0]?.company_id ?? rows[0]?.companyId)
+}
+
 function hasExplicitSelectedNodesForTemplate(operation: PlanningTableOperation, templateId: string) {
   const selectedNodesByTemplate = readRecord(operation.selectedNodesByTemplate ?? operation.selected_nodes_by_template)
   const selectedForTemplate = selectedNodesByTemplate[templateId]
@@ -4883,6 +5064,11 @@ async function buildFastTemplateDurationSuggestionUncached(
   durationContributionMode: DurationContributionMode,
   cache?: FastTemplateDurationCache,
 ): Promise<GeneratedTemplateDurationSuggestion> {
+  const nodeMetadata = readRecord(node.metadata)
+  const learnedPublicationKey = normalizeText(nodeMetadata.durationLearningPublicationKey)
+  const learnedDurationDays = learnedPublicationKey
+    ? readPositiveNumber(node.defaultDurationDays)
+    : null
   const seedRule = await resolveCachedFastTemplateDurationSeed(node, featureProfile, cache)
   const seedMode = normalizeDurationContributionMode(seedRule?.durationContributionMode)
   const effectiveMode = durationContributionMode ?? seedMode
@@ -4890,7 +5076,7 @@ async function buildFastTemplateDurationSuggestionUncached(
     return buildNonDurationTemplateSuggestion(effectiveMode)
   }
 
-  const directSeedDurationDays = pickResolvedDurationSeedDays(seedRule)
+  const directSeedDurationDays = learnedDurationDays ?? pickResolvedDurationSeedDays(seedRule)
   const descendantDurationEstimate = directSeedDurationDays == null
     ? await estimateFastTemplateDescendantDuration(node, featureProfile, cache)
     : null
@@ -4909,7 +5095,19 @@ async function buildFastTemplateDurationSuggestionUncached(
     ? Math.max(1, Math.ceil(baseRecommendedDurationDays * descendantAdjustmentFactor))
     : baseRecommendedDurationDays
   const directProjectFactScaling = directSeedDurationDays != null || !descendantDurationEstimate
-    ? applyProjectFactDurationScaling(baseRecommendedDurationDays, seedRule, featureProfile)
+    ? learnedDurationDays
+      ? {
+          days: learnedDurationDays,
+          applied: false,
+          factor: 1,
+          quantity: null,
+          defaultQuantity: null,
+          basis: null,
+          source: 'duration_learning_runtime_publication',
+          projectScaleRatio: null,
+          baseline: null,
+        } satisfies ProjectFactDurationScalingResult
+      : applyProjectFactDurationScaling(baseRecommendedDurationDays, seedRule, featureProfile)
     : null
   const projectFactScaling = directSeedDurationDays != null || !descendantDurationEstimate
     ? directProjectFactScaling!
@@ -4936,25 +5134,36 @@ async function buildFastTemplateDurationSuggestionUncached(
       ? Math.ceil((readPositiveNumber(seedRule?.defaultDaysP80) ?? Math.ceil(baseRecommendedDurationDays * 1.35)) * (recommendedDurationDays / Math.max(baseRecommendedDurationDays, 1)))
       : readPositiveNumber(seedRule?.defaultDaysP80) ?? Math.ceil(recommendedDurationDays * 1.35),
   )
+  const usesDurationLearningPublication = Boolean(learnedPublicationKey && learnedDurationDays)
   const usesDurationSeed = Boolean(seedRule) || Boolean(descendantDurationEstimate?.usesDurationSeed)
-  const seedSource = usesDurationSeed ? 'standard_work_duration_seed' : 'template_placeholder'
-  return withTemplateFastEstimateDurationOutput({
+  const seedSource = usesDurationLearningPublication
+    ? 'duration_learning_runtime_publication'
+    : usesDurationSeed
+      ? 'standard_work_duration_seed'
+      : 'template_placeholder'
+  const baseSuggestion: GeneratedTemplateDurationSuggestion = {
     recommendedDurationDays,
     conservativeDurationDays,
-    confidenceLevel: seedRule?.confidence ?? (descendantDurationEstimate?.usesDurationSeed ? 'medium' : 'low'),
-    confidenceScore: seedRule?.confidence === 'high' ? 74 : seedRule?.confidence === 'medium' || descendantDurationEstimate?.usesDurationSeed ? 60 : 38,
+    confidenceLevel: usesDurationLearningPublication ? 'medium' : seedRule?.confidence ?? (descendantDurationEstimate?.usesDurationSeed ? 'medium' : 'low'),
+    confidenceScore: usesDurationLearningPublication ? 66 : seedRule?.confidence === 'high' ? 74 : seedRule?.confidence === 'medium' || descendantDurationEstimate?.usesDurationSeed ? 60 : 38,
     forecastSource: `${seedSource}:sync_fast_template`,
-    durationCalibrationSource: usesDurationSeed ? 'standard_work_duration_seed' : 'unavailable',
-    durationProvenance: usesDurationSeed ? 'standard_work_duration_seed' : 'unavailable',
-    businessReason: seedRule?.benchmarkBasis
+    durationCalibrationSource: usesDurationLearningPublication ? 'runtime_learning_publication' : usesDurationSeed ? 'standard_work_duration_seed' : 'unavailable',
+    durationProvenance: usesDurationLearningPublication ? 'runtime_learning_publication' : usesDurationSeed ? 'standard_work_duration_seed' : 'unavailable',
+    businessReason: usesDurationLearningPublication
+      ? 'Published WBS duration learning overlay matched this template node.'
+      : seedRule?.benchmarkBasis
       ?? '?????????? seed ????????????',
-    businessReasonCode: usesDurationSeed ? 'STANDARD_SEED_REFERENCE' : 'TEMPLATE_FAST_PLACEHOLDER',
+    businessReasonCode: usesDurationLearningPublication ? 'DURATION_LEARNING_RUNTIME_PUBLICATION' : usesDurationSeed ? 'STANDARD_SEED_REFERENCE' : 'TEMPLATE_FAST_PLACEHOLDER',
     businessReasonCodes: uniqueStringArray([
-      usesDurationSeed ? 'STANDARD_SEED_REFERENCE' : 'TEMPLATE_FAST_PLACEHOLDER',
+      usesDurationLearningPublication ? 'DURATION_LEARNING_RUNTIME_PUBLICATION' : usesDurationSeed ? 'STANDARD_SEED_REFERENCE' : 'TEMPLATE_FAST_PLACEHOLDER',
       projectFactScaling.applied ? 'PROJECT_FACT_QUANTITY_SCALING' : null,
     ]),
     businessReasonParams: {
       durationSuggestionMode: 'fast_template',
+      durationLearningPublicationKey: learnedPublicationKey || null,
+      durationLearningPublicationStage: normalizeText(nodeMetadata.durationLearningPublicationStage) || null,
+      durationLearningSelectionBasis: normalizeText(nodeMetadata.durationLearningSelectionBasis) || null,
+      durationLearningAssetKey: normalizeText(nodeMetadata.durationLearningAssetKey) || null,
       seedStableCode: seedRule?.__stableCode ?? seedRule?.stableCode ?? null,
       dbQuerySkipped: true,
       seedResolver: 'resolveStandardWorkDurationSeed',
@@ -4977,20 +5186,30 @@ async function buildFastTemplateDurationSuggestionUncached(
       } : null,
     },
     displaySummary: `?? ${recommendedDurationDays} ????????????????????????`,
-    dataMaturity: usesDurationSeed ? 'L1' : 'L0',
-    dataMaturityReasons: usesDurationSeed
+    dataMaturity: usesDurationLearningPublication || usesDurationSeed ? 'L1' : 'L0',
+    dataMaturityReasons: usesDurationLearningPublication
+      ? ['governed duration learning runtime publication matched this template node']
+      : usesDurationSeed
       ? ['standard_work_duration seed matched through governed resolver']
       : ['template placeholder used because governed duration seed was not matched'],
     dataUpgradePath: ['background_duration_suggestion'],
     dataUpgradeBlockedBy: [],
     factorAvailability: {
       standard_work_duration_seed: usesDurationSeed,
+      duration_learning_runtime_publication: usesDurationLearningPublication,
       sync_fast_template: true,
       db_query_skipped: true,
       project_fact_quantity_scaling: projectFactScaling.applied,
     },
     durationContributionMode: effectiveMode,
-  })
+  }
+  return usesDurationLearningPublication
+    ? withPlanReferenceDurationOutput({
+        ...baseSuggestion,
+        durationOutputCode: 'contextual_reference',
+        contextualReferenceDays: recommendedDurationDays,
+      })!
+    : withTemplateFastEstimateDurationOutput(baseSuggestion)
 }
 
 function buildBenchmarkPlanReferenceDurationSuggestion(
@@ -7878,6 +8097,11 @@ function buildGeneratedStandardTaskMetadata(
         directSeedMutation: false,
       },
     resourceProfile: readRecord(metadata.resourceProfile),
+    durationLearningPublicationKey: normalizeId(metadata.durationLearningPublicationKey),
+    durationLearningPublicationStage: normalizeId(metadata.durationLearningPublicationStage),
+    durationLearningSelectionBasis: normalizeId(metadata.durationLearningSelectionBasis),
+    durationLearningAssetKey: normalizeId(metadata.durationLearningAssetKey),
+    durationDayBasis: normalizeId(metadata.durationDayBasis ?? metadata.duration_day_basis),
     floorRhythm: durationSuggestion?.floorRhythmAdjustment ?? null,
     durationSuggestion: buildGeneratedDurationSuggestionValue(durationSuggestion, durationContributionMode),
   }
@@ -10596,7 +10820,112 @@ function applyDependencyIntentTemplates(rows: GeneratedTemplateRow[]) {
   }
 }
 
+function learnedDependencyRowsShareScope(
+  predecessor: GeneratedTemplateRow,
+  successor: GeneratedTemplateRow,
+  scopeRule: string,
+) {
+  if (!scopeRule || scopeRule === 'same_scope_instance' || scopeRule === 'same_project') {
+    return rowsShareGeneratedScopeInstance(predecessor, successor)
+  }
+  return rowsHaveCompatibleDependencyScope(
+    predecessor,
+    successor,
+    scopeRule as DependencyScopeRule,
+  )
+}
+
+function applyDurationLearningDependencyPublications(
+  rows: GeneratedTemplateRow[],
+  publications: readonly ResolveDurationLearningRuntimePublicationResult[],
+) {
+  const consumed: WbsTemplateGenerationRuntimeArtifactPublication[] = []
+  for (const resolution of publications) {
+    const publication = resolution.publication
+    if (!resolution.runtimeConsumable || !publication || !resolution.publicationKey) continue
+    const payload = publication.runtimePayload
+    const predecessorCode = normalizeText(payload.predecessorCode ?? payload.predecessor_code)
+    const successorCode = normalizeText(payload.successorCode ?? payload.successor_code)
+    if (!predecessorCode || !successorCode) continue
+    const dependencyType = normalizeDependencyType(payload.dependencyType ?? payload.dependency_type)
+    const lagDaysValue = Number(payload.lagDays ?? payload.lag_days ?? 0)
+    const lagDays = Number.isFinite(lagDaysValue) ? lagDaysValue : 0
+    const scopeRule = normalizeText(payload.scopeRule ?? payload.scope_rule) || 'same_scope_instance'
+    const predecessors = rows.filter((row) => rowMatchesCodePrefix(row, predecessorCode))
+    const successors = rows.filter((row) => rowMatchesCodePrefix(row, successorCode))
+    let appliedEdgeCount = 0
+
+    for (const successor of successors) {
+      const predecessor = predecessors.find((candidate) => (
+        candidate.clientRowId !== successor.clientRowId
+        && learnedDependencyRowsShareScope(candidate, successor, scopeRule)
+      ))
+      if (!predecessor) continue
+      const learnedDependency: GeneratedTemplateDependency = {
+        clientRowId: predecessor.clientRowId,
+        dependencyType,
+        lagDays,
+        intentCode: normalizeId(payload.intentCode ?? payload.intent_code),
+        relationRole: 'workflow',
+        strength: 'hard',
+        source: 'duration_learning_runtime_publication',
+        publicationKey: resolution.publicationKey,
+        publicationStage: publication.publicationStage,
+        selectionBasis: resolution.selectionBasis,
+      }
+      const existingIndex = successor.predecessorDependencies.findIndex((dependency) => (
+        dependency.clientRowId === predecessor.clientRowId
+      ))
+      if (existingIndex >= 0) successor.predecessorDependencies.splice(existingIndex, 1, learnedDependency)
+      else addGeneratedDependency(successor, learnedDependency)
+      if (!successor.predecessorClientRowIds.includes(predecessor.clientRowId)) {
+        successor.predecessorClientRowIds.push(predecessor.clientRowId)
+      }
+      const metadata = readRowMetadata(successor)
+      const existingReceipts = readArray(metadata.durationLearningDependencyPublications).map(readRecord)
+      successor.values = {
+        ...successor.values,
+        standard_task_metadata: {
+          ...metadata,
+          durationLearningDependencyPublications: [
+            ...existingReceipts.filter((receipt) => normalizeText(receipt.publicationKey) !== resolution.publicationKey),
+            {
+              publicationKey: resolution.publicationKey,
+              publicationStage: publication.publicationStage,
+              selectionBasis: resolution.selectionBasis,
+              artifactKey: publication.artifactKey,
+              predecessorCode,
+              successorCode,
+              dependencyType,
+              lagDays,
+              scopeRule,
+            },
+          ],
+        },
+      }
+      appliedEdgeCount += 1
+    }
+
+    if (appliedEdgeCount > 0) {
+      consumed.push({
+        assetKey: 'dependency_rule_candidate',
+        publicationKey: resolution.publicationKey,
+        publicationStatus: publication.publicationStage === 'canary' ? 'canary' : 'published',
+        sourceEvidenceRefs: [`duration_learning_runtime_publications:${resolution.publicationKey}`],
+        observationContext: {
+          artifactKey: publication.artifactKey,
+          appliedEdgeCount,
+          selectionBasis: resolution.selectionBasis,
+          scopeRule,
+        },
+      })
+    }
+  }
+  return consumed
+}
+
 function generatedDependencyPriority(dependency: GeneratedTemplateDependency) {
+  if (dependency.source === 'duration_learning_runtime_publication') return 6
   if (
     dependency.source === 'cross_item_workflow'
     && dependency.managedFrontierProjectionPolicy === 'item_pack_anchor_when_process_hidden'
@@ -19515,13 +19844,29 @@ async function generateWbsTemplateRowsInternal(params: {
     })
   }
 
+  const durationLearningQueryExec = params.runtimeConsumerObservationQueryExec
+    ?? (process.env.NODE_ENV === 'test' ? null : executeDurationLearningRuntimePublicationQuery)
+  const durationLearningCompanyId = await resolveProjectCompanyIdForDurationLearning({
+    projectId: params.projectId,
+    projectFacts,
+    queryExec: durationLearningQueryExec,
+  })
+  const durationLearningIndustryKey = normalizeId(
+    projectFacts.industryKey
+      ?? projectFacts.industry_key
+      ?? projectFacts.businessType
+      ?? projectFacts.business_type
+      ?? projectFacts.projectTypeCode
+      ?? projectFacts.project_type_code,
+  )
+  const learnedRuntimeArtifactPublications = params.runtimeArtifactPublications as WbsTemplateGenerationRuntimeArtifactPublication[] | null | undefined
   const templateSelections: Array<{ templateId: string; selectedNodes: TemplateNode[] }> = []
   for (const templateId of templateIds) {
     if (masterPlanProfile && !hasExplicitSelectedNodesForTemplate(operation, templateId)) continue
     const roots = await loadWbsTemplateNodes(templateId)
     const selectedNodeIds = readSelectedNodeIdsForTemplate(operation, templateId)
     const catalog = getBuiltInTemplateCatalog(templateId)
-    const selectedNodes = selectedNodeIds.length === 0
+    let selectedNodes = selectedNodeIds.length === 0
       && catalog
       && getCatalogPackType(catalog) === 'danger_control'
       && getCatalogGroupSelectionMode(operation, 'danger_control') === 'auto_by_trigger'
@@ -19532,6 +19877,33 @@ async function generateWbsTemplateRowsInternal(params: {
         statusCode: 404,
         code: 'TEMPLATE_NODE_NOT_FOUND',
       })
+    }
+    if (durationLearningQueryExec) {
+      for (const assetKey of ['special_work_duration_seed', 'wbs_reference_days'] as const) {
+        const resolution = await resolveDurationLearningRuntimePublication({
+          queryExec: durationLearningQueryExec,
+          assetKey,
+          artifactKey: templateId,
+          companyId: durationLearningCompanyId,
+          projectId: params.projectId,
+          industryKey: durationLearningIndustryKey,
+        })
+        const applied = applyDurationLearningPublicationToTemplateNodes({
+          nodes: selectedNodes,
+          assetKey,
+          resolution,
+        })
+        selectedNodes = applied.nodes
+        const consumedPublication = buildWbsDurationLearningRuntimeArtifactPublication(
+          assetKey,
+          resolution,
+          templateId,
+          applied.appliedNodeCount,
+        )
+        if (consumedPublication && learnedRuntimeArtifactPublications) {
+          learnedRuntimeArtifactPublications.push(consumedPublication)
+        }
+      }
     }
     templateSelections.push({ templateId, selectedNodes })
   }
@@ -19610,6 +19982,15 @@ async function generateWbsTemplateRowsInternal(params: {
     scopeComboCount: scopeCombos.length,
     generationScopeContextCount: generationScopeContexts.length,
   })
+  const learnedDependencyRuntimePublications = durationLearningQueryExec
+    ? await listApplicableDurationLearningRuntimePublications({
+        queryExec: durationLearningQueryExec,
+        assetKey: 'dependency_rule_candidate',
+        companyId: durationLearningCompanyId,
+        projectId: params.projectId,
+        industryKey: durationLearningIndustryKey,
+      })
+    : []
   const scopeStartDateByIndex = buildScopeStartDateByIndex({
     selectedNodes: templateSelections.flatMap((selection) => selection.selectedNodes),
     scopeCombos: generationScopeCombos,
@@ -19735,6 +20116,16 @@ async function generateWbsTemplateRowsInternal(params: {
   logDiagnosticStageTiming('cross_item_workflow_applied')
   applyDependencyIntentTemplates(rows)
   logDiagnosticStageTiming('dependency_intents_applied')
+  const consumedLearnedDependencyPublications = applyDurationLearningDependencyPublications(
+    rows,
+    learnedDependencyRuntimePublications,
+  )
+  if (learnedRuntimeArtifactPublications) {
+    learnedRuntimeArtifactPublications.push(...consumedLearnedDependencyPublications)
+  }
+  logDiagnosticStageTiming('duration_learning_dependency_publications_applied', {
+    publicationCount: consumedLearnedDependencyPublications.length,
+  })
   pruneGeneratedHierarchySelfDependencies(rows)
   logDiagnosticStageTiming('dependency_hierarchy_self_dependencies_pruned_first')
   pruneGeneratedDependencyConflicts(rows)
@@ -20165,14 +20556,15 @@ async function buildTaskPlanRhythmGeneratedResult(
 export async function generateWbsTemplateRows(
   params: Parameters<typeof generateWbsTemplateRowsInternal>[0],
 ): Promise<Awaited<ReturnType<typeof generateWbsTemplateRowsInternal>>> {
-  const generated = await buildTaskPlanRhythmGeneratedResult(params)
-    ?? await generateWbsTemplateRowsInternal(params)
+  const runtimeArtifactPublications = [...(params.runtimeArtifactPublications ?? [])]
+  const effectiveParams = { ...params, runtimeArtifactPublications }
+  const generated = await buildTaskPlanRhythmGeneratedResult(effectiveParams)
+    ?? await generateWbsTemplateRowsInternal(effectiveParams)
   const publicGenerated = {
     ...generated,
     rows: sanitizeGeneratedTemplateRowsForPublicOutput(generated.rows),
   }
 
-  const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
   if (params.runtimeConsumerObservationQueryExec) {
     const templateIds = uniqueStringArray([
       normalizeText(generated.templateId),

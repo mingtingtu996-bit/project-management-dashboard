@@ -15,6 +15,10 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           'projectRemainingDurationForecastService',
           'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
         ],
+        [
+          'projectCriticalPathService',
+          'projectCriticalPathService:resolveCriticalPathLearningPublications',
+        ],
         ['wbsTemplateGenerationService', 'wbsTemplateGenerationService:generateWbsTemplateRows'],
         [
           'scheduleAccelerationService',
@@ -74,6 +78,18 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           `,
         },
         {
+          sourcePath: 'server/src/services/projectCriticalPathService.ts',
+          sourceText: `
+            import { recordProjectCriticalPathConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const PROJECT_CRITICAL_PATH_CONSUMER_ASSET_KEYS = new Set([
+              'critical_path_rule_candidate',
+            ])
+            async function resolveCriticalPathLearningPublications() {
+              await recordProjectCriticalPathConsumedArtifacts({ queryExec, artifacts: [] })
+            }
+          `,
+        },
+        {
           sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
           sourceText: `
             import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
@@ -120,6 +136,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
       'durationSuggestionService',
       'taskDurationForecastService',
       'projectRemainingDurationForecastService',
+      'projectCriticalPathService',
       'wbsTemplateGenerationService',
       'scheduleAccelerationService',
       'scheduleAccelerationRuntimeService',
@@ -428,6 +445,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
     expect(coverage.missingIntegrations).toEqual([])
     expect(coverage.observedIntegrations.map((item) => item.consumerKey).sort()).toEqual([
       'durationSuggestionService',
+      'projectCriticalPathService',
       'projectRemainingDurationForecastService',
       'scheduleAccelerationRuntimeService',
       'scheduleAccelerationService',

@@ -95,7 +95,8 @@ describe('taskStandardModelService wizard dependency batch', () => {
 
     const insertCalls = state.client.query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO task_dependencies'))
     expect(insertCalls).toHaveLength(1)
-    expect(insertCalls[0][1]).toHaveLength(16)
+    expect(insertCalls[0][1]).toHaveLength(18)
+    expect(insertCalls[0][1][8]).toEqual({})
     expect(String(insertCalls[0][0])).not.toContain('ON CONFLICT DO NOTHING')
 
     expect(state.createLineageBatchInTransaction).toHaveBeenCalledTimes(1)
@@ -146,7 +147,8 @@ describe('taskStandardModelService wizard dependency batch', () => {
     expect(rows).toHaveLength(1)
     const insertCalls = state.client.query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO task_dependencies'))
     expect(insertCalls).toHaveLength(1)
-    expect(insertCalls[0][1]).toHaveLength(8)
+    expect(insertCalls[0][1]).toHaveLength(9)
+    expect(insertCalls[0][1][8]).toEqual({})
     expect(insertCalls[0][1]).toEqual(expect.arrayContaining(['template_internal_flow']))
     expect(insertCalls[0][1]).not.toEqual(expect.arrayContaining(['template_cross_item_workflow']))
   })

@@ -233,7 +233,7 @@ describe('v1.4.23.1-A evidence artifact index service', () => {
 
     expect(entry).toBeDefined()
     expect(entry?.testEvidence).toEqual(expect.arrayContaining([
-      'server/src/__tests__/durationLearningScopeEvidenceWriterService.test.ts',
+      'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       'server/src/__tests__/wbsTemplateCandidateEventService.test.ts',
     ]))
     expect(entry?.remainingBlockers.join('\n')).not.toContain('upper-scope outcome units')

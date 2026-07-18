@@ -39,13 +39,25 @@ describe('task-summary production delay semantics', () => {
   })
 
   it('keeps production SQL from privately calculating on-time and delayed counts', () => {
-    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryCompareService.ts'), 'utf8')
 
-    expect(source).not.toContain('end_date::date AS planned_end_date')
-    expect(source).not.toContain('completed_at <= planned_end_date')
-    expect(source).not.toContain('completed_at > planned_end_date')
-    expect(source).not.toContain('actual_end_date > t.planned_end_date')
-    expect(source).toContain('isTaskDelayedByPeriodEnd(task, to, workCalendar)')
+    expect(routeSource).not.toContain('end_date::date AS planned_end_date')
+    expect(routeSource).not.toContain('completed_at <= planned_end_date')
+    expect(routeSource).not.toContain('completed_at > planned_end_date')
+    expect(routeSource).not.toContain('actual_end_date > t.planned_end_date')
+    expect(serviceSource).toContain('isTaskDelayedByPeriodEnd(task, period.to, input.workCalendar)')
+  })
+
+  it('delegates period and daily metrics to the task-summary service without fake progress fallback', () => {
+    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const compareAndDailySource = source.slice(source.indexOf("router.get('/projects/:id/task-summary/compare'"))
+
+    expect(compareAndDailySource).toContain('buildTaskSummaryCompareResults({')
+    expect(compareAndDailySource).toContain('buildDailyTaskProgressSummary({')
+    expect(compareAndDailySource).not.toContain('currentProgress - 10')
+    expect(compareAndDailySource).not.toContain('falling back to tasks table')
+    expect(compareAndDailySource).not.toContain('route-level-aggregation-approved')
   })
 
   it('uses planned_end_date before legacy end_date when deciding whether a task is overdue by a period end', () => {

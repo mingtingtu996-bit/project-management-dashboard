@@ -185,6 +185,44 @@ describe('construction dependency replay calibration service', () => {
     }))
   })
 
+  it('turns a manual predecessor correction without a published seed match into a dependency-rule gap candidate', async () => {
+    const report = await collectConstructionDependencyReplayCalibrationReport({
+      projectIds: ['project-1'],
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => [{
+        id: 'dep-manual-gap-1',
+        project_id: 'project-1',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'manual',
+        metadata: {
+          source: 'planning_table_manual_predecessor_edit',
+          learningSignal: 'manual_dependency_correction',
+          candidatePolicy: 'candidate_only_no_runtime_rule_mutation',
+        },
+        predecessor_task_id: 'task-waterproof',
+        predecessor_standard_work_code: 'BASEMENT-WATERPROOF',
+        predecessor_title: '地下室外墙防水',
+        predecessor_actual_end_date: '2026-06-10',
+        successor_task_id: 'task-backfill',
+        successor_standard_work_code: 'EARTHWORK-BACKFILL',
+        successor_title: '肥槽回填',
+        successor_actual_start_date: '2026-06-11',
+      }] as T[],
+    })
+
+    expect(report.calibrationQueues.dependencyRuleGapCandidates).toEqual([
+      expect.objectContaining({
+        matchedLayer: 'unmatched',
+        matchedSeedCode: 'candidate:BASEMENT-WATERPROOF->EARTHWORK-BACKFILL:FS',
+        sampleCount: 1,
+        projectCount: 1,
+        queueStatus: 'evidence_collection_required',
+        recommendation: 'map_dependency_to_l3_or_l4_seed',
+        sampleDependencyIds: ['dep-manual-gap-1'],
+      }),
+    ])
+  })
+
   it('records dependency-rule replay candidates as plan-network outcomes without mutating task dependencies', async () => {
     const rows = [
       {
@@ -257,6 +295,9 @@ describe('construction dependency replay calibration service', () => {
         source: 'construction_dependency_replay_calibration',
         matched_layer: 'cross_item_workflow',
         matched_seed_code: 'prefab_factory_to_site_hoist_handoff',
+        predecessor_stable_code: 'PFB-00-01-02-P01',
+        successor_stable_code: 'PFB-01-01-03-P01',
+        dependency_type: 'FS',
         sample_count: 2,
         project_count: 2,
         conflict_count: 0,
@@ -331,6 +372,50 @@ describe('construction dependency replay calibration service', () => {
       constructionCalendar,
       median_observed_wait_days: 2,
       suggested_lag_days: 2,
+    }))
+  })
+
+  it('binds learned dependency replay outcomes to the runtime publication that created the edges', async () => {
+    const publicationKey = 'duration_learning_runtime:dependency_rule_candidate:canary-1'
+    const rows = ['dep-1', 'dep-2', 'dep-3'].map((id, index) => ({
+      id,
+      project_id: 'project-1',
+      dependency_type: 'FS',
+      lag_days: 0,
+      source_type: 'duration_learning_runtime_publication',
+      metadata: {
+        seedRuleId: 'prefab_factory_to_site_hoist_handoff',
+        publicationKey,
+        publicationStage: 'canary',
+        selectionBasis: 'project_canary',
+      },
+      predecessor_task_id: `predecessor-${index}`,
+      predecessor_task_code: `PFB-00-01-02-P0${index + 1}`,
+      predecessor_actual_end_date: `2026-06-0${index + 1}`,
+      successor_task_id: `successor-${index}`,
+      successor_task_code: `PFB-01-01-03-P0${index + 1}`,
+      successor_actual_start_date: `2026-06-0${index + 4}`,
+    }))
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+
+    await collectAndPersistConstructionDependencyReplayCalibrationCandidates({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectIds: ['project-1'],
+      constructionCalendar: { basis: 'official_construction_calendar_seed', windows: [] },
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows as T[],
+      queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+        calls.push({ sql, params })
+        return [] as T[]
+      },
+    })
+
+    const outcome = calls.find((call) => call.sql.includes('INSERT INTO public.duration_plan_network_outcomes'))
+    expect(outcome?.params[0]).toContain(publicationKey)
+    expect(outcome?.params[8]).toBe(publicationKey)
+    expect(outcome?.params[9]).toEqual(expect.objectContaining({
+      runtime_publication_key: publicationKey,
+      runtime_publication_stage: 'canary',
+      runtime_publication_selection_basis: 'project_canary',
     }))
   })
 

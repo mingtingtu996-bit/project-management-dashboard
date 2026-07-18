@@ -12,6 +12,7 @@ vi.mock('../database.js', () => ({
 
 const {
   replaceDurationBenchmarkAtomically,
+  stageDurationBenchmarkCandidateAtomically,
   replaceProjectProductivityCalibrationAtomically,
   rollbackProjectProductivityCalibrationAtomically,
 } = await import('../services/durationLearningAssetAtomicStoreService.js')
@@ -43,6 +44,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
       benchmark_version: 'v1:2026-07-14',
       sample_count: 100,
       p50_days: 8,
+      duration_day_basis: 'construction_production_day',
       is_current: true,
       is_active: true,
     })
@@ -54,8 +56,46 @@ describe('durationLearningAssetAtomicStoreService', () => {
       expect.stringContaining('update public.duration_benchmarks'),
       expect.stringContaining('insert into public.duration_benchmarks'),
     ]))
+    const insertCall = mocks.query.mock.calls.find(([statement]) => String(statement).includes('insert into public.duration_benchmarks'))
+    expect(insertCall?.[0]).toContain('duration_day_basis')
+    expect(insertCall?.[1]).toContain('construction_production_day')
     expect(sql.at(-1)).toBe('commit')
     expect(mocks.release).toHaveBeenCalledOnce()
+  })
+
+  it('stages a learned benchmark candidate without retiring the current stable benchmark', async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'commit', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('select id from public.duration_benchmarks')) return { rows: [], rowCount: 0 }
+      if (normalized.includes('insert into public.duration_benchmarks')) {
+        return { rows: [{ id: 'benchmark-candidate', is_current: false }], rowCount: 1 }
+      }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    const row = await stageDurationBenchmarkCandidateAtomically({
+      company_id: 'company-1',
+      benchmark_key: 'work-1',
+      benchmark_version: 'candidate:2026-07-17:abc',
+      duration_day_basis: 'construction_production_day',
+      p50_days: 8,
+      is_current: false,
+      is_active: true,
+      metadata: {
+        candidate_operation_id: 'abc',
+        runtime_publication_status: 'candidate',
+      },
+    })
+
+    expect(row).toEqual(expect.objectContaining({ id: 'benchmark-candidate', is_current: false }))
+    const sql = mocks.query.mock.calls.map(([statement]) => String(statement).replace(/\s+/g, ' ').trim().toLowerCase())
+    expect(sql).not.toEqual(expect.arrayContaining([
+      expect.stringContaining('set is_current = false'),
+    ]))
+    const insertCall = mocks.query.mock.calls.find(([statement]) => String(statement).includes('insert into public.duration_benchmarks'))
+    expect(insertCall?.[1]).toContain(false)
+    expect(sql.at(-1)).toBe('commit')
   })
 
   it('rolls back benchmark retirement when the replacement insert fails', async () => {

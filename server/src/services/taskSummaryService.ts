@@ -4,6 +4,7 @@ import { executeSQL, executeSQLOne } from './dbService.js'
 import type { Task, TaskCompletionReport } from '../types/db.js'
 import { logger } from '../middleware/logger.js'
 import { delayDayDelta, inclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
+import { isCompletedTask } from '../utils/taskStatus.js'
 import {
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -53,7 +54,7 @@ export function calculateTaskCompletionDelayStats(
 ): DelayStats {
   const plannedEndValue = task.planned_end_date || task.end_date
   const actualEndValue = task.actual_end_date || (
-    String(task.status ?? '').toLowerCase() === 'completed' || Number(task.progress ?? 0) >= 100
+    isCompletedTask(task)
       ? task.updated_at
       : null
   )

@@ -51,7 +51,10 @@ import {
   buildTemplateGenerateCreateOperations,
   generateWbsTemplateRows,
 } from '../services/wbsTemplateGenerationService.js'
-import { recordWbsTemplateCandidateEvent } from '../services/wbsTemplateCandidateEventService.js'
+import {
+  buildSpecialWorkDurationCandidateNodes,
+  recordWbsTemplateCandidateEvent,
+} from '../services/wbsTemplateCandidateEventService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { PlanningTableOperation } from '../types/planningTable.js'
 import type {
@@ -64,15 +67,10 @@ import type {
 import type { Milestone, PlanningDraftLockRecord, Task, TaskBaseline, TaskBaselineItem } from '../types/db.js'
 import { getProjectCompanyId } from '../auth/access.js'
 import {
-  buildIndependentDefaultMasterPlanTaskNetwork,
-  type ApprovedDurationMapping,
-  type IndependentTaskScopeAssignment,
-} from '../services/defaultMasterPlanIndependentTaskNetworkService.js'
-import { materializeIndependentDefaultMasterPlanTaskNetwork } from '../services/defaultMasterPlanIndependentTaskNetworkMaterializationService.js'
-import {
-  validateScopeObjectTypes,
-  validateTaskScopeConsistency,
-} from '../services/engineeringObjectService.js'
+  recordBaselinePublicationStructuredCause,
+  STRUCTURED_CAUSE_TAXONOMY,
+  type StructuredCauseCode,
+} from '../services/structuredCauseAttributionService.js'
 
 const router = Router()
 const draftLockService = new PlanningDraftLockService()
@@ -83,6 +81,9 @@ const BUSINESS_VERSION_BASELINE_STATUSES = new Set(['confirmed', 'pending_realig
 const BASELINE_DETAIL_CACHE_TTL_MS = 5000
 const SATISFIED_CONDITION_STATUSES = new Set(['completed', 'satisfied', 'confirmed', '已完成', '已满足', '已确认'])
 const RESOLVED_OBSTACLE_STATUSES = new Set(['resolved', 'closed', '已解决', '已关闭'])
+const BASELINE_CHANGE_CAUSE_CODES = new Set<StructuredCauseCode>(
+  STRUCTURED_CAUSE_TAXONOMY.map((entry) => entry.code),
+)
 
 type UniqueConstraintErrorLike = {
   code?: string
@@ -266,6 +267,48 @@ function badRequest(message: string, code = 'VALIDATION_ERROR') {
     error: { code, message },
     timestamp: new Date().toISOString(),
   }
+}
+
+type BaselinePublicationCause = {
+  causeCode: StructuredCauseCode
+  rawText: string
+}
+
+function parseBaselinePublicationCause(body: unknown):
+  | { ok: true; value: BaselinePublicationCause }
+  | { ok: false; code: string; message: string } {
+  const payload = body && typeof body === 'object' && !Array.isArray(body)
+    ? body as Record<string, unknown>
+    : {}
+  const causeCode = typeof payload.cause_code === 'string' ? payload.cause_code.trim() : ''
+  const rawText = typeof payload.change_reason === 'string' ? payload.change_reason.trim() : ''
+
+  if (!causeCode || !rawText) {
+    return {
+      ok: false,
+      code: 'BASELINE_CHANGE_CAUSE_REQUIRED',
+      message: '发布项目基线前必须确认变更原因分类并保留原因原话。',
+    }
+  }
+  if (!BASELINE_CHANGE_CAUSE_CODES.has(causeCode as StructuredCauseCode) || rawText.length > 4000) {
+    return {
+      ok: false,
+      code: 'BASELINE_CHANGE_CAUSE_INVALID',
+      message: '项目基线变更原因分类无效，或原因原话超过 4000 个字符。',
+    }
+  }
+
+  return {
+    ok: true,
+    value: {
+      causeCode: causeCode as StructuredCauseCode,
+      rawText,
+    },
+  }
+}
+
+async function runInCurrentTransaction<T>(work: () => Promise<T>) {
+  return work()
 }
 
 function normalizeBaselineRow(
@@ -1579,133 +1622,6 @@ function buildBaselineConfirmationGateMessage(gate: ReturnType<typeof evaluateBa
   return `Baseline confirmation gate failed: ${summary}`
 }
 
-function readIndependentTaskScopeAssignment(body: unknown): IndependentTaskScopeAssignment {
-  const payload = readRecord(body)
-  const scope = readRecord(payload.scope_assignment ?? payload.scopeAssignment)
-  const keys: Array<keyof IndependentTaskScopeAssignment> = [
-    'engineering_object_id',
-    'phase_object_id',
-    'section_object_id',
-    'building_object_id',
-    'basement_object_id',
-    'floor_object_id',
-    'physical_zone_object_id',
-    'functional_area_object_id',
-  ]
-  return Object.fromEntries(keys.map((key) => [key, normalizeText(scope[key]) || null])) as IndependentTaskScopeAssignment
-}
-
-function readIndependentTaskScopeOverrides(body: unknown): Record<string, IndependentTaskScopeAssignment> {
-  const payload = readRecord(body)
-  const rawOverrides = readRecord(
-    payload.scope_assignments_by_candidate_item_id
-      ?? payload.scopeAssignmentsByCandidateItemId,
-  )
-  return Object.fromEntries(
-    Object.entries(rawOverrides)
-      .map(([candidateItemId, scope]) => [
-        normalizeText(candidateItemId),
-        readIndependentTaskScopeAssignment({ scope_assignment: scope }),
-      ])
-      .filter(([candidateItemId]) => Boolean(candidateItemId)),
-  ) as Record<string, IndependentTaskScopeAssignment>
-}
-
-const INDEPENDENT_TASK_SCOPE_KEYS: Array<keyof IndependentTaskScopeAssignment> = [
-  'engineering_object_id',
-  'phase_object_id',
-  'section_object_id',
-  'building_object_id',
-  'basement_object_id',
-  'floor_object_id',
-  'physical_zone_object_id',
-  'functional_area_object_id',
-]
-
-async function validateIndependentTaskNetworkScopeAssignments(
-  projectId: string,
-  plan: ReturnType<typeof buildIndependentDefaultMasterPlanTaskNetwork>,
-): Promise<Array<{ candidateItemIds: string[]; reason: string }>> {
-  const scopesByKey = new Map<string, {
-    scope: IndependentTaskScopeAssignment
-    candidateItemIds: string[]
-  }>()
-
-  for (const task of plan.tasks) {
-    const scope = Object.fromEntries(
-      INDEPENDENT_TASK_SCOPE_KEYS.map((key) => [key, normalizeText(task.payload[key]) || null]),
-    ) as IndependentTaskScopeAssignment
-    const scopeKey = JSON.stringify(INDEPENDENT_TASK_SCOPE_KEYS.map((key) => scope[key] ?? null))
-    const existing = scopesByKey.get(scopeKey)
-    if (existing) {
-      existing.candidateItemIds.push(task.sourceBaselineItemId)
-    } else {
-      scopesByKey.set(scopeKey, {
-        scope,
-        candidateItemIds: [task.sourceBaselineItemId],
-      })
-    }
-  }
-
-  const blockers: Array<{ candidateItemIds: string[]; reason: string }> = []
-  for (const { scope, candidateItemIds } of scopesByKey.values()) {
-    const typeError = await validateScopeObjectTypes(projectId, scope)
-    const consistencyError = typeError ? null : await validateTaskScopeConsistency(projectId, scope)
-    const reason = typeError ?? consistencyError
-    if (reason) {
-      blockers.push({ candidateItemIds, reason })
-    }
-  }
-  return blockers
-}
-
-function readApprovedDurationMappings(body: unknown): ApprovedDurationMapping[] {
-  const payload = readRecord(body)
-  const mappings = Array.isArray(payload.approved_duration_mappings)
-    ? payload.approved_duration_mappings
-    : Array.isArray(payload.approvedDurationMappings)
-      ? payload.approvedDurationMappings
-      : []
-  return mappings.map((value) => {
-    const mapping = readRecord(value)
-    return {
-      sampleId: normalizeText(mapping.sample_id ?? mapping.sampleId),
-      candidateItemId: normalizeText(mapping.candidate_item_id ?? mapping.candidateItemId),
-      actualDurationDays: Number(mapping.actual_duration_days ?? mapping.actualDurationDays),
-      decision: normalizeLower(mapping.decision) as ApprovedDurationMapping['decision'],
-    }
-  })
-}
-
-async function validateApprovedDurationMappingSamples(
-  projectId: string,
-  mappings: ApprovedDurationMapping[],
-): Promise<string[]> {
-  if (mappings.length === 0) return []
-  const sampleIds = [...new Set(mappings.map((mapping) => mapping.sampleId).filter(Boolean))]
-  const { data, error } = await supabase
-    .from('duration_experience_samples')
-    .select('id, project_id, actual_duration, sample_status, included_in_benchmark')
-    .eq('project_id', projectId)
-    .in('id', sampleIds)
-  if (error) throw error
-
-  const sampleById = new Map((data ?? []).map((sample: any) => [String(sample.id), sample]))
-  return [...new Set(mappings.flatMap((mapping) => {
-    const sample = sampleById.get(mapping.sampleId)
-    if (!sample) return ['approved_duration_mapping_sample_not_found']
-    const sampleStatus = normalizeLower(sample.sample_status)
-    const sampleDuration = Number(sample.actual_duration)
-    return [
-      sampleStatus === 'active' || sampleStatus === 'accepted' ? null : 'approved_duration_mapping_sample_not_accepted',
-      sample.included_in_benchmark === true ? null : 'approved_duration_mapping_sample_not_in_benchmark',
-      Number.isFinite(sampleDuration) && sampleDuration > 0 && sampleDuration === mapping.actualDurationDays
-        ? null
-        : 'approved_duration_mapping_sample_duration_mismatch',
-    ].filter((value): value is string => Boolean(value))
-  }))]
-}
-
 async function preserveBaselineDraftSnapshots(
   projectId: string,
   items: TaskBaselineItemInput[] | undefined,
@@ -1908,6 +1824,7 @@ async function persistBaselinePublication(params: {
   confirmedBy: string | null
   governanceMetadata?: Record<string, unknown> | null
   projectId: string
+  cause: BaselinePublicationCause
 }): Promise<{
   baseline: TaskBaseline
   items: TaskBaselineItem[]
@@ -1934,6 +1851,18 @@ async function persistBaselinePublication(params: {
       || getNumericVersion(current.version) !== params.currentBusinessVersion
     ) {
       throw new PlanningStateTransitionError('VERSION_CONFLICT', 'Baseline changed before confirmation')
+    }
+
+    const projectScopeResult = await client.query(
+      'SELECT company_id FROM public.projects WHERE id = $1 LIMIT 1',
+      [params.projectId],
+    )
+    const companyId = String(projectScopeResult.rows[0]?.company_id ?? '').trim()
+    if (!companyId) {
+      throw Object.assign(new Error('Project company scope was not found for baseline publication.'), {
+        code: 'BASELINE_PROJECT_COMPANY_SCOPE_REQUIRED',
+        statusCode: 409,
+      })
     }
 
     let nextVersion = params.currentBusinessVersion
@@ -2006,6 +1935,20 @@ async function persistBaselinePublication(params: {
         )
       }
     }
+
+    await recordBaselinePublicationStructuredCause({
+      companyId,
+      projectId: params.projectId,
+      baselineId: params.baseline.id,
+      previousStatus: params.baseline.status,
+      nextStatus: params.nextStatus,
+      causeCode: params.cause.causeCode,
+      rawText: params.cause.rawText,
+      actorId: params.confirmedBy ?? '',
+    }, {
+      queryExec: (sql, values) => client.query(sql, values),
+      withTransaction: runInCurrentTransaction,
+    })
 
     await client.query('COMMIT')
     clearBaselineDetailCache(params.baseline.id)
@@ -2504,135 +2447,6 @@ router.put(
 )
 
 router.post(
-  '/:id/materialize-independent-task-network',
-  validateIdParam,
-  requireProjectEditor(async (req) => {
-    const baseline = await getBaselineRecord(req.params.id)
-    return baseline?.project_id
-  }),
-  asyncHandler(async (req, res) => {
-    const { id } = req.params
-    const baseline = await getBaselineRecord(id)
-    if (!baseline) {
-      return res.status(404).json(badRequest('项目基线不存在', 'NOT_FOUND'))
-    }
-    if (!isDraftBaselineStatus(baseline.status)) {
-      return res.status(409).json(badRequest('只有草稿候选基线可以实例化为独立任务网络', 'INVALID_STATE'))
-    }
-
-    const projectId = normalizeText(req.body?.project_id ?? req.body?.projectId ?? baseline.project_id)
-    if (projectId !== baseline.project_id) {
-      return res.status(403).json(badRequest('项目与候选基线不匹配', 'PROJECT_MISMATCH'))
-    }
-
-    const items = await getBaselineItems(id, baseline.project_id)
-    const approvedDurationMappings = readApprovedDurationMappings(req.body)
-    const plan = buildIndependentDefaultMasterPlanTaskNetwork({
-      projectId,
-      baseline,
-      candidateItems: items,
-      scopeAssignment: readIndependentTaskScopeAssignment(req.body),
-      scopeAssignmentsByCandidateItemId: readIndependentTaskScopeOverrides(req.body),
-      materializedByUserId: req.user?.id ?? '',
-      approvedDurationMappings,
-    })
-    if (plan.status !== 'ready') {
-      return res.status(422).json({
-        success: false,
-        error: {
-          code: 'INDEPENDENT_TASK_NETWORK_PLAN_BLOCKED',
-          message: '独立任务网络预检未通过，未写入任何任务或依赖。',
-          details: { blockers: plan.blockers },
-        },
-        data: { plan },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    const scopeBlockers = await validateIndependentTaskNetworkScopeAssignments(projectId, plan)
-    if (scopeBlockers.length > 0) {
-      return res.status(422).json({
-        success: false,
-        error: {
-          code: 'INDEPENDENT_TASK_NETWORK_SCOPE_INVALID',
-          message: 'Independent task-network scope assignment is invalid for this project.',
-          details: { blockers: scopeBlockers },
-        },
-        data: { plan },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    const mode = normalizeLower(req.body?.mode ?? req.body?.execution_mode) === 'execute' ? 'execute' : 'dry_run'
-    if (mode !== 'execute') {
-      return res.json({
-        success: true,
-        data: {
-          mode,
-          plan,
-          execution_authorization_required: true,
-          runtime_publication_created: false,
-        },
-        timestamp: new Date().toISOString(),
-      } satisfies ApiResponse)
-    }
-
-    if (!readBoolean(req.body?.allow_independent_task_network_materialization)) {
-      return res.status(409).json(badRequest(
-        '执行独立任务网络实例化必须显式传入 allow_independent_task_network_materialization=true',
-        'INDEPENDENT_TASK_NETWORK_EXECUTION_NOT_AUTHORIZED',
-      ))
-    }
-
-    const mappingSampleBlockers = await validateApprovedDurationMappingSamples(projectId, approvedDurationMappings)
-    if (mappingSampleBlockers.length > 0) {
-      return res.status(422).json({
-        success: false,
-        error: {
-          code: 'APPROVED_DURATION_MAPPING_SAMPLE_INVALID',
-          message: '已确认的工期映射样本未通过项目范围、采纳状态或工期一致性校验。',
-          details: { blockers: mappingSampleBlockers },
-        },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    const materialization = await materializeIndependentDefaultMasterPlanTaskNetwork({
-      projectId,
-      baselineId: id,
-      actorUserId: req.user?.id ?? '',
-      plan,
-    })
-    clearBaselineDetailCache(id)
-    broadcastProjectTasksChanged({
-      projectId,
-      changedTaskIds: materialization.createdTaskIds,
-      source: 'system',
-      revision: Date.now(),
-    })
-    broadcastPlanningTableChanged({
-      projectId,
-      surface: 'baseline',
-      resourceId: id,
-      changedRowIds: items.map((item) => item.id),
-      source: 'system',
-      revision: Date.now(),
-    })
-
-    return res.status(201).json({
-      success: true,
-      data: {
-        mode,
-        plan,
-        materialization,
-        runtime_publication_created: false,
-      },
-      timestamp: new Date().toISOString(),
-    } satisfies ApiResponse)
-  }),
-)
-
-router.post(
   '/:id/commit',
   validateIdParam,
   requireProjectEditor(async (req) => {
@@ -2773,6 +2587,7 @@ router.post(
         generatedRowCount: generated.rows.length,
         retainedRowCount: generated.rows.length,
         rejectedRowCount: 0,
+        durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generated.rows),
         actorId: req.user?.id ?? null,
         metadata: {
           baselineId: id,
@@ -2859,6 +2674,10 @@ router.post(
     if (currentBusinessVersion != null && expectedVersion != null && currentBusinessVersion !== expectedVersion) {
       return res.status(409).json(badRequest('版本号已变化，请刷新后重试', 'VERSION_CONFLICT'))
     }
+    const publicationCause = parseBaselinePublicationCause(req.body)
+    if (publicationCause.ok === false) {
+      return res.status(400).json(badRequest(publicationCause.message, publicationCause.code))
+    }
 
     try {
       await draftLockService.acquireDraftLock({
@@ -2913,20 +2732,11 @@ router.post(
         confirmedAt,
         confirmedBy: req.user?.id ?? null,
         projectId: baseline.project_id,
+        cause: publicationCause.value,
       })
       const data = publication.baseline
       items = publication.items
 
-      await writeLog({
-        project_id: baseline.project_id,
-        entity_type: 'baseline',
-        entity_id: id,
-        field_name: 'status',
-        old_value: baseline.status,
-        new_value: nextStatus,
-        changed_by: req.user?.id ?? null,
-        change_source: 'manual_adjusted',
-      })
       await Promise.all(publication.archivedBaselines.map((archivedBaseline) => writeLog({
         project_id: archivedBaseline.project_id,
         entity_type: 'baseline',
@@ -2937,6 +2747,14 @@ router.post(
         changed_by: req.user?.id ?? null,
         change_source: 'manual_adjusted',
       })))
+      broadcastPlanningTableChanged({
+        projectId: baseline.project_id,
+        surface: 'baseline',
+        resourceId: id,
+        changedRowIds: items.map((item) => item.id),
+        source: 'baseline_publish',
+        revision: confirmedAt,
+      })
 
       const responseData = normalizeBaselineRow(
         data,
@@ -2997,6 +2815,10 @@ router.post(
     if (currentBusinessVersion != null && expectedVersion != null && currentBusinessVersion !== expectedVersion) {
       return res.status(409).json(badRequest('版本号已发生变化，请刷新后重试', 'VERSION_CONFLICT'))
     }
+    const publicationCause = parseBaselinePublicationCause(req.body)
+    if (publicationCause.ok === false) {
+      return res.status(400).json(badRequest(publicationCause.message, publicationCause.code))
+    }
 
     try {
       await draftLockService.acquireDraftLock({
@@ -3051,20 +2873,11 @@ router.post(
         confirmedAt,
         confirmedBy: req.user?.id ?? null,
         projectId: baseline.project_id,
+        cause: publicationCause.value,
       })
       const data = publication.baseline
       items = publication.items
 
-      await writeLog({
-        project_id: baseline.project_id,
-        entity_type: 'baseline',
-        entity_id: id,
-        field_name: 'status',
-        old_value: baseline.status,
-        new_value: nextStatus,
-        changed_by: req.user?.id ?? null,
-        change_source: 'manual_adjusted',
-      })
       await Promise.all(publication.archivedBaselines.map((archivedBaseline) => writeLog({
         project_id: archivedBaseline.project_id,
         entity_type: 'baseline',
@@ -3075,6 +2888,14 @@ router.post(
         changed_by: req.user?.id ?? null,
         change_source: 'manual_adjusted',
       })))
+      broadcastPlanningTableChanged({
+        projectId: baseline.project_id,
+        surface: 'baseline',
+        resourceId: id,
+        changedRowIds: items.map((item) => item.id),
+        source: 'baseline_publish',
+        revision: confirmedAt,
+      })
 
       const responseData = normalizeBaselineRow(
         data,

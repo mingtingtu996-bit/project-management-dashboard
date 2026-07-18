@@ -28,6 +28,10 @@ import {
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
 import { buildDownstreamDurationAssetConsumption } from './durationAssetDownstreamConsumptionService.js'
+import {
+  simulateDurationNetworkProbability,
+  type DurationNetworkProbabilityResult,
+} from './durationNetworkMonteCarloService.js'
 import type {
   DurationAssetConsumptionReceipt,
   DurationAssetConsumptionSummary,
@@ -67,6 +71,15 @@ export type ProjectRemainingDurationForecast = {
       mergeBiasDays?: number
       mergeBiasChainCount?: number
       mergeBiasedFinishDate?: string | null
+      probabilityBasis?: 'monte_carlo' | 'pert_analytic'
+      networkProbability?: DurationNetworkProbabilityResult & {
+        p20RemainingDays: number | null
+        p50RemainingDays: number | null
+        p80RemainingDays: number | null
+        p20FinishDate: string | null
+        p50FinishDate: string | null
+        p80FinishDate: string | null
+      }
       confidenceBandDecision?: {
         status: 'applied' | 'observed' | 'missing_confidence_band' | 'not_applicable'
         governingFinishSource: 'confidence_band' | 'merge_bias' | 'deterministic_finish'
@@ -74,6 +87,7 @@ export type ProjectRemainingDurationForecast = {
         mergeBiasApplied: boolean
         confidenceBandAvailableCount: number
         confidenceBandMissingCount: number
+        probabilityBasis: 'monte_carlo' | 'pert_analytic'
       }
     }
     runtimeAdjustment?: {
@@ -589,11 +603,87 @@ function computeCriticalMergeBiasDays(
   }
 }
 
+function readRowProbabilityDuration(row: ScheduleAccelerationRow) {
+  const durationForecast = readRecord(row.values.durationForecast)
+  const snakeDurationForecast = readRecord(row.values.duration_forecast)
+  return readRecord(
+    row.values.probabilityDuration
+      ?? row.values.probability_duration
+      ?? durationForecast.probabilityDuration
+      ?? durationForecast.probability_duration
+      ?? snakeDurationForecast.probabilityDuration
+      ?? snakeDurationForecast.probability_duration,
+  )
+}
+
+function readRowProbabilityRemainingDays(
+  row: ScheduleAccelerationRow,
+  percentile: 'p20' | 'p50' | 'p80',
+) {
+  const probability = readRowProbabilityDuration(row)
+  const keys = percentile === 'p20'
+    ? ['p20RemainingDays', 'p20_remaining_days']
+    : percentile === 'p50'
+      ? ['p50RemainingDays', 'p50_remaining_days']
+      : ['p80RemainingDays', 'p80_remaining_days']
+  for (const key of keys) {
+    const value = readNumber(probability[key])
+    if (value !== null && value > 0) return value
+  }
+  return percentile === 'p50' ? readRowRemainingDurationDays(row) : null
+}
+
+function releaseOffsetDays(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const plannedStart = normalizeDate(row.values.planned_start_date ?? row.values.start_date)
+  if (!plannedStart || (signedDurationDayDelta(asOfDate, plannedStart) ?? 0) <= 0) return 0
+  return Math.max(0, projectRemainingDurationDays(asOfDate, plannedStart, calendar) - 1)
+}
+
+function buildNetworkProbability(params: {
+  rows: ScheduleAccelerationRow[]
+  projectId: string | null
+  asOfDate: string
+  calendar?: ConstructionCalendarContext | null
+}) {
+  const rowIds = new Set(params.rows.map((row) => row.clientRowId))
+  const tasks = params.rows.map((row) => ({
+    id: row.clientRowId,
+    p20Days: readRowProbabilityRemainingDays(row, 'p20'),
+    p50Days: readRowProbabilityRemainingDays(row, 'p50'),
+    p80Days: readRowProbabilityRemainingDays(row, 'p80'),
+    releaseOffsetDays: releaseOffsetDays(row, params.asOfDate, params.calendar),
+  }))
+  const dependencies = params.rows.flatMap((row) => row.predecessorDependencies
+    .filter((dependency) => rowIds.has(dependency.clientRowId))
+    .map((dependency) => ({
+      predecessorTaskId: dependency.clientRowId,
+      successorTaskId: row.clientRowId,
+      dependencyType: dependency.dependencyType,
+      lagDays: dependency.lagDays,
+    })))
+  return simulateDurationNetworkProbability({
+    seed: [
+      params.projectId ?? 'no_project',
+      params.asOfDate,
+      ...tasks.map((task) => task.id).sort(),
+    ].join(':'),
+    tasks,
+    dependencies,
+    simulationCount: 1000,
+    scenarioCorrelation: 0.35,
+  })
+}
+
 function buildConfidenceBandDecision(params: {
   deterministicFinishDate: string | null
   mergeBiasedFinishDate: string | null
   confidenceBandFinishDate: string | null
   mergeBias: ReturnType<typeof computeCriticalMergeBiasDays>
+  probabilityBasis: 'monte_carlo' | 'pert_analytic'
 }) {
   const mergeBiasApplied = Number(params.mergeBias.mergeBiasDays ?? 0) > 0
   const governingCandidates = [
@@ -618,6 +708,7 @@ function buildConfidenceBandDecision(params: {
     mergeBiasApplied,
     confidenceBandAvailableCount: params.mergeBias.confidenceBandAvailableCount,
     confidenceBandMissingCount: params.mergeBias.confidenceBandMissingCount,
+    probabilityBasis: params.probabilityBasis,
   }
 }
 
@@ -1028,11 +1119,38 @@ export function buildProjectRemainingDurationForecast(params: {
   const latestStartGateFinishDate = latestDate(startGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestFinishGateFinishDate = latestDate(finishGateRows.map((row) => readExplicitExternalGateFinishDate(row)))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
-  const mergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate, constructionCalendar)
+  const networkProbabilityResult = buildNetworkProbability({
+    rows: internalRemainingRows,
+    projectId: normalizeText(params.projectId) || firstProjectId(scheduleRows),
+    asOfDate,
+    calendar: constructionCalendar,
+  })
+  const monteCarloApplied = networkProbabilityResult.probabilityBasis === 'monte_carlo'
+    && networkProbabilityResult.p20DurationDays !== null
+    && networkProbabilityResult.p50DurationDays !== null
+    && networkProbabilityResult.p80DurationDays !== null
+  const networkP20FinishDate = monteCarloApplied
+    ? addProductionDays(asOfDate, networkProbabilityResult.p20DurationDays, constructionCalendar)
+    : null
+  const networkP50FinishDate = monteCarloApplied
+    ? addProductionDays(asOfDate, networkProbabilityResult.p50DurationDays, constructionCalendar)
+    : null
+  const networkP80FinishDate = monteCarloApplied
+    ? addProductionDays(asOfDate, networkProbabilityResult.p80DurationDays, constructionCalendar)
+    : null
+  const analyticMergeBias = computeCriticalMergeBiasDays(internalCriticalRows, asOfDate, constructionCalendar)
+  const mergeBias = monteCarloApplied
+    ? {
+        ...analyticMergeBias,
+        mergeBiasDays: 0,
+        mergeBiasChainCount: 0,
+      }
+    : analyticMergeBias
   const deterministicInternalFinishDate = latestDate([
     latestRemainingFinishDate,
     latestCriticalFinishDate,
     criticalPathSpanFinishDate,
+    networkP50FinishDate,
     asOfDate,
   ])
   const mergeBiasedFinishDate = mergeBias.mergeBiasDays > 0
@@ -1041,8 +1159,9 @@ export function buildProjectRemainingDurationForecast(params: {
   const confidenceBandDecision = buildConfidenceBandDecision({
     deterministicFinishDate: deterministicInternalFinishDate,
     mergeBiasedFinishDate,
-    confidenceBandFinishDate,
+    confidenceBandFinishDate: networkP80FinishDate ?? confidenceBandFinishDate,
     mergeBias,
+    probabilityBasis: monteCarloApplied ? 'monte_carlo' : 'pert_analytic',
   })
   const rawInternalWorkFinishDate = confidenceBandDecision.governingFinishDate
   const pressureProgressExtraDays = computeRuntimePressureExtraDays(params.runtimeExecutionFacts, internalCriticalRows.length)
@@ -1174,12 +1293,22 @@ export function buildProjectRemainingDurationForecast(params: {
       criticalPath: {
         remainingTaskCount: internalCriticalRows.length,
         latestCriticalFinishDate,
-        optimisticBandFinishDate,
-        confidenceBandFinishDate,
+        optimisticBandFinishDate: networkP20FinishDate ?? optimisticBandFinishDate,
+        confidenceBandFinishDate: networkP80FinishDate ?? confidenceBandFinishDate,
         criticalPathSpanFinishDate,
         mergeBiasDays: mergeBias.mergeBiasDays,
         mergeBiasChainCount: mergeBias.mergeBiasChainCount,
         mergeBiasedFinishDate,
+        probabilityBasis: monteCarloApplied ? 'monte_carlo' : 'pert_analytic',
+        networkProbability: {
+          ...networkProbabilityResult,
+          p20RemainingDays: networkProbabilityResult.p20DurationDays,
+          p50RemainingDays: networkProbabilityResult.p50DurationDays,
+          p80RemainingDays: networkProbabilityResult.p80DurationDays,
+          p20FinishDate: networkP20FinishDate ?? optimisticBandFinishDate,
+          p50FinishDate: networkP50FinishDate ?? deterministicInternalFinishDate,
+          p80FinishDate: networkP80FinishDate ?? confidenceBandFinishDate,
+        },
         confidenceBandDecision,
       },
       runtimeAdjustment: {

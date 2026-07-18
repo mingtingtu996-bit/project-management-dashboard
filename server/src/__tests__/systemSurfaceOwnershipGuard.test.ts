@@ -92,6 +92,11 @@ describe('system surface ownership guard', () => {
         id: 'algorithm_asset_candidate_events',
         assignment: expect.objectContaining({ architectureUnit: '学习治理环' }),
       }),
+      expect.objectContaining({
+        kind: 'table',
+        id: 'structured_cause_attributions',
+        assignment: expect.objectContaining({ architectureUnit: '主执行环：描述分析' }),
+      }),
     ]))
   })
 })

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Database, RefreshCw, Send, ShieldCheck, XCircle } from 'lucide-react'
 
-import { V14231PageReadinessBoundary } from '@/components/governance/V14231PageReadinessBoundary'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,19 +13,26 @@ import {
   type V14231ActionableSurface,
 } from '@/services/v14231ReadinessApi'
 import {
+  getRuleAssetOperationSurfaceKey,
+  RULE_ASSET_ACTION_SURFACE_KEYS,
+} from '@/services/v14231PageActionReadiness'
+import {
   type ConstructionOrganizationPlanNetworkDraft,
   type ConstructionOrganizationPlanNetworkDraftReport,
   executeRuleAssetGovernanceWorkbenchOperation,
   getConstructionOrganizationPlanNetworkDrafts,
   getRuleAssetGovernanceWorkbenchReadiness,
+  getStructuredCauseQualityMetrics,
   type RuleAssetGovernanceWorkbenchAssetType,
   type RuleAssetGovernanceWorkbenchGate,
   type RuleAssetGovernanceWorkbenchOperationAction,
   type RuleAssetGovernanceWorkbenchOperationResult,
   type RuleAssetGovernanceWorkbenchReadiness,
+  type StructuredCauseQualityMetrics,
 } from '@/services/ruleAssetGovernanceWorkbenchApi'
 
-const CONSTRUCTION_ORGANIZATION_RUNTIME_ACTION_SURFACE_KEY = 'construction_organization_runtime_publication_action'
+const RULE_ASSET_ACTION_SURFACE_KEYS_TO_LOAD = Object.values(RULE_ASSET_ACTION_SURFACE_KEYS)
+const CONSTRUCTION_ORGANIZATION_ASSET_TYPE = 'construction_organization_plan_network' as const
 
 const GATE_LABELS: Record<string, string> = {
   asset_inventory_diagnostics: '资产台账',
@@ -836,15 +842,6 @@ function runtimeRecommendationIdentity(
   return option?.optionId ?? option?.draftNetworkKey ?? option?.publicationKey ?? null
 }
 
-function operationRequiresV14231ConstructionOrganizationActionGuard(
-  action: RuleAssetGovernanceWorkbenchOperationAction,
-  _assetType: RuleAssetGovernanceWorkbenchAssetType,
-) {
-  return action === 'runtime_apply'
-    || action === 'runtime_rollback_execution'
-    || action === 'runtime_rollback'
-}
-
 function draftBusinessType(draft: ConstructionOrganizationPlanNetworkDraft | null | undefined) {
   return String(draft?.businessType ?? '').trim()
 }
@@ -869,9 +866,12 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
   const [draftReport, setDraftReport] = useState<ConstructionOrganizationPlanNetworkDraftReport | null>(null)
   const [draftLoading, setDraftLoading] = useState(false)
   const [draftError, setDraftError] = useState<string | null>(null)
+  const [causeQualityMetrics, setCauseQualityMetrics] = useState<StructuredCauseQualityMetrics | null>(null)
+  const [causeQualityLoading, setCauseQualityLoading] = useState(false)
+  const [causeQualityError, setCauseQualityError] = useState<string | null>(null)
   const [selectedDraftKey, setSelectedDraftKey] = useState<string | null>(null)
-  const [constructionOrganizationActionSurface, setConstructionOrganizationActionSurface] = useState<V14231ActionableSurface | null>(null)
-  const [constructionOrganizationActionSurfaceFailed, setConstructionOrganizationActionSurfaceFailed] = useState(false)
+  const [actionSurfaces, setActionSurfaces] = useState<Record<string, V14231ActionableSurface>>({})
+  const [failedActionSurfaceKeys, setFailedActionSurfaceKeys] = useState<string[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -892,17 +892,20 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
   useEffect(() => {
     let mounted = true
 
-    setConstructionOrganizationActionSurfaceFailed(false)
-    fetchV14231ActionableSurface(CONSTRUCTION_ORGANIZATION_RUNTIME_ACTION_SURFACE_KEY)
-      .then((surface) => {
-        if (mounted) setConstructionOrganizationActionSurface(surface)
-      })
-      .catch(() => {
-        if (mounted) {
-          setConstructionOrganizationActionSurface(null)
-          setConstructionOrganizationActionSurfaceFailed(true)
-        }
-      })
+    setFailedActionSurfaceKeys([])
+    Promise.all(RULE_ASSET_ACTION_SURFACE_KEYS_TO_LOAD.map(async (key) => {
+      try {
+        return { key, surface: await fetchV14231ActionableSurface(key), failed: false }
+      } catch {
+        return { key, surface: null, failed: true }
+      }
+    })).then((results) => {
+      if (!mounted) return
+      setActionSurfaces(Object.fromEntries(
+        results.flatMap((result) => result.surface ? [[result.key, result.surface]] : []),
+      ))
+      setFailedActionSurfaceKeys(results.filter((result) => result.failed).map((result) => result.key))
+    })
 
     return () => {
       mounted = false
@@ -932,9 +935,33 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     }
   }, [draftProjectId])
 
+  const loadCauseQualityMetrics = useCallback(async () => {
+    const projectId = draftProjectId.trim()
+    if (!projectId) {
+      setCauseQualityMetrics(null)
+      setCauseQualityError(null)
+      setCauseQualityLoading(false)
+      return
+    }
+    setCauseQualityLoading(true)
+    setCauseQualityError(null)
+    try {
+      setCauseQualityMetrics(await getStructuredCauseQualityMetrics(projectId))
+    } catch (err) {
+      setCauseQualityMetrics(null)
+      setCauseQualityError(getApiErrorMessage(err, '归因质量暂时不可读取，请稍后重试。'))
+    } finally {
+      setCauseQualityLoading(false)
+    }
+  }, [draftProjectId])
+
   useEffect(() => {
     void loadPlanNetworkDrafts()
   }, [loadPlanNetworkDrafts])
+
+  useEffect(() => {
+    void loadCauseQualityMetrics()
+  }, [loadCauseQualityMetrics])
 
   const gates = useMemo(() => report?.gates ?? [], [report])
   const summary = report?.summary
@@ -950,31 +977,57 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
   const optionComparisonPackage = draftReport?.optionComparisonPackage ?? null
   const optionComparisonItems = optionComparisonPackage?.options ?? []
   const selectedDraft = useMemo(() => planNetworkDrafts.find((draft) => draft.draftNetworkKey === selectedDraftKey) ?? null, [planNetworkDrafts, selectedDraftKey])
-  const canUseConstructionOrganizationStableAction = canUseV14231ActionableSurfaceAsStableAction(constructionOrganizationActionSurface)
-  const constructionOrganizationActionGuardReason = constructionOrganizationActionSurfaceFailed
-    ? 'C-13 action surface 未能读取，已按 display-only 处理。'
-    : constructionOrganizationActionSurface
-      ? `C-13 ${constructionOrganizationActionSurface.status}：施工组织运行期动作仍需真实库、发布、监控与回滚证据。`
-      : 'C-13 action surface 读取中，施工组织运行期动作暂不可提交。'
-  const operationFormRequiresV14231ActionGuard = operationRequiresV14231ConstructionOrganizationActionGuard(
+  const canUseRuleAssetAction = useCallback((
+    action: RuleAssetGovernanceWorkbenchOperationAction,
+    assetType: RuleAssetGovernanceWorkbenchAssetType,
+  ) => {
+    const key = getRuleAssetOperationSurfaceKey(action, assetType)
+    return key ? canUseV14231ActionableSurfaceAsStableAction(actionSurfaces[key]) : false
+  }, [actionSurfaces])
+  const ruleAssetActionGuardReason = useCallback((
+    action: RuleAssetGovernanceWorkbenchOperationAction,
+    assetType: RuleAssetGovernanceWorkbenchAssetType,
+  ) => {
+    const key = getRuleAssetOperationSurfaceKey(action, assetType)
+    if (!key) return '该操作未登记 action surface，已按 display-only 处理。'
+    if (failedActionSurfaceKeys.includes(key)) return `${key} 未能读取，已按 display-only 处理。`
+    const surface = actionSurfaces[key]
+    return surface
+      ? `${key} 当前为 ${surface.status}，该操作暂不可提交。`
+      : `${key} 读取中，该操作暂不可提交。`
+  }, [actionSurfaces, failedActionSurfaceKeys])
+  const operationFormBlockedByV14231ActionGuard = !canUseRuleAssetAction(
     operationForm.action,
     operationForm.assetType,
   )
-  const operationFormBlockedByV14231ActionGuard = operationFormRequiresV14231ActionGuard
-    && !canUseConstructionOrganizationStableAction
   const operationButtonTitle = operationFormBlockedByV14231ActionGuard
-    ? constructionOrganizationActionGuardReason
+    ? ruleAssetActionGuardReason(operationForm.action, operationForm.assetType)
     : undefined
 
-  const blockConstructionOrganizationActionIfNeeded = useCallback((
+  const blockRuleAssetActionIfNeeded = useCallback((
     action: RuleAssetGovernanceWorkbenchOperationAction,
-    assetType: RuleAssetGovernanceWorkbenchAssetType = 'construction_organization_plan_network',
+    assetType: RuleAssetGovernanceWorkbenchAssetType,
   ) => {
-    if (!operationRequiresV14231ConstructionOrganizationActionGuard(action, assetType)) return false
-    if (canUseConstructionOrganizationStableAction) return false
-    setOperationError(constructionOrganizationActionGuardReason)
+    if (canUseRuleAssetAction(action, assetType)) return false
+    setOperationError(ruleAssetActionGuardReason(action, assetType))
     return true
-  }, [canUseConstructionOrganizationStableAction, constructionOrganizationActionGuardReason])
+  }, [canUseRuleAssetAction, ruleAssetActionGuardReason])
+  const canUseConstructionOrganizationEvidenceAction = canUseRuleAssetAction(
+    'runtime_impact_monitoring',
+    CONSTRUCTION_ORGANIZATION_ASSET_TYPE,
+  )
+  const constructionOrganizationEvidenceGuardReason = ruleAssetActionGuardReason(
+    'runtime_impact_monitoring',
+    CONSTRUCTION_ORGANIZATION_ASSET_TYPE,
+  )
+  const canUseConstructionOrganizationRollbackAction = canUseRuleAssetAction(
+    'runtime_rollback_execution',
+    CONSTRUCTION_ORGANIZATION_ASSET_TYPE,
+  )
+  const constructionOrganizationRollbackGuardReason = ruleAssetActionGuardReason(
+    'runtime_rollback_execution',
+    CONSTRUCTION_ORGANIZATION_ASSET_TYPE,
+  )
 
   const updateOperationForm = useCallback(<K extends keyof OperationFormState>(
     key: K,
@@ -1056,7 +1109,7 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
   }, [])
 
   const submitOperation = useCallback(async () => {
-    if (operationFormRequiresV14231ActionGuard && blockConstructionOrganizationActionIfNeeded(operationForm.action, operationForm.assetType)) return
+    if (blockRuleAssetActionIfNeeded(operationForm.action, operationForm.assetType)) return
     setOperationLoading(true)
     setOperationError(null)
     try {
@@ -1105,10 +1158,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, load, loadPlanNetworkDrafts, operationForm, operationFormRequiresV14231ActionGuard, selectedDraft])
+  }, [blockRuleAssetActionIfNeeded, load, loadPlanNetworkDrafts, operationForm, selectedDraft])
 
   const submitConstructionOrganizationDraft = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('manual_review_handoff')) return
+    if (blockRuleAssetActionIfNeeded('manual_review_handoff', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     setOperationLoading(true)
     setOperationError(null)
     try {
@@ -1141,10 +1194,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded])
+  }, [blockRuleAssetActionIfNeeded])
 
   const approveConstructionOrganizationDraft = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('manual_review_approval')) return
+    if (blockRuleAssetActionIfNeeded('manual_review_approval', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     setOperationLoading(true)
     setOperationError(null)
     try {
@@ -1177,13 +1230,13 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded])
+  }, [blockRuleAssetActionIfNeeded])
 
   const reviewConstructionOrganizationDraftConflict = useCallback(async (
     draft: ConstructionOrganizationPlanNetworkDraft,
     decision: 'approved_ready_for_replay' | 'rejected_needs_plan_date_adjustment',
   ) => {
-    if (blockConstructionOrganizationActionIfNeeded('manual_conflict_review')) return
+    if (blockRuleAssetActionIfNeeded('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     setOperationLoading(true)
     setOperationError(null)
     const consumerVerificationRefs = [
@@ -1220,10 +1273,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, load, loadPlanNetworkDrafts])
+  }, [blockRuleAssetActionIfNeeded, load, loadPlanNetworkDrafts])
 
   const submitConstructionOrganizationReleaseExitHandoff = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('release_exit_handoff')) return
+    if (blockRuleAssetActionIfNeeded('release_exit_handoff', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     setOperationLoading(true)
     setOperationError(null)
     const releaseRecordTarget = `construction-organization-plan-network-release:${draft.draftNetworkKey}`
@@ -1266,10 +1319,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded])
+  }, [blockRuleAssetActionIfNeeded])
 
   const applyConstructionOrganizationRuntimeDraft = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('runtime_apply')) return
+    if (blockRuleAssetActionIfNeeded('runtime_apply', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     setOperationLoading(true)
     setOperationError(null)
     const releaseRecordTarget = draft.releaseExitHandoff?.releaseRecordTarget ?? `construction-organization-plan-network-release:${draft.draftNetworkKey}`
@@ -1314,10 +1367,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, draftProjectId, draftReport?.projectId])
+  }, [blockRuleAssetActionIfNeeded, draftProjectId, draftReport?.projectId])
 
   const recordConstructionOrganizationRuntimeImpactMonitoring = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('runtime_impact_monitoring')) return
+    if (blockRuleAssetActionIfNeeded('runtime_impact_monitoring', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     const sourcePublicationKey = draftRuntimePublicationKey(draft)
     if (!sourcePublicationKey) return
     setOperationLoading(true)
@@ -1364,10 +1417,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
+  }, [blockRuleAssetActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
 
   const recordConstructionOrganizationRuntimeRollbackExecution = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('runtime_rollback_execution')) return
+    if (blockRuleAssetActionIfNeeded('runtime_rollback_execution', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     const sourcePublicationKey = draftRuntimePublicationKey(draft)
     if (!sourcePublicationKey) return
     setOperationLoading(true)
@@ -1415,10 +1468,10 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
+  }, [blockRuleAssetActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
 
   const recordConstructionOrganizationRuntimeSavedOutcome = useCallback(async (draft: ConstructionOrganizationPlanNetworkDraft) => {
-    if (blockConstructionOrganizationActionIfNeeded('runtime_saved_outcome')) return
+    if (blockRuleAssetActionIfNeeded('runtime_saved_outcome', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     const sourcePublicationKey = draftRuntimePublicationKey(draft)
     if (!sourcePublicationKey) return
     setOperationLoading(true)
@@ -1463,13 +1516,13 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
+  }, [blockRuleAssetActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
 
   const recordConstructionOrganizationRuntimeEngineEvidence = useCallback(async (
     draft: ConstructionOrganizationPlanNetworkDraft,
     engineCode: 'standard_duration_reference' | 'critical_path_cpm' | 'schedule_acceleration_target',
   ) => {
-    if (blockConstructionOrganizationActionIfNeeded('runtime_engine_evidence')) return
+    if (blockRuleAssetActionIfNeeded('runtime_engine_evidence', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     const sourcePublicationKey = draftRuntimePublicationKey(draft)
     if (!sourcePublicationKey) return
     setOperationLoading(true)
@@ -1518,12 +1571,12 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
+  }, [blockRuleAssetActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId])
 
   const recordConstructionOrganizationRecommendationDecision = useCallback(async (
     action: 'runtime_recommendation_adopt' | 'runtime_recommendation_decline',
   ) => {
-    if (blockConstructionOrganizationActionIfNeeded(action)) return
+    if (blockRuleAssetActionIfNeeded(action, CONSTRUCTION_ORGANIZATION_ASSET_TYPE)) return
     const option = draftReport?.runtimeRecommendedOption
     const identity = runtimeRecommendationIdentity(option)
     const projectId = draftReport?.projectId ?? optionalText(draftProjectId)
@@ -1572,7 +1625,7 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
     } finally {
       setOperationLoading(false)
     }
-  }, [blockConstructionOrganizationActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId, draftReport?.runtimeRecommendedOption, loadPlanNetworkDrafts])
+  }, [blockRuleAssetActionIfNeeded, draftProjectId, draftReport?.companyId, draftReport?.projectId, draftReport?.runtimeRecommendedOption, loadPlanNetworkDrafts])
 
   return (
     <div className="page-shell min-h-screen bg-slate-50/80 py-8">
@@ -1595,8 +1648,6 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
             刷新
           </Button>
         </header>
-
-        <V14231PageReadinessBoundary pageKey="规则资产 / 治理工作台" />
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
           <div className="surface-card p-4">
@@ -1641,7 +1692,7 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
           </div>
         ) : null}
 
-        <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+        <section data-testid="rule-asset-action-readiness" className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">施工组织草案池</h2>
@@ -1660,12 +1711,56 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                   onChange={(event) => setDraftProjectId(event.target.value)}
                 />
               </div>
-              <Button type="button" variant="outline" onClick={() => void loadPlanNetworkDrafts()} disabled={draftLoading}>
-                <RefreshCw className={`mr-2 h-4 w-4 ${draftLoading ? 'animate-spin' : ''}`} />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  void loadPlanNetworkDrafts()
+                  void loadCauseQualityMetrics()
+                }}
+                disabled={draftLoading || causeQualityLoading}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${draftLoading || causeQualityLoading ? 'animate-spin' : ''}`} />
                 读取草案
               </Button>
             </div>
           </div>
+
+          {draftProjectId.trim() ? (
+            <div className="border-b border-slate-200 px-4 py-3" data-testid="structured-cause-quality">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-slate-900">归因质量</h3>
+                {causeQualityLoading ? <span className="text-xs text-slate-500">读取中...</span> : null}
+              </div>
+              {causeQualityError ? (
+                <div className="mt-2 text-xs text-red-700" role="alert">{causeQualityError}</div>
+              ) : causeQualityMetrics ? (
+                <div className="mt-2 grid gap-3 lg:grid-cols-[minmax(0,220px)_minmax(0,220px)_minmax(0,1fr)]">
+                  <div className="text-sm text-slate-700">
+                    <p>其他项占比 {causeQualityMetrics.otherRate.value == null ? '数据待完善' : `${causeQualityMetrics.otherRate.value.toFixed(2)}%`}</p>
+                    <p className="mt-1 text-xs tabular-nums text-slate-500">
+                      {causeQualityMetrics.otherRate.numerator}/{causeQualityMetrics.otherRate.denominator}
+                    </p>
+                  </div>
+                  <div className="text-sm text-slate-700">
+                    <p>预填修改率 {causeQualityMetrics.prefillModificationRate.value == null ? '数据待完善' : `${causeQualityMetrics.prefillModificationRate.value.toFixed(2)}%`}</p>
+                    <p className="mt-1 text-xs tabular-nums text-slate-500">
+                      {causeQualityMetrics.prefillModificationRate.numerator}/{causeQualityMetrics.prefillModificationRate.denominator}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {causeQualityMetrics.revisionSignals.length > 0 ? causeQualityMetrics.revisionSignals.map((signal) => (
+                      <Badge key={`${signal.candidateType}:${signal.metricKey}`} variant="outline">
+                        {signal.candidateType === 'taxonomy_revision' ? '建议修订原因分类' : '建议修订推断规则'}
+                      </Badge>
+                    )) : (
+                      <span className="text-xs text-slate-500">未形成归因规则修订候选</span>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
             <div className="space-y-3">
@@ -1729,6 +1824,18 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                       const canRuntimeApply = draftCanRuntimeApply(draft) && !alreadyRuntimeApplied
                       const canRecordRuntimeEvidence = draftCanRecordRuntimeEvidence(draft)
                       const manualConflictReviewPackage = draft.manualConflictReviewPackage
+                      const nextAction: RuleAssetGovernanceWorkbenchOperationAction | null = canRuntimeApply
+                        ? 'runtime_apply'
+                        : canSend
+                          ? 'manual_review_handoff'
+                          : canApprove
+                            ? 'manual_review_approval'
+                            : canReleaseExitHandoff
+                              ? 'release_exit_handoff'
+                              : null
+                      const canUseNextAction = nextAction
+                        ? canUseRuleAssetAction(nextAction, CONSTRUCTION_ORGANIZATION_ASSET_TYPE)
+                        : false
                       return (
                         <tr key={draft.draftNetworkKey} className="hover:bg-slate-50/80">
                           <td className="px-3 py-3">
@@ -1835,7 +1942,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                   type="button"
                                   size="sm"
                                   variant="outline"
-                                  disabled={!canRecordRuntimeEvidence || operationLoading}
+                                  disabled={!canRecordRuntimeEvidence || operationLoading || !canUseConstructionOrganizationEvidenceAction}
+                                  title={!canUseConstructionOrganizationEvidenceAction ? constructionOrganizationEvidenceGuardReason : undefined}
                                   onClick={() => void recordConstructionOrganizationRuntimeImpactMonitoring(draft)}
                                 >
                                   记录影响监控
@@ -1844,8 +1952,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                   type="button"
                                   size="sm"
                                   variant="outline"
-                                  disabled={!canRecordRuntimeEvidence || operationLoading || !canUseConstructionOrganizationStableAction}
-                                  title={!canUseConstructionOrganizationStableAction ? constructionOrganizationActionGuardReason : undefined}
+                                  disabled={!canRecordRuntimeEvidence || operationLoading || !canUseConstructionOrganizationRollbackAction}
+                                  title={!canUseConstructionOrganizationRollbackAction ? constructionOrganizationRollbackGuardReason : undefined}
                                   onClick={() => void recordConstructionOrganizationRuntimeRollbackExecution(draft)}
                                 >
                                   记录回滚执行
@@ -1854,7 +1962,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                   type="button"
                                   size="sm"
                                   variant="outline"
-                                  disabled={!canRecordRuntimeEvidence || operationLoading}
+                                  disabled={!canRecordRuntimeEvidence || operationLoading || !canUseConstructionOrganizationEvidenceAction}
+                                  title={!canUseConstructionOrganizationEvidenceAction ? constructionOrganizationEvidenceGuardReason : undefined}
                                   onClick={() => void recordConstructionOrganizationRuntimeSavedOutcome(draft)}
                                 >
                                   记录保存结果
@@ -1863,7 +1972,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                   type="button"
                                   size="sm"
                                   variant="outline"
-                                  disabled={!canRecordRuntimeEvidence || operationLoading}
+                                  disabled={!canRecordRuntimeEvidence || operationLoading || !canUseConstructionOrganizationEvidenceAction}
+                                  title={!canUseConstructionOrganizationEvidenceAction ? constructionOrganizationEvidenceGuardReason : undefined}
                                   onClick={() => void recordConstructionOrganizationRuntimeEngineEvidence(draft, 'critical_path_cpm')}
                                 >
                                   记录引擎证据
@@ -1874,7 +1984,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                 <Button
                                   type="button"
                                   size="sm"
-                                  disabled={operationLoading}
+                                  disabled={operationLoading || !canUseRuleAssetAction('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)}
+                                  title={!canUseRuleAssetAction('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE) ? ruleAssetActionGuardReason('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE) : undefined}
                                   onClick={() => void reviewConstructionOrganizationDraftConflict(draft, 'approved_ready_for_replay')}
                                 >
                                   人工冲突复核通过
@@ -1883,7 +1994,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                   type="button"
                                   size="sm"
                                   variant="outline"
-                                  disabled={operationLoading}
+                                  disabled={operationLoading || !canUseRuleAssetAction('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE)}
+                                  title={!canUseRuleAssetAction('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE) ? ruleAssetActionGuardReason('manual_conflict_review', CONSTRUCTION_ORGANIZATION_ASSET_TYPE) : undefined}
                                   onClick={() => void reviewConstructionOrganizationDraftConflict(draft, 'rejected_needs_plan_date_adjustment')}
                                 >
                                   退回调整日期
@@ -1894,8 +2006,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                                 type="button"
                                 size="sm"
                                 variant={canSend || canApprove || canReleaseExitHandoff || canRuntimeApply ? 'default' : 'outline'}
-                                disabled={(!canSend && !canApprove && !canReleaseExitHandoff && !canRuntimeApply) || operationLoading || (canRuntimeApply && !canUseConstructionOrganizationStableAction)}
-                                title={canRuntimeApply && !canUseConstructionOrganizationStableAction ? constructionOrganizationActionGuardReason : undefined}
+                                disabled={!nextAction || operationLoading || !canUseNextAction}
+                                title={nextAction && !canUseNextAction ? ruleAssetActionGuardReason(nextAction, CONSTRUCTION_ORGANIZATION_ASSET_TYPE) : undefined}
                                 onClick={() => {
                                   if (canRuntimeApply) void applyConstructionOrganizationRuntimeDraft(draft)
                                   else if (canSend) void submitConstructionOrganizationDraft(draft)
@@ -2019,7 +2131,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                           <Button
                             type="button"
                             size="sm"
-                          disabled={operationLoading || !runtimeRecommendationIdentity(draftReport.runtimeRecommendedOption) || !(draftReport.projectId ?? optionalText(draftProjectId))}
+                          disabled={operationLoading || !canUseConstructionOrganizationEvidenceAction || !runtimeRecommendationIdentity(draftReport.runtimeRecommendedOption) || !(draftReport.projectId ?? optionalText(draftProjectId))}
+                          title={!canUseConstructionOrganizationEvidenceAction ? constructionOrganizationEvidenceGuardReason : undefined}
                           onClick={() => void recordConstructionOrganizationRecommendationDecision('runtime_recommendation_adopt')}
                         >
                           <CheckCircle2 className="mr-2 h-4 w-4" />
@@ -2029,7 +2142,8 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                           type="button"
                           size="sm"
                           variant="outline"
-                          disabled={operationLoading || !runtimeRecommendationIdentity(draftReport.runtimeRecommendedOption) || !(draftReport.projectId ?? optionalText(draftProjectId))}
+                          disabled={operationLoading || !canUseConstructionOrganizationEvidenceAction || !runtimeRecommendationIdentity(draftReport.runtimeRecommendedOption) || !(draftReport.projectId ?? optionalText(draftProjectId))}
+                          title={!canUseConstructionOrganizationEvidenceAction ? constructionOrganizationEvidenceGuardReason : undefined}
                           onClick={() => void recordConstructionOrganizationRecommendationDecision('runtime_recommendation_decline')}
                         >
                           <XCircle className="mr-2 h-4 w-4" />

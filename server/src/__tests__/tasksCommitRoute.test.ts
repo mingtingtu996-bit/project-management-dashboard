@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   recalculateProjectCriticalPath: vi.fn(),
   generateWbsTemplateRows: vi.fn(),
   listWbsTemplateCatalog: vi.fn(),
+  buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
   recordWbsTemplateCandidateEvent: vi.fn(async () => undefined),
   buildTaskCommitReplaySummary: vi.fn((input: {
     changedTaskIds: Set<string>
@@ -156,6 +157,7 @@ vi.mock('../services/wbsTemplateGenerationService.js', () => ({
 }))
 
 vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
+  buildSpecialWorkDurationCandidateNodes: mocks.buildSpecialWorkDurationCandidateNodes,
   recordWbsTemplateCandidateEvent: mocks.recordWbsTemplateCandidateEvent,
 }))
 
@@ -453,6 +455,11 @@ describe('tasks commit route', () => {
         dependencyType: 'FS',
         lagDays: 0,
         sourceType: 'manual',
+        metadata: {
+          source: 'planning_table_manual_predecessor_edit',
+          learningSignal: 'manual_dependency_correction',
+          candidatePolicy: 'candidate_only_no_runtime_rule_mutation',
+        },
       },
     ], {
       projectId: PROJECT_ID,
@@ -764,6 +771,10 @@ describe('tasks commit route', () => {
         dependencyType: 'SS',
         lagDays: 0,
         sourceType: 'template_dependency_intent',
+        metadata: expect.objectContaining({
+          source: 'dependency_intent_template',
+          learningPolicy: 'published_or_template_generated_dependency',
+        }),
       },
     ], { projectId: PROJECT_ID })
     expect(response.body.data.tempIdMap).toEqual({
@@ -887,6 +898,10 @@ describe('tasks commit route', () => {
         dependencyType: 'FS',
         lagDays: 0,
         sourceType: 'template_dependency_intent',
+        metadata: expect.objectContaining({
+          source: 'dependency_intent_template',
+          learningPolicy: 'published_or_template_generated_dependency',
+        }),
       }],
     }))
     expect(mocks.transactionEvents).toEqual(['BEGIN', 'COMMIT'])
@@ -1317,6 +1332,11 @@ describe('tasks commit route', () => {
         dependencyType: 'FS',
         lagDays: 0,
         sourceType: 'manual',
+        metadata: {
+          source: 'planning_table_manual_predecessor_edit',
+          learningSignal: 'manual_dependency_correction',
+          candidatePolicy: 'candidate_only_no_runtime_rule_mutation',
+        },
       },
     ], {
       projectId: PROJECT_ID,

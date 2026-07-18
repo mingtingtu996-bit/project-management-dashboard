@@ -258,6 +258,27 @@ const GOVERNED_NON_LEGACY_MIGRATION_DROPS = [
     reason: 'Migration 311 uses an immutable export checksum, locked data fingerprint preflight, and full schema/data rollback instead of the legacy-object retirement evidence model.',
   })),
   {
+    migrationFile: '316_task_fact_write_integrity.sql',
+    objectType: 'trigger',
+    objectName: 'public.tasks.trigger_auto_record_snapshot',
+    reason: 'Migration 316 retires the duplicate database progress-snapshot writer after preserving the application writer and provides an explicit rollback.',
+  },
+  {
+    migrationFile: '316_task_fact_write_integrity.sql',
+    objectType: 'function',
+    objectName: 'public.auto_record_progress_snapshot()',
+    reason: 'Migration 316 retires the trigger-only helper after preserving the application writer and provides an explicit rollback.',
+  },
+  ...[
+    't2_rhythm_schedule_runtime_events',
+    't2_rhythm_schedule_runtime_publications',
+  ].map((tableName) => ({
+    migrationFile: '321_retire_duplicate_t2_schedule_runtime.sql',
+    objectType: 'table',
+    objectName: `public.${tableName}`,
+    reason: 'Migration 321 uses an immutable export checksum, locked data fingerprint preflight, active-publication guard, and full schema/data rollback.',
+  })),
+  {
     migrationFile: '259_v14231_supabase_advisor_security_closeout.sql',
     objectType: 'policy',
     objectName: 'public.project_health_history.health_history_select',

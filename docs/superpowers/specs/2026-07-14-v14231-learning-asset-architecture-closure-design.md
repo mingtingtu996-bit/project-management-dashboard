@@ -1,8 +1,8 @@
 # v1.4.23.1 学习与校准资产架构闭合设计
 
-**状态：** 本地代码与契约已完成；待 migration 305 定向应用、deployed staging 验收和 production/live 验收
-**日期：** 2026-07-14
-**适用范围：** 工期学习/校准资产、统一自动发布、原始样本消费边界、租户归属、C-19.01 登记、原子发布与回滚、漏样本补偿。
+**状态：** 本地代码与契约已完成；当前配置真实 Supabase 已只读确认 migration 305/307 ledger，仍待同 SHA deployed staging 验收和 production/live 验收
+**日期：** 2026-07-14（2026-07-18 同步结构化原因质量指标与环境口径）
+**适用范围：** 工期学习/校准资产、统一自动发布、原始样本消费边界、结构化原因维度、租户归属、C-19.01 登记、原子发布与回滚、漏样本补偿。
 
 ## 1. 决策
 
@@ -61,6 +61,18 @@
 
 这取代“任何代码都不得读原始样本”的过宽旧规则，同时保留运行时计算层与样本事实层隔离。
 
+### 4.1 结构化原因维度
+
+原因事实采用“机器推断 + 用户轻量确认 + 离线低置信度复核”，自由文本保留为业务原话，不再承担唯一聚合键：
+
+- `structuredCauseAttributionService` 只从项目内已有任务阻碍、开工条件、活动依赖、材料到货和当前工期预测因子推断受控 taxonomy 候选；查询必须同时受 `company_id + project_id + subject_id` 约束。
+- `task / risk / issue / baseline_change` 使用同一 attribution 状态机；机器证据充分时可形成 confirmed，证据不足保持 candidate，用户可以确认、改选或拒绝。基线发布以同一事务内新建的 `baseline_publish` change log 作为 `baseline_change.subject_id`，不得直接以基线 ID 代替变更事件。
+- 基线发布页只根据草案说明、来源和治理元数据中的明确原因信号预选分类，普通项目名称不得触发原因推断；用户可改选，并必须保留原因原话。`/publish` 与兼容 `/confirm` 后端入口都执行相同必填校验；基线状态更新、旧版本归档、change log 和 confirmed attribution 任一失败时必须整体回滚。
+- 合同责任不是算法事实。`responsibility_class` 仅在用户明确确认后保存，不得由模型自动判定，也不得进入算法 evidence fingerprint、benchmark context key 或稳定参数聚合。
+- 任务首次完成时先形成结构化原因，再采集工期经验样本。样本 metadata 只快照 confirmed cause 的 `attribution_id / cause_code / cause_role / taxonomy_version / confirmation_source`；candidate 只记录数量，避免未确认标签污染基准。
+- 存量自由文本和离线标注只能形成 candidate；低置信度进入异常复核，不得直接改变 runtime publication。
+- “其他”占比和预填修改率属于归因质量指标。候选保存 `prefilled_cause_code`，人工确认保存 `prefill_modified`；统一出口为 `structured_cause_other_rate` 与 `structured_cause_prefill_modification_rate`。两项均至少积累 20 个对应样本后才允许形成治理信号：“其他”占比超过 20% 形成 taxonomy 修订候选，预填修改率超过 30% 形成 inference-rule 修订候选。信号只进入候选治理，不自动改写历史归因、taxonomy 或 runtime publication。
+
 ## 5. 租户、审批与发布原子性
 
 - 候选、版本、样本、参数和回滚操作都带 `company_id`，项目级记录还必须带 `project_id`。
@@ -91,10 +103,12 @@
 
 本地通过只证明 `local-current-code`。staging 必须使用部署后的相同代码和迁移验证；production/live 还需要真实发布、消费、监控和回滚结果。没有用户数据时可以判定代码准备完成，但不能宣称长期准确率或生产业务收益已经闭合。
 
-## 8. 2026-07-14 实施状态
+## 8. 2026-07-17 实施状态
 
 - `local-current-code`：统一自动发布策略、四元资产身份、原始样本 read-model 边界、发布资产运行消费、租户约束、原子发布/回滚、漏样本重试与补采均已实现并有聚焦测试。
 - 运行消费者：项目基线校准、PM recovery、工期建议和任务工期预测不再直接消费原始样本，只消费稳定优先、受限 canary 回退的 runtime publication；学习治理服务保留受租户约束的原始样本读取权。
 - 后台补偿：复用现有 `durationContextPolicyLearningJob`，不新增通用 scheduler 所有权；队列领取使用事务锁与 lease，避免并行 worker 重复补采。
-- 数据库：migration 305 已形成并进入迁移契约，但尚未在 staging 或 production 应用；migration 306 属于独立 worker 专项，不属于本闭合项。
-- 环境判定：当前不得写成 deployed staging 或 production/live 已闭合；完成 305 定向应用、同 SHA 部署、真实 runtime publication 消费、监控和 rollback smoke 后，才能分别升级环境状态。
+- 原因维度：任务完成链已按“先归因、后采样”接线，风险/问题关闭页已要求实际结果、效果、原因分类和可选人工责任判断；基线发布页已接入受控原因预选、人工确认/改选和原话保留，后端原子写 `baseline_publish` change log 与 `baseline_change` confirmed attribution；工期样本仅消费受控 confirmed cause 快照。
+- 数据库：当前配置真实 Supabase 的 `schema_migrations` 已只读确认 migration 305/307 ledger；结构化原因与风险/问题关闭字段使用 migration 317/318，当前仍是本地 pending，未执行 apply。migration 306 属于独立 worker 专项，不属于本闭合项。
+- 真实库兼容：使用 `workbuddy_runtime_login` 的只读事务执行当前 `loadTaskStructuredCauseEvidence` 五条事实查询，目标任务 51 条证据完整返回；这只证明 `local-current-code + real-DB read-only` schema/SQL 兼容，不证明新 attribution 已部署或产生生产业务结果。
+- 环境判定：当前不得写成 deployed staging 或 production/live 已闭合；完成 317/318 受控迁移、同 SHA 部署、真实 attribution/closure/runtime publication 消费、监控和 rollback smoke 后，才能分别升级环境状态。

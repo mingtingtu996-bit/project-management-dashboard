@@ -8,6 +8,10 @@ import {
 } from '../services/algorithmAssetLearnableParameterReleaseExecutionService.js'
 import { getAlgorithmAssetLearnableParameter } from '../services/algorithmAssetLearnableParameterRegistryService.js'
 import { hashDurationContextPolicyLearningValue } from '../services/durationContextPolicyLearningCheckpointService.js'
+import {
+  runDurationLearningRuntimeLifecycleSweep,
+  type DurationLearningRuntimeLifecycleSweepResult,
+} from '../services/durationLearningRuntimeLifecycleService.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 
 const DEFAULT_MONITORING_WINDOW_HOURS = 72
@@ -33,6 +37,7 @@ function readNonNegativeNumber(value: unknown, fallback = 0) {
 }
 
 function readOptionalNonNegativeNumber(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
@@ -53,6 +58,7 @@ export type AlgorithmAssetLearnableParameterMonitoringCandidate = {
   parameterKey: string
   monitoredAssetCount: number
   monitoringWindowHours?: number
+  monitoringElapsedHours?: number
   metrics?: Record<string, unknown>
   thresholdViolations?: string[]
 }
@@ -79,6 +85,7 @@ export type AlgorithmAssetLearnableParameterImpactMonitoringJobOptions = {
   queryExec?: AlgorithmAssetLearnableParameterReleaseExecutionQueryExec
   candidateProvider?: () => Promise<AlgorithmAssetLearnableParameterMonitoringCandidate[]>
   thresholdEvaluator?: (candidate: AlgorithmAssetLearnableParameterMonitoringCandidate) => string[]
+  durationLearningRuntimeLifecycleSweep?: () => Promise<DurationLearningRuntimeLifecycleSweepResult>
 }
 
 function emptyResult(total = 0): AlgorithmAssetLearnableParameterImpactMonitoringSweepResult {
@@ -147,9 +154,15 @@ function hasMeasuredMonitoringEvidence(
   candidate: AlgorithmAssetLearnableParameterMonitoringCandidate,
   thresholdEvaluator?: (candidate: AlgorithmAssetLearnableParameterMonitoringCandidate) => string[],
 ) {
+  if (
+    candidate.monitoringElapsedHours !== undefined
+    && candidate.monitoringElapsedHours < (candidate.monitoringWindowHours ?? DEFAULT_MONITORING_WINDOW_HOURS)
+  ) return false
   if (thresholdEvaluator || candidate.thresholdViolations !== undefined) return candidate.monitoredAssetCount > 0
   const metrics = candidate.metrics ?? {}
-  return candidate.monitoredAssetCount > 0 && [
+  const parameter = getAlgorithmAssetLearnableParameter(candidate.parameterKey)
+  const minimumSamples = Math.max(5, parameter?.evidenceRequired.minSampleCount ?? 20)
+  return candidate.monitoredAssetCount >= minimumSamples && [
     metrics.overcompensationRate,
     metrics.overcompensation_rate,
     metrics.forecastErrorRegressionRate,
@@ -165,24 +178,27 @@ function buildCandidateFromPublication(row: Record<string, unknown>): AlgorithmA
   const parameterKey = normalizeText(row.parameter_key)
   if (!sourcePublicationKey || !rollbackTarget || !parameterKey) return null
 
-  const impactMonitoring = asRecord(row.impact_monitoring)
   return {
     sourcePublicationKey,
     rollbackTarget,
     parameterKey,
-    monitoredAssetCount: readNonNegativeNumber(
-      impactMonitoring?.monitoredAssetCount ?? impactMonitoring?.monitored_asset_count,
-      0,
-    ),
+    monitoredAssetCount: readNonNegativeNumber(row.sample_count, 0),
     monitoringWindowHours: readNonNegativeNumber(
-      impactMonitoring?.monitoringWindowHours ?? impactMonitoring?.monitoring_window_hours,
+      row.monitoring_window_hours,
       DEFAULT_MONITORING_WINDOW_HOURS,
     ),
+    monitoringElapsedHours: readNonNegativeNumber(row.monitoring_elapsed_hours, 0),
     metrics: {
       ownerAlgorithm: normalizeText(row.owner_algorithm) || null,
       scopeLevel: normalizeText(row.scope_level) || null,
       targetSurface: normalizeText(row.target_surface) || null,
       publicationStatus: normalizeText(row.publication_status) || null,
+      consumerCount: readNonNegativeNumber(row.consumer_count, 0),
+      sampleCount: readNonNegativeNumber(row.sample_count, 0),
+      maeBefore: readOptionalNonNegativeNumber(row.mae_before),
+      maeAfter: readOptionalNonNegativeNumber(row.mae_after),
+      overcompensationRate: readOptionalNonNegativeNumber(row.overcompensation_rate),
+      forecastErrorRegressionRate: readOptionalNonNegativeNumber(row.regression_rate),
     },
   }
 }
@@ -191,19 +207,72 @@ export async function collectLearnableParameterImpactMonitoringCandidates(
   queryExec: AlgorithmAssetLearnableParameterReleaseExecutionQueryExec = executeSQL,
 ) {
   const rows = await queryExec<Record<string, unknown>>(
-    `select publication_key,
-            parameter_key,
-            owner_algorithm,
-            scope_level,
-            target_surface,
-            publication_status,
-            rollback_target,
-            impact_monitoring,
-            published_at
-       from public.algorithm_learnable_parameter_runtime_publications
-      where publication_status in ('published', 'canary')
-      order by published_at desc
-      limit 200`,
+    `with publication as (
+       select publication_key,
+              parameter_key,
+              owner_algorithm,
+              scope_level,
+              company_id,
+              project_id,
+              target_surface,
+              publication_status,
+              rollback_target,
+              impact_monitoring,
+              published_at
+         from public.algorithm_learnable_parameter_runtime_publications
+        where publication_status in ('published', 'canary')
+        order by published_at desc
+        limit 200
+     )
+     select publication.publication_key,
+            publication.parameter_key,
+            publication.owner_algorithm,
+            publication.scope_level,
+            publication.target_surface,
+            publication.publication_status,
+            publication.rollback_target,
+            coalesce((publication.impact_monitoring ->> 'monitoringWindowHours')::numeric, $1) as monitoring_window_hours,
+            extract(epoch from (now() - publication.published_at)) / 3600.0 as monitoring_elapsed_hours,
+            coalesce(measured.consumer_count, 0) as consumer_count,
+            coalesce(measured.sample_count, 0) as sample_count,
+            measured.mae_before,
+            measured.mae_after,
+            measured.overcompensation_rate,
+            measured.regression_rate
+       from publication
+       left join lateral (
+         select count(distinct observation.id) as consumer_count,
+                count(distinct accuracy.id) as sample_count,
+                avg(accuracy.baseline_absolute_error_days) as mae_before,
+                avg(accuracy.absolute_error_days) as mae_after,
+                avg(case when accuracy.overcompensated is true then 1.0 else 0.0 end) as overcompensation_rate,
+                avg(case
+                  when accuracy.baseline_absolute_error_days is not null
+                    and accuracy.absolute_error_days > accuracy.baseline_absolute_error_days
+                  then 1.0 else 0.0 end) as regression_rate
+           from public.runtime_consumer_observations observation
+           join public.projects observed_project
+             on observed_project.id::text = observation.observation_context ->> 'projectId'
+           left join public.duration_algorithm_accuracy_events accuracy
+             on accuracy.project_id = observed_project.id
+            and accuracy.task_id::text = observation.observation_context ->> 'taskId'
+            and accuracy.backtest_status = 'backtested'
+            and accuracy.backtested_at >= publication.published_at
+          where observation.publication_key = publication.publication_key
+            and observation.observation_status = 'observed'
+            and nullif(observation.observation_context ->> 'taskId', '') is not null
+            and (
+              publication.scope_level = 'system'
+              or (publication.scope_level = 'company' and observed_project.company_id = publication.company_id)
+              or (
+                publication.scope_level = 'project'
+                and observed_project.company_id = publication.company_id
+                and observed_project.id = publication.project_id
+              )
+            )
+       ) measured on true
+      order by publication.published_at desc`,
+    [DEFAULT_MONITORING_WINDOW_HOURS],
   )
   return rows
     .map(buildCandidateFromPublication)
@@ -346,13 +415,35 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
         async () => runAlgorithmAssetLearnableParameterImpactMonitoringSweep(this.options),
       )
 
+      let durationLearningRuntimeLifecycle: DurationLearningRuntimeLifecycleSweepResult | null = null
+      if (this.options.durationLearningRuntimeLifecycleSweep) {
+        try {
+          const lifecycleRun = await runJobWithRetry(
+            {
+              jobName: 'durationLearningRuntimeLifecycleSweep',
+              triggeredBy,
+              jobId,
+            },
+            this.options.durationLearningRuntimeLifecycleSweep,
+          )
+          durationLearningRuntimeLifecycle = lifecycleRun.value
+        } catch (error) {
+          logger.error('durationLearningRuntimeLifecycleSweep failed', {
+            triggeredBy,
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
       logger.info('algorithmAssetLearnableParameterImpactMonitoringJob completed', {
         triggeredBy,
         jobId,
         attempts,
         ...value,
+        durationLearningRuntimeLifecycle,
       })
-      return value
+      return { ...value, durationLearningRuntimeLifecycle }
     } catch (error) {
       logger.error('algorithmAssetLearnableParameterImpactMonitoringJob failed', {
         triggeredBy,
@@ -367,4 +458,6 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
   }
 }
 
-export const algorithmAssetLearnableParameterImpactMonitoringJob = new AlgorithmAssetLearnableParameterImpactMonitoringJob()
+export const algorithmAssetLearnableParameterImpactMonitoringJob = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
+  durationLearningRuntimeLifecycleSweep: runDurationLearningRuntimeLifecycleSweep,
+})

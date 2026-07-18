@@ -39,6 +39,9 @@ describe('v1.4.23.1 C-13 page readiness boundary coverage', () => {
       } else if (item.readinessBinding === 'domain-data-status') {
         expect(source).toContain('duration-accuracy-data-status')
         expect(source).not.toContain('V14231PageReadinessBoundary')
+      } else if (item.readinessBinding === 'action-level-readiness') {
+        expect(source).toContain('rule-asset-action-readiness')
+        expect(source).not.toContain('V14231PageReadinessBoundary')
       } else {
         expect(source).toContain('workspace-normal')
         expect(source).not.toContain('V14231PageReadinessBoundary')

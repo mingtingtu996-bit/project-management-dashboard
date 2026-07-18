@@ -368,6 +368,9 @@ export function createT2RhythmDurationExperienceSupabaseReader(
         'standard_work_name',
         'planned_duration',
         'actual_duration',
+        'duration_day_basis',
+        'actual_duration_calendar_days',
+        'actual_duration_production_days',
         'started_at',
         'completed_at',
         'source_type',
@@ -382,6 +385,7 @@ export function createT2RhythmDurationExperienceSupabaseReader(
     sampleQuery = chainCall(sampleQuery, 'eq', 'project_id', query.projectId)
     sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
     sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+    sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
     sampleQuery = chainCall(sampleQuery, 'not', 'started_at', 'is', null)
     sampleQuery = chainCall(sampleQuery, 'not', 'completed_at', 'is', null)
     sampleQuery = chainCall(sampleQuery, 'limit', Math.max(1, Math.floor(Number(options.limit ?? 500))))

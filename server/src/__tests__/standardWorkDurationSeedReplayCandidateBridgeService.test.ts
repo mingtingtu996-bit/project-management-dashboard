@@ -41,6 +41,7 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
         sampleStatus: 'active',
         includedInBenchmark: true,
         wbsNodeType: 'process',
+        durationDayBasis: 'construction_production_day',
         companyId: 'company-1',
         projectId: 'project-1',
         maxSamples: 1000,

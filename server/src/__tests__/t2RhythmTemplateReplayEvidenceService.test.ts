@@ -124,6 +124,14 @@ describe('t2RhythmTemplateReplayEvidenceService', () => {
 
     const result = buildT2RhythmReplaySamplesFromTaskActuals({
       candidatePackage,
+      calendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          startDate: '2026-05-02',
+          endDate: '2026-05-02',
+          shutdown: true,
+        }],
+      },
       tasks: [
         {
           id: 'task-good',
@@ -163,7 +171,7 @@ describe('t2RhythmTemplateReplayEvidenceService', () => {
           },
         },
       ],
-    })
+    } as any)
 
     expect(result.samples).toEqual([
       expect.objectContaining({
@@ -171,7 +179,7 @@ describe('t2RhythmTemplateReplayEvidenceService', () => {
         projectId: 'project-1',
         workfaceKey: 'tower-a-floor-01',
         windowCode: window?.windowCode,
-        plannedWindowDurationDays: 4,
+        plannedWindowDurationDays: 3,
         templateP80WindowDurationDays: window?.durationDays,
         plannedGateDate: '2026-05-04',
         actualGateDate: '2026-05-04',

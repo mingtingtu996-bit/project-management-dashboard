@@ -232,6 +232,7 @@ export interface TaskDependencyWriteInput {
   dependencyType?: string
   lagDays?: number
   sourceType?: string
+  metadata?: Record<string, unknown>
 }
 
 export interface WizardGeneratedTaskDependencyWriteInput extends TaskDependencyWriteInput {
@@ -244,6 +245,7 @@ export interface NormalizedTaskDependencyWrite {
   lag_days: number
   required_for_start: boolean
   source_type: string
+  metadata: Record<string, unknown>
 }
 
 export const TASK_DEPENDENCY_SOURCE_PRIORITY = {
@@ -279,6 +281,22 @@ function normalizeTaskDependencySourceType(value: unknown): TaskDependencySource
 
 function isExplicitUserDependencySource(sourceType: string) {
   return normalizeTaskDependencySourceType(sourceType) === 'manual'
+}
+
+function normalizeTaskDependencyMetadata(
+  metadata: Record<string, unknown> | undefined,
+  sourceType: TaskDependencySourceType,
+) {
+  const normalized = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? { ...metadata }
+    : {}
+  return sourceType === 'manual'
+    ? {
+        ...normalized,
+        learningSignal: 'manual_dependency_correction',
+        candidatePolicy: 'candidate_only_no_runtime_rule_mutation',
+      }
+    : normalized
 }
 
 function taskDependencyError(code: string, message: string, statusCode = 400) {
@@ -328,12 +346,14 @@ export async function validateTaskDependencies(
     if (dependencyTaskId === taskId) {
       throw taskDependencyError('TASK_DEPENDENCY_CYCLE', 'Task cannot depend on itself')
     }
+    const sourceType = normalizeTaskDependencySourceType(dep.sourceType)
     return {
       dependency_task_id: dependencyTaskId,
       dependency_type: String(dep.dependencyType || 'FS').trim() || 'FS',
       lag_days: Number(dep.lagDays ?? 0),
       required_for_start: true,
-      source_type: normalizeTaskDependencySourceType(dep.sourceType),
+      source_type: sourceType,
+      metadata: normalizeTaskDependencyMetadata(dep.metadata, sourceType),
     }
   })
 
@@ -491,20 +511,27 @@ export async function replaceTaskDependencies(
         dependencyId = existingRows[0].id
         await client.query(
           `UPDATE task_dependencies SET status = 'active', lag_days = $2,
-             required_for_start = $3, source_type = $4, updated_at = NOW()
-           WHERE id = $1 AND project_id = $5`,
-          [dependencyId, dependency.lag_days, dependency.required_for_start, dependency.source_type, validation.projectId],
+             required_for_start = $3, source_type = $4, metadata = $5, updated_at = NOW()
+           WHERE id = $1 AND project_id = $6`,
+          [
+            dependencyId,
+            dependency.lag_days,
+            dependency.required_for_start,
+            dependency.source_type,
+            dependency.metadata,
+            validation.projectId,
+          ],
         )
       } else {
         dependencyId = randomUUID()
         await client.query(
           `INSERT INTO task_dependencies (
              id, project_id, task_id, dependency_task_id,
-             dependency_type, lag_days, required_for_start, source_type,
+             dependency_type, lag_days, required_for_start, source_type, metadata,
              created_at, updated_at
            ) VALUES (
              $1, $2, $3, $4,
-             $5, $6, $7, $8,
+             $5, $6, $7, $8, $9,
              NOW(), NOW()
            )`,
           [
@@ -516,6 +543,7 @@ export async function replaceTaskDependencies(
             dependency.lag_days,
             dependency.required_for_start,
             dependency.source_type,
+            dependency.metadata,
           ],
         )
       }
@@ -540,6 +568,7 @@ export async function replaceTaskDependencies(
           lagDays: dependency.lag_days,
           requiredForStart: dependency.required_for_start,
           sourceType: dependency.source_type,
+          ...dependency.metadata,
         },
       })
     }
@@ -578,6 +607,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
     lag_days: number
     required_for_start: boolean
     source_type: string
+    metadata: Record<string, unknown>
   }>()
   for (const dependency of params.dependencies) {
     const taskId = String(dependency.taskId ?? '').trim()
@@ -588,13 +618,15 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
     if (taskId === dependencyTaskId) {
       throw taskDependencyError('TASK_DEPENDENCY_CYCLE', 'Task cannot depend on itself')
     }
+    const sourceType = normalizeTaskDependencySourceType(dependency.sourceType)
     const normalizedDependency = {
       task_id: taskId,
       dependency_task_id: dependencyTaskId,
       dependency_type: String(dependency.dependencyType || 'FS').trim() || 'FS',
       lag_days: Number(dependency.lagDays ?? 0),
       required_for_start: true,
-      source_type: normalizeTaskDependencySourceType(dependency.sourceType),
+      source_type: sourceType,
+      metadata: normalizeTaskDependencyMetadata(dependency.metadata, sourceType),
     }
     if (isExplicitUserDependencySource(normalizedDependency.source_type)) continue
     const signature = [
@@ -713,8 +745,9 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
         dependency.lag_days,
         dependency.required_for_start,
         dependency.source_type,
+        dependency.metadata,
       )
-      valueGroups.push(`($${start}, $${start + 1}, $${start + 2}, $${start + 3}, $${start + 4}, $${start + 5}, $${start + 6}, $${start + 7}, NOW(), NOW())`)
+      valueGroups.push(`($${start}, $${start + 1}, $${start + 2}, $${start + 3}, $${start + 4}, $${start + 5}, $${start + 6}, $${start + 7}, $${start + 8}, NOW(), NOW())`)
       return {
         id,
         project_id: projectId,
@@ -725,7 +758,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
     await client.query(
       `INSERT INTO task_dependencies (
          id, project_id, task_id, dependency_task_id,
-         dependency_type, lag_days, required_for_start, source_type,
+         dependency_type, lag_days, required_for_start, source_type, metadata,
          created_at, updated_at
        ) VALUES ${valueGroups.join(', ')}`,
       values,
@@ -746,6 +779,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
         requiredForStart: row.required_for_start,
         sourceType: row.source_type,
         wizardBatch: true,
+        ...row.metadata,
       },
     }))
     await createLineageBatchInTransaction(

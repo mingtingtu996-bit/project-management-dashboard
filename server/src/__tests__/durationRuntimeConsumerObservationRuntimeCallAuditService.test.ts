@@ -13,12 +13,13 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
     const audit = evaluateDurationRuntimeConsumerObservationRuntimeCallCoverage()
 
     expect(audit.status).toBe('runtime_consumer_observation_runtime_calls_not_ready')
-    expect(audit.requiredRuntimeCalls).toHaveLength(6)
+    expect(audit.requiredRuntimeCalls).toHaveLength(7)
     expect(audit.observedRuntimeCalls).toEqual([])
     expect(audit.missingRuntimeCalls.map((item) => item.consumerKey)).toEqual([
       'durationSuggestionService',
       'taskDurationForecastService',
       'projectRemainingDurationForecastService',
+      'projectCriticalPathService',
       'wbsTemplateGenerationService',
       'scheduleAccelerationService',
       'scheduleAccelerationRuntimeService',
@@ -27,6 +28,7 @@ describe('durationRuntimeConsumerObservationRuntimeCallAuditService', () => {
       'durationSuggestionService:getTaskDurationSuggestion',
       'taskDurationForecastService:forecastTaskDuration',
       'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+      'projectCriticalPathService:resolveCriticalPathLearningPublications',
       'wbsTemplateGenerationService:generateWbsTemplateRows',
       'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
       'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',

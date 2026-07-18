@@ -28,13 +28,18 @@ import {
   PROTECTED_RISK_SOURCE_TYPES,
   buildIssueConfirmClosePatch,
   buildIssueKeepProcessingPatch,
+  buildIssueRetentionClosePatch,
   buildRiskConfirmClosePatch,
   buildRiskKeepProcessingPatch,
+  buildRiskRetentionClosePatch,
   computeDynamicIssuePriority,
   getIssueBasePriority,
   isProtectedIssueRecord,
+  type RetentionClosureContext,
+  type RiskIssueClosureOutcomeInput,
 } from '../domain/riskIssueWorkflowPolicy.js'
 import { classifyProgressSnapshotSource, normalizeProgressSnapshotSource } from '../utils/progressSnapshotSource.js'
+import { shouldRecordTaskProgressSnapshot } from '../utils/taskProgressSnapshotPolicy.js'
 import { resolveSupabaseRuntimeKey } from './runtimeCredentialBoundary.js'
 import { createJobLeaseFencedFetch } from './jobLeaseFenceContext.js'
 
@@ -44,6 +49,7 @@ export interface DbServiceBusinessSideEffectAdapters {
   enqueueProjectHealthUpdate?: (projectId: string, trigger: string) => Promise<unknown> | unknown
   syncProjectDataQuality?: (projectId: string) => Promise<unknown> | unknown
   evaluateTaskConstraint?: (taskId: string, options: { projectId: string; sourceEventType: string }) => Promise<unknown> | unknown
+  finalizeTaskWrite?: (task: Task, previousTask?: Task | null, actorId?: string | null) => Promise<unknown> | unknown
 }
 
 let businessSideEffectAdapters: DbServiceBusinessSideEffectAdapters = {}
@@ -59,6 +65,7 @@ export function assertDbServiceBusinessSideEffectAdaptersRegistered() {
     'enqueueProjectHealthUpdate',
     'syncProjectDataQuality',
     'evaluateTaskConstraint',
+    'finalizeTaskWrite',
   ]
   const missingAdapters = requiredAdapters.filter((name) => !businessSideEffectAdapters[name])
   if (missingAdapters.length > 0) {
@@ -1114,6 +1121,7 @@ type ChangeSource =
   | 'manual_adjusted'
   | 'manual_close_confirmation'
   | 'manual_keep_processing'
+  | 'retention_close'
   | 'admin_force'
   | 'approval'
   | 'monthly_plan_correction'
@@ -1133,10 +1141,44 @@ function createBusinessError(code: string, message: string, statusCode = 422): B
   return error
 }
 
+function assertStructuredClosureOutcome(
+  currentStatus: string | null | undefined,
+  nextStatus: string,
+  fields: Partial<Risk> | Partial<Issue>,
+) {
+  if (currentStatus === 'closed' || nextStatus !== 'closed') return
+
+  const hasRequiredOutcome = Boolean(
+    fields.closure_result_code
+    && String(fields.closure_result_summary ?? '').trim()
+    && fields.closure_effectiveness
+    && fields.closure_recorded_at,
+  )
+  if (!hasRequiredOutcome) {
+    throw createBusinessError(
+      'CLOSURE_OUTCOME_REQUIRED',
+      '风险或问题关闭时必须记录受控结果、结果说明、有效性和记录时间',
+    )
+  }
+}
+
+function clearStructuredClosureOutcome(fields: Partial<Risk> | Partial<Issue>) {
+  Object.assign(fields, {
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
+  })
+}
+
 function normalizeDbChangeLogSource(source?: ChangeSource): DbChangeLogSource {
   if (source === 'manual_close_confirmation' || source === 'manual_keep_processing') {
     return 'manual_adjusted'
   }
+  if (source === 'retention_close') return 'system_auto'
   return source
 }
 
@@ -1194,7 +1236,7 @@ function validateRiskStatusTransition(
 ) {
   if (!currentStatus || currentStatus === nextStatus) return
 
-  if (changeSource === 'system_auto') {
+  if (changeSource === 'system_auto' || changeSource === 'retention_close') {
     const allowedSystemTransitions: Record<Risk['status'], Risk['status'][]> = {
       identified: ['mitigating', 'closed'],
       mitigating: ['closed'],
@@ -1235,6 +1277,8 @@ function validateIssueStatusTransition(
     if (allowedSystemTransitions[currentStatus]?.includes(nextStatus)) return
   }
 
+  if (changeSource === 'retention_close' && nextStatus === 'closed') return
+
   if (currentStatus === 'open' && nextStatus === 'investigating') return
   if (currentStatus === 'investigating' && nextStatus === 'open') return
   if (currentStatus === 'investigating' && nextStatus === 'resolved') return
@@ -1256,7 +1300,9 @@ function validateIssueStatusTransition(
 }
 
 function isIssuePendingManualCloseAction(changeSource: ChangeSource) {
-  return changeSource === 'manual_close_confirmation' || changeSource === 'manual_keep_processing'
+  return changeSource === 'manual_close_confirmation'
+    || changeSource === 'manual_keep_processing'
+    || changeSource === 'retention_close'
 }
 
 async function listPriorityLockedIssueIds(issueIds: string[]) {
@@ -2558,17 +2604,22 @@ export async function updateTask(
   // end_date 变更直接作为当前排期调整，后续由月度计划、月末关账和项目基线重编算法自动消化。
   // 仅通过 change_logs 留痕（已在上方 changedFieldPairs 中覆盖 end_date / planned_end_date）。
 
-  const needsSnapshot =
-    fields.progress !== undefined ||
-    fields.status !== undefined ||
-    autoActualStart ||
-    autoActualEnd ||
-    autoFirstProgress
+  const needsSnapshot = shouldRecordTaskProgressSnapshot(oldTask, updatedTask)
 
   if (needsSnapshot && !options.skipSnapshotWrite) {
     await recordTaskProgressSnapshot(updatedTask, {
       recordedBy: changedBy,
     }, oldTask)
+  }
+
+  if (needsSnapshot) {
+    runBusinessSideEffect(
+      'finalizeTaskWrite',
+      businessSideEffectAdapters.finalizeTaskWrite
+        ? () => businessSideEffectAdapters.finalizeTaskWrite!(updatedTask, oldTask, changedBy)
+        : undefined,
+      { taskId: id, projectId: oldTask.project_id ?? updatedTask.project_id ?? null },
+    )
   }
 
   if (fields.progress !== undefined || fields.status !== undefined) {
@@ -2716,6 +2767,13 @@ export async function createRisk(
     linked_issue_id: risk.linked_issue_id ?? null,
     closed_reason: risk.closed_reason ?? null,
     closed_at: status === 'closed' ? (risk.closed_at ?? ts) : null,
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
     version: risk.version ?? 1,
     created_at: ts,
     updated_at: ts,
@@ -2726,8 +2784,11 @@ export async function createRisk(
        risk_category, risk_type, impact_description, owner_id, owner_name,
        due_date, resolved_at, created_by, source_type, source_id,
        source_entity_type, source_entity_id, chain_id, pending_manual_close,
-       linked_issue_id, closed_reason, closed_at, version, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       linked_issue_id, closed_reason, closed_at,
+       closure_result_code, closure_result_summary, closure_effectiveness,
+       closure_evidence_refs, closure_cause_attribution_id, closed_by,
+       closure_recorded_at, version, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       row.id,
       row.project_id,
@@ -2753,6 +2814,13 @@ export async function createRisk(
       row.linked_issue_id,
       row.closed_reason,
       row.closed_at,
+      row.closure_result_code,
+      row.closure_result_summary,
+      row.closure_effectiveness,
+      row.closure_evidence_refs,
+      row.closure_cause_attribution_id,
+      row.closed_by,
+      row.closure_recorded_at,
       row.version,
       row.created_at,
       row.updated_at,
@@ -2782,6 +2850,7 @@ export async function updateRisk(
     oldRisk.pending_manual_close
     && changeSource !== 'manual_close_confirmation'
     && changeSource !== 'manual_keep_processing'
+    && changeSource !== 'retention_close'
   ) {
     const pendingFlagChanged = fields.pending_manual_close !== undefined && Boolean(fields.pending_manual_close) !== Boolean(oldRisk.pending_manual_close)
     const statusChanged = fields.status !== undefined && nextStatus !== oldRisk.status
@@ -2794,6 +2863,7 @@ export async function updateRisk(
   }
 
   validateRiskStatusTransition(oldRisk.status, nextStatus, changeSource)
+  assertStructuredClosureOutcome(oldRisk.status, nextStatus, fields)
   
   if (fields.status !== undefined) {
     fields.status = nextStatus
@@ -2803,6 +2873,7 @@ export async function updateRisk(
     if (nextStatus !== 'closed') {
       if (fields.closed_at === undefined) fields.closed_at = null
       if (fields.closed_reason === undefined) fields.closed_reason = null
+      clearStructuredClosureOutcome(fields)
     }
   }
   
@@ -2904,13 +2975,38 @@ export async function deleteRisk(id: string): Promise<void> {
   enqueueProjectHealthRefresh(existing.project_id, 'risk_deleted')
 }
 
-export async function confirmRiskPendingManualClose(id: string, expectedVersion?: number): Promise<Risk | null> {
+export async function confirmRiskPendingManualClose(
+  id: string,
+  outcome: RiskIssueClosureOutcomeInput,
+  actorId: string,
+  expectedVersion?: number,
+): Promise<Risk | null> {
   const risk = await getRisk(id)
   if (!risk) return null
   if (!risk.pending_manual_close) {
     throw createBusinessError('RISK_PENDING_MANUAL_CLOSE_REQUIRED', '当前风险不处于待确认关闭状态')
   }
-  return await updateRisk(id, buildRiskConfirmClosePatch(), expectedVersion, 'manual_close_confirmation')
+  return await updateRisk(id, buildRiskConfirmClosePatch(outcome, actorId), expectedVersion, 'manual_close_confirmation')
+}
+
+export async function closeRiskByRetention(
+  id: string,
+  projectId: string,
+  context: RetentionClosureContext = {},
+  expectedVersion?: number,
+): Promise<Risk | null> {
+  const risk = await getRisk(id)
+  if (!risk) return null
+  if (risk.project_id !== projectId) {
+    throw createBusinessError('PROJECT_SCOPE_MISMATCH', '风险不属于当前留存治理项目', 403)
+  }
+  if (risk.status === 'closed') return risk
+  return await updateRisk(
+    id,
+    buildRiskRetentionClosePatch(context),
+    expectedVersion,
+    'retention_close',
+  )
 }
 
 export async function keepRiskProcessing(id: string, expectedVersion?: number): Promise<Risk | null> {
@@ -3239,6 +3335,13 @@ export async function createIssue(
     status,
     closed_reason: issue.closed_reason ?? null,
     closed_at: status === 'closed' ? (issue.closed_at ?? ts) : null,
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
     version: issue.version ?? 1,
     created_at: ts,
     updated_at: ts,
@@ -3284,6 +3387,7 @@ export async function updateIssue(
   }
 
   validateIssueStatusTransition(oldIssue.status, nextStatus, changeSource, updates)
+  assertStructuredClosureOutcome(oldIssue.status, nextStatus, fields)
 
   if (fields.status !== undefined) {
     fields.status = nextStatus
@@ -3293,6 +3397,7 @@ export async function updateIssue(
     if (nextStatus !== 'closed') {
       if (fields.closed_at === undefined) fields.closed_at = null
       if (fields.closed_reason === undefined) fields.closed_reason = null
+      clearStructuredClosureOutcome(fields)
     }
   }
 
@@ -3307,7 +3412,9 @@ export async function updateIssue(
       'task_id', 'title', 'description', 'source_type', 'source_id',
       'source_entity_type', 'source_entity_id', 'chain_id', 'severity',
       'priority', 'pending_manual_close', 'status', 'closed_reason',
-      'closed_at', 'updated_at', 'version',
+      'closed_at', 'closure_result_code', 'closure_result_summary', 'closure_effectiveness',
+      'closure_evidence_refs', 'closure_cause_attribution_id', 'closed_by',
+      'closure_recorded_at', 'updated_at', 'version',
     ])
     const entries = Object.entries(updatePayload).filter(([column, value]) => (
       value !== undefined && mutableColumns.has(column)
@@ -3408,13 +3515,38 @@ export async function deleteIssue(id: string): Promise<void> {
   enqueueProjectHealthRefresh(existing.project_id, 'issue_deleted')
 }
 
-export async function confirmIssuePendingManualClose(id: string, expectedVersion?: number): Promise<Issue | null> {
+export async function confirmIssuePendingManualClose(
+  id: string,
+  outcome: RiskIssueClosureOutcomeInput,
+  actorId: string,
+  expectedVersion?: number,
+): Promise<Issue | null> {
   const issue = await getIssue(id)
   if (!issue) return null
   if (!issue.pending_manual_close) {
     throw createBusinessError('ISSUE_PENDING_MANUAL_CLOSE_REQUIRED', '当前问题不处于待确认关闭状态')
   }
-  return await updateIssue(id, buildIssueConfirmClosePatch(), expectedVersion, 'manual_close_confirmation')
+  return await updateIssue(id, buildIssueConfirmClosePatch(outcome, actorId), expectedVersion, 'manual_close_confirmation')
+}
+
+export async function closeIssueByRetention(
+  id: string,
+  projectId: string,
+  context: RetentionClosureContext = {},
+  expectedVersion?: number,
+): Promise<Issue | null> {
+  const issue = await getIssue(id)
+  if (!issue) return null
+  if (issue.project_id !== projectId) {
+    throw createBusinessError('PROJECT_SCOPE_MISMATCH', '问题不属于当前留存治理项目', 403)
+  }
+  if (issue.status === 'closed') return issue
+  return await updateIssue(
+    id,
+    buildIssueRetentionClosePatch(context),
+    expectedVersion,
+    'retention_close',
+  )
 }
 
 export async function keepIssueProcessing(id: string, expectedVersion?: number): Promise<Issue | null> {

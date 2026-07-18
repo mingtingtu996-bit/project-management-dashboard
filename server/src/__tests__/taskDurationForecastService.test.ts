@@ -68,7 +68,9 @@ function createBuilder(table: string) {
     if (table === 'duration_forecast_residual_overlays') data = state.residualOverlays
 
     let result = data.filter((row) => (
-      filters.every((filter) => row[filter.column] === filter.value)
+      filters.every((filter) => filter.value === null
+        ? row[filter.column] == null
+        : row[filter.column] === filter.value)
       && inFilters.every((filter) => filter.values.includes(row[filter.column]))
       && ltFilters.every((filter) => {
         const value = Number(row[filter.column])
@@ -85,6 +87,10 @@ function createBuilder(table: string) {
   const builder: any = {
     select: vi.fn(() => builder),
     eq: vi.fn((column: string, value: unknown) => {
+      filters.push({ column, value })
+      return builder
+    }),
+    is: vi.fn((column: string, value: unknown) => {
       filters.push({ column, value })
       return builder
     }),
@@ -4525,5 +4531,25 @@ describe('taskDurationForecastService', () => {
       }),
     ]))
     expect(state.dependencyForecasts[0]?.forecast_error_days).toBeGreaterThan(0)
+  })
+
+  it('treats actual_end_date as completion even when progress synchronization lags', async () => {
+    state.tasks = [{
+      id: 'task-actual-end-complete',
+      project_id: 'project-1',
+      title: 'Actual end complete task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-10',
+      actual_start_date: '2026-05-01',
+      actual_end_date: '2026-05-12',
+      status: 'in_progress',
+      progress: 99,
+    }]
+
+    const forecast = await forecastTaskDuration('task-actual-end-complete')
+
+    expect(forecast.remainingDurationDays).toBe(0)
+    expect(forecast.forecastFinishDate).toBe('2026-05-12')
+    expect(forecast.forecastSources).toEqual(expect.objectContaining({ completed: true }))
   })
 })

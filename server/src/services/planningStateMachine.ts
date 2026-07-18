@@ -248,20 +248,6 @@ export const planningContracts: PlanningContractsSnapshot = {
     },
     {
       method: 'POST',
-      path: '/api/task-baselines/:id/materialize-independent-task-network',
-      requestShape: '{ mode?: dry_run | execute, scope_assignment?: ScopeAssignment, scope_assignments_by_candidate_item_id?: Record<string, ScopeAssignment>, allow_independent_task_network_materialization?: boolean, approved_duration_mappings?: [...] }',
-      responseShape: '{ mode: dry_run | execute, plan: IndependentDefaultMasterPlanTaskNetworkPlan, materialization?: {...} }',
-      errorCodes: [
-        'NOT_FOUND',
-        'INVALID_STATE',
-        'INDEPENDENT_TASK_NETWORK_PLAN_BLOCKED',
-        'INDEPENDENT_TASK_NETWORK_SCOPE_INVALID',
-        'INDEPENDENT_TASK_NETWORK_EXECUTION_NOT_AUTHORIZED',
-        'APPROVED_DURATION_MAPPING_SAMPLE_INVALID',
-      ],
-    },
-    {
-      method: 'POST',
       path: '/api/task-baselines/:id/publish',
       requestShape: '{ project_id?: string, version?: number | null }',
       responseShape: "{ id: string, status: 'confirmed' }",

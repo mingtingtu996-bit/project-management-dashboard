@@ -215,7 +215,7 @@ describe('v1.4.23.1 non-live closeout contract', () => {
     ])
 
     expect(matrix.canDeclareDomainReleaseRuntimeClosureComplete).toBe(true)
-    expect(matrix.assetTypes).toContain('t2_rhythm_schedule_runtime')
+    expect(matrix.assetTypes).not.toContain('t2_rhythm_schedule_runtime')
     expect(matrix.requiredSurfaces).toEqual([
       'asset_type_domain_writer',
       'runtime_consumer_verification',
@@ -1102,8 +1102,8 @@ describe('v1.4.23.1 non-live closeout contract', () => {
     expect(matrix.assetTypes).toEqual(expect.arrayContaining([
       'metric_runtime',
       'construction_dependency_rule_runtime',
-      't2_rhythm_schedule_runtime',
     ]))
+    expect(matrix.assetTypes).not.toContain('t2_rhythm_schedule_runtime')
     expect(matrix.canDeclareDomainReleaseRuntimeClosureComplete).toBe(true)
 
     for (const row of [

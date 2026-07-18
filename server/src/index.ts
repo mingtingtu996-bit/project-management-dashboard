@@ -50,6 +50,7 @@ import {
 } from './services/projectHealthService.js'
 import { dataQualityService } from './services/dataQualityService.js'
 import { evaluateTaskConstraint } from './services/taskConstraintGovernanceService.js'
+import { finalizeTaskWriteFromLegacyMutation } from './services/taskWriteChainService.js'
 
 import projectsRouter, { warmProjectListCache } from './routes/projects.js'
 import projectWizardRouter from './routes/projectWizard.js'
@@ -85,6 +86,7 @@ import dataQualityRouter, { warmDataQualityProjectSummaryCache } from './routes/
 import taskConditionsRouter from './routes/task-conditions.js'
 import taskObstaclesRouter from './routes/task-obstacles.js'
 import taskSummariesRouter from './routes/task-summaries.js'
+import causeAttributionsRouter from './routes/cause-attributions.js'
 import changeLogsRouter from './routes/change-logs.js'
 import deletionRetentionRouter from './routes/deletion-retention.js'
 import preMilestonesRouter, { warmPreMilestoneBoardCache } from './routes/pre-milestones.js'
@@ -180,6 +182,7 @@ registerDbServiceBusinessSideEffectAdapters({
   enqueueProjectHealthUpdate,
   syncProjectDataQuality: (projectId) => dataQualityService.syncProjectDataQuality(projectId),
   evaluateTaskConstraint,
+  finalizeTaskWrite: finalizeTaskWriteFromLegacyMutation,
 })
 assertDbServiceBusinessSideEffectAdaptersRegistered()
 
@@ -517,6 +520,7 @@ app.use('/api/data-quality', dataQualityRouter)
 app.use('/api/task-conditions', taskConditionsRouter)
 app.use('/api/task-obstacles', taskObstaclesRouter)
 app.use('/api/task-summaries', taskSummariesRouter)
+app.use('/api/cause-attributions', causeAttributionsRouter)
 app.use('/api/change-logs', changeLogsRouter)
 app.use('/api/deletion-retention', deletionRetentionRouter)
 

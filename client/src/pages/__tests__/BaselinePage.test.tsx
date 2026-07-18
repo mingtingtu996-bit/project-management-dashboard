@@ -10,7 +10,7 @@ import { useStore } from '@/hooks/useStore'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import type { BaselineItem, BaselineVersion } from '@/types/planning'
 
-import BaselinePage from '../planning/BaselinePage'
+import BaselinePage, { inferBaselinePublishCauseCode } from '../planning/BaselinePage'
 
 vi.mock('@/lib/apiClient', () => ({
   apiGet: vi.fn(),
@@ -391,6 +391,27 @@ function renderBaselinePage() {
 }
 
 describe('BaselinePage planning workflow', () => {
+  it('prefills only explicit baseline-change cause signals without misclassifying project names', () => {
+    expect(inferBaselinePublishCauseCode({
+      id: 'baseline-equipment-project',
+      project_id: 'project-1',
+      version: 2,
+      status: 'draft',
+      title: '机电设备安装项目基线',
+      description: '常规计划修订',
+      source_type: 'manual',
+    })).toBe('workflow_sequence')
+    expect(inferBaselinePublishCauseCode({
+      id: 'baseline-design-change',
+      project_id: 'project-1',
+      version: 3,
+      status: 'draft',
+      title: '项目基线修订',
+      description: '设计变更确认后调整主体结构节点',
+      source_type: 'manual',
+    })).toBe('design_change')
+  })
+
   beforeEach(() => {
     seedBaselineFixtures()
     generateCandidateDefaultMasterPlanDraft = false
@@ -982,7 +1003,16 @@ describe('BaselinePage planning workflow', () => {
     await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
 
     await clickButtonByText(container, '发布项目基线')
-    await waitForText(document.body, ['发布项目基线', '确认发布'])
+    await waitForText(document.body, ['发布项目基线', '变更原因分类', '原因原话', '确认发布'])
+    await waitForText(document.body, ['工序顺序调整'])
+    const confirmPublishButton = Array.from(document.body.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('确认发布')) as HTMLButtonElement | undefined
+    expect(confirmPublishButton?.disabled).toBe(true)
+    await setTextareaValue(
+      document.body.querySelector('#baseline-publish-change-reason') as HTMLTextAreaElement,
+      '设计变更确认后调整主体结构节点。',
+    )
+    expect(confirmPublishButton?.disabled).toBe(false)
     await clickButtonByText(document.body, '确认发布')
 
     await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish'))
@@ -999,7 +1029,11 @@ describe('BaselinePage planning workflow', () => {
     expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v6/generate-version')).toBe(false)
     expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/confirm')).toBe(false)
     const publishCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/publish')
-    expect((publishCall?.[1] as Record<string, unknown> | undefined)?.candidate_governance_reviewed).toBeUndefined()
+    expect(publishCall?.[1]).toEqual({
+      project_id: 'project-1',
+      cause_code: 'workflow_sequence',
+      change_reason: '设计变更确认后调整主体结构节点。',
+    })
 
     await waitForText(container, ['已发布新版项目基线', 'v7 已确认'])
     cleanup()
@@ -1017,18 +1051,26 @@ describe('BaselinePage planning workflow', () => {
     await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
 
     await clickButtonByText(container, '发布项目基线')
-    await waitForText(document.body, ['发布项目基线', '确认发布'])
+    await waitForText(document.body, ['发布项目基线', '变更原因分类', '原因原话', '确认发布'])
 
     expect(document.body.querySelector('[data-testid="candidate-default-master-plan-review-warning"]')).toBeNull()
     expect(document.body.querySelector('#candidate-default-master-plan-review-acknowledgement')).toBeNull()
     expect(document.body.querySelector('#candidate-default-master-plan-review-notes')).toBeNull()
+    await setTextareaValue(
+      document.body.querySelector('#baseline-publish-change-reason') as HTMLTextAreaElement,
+      '根据项目向导生成结果发布首版执行基线。',
+    )
     await clickButtonByText(document.body, '确认发布')
 
     await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish'))
 
     const publishCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/publish')
     const payload = publishCall?.[1] as Record<string, unknown> | undefined
-    expect(payload).toEqual({ project_id: 'project-1' })
+    expect(payload).toEqual({
+      project_id: 'project-1',
+      cause_code: 'workflow_sequence',
+      change_reason: '根据项目向导生成结果发布首版执行基线。',
+    })
 
     cleanup()
   })
@@ -1045,18 +1087,26 @@ describe('BaselinePage planning workflow', () => {
     await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
 
     await clickButtonByText(container, '发布项目基线')
-    await waitForText(document.body, ['发布项目基线', '确认发布'])
+    await waitForText(document.body, ['发布项目基线', '变更原因分类', '原因原话', '确认发布'])
 
     expect(document.body.querySelector('[data-testid="candidate-default-master-plan-review-warning"]')).toBeNull()
     expect(document.body.querySelector('#candidate-default-master-plan-review-acknowledgement')).toBeNull()
     expect(document.body.querySelector('#candidate-default-master-plan-review-notes')).toBeNull()
+    await setTextareaValue(
+      document.body.querySelector('#baseline-publish-change-reason') as HTMLTextAreaElement,
+      '复核候选计划后发布为当前执行基线。',
+    )
     await clickButtonByText(document.body, '确认发布')
 
     await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish'))
 
     const publishCall = mockedApiPost.mock.calls.find(([url]) => url === '/api/task-baselines/baseline-v7/publish')
     const payload = publishCall?.[1] as Record<string, unknown> | undefined
-    expect(payload).toEqual({ project_id: 'project-1' })
+    expect(payload).toEqual({
+      project_id: 'project-1',
+      cause_code: 'workflow_sequence',
+      change_reason: '复核候选计划后发布为当前执行基线。',
+    })
 
     cleanup()
   })

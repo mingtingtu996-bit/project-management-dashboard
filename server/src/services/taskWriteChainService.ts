@@ -9,6 +9,7 @@ import {
 import { SystemAnomalyService } from './systemAnomalyService.js'
 import { WarningService } from './warningService.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
+import { shouldRecordTaskProgressSnapshot } from '../utils/taskProgressSnapshotPolicy.js'
 import {
   ExecutionFactIntent,
   applyExecutionFactGovernance,
@@ -379,19 +380,6 @@ function justCompletedTask(previousTask?: Task | null, nextTask?: Task | null) {
     isCompletedTask({ status: nextTask?.status ?? null, progress: nextTask?.progress ?? null })
 
   return !previousCompleted && nextCompleted
-}
-
-function shouldRecordTaskSnapshot(previousTask?: Task | null, nextTask?: Task | null) {
-  if (!nextTask) return false
-  if (!previousTask) return true
-
-  return (
-    Number(previousTask.progress ?? 0) !== Number(nextTask.progress ?? 0)
-    || String(previousTask.status ?? '') !== String(nextTask.status ?? '')
-    || String(previousTask.actual_start_date ?? '') !== String(nextTask.actual_start_date ?? '')
-    || String(previousTask.actual_end_date ?? '') !== String(nextTask.actual_end_date ?? '')
-    || String(previousTask.first_progress_at ?? '') !== String(nextTask.first_progress_at ?? '')
-  )
 }
 
 function queuePassiveReorderDetection(projectId: string, taskId: string) {
@@ -772,6 +760,18 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
     }
 
     try {
+      const { inferAndPersistTaskStructuredCauseAttributions } = await import('./structuredCauseAttributionService.js')
+      await inferAndPersistTaskStructuredCauseAttributions({
+        task: task as unknown as Record<string, unknown>,
+      })
+    } catch (error) {
+      logger.warn('Failed to infer structured causes after task completion', {
+        taskId: task.id,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+
+    try {
       await collectDurationExperienceSampleFromTask(task, {
         previousTask,
         actorId,
@@ -825,6 +825,14 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
   }
 
   queuePassiveReorderDetection(task.project_id, task.id)
+}
+
+export async function finalizeTaskWriteFromLegacyMutation(
+  task: Task,
+  previousTask?: Task | null,
+  actorId?: string | null,
+) {
+  await finalizeTaskWrite(task, previousTask, actorId)
 }
 
 async function syncExecutionGateSeedsBestEffort(task: Task, actorId?: string | null) {
@@ -1452,7 +1460,7 @@ export async function updateTaskInMainChain(
     })
   }
 
-  if (shouldRecordTaskSnapshot(previousTask, task)) {
+  if (shouldRecordTaskProgressSnapshot(previousTask, task)) {
     await runPostCommitTaskSideEffect('record_task_progress_snapshot', task.id, async () => {
       await recordTaskProgressSnapshot(task, {
         recordedBy: updates.updated_by ?? null,
@@ -1700,7 +1708,7 @@ export async function reopenTaskInMainChain(
   const task = taskData as unknown as Task
   if (!task) return null
 
-  if (shouldRecordTaskSnapshot(previousTask, task)) {
+  if (shouldRecordTaskProgressSnapshot(previousTask, task)) {
     await runPostCommitTaskSideEffect('record_reopen_progress_snapshot', task.id, async () => {
       await recordTaskProgressSnapshot(task, {
         recordedBy: actorId ?? null,

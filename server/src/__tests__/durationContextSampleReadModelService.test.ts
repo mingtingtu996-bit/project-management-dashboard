@@ -3,6 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 type Row = Record<string, any>
 type Filter = { type: 'eq' | 'not'; column: string; value: unknown }
 
+function productionSample(row: Row): Row {
+  return {
+    ...row,
+    duration_day_basis: 'construction_production_day',
+    actual_duration_production_days: row.actual_duration ?? null,
+    planned_duration_production_days: row.planned_duration ?? null,
+  }
+}
+
 const mocks = vi.hoisted(() => {
   const state = {
     durationExperienceSamples: [] as Row[],
@@ -138,7 +147,7 @@ describe('durationContextSampleReadModelService', () => {
         included_in_benchmark: true,
         completed_at: '2026-04-04T00:00:00.000Z',
       },
-    ]
+    ].map(productionSample)
 
     const rows = await loadProjectBaselineCalibrationDurationExperienceSamples('project-a')
 
@@ -155,7 +164,7 @@ describe('durationContextSampleReadModelService', () => {
   })
 
   it('loads PM recovery eligibility samples with the governed filters and 30-row cap', async () => {
-    mocks.state.durationExperienceSamples = Array.from({ length: 31 }, (_, index) => ({
+    mocks.state.durationExperienceSamples = Array.from({ length: 31 }, (_, index) => productionSample({
       id: `sample-${index + 1}`,
       project_id: 'project-b',
       task_id: `task-${index + 1}`,
@@ -198,7 +207,7 @@ describe('durationContextSampleReadModelService', () => {
         sample_status: 'active',
         included_in_benchmark: true,
       },
-    ]
+    ].map(productionSample)
 
     const rows = await loadProgressVelocityProjectDurationExperienceSamples({
       companyId: 'company-a',
@@ -240,7 +249,7 @@ describe('durationContextSampleReadModelService', () => {
         sample_status: 'active',
         included_in_benchmark: true,
       },
-    ]
+    ].map(productionSample)
 
     const rows = await loadProgressVelocityCompanyDurationExperienceSamples({
       companyId: 'company-a',
@@ -280,6 +289,8 @@ describe('durationContextSampleReadModelService', () => {
       fact_source: 'actual_outcome',
       evidence_fingerprint: 'sha256:sample-a',
       source_lineage: { sourceType: 'task_actual_dates' },
+      duration_day_basis: 'construction_production_day',
+      actual_duration_production_days: 8,
     }
     mocks.state.durationExperienceSamples = [
       { id: 'governed', ...governedIdentity, completed_at: '2026-07-03T00:00:00.000Z' },

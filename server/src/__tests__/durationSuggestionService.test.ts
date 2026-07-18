@@ -100,6 +100,7 @@ const mocks = vi.hoisted(() => {
     loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
     readPlanningReplayCalibrationReadback: vi.fn(),
     rawQuery: vi.fn(async () => ({ rows: [] })),
+    executeSQL: vi.fn(async () => []),
     getTask: vi.fn(),
   }
 })
@@ -113,6 +114,7 @@ vi.mock('../services/dbService.js', () => ({
     from: mocks.from,
   },
   getTask: mocks.getTask,
+  executeSQL: mocks.executeSQL,
 }))
 
 vi.mock('../auth/access.js', () => ({
@@ -2067,6 +2069,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 4,
           p75_days: 6,
           sample_count: 30,
@@ -2109,6 +2112,44 @@ describe('durationSuggestionService', () => {
     }))
   })
 
+  it('does not mix a legacy calendar-day benchmark into production-day duration prediction', async () => {
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (isCompanyBenchmarkScope('company-1')) {
+        return {
+          data: {
+            duration_day_basis: 'calendar_day',
+            p50_days: 4,
+            p75_days: 6,
+            sample_count: 30,
+            company_id: 'company-1',
+          },
+          error: null,
+        }
+      }
+      return { data: null, error: null }
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 8,
+      defaultDaysP80: 12,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      wbsNodeType: 'process',
+    })
+
+    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+  })
+
   it('uses a published learnable parameter runtime weight for company benchmark blending', async () => {
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
     mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: any) => (
@@ -2148,6 +2189,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 7,
           p75_days: 9,
           sample_count: 30,
@@ -2268,6 +2310,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 8,
           p75_days: 14,
           sample_count: 30,
@@ -2456,6 +2499,7 @@ describe('durationSuggestionService', () => {
       if (isSystemBenchmarkScope() && String(currentBenchmarkKey()).endsWith(':all')) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 20,
           p75_days: 24,
           sample_count: 80,
@@ -2497,6 +2541,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 6,
           p75_days: 8,
           p80_days: 10,
@@ -2542,6 +2587,7 @@ describe('durationSuggestionService', () => {
       if (isSystemBenchmarkScope()) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 6,
           p75_days: 8,
           p80_days: 10,
@@ -2594,6 +2640,7 @@ describe('durationSuggestionService', () => {
       if (isProjectBenchmarkScope('project-1')) {
         return {
           data: {
+            duration_day_basis: 'construction_production_day',
             p50_days: 7,
             p75_days: 7,
             p80_days: 9,
@@ -2608,6 +2655,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+            duration_day_basis: 'construction_production_day',
             p50_days: 6,
             p75_days: 6,
             p80_days: 8,
@@ -2622,6 +2670,7 @@ describe('durationSuggestionService', () => {
       if (isSystemBenchmarkScope()) {
         return {
           data: {
+            duration_day_basis: 'construction_production_day',
             p50_days: 12,
             p75_days: 12,
             p80_days: 14,
@@ -2673,6 +2722,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+          duration_day_basis: 'construction_production_day',
           p50_days: 8,
           p75_days: 9,
           sample_count: 24,
@@ -2756,6 +2806,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+            duration_day_basis: 'construction_production_day',
             p50_days: 8,
             p75_days: 10,
             sample_count: 18,
@@ -4635,6 +4686,7 @@ describe('durationSuggestionService', () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
           data: {
+            duration_day_basis: 'construction_production_day',
             p50_days: 8,
             p75_days: 10,
             p80_days: 12,
@@ -4749,6 +4801,139 @@ describe('durationSuggestionService', () => {
         'durationSuggestionService',
         'duration_suggestion',
       ],
+    ])
+  })
+
+  it('consumes a scoped learned standard-duration publication instead of leaving the learned seed idle', async () => {
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      if (sql.includes('from public.duration_learning_runtime_publications')) {
+        return [{
+          publication_key: 'duration_learning_runtime:standard_work_duration_seed:rebar-company-canary',
+          asset_key: 'standard_work_duration_seed',
+          artifact_key: 'rebar_installation',
+          scope_level: 'company',
+          company_id: 'company-1',
+          project_id: null,
+          industry_key: null,
+          publication_stage: 'canary',
+          runtime_payload: {
+            stableCode: 'rebar_installation',
+            defaultDaysP20: 6,
+            defaultDaysP50: 7,
+            defaultDaysP80: 9,
+            durationDayBasis: 'construction_production_day',
+          },
+          previous_publication_key: 'algorithm_seed_versions:standard-v1',
+          traffic_percent: 100,
+          monitoring_status: 'collecting',
+          published_at: '2026-07-17T00:00:00.000Z',
+        }] as T[]
+      }
+      return [] as T[]
+    }
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'active_seed',
+      __seedVersion: 'standard-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP20: 8,
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'System cold-start seed.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      projectTypeCode: 'residential',
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(suggestion.recommendedDurationDays).toBe(8)
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      seedSource: 'duration_learning_company_canary',
+      seedVersion: 'duration_learning_runtime:standard_work_duration_seed:rebar-company-canary',
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toContainEqual([
+      'standard_work_duration_seed',
+      'duration_learning_runtime:standard_work_duration_seed:rebar-company-canary',
+      'durationSuggestionService',
+      'duration_suggestion',
+    ])
+  })
+
+  it('consumes a production-day learned benchmark publication and records its exact lineage', async () => {
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      if (
+        sql.includes('from public.duration_learning_runtime_publications')
+        && params[0] === 'base_duration_benchmark'
+      ) {
+        return [{
+          publication_key: 'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
+          asset_key: 'base_duration_benchmark',
+          artifact_key: 'rebar_installation:process:all',
+          scope_level: 'company',
+          company_id: 'company-1',
+          project_id: null,
+          industry_key: null,
+          publication_stage: 'canary',
+          runtime_payload: {
+            p50Days: 6,
+            p75Days: 8,
+            p80Days: 9,
+            meanDays: 7,
+            sampleCount: 50,
+            variance: 0.2,
+            durationDayBasis: 'construction_production_day',
+          },
+          previous_publication_key: 'duration_benchmarks:company-v1',
+          traffic_percent: 100,
+          monitoring_status: 'collecting',
+          published_at: '2026-07-17T00:00:00.000Z',
+        }] as T[]
+      }
+      return [] as T[]
+    }
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'active_seed',
+      __seedVersion: 'standard-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      projectTypeCode: 'residential',
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(suggestion.recommendedDurationDays).toBeLessThan(12)
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      benchmarkP50: 6,
+      benchmarkDurationDayBasis: 'construction_production_day',
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toContainEqual([
+      'base_duration_benchmark',
+      'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
+      'durationSuggestionService',
+      'duration_suggestion',
     ])
   })
 

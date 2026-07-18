@@ -1,14 +1,16 @@
 // v1.4.20.1: Workspace page, the default landing for all users.
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { RefreshCw } from 'lucide-react'
+import { Bell, ClipboardCheck, RefreshCw, ShieldCheck } from 'lucide-react'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { LoadingState } from '@/components/ui/loading-state'
 import { useAuth } from '@/context/AuthContext'
 import { toast } from '@/hooks/use-toast'
+import { useAttentionSummary } from '@/hooks/useAttentionSummary'
 import { useWorkspaceData } from '@/hooks/useWorkspaceData'
 import type {
   JoinableProject,
@@ -17,6 +19,14 @@ import type {
 } from '@/hooks/useWorkspaceData'
 import { zhCN } from '@/i18n/zh-CN'
 import { getApiErrorMessage } from '@/lib/apiClient'
+import {
+  fetchV14231ActionableSurface,
+  type V14231ActionableSurface,
+} from '@/services/v14231ReadinessApi'
+import {
+  canShowWorkspaceGovernanceExecuteAction,
+  WORKSPACE_ACTION_SURFACE_KEYS,
+} from '@/services/v14231PageActionReadiness'
 import {
   CompanyJoinDialog,
   CompanySwitcherDialog,
@@ -45,6 +55,7 @@ export function WorkspacePage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const workspace = useWorkspaceData()
+  const attention = useAttentionSummary(null, workspace.currentCompany?.id ?? null)
   const [confirmAction, setConfirmAction] = useState<
     | { type: 'accept'; invitation: WorkspaceInvitation }
     | { type: 'decline'; invitation: WorkspaceInvitation }
@@ -54,6 +65,30 @@ export function WorkspacePage() {
   const [companyJoinOpen, setCompanyJoinOpen] = useState(false)
   const [companySwitcherOpen, setCompanySwitcherOpen] = useState(false)
   const [actionKey, setActionKey] = useState<string | null>(null)
+  const [workspaceActionSurfaces, setWorkspaceActionSurfaces] = useState<Record<string, V14231ActionableSurface>>({})
+
+  useEffect(() => {
+    let mounted = true
+    const keys = [
+      WORKSPACE_ACTION_SURFACE_KEYS.progressEntry,
+      WORKSPACE_ACTION_SURFACE_KEYS.governancePredictionExecute,
+    ]
+    Promise.all(keys.map(async (key) => {
+      try {
+        return { key, surface: await fetchV14231ActionableSurface(key) }
+      } catch {
+        return { key, surface: null }
+      }
+    })).then((results) => {
+      if (!mounted) return
+      setWorkspaceActionSurfaces(Object.fromEntries(
+        results.flatMap((result) => result.surface ? [[result.key, result.surface]] : []),
+      ))
+    })
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const userDisplayName = user?.display_name || user?.username || W.fallbackUser
   const pendingJoinRequests = workspace.joinRequests.filter((request) => request.status === 'pending')
@@ -63,6 +98,17 @@ export function WorkspacePage() {
     && pendingJoinRequests.length === 0
     && workspace.joinableProjects.length === 0
   )
+  const progressProject = workspace.recentProjects[0] ?? workspace.myProjects[0] ?? null
+  const progressActionSurface = workspaceActionSurfaces[WORKSPACE_ACTION_SURFACE_KEYS.progressEntry]
+  const governanceActionSurface = workspaceActionSurfaces[WORKSPACE_ACTION_SURFACE_KEYS.governancePredictionExecute]
+  const governanceTodoExecutable = canShowWorkspaceGovernanceExecuteAction({
+    surface: governanceActionSurface,
+    hasBackendCommand: false,
+    hasPermission: false,
+    hasFailureSemantics: false,
+    hasIdempotency: false,
+    hasSourceIdentity: false,
+  })
 
   const handleProjectClick = useCallback((projectId: string) => {
     navigate(`/projects/${projectId}/dashboard`)
@@ -239,6 +285,64 @@ export function WorkspacePage() {
         switchableCompanies={workspace.switchableCompanies}
         onOpenCompanySwitcher={() => setCompanySwitcherOpen(true)}
       />
+
+      <section
+        data-testid="workspace-action-readiness"
+        className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-[var(--el-1)]"
+      >
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-2">
+            <Bell className="h-4 w-4 text-blue-600" />
+            <h2 className="text-sm font-semibold text-slate-900">待办与提醒</h2>
+          </div>
+          <Badge data-testid="workspace-attention-read-status" variant="outline">
+            {attention.error ? '读取失败' : attention.loading ? '读取中' : '已加载'}
+          </Badge>
+        </div>
+        <div className="grid gap-px bg-slate-200 sm:grid-cols-3">
+          <div className="bg-white px-4 py-3">
+            <p className="text-xs text-slate-500">未读提醒</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums text-slate-950">{attention.summary.unreadNotificationCount}</p>
+          </div>
+          <div className="bg-white px-4 py-3">
+            <p className="text-xs text-slate-500">今日待办</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums text-slate-950">{attention.summary.todayTodoCount}</p>
+          </div>
+          <div className="bg-white px-4 py-3">
+            <p className="text-xs text-slate-500">工作区待处理</p>
+            <p className="mt-1 text-xl font-semibold tabular-nums text-slate-950">{attention.summary.workspacePendingCount}</p>
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={() => navigate('/notifications')}>
+              <Bell className="h-4 w-4" />
+              查看提醒
+            </Button>
+            {progressProject ? (
+              <Button
+                type="button"
+                size="sm"
+                data-action-readiness={progressActionSurface?.status ?? 'display-only'}
+                onClick={() => navigate(`/projects/${progressProject.id}/gantt`)}
+              >
+                <ClipboardCheck className="h-4 w-4" />
+                录入进度
+              </Button>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <ShieldCheck className="h-4 w-4" />
+            <span>治理 / 预测待办</span>
+            <Badge
+              data-testid="workspace-governance-action-status"
+              variant={governanceTodoExecutable ? 'default' : 'secondary'}
+            >
+              {governanceActionSurface?.status ?? 'display-only'}
+            </Badge>
+          </div>
+        </div>
+      </section>
 
       {shouldShowQuickMetrics ? (
         <QuickMetricRow

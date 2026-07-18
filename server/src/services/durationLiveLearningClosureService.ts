@@ -686,7 +686,7 @@ const DURATION_LIVE_LEARNING_MANIFESTS: DurationLiveLearningManifest[] = [
     assetFamily: 'critical_path_and_float_rule_candidate',
     implementationAnchors: {
       primaryService: 'projectCriticalPathService.ts',
-      runtimeConsumers: ['projectRemainingDurationForecastService.ts', 'scheduleAccelerationRuntimeService.ts'],
+      runtimeConsumers: ['projectCriticalPathService.ts', 'projectRemainingDurationForecastService.ts', 'scheduleAccelerationRuntimeService.ts'],
       predictionEventAnchors: ['network_prediction_events', 'critical_path_projection_lineage'],
       outcomeEventAnchors: ['projectDailySnapshotService.ts', 'projectExecutionSummaryService.ts'],
       releaseGateAnchors: [

@@ -50,8 +50,16 @@ describe('project entity links backend runtime RLS migration', () => {
       '-- ============================================================',
     ].join('\n')
     const sourceHeaderIndex = cleanBundle.indexOf(sourceHeader)
+    const sourceBodyStart = sourceHeaderIndex + sourceHeader.length
+    const nextSourceHeaderIndex = cleanBundle.indexOf(
+      '-- ============================================================\n-- Source:',
+      sourceBodyStart,
+    )
+    const sourceBody = nextSourceHeaderIndex >= 0
+      ? cleanBundle.slice(sourceBodyStart, nextSourceHeaderIndex)
+      : cleanBundle.slice(sourceBodyStart)
 
     expect(sourceHeaderIndex).toBeGreaterThanOrEqual(0)
-    expect(normalizeSql(cleanBundle.slice(sourceHeaderIndex + sourceHeader.length))).toBe(migration)
+    expect(normalizeSql(sourceBody)).toBe(migration)
   })
 })

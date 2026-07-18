@@ -99,6 +99,25 @@ describe('taskSummaryService duration stats', () => {
     })
   })
 
+  it('uses the shared completed-task aliases when actual finish is missing', () => {
+    expect(calculateTaskCompletionDelayStats({
+      planned_end_date: '2026-04-10',
+      actual_end_date: null,
+      updated_at: '2026-04-12T01:00:00+08:00',
+      status: 'done',
+      progress: 0,
+    } as never)).toEqual({
+      totalDelayDays: 2,
+      delayCount: 1,
+      delayDetails: [{
+        delay_date: '2026-04-12T01:00:00+08:00',
+        delay_days: 2,
+        delay_type: 'auto_detected',
+        reason: '实际完成时间晚于计划完成时间',
+      }],
+    })
+  })
+
   it('deducts official construction shutdown windows from completion delay days', () => {
     expect(calculateTaskCompletionDelayStats({
       planned_end_date: '2026-02-10',

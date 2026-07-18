@@ -67,6 +67,12 @@ const REQUIRED_BUSINESS_PATH_INTEGRATIONS: DurationRuntimeConsumerBusinessPathIn
     runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
   },
   {
+    consumerKey: 'projectCriticalPathService',
+    sourcePath: 'server/src/services/projectCriticalPathService.ts',
+    facadeFunctionName: 'recordProjectCriticalPathConsumedArtifacts',
+    runtimeEntryRef: 'projectCriticalPathService:resolveCriticalPathLearningPublications',
+  },
+  {
     consumerKey: 'wbsTemplateGenerationService',
     sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
     facadeFunctionName: 'recordWbsTemplateGenerationConsumedArtifacts',

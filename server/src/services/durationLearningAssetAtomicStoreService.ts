@@ -13,6 +13,7 @@ const DURATION_BENCHMARK_COLUMNS = [
   'project_context',
   'wbs_node_type',
   'sample_count',
+  'duration_day_basis',
   'p50_days',
   'p75_days',
   'p80_days',
@@ -88,6 +89,31 @@ async function insertAllowedRow(
   return inserted
 }
 
+async function updateAllowedRow(
+  client: PoolClient,
+  tableName: 'duration_benchmarks' | 'project_productivity_compensation_calibrations',
+  allowedColumns: readonly string[],
+  rowId: string,
+  row: PersistenceRow,
+) {
+  const columns = allowedColumns.filter((column) => (
+    column !== 'company_id'
+    && Object.prototype.hasOwnProperty.call(row, column)
+  ))
+  if (columns.length === 0) throw new Error(`No supported columns supplied for ${tableName}`)
+  const assignments = columns.map((column, index) => `${column} = $${index + 1}`)
+  const result = await client.query<PersistenceRow>(
+    `update public.${tableName}
+        set ${assignments.join(', ')}
+      where id = $${columns.length + 1}::uuid
+      returning *`,
+    [...columns.map((column) => row[column]), rowId],
+  )
+  const updated = result.rows[0]
+  if (!updated) throw new Error(`Failed to update ${tableName} row`)
+  return updated
+}
+
 async function withTransaction<T>(operation: (client: PoolClient) => Promise<T>) {
   const client = await getClient()
   let transactionStarted = false
@@ -121,6 +147,44 @@ export async function replaceDurationBenchmarkAtomically(row: PersistenceRow) {
       [benchmarkKey, companyId, row.updated_at ?? null],
     )
     return insertAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, row)
+  })
+}
+
+export async function stageDurationBenchmarkCandidateAtomically(row: PersistenceRow) {
+  const benchmarkKey = requireText(row.benchmark_key, 'benchmark_key')
+  const companyId = normalizeText(row.company_id) || null
+  const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
+    ? row.metadata as Record<string, unknown>
+    : {}
+  const candidateOperationId = requireText(metadata.candidate_operation_id, 'candidate_operation_id')
+  const candidateRow: PersistenceRow = {
+    ...row,
+    is_current: false,
+    is_active: true,
+    metadata: {
+      ...metadata,
+      candidate_operation_id: candidateOperationId,
+      runtime_publication_status: 'candidate',
+    },
+  }
+
+  return withTransaction(async (client) => {
+    const existing = await client.query<{ id: string }>(
+      `select id
+         from public.duration_benchmarks
+        where benchmark_key = $1
+          and company_id is not distinct from $2::uuid
+          and metadata ->> 'candidate_operation_id' = $3
+          and is_current = false
+          and is_active = true
+        limit 1
+        for update`,
+      [benchmarkKey, companyId, candidateOperationId],
+    )
+    const existingId = existing.rows[0]?.id ?? null
+    return existingId
+      ? updateAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, existingId, candidateRow)
+      : insertAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, candidateRow)
   })
 }
 

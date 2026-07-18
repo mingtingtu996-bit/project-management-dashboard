@@ -1085,6 +1085,14 @@ function normalizeDependencyType(value: unknown): GeneratedTemplateDependency['d
   return 'FS'
 }
 
+function manualDependencyCorrectionMetadata() {
+  return {
+    source: 'planning_table_manual_predecessor_edit',
+    learningSignal: 'manual_dependency_correction',
+    candidatePolicy: 'candidate_only_no_runtime_rule_mutation',
+  }
+}
+
 function readOperationDependencySpecs(operation: PlanningTableOperation) {
   const raw = Array.isArray(operation.predecessorDependencies)
     ? operation.predecessorDependencies
@@ -1107,12 +1115,14 @@ function readOperationDependencySpecs(operation: PlanningTableOperation) {
       dependencyType: normalizeDependencyType(record.dependencyType ?? record.dependency_type),
       lagDays: Number(record.lagDays ?? record.lag_days ?? 0) || 0,
       sourceType: 'manual',
+      metadata: manualDependencyCorrectionMetadata(),
     }
   }).filter((item): item is {
     dependencyTaskId: string
     dependencyType: GeneratedTemplateDependency['dependencyType']
     lagDays: number
     sourceType: string
+    metadata: ReturnType<typeof manualDependencyCorrectionMetadata>
   } => Boolean(item))
 }
 
@@ -1121,6 +1131,23 @@ function mapGeneratedDependencySourceType(source: GeneratedTemplateDependency['s
   if (source === 'cross_item_workflow') return 'template_cross_item_workflow'
   if (source === 'dependency_intent_template') return 'template_dependency_intent'
   return 'template_generated'
+}
+
+function generatedDependencyMetadata(dependency: GeneratedTemplateDependency) {
+  const raw = dependency as GeneratedTemplateDependency & Record<string, unknown>
+  const evidence = readGeneratedTemplateRecord(raw.dependencyRuleEvidence)
+  const sequencingBasis = String(raw.sequencingBasis ?? '').trim()
+  return {
+    source: String(raw.source ?? '').trim() || 'generated_dependency_network',
+    intentCode: String(raw.intentCode ?? '').trim() || null,
+    predecessorStableCode: String(raw.predecessorStableCode ?? '').trim() || null,
+    sequencingBasis: sequencingBasis || null,
+    governanceGapCode: String(raw.governanceGapCode ?? '').trim() || null,
+    dependencyRuleEvidence: Object.keys(evidence).length > 0 ? evidence : null,
+    learningPolicy: sequencingBasis
+      ? 'candidate_only_until_dependency_rule_replay_publication'
+      : 'published_or_template_generated_dependency',
+  }
 }
 
 function buildGeneratedTemplateDependencyWrites(
@@ -1137,9 +1164,16 @@ function buildGeneratedTemplateDependencyWrites(
         dependencyType: normalizeDependencyType(dependency.dependencyType),
         lagDays: Number(dependency.lagDays ?? 0) || 0,
         sourceType: mapGeneratedDependencySourceType(dependency.source),
+        metadata: generatedDependencyMetadata(dependency),
       }
     })
-    .filter((item): item is { dependencyTaskId: string; dependencyType: GeneratedTemplateDependency['dependencyType']; lagDays: number; sourceType: string } => Boolean(item))
+    .filter((item): item is {
+      dependencyTaskId: string
+      dependencyType: GeneratedTemplateDependency['dependencyType']
+      lagDays: number
+      sourceType: string
+      metadata: ReturnType<typeof generatedDependencyMetadata>
+    } => Boolean(item))
 }
 
 function readPreviewRowClientIds(operation: PlanningTableOperation) {
@@ -2541,6 +2575,7 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
               dependencyType: 'FS' as const,
               lagDays: 0,
               sourceType: 'manual',
+              metadata: manualDependencyCorrectionMetadata(),
             }))
         await replaceTaskDependencies(taskId, dependencyWrites, {
           projectId,

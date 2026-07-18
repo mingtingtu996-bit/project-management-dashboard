@@ -484,7 +484,7 @@ describe('Scenario B: Project running 3 months — adding new tasks', () => {
     resetMocks()
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
     mocks.query.maybeSingle.mockResolvedValue({
-      data: { p50_days: 6, p75_days: 9, sample_count: 30, confidence_level: 'high', confidence_score: 85 },
+      data: { duration_day_basis: 'construction_production_day', p50_days: 6, p75_days: 9, sample_count: 30, confidence_level: 'high', confidence_score: 85 },
       error: null,
     })
     mocks.resolveStandardWorkDurationSeed.mockResolvedValue({

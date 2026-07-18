@@ -593,6 +593,66 @@ describe('projectRemainingDurationForecastService', () => {
     }))
   })
 
+  it('uses correlated network Monte Carlo when every active task has a probability distribution', () => {
+    const probabilityDuration = {
+      method: 'pert_from_existing_percentiles',
+      source: 'governed_task_percentiles',
+      p20RemainingDays: 8,
+      p50RemainingDays: 10,
+      p80RemainingDays: 15,
+      expectedRemainingDays: 11,
+      variance: 0.1,
+      standardDeviationDays: 2,
+      confidenceBandWidthDays: 7,
+    }
+    const networkRow = (clientRowId: string, predecessorId?: string) => row({
+      clientRowId,
+      predecessorDependencies: predecessorId
+        ? [{ clientRowId: predecessorId, dependencyType: 'FS', lagDays: 0 }]
+        : [],
+      values: {
+        ...row().values,
+        project_id: 'project-1',
+        planned_start_date: predecessorId ? '2026-06-11' : '2026-06-01',
+        planned_end_date: predecessorId ? '2026-06-20' : '2026-06-10',
+        remaining_duration_days: 10,
+        total_float_days: 0,
+        durationForecast: {
+          remainingDurationDays: 10,
+          probabilityDuration,
+        },
+      },
+    })
+
+    const forecast = buildProjectRemainingDurationForecast({
+      projectId: 'project-1',
+      rows: [
+        networkRow('chain-a-1'),
+        networkRow('chain-a-2', 'chain-a-1'),
+        networkRow('chain-b-1'),
+        networkRow('chain-b-2', 'chain-b-1'),
+      ],
+      asOfDate: '2026-06-01',
+    })
+
+    const networkProbability = forecast.calculationContext.criticalPath.networkProbability!
+    expect(networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'monte_carlo',
+      simulationCount: 1000,
+      scenarioCorrelation: 0.35,
+      taskCount: 4,
+      dependencyCount: 2,
+      fallbackReasons: [],
+    }))
+    expect(networkProbability.p80RemainingDays).toBeGreaterThan(networkProbability.p50RemainingDays!)
+    expect(forecast.calculationContext.criticalPath.mergeBiasDays).toBe(0)
+    expect(forecast.calculationContext.criticalPath.confidenceBandDecision).toEqual(expect.objectContaining({
+      probabilityBasis: 'monte_carlo',
+      governingFinishSource: 'confidence_band',
+    }))
+    expect(forecast.forecastFinishDate).toBe(networkProbability.p80FinishDate)
+  })
+
   it('lets the confidence band govern when it is later than merge bias', () => {
     const forecast = buildProjectRemainingDurationForecast({
       rows: ['chain-a', 'chain-b', 'chain-c'].map((clientRowId) => row({

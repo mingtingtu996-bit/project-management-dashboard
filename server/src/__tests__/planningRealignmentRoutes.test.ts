@@ -88,6 +88,9 @@ const state = vi.hoisted(() => {
       transactionSnapshot = null
       return { rows: [], rowCount: 0 }
     }
+    if (normalizedSql.startsWith('select company_id from public.projects')) {
+      return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+    }
     if (
       normalizedSql.startsWith('select * from public.task_baselines')
       && normalizedSql.includes('where id = $1')
@@ -324,6 +327,10 @@ const state = vi.hoisted(() => {
       from: vi.fn((table: string) => new QueryBuilder(table)),
     },
     writeLog: vi.fn(),
+    recordBaselinePublicationStructuredCause: vi.fn(async () => ({
+      changeLogId: 'change-log-baseline-1',
+      attribution: { id: 'cause-baseline-1', status: 'confirmed' },
+    })),
     startProjectReorderSession: vi.fn(async ({ projectId, reorderMode, note }: any) => ({
       id: 'manual-reorder-1',
       project_id: projectId,
@@ -366,10 +373,6 @@ const wbsGenerationMocks = vi.hoisted(() => ({
 
 const wbsTemplateCandidateEventMocks = vi.hoisted(() => ({
   recordWbsTemplateCandidateEvent: vi.fn(async () => undefined),
-}))
-
-const independentTaskMaterializationMocks = vi.hoisted(() => ({
-  materializeIndependentDefaultMasterPlanTaskNetwork: vi.fn(),
 }))
 
 const scopeValidationMocks = vi.hoisted(() => ({
@@ -449,6 +452,15 @@ vi.mock('../services/dataLineageService.js', () => ({
 
 vi.mock('../services/changeLogs.js', () => ({
   writeLog: state.writeLog,
+}))
+
+vi.mock('../services/structuredCauseAttributionService.js', () => ({
+  STRUCTURED_CAUSE_TAXONOMY: [
+    { code: 'design_change' },
+    { code: 'workflow_sequence' },
+    { code: 'other' },
+  ],
+  recordBaselinePublicationStructuredCause: state.recordBaselinePublicationStructuredCause,
 }))
 
 vi.mock('../services/planningRevisionPoolService.js', () => ({
@@ -572,12 +584,8 @@ vi.mock('../services/wbsTemplateGenerationService.js', async () => {
 })
 
 vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
+  buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
   recordWbsTemplateCandidateEvent: wbsTemplateCandidateEventMocks.recordWbsTemplateCandidateEvent,
-}))
-
-vi.mock('../services/defaultMasterPlanIndependentTaskNetworkMaterializationService.js', () => ({
-  materializeIndependentDefaultMasterPlanTaskNetwork:
-    independentTaskMaterializationMocks.materializeIndependentDefaultMasterPlanTaskNetwork,
 }))
 
 vi.mock('../services/engineeringObjectService.js', () => ({
@@ -625,6 +633,106 @@ describe('planning realignment routes', () => {
     })
     scopeValidationMocks.validateScopeObjectTypes.mockResolvedValue(null)
     scopeValidationMocks.validateTaskScopeConsistency.mockResolvedValue(null)
+    state.recordBaselinePublicationStructuredCause.mockResolvedValue({
+      changeLogId: 'change-log-baseline-1',
+      attribution: { id: 'cause-baseline-1', status: 'confirmed' },
+    })
+  })
+
+  it('rejects baseline publication when the controlled cause and original wording are missing', async () => {
+    state.tables.task_baselines.push({
+      id: 'baseline-cause-required',
+      project_id: 'project-1',
+      version: null,
+      status: 'draft',
+      title: '待发布项目基线',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    })
+    state.tables.task_baseline_items.push({
+      id: 'baseline-cause-required-item',
+      project_id: 'project-1',
+      baseline_version_id: 'baseline-cause-required',
+      title: '主体结构施工',
+      planned_start_date: '2026-08-01',
+      planned_end_date: '2026-08-31',
+      sort_order: 1,
+      mapping_status: 'mapped',
+    })
+
+    const response = await supertest(buildApp())
+      .post('/api/task-baselines/baseline-cause-required/publish')
+      .send({ version: null })
+
+    expect(response.status, JSON.stringify(response.body)).toBe(400)
+    expect(response.body.error?.code).toBe('BASELINE_CHANGE_CAUSE_REQUIRED')
+    expect(state.tables.task_baselines[0]?.status).toBe('draft')
+    expect(state.recordBaselinePublicationStructuredCause).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unknown baseline publication cause without entering the write transaction', async () => {
+    state.tables.task_baselines.push({
+      id: 'baseline-cause-invalid',
+      project_id: 'project-1',
+      version: null,
+      status: 'draft',
+      title: '待发布项目基线',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    })
+
+    const response = await supertest(buildApp())
+      .post('/api/task-baselines/baseline-cause-invalid/publish')
+      .send({
+        version: null,
+        cause_code: 'free_text_only',
+        change_reason: '任意自由文本分类不得直接进入聚合。',
+      })
+
+    expect(response.status, JSON.stringify(response.body)).toBe(400)
+    expect(response.body.error?.code).toBe('BASELINE_CHANGE_CAUSE_INVALID')
+    expect(state.tables.task_baselines[0]?.status).toBe('draft')
+    expect(state.clientQuery).not.toHaveBeenCalledWith('BEGIN')
+    expect(state.recordBaselinePublicationStructuredCause).not.toHaveBeenCalled()
+  })
+
+  it('rolls back baseline publication when the transactional structured cause write fails', async () => {
+    state.tables.task_baselines.push({
+      id: 'baseline-cause-rollback',
+      project_id: 'project-1',
+      version: null,
+      status: 'draft',
+      title: '待发布项目基线',
+      created_at: '2026-07-01T00:00:00.000Z',
+      updated_at: '2026-07-01T00:00:00.000Z',
+    })
+    state.tables.task_baseline_items.push({
+      id: 'baseline-cause-rollback-item',
+      project_id: 'project-1',
+      baseline_version_id: 'baseline-cause-rollback',
+      title: '主体结构施工',
+      planned_start_date: '2026-08-01',
+      planned_end_date: '2026-08-31',
+      sort_order: 1,
+      mapping_status: 'mapped',
+    })
+    state.recordBaselinePublicationStructuredCause.mockRejectedValueOnce(new Error('structured cause write failed'))
+
+    const response = await supertest(buildApp())
+      .post('/api/task-baselines/baseline-cause-rollback/publish')
+      .send({
+        version: null,
+        cause_code: 'design_change',
+        change_reason: '设计变更确认后调整节点工期。',
+      })
+
+    expect(response.status).toBe(500)
+    expect(state.tables.task_baselines[0]).toEqual(expect.objectContaining({
+      status: 'draft',
+      version: null,
+    }))
+    expect(state.clientQuery).toHaveBeenCalledWith('ROLLBACK')
+    expect(state.clientQuery).not.toHaveBeenCalledWith('COMMIT')
   })
 
   it('returns row-level baseline diffs for the current-version drawer', async () => {
@@ -831,7 +939,11 @@ describe('planning realignment routes', () => {
 
     const response = await supertest(buildApp())
       .post('/api/task-baselines/baseline-new/confirm')
-      .send({ version: 2 })
+      .send({
+        version: 2,
+        cause_code: 'workflow_sequence',
+        change_reason: '复核修订内容后确认新版执行基线。',
+      })
 
     expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(response.body.success).toBe(true)
@@ -907,7 +1019,11 @@ describe('planning realignment routes', () => {
 
     const response = await supertest(buildApp())
       .post('/api/task-baselines/baseline-new/confirm')
-      .send({ version: 2 })
+      .send({
+        version: 2,
+        cause_code: 'workflow_sequence',
+        change_reason: '复核压缩工期影响后确认新版执行基线。',
+      })
 
     expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(planningRevisionPoolService.evaluateBaselineConfirmationGate).toHaveBeenCalledWith(expect.objectContaining({
@@ -957,7 +1073,11 @@ describe('planning realignment routes', () => {
 
       const response = await supertest(buildApp())
         .post(`/api/task-baselines/${baselineId}/${endpoint}`)
-        .send({ version: null })
+        .send({
+          version: null,
+          cause_code: 'workflow_sequence',
+          change_reason: '复核向导生成结果后确认执行基线。',
+        })
 
       expect(response.status, `${endpoint}: ${JSON.stringify(response.body)}`).toBe(200)
       expect(response.body.success).toBe(true)
@@ -1005,6 +1125,8 @@ describe('planning realignment routes', () => {
       .send({
         version: null,
         candidate_governance_reviewed: true,
+        cause_code: 'workflow_sequence',
+        change_reason: '复核向导生成结果后确认执行基线。',
       })
 
     expect(response.status, JSON.stringify(response.body)).toBe(200)
@@ -1047,7 +1169,11 @@ describe('planning realignment routes', () => {
 
     const response = await supertest(buildApp())
       .post('/api/task-baselines/candidate-governance-only/publish')
-      .send({ version: null })
+      .send({
+        version: null,
+        cause_code: 'workflow_sequence',
+        change_reason: '复核候选计划后确认执行基线。',
+      })
 
     expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(response.body.success).toBe(true)
@@ -1110,6 +1236,8 @@ describe('planning realignment routes', () => {
       .post('/api/task-baselines/candidate-reviewed/publish')
       .send({
         version: null,
+        cause_code: 'workflow_sequence',
+        change_reason: '复核候选计划后确认执行基线。',
         candidate_governance_review: {
           decision: 'accepted_for_baseline',
           reviewed_item_ids: ['candidate-reviewed-item-1'],
@@ -1852,7 +1980,11 @@ describe('planning realignment routes', () => {
 
     const response = await supertest(buildApp())
       .post('/api/task-baselines/baseline-invalid/confirm')
-      .send({ version: 5 })
+      .send({
+        version: 5,
+        cause_code: 'workflow_sequence',
+        change_reason: '调整计划后申请确认执行基线。',
+      })
 
     expect(response.status).toBe(422)
     expect(response.body.success).toBe(false)
@@ -2371,313 +2503,4 @@ describe('planning realignment routes', () => {
     })
   })
 
-  it('returns an independent task-network dry run without creating tasks or dependencies', async () => {
-    state.tables.task_baselines.push({
-      id: 'candidate-independent-network',
-      project_id: 'project-1',
-      status: 'draft',
-      title: '独立总计划候选',
-      source_version_label: 'residential_master_plan_v2',
-      governance_metadata: {},
-      created_at: '2026-07-11T00:00:00.000Z',
-      updated_at: '2026-07-11T00:00:00.000Z',
-    })
-    state.tables.task_baseline_items.push(
-      {
-        id: 'candidate-independent-item-1',
-        project_id: 'project-1',
-        baseline_version_id: 'candidate-independent-network',
-        title: '基础工程',
-        planned_start_date: '2026-02-16',
-        planned_end_date: '2026-02-16',
-        sort_order: 1,
-        source_task_id: null,
-        generation_metadata: {
-          candidateOnly: true,
-          clientRowId: 'candidate-independent-row-1',
-          predecessorDependencies: [],
-        },
-      },
-      {
-        id: 'candidate-independent-item-2',
-        project_id: 'project-1',
-        baseline_version_id: 'candidate-independent-network',
-        title: '混凝土结构',
-        planned_start_date: '2026-02-17',
-        planned_end_date: '2026-02-20',
-        sort_order: 2,
-        source_task_id: null,
-        generation_metadata: {
-          candidateOnly: true,
-          clientRowId: 'candidate-independent-row-2',
-          predecessorDependencies: [{ clientRowId: 'candidate-independent-row-1', dependencyType: 'FS', lagDays: 1 }],
-        },
-      },
-    )
-
-    const response = await supertest(buildApp())
-      .post('/api/task-baselines/candidate-independent-network/materialize-independent-task-network')
-      .send({
-        project_id: 'project-1',
-        mode: 'dry_run',
-        scope_assignment: { engineering_object_id: 'scope-1' },
-      })
-
-    expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(response.body.data).toMatchObject({
-      mode: 'dry_run',
-      execution_authorization_required: true,
-      runtime_publication_created: false,
-      plan: {
-        status: 'ready',
-        blockers: [],
-        tasks: [expect.any(Object), expect.any(Object)],
-        dependencies: [expect.objectContaining({ sourceType: 'template_generated', lagDays: 1 })],
-      },
-    })
-    expect(state.tables.tasks).toEqual([])
-    expect(state.getClient).not.toHaveBeenCalled()
-  })
-
-  it('accepts candidate-level scope assignments when a cross-specialty plan has no default scope', async () => {
-    state.tables.task_baselines.push({
-      id: 'candidate-cross-specialty-network',
-      project_id: 'project-1',
-      status: 'draft',
-      title: '跨专业独立总计划候选',
-      source_version_label: 'residential_master_plan_v2',
-      governance_metadata: {},
-    })
-    state.tables.task_baseline_items.push(
-      {
-        id: 'candidate-civil-item',
-        project_id: 'project-1',
-        baseline_version_id: 'candidate-cross-specialty-network',
-        title: '土建工程',
-        planned_start_date: '2026-02-16',
-        planned_end_date: '2026-02-20',
-        sort_order: 1,
-        source_task_id: null,
-        generation_metadata: {
-          candidateOnly: true,
-          clientRowId: 'candidate-civil-row',
-          predecessorDependencies: [],
-        },
-      },
-      {
-        id: 'candidate-mep-item',
-        project_id: 'project-1',
-        baseline_version_id: 'candidate-cross-specialty-network',
-        title: '机电安装',
-        planned_start_date: '2026-02-21',
-        planned_end_date: '2026-02-26',
-        sort_order: 2,
-        source_task_id: null,
-        generation_metadata: {
-          candidateOnly: true,
-          clientRowId: 'candidate-mep-row',
-          predecessorDependencies: [],
-        },
-      },
-    )
-
-    const response = await supertest(buildApp())
-      .post('/api/task-baselines/candidate-cross-specialty-network/materialize-independent-task-network')
-      .send({
-        project_id: 'project-1',
-        mode: 'dry_run',
-        scope_assignment: {},
-        scope_assignments_by_candidate_item_id: {
-          'candidate-civil-item': { engineering_object_id: 'civil-scope' },
-          'candidate-mep-item': { engineering_object_id: 'mep-scope' },
-        },
-      })
-
-    expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(response.body.data.plan).toMatchObject({
-      status: 'ready',
-      tasks: expect.arrayContaining([
-        expect.objectContaining({
-          sourceBaselineItemId: 'candidate-civil-item',
-          payload: expect.objectContaining({ engineering_object_id: 'civil-scope' }),
-        }),
-        expect.objectContaining({
-          sourceBaselineItemId: 'candidate-mep-item',
-          payload: expect.objectContaining({ engineering_object_id: 'mep-scope' }),
-        }),
-      ]),
-    })
-    expect(state.tables.tasks).toEqual([])
-    expect(state.getClient).not.toHaveBeenCalled()
-  })
-
-  it('blocks a dry run before execute when a candidate scope does not exist in the project', async () => {
-    state.tables.task_baselines.push({
-      id: 'candidate-invalid-scope-network',
-      project_id: 'project-1',
-      status: 'draft',
-      title: '范围校验候选',
-      source_version_label: 'residential_master_plan_v2',
-      governance_metadata: {},
-    })
-    state.tables.task_baseline_items.push({
-      id: 'candidate-invalid-scope-item',
-      project_id: 'project-1',
-      baseline_version_id: 'candidate-invalid-scope-network',
-      title: '基础工程',
-      planned_start_date: '2026-02-16',
-      planned_end_date: '2026-02-20',
-      sort_order: 1,
-      source_task_id: null,
-      generation_metadata: {
-        candidateOnly: true,
-        clientRowId: 'candidate-invalid-scope-row',
-        predecessorDependencies: [],
-      },
-    })
-    scopeValidationMocks.validateScopeObjectTypes.mockResolvedValue(
-      'engineering_object_id references a missing project scope',
-    )
-
-    const response = await supertest(buildApp())
-      .post('/api/task-baselines/candidate-invalid-scope-network/materialize-independent-task-network')
-      .send({
-        project_id: 'project-1',
-        mode: 'dry_run',
-        scope_assignment: { engineering_object_id: 'missing-scope' },
-      })
-
-    expect(response.status).toBe(422)
-    expect(response.body.error?.code).toBe('INDEPENDENT_TASK_NETWORK_SCOPE_INVALID')
-    expect(response.body.error?.details?.blockers).toEqual([
-      expect.objectContaining({
-        candidateItemIds: ['candidate-invalid-scope-item'],
-        reason: 'engineering_object_id references a missing project scope',
-      }),
-    ])
-    expect(scopeValidationMocks.validateScopeObjectTypes).toHaveBeenCalledWith(
-      'project-1',
-      expect.objectContaining({ engineering_object_id: 'missing-scope' }),
-    )
-    expect(independentTaskMaterializationMocks.materializeIndependentDefaultMasterPlanTaskNetwork).not.toHaveBeenCalled()
-    expect(state.getClient).not.toHaveBeenCalled()
-  })
-
-  it('refuses independent task-network execution without the explicit write flag', async () => {
-    state.tables.task_baselines.push({
-      id: 'candidate-independent-execute-guard',
-      project_id: 'project-1',
-      status: 'draft',
-      title: '独立总计划候选',
-      source_version_label: 'residential_master_plan_v2',
-      governance_metadata: {},
-    })
-    state.tables.task_baseline_items.push({
-      id: 'candidate-independent-execute-item',
-      project_id: 'project-1',
-      baseline_version_id: 'candidate-independent-execute-guard',
-      title: '基础工程',
-      planned_start_date: '2026-02-16',
-      planned_end_date: '2026-02-16',
-      sort_order: 1,
-      source_task_id: null,
-      generation_metadata: {
-        candidateOnly: true,
-        clientRowId: 'candidate-independent-execute-row',
-        predecessorDependencies: [],
-      },
-    })
-
-    const response = await supertest(buildApp())
-      .post('/api/task-baselines/candidate-independent-execute-guard/materialize-independent-task-network')
-      .send({
-        project_id: 'project-1',
-        mode: 'execute',
-        scope_assignment: { engineering_object_id: 'scope-1' },
-      })
-
-    expect(response.status).toBe(409)
-    expect(response.body.error?.code).toBe('INDEPENDENT_TASK_NETWORK_EXECUTION_NOT_AUTHORIZED')
-    expect(state.tables.tasks).toEqual([])
-    expect(state.getClient).not.toHaveBeenCalled()
-  })
-
-  it('executes a mapped cold-start plan with explicit write authorization and no PM or real-sample evidence', async () => {
-    state.tables.task_baselines.push({
-      id: 'candidate-independent-execute-ready',
-      project_id: 'project-1',
-      status: 'draft',
-      title: '独立总计划候选',
-      source_version_label: 'residential_master_plan_v2',
-      governance_metadata: {},
-    })
-    state.tables.task_baseline_items.push({
-      id: 'candidate-independent-execute-ready-item',
-      project_id: 'project-1',
-      baseline_version_id: 'candidate-independent-execute-ready',
-      title: '混凝土结构',
-      planned_start_date: '2026-02-16',
-      planned_end_date: '2026-02-20',
-      sort_order: 1,
-      source_task_id: null,
-      generation_metadata: {
-        candidateOnly: true,
-        clientRowId: 'candidate-independent-execute-ready-row',
-        predecessorDependencies: [],
-      },
-    })
-    independentTaskMaterializationMocks.materializeIndependentDefaultMasterPlanTaskNetwork.mockResolvedValue({
-      source: 'default_master_plan_independent_task_network_materialization',
-      baselineId: 'candidate-independent-execute-ready',
-      projectId: 'project-1',
-      createdTaskIds: ['new-independent-task-1'],
-      createdDependencyCount: 0,
-      mappedCandidateItemCount: 1,
-      auditLogId: 'audit-independent-task-network-1',
-      runtimePublicationCreated: false,
-      durationScheduleRealignmentApplied: false,
-      mutationBoundary: {
-        writesTasks: true,
-        writesExistingTasks: false,
-        writesTaskDependencies: true,
-        writesRuntimePublication: false,
-        appliesDurationScheduleRealignment: false,
-      },
-    })
-
-    const response = await supertest(buildApp())
-      .post('/api/task-baselines/candidate-independent-execute-ready/materialize-independent-task-network')
-      .send({
-        project_id: 'project-1',
-        mode: 'execute',
-        allow_independent_task_network_materialization: true,
-        scope_assignment: { engineering_object_id: 'scope-1' },
-      })
-
-    expect(response.status, JSON.stringify(response.body)).toBe(201)
-    expect(response.body.data).toMatchObject({
-      mode: 'execute',
-      runtime_publication_created: false,
-      materialization: {
-        createdTaskIds: ['new-independent-task-1'],
-        runtimePublicationCreated: false,
-      },
-    })
-    expect(independentTaskMaterializationMocks.materializeIndependentDefaultMasterPlanTaskNetwork).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: 'project-1',
-        baselineId: 'candidate-independent-execute-ready',
-        actorUserId: 'owner-1',
-        plan: expect.objectContaining({
-          status: 'ready',
-          durationCalibration: expect.objectContaining({
-            directMappingCount: 0,
-            scheduleRealignmentRequired: false,
-          }),
-        }),
-      }),
-    )
-    expect(state.tables.tasks).toEqual([])
-    expect(state.getClient).not.toHaveBeenCalled()
-  })
 })

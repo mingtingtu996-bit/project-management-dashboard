@@ -44,6 +44,11 @@ on:
         required: true
         default: false
         type: boolean
+      migration_maintenance_window_confirmed:
+        description: Confirm staging or production is in a controlled low-traffic migration window
+        required: true
+        default: false
+        type: boolean
       production_migration_governance_evidence:
         description: Repository-relative path to MG-01..MG-07 production migration governance evidence JSON
         required: false
@@ -121,6 +126,9 @@ jobs:
 
       - name: Install server dependencies
         run: npm ci --workspaces=false
+
+      - name: Server tracked relative import closure guard
+        run: npm run guard:tracked-relative-imports
 
       - name: Enable pnpm for the combined governance gate
         working-directory: .
@@ -563,6 +571,22 @@ jobs:
             fi
           fi
 
+      - name: Confirm controlled migration maintenance window
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          MIGRATION_MAINTENANCE_WINDOW_CONFIRMED: ${{ github.event.inputs.migration_maintenance_window_confirmed }}
+        run: |
+          set -euo pipefail
+          if [ "$MIGRATION_MAINTENANCE_WINDOW_CONFIRMED" != "true" ]; then
+            {
+              echo "### Database migration blocked"
+              echo ""
+              echo "- Staging and production migration writes require a controlled low-traffic window."
+              echo "- Re-run with \`migration_maintenance_window_confirmed=true\` after checking active traffic and long-running transactions."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Preflight current migration governance inputs
         if: steps.migration-config.outputs.can_run == 'true'
         env:
@@ -605,7 +629,9 @@ jobs:
           set -euo pipefail
           plan_output="$(npm run --silent migrate:plan)"
           drop_guard_args=()
-          for migration in 311_retire_product_runtime_progress_knowledge_governance.sql; do
+          for migration in \
+            311_retire_product_runtime_progress_knowledge_governance.sql \
+            321_retire_duplicate_t2_schedule_runtime.sql; do
             if grep -Fqx -- "- $migration" <<< "$plan_output"; then
               drop_guard_args+=(--approve-existing-drop-targets-for "$migration")
             fi
@@ -656,6 +682,29 @@ jobs:
           path: |
             ${{ runner.temp }}/notification-task-reference-retirement-320-*.json
             ${{ runner.temp }}/notification-task-reference-retirement-320-*.json.sha256
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Backup retired T2 schedule runtime data
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/t2-schedule-runtime-retirement-321-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:t2-schedule-runtime-retirement -- --if-pending --output "$backup_file"
+          if [ -f "$backup_file" ] && [ -f "$backup_file.sha256" ]; then
+            echo "T2_SCHEDULE_RUNTIME_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload retired T2 schedule runtime backup
+        if: steps.migration-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: t2-schedule-runtime-retirement-321-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/t2-schedule-runtime-retirement-321-*.json
+            ${{ runner.temp }}/t2-schedule-runtime-retirement-321-*.json.sha256
           if-no-files-found: ignore
           retention-days: 30
 
@@ -926,6 +975,18 @@ jobs:
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" bash -s" < scripts/deploy-lighthouse-server.sh
+
+      - name: Verify API port is not externally reachable
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          if timeout 5 bash -c "</dev/tcp/$DEPLOY_HOST/3001" 2>/dev/null; then
+            echo "API port 3001 is externally reachable; refusing to accept a TLS/proxy bypass." >&2
+            exit 1
+          fi
+          echo "Direct external access to API port 3001 is blocked." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify deployed release through SSH tunnel
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}

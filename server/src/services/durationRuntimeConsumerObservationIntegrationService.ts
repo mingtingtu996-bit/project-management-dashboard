@@ -63,6 +63,7 @@ const CONSUMER_SURFACE_BY_KEY: Record<string, string> = {
   durationSuggestionService: 'duration_suggestion',
   taskDurationForecastService: 'task_duration_forecast',
   projectRemainingDurationForecastService: 'remaining_duration_forecast',
+  projectCriticalPathService: 'critical_path_watch_prior',
   projectWizard: 'project_wizard_commit',
   wbsTemplateGenerationService: 'wbs_template_generation',
   scheduleAccelerationService: 'schedule_acceleration',
@@ -92,6 +93,7 @@ const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationRuntimeC
     'learnable-parameter-runtime:p50-p75-blend:',
     'learnable-parameter-runtime:event-duration-blend:',
     'learnable-parameter-runtime:event-p50-p75:',
+    'duration_learning_runtime:base_duration_benchmark:',
   ],
   duration_cold_start_baseline: [
     'cold_start_baseline_runtime:',
@@ -110,21 +112,26 @@ const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationRuntimeC
   standard_work_duration_seed: [
     'algorithm_seed_versions:',
     'standard_work_duration_seed_runtime:',
+    'duration_learning_runtime:standard_work_duration_seed:',
   ],
   special_work_duration_seed: [
     'wbs_template_runtime:',
     'wbs-template-runtime:',
+    'duration_learning_runtime:special_work_duration_seed:',
   ],
   wbs_reference_days: [
     'wbs_reference_days_runtime:',
+    'duration_learning_runtime:wbs_reference_days:',
   ],
   dependency_rule_candidate: [
     'dependency_rule_runtime:',
     'dependency-rule-runtime:',
+    'duration_learning_runtime:dependency_rule_candidate:',
   ],
   critical_path_rule_candidate: [
     'critical_path_rule_runtime:',
     'critical-path-rule-runtime:',
+    'duration_learning_runtime:critical_path_rule_candidate:',
   ],
   construction_organization_plan_network: [
     'construction_org_plan_network_runtime:',

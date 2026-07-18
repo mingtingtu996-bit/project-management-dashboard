@@ -640,120 +640,93 @@
       "id": "c19-runtime-publication-release-rollback",
       "tier": "live_only",
       "status": "deferred_live",
-      "purpose": "C-19 runtime publication closeout for T2 rhythm and construction organization: replay, release package, manual approval, apply, impact monitoring, monitoring, rollback.",
+      "purpose": "C-19 canonical wizard/WBS closeout: generated tasks, dependency readback, CPM, initial baseline, user adjustment, confirmed baseline, idempotent revision, rollback, and disposable-project cleanup.",
       "closeoutTargets": [
-        "C-19.replay-samples",
-        "C-19.phase1-l5-release-closure",
-        "C-19.manual-approval",
-        "C-19.runtime-publication-apply",
-        "C-19.impact-monitoring",
-        "C-19.monitoring-rollback",
-        "C-19.construction-organization-e1-e3-e5"
+        "C-19.wizard-generation-commit",
+        "C-19.task-dependency-readback",
+        "C-19.critical-path-readback",
+        "C-19.baseline-confirmation",
+        "C-19.baseline-revision-rollback",
+        "C-19.disposable-project-cleanup"
       ],
       "unlockPolicy": {
-        "profile": "live",
-        "requiredFlags": [
-          "--include-live",
-          "--confirm-live-handoff"
-        ],
-        "liveHandoffRequired": true,
-        "dbReadyRequired": false,
+        "profile": "staging",
+        "requiredFlags": [],
+        "liveHandoffRequired": false,
+        "dbReadyRequired": true,
         "writeApprovalRequired": true,
-        "manualApprovalRequired": true,
-        "monitoringOwnerRequired": true,
+        "manualApprovalRequired": false,
+        "monitoringOwnerRequired": false,
         "rollbackOwnerRequired": true,
-        "operationMode": "runtime_publication_apply_with_rollback"
+        "operationMode": "canonical_wizard_wbs_disposable_project_smoke"
       },
       "artifactValidationPolicy": {
         "requiredMetadata": [
-          "environment",
+          "environmentClassification",
+          "source",
           "projectId",
-          "releasePackageId",
-          "phase1L5Ref",
-          "approvalRef",
-          "runtimePublicationId",
-          "monitoringWindow",
-          "rollbackRef",
-          "consumerObservationRef"
+          "status",
+          "steps.commitWizardGeneration",
+          "steps.taskDependencyReadback",
+          "steps.criticalPathReadback",
+          "steps.publishBaseline",
+          "steps.rollbackRevisionDraft",
+          "cleanup"
         ],
         "rejectIf": [
-          "dry-run-only",
-          "generated-package-only",
-          "missing-manual-approval",
-          "missing-runtime-apply",
-          "missing-impact-monitoring",
-          "missing-rollback-or-saved-outcome"
+          "wizard-commit-failed",
+          "dependency-readback-mismatch",
+          "critical-path-stale-or-empty",
+          "baseline-confirmation-failed",
+          "revision-not-idempotent",
+          "revision-rollback-failed",
+          "disposable-project-residue"
         ],
         "requiredArtifactPatterns": [
-          "c19-t2-rhythm-live-replay.json",
-          "c19-release-closure-*.json",
-          "c19-runtime-publication-*.json",
-          "c19-impact-monitoring-*.json",
-          "c19-runtime-rollback-*.json",
-          "c19-construction-organization-*.json"
+          "staging-wizard-baseline-revision-*.json",
+          "staging-wizard-baseline-revision-*-cleanup-readback.json"
         ]
       },
       "commands": [
-        "npm run diagnose:t2-rhythm-live-replay --workspace=server -- --allow-live --project-id=<project-id> --environment=staging --evidence-ref=release-dashboard-live-profile --output-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json",
-        "npm run generate:t2-rhythm-release-closure --workspace=server -- --live-replay-evidence-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json --phase1-selection-gate-file=<artifact-root-from-server>/phase1-evaluation.json --l5-release-gate-file=<artifact-root-from-server>/l5-release-gate.json --output-file=<artifact-root-from-server>/c19-release-closure-artifact.json",
-        "npm run verify:t2-rhythm-release-closure --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --output-file=<artifact-root-from-server>/c19-release-closure-verification.json",
-        "npm run preflight:t2-rhythm-release-review --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --verification-file=<artifact-root-from-server>/c19-release-closure-verification.json --output-file=<artifact-root-from-server>/c19-manual-approval-preflight.json",
-        "npm run package:t2-rhythm-release-review --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --verification-file=<artifact-root-from-server>/c19-release-closure-verification.json --live-replay-evidence-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json --phase1-selection-gate-file=<artifact-root-from-server>/phase1-evaluation.json --l5-release-gate-file=<artifact-root-from-server>/l5-release-gate.json --output-dir=<artifact-root>/c19-release-review-package",
-        "npm run diagnose:construction-organization-closeout-live --workspace=server -- --company-id=<company-id> --project-id=<project-id> --output-file=<artifact-root-from-server>/c19-construction-organization-e1-e3-e5.json"
+        "node project-testing/tools/run-wizard-baseline-revision-staging.mjs --env-file <staging.env> --api-base-url <current-code-staging-api-url> --report <artifact-root>/staging-wizard-baseline-revision.json",
+        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <staging.env> --project-id <project-id> --wizard-smoke-file <artifact-root>/staging-wizard-baseline-revision.json --output <artifact-root>/c19-canonical-wizard-preflight.json"
       ],
       "commandTemplates": [
-        "npm run diagnose:t2-rhythm-live-replay --workspace=server -- --project-id=<project-id> --output-file=<json>",
-        "npm run generate:t2-rhythm-release-closure --workspace=server -- --live-replay-evidence-file=<c19-t2-rhythm-live-replay.json> --phase1-selection-gate-file=<phase1-selection-gate.json> --l5-release-gate-file=<l5-release-gate.json> --output-file=<c19-release-closure-artifact.json>",
-        "npm run verify:t2-rhythm-release-closure --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --output-file=<c19-release-closure-verification.json>",
-        "npm run preflight:t2-rhythm-release-review --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --verification-file=<c19-release-closure-verification.json> --output-file=<c19-manual-approval-preflight.json>",
-        "npm run package:t2-rhythm-release-review --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --verification-file=<c19-release-closure-verification.json> --live-replay-evidence-file=<c19-t2-rhythm-live-replay.json> --phase1-selection-gate-file=<phase1-selection-gate.json> --l5-release-gate-file=<l5-release-gate.json> --output-dir=<dir>",
-        "node project-testing/tools/check-c19-runtime-input.mjs --handoff-file <handoff.json> --runtime-input-file <runtime-input.json> --output <c19-runtime-input-check.json>",
-        "node project-testing/tools/run-c19-runtime-publication-evidence.mjs --handoff-file <handoff.json> --artifact-root <artifact-root> --include-live --confirm-live-handoff --allow-write --release-artifact-file <c19-release-closure-artifact.json> --release-verification-file <c19-release-closure-verification.json> --phase1-evaluation-file <phase1-evaluation.json> --runtime-input-file <runtime-input.json> --migration-governance-file <migration-governance.json>",
-        "npm run diagnose:construction-organization-closeout-live --workspace=server -- --company-id=<company-id> --project-id=<project-id> --output-file=<c19-construction-organization-e1-e3-e5.json>"
+        "node project-testing/tools/run-wizard-baseline-revision-staging.mjs --env-file <staging.env> --api-base-url <current-code-staging-api-url> --report <staging-wizard-baseline-revision.json>",
+        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <staging.env> --project-id <project-id> --wizard-smoke-file <staging-wizard-baseline-revision.json> --output <c19-canonical-wizard-preflight.json>"
       ],
       "requiredEvidence": [
-        "Replay samples, phase-1/L5 handoff, release closure artifact, verification pass, and manual approval.",
-        "Runtime publication apply evidence, impact monitoring, consumer observation, monitoring, rollback, and saved outcome.",
-        "Construction organization E1/E3/E5 runtime evidence and release-exit evidence."
+        "Canonical wizard commit created the expected tasks and dependencies in one transaction.",
+        "Dependency inventory/readback, CPM, candidate baseline, adjustment, confirmation, revision idempotency, and rollback all passed.",
+        "Disposable project cleanup readback shows no business residue; environment classification remains explicit."
       ],
       "handoffChecklist": [
-        "Live environment ownership is handed off with target project/company and artifact root recorded.",
-        "Phase-1/L5 handoff, release closure artifact, verification command, and manual approval reference are available before apply.",
-        "Publication apply owner, consumer observation owner, monitoring owner, and rollback owner are named.",
-        "Rollback target and impact monitoring window are recorded before runtime publication apply."
+        "Staging environment, current-code API endpoint, login company context, and disposable-project boundary are recorded.",
+        "Migration state and runtime RLS required by the canonical wizard chain are read back before smoke.",
+        "Cleanup owner and residue scan are defined before creating the disposable project."
       ],
       "blockingPrerequisites": [
-        "Missing live handoff flags, phase-1/L5 evidence, release closure artifact, verification pass, or manual approval reference.",
-        "No approved runtime publication apply window, impact-monitoring plan, or rollback owner.",
-        "No consumer observation path for published T2 rhythm or construction organization runtime output.",
-        "Generated package exists without apply, monitoring, rollback, and saved-outcome evidence."
+        "Current code is not running against the intended staging database or login company context is ambiguous.",
+        "Wizard commit, task/dependency readback, CPM, baseline confirmation, revision rollback, or cleanup fails.",
+        "The smoke report belongs to another project or omits environment classification."
       ],
       "passCriteria": [
-        "Replay samples, phase-1/L5 handoff, release closure artifact, verification pass, and approval reference are archived together.",
-        "Runtime publication apply produces apply evidence, consumer observation, impact monitoring, monitoring outcome, rollback evidence, and saved outcome.",
-        "Construction organization E1/E3/E5 runtime evidence and release-exit evidence are present and linked to the same release package.",
-        "Any manual-assisted UAT evidence is labeled supporting evidence and does not replace apply/monitoring/rollback artifacts."
+        "Wizard commit, task/dependency readback, fresh CPM, baseline confirmation, revision idempotency, and revision rollback are all pass.",
+        "Dependency readback matches inventory with zero dangling edges.",
+        "Disposable project deletion and residue readback pass; local-current-code, deployed staging, and production/live remain separately classified."
       ],
       "expectedArtifacts": [
-        "c19-t2-rhythm-live-replay.json",
-        "c19-release-closure-artifact.json",
-        "c19-release-closure-verification.json",
-        "c19-manual-approval-preflight.json",
-        "c19-runtime-publication-apply.json",
-        "c19-impact-monitoring-observation.json",
-        "c19-runtime-rollback-saved-outcome.json",
-        "c19-construction-organization-e1-e3-e5.json",
-        "c19-live-evidence-summary.json"
+        "staging-wizard-baseline-revision.json",
+        "staging-wizard-baseline-revision-cleanup-readback.json",
+        "c19-canonical-wizard-preflight.json"
       ],
       "evidenceOwners": [
-        "live-environment-owner",
-        "runtime-publication-owner",
-        "approval-owner",
-        "consumer-observation-owner",
-        "monitoring-owner",
-        "rollback-owner"
+        "staging-environment-owner",
+        "wizard-smoke-owner",
+        "database-readback-owner",
+        "cleanup-owner"
       ],
-      "mutationBoundary": "requires live environment ownership handoff, manual approval, monitoring owner, and rollback owner before publication apply"
+      "mutationBoundary": "writes only a disposable staging project through canonical product APIs, then confirms revision rollback and physical project cleanup; duplicate T2 runtime publication tables are never written"
     },
     {
       "id": "database-migration-and-recovery",

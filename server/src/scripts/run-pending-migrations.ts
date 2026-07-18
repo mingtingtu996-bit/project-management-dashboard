@@ -34,6 +34,11 @@ import {
   prepareNotificationTaskReferenceRetirementApplySession,
   validateNotificationTaskReferenceRetirementBackup,
 } from './notificationTaskReferenceRetirementSupport.js'
+import {
+  T2_SCHEDULE_RUNTIME_RETIREMENT_MIGRATION,
+  prepareT2ScheduleRuntimeRetirementApplySession,
+  validateT2ScheduleRuntimeRetirementBackup,
+} from './t2ScheduleRuntimeRetirementSupport.js'
 
 const { Client } = pg
 
@@ -181,6 +186,23 @@ async function main() {
           expectedSha256,
         )
         await prepareNotificationTaskReferenceRetirementApplySession(
+          (sql, values) => client.query(sql, values),
+          backup,
+          expectedSha256,
+        )
+      }
+      if (migration.filename === T2_SCHEDULE_RUNTIME_RETIREMENT_MIGRATION) {
+        const backupPath = String(process.env.T2_SCHEDULE_RUNTIME_RETIREMENT_BACKUP_FILE ?? '').trim()
+        if (!backupPath) {
+          throw new Error('T2_SCHEDULE_RUNTIME_RETIREMENT_BACKUP_FILE_REQUIRED')
+        }
+        const [serialized, checksumFile] = await Promise.all([
+          readFile(resolve(backupPath), 'utf8'),
+          readFile(`${resolve(backupPath)}.sha256`, 'utf8'),
+        ])
+        const expectedSha256 = checksumFile.trim().split(/\s+/)[0] ?? ''
+        const backup = validateT2ScheduleRuntimeRetirementBackup(serialized, expectedSha256)
+        await prepareT2ScheduleRuntimeRetirementApplySession(
           (sql, values) => client.query(sql, values),
           backup,
           expectedSha256,

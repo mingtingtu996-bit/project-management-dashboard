@@ -59,6 +59,16 @@
 - [x] Perform a read-only real-DB check for sample identity and tenant fields; do not write production.
 - [x] Report local, deployed staging and production/live status separately.
 
+## Task 9: Structured Cause Dimension Follow-up
+
+- [x] Add one controlled taxonomy and candidate/confirmed/rejected state machine for task, risk, issue and baseline-change subjects.
+- [x] Infer task causes from scoped obstacle, condition, dependency, material-arrival and forecast facts before duration sample collection.
+- [x] Require user confirmation before contractual responsibility is stored; exclude responsibility from algorithm facts, fingerprints and benchmark keys.
+- [x] Snapshot confirmed causes into duration sample metadata; keep unconfirmed candidates count-only.
+- [x] Add structured risk/issue closure result fields and UI payload contracts; keep migrations 317/318 pending until controlled deployment.
+- [x] Require baseline publication cause classification and original wording; atomically write the `baseline_publish` change log and confirmed `baseline_change` attribution with the baseline state transition.
+- [x] Verify current evidence SQL against the configured real Supabase in a read-only transaction.
+
 ## Verification Record (2026-07-14)
 
 - Focused regression: 25 files / 457 tests passed, covering automation policy, tier registry, replay, canary, tenant approval, atomic stores, raw-sample boundary, reconciliation, migrations and the affected runtime consumers.
@@ -69,3 +79,12 @@
 - Read-only staging readback: migration 305 is not ledgered; the five sample identity columns, project calibration `company_id`, reconciliation queue and two atomic publication functions are absent. No migration or business write was executed.
 - Classification: `local-current-code=implemented and focused-verified`; `deployed-staging=pending migration 305 and same-SHA deployment`; `production/live=not deployed or validated`.
 - Raw-date follow-up: reconciliation retry/deferred one-day offsets now use `calendarDaysToMilliseconds(1)` from the duration-day domain helper. RED reproduced the missing helper contract; GREEN passed 1 file / 9 tests, `guard:raw-date-math` scanned 667 server files with 65/65 approved sites, and server TypeScript passed.
+
+## Verification Addendum (2026-07-17)
+
+- Environment correction: the currently configured real Supabase ledger contains migration 305 and 307. This does not prove a same-SHA deployed staging release; migration 317/318 remains unapplied in that database.
+- Structured-cause service regression: 1 file / 10 tests passed. A real PostgreSQL bind-count defect found by the read-only smoke was reproduced RED and fixed by separating two-parameter scope queries from four-parameter window queries.
+- Real-DB read-only compatibility: `loadTaskStructuredCauseEvidence` completed all five fact queries under `workbuddy_runtime_login`; the selected task returned 51 evidence rows with no write or migration.
+- Risk/issue UI regression: 1 file / 17 tests passed, including ordinary risk closure and the full issue `investigating -> resolved -> closed` payload with a confirmed attribution ID.
+- Baseline publication regression: service 12/12, route 30/30 and client 13/13 passed. Missing or unknown causes fail before mutation; attribution failure rolls the publication transaction back; ordinary project names do not create false cause preselection. Migration 317 remains unapplied, so this is local code evidence only.
+- Classification remains `local-current-code + real-DB-read-only=verified for this increment`; `deployed-staging` and `production/live` remain unverified for migrations 317/318 and the new user workflow.

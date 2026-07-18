@@ -2,10 +2,13 @@
 // The service writes benchmark and override-candidate facts only; it never
 // mutates template node defaults or historical plan snapshots.
 
+import { createHash } from 'node:crypto'
+
 import { logger } from '../middleware/logger.js'
 import { supabase } from './dbService.js'
 import { loadTemplateDurationGovernanceSamples } from './durationContextSampleReadModelService.js'
-import { replaceDurationBenchmarkAtomically } from './durationLearningAssetAtomicStoreService.js'
+import { stageDurationBenchmarkCandidateAtomically } from './durationLearningAssetAtomicStoreService.js'
+import { readProductionDurationDays } from '../utils/durationDayBasis.js'
 
 type ConfidenceLevel = 'high' | 'medium' | 'low'
 
@@ -21,6 +24,11 @@ export interface DurationExperienceSampleRow {
   wbs_node_type?: string | null
   planned_duration?: number | null
   actual_duration?: number | null
+  duration_day_basis?: string | null
+  actual_duration_calendar_days?: number | null
+  actual_duration_production_days?: number | null
+  planned_duration_calendar_days?: number | null
+  planned_duration_production_days?: number | null
   sample_strength?: string | null
   confidence_score?: number | null
   duration_calibration_source?: string | null
@@ -46,6 +54,7 @@ export interface DurationBenchmarkCandidate {
   confidenceLevel: ConfidenceLevel
   confidenceScore: number
   sampleIds: string[]
+  durationDayBasis: 'construction_production_day'
 }
 
 export interface TemplateDurationGovernanceOptions {
@@ -153,7 +162,7 @@ function isUsableSample(sample: DurationExperienceSampleRow, options: Required<P
   const wbsNodeType = normalizeWbsNodeType(sample.wbs_node_type)
   if (wbsNodeType === 'activity_step' && !options.includeActivitySteps) return false
   if (normalizeText(sample.sample_strength) === 'unusable') return false
-  return readPositiveDays(sample.actual_duration) !== null
+  return readProductionDurationDays(sample as Record<string, unknown>, 'actual') !== null
 }
 
 function percentile(sortedValues: number[], percentileValue: number) {
@@ -214,7 +223,7 @@ export function buildDurationBenchmarkCandidates(
     .map((rows) => {
       const first = rows[0]
       const days = rows
-        .map((sample) => readPositiveDays(sample.actual_duration))
+        .map((sample) => readProductionDurationDays(sample as Record<string, unknown>, 'actual'))
         .filter((value): value is number => value !== null)
         .sort((left, right) => left - right)
       const meanDays = days.reduce((sum, value) => sum + value, 0) / Math.max(days.length, 1)
@@ -240,6 +249,7 @@ export function buildDurationBenchmarkCandidates(
         confidenceLevel: confidence.level,
         confidenceScore: confidence.score,
         sampleIds: rows.map((sample) => normalizeText(sample.id)).filter((value): value is string => value !== null),
+        durationDayBasis: 'construction_production_day' as const,
       }
     })
 }
@@ -251,15 +261,24 @@ async function loadGovernanceSamples(options: TemplateDurationGovernanceOptions)
 }
 
 async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: string) {
-  await replaceDurationBenchmarkAtomically({
+  const candidateOperationId = createHash('sha256').update(JSON.stringify({
+    companyId: candidate.companyId,
+    benchmarkKey: candidate.benchmarkKey,
+    durationDayBasis: candidate.durationDayBasis,
+    sampleIds: [...candidate.sampleIds].sort(),
+    p50Days: candidate.p50Days,
+    p80Days: candidate.p80Days,
+  })).digest('hex')
+  await stageDurationBenchmarkCandidateAtomically({
       company_id: candidate.companyId,
       benchmark_key: candidate.benchmarkKey,
-      benchmark_version: `v1:${nowIso.slice(0, 10)}`,
+      benchmark_version: `candidate:${nowIso.slice(0, 10)}:${candidateOperationId.slice(0, 16)}`,
       template_node_id: isUuid(candidate.templateNodeId) ? candidate.templateNodeId : null,
       engineering_category_id: isUuid(candidate.engineeringCategoryId) ? candidate.engineeringCategoryId : null,
       project_context: candidate.benchmarkContextKey,
       wbs_node_type: candidate.wbsNodeType,
       sample_count: candidate.sampleCount,
+      duration_day_basis: candidate.durationDayBasis,
       p50_days: candidate.p50Days,
       p75_days: candidate.p75Days,
       p80_days: candidate.p80Days,
@@ -268,13 +287,16 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
       coefficient_of_variation: candidate.coefficientOfVariation,
       confidence_level: candidate.confidenceLevel,
       confidence_score: candidate.confidenceScore,
-      is_current: true,
+      is_current: false,
       is_active: true,
       duration_calibration_source: 'project_history_sample',
       metadata: {
         generated_by: 'templateDurationGovernanceService',
+        runtime_publication_status: 'candidate',
+        candidate_operation_id: candidateOperationId,
         benchmark_context_key: candidate.benchmarkContextKey,
         sample_ids: candidate.sampleIds.slice(0, 50),
+        duration_day_basis: candidate.durationDayBasis,
         standard_work_code: candidate.standardWorkCode,
         standard_work_name: candidate.standardWorkName,
         variance: candidate.variance,

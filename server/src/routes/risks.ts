@@ -2,10 +2,9 @@
 
 import { Router } from 'express'
 import { SupabaseService } from '../services/supabaseService.js'
-import { confirmRiskPendingManualClose, executeSQLOne, keepRiskProcessing, supabase as db } from '../services/dbService.js'
-import { enqueueProjectHealthUpdate } from '../services/projectHealthService.js'
+import { closeRiskByRetention, confirmRiskPendingManualClose, executeSQLOne, keepRiskProcessing } from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { validate, validateIdParam, riskSchema, riskUpdateSchema } from '../middleware/validation.js'
+import { validate, validateIdParam, riskIssueClosureOutcomeSchema, riskSchema, riskUpdateSchema } from '../middleware/validation.js'
 import { getRequestCompanyId } from '../auth/companyContext.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
@@ -250,7 +249,7 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
 router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (req) => {
   const risk = await supabase.getRisk(req.params.id)
   return risk?.project_id
-}), asyncHandler(async (req, res) => {
+}), validate(riskIssueClosureOutcomeSchema), asyncHandler(async (req, res) => {
   const { id } = req.params
   const version = parseExpectedVersion(req.body?.version)
   if (version === null) {
@@ -262,7 +261,13 @@ router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (r
   }
   logger.info('Confirming risk pending manual close', { id, version })
 
-  const risk = await confirmRiskPendingManualClose(id, version)
+  const risk = await confirmRiskPendingManualClose(id, {
+    resultCode: req.body.resultCode,
+    resultSummary: req.body.resultSummary,
+    effectiveness: req.body.effectiveness,
+    evidenceRefs: req.body.evidenceRefs,
+    causeAttributionId: req.body.causeAttributionId,
+  }, String(req.user?.id ?? ''), version)
   if (!risk) {
     const response: ApiResponse = {
       success: false,
@@ -350,8 +355,7 @@ router.delete('/:id', validateIdParam, requireProjectEditor(async (req) => {
   }
   if (retention.result.resolvedAction === 'close') {
     await assertTransition('risk.lifecycle', String(risk.status ?? 'identified'), 'closed')
-    await db.from('risks').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', id).eq('project_id', risk.project_id)
-    enqueueProjectHealthUpdate(risk.project_id, 'risk_closed_by_retention')
+    await closeRiskByRetention(id, risk.project_id, { actorId: req.user?.id ?? null })
   } else {
     await supabase.deleteRisk(id)
   }

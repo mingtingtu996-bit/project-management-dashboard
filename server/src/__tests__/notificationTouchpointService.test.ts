@@ -72,7 +72,7 @@ describe('notificationTouchpointService governance metadata', () => {
     }))
   })
 
-  it('marks actionable touchpoints without a dedupe key as missing dedupe governance', async () => {
+  it('derives a stable content fingerprint for actionable touchpoints without source identity', async () => {
     await notificationTouchpointService.emit({
       company_id: 'company-1',
       project_id: 'project-1',
@@ -84,11 +84,11 @@ describe('notificationTouchpointService governance metadata', () => {
 
     expect(mocks.insertNotification).toHaveBeenCalledWith(expect.objectContaining({
       touchpoint_type: 'dashboard_todo',
-      dedupe_key: null,
+      dedupe_key: expect.stringMatching(/^content:[a-f0-9]{32}$/),
       metadata: expect.objectContaining({
-        dedupe_strategy: 'none',
+        dedupe_strategy: 'content_fingerprint',
         dedupe_required: true,
-        dedupe_missing: true,
+        dedupe_missing: false,
       }),
     }))
   })

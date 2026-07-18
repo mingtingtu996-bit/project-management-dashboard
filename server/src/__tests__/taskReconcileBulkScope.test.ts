@@ -71,13 +71,11 @@ describe('task reconcile bulk scope route', () => {
     vi.clearAllMocks()
   })
 
-  it('registers project reconcile routes with project-id aware member middleware', () => {
+  it('keeps preview readable while requiring editor permission for reconcile writes', () => {
     expect(routeSource).not.toMatch(/reconcile\/preview', authenticate, requireProjectMember,/)
-    expect(routeSource).not.toMatch(/reconcile\/apply', authenticate, requireProjectMember,/)
-    expect(routeSource).not.toMatch(/reconcile\/:batchId\/rollback', authenticate, requireProjectMember,/)
     expect(routeSource).toMatch(/reconcile\/preview', authenticate, requireProjectMember\(\(req\) => req\.params\.id\),/)
-    expect(routeSource).toMatch(/reconcile\/apply', authenticate, requireProjectMember\(\(req\) => req\.params\.id\),/)
-    expect(routeSource).toMatch(/reconcile\/:batchId\/rollback', authenticate, requireProjectMember\(\(req\) => req\.params\.id\),/)
+    expect(routeSource).toMatch(/reconcile\/apply', authenticate, requireProjectEditor\(\(req\) => req\.params\.id\),/)
+    expect(routeSource).toMatch(/reconcile\/:batchId\/rollback', authenticate, requireProjectEditor\(\(req\) => req\.params\.id\),/)
   })
 
   it('requires project editor permission before applying bulk scope patches', () => {

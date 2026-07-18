@@ -63,7 +63,6 @@ describe('planning domain contract', () => {
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines' }),
         expect.objectContaining({ method: 'PUT', path: '/api/task-baselines/:id' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/commit' }),
-        expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/materialize-independent-task-network' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/publish' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/confirm' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/queue-realignment' }),

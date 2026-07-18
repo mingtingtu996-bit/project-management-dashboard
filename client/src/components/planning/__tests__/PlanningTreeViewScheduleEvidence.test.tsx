@@ -38,4 +38,28 @@ describe('PlanningTreeView schedule evidence columns', () => {
     expect(screen.getByText('施工日历 2 个窗口；运行样本 160 天；季节修正 雨季')).toBeVisible()
     expect(screen.queryByText(/P20|P50|P80/)).not.toBeInTheDocument()
   })
+
+  it('marks heuristic sequencing rows as needing confirmation', async () => {
+    render(
+      <PlanningTreeView
+        title="Execution tasks"
+        rows={[{
+          id: 'row-heuristic-sequencing',
+          title: 'Facade follow-up work',
+          depth: 1,
+          sequenceLabel: '2',
+          sequencingBasis: 'heuristic_stagger',
+        } as PlanningTreeRow]}
+        variant="task"
+        rowMode="read"
+        viewMode="list"
+      />,
+    )
+
+    expect(await screen.findByText('排序待确认')).toBeVisible()
+    expect(screen.getByTestId('planning-task-risk-chip-row-heuristic-sequencing')).toHaveAttribute(
+      'data-risk-trace',
+      '排序待确认',
+    )
+  })
 })

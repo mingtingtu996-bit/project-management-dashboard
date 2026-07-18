@@ -296,7 +296,7 @@ const baselineDefinitions = [
     baselineId: 'PB-04',
     name: '发布与回滚',
     gates: ['G4', 'G5', 'G7', 'G8'],
-    existingCoverage: ['wbsTemplateRuntimePublicationService.test.ts', 't2RhythmScheduleRuntimePublicationService.test.ts', 'verifyT2RhythmReleaseClosureArtifact.test.ts', 'runC19RuntimePublicationEvidence*.test.mjs'],
+    existingCoverage: ['wbsTemplateGenerationService.test.ts', 'wizardGenerationSideEffects.test.ts', 'run-wizard-baseline-revision-staging-contract.test.mjs', 'durationRuntimeOrphanRetirement.test.ts'],
     cases: [
       caseRecord({
         caseId: 'PB04-RELEASE-NORMAL-01',

@@ -4,6 +4,7 @@ import type { PlanningSurface } from '../types/planningTable.js'
 type PlanningTableRealtimeSource =
   | 'task_list_commit'
   | 'baseline_commit'
+  | 'baseline_publish'
   | 'monthly_plan_commit'
   | 'task_api'
   | 'import'

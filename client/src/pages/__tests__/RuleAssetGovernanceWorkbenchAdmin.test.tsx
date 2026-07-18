@@ -8,12 +8,14 @@ const mocks = vi.hoisted(() => ({
   executeRuleAssetGovernanceWorkbenchOperation: vi.fn(),
   fetchV14231ActionableSurface: vi.fn(),
   getConstructionOrganizationPlanNetworkDrafts: vi.fn(),
+  getStructuredCauseQualityMetrics: vi.fn(),
   getRuleAssetGovernanceWorkbenchReadiness: vi.fn(),
 }))
 
 vi.mock('@/services/ruleAssetGovernanceWorkbenchApi', () => ({
   executeRuleAssetGovernanceWorkbenchOperation: mocks.executeRuleAssetGovernanceWorkbenchOperation,
   getConstructionOrganizationPlanNetworkDrafts: mocks.getConstructionOrganizationPlanNetworkDrafts,
+  getStructuredCauseQualityMetrics: mocks.getStructuredCauseQualityMetrics,
   getRuleAssetGovernanceWorkbenchReadiness: mocks.getRuleAssetGovernanceWorkbenchReadiness,
 }))
 
@@ -145,8 +147,8 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
-    mocks.fetchV14231ActionableSurface.mockResolvedValue({
-      key: 'construction_organization_runtime_publication_action',
+    mocks.fetchV14231ActionableSurface.mockImplementation(async (key: string) => ({
+      key,
       status: 'stable_action',
       boundaryPolicy: {
         canUseAsStableAction: true,
@@ -154,7 +156,7 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
         declaresProductionReady: false,
         requiresLiveEvidenceForUpgrade: false,
       },
-    })
+    }))
     mocks.getRuleAssetGovernanceWorkbenchReadiness.mockResolvedValue({
       reportCode: 'v14223_rule_asset_governance_workbench_readiness',
       companyId: 'company-1',
@@ -660,6 +662,47 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
         boundaryPolicy: ['draft_network_is_read_only'],
       }],
       boundaryPolicy: ['plan_network_draft_is_not_runtime_materialization'],
+    })
+    mocks.getStructuredCauseQualityMetrics.mockResolvedValue({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      policy: {
+        minimumSampleCount: 20,
+        otherRateRevisionThresholdPercent: 20,
+        prefillModificationRateRevisionThresholdPercent: 30,
+      },
+      otherRate: {
+        metricKey: 'structured_cause_other_rate',
+        numerator: 6,
+        denominator: 25,
+        value: 24,
+        availability: 'ready',
+      },
+      prefillModificationRate: {
+        metricKey: 'structured_cause_prefill_modification_rate',
+        numerator: 7,
+        denominator: 20,
+        value: 35,
+        availability: 'ready',
+      },
+      revisionSignals: [
+        {
+          candidateType: 'taxonomy_revision',
+          reasonCode: 'structured_cause_other_rate_above_threshold',
+          metricKey: 'structured_cause_other_rate',
+          observedPercent: 24,
+          thresholdPercent: 20,
+          sampleCount: 25,
+        },
+        {
+          candidateType: 'inference_rule_revision',
+          reasonCode: 'structured_cause_prefill_modification_rate_above_threshold',
+          metricKey: 'structured_cause_prefill_modification_rate',
+          observedPercent: 35,
+          thresholdPercent: 30,
+          sampleCount: 20,
+        },
+      ],
     })
   })
 
@@ -1676,17 +1719,24 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
     await waitForText(container, ['operation_delegated', 'recordRecommendationDecision'])
   })
 
-  it('keeps runtime publication gated while recommendation review remains usable', async () => {
-    mocks.fetchV14231ActionableSurface.mockResolvedValueOnce({
-      key: 'construction_organization_runtime_publication_action',
-      status: 'needs-gating',
-      permissionGate: 'manual approval and live runtime evidence required',
-      boundaryPolicy: {
-        canUseAsStableAction: false,
-        writesRuntimePublication: false,
-        declaresProductionReady: false,
-        requiresLiveEvidenceForUpgrade: true,
-      },
+  it('gates construction organization publication without disabling stable evidence actions', async () => {
+    mocks.fetchV14231ActionableSurface.mockImplementation(async (key: string) => {
+      const publicationGated = [
+        'construction_organization_runtime_publication_action',
+        'rule_asset_stable_publication_action',
+        'rule_asset_template_replacement_action',
+      ].includes(key)
+      return {
+        key,
+        status: publicationGated ? 'needs-gating' : 'stable_action',
+        permissionGate: 'action-specific permission and evidence required',
+        boundaryPolicy: {
+          canUseAsStableAction: !publicationGated,
+          writesRuntimePublication: false,
+          declaresProductionReady: false,
+          requiresLiveEvidenceForUpgrade: publicationGated,
+        },
+      }
     })
     mocks.getConstructionOrganizationPlanNetworkDrafts.mockResolvedValueOnce(runtimeRecommendedOptionDraftReport())
 
@@ -1722,11 +1772,39 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
     expect(submitButton.disabled).toBe(true)
 
     await act(async () => {
+      adoptButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       submitButton.dispatchEvent(new MouseEvent('click', { bubbles: true }))
       await flush()
     })
 
-    expect(mocks.executeRuleAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
+    expect(mocks.executeRuleAssetGovernanceWorkbenchOperation).toHaveBeenCalledTimes(1)
+    expect(mocks.executeRuleAssetGovernanceWorkbenchOperation).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'runtime_recommendation_adopt',
+    }))
+  })
+
+  it('consumes project cause-quality metrics as read-only taxonomy and inference-rule candidates', async () => {
+    await act(async () => {
+      root.render(<RuleAssetGovernanceWorkbenchAdmin />)
+    })
+    await waitForText(container, ['规则资产治理工作台', '施工组织草案池'])
+    expect(mocks.getStructuredCauseQualityMetrics).not.toHaveBeenCalled()
+
+    const projectInput = container.querySelector('#construction-organization-draft-project') as HTMLInputElement
+    await act(async () => {
+      setInputValue(projectInput, 'project-1')
+      await flush()
+    })
+
+    await waitForText(container, [
+      '归因质量',
+      '其他项占比 24.00%',
+      '预填修改率 35.00%',
+      '建议修订原因分类',
+      '建议修订推断规则',
+    ])
+    expect(mocks.getStructuredCauseQualityMetrics).toHaveBeenCalledWith('project-1')
+    expect(container.textContent).not.toContain('自动改写历史归因')
   })
 
   it('lets admins send a ready construction organization draft to manual review without pasting JSON', async () => {

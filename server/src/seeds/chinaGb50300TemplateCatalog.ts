@@ -6217,7 +6217,7 @@ function isStableCodeBackfillRule(rule: CuratedStandardInternalFlowRule) {
 type InternalFlowDirectRuleIndex = {
   stablePairToRules: Map<string, CuratedStandardInternalFlowRule[]>
   exactNamePairToRules: Map<string, CuratedStandardInternalFlowRule[]>
-  suffixRules: CuratedStandardInternalFlowRule[]
+  suffixTerminalPairToRules: Map<string, CuratedStandardInternalFlowRule[]>
   ruleOrder: Map<CuratedStandardInternalFlowRule, number>
 }
 
@@ -6233,11 +6233,17 @@ function appendInternalFlowDirectRule(
   index.set(key, rules)
 }
 
+function internalFlowTerminalPairKey(predecessorName: string, successorName: string) {
+  const predecessorTerminal = Array.from(predecessorName).at(-1) ?? ''
+  const successorTerminal = Array.from(successorName).at(-1) ?? ''
+  return `${predecessorTerminal}\u0000${successorTerminal}`
+}
+
 function getInternalFlowDirectRuleIndex(): InternalFlowDirectRuleIndex {
   if (internalFlowDirectRuleIndex) return internalFlowDirectRuleIndex
   const stablePairToRules = new Map<string, CuratedStandardInternalFlowRule[]>()
   const exactNamePairToRules = new Map<string, CuratedStandardInternalFlowRule[]>()
-  const suffixRules: CuratedStandardInternalFlowRule[] = []
+  const suffixTerminalPairToRules = new Map<string, CuratedStandardInternalFlowRule[]>()
   const ruleOrder = new Map<CuratedStandardInternalFlowRule, number>()
 
   for (const [index, rule] of STANDARD_INTERNAL_FLOW_CURATED_RULES.entries()) {
@@ -6251,7 +6257,11 @@ function getInternalFlowDirectRuleIndex(): InternalFlowDirectRuleIndex {
       continue
     }
     if (rule.matchMode === 'suffix') {
-      suffixRules.push(rule)
+      appendInternalFlowDirectRule(
+        suffixTerminalPairToRules,
+        internalFlowTerminalPairKey(rule.predecessorName, rule.successorName),
+        rule,
+      )
       continue
     }
     appendInternalFlowDirectRule(
@@ -6264,7 +6274,7 @@ function getInternalFlowDirectRuleIndex(): InternalFlowDirectRuleIndex {
   internalFlowDirectRuleIndex = {
     stablePairToRules,
     exactNamePairToRules,
-    suffixRules,
+    suffixTerminalPairToRules,
     ruleOrder,
   }
   return internalFlowDirectRuleIndex
@@ -6364,7 +6374,9 @@ function findCuratedInternalFlowRule(input: {
   const directCandidates = [
     ...(directRuleIndex.stablePairToRules.get(stablePairKey) ?? []),
     ...(directRuleIndex.exactNamePairToRules.get(`${predecessorName}\u0000${successorName}`) ?? []),
-    ...directRuleIndex.suffixRules,
+    ...(directRuleIndex.suffixTerminalPairToRules.get(
+      internalFlowTerminalPairKey(predecessorName, successorName),
+    ) ?? []),
   ].sort((left, right) => (
     (directRuleIndex.ruleOrder.get(left) ?? Number.MAX_SAFE_INTEGER)
     - (directRuleIndex.ruleOrder.get(right) ?? Number.MAX_SAFE_INTEGER)
@@ -11436,13 +11448,12 @@ function collectInternalFlowGovernanceEntries(catalogs: ChinaTemplateCatalog[]):
 
   const visit = (catalog: ChinaTemplateCatalog, node: ChinaTemplateCatalogNode) => {
     const siblingNodes = (node.children ?? []).filter(isInternalFlowSiblingNode)
+    let previousAnchorNode = siblingNodes[0] && isInternalFlowAnchorNode(siblingNodes[0])
+      ? siblingNodes[0]
+      : null
     for (let index = 1; index < siblingNodes.length; index += 1) {
       const predecessorNode = siblingNodes[index - 1]
       const successorNode = siblingNodes[index]
-      const previousAnchorNode = siblingNodes
-        .slice(0, index)
-        .reverse()
-        .find(isInternalFlowAnchorNode) ?? null
       entries.push({
         catalogId: catalog.templateId,
         catalogGroup: getInternalFlowCatalogGroup(catalog),
@@ -11457,6 +11468,7 @@ function collectInternalFlowGovernanceEntries(catalogs: ChinaTemplateCatalog[]):
           successorNode,
         }),
       })
+      if (isInternalFlowAnchorNode(successorNode)) previousAnchorNode = successorNode
     }
     for (const child of node.children ?? []) visit(catalog, child)
   }

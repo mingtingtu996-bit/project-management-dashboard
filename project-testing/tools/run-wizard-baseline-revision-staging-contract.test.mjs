@@ -73,6 +73,13 @@ test('wizard baseline revision staging smoke can attest an exact deployed stagin
   assert.match(smokeSource, /writeResultReport\(\)/)
 })
 
+test('wizard baseline revision staging smoke reads duration accuracy from the real staging database without inventing an accuracy claim', () => {
+  assert.match(smokeSource, /\/api\/admin\/duration-accuracy\/summary/)
+  assert.match(smokeSource, /durationAccuracyReadback/)
+  assert.match(smokeSource, /empty_no_completed_samples/)
+  assert.match(smokeSource, /readback_only_not_accuracy_acceptance/)
+})
+
 test('wizard baseline revision staging smoke recovers and deletes a project when create commits before the response times out', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizard-timeout-recovery-'))
   t.after(() => fs.rmSync(root, { recursive: true, force: true }))
@@ -104,6 +111,10 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
           },
         },
       })
+      return
+    }
+    if (req.method === 'GET' && req.url === '/api/admin/duration-accuracy/summary') {
+      send(200, { metrics: [] })
       return
     }
     if (req.method === 'POST' && req.url === '/api/projects/wizard') {
@@ -170,6 +181,8 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
   assert.equal(report.projectId, createdProjectId)
   assert.equal(report.steps.projectRecovery.status, 'pass')
+  assert.equal(report.steps.durationAccuracyReadback.status, 'pass')
+  assert.equal(report.steps.durationAccuracyReadback.dataState, 'empty_no_completed_samples')
   assert.equal(report.cleanup.status, 'pass')
   assert.equal(report.cleanup.projectPhysicallyDeleted, true)
   assert.equal(project, null)
