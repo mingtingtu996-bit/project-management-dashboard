@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)))
-const tsxCliPath = fileURLToPath(import.meta.resolve('tsx/cli'))
+const serverRequire = createRequire(resolve(repoRoot, 'server/package.json'))
+const tsxCliPath = serverRequire.resolve('tsx/cli')
 const outputPath = resolve(repoRoot, 'artifacts/reports/wbs-template-golden-benchmark-verification.json')
 const runtimeOutputPath = resolve(repoRoot, 'artifacts/reports/wbs-template-golden-benchmark-runtime-results.json')
 const userArgs = process.argv.slice(2)
