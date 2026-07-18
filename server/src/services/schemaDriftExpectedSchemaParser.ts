@@ -415,6 +415,20 @@ function applyAlterTableOperation(
     return
   }
 
+  const validateConstraintMatch = operation.match(
+    /^validate\s+constraint\s+(?<name>"[^"]+"|[a-zA-Z0-9_]+)$/i,
+  )
+  if (validateConstraintMatch?.groups?.name) {
+    const constraintName = normalizeObjectName(validateConstraintMatch.groups.name)
+    const constraint = tables.get(tableName)?.constraints.find(
+      (candidate) => candidate.constraintName === constraintName,
+    )
+    if (constraint) {
+      constraint.definition = constraint.definition.replace(/\s+not\s+valid\s*$/i, '').trim()
+    }
+    return
+  }
+
   const setNotNullMatch = operation.match(/^alter\s+column\s+(?<column>[a-zA-Z0-9_".]+)\s+set\s+not\s+null$/i)
   if (setNotNullMatch?.groups?.column) {
     patchColumn(tables, tableName, setNotNullMatch.groups.column, { nullable: false })
@@ -624,7 +638,7 @@ function applyPolicyTemplateRuntimePublicationRollbackStatus(sql: string, tables
   upsertConstraint(table, {
     constraintName: finalConstraintName,
     constraintType: 'check_constraint',
-    definition: "CHECK (runtime_publication_status IN ('runtime_stable_published', 'runtime_rolled_back')) NOT VALID",
+    definition: "CHECK (runtime_publication_status IN ('runtime_stable_published', 'runtime_rolled_back'))",
   })
 }
 
