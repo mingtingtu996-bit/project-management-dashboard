@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import test from 'node:test'
 
 const workspaceRoot = resolve(import.meta.dirname, '..')
+const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash'
 
 function readOwnedFile(relativePath) {
   const absolutePath = resolve(workspaceRoot, relativePath)
@@ -17,6 +19,73 @@ function jobSection(workflow, jobName, nextJobName) {
   const end = nextJobName ? workflow.indexOf(`  ${nextJobName}:`, start + 1) : workflow.length
   assert.notEqual(end, -1, `${nextJobName} job must follow ${jobName}`)
   return workflow.slice(start, end)
+}
+
+function stepRun(workflow, stepName) {
+  const lines = workflow.split(/\r?\n/u)
+  const stepIndex = lines.findIndex((line) => line.trim() === `- name: ${stepName}`)
+  assert.notEqual(stepIndex, -1, `${stepName} step must exist`)
+  const stepIndent = lines[stepIndex].search(/\S/u)
+  const runIndex = lines.findIndex((line, index) => {
+    if (index <= stepIndex) return false
+    const indent = line.search(/\S/u)
+    if (indent >= 0 && indent <= stepIndent) return false
+    return line.trim() === 'run: |'
+  })
+  assert.ok(runIndex > stepIndex, `${stepName} must contain a run block`)
+  const runIndent = lines[runIndex].search(/\S/u)
+  const body = []
+  for (let index = runIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    const indent = line.search(/\S/u)
+    if (indent >= 0 && indent <= runIndent) break
+    body.push(line.length > runIndent + 2 ? line.slice(runIndent + 2) : '')
+  }
+  return body.join('\n')
+}
+
+function runProbeStep(run, { body, httpStatus = '200', reportSha = null }) {
+  const report = reportSha
+    ? `printf '%s\\n' 'release_sha=${reportSha}' > "$OUTPUT_ROOT/runtime-recovery.env"`
+    : ':'
+  return spawnSync(bash, ['-c', `
+set -euo pipefail
+curl() {
+  local output=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --output|-o) output="$2"; shift 2 ;;
+      --write-out|--max-time) shift 2 ;;
+      --fail|--silent|--show-error) shift ;;
+      *) shift ;;
+    esac
+  done
+  if [ -n "$output" ]; then printf '%s' "$MOCK_READINESS" > "$output"; fi
+  printf '%s' "$MOCK_HTTP_STATUS"
+}
+sleep() { :; }
+RUNNER_TEMP="$(mktemp -d)"
+trap 'rm -rf "$RUNNER_TEMP"' EXIT
+GITHUB_OUTPUT="$RUNNER_TEMP/github-output"
+OUTPUT_ROOT="$RUNNER_TEMP/output"
+mkdir -p "$OUTPUT_ROOT"
+touch "$GITHUB_OUTPUT"
+export RUNNER_TEMP GITHUB_OUTPUT OUTPUT_ROOT
+${report}
+${run}
+cat "$GITHUB_OUTPUT"
+`], {
+    cwd: workspaceRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      DEPLOY_HEALTH_URL: 'https://zhuxucloud.com/api/readyz',
+      EXPECTED_PUBLIC_HOST: 'zhuxucloud.com',
+      MOCK_HTTP_STATUS: httpStatus,
+      MOCK_READINESS: JSON.stringify(body),
+      SUPABASE_URL: 'https://production-ref.supabase.co',
+    },
+  })
 }
 
 test('runtime recovery is manual-only behind the protected production environment', () => {
@@ -41,6 +110,7 @@ test('runtime recovery is manual-only behind the protected production environmen
     'PRODUCTION_DEPLOY_SSH_PRIVATE_KEY',
     'PRODUCTION_DEPLOY_KNOWN_HOSTS',
     'PRODUCTION_DEPLOY_HEALTH_URL',
+    'PRODUCTION_SUPABASE_URL',
     'PRODUCTION_SLACK_WEBHOOK',
   ]) {
     assert.match(workflow, new RegExp(`secrets\\.${secret}`), `${secret} must retain the current secret convention`)
@@ -75,12 +145,64 @@ test('production runtime recovery requires both local verification and public HT
   )
 })
 
-test('production deploy and runtime recovery share one full-workflow mutation queue', () => {
+test('production deploy, staging deploy, recovery, and ingress share one host mutation queue', () => {
   const deployWorkflow = readOwnedFile('.github/workflows/deploy.yml')
   const recoveryWorkflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
+  const ingressWorkflow = readOwnedFile('.github/workflows/provision-domain-ingress.yml')
 
-  assert.match(deployWorkflow, /production-runtime-mutation/)
-  assert.match(recoveryWorkflow, /group:\s*production-runtime-mutation/)
+  const sharedGroup = 'lighthouse-host-runtime-mutation'
+  assert.match(deployWorkflow, new RegExp(sharedGroup))
+  assert.match(deployWorkflow, /github\.event\.inputs\.environment != 'preview'/)
+  assert.match(recoveryWorkflow, new RegExp(`group:\\s*${sharedGroup}`))
+  assert.match(ingressWorkflow, new RegExp(`group:\\s*${sharedGroup}`))
+  assert.doesNotMatch(recoveryWorkflow, /group:\s*production-runtime-mutation/)
+  assert.doesNotMatch(ingressWorkflow, /group:\s*workbuddy-domain-ingress/)
+})
+
+test('public recovery probes reject wrong target, project, stale SHA, and non-200 responses', () => {
+  const workflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
+  const before = stepRun(workflow, 'Probe required public runtime readiness endpoint')
+  const after = stepRun(workflow, 'Verify required public runtime readiness after diagnosis and recovery')
+  const currentSha = 'a'.repeat(40)
+  const valid = {
+    status: 'ready',
+    build: {
+      releaseSha: currentSha,
+      deployTarget: 'production',
+      supabaseProjectRef: 'production-ref',
+      databaseProjectRef: 'production-ref',
+    },
+  }
+
+  const validBefore = runProbeStep(before, { body: valid })
+  assert.equal(validBefore.status, 0, validBefore.stderr)
+  assert.match(validBefore.stdout, /^healthy=true$/mu)
+
+  for (const body of [
+    { ...valid, build: { ...valid.build, deployTarget: 'staging' } },
+    { ...valid, build: { ...valid.build, supabaseProjectRef: 'staging-ref' } },
+    { ...valid, build: { ...valid.build, databaseProjectRef: 'staging-ref' } },
+    { ...valid, status: 'live' },
+  ]) {
+    const result = runProbeStep(before, { body })
+    assert.equal(result.status, 0, result.stderr)
+    assert.match(result.stdout, /^healthy=false$/mu)
+  }
+
+  const validAfter = runProbeStep(after, { body: valid, reportSha: currentSha })
+  assert.equal(validAfter.status, 0, validAfter.stderr)
+  assert.match(validAfter.stdout, /^healthy=true$/mu)
+
+  const staleAfter = runProbeStep(after, {
+    body: { ...valid, build: { ...valid.build, releaseSha: 'b'.repeat(40) } },
+    reportSha: currentSha,
+  })
+  assert.equal(staleAfter.status, 0, staleAfter.stderr)
+  assert.match(staleAfter.stdout, /^healthy=false$/mu)
+
+  const noContent = runProbeStep(after, { body: valid, httpStatus: '204', reportSha: currentSha })
+  assert.equal(noContent.status, 0, noContent.stderr)
+  assert.match(noContent.stdout, /^healthy=false$/mu)
 })
 
 test('manual restart is guarded by environment, exact confirmation, and an allow-listed target', () => {
@@ -94,7 +216,9 @@ test('manual restart is guarded by environment, exact confirmation, and an allow
 
   assert.match(script, /DEPLOY_TARGET.*production/)
   assert.match(script, /RESTART_PRODUCTION_RUNTIME/)
-  assert.match(script, /auto\|api\|web\|worker\|all/)
+  assert.match(script, /api\|web\|worker\|all/)
+  assert.doesNotMatch(script, /\b(?:scheduled|auto)\b/u)
+  assert.doesNotMatch(workflow, /\b(?:scheduled|auto)\b/u)
   assert.match(script, /Refusing manual recovery/)
 })
 
@@ -175,6 +299,7 @@ test('workflow guard and deployment documentation own the recovery contract', ()
   for (const path of [
     '.github/workflows/production-runtime-recovery.yml',
     'scripts/recover-production-runtime.sh',
+    'scripts/verify-public-readyz-identity.mjs',
     'scripts/production-runtime-recovery.contract.test.mjs',
     'deploy/README.md',
   ]) {
@@ -192,4 +317,5 @@ test('workflow guard and deployment documentation own the recovery contract', ()
   assert.match(deployReadme, /Web, API, and worker/)
   assert.match(deployReadme, /does not deploy/i)
   assert.match(deployReadme, /exit code 137/i)
+  assert.doesNotMatch(deployReadme, /scheduled run/i)
 })

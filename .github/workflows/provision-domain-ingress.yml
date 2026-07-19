@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: workbuddy-domain-ingress
+  group: lighthouse-host-runtime-mutation
   cancel-in-progress: false
 
 jobs:
@@ -63,6 +63,11 @@ jobs:
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 1
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
 
       - name: Verify release is current main
         shell: bash

@@ -85,17 +85,24 @@ and the same production secret names as the release workflow:
 - `PRODUCTION_DEPLOY_SSH_PRIVATE_KEY`
 - `PRODUCTION_DEPLOY_KNOWN_HOSTS`
 - `PRODUCTION_DEPLOY_HEALTH_URL` (required; must be an HTTPS `/api/readyz` URL)
+- `PRODUCTION_SUPABASE_URL` (required; supplies the expected production project identity)
 - `PRODUCTION_SLACK_WEBHOOK` (optional notification channel)
+
+The protected `PRODUCTION_DEPLOY_PUBLIC_HOST` environment variable must be
+`zhuxucloud.com`. Both public probes require the canonical
+`https://zhuxucloud.com/api/readyz` authority and validate the readyz target,
+Supabase/database project refs, and release SHA. The post-recovery SHA must equal
+the atomic current release reported by the remote recovery script.
 
 Recovery is fail closed. SSH credentials, pinned host trust, the runtime env,
 the atomic `current` release pointer and manifest, absence of a pending release,
 the shared deployment lock, `SUPABASE_RUNTIME_KEY`, absence of
 `SUPABASE_SERVICE_KEY`, Docker access, container Compose identities, the
 `production` target, and matching current/Web/API/worker release identities must all
-pass preflight. A scheduled run may
-recover only a service with an explicit stopped, unhealthy, or failed local
-`readyz` diagnosis. A public probe failure with all three local services healthy
-is reported as an ingress boundary failure and does not restart containers.
+pass preflight. Recovery is manual-only and may recover only a service with an
+explicit stopped, unhealthy, or failed local `readyz` diagnosis. A public probe
+failure with all three local services healthy is reported as an ingress boundary
+failure and does not restart containers.
 
 Manual dispatch additionally requires environment `production`, one of the
 `api`, `web`, `worker`, or `all` targets, and the exact confirmation phrase

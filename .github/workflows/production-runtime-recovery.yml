@@ -27,7 +27,7 @@ on:
         type: string
 
 concurrency:
-  group: production-runtime-mutation
+  group: lighthouse-host-runtime-mutation
   cancel-in-progress: false
 
 permissions:
@@ -58,6 +58,8 @@ jobs:
       DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
       DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
       DEPLOY_HEALTH_URL: ${{ secrets.PRODUCTION_DEPLOY_HEALTH_URL }}
+      EXPECTED_PUBLIC_HOST: ${{ vars.PRODUCTION_DEPLOY_PUBLIC_HOST }}
+      SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
     steps:
       - name: Checkout recovery contract
         uses: actions/checkout@v6
@@ -79,24 +81,22 @@ jobs:
             blocked="true"
           fi
           case "$RECOVERY_TARGET" in
-            auto|api|web|worker|all) ;;
+            api|web|worker|all) ;;
             *)
               echo "The recovery target is not allow-listed." >&2
               blocked="true"
               ;;
           esac
-          if [ "$RECOVERY_MODE" = "scheduled" ] && [ "$RECOVERY_TARGET" != "auto" ]; then
-            echo "Scheduled recovery requires the auto target." >&2
+          if [ "$RECOVERY_MODE" != "manual" ]; then
+            echo "Production runtime recovery is manual-only." >&2
             blocked="true"
           fi
-          if [ "$RECOVERY_MODE" = "manual" ]; then
-            if [ "$RECOVERY_TARGET" = "auto" ] || [ "$RECOVERY_CONFIRMATION" != "RESTART_PRODUCTION_RUNTIME" ]; then
-              echo "Manual recovery requires the exact confirmation and an explicit target." >&2
-              blocked="true"
-            fi
+          if [ "$RECOVERY_CONFIRMATION" != "RESTART_PRODUCTION_RUNTIME" ]; then
+            echo "Manual recovery requires the exact confirmation and an explicit target." >&2
+            blocked="true"
           fi
 
-          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HEALTH_URL; do
+          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HEALTH_URL EXPECTED_PUBLIC_HOST SUPABASE_URL; do
             if [ -z "${!required_name}" ]; then
               echo "Missing required production recovery secret: $required_name" >&2
               blocked="true"
@@ -108,13 +108,11 @@ jobs:
               blocked="true"
               ;;
           esac
-          case "$DEPLOY_HEALTH_URL" in
-            https://*/api/readyz) ;;
-            *)
-              echo "PRODUCTION_DEPLOY_HEALTH_URL must be an HTTPS /api/readyz endpoint." >&2
-              blocked="true"
-              ;;
-          esac
+          if [ "$EXPECTED_PUBLIC_HOST" != "zhuxucloud.com" ] \
+            || [ "$DEPLOY_HEALTH_URL" != "https://zhuxucloud.com/api/readyz" ]; then
+            echo "Production recovery requires the canonical zhuxucloud.com HTTPS readyz authority." >&2
+            blocked="true"
+          fi
 
           if [ "$blocked" = "true" ]; then
             echo "passed=false" >> "$GITHUB_OUTPUT"
@@ -129,15 +127,25 @@ jobs:
           set -euo pipefail
           configured="true"
           healthy="false"
+          release_sha="unknown"
+          readyz_file="$RUNNER_TEMP/production-public-readyz-before.json"
           for attempt in 1 2 3; do
-            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
-              healthy="true"
-              break
+            if public_status="$(curl --silent --show-error --max-time 15 \
+              --output "$readyz_file" --write-out '%{http_code}' "$DEPLOY_HEALTH_URL")"; then
+              if [ "$public_status" = "200" ]; then
+                if verified_sha="$(node scripts/verify-public-readyz-identity.mjs \
+                  --file "$readyz_file" --expected-target production 2>/dev/null)"; then
+                  healthy="true"
+                  release_sha="$verified_sha"
+                  break
+                fi
+              fi
             fi
             if [ "$attempt" -lt 3 ]; then sleep 5; fi
           done
           echo "configured=$configured" >> "$GITHUB_OUTPUT"
           echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
 
       - name: Configure pinned production SSH trust
         if: ${{ steps.preflight.outcome == 'success' }}
@@ -206,13 +214,27 @@ jobs:
           set -euo pipefail
           configured="true"
           healthy="false"
-          for attempt in $(seq 1 12); do
-            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
-              healthy="true"
-              break
-            fi
-            if [ "$attempt" -lt 12 ]; then sleep 5; fi
-          done
+          expected_release_sha=""
+          if [ -f "$OUTPUT_ROOT/runtime-recovery.env" ]; then
+            expected_release_sha="$(awk -F= '$1 == "release_sha" { value = $2 } END { print value }' \
+              "$OUTPUT_ROOT/runtime-recovery.env")"
+          fi
+          readyz_file="$RUNNER_TEMP/production-public-readyz-after.json"
+          if [[ "$expected_release_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            for attempt in $(seq 1 12); do
+              if public_status="$(curl --silent --show-error --max-time 15 \
+                --output "$readyz_file" --write-out '%{http_code}' "$DEPLOY_HEALTH_URL")"; then
+                if [ "$public_status" = "200" ] \
+                  && node scripts/verify-public-readyz-identity.mjs \
+                    --file "$readyz_file" --expected-target production \
+                    --expected-release-sha "$expected_release_sha" >/dev/null 2>&1; then
+                  healthy="true"
+                  break
+                fi
+              fi
+              if [ "$attempt" -lt 12 ]; then sleep 5; fi
+            done
+          fi
           echo "configured=$configured" >> "$GITHUB_OUTPUT"
           echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
 

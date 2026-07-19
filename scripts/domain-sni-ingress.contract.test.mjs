@@ -1,12 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { createRequire } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 const root = new URL('../', import.meta.url)
-const require = createRequire(new URL('../server/package.json', import.meta.url))
-const { load: loadYaml } = require('js-yaml')
 const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash'
 
 async function source(path) {
@@ -26,6 +23,61 @@ function bashPath(url) {
   if (process.platform !== 'win32') return pathname
   return pathname.replace(/^\/([A-Za-z]):/u, (_match, drive) => `/${drive.toLowerCase()}`)
 }
+
+function yamlStepRun(workflow, stepId) {
+  const lines = workflow.split(/\r?\n/u)
+  const idIndex = lines.findIndex((line) => line.trim() === `id: ${stepId}`)
+  assert.notEqual(idIndex, -1, `${stepId} step must exist`)
+  const stepIndent = lines[idIndex].search(/\S/u) - 2
+  const runIndex = lines.findIndex((line, index) => {
+    if (index <= idIndex) return false
+    const indent = line.search(/\S/u)
+    if (indent >= 0 && indent <= stepIndent) return false
+    return line.trim() === 'run: |'
+  })
+  assert.ok(runIndex > idIndex, `${stepId} must contain a run block`)
+  const runIndent = lines[runIndex].search(/\S/u)
+  const body = []
+  for (let index = runIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index]
+    const indent = line.search(/\S/u)
+    if (indent >= 0 && indent <= runIndent) break
+    body.push(line.length > runIndent + 2 ? line.slice(runIndent + 2) : '')
+  }
+  return body.join('\n')
+}
+
+function workflowEventPaths(workflow, eventName) {
+  const lines = workflow.split(/\r?\n/u)
+  const eventIndex = lines.findIndex((line) => line === `  ${eventName}:`)
+  assert.notEqual(eventIndex, -1, `${eventName} event must exist`)
+  const pathsIndex = lines.findIndex((line, index) => index > eventIndex && line === '    paths:')
+  assert.ok(pathsIndex > eventIndex, `${eventName} paths must exist`)
+  const paths = []
+  for (let index = pathsIndex + 1; index < lines.length; index += 1) {
+    const match = lines[index].match(/^\s{6}-\s+['"]?([^'"]+)['"]?\s*$/u)
+    if (!match) break
+    paths.push(match[1])
+  }
+  return paths
+}
+
+test('provision contract runs from a clean checkout without repository dependencies', async () => {
+  const [workflow, contract] = await Promise.all([
+    source('.github/workflows/provision-domain-ingress.yml'),
+    source('scripts/domain-sni-ingress.contract.test.mjs'),
+  ])
+
+  const setupNode = workflow.indexOf('uses: actions/setup-node@v6')
+  const contractTest = workflow.indexOf('node --test scripts/domain-sni-ingress.contract.test.mjs')
+  assert.ok(setupNode >= 0, 'the clean runner must pin Node before executing the contract')
+  assert.ok(setupNode < contractTest, 'Node setup must precede the ingress contract test')
+  assert.ok(!contract.includes(['create', 'Require'].join('')))
+  assert.ok(!contract.includes(['js', 'yaml'].join('-')))
+  for (const specifier of contract.matchAll(/from\s+['"]([^'"]+)['"]/gu)) {
+    assert.match(specifier[1], /^node:/u, `unexpected clean-runner dependency: ${specifier[1]}`)
+  }
+})
 
 test('Caddy owns only shared 80/443 and routes the two domain names to loopback runtimes', async () => {
   const [caddyfile, compose, envExample] = await Promise.all([
@@ -103,12 +155,11 @@ test('provisioning validates a candidate, activates atomically, classifies boots
 })
 
 test('public ingress probe workflow is valid Bash after YAML block scalar decoding', async () => {
-  const workflow = loadYaml(await source('.github/workflows/provision-domain-ingress.yml'))
-  const publicProbe = workflow.jobs.provision.steps.find((step) => step.id === 'public-probe')
-  assert.ok(publicProbe?.run, 'public-probe shell is required')
+  const workflow = await source('.github/workflows/provision-domain-ingress.yml')
+  const publicProbe = yamlStepRun(workflow, 'public-probe')
 
   const result = spawnSync(bash, ['-n'], {
-    input: publicProbe.run,
+    input: publicProbe,
     encoding: 'utf8',
   })
   assert.equal(result.status, 0, result.stderr)
@@ -447,7 +498,7 @@ test('Workflow Guard executes the domain ingress contract', async () => {
 })
 
 test('Workflow Guard watches deployment ingress and atomicity paths on pushes and pull requests', async () => {
-  const guard = loadYaml(await source('.github/workflows/workflow-guard.yml'))
+  const guard = await source('.github/workflows/workflow-guard.yml')
   const requiredPaths = [
     '.github/workflows/provision-domain-ingress.yml',
     'scripts/domain-sni-ingress.contract.test.mjs',
@@ -458,15 +509,17 @@ test('Workflow Guard watches deployment ingress and atomicity paths on pushes an
     'deploy/env/ingress.example',
   ]
 
+  const eventPaths = {}
   for (const eventName of ['push', 'pull_request']) {
-    const paths = guard.on?.[eventName]?.paths ?? []
+    const paths = workflowEventPaths(guard, eventName)
+    eventPaths[eventName] = paths
     for (const requiredPath of requiredPaths) {
       assert.ok(paths.includes(requiredPath), `${eventName} does not watch ${requiredPath}`)
     }
   }
   assert.deepEqual(
-    [...guard.on.push.paths].sort(),
-    [...guard.on.pull_request.paths].sort(),
+    [...eventPaths.push].sort(),
+    [...eventPaths.pull_request].sort(),
     'push and pull_request must run the same workflow guard path surface',
   )
 })
