@@ -4,8 +4,8 @@ set -euo pipefail
 : "${APP_DIR:?APP_DIR is required}"
 : "${REPORT_FILE:?REPORT_FILE is required}"
 
-RECOVERY_MODE="${RECOVERY_MODE:-scheduled}"
-RECOVERY_TARGET="${RECOVERY_TARGET:-auto}"
+RECOVERY_MODE="${RECOVERY_MODE:-manual}"
+RECOVERY_TARGET="${RECOVERY_TARGET:-}"
 RECOVERY_CONFIRMATION="${RECOVERY_CONFIRMATION:-}"
 DEPLOY_TARGET="${DEPLOY_TARGET:-}"
 PUBLIC_PROBE_CONFIGURED="${PUBLIC_PROBE_CONFIGURED:-false}"
@@ -141,25 +141,18 @@ if [ "$DEPLOY_TARGET" != "production" ]; then
   refuse "environment_guard_failed" "Recovery requires DEPLOY_TARGET=production."
 fi
 
-case "$RECOVERY_MODE" in
-  scheduled|manual) ;;
-  *) refuse "mode_guard_failed" "Unsupported recovery mode." ;;
-esac
+[ "$RECOVERY_MODE" = "manual" ] || {
+  refuse "mode_guard_failed" "Production runtime recovery is manual-only."
+}
 
 case "$RECOVERY_TARGET" in
-  auto|api|web|worker|all) ;;
+  api|web|worker|all) ;;
   *) refuse "target_guard_failed" "Unsupported recovery target." ;;
 esac
 
-if [ "$RECOVERY_MODE" = "scheduled" ] && [ "$RECOVERY_TARGET" != "auto" ]; then
-  refuse "scheduled_target_guard_failed" "Scheduled recovery only accepts the auto target."
-fi
-
-if [ "$RECOVERY_MODE" = "manual" ]; then
-  if [ "$RECOVERY_TARGET" = "auto" ] || [ "$RECOVERY_CONFIRMATION" != "RESTART_PRODUCTION_RUNTIME" ]; then
-    refuse "manual_guard_failed" "Refusing manual recovery without production environment, exact confirmation, and an explicit target."
-  fi
-fi
+[ "$RECOVERY_CONFIRMATION" = "RESTART_PRODUCTION_RUNTIME" ] || {
+  refuse "manual_guard_failed" "Refusing manual recovery without production environment, exact confirmation, and an explicit target."
+}
 
 case "$PUBLIC_PROBE_CONFIGURED" in
   true|false) ;;
@@ -434,7 +427,7 @@ fi
 
 target_requested() {
   case "$RECOVERY_TARGET" in
-    auto|all) return 0 ;;
+    all) return 0 ;;
     "$1") return 0 ;;
     *) return 1 ;;
   esac

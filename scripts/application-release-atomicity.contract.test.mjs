@@ -228,8 +228,45 @@ test('remote deployment and ingress scripts do not require host Node.js', async 
   assert.match(ingressScript, /python3/u)
 })
 
+test('deployment target preflight proves the host Python runtime before database migration', async () => {
+  const workflow = await source('.github/workflows/deploy.yml')
+  const preflightStart = workflow.indexOf('  deployment-target-preflight:')
+  const migrationStart = workflow.indexOf('  database-migration:')
+  assert.ok(preflightStart >= 0 && migrationStart > preflightStart)
+  const preflight = workflow.slice(preflightStart, migrationStart)
+
+  assert.match(preflight, /name: Verify deployment host Python runtime/u)
+  assert.match(preflight, /command -v python3/u)
+  assert.match(preflight, /sys\.version_info < \(3, 10\)/u)
+  assert.match(preflight, /import ipaddress/u)
+  assert.match(preflight, /import json/u)
+  assert.match(preflight, /from urllib\.parse import urlsplit/u)
+  assert.match(preflight, /ssh[\s\S]*?python3/u)
+
+  const parsed = loadYaml(workflow)
+  const runtimeCheck = parsed.jobs['deployment-target-preflight'].steps.find(
+    (step) => step.name === 'Verify deployment host Python runtime',
+  )
+  assert.ok(runtimeCheck?.run, 'the host Python runtime step must contain executable shell')
+  const shellSyntax = spawnSync(bash, ['-n'], { input: runtimeCheck.run, encoding: 'utf8' })
+  assert.equal(shellSyntax.status, 0, shellSyntax.stderr)
+  const pythonSource = runtimeCheck.run.match(/python3 - <<'PY'\n([\s\S]*?)\nPY/u)?.[1]
+  assert.ok(pythonSource, 'the host Python runtime preflight must retain its Python body')
+  const pythonSyntax = process.platform === 'win32'
+    ? spawnSync('py.exe', ['-3', '-c', 'import ast,sys; ast.parse(sys.stdin.read())'], {
+        input: pythonSource,
+        encoding: 'utf8',
+      })
+    : spawnSync('python3', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], {
+        input: pythonSource,
+        encoding: 'utf8',
+      })
+  assert.equal(pythonSyntax.status, 0, pythonSyntax.stderr)
+})
+
 test('host Python ingress verifier rejects wrong authority, path, credentials, port, and private IP', async () => {
   const script = await source('scripts/deploy-lighthouse-server.sh')
+  const { classifyPublicIngressUrl } = await import('./classify-public-ingress-url.mjs')
   const validator = script.match(
     /(validate_public_ingress_contract\(\) \{[\s\S]*?\n\})\n\nverify_release_health/u,
   )?.[1]
@@ -243,8 +280,22 @@ test('host Python ingress verifier rejects wrong authority, path, credentials, p
     ['https://staging.zhuxucloud.com:8443/api/readyz', 'http://staging.zhuxucloud.com/api/readyz', 'staging', 'staging.zhuxucloud.com', 'domain_hsts', 1],
     ['https://127.0.0.1/api/readyz', 'http://127.0.0.1/api/readyz', 'production', '127.0.0.1', 'temporary_ip_tls', 1],
     ['https://staging.zhuxucloud.com/api/readyz', 'http://staging.zhuxucloud.com/api/readyz', 'staging', 'zhuxucloud.com', 'domain_hsts', 1],
+    ['https://internal/api/readyz', 'http://internal/api/readyz', 'production', 'internal', 'domain_hsts', 1],
+    ['https://service.test/api/readyz', 'http://service.test/api/readyz', 'production', 'service.test', 'domain_hsts', 1],
+    ['https://workbuddy/api/readyz', 'http://workbuddy/api/readyz', 'production', 'workbuddy', 'domain_hsts', 1],
+    ['https://bad_label.example.com/api/readyz', 'http://bad_label.example.com/api/readyz', 'production', 'bad_label.example.com', 'domain_hsts', 1],
+    ['https://[2001:4860:4860::8888]/api/readyz', 'http://[2001:4860:4860::8888]/api/readyz', 'production', '2001:4860:4860::8888', 'temporary_ip_tls', 1],
+    ['https://zhuxucloud.com./api/readyz', 'http://zhuxucloud.com./api/readyz', 'production', 'zhuxucloud.com', 'domain_hsts', 1],
   ]
   for (const [health, redirect, target, host, mode, expectedStatus] of cases) {
+    const canonical = classifyPublicIngressUrl({
+      environment: target,
+      expectedHost: host,
+      expectedMode: mode,
+      redirectValue: redirect,
+      value: health,
+    })
+    assert.equal(canonical.pass, expectedStatus === 0, `canonical golden mismatch for ${health}`)
     const result = runBash(`
 set -euo pipefail
 ${python3Shim}

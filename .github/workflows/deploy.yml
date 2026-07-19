@@ -74,7 +74,7 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production' && 'production-runtime-mutation' || format('deploy-{0}-{1}', github.workflow, github.event_name == 'workflow_dispatch' && format('target-{0}', github.event.inputs.environment) || format('preview-{0}', github.ref)) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview' && 'lighthouse-host-runtime-mutation' || format('deploy-{0}-{1}', github.workflow, github.event_name == 'workflow_dispatch' && format('target-{0}', github.event.inputs.environment) || format('preview-{0}', github.ref)) }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.environment == 'preview' }}
 
 permissions:
@@ -593,6 +593,41 @@ jobs:
             echo "- Classification: $ingress_classification"
             echo "- Runtime preflight: $predeploy_runtime_classification"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify deployment host Python runtime
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
+          chmod 600 ~/.ssh/project-management-deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/project-management-deploy -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          command -v python3 >/dev/null 2>&1
+          python3 - <<'PY'
+          import ipaddress
+          import json
+          import re
+          import sys
+          from urllib.parse import urlsplit
+
+          if sys.version_info < (3, 10):
+              raise SystemExit('python3 >= 3.10 is required')
+          json.loads('{"ready":true}')
+          ipaddress.ip_address('127.0.0.1')
+          re.fullmatch(r'[0-9a-f]{40}', '0' * 40)
+          urlsplit('https://zhuxucloud.com/api/readyz')
+          PY
+          REMOTE
 
       - name: Verify remote runtime JWT fingerprint
         shell: bash

@@ -404,8 +404,60 @@ PY
 validate_public_ingress_contract() {
   python3 - "$HEALTH_URL" "$HTTP_REDIRECT_URL" "$DEPLOY_TARGET" "$EXPECTED_PUBLIC_HOST" "$PUBLIC_INGRESS_MODE" <<'PY'
 import ipaddress
+import re
 import sys
 from urllib.parse import urlsplit
+
+def normalized_expected_host(value):
+    normalized = value.strip().lower()
+    if normalized.startswith('[') and normalized.endswith(']'):
+        normalized = normalized[1:-1]
+    return normalized[:-1] if normalized.endswith('.') else normalized
+
+def is_globally_routable_ipv4(address):
+    if not isinstance(address, ipaddress.IPv4Address):
+        return False
+    a, b, c, _d = (int(part) for part in str(address).split('.'))
+    if a in {0, 10, 127} or a >= 224:
+        return False
+    if a == 100 and 64 <= b <= 127:
+        return False
+    if a == 169 and b == 254:
+        return False
+    if a == 172 and 16 <= b <= 31:
+        return False
+    if a == 192 and b == 168:
+        return False
+    if a == 192 and b == 0 and c in {0, 2}:
+        return False
+    if a == 192 and b == 88 and c == 99:
+        return False
+    if a == 198 and b in {18, 19}:
+        return False
+    if a == 198 and b == 51 and c == 100:
+        return False
+    if a == 203 and b == 0 and c == 113:
+        return False
+    return True
+
+def is_public_dns_hostname(hostname):
+    if len(hostname) > 253:
+        return False
+    normalized = hostname.lower().removesuffix('.')
+    special_use_suffixes = {
+        'internal', 'local', 'localhost', 'onion', 'test', 'invalid',
+        'example', 'home.arpa',
+    }
+    if any(normalized == suffix or normalized.endswith(f'.{suffix}') for suffix in special_use_suffixes):
+        return False
+    labels = normalized.split('.')
+    if len(labels) < 2:
+        return False
+    return all(
+        0 < len(label) <= 63
+        and re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?', label)
+        for label in labels
+    )
 
 health = urlsplit(sys.argv[1])
 redirect = urlsplit(sys.argv[2])
@@ -414,24 +466,25 @@ if environment not in {'production', 'staging'} or mode not in {'domain_hsts', '
     raise SystemExit(1)
 if health.scheme != 'https' or health.username or health.password or health.query or health.fragment:
     raise SystemExit(1)
-if (health.hostname or '').lower().rstrip('.') != expected_host.lower().rstrip('.') or health.path != '/api/readyz':
+health_host = (health.hostname or '').lower()
+if health_host != normalized_expected_host(expected_host) or health.path != '/api/readyz':
     raise SystemExit(1)
 try:
-    address = ipaddress.ip_address(health.hostname or '')
+    address = ipaddress.ip_address(health_host)
 except ValueError:
     address = None
 if mode == 'domain_hsts':
-    if address is not None or (health.port or 443) != 443:
+    if address is not None or not is_public_dns_hostname(health_host) or (health.port or 443) != 443:
         raise SystemExit(1)
 else:
-    if not isinstance(address, ipaddress.IPv4Address) or not address.is_global:
+    if not is_globally_routable_ipv4(address):
         raise SystemExit(1)
     expected_port = 8443 if environment == 'staging' else 443
     if (health.port or 443) != expected_port:
         raise SystemExit(1)
 expected_redirect_path = '/staging-redirect/api/readyz' if mode == 'temporary_ip_tls' and environment == 'staging' else '/api/readyz'
 if (redirect.scheme != 'http' or redirect.username or redirect.password or redirect.query or redirect.fragment
-        or (redirect.hostname or '').lower().rstrip('.') != (health.hostname or '').lower().rstrip('.')
+        or (redirect.hostname or '').lower() != health_host
         or redirect.path != expected_redirect_path or (redirect.port or 80) != 80):
     raise SystemExit(1)
 PY
