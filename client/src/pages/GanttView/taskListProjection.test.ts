@@ -144,7 +144,20 @@ describe('task list projection semantics', () => {
         end_date: '2020-01-01',
         statusDerivation: {
           businessStatus: { status: 'in_progress', label: '进行中' },
-          dueStatus: { status: 'normal', label: '正常', daysUntilDue: 5 },
+          dueStatus: {
+            status: 'normal',
+            label: '正常',
+            duration: {
+              value: 5,
+              unit: 'calendar_day',
+              calendarRef: 'gregorian',
+              calendarVersion: 'ISO-8601',
+              timezone: 'Asia/Shanghai',
+              asOf: '2026-07-20',
+              availability: 'available',
+              unavailableReason: null,
+            },
+          },
         },
       }),
       { taskConditionMap: {}, obstacleCountMap: {} },

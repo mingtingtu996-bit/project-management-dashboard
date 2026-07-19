@@ -118,15 +118,18 @@ describe('duration surface contract', () => {
     expect(ganttDialogsSource).toContain('DurationBasisBadge')
     expect(ganttDialogsSource).toContain('inclusiveDurationDays')
     expect(ganttDialogsSource).toContain('计划工期')
+    for (const [file, source] of Object.entries({
+      'pages/Dashboard.tsx': dashboardSource,
+      'pages/Reports.tsx': reportsSource,
+      'pages/TaskSummary.tsx': taskSummarySource,
+    })) {
+      expect(source, file).toContain('formatDurationMetric')
+      expect(source, file).not.toMatch(/\.(?:delay_days|delayDays|daysUntilDue|remainingDurationDays|targetGapDays)\b/)
+      expect(source, file).not.toMatch(/\$\{[^}]+\}\s*个生产日/)
+    }
     expect(dashboardSource).toContain('DurationBasisBadge')
-    expect(dashboardSource).toContain('个生产日')
-    expect(dashboardSource).toContain('basis="production"')
     expect(reportsSource).toContain('DurationBasisBadge')
-    expect(reportsSource).toContain('个生产日')
-    expect(reportsSource).toContain('延期生产日')
-    expect(reportsSource).toContain('偏差生产日')
     expect(taskSummarySource).toContain('DurationBasisBadge')
-    expect(taskSummarySource).toContain('个生产日')
     expect(taskSummarySource).not.toContain('86400000')
     expect(taskSummarySource).not.toContain('延期 ${delayDays} 天')
     expect(taskSummarySource).not.toContain('延后 ${diffDays} 天')
@@ -294,7 +297,6 @@ describe('duration surface contract', () => {
     expect(taskBusinessStatusSource).not.toContain('/ 86400000')
 
     for (const [file, source] of Object.entries({
-      'pages/GanttView/ganttViewUtils.ts': ganttUtilsSource,
       'lib/milestoneOverview.ts': milestoneOverviewSource,
       'pages/Milestones.tsx': milestonesPageSource,
       'pages/planning/MonthlyPlanPage.tsx': monthlyPlanPageSource,
@@ -306,7 +308,9 @@ describe('duration surface contract', () => {
       expect(source, file).not.toContain('/ (24 * 60 * 60 * 1000)')
     }
 
-    expect(ganttUtilsSource).toContain('个生产日')
+    expect(ganttUtilsSource).toContain('formatDurationMetric')
+    expect(ganttUtilsSource).not.toContain('daysUntilDue')
+    expect(ganttUtilsSource).not.toContain('delayDayDelta(task.end_date, new Date())')
     expect(closeoutPageSource).toContain('日历天')
   })
 

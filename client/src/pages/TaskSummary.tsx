@@ -22,6 +22,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCurrentProject } from '@/hooks/useStore'
 import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import {
+  formatDurationMetric,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
 import { cn, formatDate } from '@/lib/utils'
 import {
   Building2,
@@ -47,11 +52,11 @@ type ProjectSummaryStats = {
   on_time_count: number
   delayed_count: number
   completed_milestone_count: number
-  avg_delay_days?: number
+  avg_delay?: DurationMetricDto | null
 }
 
 type TaskSummaryDelayRecord = {
-  delay_days?: number | null
+  delay?: DurationMetricDto | null
   reason?: string | null
   recorded_at?: string | null
 }
@@ -67,8 +72,10 @@ type TaskSummaryTaskRow = {
   completed_at?: string | null
   actual_duration?: number | null
   planned_duration?: number | null
+  actual_duration_metric?: DurationMetricDto | null
+  planned_duration_metric?: DurationMetricDto | null
   status_label?: string | null
-  delay_total_days?: number | null
+  delay_total?: DurationMetricDto | null
   delay_records?: TaskSummaryDelayRecord[]
   specialty_id?: string | null
   specialty_type?: string | null
@@ -144,9 +151,9 @@ type ScopedDurationForecastGroup = {
   p50FinishDate: string | null
   p80FinishDate: string | null
   expectedFinishDate: string | null
-  remainingDurationDays: number | null
-  targetGapDays: number | null
-  delayDays: number | null
+  remainingDuration: DurationMetricDto
+  targetGap: DurationMetricDto
+  delay: DurationMetricDto
   confidenceLevel: string | null
   confidenceScore: number | null
   forecastCoverageRate: number
@@ -212,8 +219,8 @@ type AttributionTotal = {
   delayed: number
   on_time_rate: number
   completion_rate: number
-  max_delay_days: number
-  avg_delay_days: number
+  max_delay: DurationMetricDto
+  avg_delay: DurationMetricDto
   recent_completed_at: string | null
   health_level: AttributionHealthLevel
 }
@@ -256,8 +263,8 @@ type TaskAttributionSummary = {
   delayedCount: number
   onTimeRate: number
   completionRate: number
-  maxDelayDays: number
-  avgDelayDays: number
+  maxDelay: DurationMetricDto | null
+  avgDelay: DurationMetricDto | null
   healthLevel: AttributionHealthLevel
   recentCompletedAt: string | null
   mainDelayedTask: TaskSummaryLedgerRow | null
@@ -430,9 +437,9 @@ function buildForecastAttributionOption(group: ScopedDurationForecastGroup): Tas
 }
 
 function isTaskDelayed(task: TaskSummaryTaskRow) {
-  const delayDays = Number(task.delay_total_days ?? 0)
+  const delayValue = readAvailableDurationValue(task.delay_total, 'construction_production_day')
   const statusToken = String(task.status_label ?? '').toLowerCase()
-  if (delayDays > 0 || /(delay|overdue|延期|逾期)/.test(statusToken)) return true
+  if ((delayValue ?? 0) > 0 || /(delay|overdue|延期|逾期)/.test(statusToken)) return true
   const plannedEnd = getDateOnly(task.planned_end_date)
   const completedAt = getDateOnly(task.completed_at)
   return Boolean(plannedEnd && completedAt && completedAt > plannedEnd)
@@ -447,18 +454,9 @@ function isTaskOnTime(task: TaskSummaryTaskRow) {
   return Boolean(plannedEnd && completedAt && completedAt <= plannedEnd)
 }
 
-function getTaskDelayDays(task: TaskSummaryTaskRow) {
-  const recordedDelay = Math.max(Number(task.delay_total_days ?? 0), 0)
-  if (recordedDelay > 0) return recordedDelay
-  return 0
-}
-
-function getAverageDelayDays(rows: TaskSummaryTaskRow[]) {
-  const delayedRows = rows.filter(isTaskDelayed)
-  if (delayedRows.length === 0) return 0
-  // eslint-disable-next-line -- frontend-bi-aggregation-approved
-  const totalDelayDays = delayedRows.reduce((sum, row) => sum + getTaskDelayDays(row), 0)
-  return Math.round((totalDelayDays / delayedRows.length) * 10) / 10
+function getTaskDelayValue(task: TaskSummaryTaskRow) {
+  const value = readAvailableDurationValue(task.delay_total, 'construction_production_day')
+  return value === null ? null : Math.max(value, 0)
 }
 
 function isCompletedInCurrentMonth(task: TaskSummaryTaskRow) {
@@ -478,22 +476,23 @@ function appendAssigneeHint(task: TaskSummaryTaskRow, segments: NarrativeSegment
 }
 
 function getTaskCompletionNarrative(task: TaskSummaryTaskRow): NarrativeSegment[] {
-  const delayDays = Number(task.delay_total_days ?? 0)
+  const delayValue = getTaskDelayValue(task)
   const completedAt = getDateOnly(task.completed_at)
   const plannedEnd = getDateOnly(task.planned_end_date)
   const completedLabel = completedAt ? formatDate(completedAt) : ''
   const plannedLabel = plannedEnd ? formatDate(plannedEnd) : ''
 
-  if (delayDays > 0) {
+  if (delayValue !== null && delayValue > 0) {
+    const delayLabel = formatDurationMetric(task.delay_total, { absolute: true })
     const base = completedAt
       ? [
           { text: '完成 ' },
           { text: completedLabel, className: 'num-mono text-slate-600 font-medium' },
           { text: ' · ' },
-          { text: `延期 ${delayDays} 个生产日`, className: 'text-red-600 font-medium' },
+          { text: `延期 ${delayLabel}`, className: 'text-red-600 font-medium' },
         ]
       : [
-          { text: `延期 ${delayDays} 个生产日`, className: 'text-red-600 font-medium' },
+          { text: `延期 ${delayLabel}`, className: 'text-red-600 font-medium' },
           { text: ' · ' },
           { text: '完成时间待补齐', className: 'text-slate-400' },
         ]
@@ -648,7 +647,7 @@ function getTaskProcessEvents(task: TaskSummaryTaskRow, timelineEvents: TaskTime
     }))
 
   for (const [index, record] of (task.delay_records ?? []).entries()) {
-    const delayDays = Number(record.delay_days ?? 0)
+    const delayValue = readAvailableDurationValue(record.delay, 'construction_production_day')
     events.push({
       id: `${task.id}-delay-${index}`,
       kind: 'obstacle',
@@ -656,7 +655,9 @@ function getTaskProcessEvents(task: TaskSummaryTaskRow, timelineEvents: TaskTime
       title: '延期记录',
       description: String(record.reason ?? '').trim() || '延期原因待补齐',
       occurredAt: record.recorded_at || task.completed_at || task.planned_end_date || '',
-      statusLabel: delayDays > 0 ? `延期 ${delayDays} 个生产日` : '延期记录',
+      statusLabel: delayValue !== null && delayValue > 0
+        ? `延期 ${formatDurationMetric(record.delay, { absolute: true })}`
+        : '延期记录 · 生产日口径不可用',
     })
   }
 
@@ -703,9 +704,8 @@ function groupProcessEventsByDate(events: ProcessEvent[]) {
 function getTaskProcessConclusion(task: TaskSummaryTaskRow, processEvents: ProcessEvent[]) {
   const hasConditionChange = processEvents.some((event) => event.kind === 'condition')
   const hasObstacleChange = processEvents.some((event) => event.kind === 'obstacle')
-  const delayDays = Number(task.delay_total_days ?? 0)
   const resultText = isTaskDelayed(task)
-    ? `实际完成较计划延期 ${delayDays} 个生产日`
+    ? `实际完成较计划延期 ${formatDurationMetric(task.delay_total, { absolute: true })}`
     : '实际完成满足计划要求'
 
   if (hasConditionChange && hasObstacleChange) {
@@ -829,14 +829,12 @@ function buildAttributionSummary(
     .sort((left, right) => getDateTime(right) - getDateTime(left))[0] ?? null
   const mainDelayedTask = scopedRows
     .filter(isTaskDelayed)
-    .sort((left, right) => Number(right.delay_total_days ?? 0) - Number(left.delay_total_days ?? 0))[0] ?? null
+    .sort((left, right) => (getTaskDelayValue(right) ?? -1) - (getTaskDelayValue(left) ?? -1))[0] ?? null
   const stages = getAttributionProcessStages(scopedRows, processEvents)
   const completedCount = total?.completed ?? scopedRows.length
   const onTimeCount = total?.on_time ?? scopedRows.filter(isTaskOnTime).length
   // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const delayedCount = total?.delayed ?? scopedRows.filter(isTaskDelayed).length
-  const fallbackAvgDelayDays = getAverageDelayDays(scopedRows)
-  const apiAvgDelayDays = Number(total?.avg_delay_days ?? Number.NaN)
   const totalTaskCount = total?.total ?? option.taskCount ?? scopedRows.length
   const fallbackHealthLevel: AttributionHealthLevel = completedCount === 0
     ? 'warning'
@@ -854,10 +852,8 @@ function buildAttributionSummary(
     delayedCount,
     onTimeRate: total?.on_time_rate ?? (completedCount > 0 ? Math.round((onTimeCount / completedCount) * 100) : 0),
     completionRate: total?.completion_rate ?? (totalTaskCount > 0 ? Math.round((completedCount / totalTaskCount) * 100) : 0),
-    maxDelayDays: total?.max_delay_days ?? Number(mainDelayedTask?.delay_total_days ?? 0),
-    avgDelayDays: Number.isFinite(apiAvgDelayDays) && (apiAvgDelayDays > 0 || delayedCount === 0)
-      ? apiAvgDelayDays
-      : fallbackAvgDelayDays,
+    maxDelay: total?.max_delay ?? mainDelayedTask?.delay_total ?? null,
+    avgDelay: total?.avg_delay ?? null,
     healthLevel: total?.health_level ?? fallbackHealthLevel,
     recentCompletedAt: total?.recent_completed_at ?? recentCompletedAt,
     mainDelayedTask,
@@ -882,16 +878,12 @@ function getLedgerSummary(rows: TaskSummaryLedgerRow[]) {
     total: rows.length,
     onTime: rows.filter(isTaskOnTime).length,
     delayed: delayedRows.length,
-    avgDelay: getAverageDelayDays(rows),
   }
 }
 
 function getAttributionLedgerSummary(summaries: TaskAttributionSummary[]) {
   // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const delayedCount = summaries.reduce((sum, summary) => sum + summary.delayedCount, 0)
-  // eslint-disable-next-line -- frontend-bi-aggregation-approved
-  const totalDelayDays = summaries.reduce((sum, summary) => sum + (summary.avgDelayDays * summary.delayedCount), 0)
-
   return {
     total: summaries.length,
     // eslint-disable-next-line -- frontend-bi-aggregation-approved
@@ -901,7 +893,6 @@ function getAttributionLedgerSummary(summaries: TaskAttributionSummary[]) {
     // eslint-disable-next-line -- frontend-bi-aggregation-approved
     onTime: summaries.reduce((sum, summary) => sum + summary.onTimeCount, 0),
     delayed: delayedCount,
-    avgDelay: delayedCount > 0 ? Math.round((totalDelayDays / delayedCount) * 10) / 10 : 0,
   }
 }
 
@@ -947,7 +938,7 @@ function getAttributionNarrative(summary: TaskAttributionSummary): NarrativeSegm
 
   if (summary.delayedCount > 0) {
     segments.push({
-      text: `延期 ${summary.delayedCount} 项（最大 ${summary.maxDelayDays} 个生产日），`,
+      text: `延期 ${summary.delayedCount} 项（最大 ${formatDurationMetric(summary.maxDelay, { absolute: true })}），`,
       className: 'text-rose-600',
     })
   } else {
@@ -1152,7 +1143,7 @@ function TaskAttributionReplayPanel({
   onClear: () => void
 }) {
   const delayTaskLabel = summary.mainDelayedTask
-    ? `${summary.mainDelayedTask.title} · 延期 ${Number(summary.mainDelayedTask.delay_total_days ?? 0)} 个生产日`
+    ? `${summary.mainDelayedTask.title} · 延期 ${formatDurationMetric(summary.mainDelayedTask.delay_total, { absolute: true })}`
     : '无主要延期任务'
 
   return (
@@ -1210,7 +1201,7 @@ function TaskAttributionReplayPanel({
                     <span className="text-slate-400"> · 最大延期 </span>
                     <span className="inline-flex items-center gap-1.5 num-mono text-red-600">
                       <DurationBasisBadge basis="production" compact variant="outline" />
-                      {summary.maxDelayDays} 个生产日
+                      {formatDurationMetric(summary.maxDelay, { absolute: true })}
                     </span>
                   </>
                 ) : null}
@@ -1432,7 +1423,7 @@ function TaskSummaryTaskLedgerTable({
             <>
               <span aria-hidden className="h-3 w-px bg-slate-200" />
               <span className="inline-flex items-center gap-1.5">
-                平均延期 <DurationBasisBadge basis="production" compact variant="outline" /> <span className="font-medium text-slate-700">{ledgerSummary.avgDelay}</span> 个生产日
+                延期时长逐项显示服务端口径
               </span>
             </>
           ) : null}
@@ -1482,11 +1473,10 @@ function ScopedDurationForecastCompact({
       </span>
       <span className="inline-flex items-center gap-1">
         剩余 <DurationBasisBadge basis="production" compact variant="outline" />
-        <span className="num-mono font-medium text-slate-700">{forecast.remainingDurationDays ?? '待补齐'}</span>
-        {forecast.remainingDurationDays !== null ? ' 个生产日' : null}
+        <span className="num-mono font-medium text-slate-700">{formatDurationMetric(forecast.remainingDuration)}</span>
       </span>
-      <span className={cn(forecast.delayDays && forecast.delayDays > 0 ? 'text-rose-600' : 'text-slate-500')}>
-        延期 {forecast.delayDays === null ? '待补齐' : `${forecast.delayDays} 个生产日`}
+      <span className={cn((readAvailableDurationValue(forecast.delay, 'construction_production_day') ?? 0) > 0 ? 'text-rose-600' : 'text-slate-500')}>
+        延期 {formatDurationMetric(forecast.delay, { absolute: true })}
       </span>
       <ScopedDurationForecastStatus status={forecast.dataStatus} />
     </div>
@@ -1517,17 +1507,16 @@ function ScopedDurationForecastDetail({ forecast }: { forecast: ScopedDurationFo
           <div className="text-slate-400">剩余工期</div>
           <div className="mt-1 inline-flex items-center gap-1 font-medium text-slate-800">
             <DurationBasisBadge basis="production" compact variant="outline" />
-            <span className="num-mono">{forecast.remainingDurationDays ?? '待补齐'}</span>
-            {forecast.remainingDurationDays !== null ? ' 个生产日' : null}
+            <span className="num-mono">{formatDurationMetric(forecast.remainingDuration)}</span>
           </div>
         </div>
         <div>
           <div className="text-slate-400">目标偏差</div>
           <div className={cn(
             'num-mono mt-1 font-medium',
-            forecast.delayDays && forecast.delayDays > 0 ? 'text-rose-600' : 'text-slate-800',
+            (readAvailableDurationValue(forecast.delay, 'construction_production_day') ?? 0) > 0 ? 'text-rose-600' : 'text-slate-800',
           )}>
-            {forecast.delayDays === null ? '待补齐' : `${forecast.delayDays} 个生产日`}
+            {formatDurationMetric(forecast.delay, { absolute: true })}
           </div>
         </div>
         <div>
@@ -1894,7 +1883,7 @@ function TaskSummaryLedgerSection({
                       <>
                         <span aria-hidden className="h-3 w-px bg-slate-200" />
                         <span className="inline-flex items-center gap-1.5">
-                          延期任务均延 <DurationBasisBadge basis="production" compact variant="outline" /> <span className="font-medium text-slate-700">{attributionLedgerSummary.avgDelay}</span> 个生产日
+                          延期时长按归属项逐项展示
                         </span>
                       </>
                     ) : null}
@@ -2026,7 +2015,7 @@ export default function TaskSummary() {
       ['按时完成', stats.on_time_count ?? 0],
       ['延期完成', stats.delayed_count ?? 0],
       ['完成里程碑', stats.completed_milestone_count ?? 0],
-      ['平均延期生产日', stats.avg_delay_days ?? 0],
+      ['平均延期', formatDurationMetric(stats.avg_delay)],
     ]
 
     const csv = lines.map((line) => line.map((cell) => escapeCsvCell(cell)).join(',')).join('\n')

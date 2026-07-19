@@ -7,7 +7,11 @@ import {
 import { getAuthHeaders } from '@/lib/apiClient'
 import { safeStorageRemove, safeStorageSet } from '@/lib/browserStorage'
 import { getStatusTheme } from '@/lib/statusTheme'
-import { delayDayDelta } from '@/lib/durationDays'
+import {
+  formatDurationMetric,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
 import {
   getTaskBusinessStatus,
   getTaskLagLevel,
@@ -38,7 +42,7 @@ export type GanttBusinessStatusDisplay = {
 type TaskDueStatusLike = {
   status?: string | null
   label?: string | null
-  daysUntilDue?: number | null
+  duration?: DurationMetricDto | null
 } | null
 
 type CriticalPathSummaryLike = {
@@ -154,20 +158,14 @@ export function getGanttBusinessStatusDisplay(
     || (task as { dueStatus?: TaskDueStatusLike }).dueStatus
     || null
   const backendDueCode = String(backendDueStatus?.status ?? '').trim()
-  const backendOverdueDays = typeof backendDueStatus?.daysUntilDue === 'number' && backendDueStatus.daysUntilDue < 0
-    ? Math.abs(backendDueStatus.daysUntilDue)
+  const backendOverdueValue = backendDueCode === 'overdue'
+    ? readAvailableDurationValue(backendDueStatus?.duration, 'construction_production_day')
     : null
-  const localOverdueDays = !backendDueCode && !isCompletedTask(task) && task.end_date
-    ? Math.max(0, delayDayDelta(task.end_date, new Date()) ?? 0)
-    : null
-  const overdueDays = backendDueCode === 'overdue'
-    ? backendOverdueDays
-    : localOverdueDays
-  const overdueBadge = overdueDays && overdueDays > 0
+  const overdueBadge = backendDueCode === 'overdue'
     ? {
-        text: backendDueCode === 'overdue' && backendOverdueDays != null
-          ? '逾期' + overdueDays + '个生产日'
-          : '逾期',
+        text: backendOverdueValue !== null
+          ? `逾期 ${formatDurationMetric(backendDueStatus?.duration, { absolute: true })}`
+          : '逾期 · 生产日口径不可用',
         cls: getStatusTheme('overdue').className,
       }
     : undefined

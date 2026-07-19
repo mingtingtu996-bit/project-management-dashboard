@@ -31,6 +31,36 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+function productionDuration(value: unknown) {
+  const numeric = value === null || value === undefined ? null : Number(value)
+  return {
+    value: Number.isFinite(numeric) ? numeric : null,
+    unit: 'construction_production_day',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-13',
+    availability: Number.isFinite(numeric) ? 'available' : 'unavailable',
+    unavailableReason: Number.isFinite(numeric) ? null : 'duration_value_missing',
+  }
+}
+
+function upgradeDurationContracts(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(upgradeDurationContracts)
+  if (!value || typeof value !== 'object') return value
+  const row = Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, upgradeDurationContracts(item)]),
+  )
+  if ('remainingDurationDays' in row) row.remainingDuration = productionDuration(row.remainingDurationDays)
+  if ('targetGapDays' in row) row.targetGap = productionDuration(row.targetGapDays)
+  if ('delayDays' in row) row.delay = productionDuration(row.delayDays)
+  if ('delay_total_days' in row) row.delay_total = productionDuration(row.delay_total_days)
+  if ('delay_days' in row) row.delay = productionDuration(row.delay_days)
+  if ('max_delay_days' in row) row.max_delay = productionDuration(row.max_delay_days)
+  if ('avg_delay_days' in row) row.avg_delay = productionDuration(row.avg_delay_days)
+  return row
+}
+
 async function waitForSelector(container: HTMLElement, selector: string) {
   const deadline = Date.now() + 2500
 
@@ -48,12 +78,13 @@ async function waitForSelector(container: HTMLElement, selector: string) {
 }
 
 function jsonResponse(data: unknown) {
-  const body = JSON.stringify(data)
+  const upgraded = upgradeDurationContracts(data)
+  const body = JSON.stringify(upgraded)
   return {
     ok: true,
     status: 200,
     text: async () => body,
-    json: async () => data,
+    json: async () => upgraded,
   } as never
 }
 
@@ -690,7 +721,7 @@ describe('TaskSummary page contract', () => {
     expect(container.textContent).not.toContain('任务 4（完成 4）')
     expect(container.textContent).toContain('按时 3')
     expect(container.textContent).toContain('延期 1')
-    expect(container.textContent).toContain('延期任务均延 生产日 2 个生产日')
+    expect(container.textContent).toContain('延期时长按归属项逐项展示')
     expect(container.textContent).not.toContain('展开更多')
     expect(container.textContent).not.toContain('关联任务 4')
     expect(container.textContent).not.toContain('查看')

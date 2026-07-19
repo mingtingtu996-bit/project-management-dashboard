@@ -1,5 +1,6 @@
 // GanttView 共享类型、接口和常量
 // 从 GanttView.tsx 提取以避免 esbuild 解析超大文件的问题
+import type { DurationMetricDto } from '@/lib/durationMetric'
 
 // Task类型（本地版本）
 export type TaskStatusAxisEvidence = {
@@ -20,6 +21,8 @@ export type TaskDerivedStatusDto = {
 
 export type TaskDueStatusDto = TaskDerivedStatusDto & {
   status?: 'normal' | 'approaching' | 'urgent' | 'overdue' | string | null
+  duration?: DurationMetricDto | null
+  /** @deprecated Use duration. */
   daysUntilDue?: number | null
 }
 
