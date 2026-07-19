@@ -51,4 +51,29 @@ describe('weeklyDigestReadModelService', () => {
       availability: 'unavailable',
     }))
   })
+
+  it('treats a negative nearest-milestone value as a natural-day remaining window', () => {
+    const result = buildWeeklyDigestReadModel({
+      project_id: 'project-1',
+      generated_at: '2026-07-20T08:00:00.000Z',
+      critical_nearest_delay_days: -30,
+      top_delayed_tasks: [],
+    }, {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    })
+
+    expect(result?.critical_nearest_delay).toEqual(expect.objectContaining({
+      value: -30,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    }))
+  })
 })
