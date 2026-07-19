@@ -11,6 +11,11 @@ EXPECTED_STAGING_HOST="${EXPECTED_STAGING_HOST:-staging.zhuxucloud.com}"
 PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-wwdrkjnbvcbfytwnnyvs}"
 STAGING_PROJECT_REF="${STAGING_PROJECT_REF:-xemqmqpifsstkovbkatp}"
 
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 is required on the ingress host." >&2
+  exit 2
+}
+
 require_sha() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]] || {
     echo "release SHA must be a full lowercase Git SHA" >&2
@@ -90,6 +95,97 @@ write_activation_state() {
   fi
 }
 
+probe_redirect() {
+  local host="$1"
+  local resolve_ip="${2:-}"
+  local result status location
+  local curl_args=()
+  if [ -n "$resolve_ip" ]; then curl_args=(--resolve "$host:80:$resolve_ip"); fi
+  result="$(curl --silent --show-error --max-time 20 --max-redirs 0 \
+    "${curl_args[@]}" \
+    --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+    "http://$host/api/readyz")" || return 1
+  status="${result%% *}"
+  location="${result#* }"
+  [ "$status" = 308 ] && [ "$location" = "https://$host/api/readyz" ]
+}
+
+probe_https() {
+  local host="$1"
+  local expected_target="$2"
+  local expected_project_ref="$3"
+  local resolve_ip="${4:-}"
+  local headers="$ROOT_DIR/.headers-$host-$$"
+  local body="$ROOT_DIR/.body-$host-$$"
+  local status
+  local curl_args=()
+  if [ -n "$resolve_ip" ]; then curl_args=(--resolve "$host:443:$resolve_ip"); fi
+  if ! status="$(curl --silent --show-error --max-time 45 \
+    "${curl_args[@]}" \
+    --dump-header "$headers" --output "$body" --write-out '%{http_code}' \
+    "https://$host/api/readyz")"; then
+    rm -f "$headers" "$body"
+    return 1
+  fi
+  if ! tr -d '\r' < "$headers" | grep -qi '^strict-transport-security:'; then
+    rm -f "$headers" "$body"
+    return 1
+  fi
+  if [ "$status" = 200 ]; then
+    if ! python3 - "$body" "$expected_target" "$expected_project_ref" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    readiness = json.load(handle)
+build = readiness.get('build') or {}
+expected_target = sys.argv[2]
+expected_project_ref = sys.argv[3]
+if (readiness.get('status') != 'ready'
+        or build.get('deployTarget') != expected_target
+        or build.get('supabaseProjectRef') != expected_project_ref
+        or build.get('databaseProjectRef') != expected_project_ref):
+    raise SystemExit(1)
+PY
+    then
+      rm -f "$headers" "$body"
+      return 1
+    fi
+  fi
+  rm -f "$headers" "$body"
+  printf '%s' "$status"
+}
+
+probe_ingress_pair() {
+  local resolve_ip="${1:-}"
+  local production_status staging_status
+  probe_redirect "$EXPECTED_PRODUCTION_HOST" "$resolve_ip" || return 1
+  probe_redirect "$EXPECTED_STAGING_HOST" "$resolve_ip" || return 1
+  production_status="$(probe_https "$EXPECTED_PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF" "$resolve_ip")" || return 1
+  staging_status="$(probe_https "$EXPECTED_STAGING_HOST" staging "$STAGING_PROJECT_REF" "$resolve_ip")" || return 1
+  case "$production_status" in 200|502) ;; *) return 1 ;; esac
+  case "$staging_status" in 200|502) ;; *) return 1 ;; esac
+}
+
+verify_ingress_release() {
+  local release_dir="$1" attempt
+  [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$release_dir" ] || return 1
+  for attempt in $(seq 1 6); do
+    if probe_ingress_pair 127.0.0.1 && probe_ingress_pair; then return 0; fi
+    if [ "$attempt" -lt 6 ]; then sleep 5; fi
+  done
+  return 1
+}
+
+verify_ingress_stopped() {
+  local release_dir="$1" running
+  running="$(docker compose \
+    --project-name "$COMPOSE_PROJECT" \
+    --env-file "$(env_file_for "$release_dir")" \
+    --file "$(compose_file_for "$release_dir")" \
+    ps -q --status running)" || return 1
+  [ -z "$running" ] && [ ! -e "$ROOT_DIR/current" ] && [ ! -L "$ROOT_DIR/current" ]
+}
+
 rollback() {
   local failed_sha="${FAILED_RELEASE_SHA:-}"
   local current_target
@@ -111,6 +207,10 @@ rollback() {
     esac
     compose_up "$PREVIOUS_TARGET" || return 1
     atomic_link "$PREVIOUS_TARGET" || return 1
+    verify_ingress_release "$PREVIOUS_TARGET" || {
+      echo "Restored ingress failed local or public verification; rollback remains pending." >&2
+      return 1
+    }
   else
     case "$current_target" in
       "$ACTIVATED_TARGET"|'') ;;
@@ -121,6 +221,10 @@ rollback() {
     esac
     compose_down "$ACTIVATED_TARGET" || return 1
     rm -f "$ROOT_DIR/current" || return 1
+    verify_ingress_stopped "$ACTIVATED_TARGET" || {
+      echo "Initial ingress did not stop cleanly; rollback remains pending." >&2
+      return 1
+    }
   fi
   if [[ "$ACTIVATED_TARGET" == "$ROOT_DIR/releases/"* ]] && [ -d "$ACTIVATED_TARGET" ]; then
     mkdir -p "$ROOT_DIR/failed" || return 1
@@ -302,62 +406,10 @@ atomic_link "$RELEASE_DIR"
 ACTIVATED=true
 compose_up "$RELEASE_DIR"
 
-probe_redirect() {
-  local host="$1"
-  local result status location
-  result="$(curl --silent --show-error --max-time 20 --max-redirs 0 \
-    --resolve "$host:80:127.0.0.1" \
-    --output /dev/null --write-out '%{http_code} %{redirect_url}' \
-    "http://$host/api/readyz")"
-  status="${result%% *}"
-  location="${result#* }"
-  [ "$status" = 308 ] && [ "$location" = "https://$host/api/readyz" ]
-}
-
-probe_https() {
-  local host="$1"
-  local expected_target="$2"
-  local expected_project_ref="$3"
-  local headers="$ROOT_DIR/.headers-$host-$$"
-  local body="$ROOT_DIR/.body-$host-$$"
-  local status
-  if ! status="$(curl --silent --show-error --max-time 45 \
-    --resolve "$host:443:127.0.0.1" \
-    --dump-header "$headers" --output "$body" --write-out '%{http_code}' \
-    "https://$host/api/readyz")"; then
-    rm -f "$headers" "$body"
-    return 1
-  fi
-  if ! tr -d '\r' < "$headers" | grep -qi '^strict-transport-security:'; then
-    rm -f "$headers" "$body"
-    return 1
-  fi
-  if [ "$status" = 200 ]; then
-    if ! node --input-type=module - "$body" "$expected_target" "$expected_project_ref" <<'NODE'
-import { readFileSync } from 'node:fs';
-const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-const expectedTarget = process.argv[3];
-const expectedProjectRef = process.argv[4];
-if (readiness.status !== 'ready'
-  || readiness.build?.deployTarget !== expectedTarget
-  || readiness.build?.supabaseProjectRef !== expectedProjectRef
-  || readiness.build?.databaseProjectRef !== expectedProjectRef) {
-  process.exit(1);
-}
-NODE
-    then
-      rm -f "$headers" "$body"
-      return 1
-    fi
-  fi
-  rm -f "$headers" "$body"
-  printf '%s' "$status"
-}
-
 for attempt in $(seq 1 18); do
-  if probe_redirect "$PRODUCTION_HOST" && probe_redirect "$STAGING_HOST"; then
-    if production_status="$(probe_https "$PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF")" \
-      && staging_status="$(probe_https "$STAGING_HOST" staging "$STAGING_PROJECT_REF")"; then
+  if probe_redirect "$PRODUCTION_HOST" 127.0.0.1 && probe_redirect "$STAGING_HOST" 127.0.0.1; then
+    if production_status="$(probe_https "$PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF" 127.0.0.1)" \
+      && staging_status="$(probe_https "$STAGING_HOST" staging "$STAGING_PROJECT_REF" 127.0.0.1)"; then
       break
     fi
   fi

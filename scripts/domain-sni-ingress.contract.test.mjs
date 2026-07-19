@@ -116,7 +116,7 @@ test('public ingress probe workflow is valid Bash after YAML block scalar decodi
 
 test('local HTTPS probe rejects wrong runtime identity and missing HSTS', async () => {
   const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
-  const match = script.match(/(probe_https\(\) \{[\s\S]*?\n\})\n\nfor attempt/u)
+  const match = script.match(/(probe_https\(\) \{[\s\S]*?\n\})\n\nprobe_ingress_pair/u)
   assert.ok(match, 'probe_https function must remain executable in isolation')
 
   const harness = `
@@ -139,6 +139,17 @@ curl() {
   fi
   printf '%s' "$MOCK_READINESS" > "$body"
   printf '200'
+}
+python3() {
+  node -e '
+    const fs = require("node:fs");
+    const readiness = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const build = readiness.build || {};
+    if (readiness.status !== "ready"
+      || build.deployTarget !== process.argv[2]
+      || build.supabaseProjectRef !== process.argv[3]
+      || build.databaseProjectRef !== process.argv[3]) process.exit(1);
+  ' "$2" "$3" "$4"
 }
 ${match[1]}
 if probe_status="$(probe_https zhuxucloud.com production wwdrkjnbvcbfytwnnyvs)"; then
@@ -222,8 +233,8 @@ test -f "$ROOT_DIR/pending-activation.env"
 
 test('rollback preserves its CAS state when previous compose recovery fails', async () => {
   const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
-  const functions = script.match(/(require_sha\(\) \{[\s\S]*?rollback\(\) \{[\s\S]*?\n\})\n\ncommit_activation/u)?.[1]
-  assert.ok(functions, 'rollback function graph must remain executable in isolation')
+  const rollbackFunction = script.match(/(rollback\(\) \{[\s\S]*?\n\})\n\ncommit_activation/u)?.[1]
+  assert.ok(rollbackFunction, 'rollback must remain executable in isolation')
   const sha = 'c'.repeat(40)
   const result = runBash(`
 set -euo pipefail
@@ -231,9 +242,7 @@ ROOT_DIR="$(readlink -f "$(mktemp -d)")"
 trap 'rm -rf "$ROOT_DIR"' EXIT
 active="$ROOT_DIR/releases/${sha}"
 previous="$ROOT_DIR/releases/${'d'.repeat(40)}"
-mkdir -p "$active/deploy" "$active/env" "$previous/deploy" "$previous/env" "$ROOT_DIR/mockbin"
-touch "$active/deploy/docker-compose.ingress.yml" "$active/env/ingress.env"
-touch "$previous/deploy/docker-compose.ingress.yml" "$previous/env/ingress.env"
+mkdir -p "$active" "$previous" "$ROOT_DIR/mockbin"
 touch "$ROOT_DIR/current"
 printf '%s' "$active" > "$ROOT_DIR/current-target"
 cat > "$ROOT_DIR/pending-activation.env" <<STATE
@@ -241,23 +250,67 @@ ACTIVATED_SHA=${sha}
 ACTIVATED_TARGET=$active
 PREVIOUS_TARGET=$previous
 STATE
-COMPOSE_PROJECT=workbuddy-ingress-test
 STATE_FILE="$ROOT_DIR/pending-activation.env"
-printf '#!/usr/bin/env bash\\nexit 0\\n' > "$ROOT_DIR/mockbin/flock"
-printf '#!/usr/bin/env bash\\nexit 17\\n' > "$ROOT_DIR/mockbin/docker"
 cat > "$ROOT_DIR/mockbin/readlink" <<'MOCK'
 #!/usr/bin/env bash
 if [ "$1" = -f ] && [ -f "$2-target" ]; then cat "$2-target"; exit 0; fi
 exec /usr/bin/readlink "$@"
 MOCK
-chmod +x "$ROOT_DIR/mockbin/flock" "$ROOT_DIR/mockbin/docker" "$ROOT_DIR/mockbin/readlink"
+chmod +x "$ROOT_DIR/mockbin/readlink"
 export PATH="$ROOT_DIR/mockbin:$PATH"
-${functions}
+require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+load_state() { source "$STATE_FILE"; }
+compose_up() { return 17; }
+atomic_link() { printf '%s' "$1" > "$ROOT_DIR/current-target"; }
+verify_ingress_release() { return 91; }
+${rollbackFunction}
 FAILED_RELEASE_SHA=${sha} rollback || true
 test "$(readlink -f "$ROOT_DIR/current")" = "$active"
 test -f "$ROOT_DIR/pending-activation.env"
 test -d "$active"
 `)
+  assert.equal(result.status, 0, result.stderr)
+})
+
+test('rollback preserves state when restored ingress probes fail after compose succeeds', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const rollbackFunction = script.match(
+    /(rollback\(\) \{[\s\S]*?\n\})\n\ncommit_activation/u,
+  )?.[1]
+  assert.ok(rollbackFunction, 'rollback must remain executable in isolation')
+  const sha = '7'.repeat(40)
+  const previousSha = '6'.repeat(40)
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(readlink -f "$(mktemp -d)")"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+active="$ROOT_DIR/releases/${sha}"
+previous="$ROOT_DIR/releases/${previousSha}"
+mkdir -p "$active" "$previous"
+touch "$ROOT_DIR/current"
+printf '%s' "$active" > "$ROOT_DIR/current-target"
+cat > "$STATE_FILE" <<STATE
+ACTIVATED_SHA=${sha}
+ACTIVATED_TARGET=$active
+PREVIOUS_TARGET=$previous
+STATE
+require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+load_state() { source "$STATE_FILE"; }
+readlink() {
+  if [ "$1" = -f ] && [ -f "$2-target" ]; then cat "$2-target"; return 0; fi
+  command readlink "$@"
+}
+compose_up() { return 0; }
+atomic_link() { printf '%s' "$1" > "$ROOT_DIR/current-target"; }
+verify_ingress_release() { return 1; }
+${rollbackFunction}
+FAILED_RELEASE_SHA=${sha} rollback || true
+test "$(readlink -f "$ROOT_DIR/current")" = "$previous"
+test -f "$STATE_FILE"
+test -d "$active"
+`)
+
   assert.equal(result.status, 0, result.stderr)
 })
 
@@ -411,6 +464,11 @@ test('Workflow Guard watches deployment ingress and atomicity paths on pushes an
       assert.ok(paths.includes(requiredPath), `${eventName} does not watch ${requiredPath}`)
     }
   }
+  assert.deepEqual(
+    [...guard.on.push.paths].sort(),
+    [...guard.on.pull_request.paths].sort(),
+    'push and pull_request must run the same workflow guard path surface',
+  )
 })
 
 test('application deploy distinguishes first bootstrap from upgrades and verifies public release identity', async () => {
@@ -428,10 +486,8 @@ test('application deploy distinguishes first bootstrap from upgrades and verifie
   assert.match(workflow, /readiness\.status !== 'ready'/u)
 
   assert.match(deployScript, /verify_readyz_identity/u)
-  assert.match(
-    deployScript,
-    /node "\$ACTIVE_RELEASE_DIR\/scripts\/classify-public-ingress-url\.mjs"[\s\S]*?--expected-host "\$EXPECTED_PUBLIC_HOST"/u,
-  )
+  assert.match(deployScript, /validate_public_ingress_contract/u)
+  assert.match(deployScript, /python3/u)
   assert.equal((deployScript.match(/\*\/api\/readyz\)/gu) ?? []).length, 1)
 })
 
@@ -450,6 +506,18 @@ ROOT_DIR="$(mktemp -d)"
 trap 'rm -rf "$ROOT_DIR"' EXIT
 expected_public_project_ref=${projectRef}
 DEPLOY_TARGET=production
+python3() {
+  node -e '
+    const fs = require("node:fs");
+    const readiness = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const build = readiness.build || {};
+    if (readiness.status !== "ready"
+      || build.releaseSha !== process.env.RELEASE_SHA_TO_VERIFY
+      || build.deployTarget !== process.env.DEPLOY_TARGET_TO_VERIFY
+      || build.supabaseProjectRef !== process.env.EXPECTED_PROJECT_REF_TO_VERIFY
+      || build.databaseProjectRef !== process.env.EXPECTED_PROJECT_REF_TO_VERIFY) process.exit(1);
+  ' "$2"
+}
 ${verifier}
 printf '%s' "$MOCK_READINESS" > "$ROOT_DIR/readyz.json"
 if verify_readyz_identity "$ROOT_DIR/readyz.json" ${sha}; then

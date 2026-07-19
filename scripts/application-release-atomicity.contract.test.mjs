@@ -9,6 +9,9 @@ const root = new URL('../', import.meta.url)
 const require = createRequire(new URL('../server/package.json', import.meta.url))
 const { load: loadYaml } = require('js-yaml')
 const bash = process.platform === 'win32' ? 'C:\\Program Files\\Git\\bin\\bash.exe' : 'bash'
+const python3Shim = process.platform === 'win32'
+  ? 'python3() { py.exe -3 "$@"; }'
+  : ''
 
 async function source(path) {
   return readFile(new URL(path, root), 'utf8')
@@ -91,34 +94,38 @@ validate_runtime_slot
   }
 })
 
-test('runtime JWT secret must match its registered fingerprint and differ from the peer environment', async () => {
+test('runtime JWT secrets must match both registered fingerprints and differ from the real peer environment', async () => {
   const script = await source('scripts/deploy-lighthouse-server.sh')
-  const validateJwtSecretFingerprint = script.match(
-    /(validate_jwt_secret_fingerprint\(\) \{[\s\S]*?\n\})\n\n/u,
+  const validateJwtSecretFingerprints = script.match(
+    /(validate_jwt_secret_fingerprints\(\) \{[\s\S]*?\n\})\n\n/u,
   )?.[1]
   assert.ok(
-    validateJwtSecretFingerprint,
-    'validate_jwt_secret_fingerprint must remain executable in isolation',
+    validateJwtSecretFingerprints,
+    'validate_jwt_secret_fingerprints must remain executable in isolation',
   )
 
   const jwtSecret = 'runtime-secret-with-at-least-32-random-bytes'
+  const peerSecret = 'peer-runtime-secret-with-at-least-32-random-bytes'
   const expectedFingerprint = createHash('sha256').update(jwtSecret).digest('hex')
-  const peerFingerprint = 'b'.repeat(64)
+  const peerFingerprint = createHash('sha256').update(peerSecret).digest('hex')
   const harness = `
 set -euo pipefail
-${validateJwtSecretFingerprint}
-validate_jwt_secret_fingerprint "$MOCK_JWT_SECRET"
+${validateJwtSecretFingerprints}
+validate_jwt_secret_fingerprints "$MOCK_JWT_SECRET" "$MOCK_PEER_JWT_SECRET"
 `
   const cases = [
-    [expectedFingerprint, peerFingerprint, 0],
-    ['a'.repeat(64), peerFingerprint, 1],
-    [expectedFingerprint, expectedFingerprint, 1],
-    [expectedFingerprint.toUpperCase(), peerFingerprint, 1],
-    ['', peerFingerprint, 1],
+    [expectedFingerprint, peerFingerprint, peerSecret, 0],
+    ['a'.repeat(64), peerFingerprint, peerSecret, 1],
+    [expectedFingerprint, 'b'.repeat(64), peerSecret, 1],
+    [expectedFingerprint, peerFingerprint, jwtSecret, 1],
+    [expectedFingerprint, expectedFingerprint, peerSecret, 1],
+    [expectedFingerprint.toUpperCase(), peerFingerprint, peerSecret, 1],
+    ['', peerFingerprint, peerSecret, 1],
   ]
-  for (const [currentFingerprint, otherFingerprint, expectedStatus] of cases) {
+  for (const [currentFingerprint, otherFingerprint, actualPeerSecret, expectedStatus] of cases) {
     const result = runBash(harness, {
       MOCK_JWT_SECRET: jwtSecret,
+      MOCK_PEER_JWT_SECRET: actualPeerSecret,
       EXPECTED_JWT_SECRET_SHA256: currentFingerprint,
       PEER_JWT_SECRET_SHA256: otherFingerprint,
     })
@@ -157,13 +164,17 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
     deploymentStep.env?.PEER_JWT_SECRET_SHA256,
     "${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}",
   )
+  assert.equal(
+    deploymentStep.env?.PEER_DEPLOY_PATH,
+    "${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}",
+  )
   assert.match(
     deploymentStep.run,
     /INITIAL_RUNTIME_BOOTSTRAP=\\"\$INITIAL_RUNTIME_BOOTSTRAP\\"/u,
   )
   assert.match(
     deploymentStep.run,
-    /EXPECTED_JWT_SECRET_SHA256=\\"\$EXPECTED_JWT_SECRET_SHA256\\" PEER_JWT_SECRET_SHA256=\\"\$PEER_JWT_SECRET_SHA256\\"/u,
+    /EXPECTED_JWT_SECRET_SHA256=\\"\$EXPECTED_JWT_SECRET_SHA256\\" PEER_JWT_SECRET_SHA256=\\"\$PEER_JWT_SECRET_SHA256\\" PEER_RUNTIME_ENV_FILE=\\"\$PEER_DEPLOY_PATH\/deploy\/env\/server\.production\.env\\"/u,
   )
 
   const preflightSteps = workflow.jobs['deployment-target-preflight'].steps
@@ -177,6 +188,8 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   )
   assert.ok(remoteFingerprintCheck?.run, 'remote JWT fingerprint preflight is required before migration')
   assert.match(remoteFingerprintCheck.run, /sha256sum/u)
+  assert.match(remoteFingerprintCheck.run, /PEER_DEPLOY_PATH/u)
+  assert.match(remoteFingerprintCheck.run, /peer_actual_fingerprint/u)
   assert.doesNotMatch(remoteFingerprintCheck.run, /echo .*JWT.*SHA|printf .*fingerprint/u)
   const fingerprintSyntax = spawnSync(bash, ['-n'], {
     input: remoteFingerprintCheck.run,
@@ -184,6 +197,77 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   })
   assert.equal(fingerprintSyntax.status, 0, fingerprintSyntax.stderr)
   assert.match(guardWorkflow, /application-release-atomicity\.contract\.test\.mjs/u)
+})
+
+test('application commit and rollback require healthy exact-SHA Web, API, and worker containers', async () => {
+  const [script, compose] = await Promise.all([
+    source('scripts/deploy-lighthouse-server.sh'),
+    source('deploy/docker-compose.lighthouse.yml'),
+  ])
+
+  assert.match(script, /verify_runtime_container_identities/u)
+  assert.match(script, /container_env_value[\s\S]*?RELEASE_SHA/u)
+  assert.match(script, /container_env_value[\s\S]*?DEPLOY_TARGET/u)
+  assert.match(script, /container_health/u)
+  assert.match(script, /for service in web api worker/u)
+  assert.match(script, /container="\$\{COMPOSE_PROJECT_NAME_VALUE\}-\$\{service\}"/u)
+  assert.match(compose, /web:[\s\S]*?RELEASE_SHA: \$\{RELEASE_SHA:\?RELEASE_SHA is required\}/u)
+  assert.match(compose, /web:[\s\S]*?DEPLOY_TARGET: \$\{DEPLOY_TARGET:\?DEPLOY_TARGET is required\}/u)
+  assert.match(compose, /web:[\s\S]*?healthcheck:/u)
+})
+
+test('remote deployment and ingress scripts do not require host Node.js', async () => {
+  const [deployScript, ingressScript] = await Promise.all([
+    source('scripts/deploy-lighthouse-server.sh'),
+    source('scripts/provision-lighthouse-domain-ingress.sh'),
+  ])
+
+  assert.doesNotMatch(deployScript, /(^|\n)\s*node(?:\s|$)/u)
+  assert.doesNotMatch(ingressScript, /\bnode\s+--input-type/u)
+  assert.match(deployScript, /python3/u)
+  assert.match(ingressScript, /python3/u)
+})
+
+test('host Python ingress verifier rejects wrong authority, path, credentials, port, and private IP', async () => {
+  const script = await source('scripts/deploy-lighthouse-server.sh')
+  const validator = script.match(
+    /(validate_public_ingress_contract\(\) \{[\s\S]*?\n\})\n\nverify_release_health/u,
+  )?.[1]
+  assert.ok(validator, 'validate_public_ingress_contract must remain executable in isolation')
+
+  const cases = [
+    ['https://zhuxucloud.com/api/readyz', 'http://zhuxucloud.com/api/readyz', 'production', 'zhuxucloud.com', 'domain_hsts', 0],
+    ['https://staging.zhuxucloud.com/api/readyz', 'http://staging.zhuxucloud.com/api/readyz', 'staging', 'staging.zhuxucloud.com', 'domain_hsts', 0],
+    ['https://staging.zhuxucloud.com/health', 'http://staging.zhuxucloud.com/api/readyz', 'staging', 'staging.zhuxucloud.com', 'domain_hsts', 1],
+    ['https://user:pass@zhuxucloud.com/api/readyz', 'http://zhuxucloud.com/api/readyz', 'production', 'zhuxucloud.com', 'domain_hsts', 1],
+    ['https://staging.zhuxucloud.com:8443/api/readyz', 'http://staging.zhuxucloud.com/api/readyz', 'staging', 'staging.zhuxucloud.com', 'domain_hsts', 1],
+    ['https://127.0.0.1/api/readyz', 'http://127.0.0.1/api/readyz', 'production', '127.0.0.1', 'temporary_ip_tls', 1],
+    ['https://staging.zhuxucloud.com/api/readyz', 'http://staging.zhuxucloud.com/api/readyz', 'staging', 'zhuxucloud.com', 'domain_hsts', 1],
+  ]
+  for (const [health, redirect, target, host, mode, expectedStatus] of cases) {
+    const result = runBash(`
+set -euo pipefail
+${python3Shim}
+HEALTH_URL="$MOCK_HEALTH_URL"
+HTTP_REDIRECT_URL="$MOCK_REDIRECT_URL"
+DEPLOY_TARGET="$MOCK_DEPLOY_TARGET"
+EXPECTED_PUBLIC_HOST="$MOCK_EXPECTED_HOST"
+PUBLIC_INGRESS_MODE="$MOCK_INGRESS_MODE"
+${validator}
+validate_public_ingress_contract
+`, {
+      MOCK_HEALTH_URL: health,
+      MOCK_REDIRECT_URL: redirect,
+      MOCK_DEPLOY_TARGET: target,
+      MOCK_EXPECTED_HOST: host,
+      MOCK_INGRESS_MODE: mode,
+    })
+    assert.equal(
+      result.status,
+      expectedStatus,
+      `${health}/${redirect}/${target}/${host}/${mode}: ${result.stderr}`,
+    )
+  }
 })
 
 test('application activation state replaces the prior checkpoint only after the candidate is durable', async () => {

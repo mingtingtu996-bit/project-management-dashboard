@@ -57,6 +57,12 @@ must equal the other environment's own fingerprint. Deployment validates this
 before database migration and again before Compose mutation without printing
 the secret or either fingerprint.
 
+The protected environment variables `STAGING_PEER_DEPLOY_PATH` and
+`PRODUCTION_PEER_DEPLOY_PATH` point to the other environment's application root
+on the same host. The migration preflight and remote deploy script hash that
+peer runtime env directly, so a fabricated peer fingerprint cannot satisfy the
+isolation gate.
+
 Unsafe browser requests are rejected before routing unless `Origin` or
 `Referer` matches that origin. Cookie-free Bearer machine requests remain
 available. Release smoke commands that connect through an SSH loopback tunnel
@@ -66,10 +72,10 @@ final isolation and HSTS boundary.
 
 ## Production runtime recovery
 
-`.github/workflows/production-runtime-recovery.yml` runs an hourly SSH-based
-inspection of the existing Web, API, and worker containers and their local
-`/api/readyz` probes. When a public health URL is configured, it also verifies
-that HTTPS endpoint. The workflow uses the protected `production` GitHub environment
+`.github/workflows/production-runtime-recovery.yml` is a manual, protected
+SSH-based inspection of the existing Web, API, and worker containers and their local
+`/api/readyz` probes. It also requires the public HTTPS readiness endpoint before
+and after any recovery. The workflow uses the protected `production` GitHub environment
 and the same production secret names as the release workflow:
 
 - `PRODUCTION_DEPLOY_HOST`
@@ -78,19 +84,18 @@ and the same production secret names as the release workflow:
 - `PRODUCTION_DEPLOY_PATH`
 - `PRODUCTION_DEPLOY_SSH_PRIVATE_KEY`
 - `PRODUCTION_DEPLOY_KNOWN_HOSTS`
-- `PRODUCTION_DEPLOY_HEALTH_URL` (optional; when set, must be an HTTPS `/api/readyz` URL)
+- `PRODUCTION_DEPLOY_HEALTH_URL` (required; must be an HTTPS `/api/readyz` URL)
 - `PRODUCTION_SLACK_WEBHOOK` (optional notification channel)
 
 Recovery is fail closed. SSH credentials, pinned host trust, the runtime env,
 the atomic `current` release pointer and manifest, absence of a pending release,
 the shared deployment lock, `SUPABASE_RUNTIME_KEY`, absence of
 `SUPABASE_SERVICE_KEY`, Docker access, container Compose identities, the
-`production` target, and matching current/API/worker release identities must all
+`production` target, and matching current/Web/API/worker release identities must all
 pass preflight. A scheduled run may
 recover only a service with an explicit stopped, unhealthy, or failed local
-`readyz` diagnosis. When a public probe is configured, its failure with all
-three local services healthy is reported as an ingress boundary failure and
-does not restart containers. Without it, local container verification is authoritative.
+`readyz` diagnosis. A public probe failure with all three local services healthy
+is reported as an ingress boundary failure and does not restart containers.
 
 Manual dispatch additionally requires environment `production`, one of the
 `api`, `web`, `worker`, or `all` targets, and the exact confirmation phrase

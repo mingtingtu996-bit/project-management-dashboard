@@ -13,6 +13,11 @@ PUBLIC_PROBE_HEALTHY="${PUBLIC_PROBE_HEALTHY:-false}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
 
+command -v python3 >/dev/null 2>&1 || {
+  echo "python3 is required on the recovery host." >&2
+  exit 2
+}
+
 case "$REPORT_FILE" in
   /*) ;;
   *) REPORT_FILE="$PWD/$REPORT_FILE" ;;
@@ -42,9 +47,11 @@ apiUnhealthy="false"
 apiExited="false"
 
 web_status_before="unknown"
+web_health_before="unknown"
 web_probe_before="false"
 web_exit_code_before="unknown"
 web_status_after="unknown"
+web_health_after="unknown"
 web_probe_after="false"
 webUnavailable="false"
 webExited="false"
@@ -90,9 +97,11 @@ write_report() {
     printf 'api_health_after=%s\n' "$api_health_after"
     printf 'api_probe_after=%s\n' "$api_probe_after"
     printf 'web_status_before=%s\n' "$web_status_before"
+    printf 'web_health_before=%s\n' "$web_health_before"
     printf 'web_probe_before=%s\n' "$web_probe_before"
     printf 'web_exit_code_before=%s\n' "$web_exit_code_before"
     printf 'web_status_after=%s\n' "$web_status_after"
+    printf 'web_health_after=%s\n' "$web_health_after"
     printf 'web_probe_after=%s\n' "$web_probe_after"
     printf 'worker_status_before=%s\n' "$worker_status_before"
     printf 'worker_health_before=%s\n' "$worker_health_before"
@@ -156,6 +165,9 @@ case "$PUBLIC_PROBE_CONFIGURED" in
   true|false) ;;
   *) refuse "public_probe_configured_input_invalid" "Public probe configured input must be true or false." ;;
 esac
+[ "$PUBLIC_PROBE_CONFIGURED" = "true" ] || {
+  refuse "public_probe_required" "The production public probe is required for runtime recovery."
+}
 case "$PUBLIC_PROBE_HEALTHY" in
   true|false) ;;
   *) refuse "public_probe_input_invalid" "Public probe input must be true or false." ;;
@@ -209,12 +221,16 @@ if [ ! -f "$COMPOSE_FILE" ]; then
 fi
 
 release_sha_from_manifest() {
-  node -e '
-    const fs = require("node:fs");
-    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).releaseSha;
-    if (!/^[0-9a-f]{40}$/.test(value ?? "")) process.exit(1);
-    process.stdout.write(value);
-  ' "$1/client/dist/workbuddy-build.json"
+  python3 - "$1/client/dist/workbuddy-build.json" <<'PY'
+import json
+import re
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle).get('releaseSha', '')
+if not re.fullmatch(r'[0-9a-f]{40}', value):
+    raise SystemExit(1)
+print(value, end='')
+PY
 }
 
 active_release_sha="$(release_sha_from_manifest "$ACTIVE_RELEASE_DIR")" || {
@@ -284,13 +300,15 @@ fi
 
 api_target="$(container_env_value project-management-api DEPLOY_TARGET)"
 worker_target="$(container_env_value project-management-worker DEPLOY_TARGET)"
+web_target="$(container_env_value project-management-web DEPLOY_TARGET)"
 api_release_sha="$(container_env_value project-management-api RELEASE_SHA)"
 worker_release_sha="$(container_env_value project-management-worker RELEASE_SHA)"
-if [ "$api_target" != "production" ] || [ "$worker_target" != "production" ]; then
-  refuse "container_environment_mismatch" "API or worker container is not marked for production."
+web_release_sha="$(container_env_value project-management-web RELEASE_SHA)"
+if [ "$api_target" != "production" ] || [ "$worker_target" != "production" ] || [ "$web_target" != "production" ]; then
+  refuse "container_environment_mismatch" "Web, API, or worker container is not marked for production."
 fi
-if [ -z "$api_release_sha" ] || [ "$api_release_sha" != "$worker_release_sha" ]; then
-  refuse "release_identity_mismatch" "API and worker release identities are missing or inconsistent."
+if [ -z "$api_release_sha" ] || [ "$api_release_sha" != "$worker_release_sha" ] || [ "$api_release_sha" != "$web_release_sha" ]; then
+  refuse "release_identity_mismatch" "Web, API, and worker release identities are missing or inconsistent."
 fi
 release_sha="$api_release_sha"
 [ "$release_sha" = "$active_release_sha" ] || {
@@ -352,6 +370,7 @@ api_health_before="$(container_health project-management-api)"
 api_exit_code_before="$(container_exit_code project-management-api)"
 api_probe_before="$(bool_probe probe_container_ready project-management-api)"
 web_status_before="$(container_status project-management-web)"
+web_health_before="$(container_health project-management-web)"
 web_exit_code_before="$(container_exit_code project-management-web)"
 web_probe_before="$(bool_probe probe_web_ready)"
 worker_status_before="$(container_status project-management-worker)"
@@ -368,10 +387,10 @@ fi
 if [ "$worker_health_before" = "unhealthy" ] || { [ "$worker_status_before" = "running" ] && [ "$worker_probe_before" != "true" ]; }; then
   workerUnhealthy="true"
 fi
-if [ "$web_status_before" = "running" ] && [ "$web_probe_before" != "true" ]; then
+if [ "$web_health_before" = "unhealthy" ] || { [ "$web_status_before" = "running" ] && [ "$web_probe_before" != "true" ]; }; then
   webUnavailable="true"
 fi
-if { [ "$PUBLIC_PROBE_CONFIGURED" = "true" ] && [ "$PUBLIC_PROBE_HEALTHY" != "true" ]; } || [ "$web_probe_before" != "true" ]; then
+if [ "$PUBLIC_PROBE_HEALTHY" != "true" ] || [ "$web_probe_before" != "true" ]; then
   healthCurlFailed="true"
 fi
 
@@ -440,7 +459,7 @@ fi
 all_runtime_healthy="false"
 if [ "$api_status_before" = "running" ] && [ "$api_health_before" = "healthy" ] && [ "$api_probe_before" = "true" ] \
   && [ "$worker_status_before" = "running" ] && [ "$worker_health_before" = "healthy" ] && [ "$worker_probe_before" = "true" ] \
-  && [ "$web_status_before" = "running" ] && [ "$web_probe_before" = "true" ]; then
+  && [ "$web_status_before" = "running" ] && [ "$web_health_before" = "healthy" ] && [ "$web_probe_before" = "true" ]; then
   all_runtime_healthy="true"
 fi
 
@@ -449,13 +468,14 @@ if [ "$recovery_allowed" != "true" ]; then
   api_health_after="$api_health_before"
   api_probe_after="$api_probe_before"
   web_status_after="$web_status_before"
+  web_health_after="$web_health_before"
   web_probe_after="$web_probe_before"
   worker_status_after="$worker_status_before"
   worker_health_after="$worker_health_before"
   worker_probe_after="$worker_probe_before"
   if [ "$all_runtime_healthy" = "true" ]; then
     local_verification_passed="true"
-    if [ "$PUBLIC_PROBE_CONFIGURED" != "true" ] || [ "$PUBLIC_PROBE_HEALTHY" = "true" ]; then
+    if [ "$PUBLIC_PROBE_HEALTHY" = "true" ]; then
       recovery_outcome="healthy_no_action"
       failure_reason="none"
       exit 0
@@ -495,7 +515,7 @@ wait_container_ready() {
 wait_web_ready() {
   local attempt
   for attempt in $(seq 1 20); do
-    if probe_web_ready; then
+    if [ "$(container_health project-management-web)" = "healthy" ] && probe_web_ready; then
       return 0
     fi
     sleep 3
@@ -535,6 +555,7 @@ api_status_after="$(container_status project-management-api)"
 api_health_after="$(container_health project-management-api)"
 api_probe_after="$(bool_probe probe_container_ready project-management-api)"
 web_status_after="$(container_status project-management-web)"
+web_health_after="$(container_health project-management-web)"
 web_probe_after="$(bool_probe probe_web_ready)"
 worker_status_after="$(container_status project-management-worker)"
 worker_health_after="$(container_health project-management-worker)"
@@ -542,7 +563,7 @@ worker_probe_after="$(bool_probe probe_container_ready project-management-worker
 
 if [ "$api_status_after" = "running" ] && [ "$api_health_after" = "healthy" ] && [ "$api_probe_after" = "true" ] \
   && [ "$worker_status_after" = "running" ] && [ "$worker_health_after" = "healthy" ] && [ "$worker_probe_after" = "true" ] \
-  && [ "$web_status_after" = "running" ] && [ "$web_probe_after" = "true" ]; then
+  && [ "$web_status_after" = "running" ] && [ "$web_health_after" = "healthy" ] && [ "$web_probe_after" = "true" ]; then
   local_verification_passed="true"
 fi
 
