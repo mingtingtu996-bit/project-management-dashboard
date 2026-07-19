@@ -38,6 +38,8 @@ jobs:
       BOOTSTRAP_MODE: ${{ inputs.bootstrap_mode }}
       PRODUCTION_HOST: ${{ vars.PRODUCTION_DEPLOY_PUBLIC_HOST || 'zhuxucloud.com' }}
       STAGING_HOST: ${{ vars.STAGING_DEPLOY_PUBLIC_HOST || 'staging.zhuxucloud.com' }}
+      PRODUCTION_PROJECT_REF: wwdrkjnbvcbfytwnnyvs
+      STAGING_PROJECT_REF: xemqmqpifsstkovbkatp
       DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
       DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
       DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
@@ -50,9 +52,8 @@ jobs:
           set -euo pipefail
           [ "${{ inputs.confirmation }}" = PROVISION_DOMAIN_INGRESS ]
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$PRODUCTION_HOST" =~ ^[a-z0-9.-]+$ ]]
-          [[ "$STAGING_HOST" =~ ^[a-z0-9.-]+$ ]]
-          [ "$PRODUCTION_HOST" != "$STAGING_HOST" ]
+          [ "$PRODUCTION_HOST" = zhuxucloud.com ]
+          [ "$STAGING_HOST" = staging.zhuxucloud.com ]
           for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
             [ -n "${!name}" ] || { echo "Missing required production SSH value: $name" >&2; exit 1; }
           done
@@ -107,26 +108,58 @@ jobs:
           set -euo pipefail
           probe_domain() {
             local host="$1"
+            local expected_target="$2"
+            local expected_project_ref="$3"
             local headers="$RUNNER_TEMP/$host.headers"
+            local body="$RUNNER_TEMP/$host.readyz.json"
             local result status location https_status
             result="$(curl --silent --show-error --max-time 20 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "http://$host/api/readyz")"
             status="${result%% *}"
             location="${result#* }"
             [ "$status" = 308 ]
             [ "$location" = "https://$host/api/readyz" ]
-            https_status="$(curl --silent --show-error --max-time 30 --dump-header "$headers" --output /dev/null --write-out '%{http_code}' "https://$host/api/readyz")"
+            https_status="$(curl --silent --show-error --max-time 30 --dump-header "$headers" --output "$body" --write-out '%{http_code}' "https://$host/api/readyz")"
             tr -d '\r' < "$headers" | grep -qi '^Strict-Transport-Security:'
+            if [ "$https_status" = 200 ]; then
+              node --input-type=module - "$body" "$expected_target" "$expected_project_ref" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const expectedTarget = process.argv[3];
+          const expectedProjectRef = process.argv[4];
+          if (readiness.status !== 'ready'
+            || readiness.build?.deployTarget !== expectedTarget
+            || readiness.build?.supabaseProjectRef !== expectedProjectRef
+            || readiness.build?.databaseProjectRef !== expectedProjectRef) process.exit(1);
+          NODE
+            fi
             if [ "$BOOTSTRAP_MODE" = initial ]; then
               case "$https_status" in 200|502) ;; *) return 1 ;; esac
             else
               [ "$https_status" = 200 ]
             fi
           }
-          probe_domain "$PRODUCTION_HOST"
-          probe_domain "$STAGING_HOST"
+          probe_domain "$PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF"
+          probe_domain "$STAGING_HOST" staging "$STAGING_PROJECT_REF"
 
-      - name: Roll back candidate after any public failure
-        if: ${{ failure() && steps.activate.outcome == 'success' }}
+      - name: Finalize public probe outcome
+        id: finalize
+        if: ${{ always() && steps.activate.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          PUBLIC_PROBE_OUTCOME: ${{ steps.public-probe.outcome }}
+        run: |
+          if [ "$PUBLIC_PROBE_OUTCOME" = success ]; then
+            remote_action="ACTION=commit RELEASE_SHA=$RELEASE_SHA"
+          else
+            remote_action="ACTION=rollback FAILED_RELEASE_SHA=$RELEASE_SHA"
+          fi
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "sudo -n env $remote_action bash -s" \
+            < scripts/provision-lighthouse-domain-ingress.sh
+
+      - name: Recover pending activation after finalize failure
+        if: ${{ always() && steps.activate.outcome == 'success' && steps.finalize.outcome == 'failure' }}
         shell: bash
         run: |
           ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
@@ -134,14 +167,10 @@ jobs:
             "sudo -n env ACTION=rollback FAILED_RELEASE_SHA=$RELEASE_SHA bash -s" \
             < scripts/provision-lighthouse-domain-ingress.sh
 
-      - name: Commit successful ingress activation
-        if: ${{ success() }}
+      - name: Publish committed ingress summary
+        if: ${{ success() && steps.public-probe.outcome == 'success' && steps.finalize.outcome == 'success' }}
         shell: bash
         run: |
-          ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo -n env ACTION=commit RELEASE_SHA=$RELEASE_SHA bash -s" \
-            < scripts/provision-lighthouse-domain-ingress.sh
           {
             echo '### Domain ingress provisioned'
             echo ''
@@ -151,3 +180,9 @@ jobs:
             echo '- HSTS header and domain policy applicability: pass'
             echo '- Application/database/source mutations: none'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce finalization result
+        if: ${{ always() && steps.activate.outcome == 'success' }}
+        shell: bash
+        run: |
+          [ "${{ steps.finalize.outcome }}" = success ]

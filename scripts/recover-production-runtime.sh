@@ -170,6 +170,36 @@ if [ ! -d "$APP_DIR" ]; then
   refuse "app_dir_missing" "Production application directory is missing."
 fi
 cd "$APP_DIR"
+APP_DIR="$PWD"
+CURRENT_LINK="$APP_DIR/current"
+PENDING_APPLICATION_STATE="$APP_DIR/pending-application-release.env"
+exec 9>"$APP_DIR/.deploy.lock"
+flock -n 9 || refuse "deployment_operation_active" "A production deployment or rollback operation is active."
+[ ! -f "$PENDING_APPLICATION_STATE" ] || {
+  refuse "pending_application_release" "A pending application activation must be recovered by the release workflow before runtime restart."
+}
+
+if [ -e "$CURRENT_LINK" ] || [ -L "$CURRENT_LINK" ]; then
+  ACTIVE_RELEASE_DIR="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  case "$ACTIVE_RELEASE_DIR" in
+    "$APP_DIR/releases/"*) ;;
+    *) refuse "current_release_pointer_invalid" "The current application pointer is outside the managed releases directory." ;;
+  esac
+  [ -d "$ACTIVE_RELEASE_DIR" ] || refuse "current_release_missing" "The current application release directory is missing."
+else
+  ACTIVE_RELEASE_DIR="$APP_DIR"
+fi
+
+case "$ENV_FILE" in
+  /*) ;;
+  ../*|*/../*) refuse "runtime_env_path_invalid" "Production runtime env path must stay inside the application root." ;;
+  *) ENV_FILE="$APP_DIR/$ENV_FILE" ;;
+esac
+case "$COMPOSE_FILE" in
+  /*) ;;
+  ../*|*/../*) refuse "compose_contract_path_invalid" "Production Compose path must stay inside the active release." ;;
+  *) COMPOSE_FILE="$ACTIVE_RELEASE_DIR/$COMPOSE_FILE" ;;
+esac
 
 if [ ! -f "$ENV_FILE" ]; then
   refuse "runtime_env_missing" "Production runtime env file is missing."
@@ -177,6 +207,19 @@ fi
 if [ ! -f "$COMPOSE_FILE" ]; then
   refuse "compose_contract_missing" "Production Compose contract is missing."
 fi
+
+release_sha_from_manifest() {
+  node -e '
+    const fs = require("node:fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).releaseSha;
+    if (!/^[0-9a-f]{40}$/.test(value ?? "")) process.exit(1);
+    process.stdout.write(value);
+  ' "$1/client/dist/workbuddy-build.json"
+}
+
+active_release_sha="$(release_sha_from_manifest "$ACTIVE_RELEASE_DIR")" || {
+  refuse "current_release_manifest_invalid" "The active release build manifest is missing or invalid."
+}
 
 read_env_value() {
   awk -F= -v key="$1" '
@@ -250,6 +293,9 @@ if [ -z "$api_release_sha" ] || [ "$api_release_sha" != "$worker_release_sha" ];
   refuse "release_identity_mismatch" "API and worker release identities are missing or inconsistent."
 fi
 release_sha="$api_release_sha"
+[ "$release_sha" = "$active_release_sha" ] || {
+  refuse "current_release_identity_mismatch" "Running containers do not match the atomic current release."
+}
 preflight_passed="true"
 failure_reason="none"
 
