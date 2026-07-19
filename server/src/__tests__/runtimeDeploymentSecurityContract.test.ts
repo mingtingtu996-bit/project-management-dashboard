@@ -50,6 +50,7 @@ describe('runtime deployment security contract', () => {
     expect(dockerfile).toContain('/api/readyz')
     expect(deployScript).toContain('http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz')
     expect(deployScript).toContain(': "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"')
+    expect(deployScript).toContain(': "${HTTP_REDIRECT_URL:?External HTTP redirect URL is required}"')
     expect(workflow).toContain('HEALTH_URL=\\\"${DEPLOY_HEALTH_URL:-}\\\"')
     expect(workflow).toContain('if [[ "$DEPLOY_HEALTH_URL" != https://* ]]')
     expect(workflow).not.toContain('Public HTTPS health is optional')
@@ -60,6 +61,11 @@ describe('runtime deployment security contract', () => {
     expect(workflow).toContain('Public HTTPS was not inferred from the private SSH tunnel.')
     expect(deployScript).toContain("grep -qi '^strict-transport-security:'")
     expect(deployScript).toContain('Public HTTP endpoint did not redirect to HTTPS')
+    expect(deployScript).not.toContain('HTTP_HEALTH_URL="http://${HEALTH_URL#https://}"')
+    expect(deployScript).toContain('if [ "$redirect_url" != "$HEALTH_URL" ]; then')
+    expect(workflow).toContain('DEPLOY_HTTP_REDIRECT_URL')
+    expect(workflow).toContain('temporary_ip_tls')
+    expect(workflow).toContain('domainHstsReady')
   })
 
   it('bounds container logs and disables unrotated production file duplication', () => {

@@ -250,6 +250,7 @@ describe('deploy workflow contract', () => {
     expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_PATH'")
     expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY'")
     expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_HEALTH_URL'")
+    expect(preflightJob).toContain("secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL'")
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_URL'")
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_ANON_KEY'")
     expect(preflightJob).toContain("secrets[format('{0}_SUPABASE_MIGRATION_URL'")
@@ -261,6 +262,23 @@ describe('deploy workflow contract', () => {
     expect(preflightJob).toContain('Target deployment preflight blocked')
     expect(preflightJob).not.toContain('Public HTTPS health is optional')
     expect(preflightJob).toContain('External HTTPS health URL is required')
+    expect(preflightJob).toContain('DEPLOY_HTTP_REDIRECT_URL')
+    expect(preflightJob).toContain('EXPECTED_PUBLIC_HOST')
+    expect(preflightJob).toContain('public_ingress_mode')
+    expect(preflightJob).toContain('node scripts/classify-public-ingress-url.mjs --url "$DEPLOY_HEALTH_URL"')
+    expect(preflightJob).toContain('--environment "$DEPLOY_TARGET"')
+    expect(preflightJob).toContain('--redirect-url "$DEPLOY_HTTP_REDIRECT_URL"')
+    expect(preflightJob).toContain('--expected-host "$EXPECTED_PUBLIC_HOST"')
+    expect(preflightJob).toContain('temporary_ip_tls')
+    expect(preflightJob).toContain('domainHstsReady')
+    expect(preflightJob).toContain(
+      'curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL"',
+    )
+    expect(preflightJob).toContain('--max-redirs 0')
+    expect(preflightJob).toContain('if [ "$redirect_url" != "$DEPLOY_HEALTH_URL" ]; then')
+    expect(preflightJob).toContain('readiness.build?.deployTarget')
+    expect(preflightJob).toContain('readiness.build?.supabaseProjectRef')
+    expect(preflightJob).toContain('readiness.build?.databaseProjectRef')
     expect(preflightJob).toContain(
       'if [[ "$DEPLOY_HEALTH_URL" != https://* ]]',
     )
@@ -435,8 +453,10 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain('staging-wizard-baseline-revision-${{ github.run_id }}')
     expect(workflow).not.toContain('Public HTTPS health is optional')
     expect(workflow).toContain(
-      'Public HTTPS health, HSTS, HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory.',
+      'Public TLS health, explicit HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory.',
     )
+    expect(workflow).toContain('Temporary IP TLS is selected; domain HSTS closure remains false.')
+    expect(workflow).toContain('Domain HSTS mode is selected and must pass the public header probe.')
     expect(workflow).not.toContain("needs.database-migration.result == 'skipped'")
 
     const deployJob = workflow.slice(workflow.indexOf('  deploy-server:'))
@@ -470,7 +490,12 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
     expect(deployScript).toContain('INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"')
     expect(deployScript).toContain(': "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"')
+    expect(deployScript).toContain(': "${HTTP_REDIRECT_URL:?External HTTP redirect URL is required}"')
     expect(deployScript).not.toContain('HEALTH_URL="${HEALTH_URL:-$INTERNAL_HEALTH_URL}"')
+    expect(deployScript).not.toContain('HTTP_HEALTH_URL="http://${HEALTH_URL#https://}"')
+    expect(deployScript).toContain('if [ "$redirect_url" != "$HEALTH_URL" ]; then')
+    expect(deployScript).toContain('temporary_ip_tls')
+    expect(deployScript).toContain('domainHstsReady')
     expect(deployScript).toContain('curl --fail --silent --show-error "$INTERNAL_HEALTH_URL"')
     expect(deployScript).toContain('/api/performance-reports/summary')
     expect(deployScript).toContain('External deployment health URL must use https://')
