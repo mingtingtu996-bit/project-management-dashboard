@@ -19,11 +19,12 @@ function jobSection(workflow, jobName, nextJobName) {
   return workflow.slice(start, end)
 }
 
-test('runtime recovery workflow probes production hourly and preserves current deployment contracts', () => {
+test('runtime recovery is manual-only behind the protected production environment', () => {
   const workflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
 
-  assert.match(workflow, /schedule:\r?\n\s+- cron: '17 \* \* \* \*'/)
   assert.match(workflow, /workflow_dispatch:/)
+  assert.doesNotMatch(workflow, /schedule:/)
+  assert.doesNotMatch(workflow, /cron:/)
   assert.match(workflow, /environment:\s+production/)
   assert.match(workflow, /\/api\/readyz/)
   assert.doesNotMatch(workflow, /\/api\/health(?:\s|['"]|$)/)
@@ -52,21 +53,34 @@ test('runtime recovery workflow probes production hourly and preserves current d
   assert.doesNotMatch(workflow, /deploy-lighthouse-server/)
 })
 
-test('private runtime recovery requires local verification and treats public HTTPS as optional', () => {
+test('production runtime recovery requires both local verification and public HTTPS readiness', () => {
   const workflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
   const script = readOwnedFile('scripts/recover-production-runtime.sh')
   const requiredSecretLoop = workflow.match(/for required_name in ([^;]+); do/)?.[1] ?? ''
 
-  assert.doesNotMatch(requiredSecretLoop, /DEPLOY_HEALTH_URL/)
-  assert.match(workflow, /if \[ -n "\$DEPLOY_HEALTH_URL" \]; then/)
+  assert.match(requiredSecretLoop, /DEPLOY_HEALTH_URL/)
+  assert.doesNotMatch(workflow, /Probe optional public runtime readiness endpoint/)
+  assert.doesNotMatch(workflow, /if \[ -n "\$DEPLOY_HEALTH_URL" \]; then/)
   assert.match(workflow, /PUBLIC_PROBE_CONFIGURED/)
   assert.match(workflow, /publicProbeConfigured/)
-  assert.match(workflow, /!publicProbeConfigured \|\| publicProbeAfterPassed/)
+  assert.match(workflow, /publicProbeConfigured && publicProbeAfterPassed/)
   assert.match(script, /PUBLIC_PROBE_CONFIGURED/)
   assert.match(
     script,
+    /\[ "\$PUBLIC_PROBE_CONFIGURED" = "true" \].*public probe.*required/is,
+  )
+  assert.doesNotMatch(
+    script,
     /\[ "\$PUBLIC_PROBE_CONFIGURED" != "true" \] \|\| \[ "\$PUBLIC_PROBE_HEALTHY" = "true" \]/,
   )
+})
+
+test('production deploy and runtime recovery share one full-workflow mutation queue', () => {
+  const deployWorkflow = readOwnedFile('.github/workflows/deploy.yml')
+  const recoveryWorkflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
+
+  assert.match(deployWorkflow, /production-runtime-mutation/)
+  assert.match(recoveryWorkflow, /group:\s*production-runtime-mutation/)
 })
 
 test('manual restart is guarded by environment, exact confirmation, and an allow-listed target', () => {
@@ -114,6 +128,7 @@ test('recovery policy is fail closed and records evidence without inferring OOM 
 
 test('recovery binds container actions to the atomic current release and refuses deployment overlap', () => {
   const script = readOwnedFile('scripts/recover-production-runtime.sh')
+  const compose = readOwnedFile('deploy/docker-compose.lighthouse.yml')
 
   assert.match(script, /CURRENT_LINK="\$APP_DIR\/current"/)
   assert.match(script, /pending-application-release\.env/)
@@ -122,6 +137,14 @@ test('recovery binds container actions to the atomic current release and refuses
   assert.match(script, /readlink -f "\$CURRENT_LINK"/)
   assert.match(script, /release_sha_from_manifest/)
   assert.match(script, /\[ "\$release_sha" = "\$active_release_sha" \]/)
+  assert.match(script, /web_release_sha/)
+  assert.match(script, /web_target/)
+  assert.match(script, /web_health_before/)
+  assert.match(script, /web_health_after/)
+  assert.match(script, /api_release_sha.*worker_release_sha.*web_release_sha/s)
+  assert.match(compose, /web:[\s\S]*?RELEASE_SHA: \$\{RELEASE_SHA:\?RELEASE_SHA is required\}/)
+  assert.match(compose, /web:[\s\S]*?DEPLOY_TARGET: \$\{DEPLOY_TARGET:\?DEPLOY_TARGET is required\}/)
+  assert.match(compose, /web:[\s\S]*?healthcheck:/)
 
   const pendingGuard = script.indexOf('pending-application-release.env')
   const containerMutation = script.indexOf('recover_container()')
@@ -161,6 +184,10 @@ test('workflow guard and deployment documentation own the recovery contract', ()
 
   assert.match(deployReadme, /Production runtime recovery/)
   assert.match(deployReadme, /PRODUCTION_DEPLOY_HEALTH_URL/)
+  assert.match(deployReadme, /PRODUCTION_DEPLOY_HEALTH_URL.*required/i)
+  assert.doesNotMatch(deployReadme, /PRODUCTION_DEPLOY_HEALTH_URL.*optional/i)
+  assert.match(deployReadme, /STAGING_PEER_DEPLOY_PATH/)
+  assert.match(deployReadme, /PRODUCTION_PEER_DEPLOY_PATH/)
   assert.match(deployReadme, /\/api\/readyz/)
   assert.match(deployReadme, /Web, API, and worker/)
   assert.match(deployReadme, /does not deploy/i)

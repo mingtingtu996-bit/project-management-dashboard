@@ -16,6 +16,7 @@ PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 INITIAL_RUNTIME_BOOTSTRAP="${INITIAL_RUNTIME_BOOTSTRAP:-false}"
 EXPECTED_JWT_SECRET_SHA256="${EXPECTED_JWT_SECRET_SHA256:-}"
 PEER_JWT_SECRET_SHA256="${PEER_JWT_SECRET_SHA256:-}"
+PEER_RUNTIME_ENV_FILE="${PEER_RUNTIME_ENV_FILE:-}"
 
 require_sha() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]] || {
@@ -29,6 +30,7 @@ require_sha "$RELEASE_SHA"
 : "${HTTP_REDIRECT_URL:?External HTTP redirect URL is required}"
 : "${PUBLIC_INGRESS_MODE:?PUBLIC_INGRESS_MODE is required}"
 : "${EXPECTED_PUBLIC_HOST:?EXPECTED_PUBLIC_HOST is required}"
+: "${PEER_RUNTIME_ENV_FILE:?PEER_RUNTIME_ENV_FILE is required}"
 case "$HEALTH_URL" in https://*) ;; *) echo "External deployment health URL must use https://." >&2; exit 1 ;; esac
 case "$HTTP_REDIRECT_URL" in http://*) ;; *) echo "External deployment redirect URL must use http://." >&2; exit 1 ;; esac
 case "$PUBLIC_INGRESS_MODE" in domain_hsts|temporary_ip_tls) ;; *) echo "Unsupported PUBLIC_INGRESS_MODE." >&2; exit 1 ;; esac
@@ -37,6 +39,7 @@ case "$APP_DIR" in "~") APP_DIR="$HOME" ;; "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}
 [ -d "$APP_DIR" ] || { echo "Application root does not exist: $APP_DIR" >&2; exit 1; }
 APP_DIR="$(cd "$APP_DIR" && pwd -P)"
 case "$ENV_FILE" in /*) STABLE_ENV_FILE="$ENV_FILE" ;; *) STABLE_ENV_FILE="$APP_DIR/$ENV_FILE" ;; esac
+case "$PEER_RUNTIME_ENV_FILE" in /*) ;; *) echo "PEER_RUNTIME_ENV_FILE must be absolute." >&2; exit 1 ;; esac
 case "$COMPOSE_FILE" in /*|../*|*/../*) echo "COMPOSE_FILE must stay inside each release." >&2; exit 1 ;; esac
 
 RELEASES_DIR="$APP_DIR/releases"
@@ -52,10 +55,44 @@ mkdir -p "$RELEASES_DIR" "$FAILED_RELEASES_DIR" "$STABLE_DATA_DIR/logs"
 exec 9>"$APP_DIR/.deploy.lock"
 flock -n 9 || { echo "Another application deployment is active." >&2; exit 3; }
 [ -f "$STABLE_ENV_FILE" ] || { echo "Missing production env file: $STABLE_ENV_FILE" >&2; exit 1; }
+[ -f "$PEER_RUNTIME_ENV_FILE" ] || { echo "Missing peer runtime env file: $PEER_RUNTIME_ENV_FILE" >&2; exit 1; }
+[ "$(readlink -f "$STABLE_ENV_FILE")" != "$(readlink -f "$PEER_RUNTIME_ENV_FILE")" ] || {
+  echo "Current and peer runtime env files must differ." >&2
+  exit 1
+}
 [ -f "$RELEASE_ARCHIVE" ] || { echo "Missing release archive: $RELEASE_ARCHIVE" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required on the deployment host." >&2; exit 1; }
+
+read_env_value_from() {
+  local env_file="$1" key="$2"
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$env_file"
+}
 
 read_env_value() {
-  awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$STABLE_ENV_FILE"
+  read_env_value_from "$STABLE_ENV_FILE" "$1"
+}
+
+url_origin() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+url = urlsplit(sys.argv[1])
+if not url.scheme or not url.netloc or url.username or url.password:
+    raise SystemExit(1)
+print(f'{url.scheme}://{url.netloc}')
+PY
+}
+
+url_project_ref() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+hostname = urlsplit(sys.argv[1]).hostname or ''
+value = hostname.split('.')[0]
+if not value:
+    raise SystemExit(1)
+print(value)
+PY
 }
 
 validate_runtime_slot() {
@@ -82,10 +119,12 @@ validate_runtime_slot() {
     echo "COMPOSE_PROJECT_NAME does not match the governed deployment slot for $DEPLOY_TARGET." >&2
     return 1
   }
+  COMPOSE_PROJECT_NAME_VALUE="$actual_compose_project_name"
 }
 
-validate_jwt_secret_fingerprint() {
-  local jwt_secret_value="$1" actual_fingerprint
+validate_jwt_secret_fingerprints() {
+  local jwt_secret_value="$1" peer_jwt_secret_value="$2"
+  local actual_fingerprint peer_actual_fingerprint
   [[ "$EXPECTED_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
     echo "Registered JWT secret fingerprint is missing or invalid." >&2
     return 1
@@ -99,8 +138,17 @@ validate_jwt_secret_fingerprint() {
     return 1
   }
   actual_fingerprint="$(printf '%s' "$jwt_secret_value" | sha256sum | awk '{print $1}')" || return 1
+  peer_actual_fingerprint="$(printf '%s' "$peer_jwt_secret_value" | sha256sum | awk '{print $1}')" || return 1
   [ "$actual_fingerprint" = "$EXPECTED_JWT_SECRET_SHA256" ] || {
     echo "Runtime JWT secret does not match the registered environment fingerprint." >&2
+    return 1
+  }
+  [ "$peer_actual_fingerprint" = "$PEER_JWT_SECRET_SHA256" ] || {
+    echo "Peer runtime JWT secret does not match the registered peer fingerprint." >&2
+    return 1
+  }
+  [ "$actual_fingerprint" != "$peer_actual_fingerprint" ] || {
+    echo "Current and peer runtime JWT secrets must differ." >&2
     return 1
   }
 }
@@ -134,15 +182,17 @@ auth_cookie_name="$(read_env_value AUTH_COOKIE_NAME)"
 jwt_issuer="$(read_env_value JWT_ISSUER)"
 jwt_audience="$(read_env_value JWT_AUDIENCE)"
 jwt_secret="$(read_env_value JWT_SECRET)"
+peer_jwt_secret="$(read_env_value_from "$PEER_RUNTIME_ENV_FILE" JWT_SECRET)"
 public_https_origin="$(read_env_value PUBLIC_HTTPS_ORIGIN)"
 runtime_public_ingress_mode="$(read_env_value PUBLIC_INGRESS_MODE)"
 cors_origin="$(read_env_value CORS_ORIGIN)"
-expected_public_origin="$(node -e "process.stdout.write(new URL(process.argv[1]).origin)" "$HEALTH_URL")"
+expected_public_origin="$(url_origin "$HEALTH_URL")"
 [ "$auth_cookie_name" = "$expected_auth_cookie_name" ] || { echo "AUTH_COOKIE_NAME does not match DEPLOY_TARGET." >&2; exit 1; }
 [ "$jwt_issuer" = "$expected_jwt_issuer" ] || { echo "JWT_ISSUER does not match DEPLOY_TARGET." >&2; exit 1; }
 [ "$jwt_audience" = "$expected_jwt_audience" ] || { echo "JWT_AUDIENCE does not match DEPLOY_TARGET." >&2; exit 1; }
 [ "${#jwt_secret}" -ge 32 ] || { echo "JWT_SECRET must contain at least 32 characters and must be environment-specific." >&2; exit 1; }
-validate_jwt_secret_fingerprint "$jwt_secret"
+[ "${#peer_jwt_secret}" -ge 32 ] || { echo "Peer JWT_SECRET must contain at least 32 characters." >&2; exit 1; }
+validate_jwt_secret_fingerprints "$jwt_secret" "$peer_jwt_secret"
 [ "$public_https_origin" = "$expected_public_origin" ] || { echo "PUBLIC_HTTPS_ORIGIN must exactly match the deployment health origin." >&2; exit 1; }
 [ "$runtime_public_ingress_mode" = "$PUBLIC_INGRESS_MODE" ] || { echo "PUBLIC_INGRESS_MODE in the runtime env must match the deployment contract." >&2; exit 1; }
 [ "$cors_origin" = "$expected_public_origin" ] || { echo "CORS_ORIGIN must contain only the current deployment origin." >&2; exit 1; }
@@ -157,7 +207,7 @@ VITE_SUPABASE_ANON_KEY="${VITE_SUPABASE_ANON_KEY:-$(read_env_value SUPABASE_ANON
 : "${VITE_SUPABASE_URL:?VITE_SUPABASE_URL or SUPABASE_URL is required in $STABLE_ENV_FILE}"
 : "${VITE_SUPABASE_ANON_KEY:?VITE_SUPABASE_ANON_KEY or SUPABASE_ANON_KEY is required in $STABLE_ENV_FILE}"
 export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY
-expected_public_project_ref="$(node -e "process.stdout.write(new URL(process.argv[1]).hostname.split('.')[0])" "$(read_env_value SUPABASE_URL)")"
+expected_public_project_ref="$(url_project_ref "$(read_env_value SUPABASE_URL)")"
 
 if docker info >/dev/null 2>&1; then
   USE_SUDO_DOCKER=0
@@ -196,12 +246,16 @@ prepare_runtime_links() {
 }
 
 release_sha_from_manifest() {
-  node -e '
-    const fs = require("node:fs");
-    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).releaseSha;
-    if (!/^[0-9a-f]{40}$/.test(value ?? "")) process.exit(1);
-    process.stdout.write(value);
-  ' "$1/client/dist/workbuddy-build.json"
+  python3 - "$1/client/dist/workbuddy-build.json" <<'PY'
+import json
+import re
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle).get('releaseSha', '')
+if not re.fullmatch(r'[0-9a-f]{40}', value):
+    raise SystemExit(1)
+print(value, end='')
+PY
 }
 
 set_release_contract() {
@@ -235,6 +289,53 @@ run_docker_compose() {
       VITE_SUPABASE_URL="$VITE_SUPABASE_URL" VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
       docker compose --env-file "$STABLE_ENV_FILE" -f "$release_dir/$COMPOSE_FILE" "$@"
   fi
+}
+
+run_docker_command() {
+  if [ "$USE_SUDO_DOCKER" = 1 ]; then
+    sudo -n docker "$@"
+  else
+    docker "$@"
+  fi
+}
+
+container_inspect_value() {
+  run_docker_command container inspect "$1" --format "$2" 2>/dev/null
+}
+
+container_env_value() {
+  local container="$1" key="$2"
+  run_docker_command container inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); value = $0 } END { print value }'
+}
+
+container_health() {
+  container_inspect_value "$1" '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}'
+}
+
+verify_runtime_container_identities() {
+  local expected_sha="$1" service container release_sha target status health
+  for service in web api worker; do
+    container="${COMPOSE_PROJECT_NAME_VALUE}-${service}"
+    [ "$(container_inspect_value "$container" '{{index .Config.Labels "com.docker.compose.service"}}')" = "$service" ] || return 1
+    status="$(container_inspect_value "$container" '{{.State.Status}}')"
+    [ "$status" = running ] || return 1
+    release_sha="$(container_env_value "$container" RELEASE_SHA)"
+    target="$(container_env_value "$container" DEPLOY_TARGET)"
+    if [ "$service" = web ] && { [ -z "$release_sha" ] || [ -z "$target" ]; }; then
+      # Pre-atomic releases prove Web identity through the immutable served build manifest.
+      :
+    else
+      [ "$release_sha" = "$expected_sha" ] || return 1
+      [ "$target" = "$DEPLOY_TARGET" ] || return 1
+    fi
+    health="$(container_health "$container")"
+    if [ "$service" = web ]; then
+      case "$health" in healthy|missing) ;; *) return 1 ;; esac
+    else
+      [ "$health" = healthy ] || return 1
+    fi
+  done
 }
 
 run_docker_builder_prune() {
@@ -272,31 +373,82 @@ derive_performance_summary_url() {
 
 verify_readyz_identity() {
   RELEASE_SHA_TO_VERIFY="$2" DEPLOY_TARGET_TO_VERIFY="$DEPLOY_TARGET" EXPECTED_PROJECT_REF_TO_VERIFY="$expected_public_project_ref" \
-    node --input-type=module - "$1" <<'NODE'
-import { readFileSync } from 'node:fs';
-const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
-if (readiness.status !== 'ready'
-  || readiness.build?.releaseSha !== process.env.RELEASE_SHA_TO_VERIFY
-  || readiness.build?.deployTarget !== process.env.DEPLOY_TARGET_TO_VERIFY
-  || readiness.build?.supabaseProjectRef !== process.env.EXPECTED_PROJECT_REF_TO_VERIFY
-  || readiness.build?.databaseProjectRef !== process.env.EXPECTED_PROJECT_REF_TO_VERIFY) process.exit(1);
-NODE
+    python3 - "$1" <<'PY'
+import json
+import os
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    readiness = json.load(handle)
+build = readiness.get('build') or {}
+if (readiness.get('status') != 'ready'
+        or build.get('releaseSha') != os.environ['RELEASE_SHA_TO_VERIFY']
+        or build.get('deployTarget') != os.environ['DEPLOY_TARGET_TO_VERIFY']
+        or build.get('supabaseProjectRef') != os.environ['EXPECTED_PROJECT_REF_TO_VERIFY']
+        or build.get('databaseProjectRef') != os.environ['EXPECTED_PROJECT_REF_TO_VERIFY']):
+    raise SystemExit(1)
+PY
+}
+
+verify_web_build_identity() {
+  RELEASE_SHA_TO_VERIFY="$2" python3 - "$1" <<'PY'
+import json
+import os
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    build = json.load(handle)
+if build.get('releaseSha') != os.environ['RELEASE_SHA_TO_VERIFY']:
+    raise SystemExit(1)
+PY
+}
+
+validate_public_ingress_contract() {
+  python3 - "$HEALTH_URL" "$HTTP_REDIRECT_URL" "$DEPLOY_TARGET" "$EXPECTED_PUBLIC_HOST" "$PUBLIC_INGRESS_MODE" <<'PY'
+import ipaddress
+import sys
+from urllib.parse import urlsplit
+
+health = urlsplit(sys.argv[1])
+redirect = urlsplit(sys.argv[2])
+environment, expected_host, mode = sys.argv[3:6]
+if environment not in {'production', 'staging'} or mode not in {'domain_hsts', 'temporary_ip_tls'}:
+    raise SystemExit(1)
+if health.scheme != 'https' or health.username or health.password or health.query or health.fragment:
+    raise SystemExit(1)
+if (health.hostname or '').lower().rstrip('.') != expected_host.lower().rstrip('.') or health.path != '/api/readyz':
+    raise SystemExit(1)
+try:
+    address = ipaddress.ip_address(health.hostname or '')
+except ValueError:
+    address = None
+if mode == 'domain_hsts':
+    if address is not None or (health.port or 443) != 443:
+        raise SystemExit(1)
+else:
+    if not isinstance(address, ipaddress.IPv4Address) or not address.is_global:
+        raise SystemExit(1)
+    expected_port = 8443 if environment == 'staging' else 443
+    if (health.port or 443) != expected_port:
+        raise SystemExit(1)
+expected_redirect_path = '/staging-redirect/api/readyz' if mode == 'temporary_ip_tls' and environment == 'staging' else '/api/readyz'
+if (redirect.scheme != 'http' or redirect.username or redirect.password or redirect.query or redirect.fragment
+        or (redirect.hostname or '').lower().rstrip('.') != (health.hostname or '').lower().rstrip('.')
+        or redirect.path != expected_redirect_path or (redirect.port or 80) != 80):
+    raise SystemExit(1)
+PY
 }
 
 verify_release_health() {
-  local expected_sha="$1" internal_file public_file hsts_header_present=false
+  local expected_sha="$1" internal_file public_file web_build_file hsts_header_present=false
   local redirect_result redirect_status redirect_url performance_url
   internal_file="/tmp/project-management-health-${expected_sha}.json"
   public_file="/tmp/project-management-public-health-${expected_sha}.json"
-  node "$ACTIVE_RELEASE_DIR/scripts/classify-public-ingress-url.mjs" \
-    --url "$HEALTH_URL" \
-    --redirect-url "$HTTP_REDIRECT_URL" \
-    --environment "$DEPLOY_TARGET" \
-    --expected-host "$EXPECTED_PUBLIC_HOST" \
-    --expected-mode "$PUBLIC_INGRESS_MODE" \
-    > "/tmp/project-management-ingress-classification-${expected_sha}.json" || return 1
+  web_build_file="/tmp/project-management-web-build-${expected_sha}.json"
+  retry 12 5 verify_runtime_container_identities "$expected_sha" || return 1
+  validate_public_ingress_contract || return 1
   retry 12 5 curl --fail --silent --show-error "$INTERNAL_HEALTH_URL" -o "$internal_file" || return 1
   verify_readyz_identity "$internal_file" "$expected_sha" || return 1
+  curl --fail --silent --show-error "http://127.0.0.1:${WEB_PORT_VALUE}/workbuddy-build.json" -o "$web_build_file" || return 1
+  verify_web_build_identity "$web_build_file" "$expected_sha" || return 1
   curl --fail --silent --show-error "$HEALTH_URL" -o "$public_file" || return 1
   verify_readyz_identity "$public_file" "$expected_sha" || return 1
   if curl --silent --show-error --head "$HEALTH_URL" | tr -d '\r' | grep -qi '^strict-transport-security:'; then
@@ -308,7 +460,9 @@ verify_release_health() {
   redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$HTTP_REDIRECT_URL")" || return 1
   redirect_status="${redirect_result%% *}"
   redirect_url="${redirect_result#* }"
+  case "$redirect_status" in 301|302|307|308) ;; *) echo "Public HTTP endpoint did not redirect to HTTPS." >&2 ;; esac
   case "$redirect_status" in 301|302|307|308) ;; *) return 1 ;; esac
+  [ "$redirect_url" = "$HEALTH_URL" ] || echo "Public HTTP endpoint did not redirect to HTTPS health authority." >&2
   [ "$redirect_url" = "$HEALTH_URL" ] || return 1
   performance_url="${PERFORMANCE_SUMMARY_URL:-$(derive_performance_summary_url "$HEALTH_URL")}"
   curl --fail --silent --show-error "$performance_url" -o /tmp/project-management-performance-summary.json || return 1

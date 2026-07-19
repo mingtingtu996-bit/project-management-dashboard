@@ -1,8 +1,6 @@
 name: Production Runtime Recovery
 
 on:
-  schedule:
-    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       environment:
@@ -29,7 +27,7 @@ on:
         type: string
 
 concurrency:
-  group: production-runtime-recovery
+  group: production-runtime-mutation
   cancel-in-progress: false
 
 permissions:
@@ -67,10 +65,10 @@ jobs:
       - name: Preflight environment, confirmation, target, and secrets
         id: preflight
         env:
-          RECOVERY_MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'scheduled' }}
-          REQUESTED_ENVIRONMENT: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || 'production' }}
-          RECOVERY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'auto' }}
-          RECOVERY_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
+          RECOVERY_MODE: manual
+          REQUESTED_ENVIRONMENT: ${{ inputs.environment }}
+          RECOVERY_TARGET: ${{ inputs.target }}
+          RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
         run: |
           set -euo pipefail
           mkdir -p "$OUTPUT_ROOT"
@@ -98,7 +96,7 @@ jobs:
             fi
           fi
 
-          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
+          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS DEPLOY_HEALTH_URL; do
             if [ -z "${!required_name}" ]; then
               echo "Missing required production recovery secret: $required_name" >&2
               blocked="true"
@@ -110,15 +108,13 @@ jobs:
               blocked="true"
               ;;
           esac
-          if [ -n "$DEPLOY_HEALTH_URL" ]; then
-            case "$DEPLOY_HEALTH_URL" in
-              https://*/api/readyz) ;;
-              *)
-                echo "When configured, PRODUCTION_DEPLOY_HEALTH_URL must be an HTTPS /api/readyz endpoint." >&2
-                blocked="true"
-                ;;
-            esac
-          fi
+          case "$DEPLOY_HEALTH_URL" in
+            https://*/api/readyz) ;;
+            *)
+              echo "PRODUCTION_DEPLOY_HEALTH_URL must be an HTTPS /api/readyz endpoint." >&2
+              blocked="true"
+              ;;
+          esac
 
           if [ "$blocked" = "true" ]; then
             echo "passed=false" >> "$GITHUB_OUTPUT"
@@ -126,23 +122,20 @@ jobs:
           fi
           echo "passed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Probe optional public runtime readiness endpoint
+      - name: Probe required public runtime readiness endpoint
         id: public_probe
         if: ${{ steps.preflight.outcome == 'success' }}
         run: |
           set -euo pipefail
-          configured="false"
+          configured="true"
           healthy="false"
-          if [ -n "$DEPLOY_HEALTH_URL" ]; then
-            configured="true"
-            for attempt in 1 2 3; do
-              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
-                healthy="true"
-                break
-              fi
-              if [ "$attempt" -lt 3 ]; then sleep 5; fi
-            done
-          fi
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+              healthy="true"
+              break
+            fi
+            if [ "$attempt" -lt 3 ]; then sleep 5; fi
+          done
           echo "configured=$configured" >> "$GITHUB_OUTPUT"
           echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
 
@@ -162,9 +155,9 @@ jobs:
         if: ${{ steps.preflight.outcome == 'success' }}
         continue-on-error: true
         env:
-          RECOVERY_MODE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'scheduled' }}
-          RECOVERY_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'auto' }}
-          RECOVERY_CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || '' }}
+          RECOVERY_MODE: manual
+          RECOVERY_TARGET: ${{ inputs.target }}
+          RECOVERY_CONFIRMATION: ${{ inputs.confirmation }}
           PUBLIC_PROBE_CONFIGURED: ${{ steps.public_probe.outputs.configured }}
           PUBLIC_PROBE_HEALTHY: ${{ steps.public_probe.outputs.healthy }}
         run: |
@@ -206,23 +199,20 @@ jobs:
           fi
           exit "$remote_status"
 
-      - name: Verify optional public runtime readiness after diagnosis and recovery
+      - name: Verify required public runtime readiness after diagnosis and recovery
         id: public_verify
         if: ${{ always() && steps.preflight.outcome == 'success' }}
         run: |
           set -euo pipefail
-          configured="false"
+          configured="true"
           healthy="false"
-          if [ -n "$DEPLOY_HEALTH_URL" ]; then
-            configured="true"
-            for attempt in $(seq 1 12); do
-              if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
-                healthy="true"
-                break
-              fi
-              if [ "$attempt" -lt 12 ]; then sleep 5; fi
-            done
-          fi
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" >/dev/null 2>&1; then
+              healthy="true"
+              break
+            fi
+            if [ "$attempt" -lt 12 ]; then sleep 5; fi
+          done
           echo "configured=$configured" >> "$GITHUB_OUTPUT"
           echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
 
@@ -260,14 +250,12 @@ jobs:
           const publicProbeAfterPassed = process.env.PUBLIC_PROBE_AFTER === 'true';
           const localVerificationPassed = meta.local_verification_passed === 'true';
           const recoveryAttempted = meta.recovery_attempted === 'true';
-          const runtimeHealthy = preflightPassed && localVerificationPassed && (!publicProbeConfigured || publicProbeAfterPassed);
+          const runtimeHealthy = preflightPassed && localVerificationPassed && publicProbeConfigured && publicProbeAfterPassed;
           const recoverySucceeded = recoveryAttempted && meta.recovery_succeeded === 'true' && runtimeHealthy;
           const overallStatus = runtimeHealthy ? (recoverySucceeded ? 'recovered' : 'healthy') : 'failed';
           const probeStatus = process.env.PREFLIGHT_OUTCOME !== 'success'
             ? 'blocked'
-            : publicProbeConfigured
-              ? (publicProbeBeforePassed ? 'passed' : 'failed')
-              : (localVerificationPassed ? 'passed' : 'failed');
+            : (publicProbeBeforePassed ? 'passed' : 'failed');
           const recoveryStatus = !preflightPassed
             ? 'blocked'
             : recoveryAttempted ? (recoverySucceeded ? 'succeeded' : 'failed') : 'not-needed';
@@ -311,9 +299,11 @@ jobs:
               },
               web: {
                 statusBefore: meta.web_status_before || 'unknown',
+                healthBefore: meta.web_health_before || 'unknown',
                 readyBefore: meta.web_probe_before === 'true',
                 exitCodeBefore: meta.web_exit_code_before || 'unknown',
                 statusAfter: meta.web_status_after || 'unknown',
+                healthAfter: meta.web_health_after || 'unknown',
                 readyAfter: meta.web_probe_after === 'true',
               },
               worker: {
