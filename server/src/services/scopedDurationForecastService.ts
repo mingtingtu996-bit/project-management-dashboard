@@ -15,6 +15,10 @@ import {
   simulateDurationNetworkProbability,
   type DurationNetworkProbabilityResult,
 } from './durationNetworkMonteCarloService.js'
+import {
+  buildConstructionProductionDayDurationMetric,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 
 export type ScopedDurationForecastDimension = 'division' | 'subdivision' | 'specialty'
 export type ScopedDurationForecastState = 'not_started' | 'in_progress' | 'completed'
@@ -38,8 +42,14 @@ export type ScopedDurationForecastGroup = {
   p50FinishDate: string | null
   p80FinishDate: string | null
   expectedFinishDate: string | null
+  remainingDuration: DurationMetricDto
+  targetGap: DurationMetricDto
+  delay: DurationMetricDto
+  /** @deprecated Use remainingDuration. Removed after the v1.5 compatibility window. */
   remainingDurationDays: number | null
+  /** @deprecated Use targetGap. Removed after the v1.5 compatibility window. */
   targetGapDays: number | null
+  /** @deprecated Use delay. Removed after the v1.5 compatibility window. */
   delayDays: number | null
   confidenceLevel: string | null
   confidenceScore: number | null
@@ -47,8 +57,14 @@ export type ScopedDurationForecastGroup = {
   probabilityCoverageRate: number
   probabilityBasis: 'monte_carlo' | 'pert_analytic' | 'deterministic_completed'
   networkProbability: (DurationNetworkProbabilityResult & {
+    p20RemainingDuration: DurationMetricDto
+    p50RemainingDuration: DurationMetricDto
+    p80RemainingDuration: DurationMetricDto
+    /** @deprecated Use p20RemainingDuration. */
     p20RemainingDays: number | null
+    /** @deprecated Use p50RemainingDuration. */
     p50RemainingDays: number | null
+    /** @deprecated Use p80RemainingDuration. */
     p80RemainingDays: number | null
     p20FinishDate: string | null
     p50FinishDate: string | null
@@ -509,6 +525,11 @@ function buildGroupForecast(input: {
     rowById,
     calendar,
   } = input
+  const durationMetric = (value: number | null) => buildConstructionProductionDayDurationMetric(value, {
+    asOf: asOfDate,
+    timezone: calendar?.timezone,
+    calendar,
+  })
   const completedTasks = bucket.tasks.filter((task) => task.completed)
   const activeTasks = bucket.tasks.filter((task) => !task.completed)
   const targetFinishDate = latestDate(bucket.tasks.map((task) => {
@@ -537,6 +558,8 @@ function buildGroupForecast(input: {
       return normalizeDate(task.row.values.planned_end_date ?? task.row.values.end_date)
     }))
     const targetGapDays = delayDayDelta(targetFinishDate, completionFinishDate, calendar)
+    const remainingDurationDays = completionFinishDate ? 0 : null
+    const delayDays = targetGapDays === null ? null : Math.max(0, targetGapDays)
     return {
       id: bucket.id,
       dimension: bucket.dimension,
@@ -555,9 +578,12 @@ function buildGroupForecast(input: {
       p50FinishDate: completionFinishDate,
       p80FinishDate: completionFinishDate,
       expectedFinishDate: completionFinishDate,
-      remainingDurationDays: completionFinishDate ? 0 : null,
+      remainingDuration: durationMetric(remainingDurationDays),
+      targetGap: durationMetric(targetGapDays),
+      delay: durationMetric(delayDays),
+      remainingDurationDays,
       targetGapDays,
-      delayDays: targetGapDays === null ? null : Math.max(0, targetGapDays),
+      delayDays,
       confidenceLevel: null,
       confidenceScore: null,
       forecastCoverageRate: 1,
@@ -653,6 +679,9 @@ function buildGroupForecast(input: {
       && degradationReasons.length === 0
       ? 'ready'
       : 'degraded'
+  const delayDays = targetGapDays === null
+    ? currentOverdueDays
+    : Math.max(0, targetGapDays)
 
   return {
     id: bucket.id,
@@ -672,11 +701,12 @@ function buildGroupForecast(input: {
     p50FinishDate: ordered.p50,
     p80FinishDate: ordered.p80,
     expectedFinishDate: ordered.p50,
+    remainingDuration: durationMetric(remainingDurationDays),
+    targetGap: durationMetric(targetGapDays),
+    delay: durationMetric(delayDays),
     remainingDurationDays,
     targetGapDays,
-    delayDays: targetGapDays === null
-      ? currentOverdueDays
-      : Math.max(0, targetGapDays),
+    delayDays,
     confidenceLevel: confidence.level,
     confidenceScore: confidence.score,
     forecastCoverageRate,
@@ -684,6 +714,9 @@ function buildGroupForecast(input: {
     probabilityBasis: monteCarloApplied ? 'monte_carlo' : 'pert_analytic',
     networkProbability: {
       ...networkProbabilityResult,
+      p20RemainingDuration: durationMetric(networkProbabilityResult.p20DurationDays),
+      p50RemainingDuration: durationMetric(networkProbabilityResult.p50DurationDays),
+      p80RemainingDuration: durationMetric(networkProbabilityResult.p80DurationDays),
       p20RemainingDays: networkProbabilityResult.p20DurationDays,
       p50RemainingDays: networkProbabilityResult.p50DurationDays,
       p80RemainingDays: networkProbabilityResult.p80DurationDays,
@@ -752,6 +785,11 @@ export function buildScopedDurationForecasts(
   const globalDegradationReasons = unique([
     ...(input.globalDegradationReasons ?? []),
     ...(!input.constructionCalendar ? ['construction_calendar_fallback'] : []),
+    ...(input.constructionCalendar?.availability === 'available'
+      && input.constructionCalendar.calendarRef
+      && input.constructionCalendar.calendarVersion
+      ? []
+      : ['construction_calendar_identity_missing']),
   ])
   const dimensions = {
     division: [] as ScopedDurationForecastGroup[],

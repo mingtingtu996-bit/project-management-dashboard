@@ -6,9 +6,17 @@ import { logger } from '../middleware/logger.js'
 import { delayDayDelta, inclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
 import {
+  parseConstructionCalendarDate,
+  productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import {
+  buildCalendarDayDurationMetric,
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface EfficiencyStats {
@@ -20,7 +28,9 @@ export interface EfficiencyStats {
 
 export interface TaskSummaryDurationStats {
   plannedDuration: number
-  actualDuration: number
+  actualDuration: number | null
+  plannedDurationMetric: DurationMetricDto
+  actualDurationMetric: DurationMetricDto
 }
 
 type TaskSummaryDurationInput = Pick<
@@ -28,18 +38,40 @@ type TaskSummaryDurationInput = Pick<
   'start_date' | 'end_date' | 'planned_start_date' | 'planned_end_date' | 'actual_start_date' | 'actual_end_date'
 >
 
-export function calculateTaskSummaryDurationStats(task: TaskSummaryDurationInput): TaskSummaryDurationStats {
+export function calculateTaskSummaryDurationStats(
+  task: TaskSummaryDurationInput,
+  calendar?: ConstructionCalendarContext | null,
+  asOfDate?: string,
+): TaskSummaryDurationStats {
   const plannedStart = task.planned_start_date || task.start_date
   const plannedEnd = task.planned_end_date || task.end_date
   const plannedDuration = inclusiveDurationDays(plannedStart, plannedEnd) ?? 1
-
-  const actualDuration = task.actual_start_date && task.actual_end_date
-    ? (inclusiveDurationDays(task.actual_start_date, task.actual_end_date) ?? plannedDuration)
-    : plannedDuration
+  const asOf = asOfDate
+    || String(task.actual_end_date ?? task.planned_end_date ?? task.end_date ?? '').slice(0, 10)
+    || businessDateKey(new Date(), calendar?.timezone || 'Asia/Shanghai')
+  const actualStart = parseConstructionCalendarDate(task.actual_start_date)
+  const actualEnd = parseConstructionCalendarDate(task.actual_end_date)
+  const rawActualDuration = actualStart && actualEnd
+    ? productionDaysBetweenInclusive(actualStart, actualEnd, calendar)
+    : null
+  const plannedDurationMetric = buildCalendarDayDurationMetric(plannedDuration, {
+    asOf,
+    timezone: calendar?.timezone,
+  })
+  const actualDurationMetric = buildConstructionProductionDayDurationMetric(rawActualDuration, {
+    asOf,
+    timezone: calendar?.timezone,
+    calendar,
+  })
+  const actualDuration = actualDurationMetric.availability === 'available'
+    ? actualDurationMetric.value
+    : null
 
   return {
     plannedDuration,
     actualDuration,
+    plannedDurationMetric,
+    actualDurationMetric,
   }
 }
 
@@ -51,6 +83,7 @@ type TaskCompletionDelayInput = Partial<Pick<
 export function calculateTaskCompletionDelayStats(
   task: TaskCompletionDelayInput,
   calendar?: ConstructionCalendarContext | null,
+  asOfDate?: string,
 ): DelayStats {
   const plannedEndValue = task.planned_end_date || task.end_date
   const actualEndValue = task.actual_end_date || (
@@ -58,8 +91,24 @@ export function calculateTaskCompletionDelayStats(
       ? task.updated_at
       : null
   )
-  const delayDays = Math.max(0, delayDayDelta(plannedEndValue, actualEndValue, calendar) ?? 0)
-  const delayDetails = delayDays > 0
+  const asOf = asOfDate
+    || String(actualEndValue ?? plannedEndValue ?? '').slice(0, 10)
+    || businessDateKey(new Date(), calendar?.timezone || 'Asia/Shanghai')
+  const plannedEnd = parseConstructionCalendarDate(plannedEndValue)
+  const actualEnd = parseConstructionCalendarDate(actualEndValue)
+  const isChronologicallyDelayed = Boolean(plannedEnd && actualEnd && actualEnd > plannedEnd)
+  const rawDelayDays = isChronologicallyDelayed
+    ? Math.max(0, delayDayDelta(plannedEndValue, actualEndValue, calendar) ?? 0)
+    : 0
+  const delayDurationMetric = buildConstructionProductionDayDurationMetric(rawDelayDays, {
+    asOf,
+    timezone: calendar?.timezone,
+    calendar,
+  })
+  const delayDays = delayDurationMetric.availability === 'available'
+    ? delayDurationMetric.value
+    : null
+  const delayDetails = isChronologicallyDelayed
     ? [{
         delay_date: actualEndValue ?? '',
         delay_days: delayDays,
@@ -70,17 +119,19 @@ export function calculateTaskCompletionDelayStats(
 
   return {
     totalDelayDays: delayDays,
-    delayCount: delayDays > 0 ? 1 : 0,
+    delayCount: isChronologicallyDelayed ? 1 : 0,
     delayDetails,
+    delayDurationMetric,
   }
 }
 
 export interface DelayStats {
-  totalDelayDays: number
+  totalDelayDays: number | null
   delayCount: number
+  delayDurationMetric: DurationMetricDto
   delayDetails: Array<{
     delay_date: string
-    delay_days: number
+    delay_days: number | null
     delay_type: string
     reason: string
   }>
@@ -404,7 +455,15 @@ export class TaskSummaryService {
       [taskId, projectId],
     )
     if (!task) {
-      return { totalDelayDays: 0, delayCount: 0, delayDetails: [] }
+      return {
+        totalDelayDays: null,
+        delayCount: 0,
+        delayDetails: [],
+        delayDurationMetric: buildConstructionProductionDayDurationMetric(null, {
+          asOf: businessDateKey(new Date()),
+          calendar: null,
+        }),
+      }
     }
 
     const calendar = await resolveConstructionCalendarContext({

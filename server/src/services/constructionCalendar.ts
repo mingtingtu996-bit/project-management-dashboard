@@ -1,4 +1,9 @@
 export type ConstructionCalendarWindow = Record<string, unknown> & {
+  __stableCode?: string | null
+  __resolverSource?: string | null
+  __resolverVersionId?: string | null
+  sourceVersion?: string | null
+  source_version?: string | null
   holidayCode?: string | null
   holiday_code?: string | null
   stableCode?: string | null
@@ -19,6 +24,11 @@ export type ConstructionCalendarWindow = Record<string, unknown> & {
 export type ConstructionCalendarContext<TWindow extends ConstructionCalendarWindow = ConstructionCalendarWindow> = {
   basis: 'calendar_day' | 'official_construction_calendar_seed'
   windows: TWindow[]
+  calendarRef?: string | null
+  calendarVersion?: string | null
+  timezone?: string | null
+  availability?: 'available' | 'unavailable'
+  unavailableReason?: string | null
 }
 
 export type ResolveConstructionCalendarContextInput = {
@@ -213,12 +223,30 @@ export async function resolveConstructionCalendarContext(
       standardWorkCode: input.standardWorkCode ?? null,
       templateNodeId: input.templateNodeId ?? null,
     })
+    const calendarVersions = Array.from(new Set(windows.flatMap((window) => [
+      String(window.__resolverVersionId ?? '').trim(),
+      String(window.sourceVersion ?? window.source_version ?? '').trim(),
+    ]).filter(Boolean))).sort()
+    const available = windows.length > 0 && calendarVersions.length > 0
     return {
       basis: windows.length > 0 ? 'official_construction_calendar_seed' : 'calendar_day',
       windows,
+      calendarRef: available ? 'work_calendar' : null,
+      calendarVersion: available ? calendarVersions.join('|') : null,
+      timezone: 'Asia/Shanghai',
+      availability: available ? 'available' : 'unavailable',
+      unavailableReason: available ? null : 'construction_calendar_identity_missing',
     }
   } catch (error) {
     input.onError?.(error)
-    return { basis: 'calendar_day', windows: [] }
+    return {
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_unavailable',
+    }
   }
 }

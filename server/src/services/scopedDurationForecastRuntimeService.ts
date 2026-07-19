@@ -97,7 +97,15 @@ export async function buildRuntimeScopedDurationForecast(
 
   const constructionCalendar: ConstructionCalendarContext = calendarResult.status === 'fulfilled'
     ? calendarResult.value
-    : { basis: 'calendar_day', windows: [] }
+    : {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: BUSINESS_TIME_ZONE,
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_unavailable',
+      }
   if (calendarResult.status === 'rejected') globalDegradationReasons.push('construction_calendar_unavailable')
 
   const criticalTaskIds = new Set(unique([

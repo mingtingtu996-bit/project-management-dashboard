@@ -73,7 +73,15 @@ function dependencies(overrides: Partial<ScopedDurationForecastRuntimeDependenci
       autoTaskIds: ['task-2'],
       tasks: [{ taskId: 'task-2', isAutoCritical: true }],
     })),
-    resolveConstructionCalendarContext: vi.fn(async () => ({ basis: 'calendar_day' as const, windows: [] })),
+    resolveConstructionCalendarContext: vi.fn(async () => ({
+      basis: 'official_construction_calendar_seed' as const,
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available' as const,
+      unavailableReason: null,
+    })),
     ...overrides,
   } as ScopedDurationForecastRuntimeDependencies
 }

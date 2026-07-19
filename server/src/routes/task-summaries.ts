@@ -2,7 +2,11 @@
 
 import { Router } from 'express'
 import { z } from 'zod'
-import { TaskSummaryService, calculateTaskSummaryDurationStats } from '../services/taskSummaryService.js'
+import {
+  TaskSummaryService,
+  calculateTaskCompletionDelayStats,
+  calculateTaskSummaryDurationStats,
+} from '../services/taskSummaryService.js'
 import {
   buildTaskSummaryAttributionGroups,
   taskAttributionSummaryService,
@@ -34,7 +38,6 @@ import {
 } from '../middleware/auth.js'
 import { validate, validateIdParam } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
-import { delayDayDelta } from '../utils/durationDays.js'
 import { isCompletedMilestone, isCompletedTask } from '../utils/taskStatus.js'
 import type { ApiResponse } from '../types/index.js'
 import type { TaskCompletionReport } from '../types/db.js'
@@ -655,13 +658,18 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
     const taskCompleted = isCompletedTask(t)
     const actualEndDate = getTaskActualEndDate(t)
     const completedAt = taskCompleted ? (actualEndDate || plannedEndDate) : null
-    const delayTotal = taskCompleted && plannedEndDate && completedAt && completedAt.slice(0, 10) > plannedEndDate
-      ? Math.max(0, delayDayDelta(plannedEndDate, completedAt, workCalendar) ?? 0)
-      : 0
-    const isDelayed = taskCompleted && (delayTotal > 0 || (
+    const asOf = completedAt?.slice(0, 10) || plannedEndDate?.slice(0, 10) || new Date().toISOString().slice(0, 10)
+    const completionDelay = calculateTaskCompletionDelayStats({
+      planned_end_date: plannedEndDate,
+      actual_end_date: completedAt,
+      status: t.status,
+      progress: t.progress,
+    }, workCalendar, asOf)
+    const delayTotal = taskCompleted ? completionDelay.totalDelayDays : 0
+    const isDelayed = taskCompleted && ((delayTotal ?? 0) > 0 || (
       plannedEndDate && completedAt && completedAt.slice(0, 10) > plannedEndDate
     ))
-    const durationStats = calculateTaskSummaryDurationStats(t)
+    const durationStats = calculateTaskSummaryDurationStats(t, workCalendar, asOf)
 
     return {
       id: t.id,
@@ -696,10 +704,14 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
       planned_end_date: plannedEndDate,
       actual_duration: durationStats.actualDuration,
       planned_duration: durationStats.plannedDuration,
+      actual_duration_metric: durationStats.actualDurationMetric,
+      planned_duration_metric: durationStats.plannedDurationMetric,
+      delay_total: completionDelay.delayDurationMetric,
       delay_total_days: delayTotal,
-      delay_records: delayTotal > 0
+      delay_records: isDelayed
         ? [{
             delay_days: delayTotal,
+            delay: completionDelay.delayDurationMetric,
             reason: '实际完成时间晚于计划完成时间',
             recorded_at: completedAt,
           }]

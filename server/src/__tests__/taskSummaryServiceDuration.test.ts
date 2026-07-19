@@ -26,6 +26,11 @@ const SHUTDOWN_CALENDAR: ConstructionCalendarContext = {
     endDate: '2026-02-24',
     counts_as_construction_shutdown: true,
   }],
+  calendarRef: 'work_calendar',
+  calendarVersion: 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  availability: 'available',
+  unavailableReason: null,
 }
 
 describe('taskSummaryService duration stats', () => {
@@ -36,7 +41,7 @@ describe('taskSummaryService duration stats', () => {
     mocks.executeSQL.mockResolvedValue([])
   })
 
-  it('uses planned fields for planned duration and actual fields for actual duration', () => {
+  it('uses calendar days for the plan span and identified production days for actual execution', () => {
     expect(calculateTaskSummaryDurationStats({
       start_date: '2026-04-01',
       end_date: '2026-04-30',
@@ -44,22 +49,42 @@ describe('taskSummaryService duration stats', () => {
       planned_end_date: '2026-04-05',
       actual_start_date: '2026-04-04',
       actual_end_date: '2026-04-08',
-    } as never)).toEqual({
+    } as never, SHUTDOWN_CALENDAR, '2026-04-08')).toEqual(expect.objectContaining({
       plannedDuration: 3,
       actualDuration: 5,
-    })
+      plannedDurationMetric: expect.objectContaining({
+        value: 3,
+        unit: 'calendar_day',
+        asOf: '2026-04-08',
+        availability: 'available',
+      }),
+      actualDurationMetric: expect.objectContaining({
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        asOf: '2026-04-08',
+        availability: 'available',
+      }),
+    }))
   })
 
-  it('falls back to planned duration when actual execution window is incomplete', () => {
+  it('does not copy the planned calendar span into an incomplete actual production span', () => {
     expect(calculateTaskSummaryDurationStats({
       planned_start_date: '2026-04-03',
       planned_end_date: '2026-04-05',
       actual_start_date: '2026-04-04',
       actual_end_date: null,
-    } as never)).toEqual({
+    } as never, SHUTDOWN_CALENDAR, '2026-04-08')).toEqual(expect.objectContaining({
       plannedDuration: 3,
-      actualDuration: 3,
-    })
+      actualDuration: null,
+      actualDurationMetric: expect.objectContaining({
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      }),
+    }))
   })
 
   it('keeps same-day tasks as one inclusive day', () => {
@@ -68,10 +93,39 @@ describe('taskSummaryService duration stats', () => {
       planned_end_date: '2026-04-03',
       actual_start_date: '2026-04-03',
       actual_end_date: '2026-04-03',
-    } as never)).toEqual({
+    } as never, SHUTDOWN_CALENDAR, '2026-04-03')).toEqual(expect.objectContaining({
       plannedDuration: 1,
       actualDuration: 1,
-    })
+    }))
+  })
+
+  it('fails closed for actual duration and completion delay without calendar identity', () => {
+    const unidentifiedCalendar: ConstructionCalendarContext = { basis: 'calendar_day', windows: [] }
+    expect(calculateTaskSummaryDurationStats({
+      planned_start_date: '2026-04-03',
+      planned_end_date: '2026-04-05',
+      actual_start_date: '2026-04-04',
+      actual_end_date: '2026-04-08',
+    } as never, unidentifiedCalendar, '2026-04-08')).toEqual(expect.objectContaining({
+      plannedDuration: 3,
+      actualDuration: null,
+      actualDurationMetric: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+      }),
+    }))
+    expect(calculateTaskCompletionDelayStats({
+      planned_end_date: '2026-04-05',
+      actual_end_date: '2026-04-08',
+      status: 'completed',
+    }, unidentifiedCalendar, '2026-04-08')).toEqual(expect.objectContaining({
+      totalDelayDays: null,
+      delayDurationMetric: expect.objectContaining({
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+      }),
+    }))
   })
 
   it('calculates completion delay from the shared signed date-only delta', () => {
@@ -80,14 +134,23 @@ describe('taskSummaryService duration stats', () => {
       actual_end_date: '2026-04-10T23:30:00+08:00',
       status: 'completed',
       progress: 100,
-    })).toEqual({ totalDelayDays: 0, delayCount: 0, delayDetails: [] })
+    }, SHUTDOWN_CALENDAR)).toEqual(expect.objectContaining({
+      totalDelayDays: 0,
+      delayCount: 0,
+      delayDetails: [],
+      delayDurationMetric: expect.objectContaining({
+        value: 0,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+    }))
 
     expect(calculateTaskCompletionDelayStats({
       planned_end_date: '2026-04-10',
       actual_end_date: '2026-04-12T01:00:00+08:00',
       status: 'completed',
       progress: 100,
-    })).toEqual({
+    }, SHUTDOWN_CALENDAR)).toEqual(expect.objectContaining({
       totalDelayDays: 2,
       delayCount: 1,
       delayDetails: [{
@@ -96,7 +159,8 @@ describe('taskSummaryService duration stats', () => {
         delay_type: 'auto_detected',
         reason: '实际完成时间晚于计划完成时间',
       }],
-    })
+      delayDurationMetric: expect.objectContaining({ value: 2, availability: 'available' }),
+    }))
   })
 
   it('uses the shared completed-task aliases when actual finish is missing', () => {
@@ -106,7 +170,7 @@ describe('taskSummaryService duration stats', () => {
       updated_at: '2026-04-12T01:00:00+08:00',
       status: 'done',
       progress: 0,
-    } as never)).toEqual({
+    } as never, SHUTDOWN_CALENDAR)).toEqual(expect.objectContaining({
       totalDelayDays: 2,
       delayCount: 1,
       delayDetails: [{
@@ -115,7 +179,8 @@ describe('taskSummaryService duration stats', () => {
         delay_type: 'auto_detected',
         reason: '实际完成时间晚于计划完成时间',
       }],
-    })
+      delayDurationMetric: expect.objectContaining({ value: 2, availability: 'available' }),
+    }))
   })
 
   it('deducts official construction shutdown windows from completion delay days', () => {
@@ -124,7 +189,7 @@ describe('taskSummaryService duration stats', () => {
       actual_end_date: '2026-03-01',
       status: 'completed',
       progress: 100,
-    }, SHUTDOWN_CALENDAR)).toEqual({
+    }, SHUTDOWN_CALENDAR)).toEqual(expect.objectContaining({
       totalDelayDays: 5,
       delayCount: 1,
       delayDetails: [{
@@ -133,7 +198,12 @@ describe('taskSummaryService duration stats', () => {
         delay_type: 'auto_detected',
         reason: '实际完成时间晚于计划完成时间',
       }],
-    })
+      delayDurationMetric: expect.objectContaining({
+        value: 5,
+        calendarRef: 'work_calendar',
+        availability: 'available',
+      }),
+    }))
   })
 
   it('uses fixed SQL branches for paginated and unpaginated project summaries', async () => {
