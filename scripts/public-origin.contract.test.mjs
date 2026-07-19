@@ -70,8 +70,14 @@ test('release smoke and browser auth fixture send the resolved public Origin', a
 
   assert.match(wizardSmoke, /args\.get\('public-origin'\)/u)
   assert.match(wizardSmoke, /Origin:\s*publicOrigin/u)
+  assert.match(wizardSmoke, /'X-Forwarded-Proto':\s*'https'/u)
   assert.match(browserFixture, /PUBLIC_HTTPS_ORIGIN/u)
   assert.match(browserFixture, /Origin:\s*publicOrigin/u)
+  assert.match(browserFixture, /'X-Forwarded-Proto':\s*'https'/u)
+  assert.match(
+    deployWorkflow,
+    /--header "X-Forwarded-Proto: https"[\s\S]*\/api\/performance-reports\/summary/u,
+  )
   const stagingCommands = wizardCommands(deployWorkflow)
   const productionCommands = wizardCommands(productionLivegate)
   assert.equal(stagingCommands.length, 2)

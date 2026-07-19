@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { evaluateHandoffReadiness } from './build-v14241-real-env-handoff-pack.mjs'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
@@ -676,11 +677,12 @@ function checkPassesForCloseout(check) {
   return check.status === 'pass' || check.status === 'supporting'
 }
 
-async function login({ apiBase, username, password, redactions }) {
+async function login({ apiBase, username, password, redactions, publicOrigin }) {
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const result = await request({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: resolvedPublicOrigin },
     body: { username, password },
     timeoutMs: 10000,
   })
@@ -746,7 +748,7 @@ async function captureBrowserEvidence({ clientBase, apiBase, token, companyId, p
   }
 }
 
-async function executeScenario({ report, handoff, tier, resolvedRefs, artifactRoot, auditReadbackFile, auditEnvFile, cleanupReadbackFile, now }) {
+async function executeScenario({ report, handoff, tier, resolvedRefs, artifactRoot, auditReadbackFile, auditEnvFile, cleanupReadbackFile, publicOrigin, now }) {
   const redactions = [
     resolvedRefs.inviterUsername.value,
     resolvedRefs.inviterPassword.value,
@@ -763,6 +765,7 @@ async function executeScenario({ report, handoff, tier, resolvedRefs, artifactRo
     username: resolvedRefs.inviterUsername.value,
     password: resolvedRefs.inviterPassword.value,
     redactions,
+    publicOrigin,
   })
   report.commandsExecuted += 1
   report.checks.push({ id: 'inviter-login', status: inviterLogin.token ? 'pass' : 'blocked', result: inviterLogin.digest })
@@ -798,6 +801,7 @@ async function executeScenario({ report, handoff, tier, resolvedRefs, artifactRo
     username: selectedInvitedMember.username,
     password: selectedInvitedMember.password,
     redactions,
+    publicOrigin,
   })
   report.commandsExecuted += 1
   report.checks.push({ id: 'invited-member-login', status: invitedLogin.token ? 'pass' : 'blocked', result: invitedLogin.digest })
@@ -1032,6 +1036,7 @@ export async function runUat02InviteJoinRole({
   auditReadbackFile = null,
   auditEnvFile = null,
   cleanupReadbackFile = null,
+  publicOrigin = null,
   flags = {},
   now = new Date(),
 } = {}) {
@@ -1105,6 +1110,7 @@ export async function runUat02InviteJoinRole({
     auditReadbackFile,
     auditEnvFile,
     cleanupReadbackFile,
+    publicOrigin,
     now,
   })
   return writeReport(executed, output)
@@ -1138,6 +1144,7 @@ async function main() {
     auditReadbackFile: auditReadbackFile ? resolve(auditReadbackFile) : null,
     auditEnvFile: auditEnvFile ? resolve(auditEnvFile) : null,
     cleanupReadbackFile: cleanupReadbackFile ? resolve(cleanupReadbackFile) : null,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
     flags,
   })
   console.log(JSON.stringify({

@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
 const defaultEnvFile = join(repoRoot, 'deploy', 'env', 'staging.env')
@@ -375,8 +377,9 @@ async function choosePlanningProbeTarget({ apiBase, token, workspaceBody, fallba
   }
 }
 
-async function login({ apiBase, env }) {
+async function login({ apiBase, env, publicOrigin }) {
   const loginUrl = joinApiPath(apiBase, '/api/auth/login')
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const attempts = []
   let token = null
   if (!loginUrl) {
@@ -391,7 +394,7 @@ async function login({ apiBase, env }) {
     const result = await request({
       url: loginUrl,
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      headers: { 'content-type': 'application/json', accept: 'application/json', origin: resolvedPublicOrigin },
       body: {
         username: candidate.username,
         password: env.TEST_USER_PASSWORD,
@@ -419,6 +422,7 @@ export async function runPlanningReadonlyProbe({
   output = defaultOutput,
   now = new Date(),
   maxProjectCandidates = DEFAULT_MAX_PROJECT_CANDIDATES,
+  publicOrigin = null,
 } = {}) {
   const absoluteEnvFile = resolve(envFile)
   const env = await readEnvFile(absoluteEnvFile)
@@ -427,7 +431,7 @@ export async function runPlanningReadonlyProbe({
   const clientBase = normalizeBaseUrl(env.CLIENT_BASE_URL)
   const targetClass = classifyTarget(apiBase, clientBase)
   const loginResult = envCheck.status === 'pass'
-    ? await login({ apiBase, env })
+    ? await login({ apiBase, env, publicOrigin })
     : { token: null, attempts: [], status: 'blocked', reason: 'env_check_failed' }
   const token = loginResult.token
   const checks = [
@@ -650,7 +654,12 @@ async function main() {
   const envFile = resolve(argValue('--env-file', defaultEnvFile))
   const output = resolve(argValue('--output', defaultOutput))
   const maxProjectCandidates = Number(argValue('--max-project-candidates', String(DEFAULT_MAX_PROJECT_CANDIDATES)))
-  const report = await runPlanningReadonlyProbe({ envFile, output, maxProjectCandidates })
+  const report = await runPlanningReadonlyProbe({
+    envFile,
+    output,
+    maxProjectCandidates,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
+  })
   console.log(JSON.stringify({
     status: report.status,
     scenarioId: report.scenarioId,

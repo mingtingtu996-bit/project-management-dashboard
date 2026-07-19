@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import bcrypt from 'bcryptjs'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -243,10 +245,14 @@ async function login(baseUrl, fileEnv) {
   if (!username || !password) {
     throw new Error('TEST_USERNAME and TEST_USER_PASSWORD are required in the env file for G6 staging auth.')
   }
+  const publicOrigin = resolvePublicHttpsOrigin({
+    apiBaseUrl: baseUrl,
+    publicOrigin: fileEnv.PUBLIC_HTTPS_ORIGIN,
+  })
 
   const response = await fetch(`${baseUrl.replace(/\/$/, '')}/api/auth/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', origin: publicOrigin },
     body: JSON.stringify({ username, password }),
   })
   const text = await response.text()

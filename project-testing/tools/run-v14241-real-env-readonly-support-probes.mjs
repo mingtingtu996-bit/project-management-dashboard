@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
 const defaultEnvFile = join(repoRoot, 'deploy', 'env', 'staging.env')
@@ -274,7 +276,7 @@ function buildAuthHeaders(token) {
   }
 }
 
-async function login({ apiBase, env }) {
+async function login({ apiBase, env, publicOrigin }) {
   const loginUrl = joinApiPath(apiBase, '/api/auth/login')
   const attempts = []
   let token = null
@@ -290,7 +292,7 @@ async function login({ apiBase, env }) {
     const result = await request({
       url: loginUrl,
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      headers: { 'content-type': 'application/json', accept: 'application/json', origin: publicOrigin },
       body: {
         username: candidate.username,
         password: env.TEST_USER_PASSWORD,
@@ -438,8 +440,18 @@ export async function runReadonlySupportProbes({
     override: authBoundaryDiagnosticsOverride,
   })
   const envCheck = checkEnv(env)
+  let publicOrigin = null
+  try {
+    publicOrigin = resolvePublicHttpsOrigin({
+      apiBaseUrl: apiBase,
+      publicOrigin: env.PUBLIC_HTTPS_ORIGIN,
+    })
+  } catch {
+    envCheck.status = 'blocked'
+    envCheck.missingKeys.push('PUBLIC_HTTPS_ORIGIN for loopback API')
+  }
   const loginResult = envCheck.status === 'pass'
-    ? await login({ apiBase, env })
+    ? await login({ apiBase, env, publicOrigin })
     : { token: null, attempts: [], status: 'blocked', reason: 'env_check_failed' }
   const token = loginResult.token
   const setupChecks = [

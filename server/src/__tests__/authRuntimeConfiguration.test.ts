@@ -139,4 +139,16 @@ describe('auth runtime configuration', () => {
     expect(JWT_CONFIG.issuer).toBe('construction-management-system')
     expect(JWT_CONFIG.audience).toBe('api-users')
   })
+
+  it('rejects an invalid configured cookie name before a response cookie is written', () => {
+    process.env.NODE_ENV = 'test'
+    process.env.AUTH_COOKIE_NAME = 'bad cookie'
+    const response = {
+      clearCookie: vi.fn(),
+      cookie: vi.fn(),
+    } as unknown as Response
+
+    expect(() => setAuthTokenCookie(response, 'token')).toThrow(/AUTH_COOKIE_NAME/u)
+    expect(response.cookie).not.toHaveBeenCalled()
+  })
 })

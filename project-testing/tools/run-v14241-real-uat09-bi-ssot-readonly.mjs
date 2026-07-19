@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
 const defaultEnvFile = join(repoRoot, 'deploy', 'env', 'staging.env')
@@ -271,6 +273,7 @@ export async function runBiSsotReadonlyProbe({
   now = new Date(),
   readTimeoutMs = DEFAULT_READ_TIMEOUT_MS,
   readWarningThresholdMs = DEFAULT_READ_WARNING_THRESHOLD_MS,
+  publicOrigin = null,
 } = {}) {
   const absoluteEnvFile = resolve(envFile)
   const env = await readEnvFile(absoluteEnvFile)
@@ -279,6 +282,7 @@ export async function runBiSsotReadonlyProbe({
   const clientBase = normalizeBaseUrl(env.CLIENT_BASE_URL)
   const targetClass = classifyTarget(apiBase, clientBase)
   const checks = []
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
 
   let token = null
   const loginUrl = joinApiPath(apiBase, '/api/auth/login')
@@ -292,7 +296,7 @@ export async function runBiSsotReadonlyProbe({
       const result = await request({
         url: loginUrl,
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        headers: { 'content-type': 'application/json', accept: 'application/json', origin: resolvedPublicOrigin },
         body: {
           username: candidate.username,
           password: env.TEST_USER_PASSWORD,
@@ -485,7 +489,11 @@ export async function runBiSsotReadonlyProbe({
 async function main() {
   const envFile = resolve(argValue('--env-file', defaultEnvFile))
   const output = resolve(argValue('--output', defaultOutput))
-  const report = await runBiSsotReadonlyProbe({ envFile, output })
+  const report = await runBiSsotReadonlyProbe({
+    envFile,
+    output,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
+  })
   console.log(JSON.stringify({
     status: report.status,
     scenarioId: report.scenarioId,

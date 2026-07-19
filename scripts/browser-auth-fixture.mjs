@@ -48,6 +48,7 @@ async function loginWithFullAppFixture() {
     headers: {
       'Content-Type': 'application/json',
       Origin: publicOrigin,
+      'X-Forwarded-Proto': 'https',
     },
     body: JSON.stringify({
       username: account.username,

@@ -5,6 +5,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
 const defaultEnvFile = join(repoRoot, 'deploy', 'env', 'staging.env')
@@ -144,6 +146,16 @@ export async function runPreflight({
   const clientBase = normalizeBaseUrl(env.CLIENT_BASE_URL)
   const targetClass = classifyTarget(apiBase, clientBase)
   const checks = []
+  let publicOrigin = null
+  try {
+    publicOrigin = resolvePublicHttpsOrigin({
+      apiBaseUrl: apiBase,
+      publicOrigin: env.PUBLIC_HTTPS_ORIGIN,
+    })
+  } catch {
+    envCheck.status = 'blocked'
+    envCheck.missingKeys.push('PUBLIC_HTTPS_ORIGIN for loopback API')
+  }
 
   if (clientBase) {
     checks.push({
@@ -176,7 +188,7 @@ export async function runPreflight({
       loginResult = await request({
         url: loginUrl,
         method: 'POST',
-        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        headers: { 'content-type': 'application/json', accept: 'application/json', origin: publicOrigin },
         body: {
           username: candidate.username,
           password: env.TEST_USER_PASSWORD,

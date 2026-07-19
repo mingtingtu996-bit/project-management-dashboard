@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 
 import JSZip from 'jszip'
 import pg from 'pg'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const { Pool } = pg
 
@@ -461,11 +462,15 @@ async function buildContext(options) {
   if (issues.length > 0) {
     throw new Error(`Cannot collect staging evidence because refs are unresolved: ${issues.join(', ')}`)
   }
+  const publicOrigin = resolvePublicHttpsOrigin({
+    apiBaseUrl: resolved.apiBase.value,
+    publicOrigin: options.publicOrigin,
+  })
 
   const login = await requestJson({
     url: joinApiPath(resolved.apiBase.value, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: publicOrigin },
     body: { username: resolved.username.value, password: resolved.password.value },
     timeoutMs: 15000,
   })
@@ -492,7 +497,7 @@ async function buildContext(options) {
     const adminLogin = await requestJson({
       url: joinApiPath(resolved.apiBase.value, '/api/auth/login'),
       method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      headers: { 'content-type': 'application/json', accept: 'application/json', origin: publicOrigin },
       body: { username: resolved.companyAdminUsername.value, password: resolved.password.value },
       timeoutMs: 15000,
     })
@@ -1332,6 +1337,7 @@ async function main() {
     matrixFile,
     artifactRoot,
     evidenceRoot,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
   })
   const results = []
   for (const scenarioId of selected) {

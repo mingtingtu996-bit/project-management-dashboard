@@ -167,6 +167,7 @@ export async function runScenarioAttempts({
   artifactRoot = null,
   evidenceRoot = null,
   evidenceFiles = [],
+  publicOrigin = null,
   flags = {},
   now = new Date(),
 } = {}) {
@@ -192,6 +193,7 @@ export async function runScenarioAttempts({
       evidenceFiles,
       flags,
       now,
+      publicOrigin,
       ...scenarioDefaultEvidenceOptions(resolvedArtifactRoot, scenarioId, normalizedTier),
     })
     results.push({
@@ -303,6 +305,7 @@ async function main() {
     artifactRoot: resolve(argValue('--artifact-root', join(releaseDir, 'v14241-real-env-evidence', String(tier).toLowerCase()))),
     evidenceRoot: resolve(argValue('--evidence-root', join(releaseDir, 'v14241-real-env-evidence', String(tier).toLowerCase()))),
     evidenceFiles: argValues('--evidence-file'),
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
     flags,
   })
   console.log(JSON.stringify({

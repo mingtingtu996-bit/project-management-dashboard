@@ -31,7 +31,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { xssProtection, sanitizeInput } from './middleware/xssProtection.js'
 import { auditLogger } from './middleware/auditLogger.js'
 import { readOnlyCacheMiddleware } from './middleware/httpCache.js'
-import { createRequestOriginGuard } from './middleware/requestOriginGuard.js'
+import { createRuntimeRequestBoundary } from './middleware/runtimeRequestBoundary.js'
 import { assertAuthRuntimeConfiguration } from './auth/config.js'
 import { closeDatabasePool, query, warmDatabasePool } from './database.js'
 
@@ -153,7 +153,6 @@ import {
   assertProductionApiCredentialBoundary,
   resolveSupabaseRuntimeKey,
 } from './services/runtimeCredentialBoundary.js'
-import { shouldRejectInsecureProductionRequest } from './services/httpsRuntimeBoundary.js'
 import { recoverTaskBatchUpdateJobs } from './services/taskBatchUpdateService.js'
 import {
   beginJobRuntimeShutdown,
@@ -414,32 +413,14 @@ function isAuthLimitedRoute(req: express.Request) {
 }
 
 app.use(helmet())
-app.use((req, res, next) => {
-  if (shouldRejectInsecureProductionRequest({
-    nodeEnv: process.env.NODE_ENV,
-    path: req.originalUrl || req.path,
-    secure: req.secure,
-    forwardedProto: req.get('x-forwarded-proto'),
-  })) {
-    return res.status(426).json({
-      success: false,
-      error: {
-        code: 'HTTPS_REQUIRED',
-        message: 'Production API requests must use the trusted HTTPS entry point',
-      },
-      timestamp: new Date().toISOString(),
-    })
-  }
-  next()
-})
+app.use(createRuntimeRequestBoundary({
+  nodeEnv: process.env.NODE_ENV,
+  expectedOrigin: process.env.PUBLIC_HTTPS_ORIGIN ?? '',
+}))
 const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
   : ['http://localhost:5173'];
 
-app.use(createRequestOriginGuard({
-  enforce: IS_PRODUCTION,
-  expectedOrigin: process.env.PUBLIC_HTTPS_ORIGIN ?? '',
-}))
 app.use(cors({
   origin: corsOrigins,
   credentials: true

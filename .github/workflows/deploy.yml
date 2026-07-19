@@ -1131,6 +1131,7 @@ jobs:
           done
 
           curl --fail --silent --show-error \
+            --header "X-Forwarded-Proto: https" \
             "http://127.0.0.1:${local_smoke_port}/api/performance-reports/summary" \
             > "$RUNNER_TEMP/deployed-performance-summary.json"
           curl --fail --silent --show-error \
