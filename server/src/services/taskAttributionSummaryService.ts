@@ -5,6 +5,11 @@ import {
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import {
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 
 export type TaskSummaryAttributionDimension =
   | 'division'
@@ -81,8 +86,12 @@ export type TaskSummaryAttributionTotal = {
   delayed: number
   on_time_rate: number
   completion_rate: number
-  max_delay_days: number
-  avg_delay_days: number
+  max_delay: DurationMetricDto
+  avg_delay: DurationMetricDto
+  /** @deprecated Use max_delay. Removed after the v1.5 compatibility window. */
+  max_delay_days: number | null
+  /** @deprecated Use avg_delay. Removed after the v1.5 compatibility window. */
+  avg_delay_days: number | null
   recent_completed_at: string | null
   health_level: TaskSummaryAttributionHealthLevel
 }
@@ -179,7 +188,12 @@ export function isDelayedAttributionTask(
   calendar?: ConstructionCalendarContext | null,
 ) {
   if (!isCompletedAttributionTask(task)) return false
-  return isCompletedTaskDelayedAgainstPlan(task, calendar) && getAttributionDelayDays(task, calendar) > 0
+  const status = normalizeText(task.status_label).toLowerCase()
+  const plannedEnd = toDateOnly(task.planned_end_date)
+  const completedAt = toDateOnly(task.completed_at)
+  return status === 'delayed'
+    || Boolean(plannedEnd && completedAt && completedAt > plannedEnd)
+    || isCompletedTaskDelayedAgainstPlan(task, calendar)
 }
 
 function getAttributionDelayDays(
@@ -189,8 +203,15 @@ function getAttributionDelayDays(
   const plannedEnd = toDateOnly(task.planned_end_date)
   const completedAt = toDateOnly(task.completed_at)
   const computedDelay = delayDayDelta(plannedEnd, completedAt, calendar)
-  if (computedDelay !== null) return Math.max(computedDelay, 0)
-  return Math.max(Number(task.delay_total_days ?? 0), 0)
+  const metric = buildConstructionProductionDayDurationMetric(
+    computedDelay === null ? null : Math.max(computedDelay, 0),
+    {
+      asOf: completedAt || plannedEnd || businessDateKey(new Date(), calendar?.timezone || 'Asia/Shanghai'),
+      timezone: calendar?.timezone,
+      calendar,
+    },
+  )
+  return metric.availability === 'available' ? metric.value : null
 }
 
 function getRecentCompletedAt(rows: TaskSummaryAttributionTask[]) {
@@ -396,8 +417,10 @@ export function createEmptyAttributionTotalsMap(): TaskSummaryAttributionTotalsM
 export function buildTaskSummaryAttributionTotals(
   tasks: TaskSummaryAttributionTask[],
   calendar?: ConstructionCalendarContext | null,
+  asOfDate?: string,
 ): TaskSummaryAttributionTotalsMap {
   const totals = createEmptyAttributionTotalsMap()
+  const asOf = asOfDate || businessDateKey(new Date(), calendar?.timezone || 'Asia/Shanghai')
 
   for (const { meta, rows } of buildAttributionBuckets(tasks)) {
     const completedRows = rows.filter(isCompletedAttributionTask)
@@ -405,9 +428,19 @@ export function buildTaskSummaryAttributionTotals(
     const onTimeCount = completedRows.length - delayedRows.length
     const onTimeRate = getRate(onTimeCount, completedRows.length)
     // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
-    const delayDaysTotal = delayedRows.reduce((sum, row) => sum + getAttributionDelayDays(row, calendar), 0)
-    // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
-    const maxDelayDays = delayedRows.reduce((max, row) => Math.max(max, getAttributionDelayDays(row, calendar)), 0)
+    const delayValues = delayedRows
+      .map((row) => getAttributionDelayDays(row, calendar))
+      .filter((value): value is number => value !== null)
+    const allDelayValuesAvailable = delayValues.length === delayedRows.length
+    const delayDaysTotal = allDelayValuesAvailable
+      ? delayValues.reduce((sum, value) => sum + value, 0)
+      : null
+    const maxDelayDays = allDelayValuesAvailable
+      ? delayValues.reduce((max, value) => Math.max(max, value), 0)
+      : null
+    const avgDelayDays = delayDaysTotal !== null
+      ? (delayedRows.length > 0 ? Math.round((delayDaysTotal / delayedRows.length) * 10) / 10 : 0)
+      : null
 
     totals[meta.dimension][meta.id] = {
       total: rows.length,
@@ -416,8 +449,18 @@ export function buildTaskSummaryAttributionTotals(
       delayed: delayedRows.length,
       on_time_rate: onTimeRate,
       completion_rate: getRate(completedRows.length, rows.length),
+      max_delay: buildConstructionProductionDayDurationMetric(maxDelayDays, {
+        asOf,
+        timezone: calendar?.timezone,
+        calendar,
+      }),
+      avg_delay: buildConstructionProductionDayDurationMetric(avgDelayDays, {
+        asOf,
+        timezone: calendar?.timezone,
+        calendar,
+      }),
       max_delay_days: maxDelayDays,
-      avg_delay_days: delayedRows.length > 0 ? Math.round((delayDaysTotal / delayedRows.length) * 10) / 10 : 0,
+      avg_delay_days: avgDelayDays,
       recent_completed_at: getRecentCompletedAt(completedRows),
       health_level: getHealthLevel(onTimeRate),
     }
@@ -432,7 +475,7 @@ export class TaskAttributionSummaryService {
     tasks: TaskSummaryAttributionTask[] = [],
   ): Promise<TaskSummaryAttributionTotalsMap> {
     const calendar = await resolveConstructionCalendarContext({ projectId })
-    return buildTaskSummaryAttributionTotals(tasks, calendar)
+    return buildTaskSummaryAttributionTotals(tasks, calendar, businessDateKey(new Date(), calendar.timezone || 'Asia/Shanghai'))
   }
 }
 
