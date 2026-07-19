@@ -454,6 +454,8 @@ jobs:
           SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           RUNTIME_DATABASE_URL: ${{ secrets[format('{0}_RUNTIME_DATABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           set -euo pipefail
           missing=()
@@ -470,7 +472,9 @@ jobs:
             SUPABASE_ANON_KEY \
             SUPABASE_MIGRATION_URL \
             RUNTIME_DATABASE_URL \
-            SUPABASE_ADVISOR_EXPORT_JSON; do
+            SUPABASE_ADVISOR_EXPORT_JSON \
+            EXPECTED_JWT_SECRET_SHA256 \
+            PEER_JWT_SECRET_SHA256; do
             if [ -z "${!name:-}" ]; then
               missing+=("$name")
             fi
@@ -587,6 +591,44 @@ jobs:
             echo "- Classification: $ingress_classification"
             echo "- Runtime preflight: $predeploy_runtime_classification"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify remote runtime JWT fingerprint
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+          DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PEER_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [ "$EXPECTED_JWT_SECRET_SHA256" != "$PEER_JWT_SECRET_SHA256" ]
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
+          chmod 600 ~/.ssh/project-management-deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          remote_command="$(printf 'bash -s -- %q %q %q' "$DEPLOY_PATH" "$EXPECTED_JWT_SECRET_SHA256" "$PEER_JWT_SECRET_SHA256")"
+          ssh -i ~/.ssh/project-management-deploy -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR="$1"
+          EXPECTED_JWT_SECRET_SHA256="$2"
+          PEER_JWT_SECRET_SHA256="$3"
+          case "$APP_DIR" in "~") APP_DIR="$HOME" ;; "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;; esac
+          ENV_FILE="$APP_DIR/deploy/env/server.production.env"
+          [ -f "$ENV_FILE" ]
+          jwt_secret="$(awk -F= '$1 == "JWT_SECRET" { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$ENV_FILE")"
+          [ "${#jwt_secret}" -ge 32 ]
+          actual_fingerprint="$(printf '%s' "$jwt_secret" | sha256sum | awk '{print $1}')"
+          [ "$actual_fingerprint" = "$EXPECTED_JWT_SECRET_SHA256" ]
+          [ "$EXPECTED_JWT_SECRET_SHA256" != "$PEER_JWT_SECRET_SHA256" ]
+          REMOTE
 
       - name: Verify deployment target database identity
         env:
@@ -1029,6 +1071,9 @@ jobs:
           DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
           EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           health_url_valid=false
           if [[ "$DEPLOY_HEALTH_URL" == https://* ]]; then
@@ -1039,7 +1084,7 @@ jobs:
             redirect_url_valid=true
           fi
 
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ -n "$DEPLOY_HEALTH_URL" ] && [ "$health_url_valid" = "true" ] && [ -n "$DEPLOY_HTTP_REDIRECT_URL" ] && [ "$redirect_url_valid" = "true" ] && [ -n "$EXPECTED_PUBLIC_HOST" ]; then
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ -n "$DEPLOY_HEALTH_URL" ] && [ "$health_url_valid" = "true" ] && [ -n "$DEPLOY_HTTP_REDIRECT_URL" ] && [ "$redirect_url_valid" = "true" ] && [ -n "$EXPECTED_PUBLIC_HOST" ] && [ -n "$EXPECTED_JWT_SECRET_SHA256" ] && [ -n "$PEER_JWT_SECRET_SHA256" ]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
             {
               echo "### Self-hosted deployment eligible"
@@ -1090,6 +1135,9 @@ jobs:
           DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
           EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           RELEASE_ARCHIVE="/tmp/project-management-${RELEASE_SHA}.tar.gz"
           RELEASE_DIR="$(mktemp -d)"
@@ -1110,7 +1158,7 @@ jobs:
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" INITIAL_RUNTIME_BOOTSTRAP=\"$INITIAL_RUNTIME_BOOTSTRAP\" EXPECTED_JWT_SECRET_SHA256=\"$EXPECTED_JWT_SECRET_SHA256\" PEER_JWT_SECRET_SHA256=\"$PEER_JWT_SECRET_SHA256\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Verify API port is not externally reachable
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}

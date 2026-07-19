@@ -6,6 +6,10 @@ ROOT_DIR="${ROOT_DIR:-/opt/workbuddy-ingress}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-workbuddy-ingress}"
 CADDY_IMAGE="caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 STATE_FILE="$ROOT_DIR/pending-activation.env"
+EXPECTED_PRODUCTION_HOST="${EXPECTED_PRODUCTION_HOST:-zhuxucloud.com}"
+EXPECTED_STAGING_HOST="${EXPECTED_STAGING_HOST:-staging.zhuxucloud.com}"
+PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-wwdrkjnbvcbfytwnnyvs}"
+STAGING_PROJECT_REF="${STAGING_PROJECT_REF:-xemqmqpifsstkovbkatp}"
 
 require_sha() {
   [[ "$1" =~ ^[0-9a-f]{40}$ ]] || {
@@ -44,13 +48,13 @@ compose_down() {
     --project-name "$COMPOSE_PROJECT" \
     --env-file "$(env_file_for "$release_dir")" \
     --file "$(compose_file_for "$release_dir")" \
-    down || true
+    down
 }
 
 atomic_link() {
   local target="$1"
-  ln -sfn "$target" "$ROOT_DIR/current.next"
-  mv -Tf "$ROOT_DIR/current.next" "$ROOT_DIR/current"
+  ln -sfn "$target" "$ROOT_DIR/current.next" || return 1
+  mv -Tf "$ROOT_DIR/current.next" "$ROOT_DIR/current" || return 1
 }
 
 load_state() {
@@ -65,36 +69,85 @@ load_state() {
   PREVIOUS_TARGET="${PREVIOUS_TARGET:-}"
 }
 
+write_activation_state() {
+  local state_candidate="${STATE_FILE}.next.$$"
+  rm -f "$state_candidate" || return 1
+  if ! {
+    printf 'ACTIVATED_SHA=%q\n' "$RELEASE_SHA"
+    printf 'ACTIVATED_TARGET=%q\n' "$RELEASE_DIR"
+    printf 'PREVIOUS_TARGET=%q\n' "$PREVIOUS_TARGET"
+  } > "$state_candidate"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+  if ! chmod 600 "$state_candidate"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+  if ! mv -f "$state_candidate" "$STATE_FILE"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+}
+
 rollback() {
   local failed_sha="${FAILED_RELEASE_SHA:-}"
+  local current_target
   require_sha "$failed_sha"
   load_state
   [ "$ACTIVATED_SHA" = "$failed_sha" ] || {
     echo "Pending activation SHA does not match the rollback request." >&2
-    exit 2
+    return 2
   }
-  [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$ACTIVATED_TARGET" ] || {
-    echo "Current ingress release changed; refusing stale rollback." >&2
-    exit 2
-  }
+  current_target="$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)"
 
   if [ -n "$PREVIOUS_TARGET" ] && [ -d "$PREVIOUS_TARGET" ]; then
-    atomic_link "$PREVIOUS_TARGET"
-    compose_up "$PREVIOUS_TARGET"
+    case "$current_target" in
+      "$ACTIVATED_TARGET"|"$PREVIOUS_TARGET") ;;
+      *)
+        echo "Current ingress release changed; refusing stale rollback." >&2
+        return 2
+        ;;
+    esac
+    compose_up "$PREVIOUS_TARGET" || return 1
+    atomic_link "$PREVIOUS_TARGET" || return 1
   else
-    compose_down "$ACTIVATED_TARGET"
-    rm -f "$ROOT_DIR/current"
+    case "$current_target" in
+      "$ACTIVATED_TARGET"|'') ;;
+      *)
+        echo "Current ingress release changed; refusing stale rollback." >&2
+        return 2
+        ;;
+    esac
+    compose_down "$ACTIVATED_TARGET" || return 1
+    rm -f "$ROOT_DIR/current" || return 1
   fi
-  rm -f "$STATE_FILE"
+  if [[ "$ACTIVATED_TARGET" == "$ROOT_DIR/releases/"* ]] && [ -d "$ACTIVATED_TARGET" ]; then
+    mkdir -p "$ROOT_DIR/failed" || return 1
+    mv "$ACTIVATED_TARGET" "$ROOT_DIR/failed/${ACTIVATED_SHA}-$(date -u +%Y%m%dT%H%M%SZ)-$$" || return 1
+  fi
+  rm -f "$STATE_FILE" || return 1
   printf '%s\n' '{"status":"rolled_back","sourceMutation":false,"databaseMutation":false}'
 }
 
 commit_activation() {
   local activated_sha="${RELEASE_SHA:-}"
   require_sha "$activated_sha"
+  if [ ! -f "$STATE_FILE" ]; then
+    [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$ROOT_DIR/releases/$activated_sha" ] || {
+      echo "No matching active ingress release exists for idempotent commit." >&2
+      exit 2
+    }
+    printf '%s\n' '{"status":"already_committed","sourceMutation":false,"databaseMutation":false}'
+    return
+  fi
   load_state
   [ "$ACTIVATED_SHA" = "$activated_sha" ] || {
     echo "Pending activation SHA does not match commit request." >&2
+    exit 2
+  }
+  [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$ACTIVATED_TARGET" ] || {
+    echo "Current ingress release changed; refusing stale commit." >&2
     exit 2
   }
   rm -f "$STATE_FILE"
@@ -133,8 +186,12 @@ BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-upgrade}"
 require_sha "$RELEASE_SHA"
 require_hostname "$PRODUCTION_HOST"
 require_hostname "$STAGING_HOST"
-[ "$PRODUCTION_HOST" != "$STAGING_HOST" ] || {
-  echo "Production and staging hosts must differ." >&2
+[ "$PRODUCTION_HOST" = "$EXPECTED_PRODUCTION_HOST" ] || {
+  echo "Production host does not match the governed authority map." >&2
+  exit 2
+}
+[ "$STAGING_HOST" = "$EXPECTED_STAGING_HOST" ] || {
+  echo "Staging host does not match the governed authority map." >&2
   exit 2
 }
 case "$BOOTSTRAP_MODE" in
@@ -145,10 +202,12 @@ esac
   echo "Ingress release archive is missing." >&2
   exit 2
 }
-[ ! -f "$STATE_FILE" ] || {
-  echo "A pending ingress activation must be committed or rolled back first." >&2
-  exit 3
-}
+if [ -f "$STATE_FILE" ]; then
+  load_state
+  stale_activation_sha="$ACTIVATED_SHA"
+  echo "Recovering a pending ingress activation before retrying."
+  FAILED_RELEASE_SHA="$stale_activation_sha" rollback
+fi
 
 RELEASE_DIR="$ROOT_DIR/releases/$RELEASE_SHA"
 CANDIDATE_DIR="$ROOT_DIR/.candidate-$RELEASE_SHA-$$"
@@ -157,14 +216,47 @@ ACTIVATED=false
 
 restore_on_failure() {
   local exit_code=$?
+  local cleanup_status=0
+  local recovery_status=0
+  local recovery_kind=none
+  trap - ERR INT TERM
+  set +e
   rm -rf "$CANDIDATE_DIR"
-  if [ "$ACTIVATED" = true ]; then
-    FAILED_RELEASE_SHA="$RELEASE_SHA" rollback || true
+  cleanup_status=$?
+  if [ "$ACTIVATED" = true ] || { [ -n "${STATE_FILE:-}" ] && [ -f "$STATE_FILE" ]; }; then
+    recovery_kind=rollback
+    FAILED_RELEASE_SHA="$RELEASE_SHA" rollback
+    recovery_status=$?
+  elif [ -n "${RELEASE_DIR:-}" ] && [ -d "$RELEASE_DIR" ]; then
+    recovery_kind=quarantine
+    if [ "$RELEASE_DIR" = "$ROOT_DIR/releases/$RELEASE_SHA" ]; then
+      mkdir -p "$ROOT_DIR/failed" \
+        && mv "$RELEASE_DIR" "$ROOT_DIR/failed/${RELEASE_SHA}-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+      recovery_status=$?
+    else
+      recovery_status=2
+    fi
+  fi
+  if [ "$cleanup_status" -ne 0 ]; then
+    echo "Ingress candidate cleanup did not complete; rollback was still attempted." >&2
+  fi
+  if [ "$recovery_status" -ne 0 ]; then
+    if [ "$recovery_kind" = rollback ]; then
+      echo "Ingress rollback did not complete; pending activation state was preserved for recovery." >&2
+    else
+      echo "Ingress failed release quarantine did not complete; the immutable release was preserved for recovery." >&2
+    fi
   fi
   exit "$exit_code"
 }
 trap restore_on_failure ERR INT TERM
 
+if [ -d "$RELEASE_DIR" ] \
+  && [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$RELEASE_DIR" ]; then
+  trap - ERR INT TERM
+  printf '%s\n' '{"status":"already_active","sourceMutation":false,"databaseMutation":false}'
+  exit 0
+fi
 [ ! -e "$RELEASE_DIR" ] || {
   echo "Ingress release already exists; refusing to overwrite it." >&2
   exit 2
@@ -205,12 +297,7 @@ docker run --rm \
 mkdir -p "$ROOT_DIR/releases"
 write_ingress_env "$RELEASE_DIR" "$CANDIDATE_DIR/env/ingress.env"
 mv "$CANDIDATE_DIR" "$RELEASE_DIR"
-{
-  printf 'ACTIVATED_SHA=%q\n' "$RELEASE_SHA"
-  printf 'ACTIVATED_TARGET=%q\n' "$RELEASE_DIR"
-  printf 'PREVIOUS_TARGET=%q\n' "$PREVIOUS_TARGET"
-} > "$STATE_FILE"
-chmod 600 "$STATE_FILE"
+write_activation_state
 atomic_link "$RELEASE_DIR"
 ACTIVATED=true
 compose_up "$RELEASE_DIR"
@@ -229,23 +316,50 @@ probe_redirect() {
 
 probe_https() {
   local host="$1"
+  local expected_target="$2"
+  local expected_project_ref="$3"
   local headers="$ROOT_DIR/.headers-$host-$$"
   local body="$ROOT_DIR/.body-$host-$$"
   local status
-  status="$(curl --silent --show-error --max-time 45 \
+  if ! status="$(curl --silent --show-error --max-time 45 \
     --resolve "$host:443:127.0.0.1" \
     --dump-header "$headers" --output "$body" --write-out '%{http_code}' \
-    "https://$host/api/readyz")"
-  tr -d '\r' < "$headers" | grep -qi '^strict-transport-security:'
+    "https://$host/api/readyz")"; then
+    rm -f "$headers" "$body"
+    return 1
+  fi
+  if ! tr -d '\r' < "$headers" | grep -qi '^strict-transport-security:'; then
+    rm -f "$headers" "$body"
+    return 1
+  fi
+  if [ "$status" = 200 ]; then
+    if ! node --input-type=module - "$body" "$expected_target" "$expected_project_ref" <<'NODE'
+import { readFileSync } from 'node:fs';
+const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const expectedTarget = process.argv[3];
+const expectedProjectRef = process.argv[4];
+if (readiness.status !== 'ready'
+  || readiness.build?.deployTarget !== expectedTarget
+  || readiness.build?.supabaseProjectRef !== expectedProjectRef
+  || readiness.build?.databaseProjectRef !== expectedProjectRef) {
+  process.exit(1);
+}
+NODE
+    then
+      rm -f "$headers" "$body"
+      return 1
+    fi
+  fi
   rm -f "$headers" "$body"
   printf '%s' "$status"
 }
 
 for attempt in $(seq 1 18); do
   if probe_redirect "$PRODUCTION_HOST" && probe_redirect "$STAGING_HOST"; then
-    production_status="$(probe_https "$PRODUCTION_HOST" || true)"
-    staging_status="$(probe_https "$STAGING_HOST" || true)"
-    if [ -n "$production_status" ] && [ -n "$staging_status" ]; then break; fi
+    if production_status="$(probe_https "$PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF")" \
+      && staging_status="$(probe_https "$STAGING_HOST" staging "$STAGING_PROJECT_REF")"; then
+      break
+    fi
   fi
   if [ "$attempt" -eq 18 ]; then
     echo "Domain TLS or redirect probes did not become ready." >&2

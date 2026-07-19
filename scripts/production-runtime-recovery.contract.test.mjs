@@ -112,6 +112,22 @@ test('recovery policy is fail closed and records evidence without inferring OOM 
   assert.doesNotMatch(script, /migrat(?:e|ion)/i)
 })
 
+test('recovery binds container actions to the atomic current release and refuses deployment overlap', () => {
+  const script = readOwnedFile('scripts/recover-production-runtime.sh')
+
+  assert.match(script, /CURRENT_LINK="\$APP_DIR\/current"/)
+  assert.match(script, /pending-application-release\.env/)
+  assert.match(script, /flock -n 9/)
+  assert.match(script, /ACTIVE_RELEASE_DIR/)
+  assert.match(script, /readlink -f "\$CURRENT_LINK"/)
+  assert.match(script, /release_sha_from_manifest/)
+  assert.match(script, /\[ "\$release_sha" = "\$active_release_sha" \]/)
+
+  const pendingGuard = script.indexOf('pending-application-release.env')
+  const containerMutation = script.indexOf('recover_container()')
+  assert.ok(pendingGuard >= 0 && pendingGuard < containerMutation)
+})
+
 test('all recovery notifications are independent and cannot suppress later stages', () => {
   const workflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
   const notificationJobs = [
