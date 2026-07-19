@@ -4390,6 +4390,13 @@
     },
     {
       "kind": "service",
+      "id": "commercialTriggerRpcAclRemediationService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "verifies the exact production Supabase target, migration 308 ledger phase, and trigger-function ACL readback for the protected one-time remediation; performs no business writes"
+    },
+    {
+      "kind": "service",
       "id": "companySummaryService",
       "architectureUnit": "主执行环：描述分析",
       "runtimeScope": "business_core",

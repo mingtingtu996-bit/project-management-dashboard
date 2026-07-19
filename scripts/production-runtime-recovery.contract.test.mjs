@@ -145,16 +145,18 @@ test('production runtime recovery requires both local verification and public HT
   )
 })
 
-test('production deploy, staging deploy, recovery, and ingress share one host mutation queue', () => {
+test('production deploy, staging deploy, recovery, ingress, and ACL remediation share one mutation queue', () => {
   const deployWorkflow = readOwnedFile('.github/workflows/deploy.yml')
   const recoveryWorkflow = readOwnedFile('.github/workflows/production-runtime-recovery.yml')
   const ingressWorkflow = readOwnedFile('.github/workflows/provision-domain-ingress.yml')
+  const aclRemediationWorkflow = readOwnedFile('.github/workflows/production-advisor-acl-remediation.yml')
 
   const sharedGroup = 'lighthouse-host-runtime-mutation'
   assert.match(deployWorkflow, new RegExp(sharedGroup))
   assert.match(deployWorkflow, /github\.event\.inputs\.environment != 'preview'/)
   assert.match(recoveryWorkflow, new RegExp(`group:\\s*${sharedGroup}`))
   assert.match(ingressWorkflow, new RegExp(`group:\\s*${sharedGroup}`))
+  assert.match(aclRemediationWorkflow, new RegExp(`group:\\s*${sharedGroup}`))
   assert.doesNotMatch(recoveryWorkflow, /group:\s*production-runtime-mutation/)
   assert.doesNotMatch(ingressWorkflow, /group:\s*workbuddy-domain-ingress/)
 })
