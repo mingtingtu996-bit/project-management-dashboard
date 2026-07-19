@@ -37,7 +37,14 @@ function normalizeValue(value: unknown) {
 
 function normalizeAsOf(value: unknown) {
   const text = normalizeText(value)
-  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return ''
+  const [year, month, day] = text.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
+    ? text
+    : ''
 }
 
 function unavailableMetric(

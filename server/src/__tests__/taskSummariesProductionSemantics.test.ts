@@ -6,6 +6,7 @@ import {
   getTaskActualEndDate,
   getTaskPlannedEndDate,
   isTaskDelayedByPeriodEnd,
+  resolveTaskSummaryDurationAsOf,
 } from '../routes/task-summaries.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
 
@@ -96,5 +97,12 @@ describe('task-summary production delay semantics', () => {
     }
 
     expect(isTaskDelayedByPeriodEnd(task, '2026-02-28', SPRING_FESTIVAL_SHUTDOWN)).toBe(false)
+  })
+
+  it('derives fallback as-of from the construction-calendar timezone at a UTC date boundary', () => {
+    expect(resolveTaskSummaryDurationAsOf({}, {
+      ...SPRING_FESTIVAL_SHUTDOWN,
+      timezone: 'Asia/Shanghai',
+    }, new Date('2026-07-19T18:00:00.000Z'))).toBe('2026-07-20')
   })
 })

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildDashboardFocusTasksResponse } from '../services/dashboardFocusTaskService.js'
+import {
+  buildDashboardFocusTasksResponse,
+  normalizeDashboardFocusTaskLimit,
+} from '../services/dashboardFocusTaskService.js'
 
 const calendar = {
   basis: 'official_construction_calendar_seed' as const,
@@ -56,5 +59,27 @@ describe('dashboardFocusTaskService', () => {
         availability: 'unavailable',
       }),
     }))
+  })
+
+  it('reports the full filtered count while limiting returned items', () => {
+    const result = buildDashboardFocusTasksResponse({
+      rows: Array.from({ length: 8 }, (_, index) => ({
+        id: `task-${index + 1}`,
+        title: `Task ${index + 1}`,
+        status: 'pending',
+        planned_end_date: '2026-07-22',
+      })),
+      filter: 'week',
+      limit: 6,
+      now: new Date('2026-07-20T00:00:00.000Z'),
+      calendar,
+    })
+
+    expect(result.items).toHaveLength(6)
+    expect(result.totalCount).toBe(8)
+  })
+
+  it('keeps the dashboard focus task default limit at six', () => {
+    expect(normalizeDashboardFocusTaskLimit(undefined)).toBe(6)
   })
 })

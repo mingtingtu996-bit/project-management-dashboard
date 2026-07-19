@@ -19,6 +19,8 @@ import {
 } from '../services/scopedDurationForecastRuntimeService.js'
 import { getProjectTimelineEvents, isTaskTimelineEventStoreReady } from '../services/taskTimelineService.js'
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
+import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
+import { businessDateKey } from '../services/durationMetricService.js'
 import { executeSQLOne, supabase } from '../services/dbService.js'
 import {
   buildDailyTaskProgressSummary,
@@ -46,6 +48,16 @@ export {
   getTaskActualEndDate,
   getTaskPlannedEndDate,
   isTaskDelayedByPeriodEnd,
+}
+
+export function resolveTaskSummaryDurationAsOf(
+  task: { completedAt?: string | null; plannedEndDate?: string | null },
+  calendar?: ConstructionCalendarContext | null,
+  now = new Date(),
+) {
+  return task.completedAt?.slice(0, 10)
+    || task.plannedEndDate?.slice(0, 10)
+    || businessDateKey(now, calendar?.timezone)
 }
 
 const router = Router()
@@ -658,7 +670,7 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
     const taskCompleted = isCompletedTask(t)
     const actualEndDate = getTaskActualEndDate(t)
     const completedAt = taskCompleted ? (actualEndDate || plannedEndDate) : null
-    const asOf = completedAt?.slice(0, 10) || plannedEndDate?.slice(0, 10) || new Date().toISOString().slice(0, 10)
+    const asOf = resolveTaskSummaryDurationAsOf({ completedAt, plannedEndDate }, workCalendar)
     const completionDelay = calculateTaskCompletionDelayStats({
       planned_end_date: plannedEndDate,
       actual_end_date: completedAt,
