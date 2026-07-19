@@ -114,6 +114,61 @@ if [ -z "$(read_env_value SUPABASE_RUNTIME_KEY)" ]; then
   exit 1
 fi
 
+case "$DEPLOY_TARGET" in
+  production)
+    expected_auth_cookie_name="workbuddy_production_auth_token"
+    expected_jwt_issuer="workbuddy-production"
+    expected_jwt_audience="workbuddy-production-api"
+    ;;
+  staging)
+    expected_auth_cookie_name="workbuddy_staging_auth_token"
+    expected_jwt_issuer="workbuddy-staging"
+    expected_jwt_audience="workbuddy-staging-api"
+    ;;
+  *)
+    echo "Unsupported deployment target for runtime auth configuration: $DEPLOY_TARGET" >&2
+    exit 1
+    ;;
+esac
+
+auth_cookie_name="$(read_env_value AUTH_COOKIE_NAME)"
+jwt_issuer="$(read_env_value JWT_ISSUER)"
+jwt_audience="$(read_env_value JWT_AUDIENCE)"
+jwt_secret="$(read_env_value JWT_SECRET)"
+public_https_origin="$(read_env_value PUBLIC_HTTPS_ORIGIN)"
+runtime_public_ingress_mode="$(read_env_value PUBLIC_INGRESS_MODE)"
+cors_origin="$(read_env_value CORS_ORIGIN)"
+expected_public_origin="$(node -e "process.stdout.write(new URL(process.argv[1]).origin)" "$HEALTH_URL")"
+
+if [ "$auth_cookie_name" != "$expected_auth_cookie_name" ]; then
+  echo "AUTH_COOKIE_NAME does not match DEPLOY_TARGET." >&2
+  exit 1
+fi
+if [ "$jwt_issuer" != "$expected_jwt_issuer" ]; then
+  echo "JWT_ISSUER does not match DEPLOY_TARGET." >&2
+  exit 1
+fi
+if [ "$jwt_audience" != "$expected_jwt_audience" ]; then
+  echo "JWT_AUDIENCE does not match DEPLOY_TARGET." >&2
+  exit 1
+fi
+if [ "${#jwt_secret}" -lt 32 ]; then
+  echo "JWT_SECRET must contain at least 32 characters and must be environment-specific." >&2
+  exit 1
+fi
+if [ "$public_https_origin" != "$expected_public_origin" ]; then
+  echo "PUBLIC_HTTPS_ORIGIN must exactly match the deployment health origin." >&2
+  exit 1
+fi
+if [ "$runtime_public_ingress_mode" != "$PUBLIC_INGRESS_MODE" ]; then
+  echo "PUBLIC_INGRESS_MODE in the runtime env must match the deployment contract." >&2
+  exit 1
+fi
+if [ "$cors_origin" != "$expected_public_origin" ]; then
+  echo "CORS_ORIGIN must contain only the current deployment origin." >&2
+  exit 1
+fi
+
 WEB_PORT_VALUE="$(read_env_value WEB_PORT)"
 WEB_PORT_VALUE="${WEB_PORT_VALUE:-8080}"
 INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"

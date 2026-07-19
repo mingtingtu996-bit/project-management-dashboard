@@ -31,6 +31,8 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler.js'
 import { xssProtection, sanitizeInput } from './middleware/xssProtection.js'
 import { auditLogger } from './middleware/auditLogger.js'
 import { readOnlyCacheMiddleware } from './middleware/httpCache.js'
+import { createRequestOriginGuard } from './middleware/requestOriginGuard.js'
+import { assertAuthRuntimeConfiguration } from './auth/config.js'
 import { closeDatabasePool, query, warmDatabasePool } from './database.js'
 
 
@@ -390,6 +392,8 @@ const TRUST_PROXY_HOPS = Number(process.env.TRUST_PROXY_HOPS ?? (IS_PRODUCTION ?
 const DEFAULT_API_RATE_LIMIT_MAX = 2_000
 const DEFAULT_AUTH_RATE_LIMIT_MAX = 20
 
+assertAuthRuntimeConfiguration()
+
 if (Number.isFinite(TRUST_PROXY_HOPS) && TRUST_PROXY_HOPS > 0) {
   app.set('trust proxy', TRUST_PROXY_HOPS)
 }
@@ -432,6 +436,10 @@ const corsOrigins = process.env.CORS_ORIGIN
   ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
   : ['http://localhost:5173'];
 
+app.use(createRequestOriginGuard({
+  enforce: IS_PRODUCTION,
+  expectedOrigin: process.env.PUBLIC_HTTPS_ORIGIN ?? '',
+}))
 app.use(cors({
   origin: corsOrigins,
   credentials: true

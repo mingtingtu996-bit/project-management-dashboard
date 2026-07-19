@@ -13,6 +13,38 @@ The API rejects non-probe production requests that do not arrive through this
 trusted HTTPS boundary. `/api/livez` and `/api/readyz` remain
 available to local container and deployment probes.
 
+## Same-host authentication boundary
+
+Cookies do not distinguish ports. While production and staging share an IP
+host, browsers send both environments' cookies to both HTTPS ports. Distinct
+cookie names prevent overwrite and make each API select only its own token;
+they do not create separate browser cookie security domains.
+
+Production runtime values are:
+
+- `AUTH_COOKIE_NAME=workbuddy_production_auth_token`
+- `JWT_ISSUER=workbuddy-production`
+- `JWT_AUDIENCE=workbuddy-production-api`
+
+Staging runtime values are:
+
+- `AUTH_COOKIE_NAME=workbuddy_staging_auth_token`
+- `JWT_ISSUER=workbuddy-staging`
+- `JWT_AUDIENCE=workbuddy-staging-api`
+
+Each environment requires its own random `JWT_SECRET`. `PUBLIC_HTTPS_ORIGIN`
+and the sole `CORS_ORIGIN` must equal that environment's exact HTTPS origin.
+`PUBLIC_INGRESS_MODE` must match the selected deployment mode; temporary IP TLS
+uses port 443 for production and 8443 for staging. The API validates all of
+these values again at startup, including direct recovery starts that do not run
+the deployment script.
+Unsafe browser requests are rejected before routing unless `Origin` or
+`Referer` matches that origin. Cookie-free Bearer machine requests remain
+available. Release smoke commands that connect through an SSH loopback tunnel
+must pass the real public origin explicitly; `scripts/browser-auth-fixture.mjs`
+uses `PUBLIC_HTTPS_ORIGIN` for the same purpose. A controlled domain remains the
+final isolation and HSTS boundary.
+
 ## Production runtime recovery
 
 `.github/workflows/production-runtime-recovery.yml` runs an hourly SSH-based

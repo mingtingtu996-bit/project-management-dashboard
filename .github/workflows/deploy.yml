@@ -1159,12 +1159,13 @@ jobs:
           DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
           DEPLOY_PORT: ${{ secrets.STAGING_DEPLOY_PORT || '22' }}
           DEPLOY_PATH: ${{ secrets.STAGING_DEPLOY_PATH }}
+          DEPLOY_HEALTH_URL: ${{ secrets.STAGING_DEPLOY_HEALTH_URL }}
           STAGING_SMOKE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
           STAGING_SMOKE_TEST_USER_EMAIL: ${{ secrets.STAGING_TEST_USER_EMAIL }}
           STAGING_SMOKE_TEST_USER_PASSWORD: ${{ secrets.STAGING_TEST_USER_PASSWORD }}
         run: |
           set -euo pipefail
-          for required_name in STAGING_SMOKE_SUPABASE_URL STAGING_SMOKE_TEST_USER_EMAIL STAGING_SMOKE_TEST_USER_PASSWORD; do
+          for required_name in DEPLOY_HEALTH_URL STAGING_SMOKE_SUPABASE_URL STAGING_SMOKE_TEST_USER_EMAIL STAGING_SMOKE_TEST_USER_PASSWORD; do
             if [ -z "${!required_name}" ]; then
               echo "Missing required authenticated staging smoke secret: $required_name" >&2
               exit 1
@@ -1187,6 +1188,7 @@ jobs:
           smoke_env="$RUNNER_TEMP/staging-wizard-smoke.env"
           smoke_report="$RUNNER_TEMP/staging-wizard-baseline-revision.json"
           smoke_cleanup_report="$RUNNER_TEMP/staging-wizard-baseline-revision.cleanup.json"
+          public_origin="$(node -e "process.stdout.write(new URL(process.argv[1]).origin)" "$DEPLOY_HEALTH_URL")"
           smoke_completed=false
           tunnel_pid=""
           cleanup() {
@@ -1194,6 +1196,7 @@ jobs:
               node scripts/run-wizard-baseline-revision-staging.mjs \
                 --env-file "$smoke_env" \
                 --api-base-url "http://127.0.0.1:${local_smoke_port}" \
+                --public-origin "$public_origin" \
                 --cleanup-report "$smoke_report" \
                 --report "$smoke_cleanup_report" \
                 --request-timeout-ms 20000 \
@@ -1242,6 +1245,7 @@ jobs:
           node scripts/run-wizard-baseline-revision-staging.mjs \
             --env-file "$smoke_env" \
             --api-base-url "http://127.0.0.1:${local_smoke_port}" \
+            --public-origin "$public_origin" \
             --report "$smoke_report" \
             --deployed-staging-code \
             --release-sha "$RELEASE_SHA"

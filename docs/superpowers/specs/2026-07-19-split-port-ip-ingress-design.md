@@ -58,6 +58,10 @@ Each environment has two explicit public probe inputs:
 - `*_DEPLOY_HEALTH_URL`: exact HTTPS `/api/readyz` URL.
 - `*_DEPLOY_HTTP_REDIRECT_URL`: exact HTTP `/api/readyz` redirect source.
 
+Each manual deployment also declares `public_ingress_mode` as either
+`temporary_ip_tls` or `domain_hsts`. An IP-literal URL is accepted only in the
+explicit temporary mode; a DNS URL is accepted only in domain mode.
+
 The deployment script must not derive one from the other. It validates:
 
 1. the internal loopback `/api/readyz` response;
@@ -68,9 +72,10 @@ The deployment script must not derive one from the other. It validates:
 4. the redirect target exactly equals the HTTPS health URL, including scheme,
    host, port, path, and query;
 5. the performance summary is read from the same HTTPS origin;
-6. an IP-literal report is classified as
-   `hstsUserAgentPolicyApplicable=false` and cannot satisfy a production HSTS
-   readiness gate merely because an STS header is present.
+6. an IP-literal report is classified as `transportTlsReady=true`,
+   `temporaryIngressReady=true`, `hstsUserAgentPolicyApplicable=false`, and
+   `domainHstsReady=false`; it cannot claim final ingress closure merely because
+   an STS header is present.
 
 Ingress provisioning is a separate manually dispatched operation protected by
 the GitHub `production` environment. It requires an exact confirmation phrase,
@@ -78,14 +83,26 @@ pinned SSH host trust, a clean immutable main SHA, and a successful workflow
 guard. It may update only the ingress Compose/configuration boundary. It does
 not deploy application source, run migrations, or write application data.
 
-## Cookie Isolation
+## Cookie Selection Boundary
 
 Browser cookies do not distinguish ports. Production and staging therefore use
 different HTTP-only cookie names supplied as `AUTH_COOKIE_NAME` in each runtime
-environment. Production startup and deployment fail closed if the value is
-missing or unsafe. Development and test retain the existing `auth_token`
-default. The login, token extraction, and logout paths all read the same
-validated configuration value.
+environment. This prevents overwrite and makes each API select only its own
+token, but both cookies are still sent to both ports on the same IP host. This
+is a temporary same-trust-host boundary, not browser cookie-domain isolation.
+Production startup and deployment fail closed if the value is missing or
+unsafe. Development and test retain the existing `auth_token` default. The
+login, token extraction, and logout paths all read the same validated
+configuration value.
+
+Production and staging also use distinct JWT secrets, issuers, and audiences.
+Startup validates the exact target cookie name, issuer, audience, ingress mode,
+and a single `CORS_ORIGIN` equal to `PUBLIC_HTTPS_ORIGIN`; deploy-script checks
+are defense in depth rather than the only enforcement point. Unsafe browser
+methods under `/api/` require an exact Origin or same-origin Referer before the
+request reaches a handler. Cookie-free Bearer machine calls remain supported.
+Official wizard and browser authentication helpers carry the external HTTPS
+Origin even when their transport uses an SSH loopback tunnel.
 
 ## Recovery And Renewal
 
@@ -111,13 +128,14 @@ validated configuration value.
 - Firewall changes are limited to `80`, `443`, and `8443`; loopback
   `8080/8081` remain non-public. Cloud firewall changes require their own
   control-plane evidence and are not inferred from host firewall success.
-- The IP TLS boundary may restore encrypted access, but production readiness
+- The IP TLS boundary may restore encrypted access and may deploy in the
+  explicitly approved `temporary_ip_tls` mode, but final ingress readiness
   remains degraded while HSTS policy is inapplicable. No report or workflow may
   rename header presence to HSTS enforcement. Domain ingress is required to
   close that gate.
-- Ingress provisioning, existing-runtime recovery, and staging deployment may
-  proceed after their own guards pass. A new production application deployment
-  remains blocked with `hsts_policy_inapplicable_ip_literal` until its public
+- Ingress provisioning, runtime recovery, migrations, and staging/production
+  application deployment may proceed after their own guards pass in temporary
+  mode. Completion reports must retain `domainHstsReady=false` until the public
   authority is a controlled DNS name.
 - Application deploy and database migration remain blocked until the ingress
   contract, runtime role credential, advisor, backup, rollback, and same-SHA

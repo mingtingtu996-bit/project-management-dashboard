@@ -478,6 +478,24 @@ describe('deploy workflow contract', () => {
 
     const deployScript = readFileSync(resolve(workspaceRoot, 'scripts', 'deploy-lighthouse-server.sh'), 'utf8')
     const compose = readFileSync(resolve(workspaceRoot, 'deploy', 'docker-compose.lighthouse.yml'), 'utf8')
+    const runtimeEnvExample = readFileSync(
+      resolve(workspaceRoot, 'deploy', 'env', 'server.production.example'),
+      'utf8',
+    )
+
+    const envValues = new Map(
+      runtimeEnvExample
+        .split(/\r?\n/u)
+        .filter((line) => /^[A-Z][A-Z0-9_]*=/u.test(line))
+        .map((line) => {
+          const separator = line.indexOf('=')
+          return [line.slice(0, separator), line.slice(separator + 1)]
+        }),
+    )
+    expect(runtimeEnvExample.match(/^PUBLIC_HTTPS_ORIGIN=/gmu)).toHaveLength(1)
+    expect(runtimeEnvExample.match(/^CORS_ORIGIN=/gmu)).toHaveLength(1)
+    expect(runtimeEnvExample.match(/^JWT_SECRET=/gmu)).toHaveLength(1)
+    expect(envValues.get('CORS_ORIGIN')).toBe(envValues.get('PUBLIC_HTTPS_ORIGIN'))
 
     expect(deployScript).toContain('ALLOW_DIRTY_DEPLOY')
     expect(deployScript).toContain('git status --porcelain --untracked-files=no')
@@ -487,6 +505,17 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('run_docker_compose')
     expect(deployScript).toContain('read_env_value SUPABASE_URL')
     expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
+    expect(deployScript).toContain('read_env_value AUTH_COOKIE_NAME')
+    expect(deployScript).toContain('read_env_value JWT_ISSUER')
+    expect(deployScript).toContain('read_env_value JWT_AUDIENCE')
+    expect(deployScript).toContain('read_env_value JWT_SECRET')
+    expect(deployScript).toContain('workbuddy_production_auth_token')
+    expect(deployScript).toContain('workbuddy_staging_auth_token')
+    expect(deployScript).toContain('workbuddy-production-api')
+    expect(deployScript).toContain('workbuddy-staging-api')
+    expect(deployScript).toContain('read_env_value PUBLIC_HTTPS_ORIGIN')
+    expect(deployScript).toContain('read_env_value PUBLIC_INGRESS_MODE')
+    expect(deployScript).toContain('read_env_value CORS_ORIGIN')
     expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
     expect(deployScript).toContain('INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"')
     expect(deployScript).toContain(': "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"')

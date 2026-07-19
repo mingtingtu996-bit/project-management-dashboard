@@ -4,6 +4,8 @@ import process from 'node:process'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from './public-origin.mjs'
+
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const workspaceRoot = path.resolve(scriptDir, '..')
 
@@ -69,6 +71,10 @@ const args = parseArgs(process.argv.slice(2))
 const envPath = path.resolve(workspaceRoot, args.get('env-file') ?? 'deploy/env/staging.env')
 const env = loadEnvFile(envPath)
 const apiBaseUrl = requireValue(args.get('api-base-url') ?? 'http://127.0.0.1:3107', 'api-base-url').replace(/\/$/, '')
+const publicOrigin = resolvePublicHttpsOrigin({
+  apiBaseUrl,
+  publicOrigin: args.get('public-origin'),
+})
 const targetEnvironment = String(args.get('target-environment') ?? 'staging').trim()
 if (!['staging', 'production'].includes(targetEnvironment)) {
   throw new Error('target-environment must be staging or production')
@@ -456,6 +462,7 @@ async function apiRequest(method, requestPath, body, extraHeaders = {}) {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
+      Origin: publicOrigin,
       'X-Forwarded-Proto': 'https',
       'X-Company-Id': companyId,
       ...extraHeaders,
@@ -478,6 +485,7 @@ async function authenticate(expectedCompanyId = requestedCompanyId) {
     signal: AbortSignal.timeout(requestTimeoutMs),
     headers: {
       'Content-Type': 'application/json',
+      Origin: publicOrigin,
       'X-Forwarded-Proto': 'https',
     },
     body: JSON.stringify({ username: testUsername, password: testUserPassword }),

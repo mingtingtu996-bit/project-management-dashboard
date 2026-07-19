@@ -9,7 +9,13 @@ TRUST_PROXY_HOPS=1
 
 # A host-level CDN/LB/Caddy/Nginx must terminate TLS and proxy to
 # 127.0.0.1:${WEB_PORT}. The compose web port is intentionally not public.
+PUBLIC_INGRESS_MODE=domain_hsts
 PUBLIC_HTTPS_ORIGIN=https://workbuddy.example.com
+CORS_ORIGIN=https://workbuddy.example.com
+AUTH_COOKIE_NAME=workbuddy_production_auth_token
+JWT_ISSUER=workbuddy-production
+JWT_AUDIENCE=workbuddy-production-api
+JWT_SECRET=
 
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_RUNTIME_KEY=YOUR_NON_BYPASSRLS_RUNTIME_JWT_HERE
@@ -59,8 +65,6 @@ OFFICIAL_WEATHER_AREA_ID_MAP_JSON={}
 OFFICIAL_WEATHER_STATION_ID_MAP_JSON={"310000":"58367","上海市":"58367","北京市":"54511"}
 CMA_PUBLIC_WEATHER_BASE_URL=https://weather.cma.cn/api/weather/view
 
-CORS_ORIGIN=http://YOUR_SERVER_IP
-JWT_SECRET=CHANGE_ME_TO_A_STRONG_RANDOM_SECRET
 LOG_LEVEL=info
 LOG_PERSIST=false
 PDF_RENDER_CONCURRENCY=2
