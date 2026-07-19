@@ -5,6 +5,7 @@ on:
     branches: [main, master]
     paths:
       - '.github/workflows/deploy.yml'
+      - '.github/workflows/provision-domain-ingress.yml'
       - '.github/workflows/staging-duration-learning-cycle-v2.yml'
       - '.github/workflows/production-closeout-readiness.yml'
       - '.github/workflows/production-livegate-execution.yml'
@@ -15,6 +16,11 @@ on:
       - 'client/vercel.json'
       - 'scripts/recover-production-runtime.sh'
       - 'scripts/production-runtime-recovery.contract.test.mjs'
+      - 'scripts/domain-sni-ingress.contract.test.mjs'
+      - 'scripts/provision-lighthouse-domain-ingress.sh'
+      - 'deploy/ingress/**'
+      - 'deploy/docker-compose.ingress.yml'
+      - 'deploy/env/ingress.example'
       - 'server/scripts/workbuddy-staging-duration-learning-cycle-v2.mjs'
       - 'project-testing/tools/run-duration-learning-cycle-v2-staging-contract.test.mjs'
       - 'deploy/README.md'
@@ -598,6 +604,10 @@ jobs:
       - name: Verify production runtime recovery contract
         working-directory: .
         run: node --test scripts/production-runtime-recovery.contract.test.mjs
+
+      - name: Verify domain SNI ingress contract
+        working-directory: .
+        run: node --test scripts/domain-sni-ingress.contract.test.mjs
 
       - name: Enable pnpm via Corepack
         working-directory: .

@@ -259,7 +259,6 @@ derive_performance_summary_url() {
   local health_url="$1"
   case "$health_url" in
     */api/readyz) echo "${health_url%/api/readyz}/api/performance-reports/summary" ;;
-    */api/readyz) echo "${health_url%/api/readyz}/api/performance-reports/summary" ;;
     *) echo "${health_url%/}/api/performance-reports/summary" ;;
   esac
 }
@@ -335,11 +334,44 @@ if [ "$HEALTH_URL" != "$INTERNAL_HEALTH_URL" ]; then
       ;;
   esac
 
-  curl --fail --silent --show-error "$HEALTH_URL" >/tmp/project-management-public-health.json
-  cat /tmp/project-management-public-health.json
-  if ! curl --fail --silent --show-error --head "$HEALTH_URL" \
+  public_health_file=/tmp/project-management-public-health.json
+  curl --fail --silent --show-error "$HEALTH_URL" >"$public_health_file"
+  cat "$public_health_file"
+  expected_public_project_ref="$(node -e "process.stdout.write(new URL(process.argv[1]).hostname.split('.')[0])" "$(read_env_value SUPABASE_URL)")"
+  export RELEASE_SHA DEPLOY_TARGET
+  node --input-type=module - "$public_health_file" "$expected_public_project_ref" <<'NODE'
+import { readFileSync } from 'node:fs';
+
+const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const expectedProjectRef = process.argv[3];
+if (readiness.status !== 'ready') {
+  console.error('Public postdeploy readyz status is not ready');
+  process.exit(1);
+}
+if (readiness.build?.releaseSha !== process.env.RELEASE_SHA) {
+  console.error('Public postdeploy release SHA mismatch');
+  process.exit(1);
+}
+if (readiness.build?.deployTarget !== process.env.DEPLOY_TARGET) {
+  console.error('Public postdeploy target mismatch');
+  process.exit(1);
+}
+if (readiness.build?.supabaseProjectRef !== expectedProjectRef) {
+  console.error('Public postdeploy Supabase project mismatch');
+  process.exit(1);
+}
+if (readiness.build?.databaseProjectRef !== expectedProjectRef) {
+  console.error('Public postdeploy database project mismatch');
+  process.exit(1);
+}
+NODE
+
+  hsts_header_present=false
+  if curl --silent --show-error --head "$HEALTH_URL" \
     | tr -d '\r' \
     | grep -qi '^strict-transport-security:'; then
+    hsts_header_present=true
+  elif [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ]; then
     echo "Public HTTPS response is missing Strict-Transport-Security: $HEALTH_URL" >&2
     exit 1
   fi
@@ -367,7 +399,7 @@ if [ "$HEALTH_URL" != "$INTERNAL_HEALTH_URL" ]; then
   fi
 
   if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
-    printf '%s\n' '{"transportTlsReady":true,"temporaryIngressReady":true,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":false,"domainHstsReady":false}'
+    printf '{"transportTlsReady":true,"temporaryIngressReady":true,"hstsHeaderPresent":%s,"hstsUserAgentPolicyApplicable":false,"domainHstsReady":false}\n' "$hsts_header_present"
   else
     printf '%s\n' '{"transportTlsReady":true,"temporaryIngressReady":false,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":true,"domainHstsReady":true}'
   fi

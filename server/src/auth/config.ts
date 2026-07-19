@@ -8,11 +8,13 @@ const AUTH_RUNTIME_TARGETS = {
   production: {
     audience: 'workbuddy-production-api',
     cookieName: 'workbuddy_production_auth_token',
+    hostname: 'zhuxucloud.com',
     issuer: 'workbuddy-production',
   },
   staging: {
     audience: 'workbuddy-staging-api',
     cookieName: 'workbuddy_staging_auth_token',
+    hostname: 'staging.zhuxucloud.com',
     issuer: 'workbuddy-staging',
   },
 } as const
@@ -77,7 +79,7 @@ function assertPublicOriginMatchesTarget(target: keyof typeof AUTH_RUNTIME_TARGE
       throw new Error(`PUBLIC_HTTPS_ORIGIN does not match temporary_ip_tls ${target}`)
     }
   } else if (ingressMode === 'domain_hsts') {
-    if (ipVersion !== 0 || effectivePort !== '443') {
+    if (ipVersion !== 0 || effectivePort !== '443' || url.hostname !== AUTH_RUNTIME_TARGETS[target].hostname) {
       throw new Error(`PUBLIC_HTTPS_ORIGIN does not match domain_hsts ${target}`)
     }
   } else {

@@ -42,9 +42,22 @@ function isGloballyRoutableIpv4(hostname) {
 
 function isPublicDnsHostname(hostname) {
   if (isIP(hostname) !== 0 || hostname.length > 253) return false
-  const labels = hostname.toLowerCase().replace(/\.$/u, '').split('.')
+  const normalized = hostname.toLowerCase().replace(/\.$/u, '')
+  const specialUseSuffixes = [
+    'internal',
+    'local',
+    'localhost',
+    'onion',
+    'test',
+    'invalid',
+    'example',
+    'home.arpa',
+  ]
+  if (specialUseSuffixes.some((suffix) => normalized === suffix || normalized.endsWith(`.${suffix}`))) {
+    return false
+  }
+  const labels = normalized.split('.')
   if (labels.length < 2) return false
-  if (['example', 'invalid', 'local', 'localhost', 'test'].includes(labels.at(-1))) return false
   return labels.every(
     (label) => label.length > 0
       && label.length <= 63

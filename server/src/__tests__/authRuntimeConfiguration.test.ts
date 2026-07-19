@@ -108,6 +108,20 @@ describe('auth runtime configuration', () => {
     expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
   })
 
+  it('rejects production and staging domain origins when they are swapped', () => {
+    setProductionEnvironment('production')
+    process.env.PUBLIC_INGRESS_MODE = 'domain_hsts'
+    process.env.PUBLIC_HTTPS_ORIGIN = 'https://staging.zhuxucloud.com'
+    process.env.CORS_ORIGIN = process.env.PUBLIC_HTTPS_ORIGIN
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+
+    setProductionEnvironment('staging')
+    process.env.PUBLIC_INGRESS_MODE = 'domain_hsts'
+    process.env.PUBLIC_HTTPS_ORIGIN = 'https://zhuxucloud.com'
+    process.env.CORS_ORIGIN = process.env.PUBLIC_HTTPS_ORIGIN
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+  })
+
   it('uses the configured cookie name for set and clear operations', () => {
     setProductionEnvironment('production')
     const response = {
