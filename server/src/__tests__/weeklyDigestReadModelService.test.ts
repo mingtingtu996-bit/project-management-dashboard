@@ -80,6 +80,7 @@ describe('weeklyDigestReadModelService', () => {
   it.each([
     ['missing', {}],
     ['invalid', { generated_at: 'not-a-timestamp', week_start: 'not-a-date' }],
+    ['an impossible normalized timestamp', { generated_at: '2026-02-30T08:00:00.000Z' }],
   ])('fails closed when digest as-of metadata is %s', (_label, timestamps) => {
     const result = buildWeeklyDigestReadModel({
       project_id: 'project-1',

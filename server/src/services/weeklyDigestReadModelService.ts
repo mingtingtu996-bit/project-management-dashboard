@@ -38,12 +38,25 @@ function normalizeDigestRow(row: Record<string, unknown> | null | undefined) {
   )
 }
 
+function isStrictDateOnly(value: unknown) {
+  const text = String(value ?? '').slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false
+  const [year, month, day] = text.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
+}
+
 function readAsOf(row: Record<string, unknown>, calendar?: ConstructionCalendarContext | null) {
   const timezone = calendar?.timezone || 'Asia/Shanghai'
-  const generatedAt = new Date(String(row.generated_at ?? ''))
-  if (!Number.isNaN(generatedAt.getTime())) return businessDateKey(generatedAt, timezone)
+  const generatedAtText = String(row.generated_at ?? '')
+  const generatedAt = new Date(generatedAtText)
+  if (isStrictDateOnly(generatedAtText) && !Number.isNaN(generatedAt.getTime())) {
+    return businessDateKey(generatedAt, timezone)
+  }
   const weekStart = String(row.week_start ?? '').slice(0, 10)
-  return /^\d{4}-\d{2}-\d{2}$/.test(weekStart) ? weekStart : ''
+  return isStrictDateOnly(weekStart) ? weekStart : ''
 }
 
 function readDelayedTasks(value: unknown) {
