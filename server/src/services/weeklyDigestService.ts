@@ -4,7 +4,7 @@ import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { calculateProgressMetrics } from '../utils/progressCalculation.js'
 import { isActiveObstacle } from '../utils/obstacleStatus.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
-import { delayDayDelta } from '../utils/durationDays.js'
+import { delayDayDelta, signedDurationDayDelta } from '../utils/durationDays.js'
 import {
   resolveConstructionCalendarContext,
 } from './constructionCalendar.js'
@@ -116,7 +116,14 @@ export class WeeklyDigestService {
     )
     const nearestMs = (criticalMilestones[0] as { title: string; planned_end_date: string } | undefined)
     const criticalNearestMilestone = nearestMs?.title ?? null
-    const criticalNearestDelayDays = nearestMs ? delayDayDelta(nearestMs.planned_end_date, today, calendar) ?? 0 : null
+    const criticalNearestCalendarDelta = nearestMs
+      ? signedDurationDayDelta(nearestMs.planned_end_date, today)
+      : null
+    const criticalNearestDelayDays = nearestMs
+      ? (criticalNearestCalendarDelta !== null && criticalNearestCalendarDelta > 0
+          ? delayDayDelta(nearestMs.planned_end_date, today, calendar) ?? 0
+          : criticalNearestCalendarDelta ?? 0)
+      : null
 
     // 6. Top 5 偏差任务（未完成且有计划结束日期，按延期天数降序）
     const incompleteTasks = tasks.filter((task) => !isCompletedTask(task) && Boolean(task.planned_end_date))

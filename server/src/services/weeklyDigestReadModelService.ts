@@ -6,6 +6,7 @@ import {
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
 import {
+  buildCalendarDayDurationMetric,
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
   type DurationMetricDto,
@@ -62,9 +63,13 @@ export function buildWeeklyDigestReadModel(
     typeof value === 'number' ? value : Number(value),
     { asOf, timezone: calendar?.timezone, calendar },
   )
+  const nearestValue = Number(normalized.critical_nearest_delay_days)
+  const nearestMetric = Number.isFinite(nearestValue) && nearestValue < 0
+    ? buildCalendarDayDurationMetric(nearestValue, { asOf, timezone: calendar?.timezone })
+    : metric(normalized.critical_nearest_delay_days)
   return {
     ...normalized,
-    critical_nearest_delay: metric(normalized.critical_nearest_delay_days),
+    critical_nearest_delay: nearestMetric,
     top_delayed_tasks: readDelayedTasks(normalized.top_delayed_tasks).map((task) => ({
       ...task,
       delay: metric(task.delay_days),
