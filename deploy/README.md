@@ -70,6 +70,28 @@ must pass the real public origin explicitly; `scripts/browser-auth-fixture.mjs`
 uses `PUBLIC_HTTPS_ORIGIN` for the same purpose. A controlled domain remains the
 final isolation and HSTS boundary.
 
+## Production Advisor ACL Remediation 308
+
+Production migration 308 is a one-time bootstrap exception for the two
+commercial trigger functions whose existing anon/authenticated execute grants
+prevent a zero-issue Supabase Advisor export. Dispatch
+`.github/workflows/production-advisor-acl-remediation.yml` only from the exact
+current protected `main` SHA and enter
+`APPLY_PRODUCTION_ADVISOR_ACL_REMEDIATION_308` in the protected Production
+environment.
+
+The workflow verifies the exact four known API-role exposures, applies only
+`308_commercial_trigger_rpc_acl_closeout.sql`, then verifies that PUBLIC,
+anon, and authenticated execute access is closed while existing backend runtime
+roles retain execute. Before its first database connection, it also requires
+`PRODUCTION_SUPABASE_URL` and `PRODUCTION_SUPABASE_MIGRATION_URL` to resolve to
+the same Supabase project. A retry accepts only the matching hardened ACL plus
+applied migration-ledger state; inconsistent ACL/ledger states fail closed. It
+performs no SSH, container, ingress, or application deployment operation. After
+it passes, refresh the Production Supabase Advisor export and require
+zero security issues before using the normal deployment workflow. Do not reuse this
+path for later migrations or bypass the normal Advisor gate.
+
 ## Production runtime recovery
 
 `.github/workflows/production-runtime-recovery.yml` is a manual, protected
