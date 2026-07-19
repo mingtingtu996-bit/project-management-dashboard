@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import type { DurationMetricDto } from './durationMetric'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
@@ -107,6 +108,8 @@ export type TaskDerivedStatusDto = {
 
 export type TaskDueStatusDto = TaskDerivedStatusDto & {
   status?: 'normal' | 'approaching' | 'urgent' | 'overdue' | string | null
+  duration?: DurationMetricDto | null
+  /** @deprecated Use duration. */
   daysUntilDue?: number | null
 }
 

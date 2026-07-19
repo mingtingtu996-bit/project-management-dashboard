@@ -37,6 +37,11 @@ import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage, getAuthHeaders } from '@/lib/apiClient'
 import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
 import {
+  formatDurationMetric,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
+import {
   formatDate as formatDisplayDate,
   formatDateTime as formatDisplayDateTime,
   formatWholePercent,
@@ -695,28 +700,18 @@ function isCompletedTask(task: Task) {
   return ['已完成', 'completed'].includes(task.status || '')
 }
 
-function readBackendDelayDays(task: Task): number {
-  const rawDelayDays = (task as Task & { delayDays?: number | string | null }).delay_days
-    ?? (task as Task & { delayDays?: number | string | null }).delayDays
-  const parsedDelayDays = Number(rawDelayDays)
-  if (Number.isFinite(parsedDelayDays) && parsedDelayDays > 0) {
-    return Math.ceil(parsedDelayDays)
-  }
-
+function readBackendDelayMetric(task: Task): DurationMetricDto | null {
   const dueStatus = task.dueStatus ?? task.statusDerivation?.dueStatus ?? null
-  const daysUntilDue = Number(dueStatus?.daysUntilDue)
-  if (Number.isFinite(daysUntilDue) && daysUntilDue < 0) {
-    return Math.ceil(Math.abs(daysUntilDue))
-  }
-
-  return 0
+  return dueStatus?.duration?.unit === 'construction_production_day'
+    ? dueStatus.duration
+    : null
 }
 
 function isDelayedTask(task: Task) {
   if (isCompletedTask(task)) return false
   const dueStatus = task.dueStatus ?? task.statusDerivation?.dueStatus ?? null
   const statusText = String(task.status || task.displayStatus || '').trim().toLowerCase()
-  return readBackendDelayDays(task) > 0
+  return (readAvailableDurationValue(readBackendDelayMetric(task), 'construction_production_day') ?? 0) < 0
     || dueStatus?.status === 'overdue'
     || statusText === 'delayed'
 }
@@ -1519,15 +1514,17 @@ export default function Reports() {
     () =>
       delayedTasks.map((task) => {
         const plannedEnd = task.planned_end_date || task.end_date
-        const delayDays = readBackendDelayDays(task)
+        const delayMetric = readBackendDelayMetric(task)
+        const delayValue = readAvailableDurationValue(delayMetric, 'construction_production_day')
         return {
           id: String(task.id || ''),
           title: getTaskDisplayName(task),
-          delayDays,
+          delayMetric,
+          delayValue,
           owner: getResponsibilityLabel(task),
           plannedEnd: plannedEnd || null,
         }
-      }).sort((left, right) => right.delayDays - left.delayDays),
+      }).sort((left, right) => Math.abs(right.delayValue ?? -1) - Math.abs(left.delayValue ?? -1)),
     [delayedTasks],
   )
   const delayObstacleCorrelationRows = useMemo(
@@ -2035,7 +2032,7 @@ export default function Reports() {
           <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
             <DetailStatCard label="整体完成率" value={formatWholePercent(summary?.overallProgress ?? 0)} hint={`任务总数 ${summary?.totalTasks ?? 0}`} />
             <DetailStatCard label="里程碑完成率" value={formatWholePercent(summary?.milestoneProgress ?? 0)} hint={`${summary?.completedMilestones ?? 0}/${summary?.totalMilestones ?? 0}`} />
-            <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint={`累计延期 ${summary?.delayDays ?? 0} 个生产日`} />
+            <DetailStatCard label="延期任务" value={summary?.delayedTaskCount ?? delayedTasks.length} hint="延期时长按任务服务端口径展示" />
             <DetailStatCard
               label="验收通过"
               value={`${summary?.passedAcceptancePlanCount ?? 0}/${summary?.acceptancePlanCount ?? 0}`}
@@ -2483,7 +2480,7 @@ export default function Reports() {
                       </div>
                       <div className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600">
                         <DurationBasisBadge basis="production" compact variant="outline" />
-                        延期 {row.delayDays} 个生产日
+                        延期 {formatDurationMetric(row.delayMetric, { absolute: true })}
                       </div>
                     </div>
                   ))

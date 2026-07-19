@@ -54,6 +54,11 @@ import { useToast } from '@/hooks/use-toast'
 import { ApiClientError, apiGet, isAbortError } from '@/lib/apiClient'
 import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
 import { inclusiveDurationDays } from '@/lib/durationDays'
+import {
+  formatDurationMetric,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
 import { getProjectDisplayName } from '@/lib/projectDisplay'
 import { cn } from '@/lib/utils'
 import { DashboardApiService, type ProjectSummary } from '@/services/dashboardApi'
@@ -609,7 +614,7 @@ function DashboardActionPanel({
       ? {
         key: 'delay',
         title: '先处理延期任务',
-        meta: `${delayedCount} 个延期任务，偏差 ${summaryData?.delayDays ?? 0} 天`,
+        meta: `${delayedCount} 个延期任务，偏差时长见任务明细`,
         href: `/projects/${projectId}/gantt`,
         tone: 'danger',
       }
@@ -1083,8 +1088,8 @@ function WeeklyDigestPanel({
     critical_tasks_count?: number | null
     critical_blocked_count?: number | null
     critical_nearest_milestone?: string | null
-    critical_nearest_delay_days?: number | null
-    top_delayed_tasks?: Array<{ task_id: string; title: string; assignee?: string; delay_days: number }> | null
+    critical_nearest_delay?: DurationMetricDto | null
+    top_delayed_tasks?: Array<{ task_id: string; title: string; assignee?: string; delay: DurationMetricDto }> | null
     abnormal_responsibilities?: Array<{ subject_id: string; name: string; type: string }> | null
     new_risks_count?: number | null
     new_obstacles_count?: number | null
@@ -1119,20 +1124,23 @@ function WeeklyDigestPanel({
   }, [projectId])
 
   const nearestMilestoneName = digest?.critical_nearest_milestone || '--'
-  const nearestMilestoneDelta = digest?.critical_nearest_delay_days ?? null
+  const nearestMilestoneTiming = digest?.critical_nearest_delay ?? null
+  const nearestMilestoneDelta = readAvailableDurationValue(nearestMilestoneTiming)
   const nearestMilestoneHint =
-    nearestMilestoneDelta == null
+    !nearestMilestoneTiming
       ? '等待关键节点数据'
+      : nearestMilestoneDelta == null
+        ? formatDurationMetric(nearestMilestoneTiming)
       : nearestMilestoneDelta > 0
-        ? `延期 ${nearestMilestoneDelta} 个生产日`
+        ? `延期 ${formatDurationMetric(nearestMilestoneTiming, { absolute: true })}`
         : nearestMilestoneDelta === 0
           ? '今日到期'
-          : `剩余 ${Math.abs(nearestMilestoneDelta)} 个生产日`
+          : `剩余 ${formatDurationMetric(nearestMilestoneTiming, { absolute: true })}`
   const focusItems = digest
     ? [
         ...(digest.top_delayed_tasks ?? []).slice(0, 3).map((task) => ({
           title: task.title,
-          meta: `${task.delay_days} 个生产日延期${task.assignee ? ` · ${task.assignee}` : ''}`,
+          meta: `${formatDurationMetric(task.delay, { absolute: true })}延期${task.assignee ? ` · ${task.assignee}` : ''}`,
         })),
         (digest.critical_blocked_count ?? 0) > 0
           ? { title: '关键阻碍待解除', meta: `${digest.critical_blocked_count} 个阻碍影响关键路径` }

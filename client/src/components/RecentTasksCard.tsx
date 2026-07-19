@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { apiGet, isAbortError } from '@/lib/apiClient'
+import type { DurationMetricDto } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 
 interface TaskWithDue {
@@ -19,7 +20,7 @@ interface TaskWithDue {
   assignee?: string
   assigneeUnit?: string
   endDate?: string
-  daysUntilDue: number | null
+  dueDuration: DurationMetricDto
   dueStatus: 'overdue' | 'urgent' | 'approaching' | 'normal'
   dueLabel: string
   updatedAt?: string
