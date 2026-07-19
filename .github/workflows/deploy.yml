@@ -22,6 +22,16 @@ on:
         options:
           - domain_hsts
           - temporary_ip_tls
+      initial_runtime_bootstrap:
+        description: Allow a verified domain ingress to return 502 before the first target runtime starts
+        required: true
+        default: false
+        type: boolean
+      initial_runtime_bootstrap_confirmation:
+        description: Type INGRESS_READY_UPSTREAM_UNAVAILABLE when enabling the one-time bootstrap path
+        required: false
+        default: ''
+        type: string
       production_confirmation:
         description: Type DEPLOY_PRODUCTION to authorize a production migration and deployment
         required: false
@@ -422,6 +432,8 @@ jobs:
     env:
       DEPLOY_TARGET: ${{ github.event.inputs.environment }}
       PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+      INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}
+      INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
       EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     steps:
       - name: Checkout code
@@ -493,13 +505,30 @@ jobs:
 
           ingress_classification="$(node scripts/classify-public-ingress-url.mjs --url "$DEPLOY_HEALTH_URL" --redirect-url "$DEPLOY_HTTP_REDIRECT_URL" --environment "$DEPLOY_TARGET" --expected-host "$EXPECTED_PUBLIC_HOST" --expected-mode "$PUBLIC_INGRESS_MODE")"
 
+          if [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ]; then
+            [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ] || {
+              echo "Initial runtime bootstrap requires domain_hsts ingress." >&2
+              exit 1
+            }
+            [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ] || {
+              echo "Initial runtime bootstrap confirmation is missing or invalid." >&2
+              exit 1
+            }
+          fi
+
           public_readyz_file="$RUNNER_TEMP/predeploy-public-readyz.json"
-          curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" > "$public_readyz_file"
-          node --input-type=module - "$public_readyz_file" <<'NODE'
+          public_readyz_status="$(curl --silent --show-error --max-time 15 --output "$public_readyz_file" --write-out '%{http_code}' "$DEPLOY_HEALTH_URL")"
+          predeploy_runtime_classification="runtime_ready"
+          if [ "$public_readyz_status" = "200" ]; then
+            node --input-type=module - "$public_readyz_file" <<'NODE'
           import { readFileSync } from 'node:fs';
 
           const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
           const expectedProjectRef = new URL(process.env.SUPABASE_URL).hostname.split('.')[0];
+          if (readiness.status !== 'ready') {
+            console.error('Public predeploy readyz status is not ready');
+            process.exit(1);
+          }
           if (readiness.build?.deployTarget !== process.env.DEPLOY_TARGET) {
             console.error('Public predeploy readyz target mismatch');
             process.exit(1);
@@ -513,6 +542,14 @@ jobs:
             process.exit(1);
           }
           NODE
+          elif [ "$public_readyz_status" = "502" ] \
+            && [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ] \
+            && [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ]; then
+            predeploy_runtime_classification="ingress_ready_upstream_unavailable"
+          else
+            echo "Public predeploy readyz is unavailable or returned an unsupported status: $public_readyz_status" >&2
+            exit 1
+          fi
 
           redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$DEPLOY_HTTP_REDIRECT_URL")"
           redirect_status="${redirect_result%% *}"
@@ -530,9 +567,9 @@ jobs:
           fi
 
           hsts_header_present=false
-          if curl --fail --silent --show-error --head --max-time 15 "$DEPLOY_HEALTH_URL" \
-            | tr -d '\r' \
-            | grep -qi '^strict-transport-security:'; then
+          hsts_headers="$RUNNER_TEMP/predeploy-hsts.headers"
+          curl --silent --show-error --head --max-time 15 --output "$hsts_headers" "$DEPLOY_HEALTH_URL"
+          if tr -d '\r' < "$hsts_headers" | grep -qi '^strict-transport-security:'; then
             hsts_header_present=true
           elif [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ]; then
             echo "Domain HSTS mode requires a Strict-Transport-Security header." >&2
@@ -548,6 +585,7 @@ jobs:
             echo ""
             echo "- $ingress_readiness"
             echo "- Classification: $ingress_classification"
+            echo "- Runtime preflight: $predeploy_runtime_classification"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify deployment target database identity

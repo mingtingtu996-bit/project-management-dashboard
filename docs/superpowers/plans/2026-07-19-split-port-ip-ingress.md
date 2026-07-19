@@ -1,5 +1,10 @@
 # Split-Port IP Ingress Implementation Plan
 
+> Superseded on 2026-07-19 after the user provisioned `zhuxucloud.com` and
+> `staging.zhuxucloud.com`. The active implementation plan is
+> `2026-07-19-domain-sni-ingress.md`; the temporary IP design remains only as
+> historical rationale and must not drive the current release.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Provide isolated temporary production and staging TLS entry points on one public IPv4 address while keeping application ports loopback-only, reporting HSTS as inapplicable, and keeping every release/recovery path fail closed.

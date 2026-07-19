@@ -1,0 +1,6 @@
+PRODUCTION_HOST=zhuxucloud.com
+STAGING_HOST=staging.zhuxucloud.com
+INGRESS_ENV_FILE=/opt/workbuddy-ingress/current/env/ingress.env
+INGRESS_CADDYFILE=/opt/workbuddy-ingress/current/deploy/ingress/Caddyfile
+CADDY_DATA_DIR=/opt/workbuddy-ingress/data
+CADDY_CONFIG_DIR=/opt/workbuddy-ingress/config

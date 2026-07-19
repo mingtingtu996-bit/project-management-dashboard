@@ -10,8 +10,8 @@ TRUST_PROXY_HOPS=1
 # A host-level CDN/LB/Caddy/Nginx must terminate TLS and proxy to
 # 127.0.0.1:${WEB_PORT}. The compose web port is intentionally not public.
 PUBLIC_INGRESS_MODE=domain_hsts
-PUBLIC_HTTPS_ORIGIN=https://workbuddy.example.com
-CORS_ORIGIN=https://workbuddy.example.com
+PUBLIC_HTTPS_ORIGIN=https://zhuxucloud.com
+CORS_ORIGIN=https://zhuxucloud.com
 AUTH_COOKIE_NAME=workbuddy_production_auth_token
 JWT_ISSUER=workbuddy-production
 JWT_AUDIENCE=workbuddy-production-api

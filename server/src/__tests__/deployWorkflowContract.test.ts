@@ -271,9 +271,11 @@ describe('deploy workflow contract', () => {
     expect(preflightJob).toContain('--expected-host "$EXPECTED_PUBLIC_HOST"')
     expect(preflightJob).toContain('temporary_ip_tls')
     expect(preflightJob).toContain('domainHstsReady')
-    expect(preflightJob).toContain(
-      'curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL"',
-    )
+    expect(preflightJob).toContain('INITIAL_RUNTIME_BOOTSTRAP')
+    expect(preflightJob).toContain('INGRESS_READY_UPSTREAM_UNAVAILABLE')
+    expect(preflightJob).toContain('ingress_ready_upstream_unavailable')
+    expect(preflightJob).toContain("public_readyz_status=\"$(curl --silent --show-error --max-time 15")
+    expect(preflightJob).toContain('[ "$public_readyz_status" = "502" ]')
     expect(preflightJob).toContain('--max-redirs 0')
     expect(preflightJob).toContain('if [ "$redirect_url" != "$DEPLOY_HEALTH_URL" ]; then')
     expect(preflightJob).toContain('readiness.build?.deployTarget')

@@ -105,3 +105,19 @@ test('rejects private or reserved IPs, wrong ports, and cross-target redirect UR
     assert.equal(result.pass, false, JSON.stringify(input))
   }
 })
+
+test('rejects special-use DNS suffixes as public domain ingress', async () => {
+  const { classifyPublicIngressUrl } = await loadClassifier()
+
+  for (const hostname of ['app.internal', 'router.home.arpa', 'service.onion']) {
+    const result = classifyPublicIngressUrl({
+      environment: 'production',
+      expectedMode: 'domain_hsts',
+      expectedHost: hostname,
+      redirectValue: `http://${hostname}/api/readyz`,
+      value: `https://${hostname}/api/readyz`,
+    })
+    assert.equal(result.pass, false, hostname)
+    assert.ok(result.reasonCodes.includes('public_dns_hostname_required'))
+  }
+})

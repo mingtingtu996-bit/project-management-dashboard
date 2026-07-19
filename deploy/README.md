@@ -13,12 +13,18 @@ The API rejects non-probe production requests that do not arrive through this
 trusted HTTPS boundary. `/api/livez` and `/api/readyz` remain
 available to local container and deployment probes.
 
-## Same-host authentication boundary
+## Domain ingress and authentication boundary
 
-Cookies do not distinguish ports. While production and staging share an IP
-host, browsers send both environments' cookies to both HTTPS ports. Distinct
-cookie names prevent overwrite and make each API select only its own token;
-they do not create separate browser cookie security domains.
+`deploy/docker-compose.ingress.yml` and `deploy/ingress/Caddyfile` own shared
+ports 80/443. SNI routes `zhuxucloud.com` to production port 8080 and
+`staging.zhuxucloud.com` to staging port 8081. The protected
+`provision-domain-ingress.yml` workflow validates a candidate, activates it
+atomically, probes both domains from a public runner, and restores the previous
+configuration on failure.
+
+The two hostnames create separate browser origins and cookie hosts. Distinct
+cookie names remain defense in depth and make each API select only its own
+token.
 
 Production runtime values are:
 
@@ -34,10 +40,10 @@ Staging runtime values are:
 
 Each environment requires its own random `JWT_SECRET`. `PUBLIC_HTTPS_ORIGIN`
 and the sole `CORS_ORIGIN` must equal that environment's exact HTTPS origin.
-`PUBLIC_INGRESS_MODE` must match the selected deployment mode; temporary IP TLS
-uses port 443 for production and 8443 for staging. The API validates all of
-these values again at startup, including direct recovery starts that do not run
-the deployment script.
+Production uses `https://zhuxucloud.com`; staging uses
+`https://staging.zhuxucloud.com`. `PUBLIC_INGRESS_MODE=domain_hsts` is required
+for the domain release. The API validates these values again at startup,
+including direct recovery starts that do not run the deployment script.
 Unsafe browser requests are rejected before routing unless `Origin` or
 `Referer` matches that origin. Cookie-free Bearer machine requests remain
 available. Release smoke commands that connect through an SSH loopback tunnel
