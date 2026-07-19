@@ -8,13 +8,33 @@ set -euo pipefail
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
 HEALTH_URL="${HEALTH_URL:-}"
+HTTP_REDIRECT_URL="${HTTP_REDIRECT_URL:-}"
+PUBLIC_INGRESS_MODE="${PUBLIC_INGRESS_MODE:-}"
+EXPECTED_PUBLIC_HOST="${EXPECTED_PUBLIC_HOST:-}"
 PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 
 : "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"
+: "${HTTP_REDIRECT_URL:?External HTTP redirect URL is required}"
+: "${PUBLIC_INGRESS_MODE:?PUBLIC_INGRESS_MODE is required}"
+: "${EXPECTED_PUBLIC_HOST:?EXPECTED_PUBLIC_HOST is required}"
 case "$HEALTH_URL" in
   https://*) ;;
   *)
     echo "External deployment health URL must use https://: $HEALTH_URL" >&2
+    exit 1
+    ;;
+esac
+case "$HTTP_REDIRECT_URL" in
+  http://*) ;;
+  *)
+    echo "External deployment redirect URL must use http://: $HTTP_REDIRECT_URL" >&2
+    exit 1
+    ;;
+esac
+case "$PUBLIC_INGRESS_MODE" in
+  domain_hsts|temporary_ip_tls) ;;
+  *)
+    echo "Unsupported PUBLIC_INGRESS_MODE: $PUBLIC_INGRESS_MODE" >&2
     exit 1
     ;;
 esac
@@ -220,6 +240,15 @@ if ! grep -Fq "\"releaseSha\": \"$RELEASE_SHA\"" "$FRONTEND_BUILD_MANIFEST"; the
   exit 1
 fi
 
+node scripts/classify-public-ingress-url.mjs \
+  --url "$HEALTH_URL" \
+  --redirect-url "$HTTP_REDIRECT_URL" \
+  --environment "$DEPLOY_TARGET" \
+  --expected-host "$EXPECTED_PUBLIC_HOST" \
+  --expected-mode "$PUBLIC_INGRESS_MODE" \
+  >/tmp/project-management-public-ingress-policy.json
+cat /tmp/project-management-public-ingress-policy.json
+
 LATEST_SCHEMA_MIGRATION_PATH="$(find server/migrations -maxdepth 1 -type f -name '[0-9]*_*.sql' -print | sort -V | tail -n 1)"
 if [ -z "$LATEST_SCHEMA_MIGRATION_PATH" ] || [ ! -f "$LATEST_SCHEMA_MIGRATION_PATH" ]; then
   echo "No managed schema migration found in the release tree." >&2
@@ -260,14 +289,13 @@ if [ "$HEALTH_URL" != "$INTERNAL_HEALTH_URL" ]; then
     exit 1
   fi
 
-  HTTP_HEALTH_URL="http://${HEALTH_URL#https://}"
-  redirect_result="$(curl --silent --show-error --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$HTTP_HEALTH_URL")"
+  redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$HTTP_REDIRECT_URL")"
   redirect_status="${redirect_result%% *}"
   redirect_url="${redirect_result#* }"
   case "$redirect_status" in
     301|302|307|308) ;;
     *)
-      echo "Public HTTP endpoint did not redirect to HTTPS: $HTTP_HEALTH_URL ($redirect_status)" >&2
+      echo "Public HTTP endpoint did not redirect to HTTPS: $HTTP_REDIRECT_URL ($redirect_status)" >&2
       exit 1
       ;;
   esac
@@ -278,6 +306,16 @@ if [ "$HEALTH_URL" != "$INTERNAL_HEALTH_URL" ]; then
       exit 1
       ;;
   esac
+  if [ "$redirect_url" != "$HEALTH_URL" ]; then
+    echo "Public HTTP redirect target does not exactly match the HTTPS health URL." >&2
+    exit 1
+  fi
+
+  if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
+    printf '%s\n' '{"transportTlsReady":true,"temporaryIngressReady":true,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":false,"domainHstsReady":false}'
+  else
+    printf '%s\n' '{"transportTlsReady":true,"temporaryIngressReady":false,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":true,"domainHstsReady":true}'
+  fi
 fi
 
 if [ -z "$PERFORMANCE_SUMMARY_URL" ]; then

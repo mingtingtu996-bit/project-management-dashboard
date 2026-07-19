@@ -14,6 +14,14 @@ on:
           - preview
           - staging
           - production
+      public_ingress_mode:
+        description: Public ingress authority mode for staging or production
+        required: true
+        default: domain_hsts
+        type: choice
+        options:
+          - domain_hsts
+          - temporary_ip_tls
       production_confirmation:
         description: Type DEPLOY_PRODUCTION to authorize a production migration and deployment
         required: false
@@ -413,6 +421,8 @@ jobs:
       github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
     env:
       DEPLOY_TARGET: ${{ github.event.inputs.environment }}
+      PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+      EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -426,6 +436,7 @@ jobs:
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           SUPABASE_ANON_KEY: ${{ secrets[format('{0}_SUPABASE_ANON_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
@@ -441,6 +452,8 @@ jobs:
             DEPLOY_SSH_PRIVATE_KEY \
             DEPLOY_KNOWN_HOSTS \
             DEPLOY_HEALTH_URL \
+            DEPLOY_HTTP_REDIRECT_URL \
+            EXPECTED_PUBLIC_HOST \
             SUPABASE_URL \
             SUPABASE_ANON_KEY \
             SUPABASE_MIGRATION_URL \
@@ -455,21 +468,87 @@ jobs:
           if [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
             health_url_invalid=true
           fi
+          redirect_url_invalid=false
+          if [[ "$DEPLOY_HTTP_REDIRECT_URL" != http://* ]]; then
+            redirect_url_invalid=true
+          fi
 
-          if [ "${#missing[@]}" -gt 0 ] || [ "$health_url_invalid" = "true" ]; then
+          if [ "${#missing[@]}" -gt 0 ] || [ "$health_url_invalid" = "true" ] || [ "$redirect_url_invalid" = "true" ]; then
             {
               echo "### Target deployment preflight blocked"
               echo ""
               if [ "${#missing[@]}" -gt 0 ]; then
-                printf '%s\n' "- Missing target-specific secrets: ${missing[*]}"
+                printf '%s\n' "- Missing target-specific deployment values: ${missing[*]}"
               fi
               if [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
                 echo "- External HTTPS health URL is required and must begin with https://."
+              fi
+              if [[ "$DEPLOY_HTTP_REDIRECT_URL" != http://* ]]; then
+                echo "- External HTTP redirect source URL is required and must begin with http://."
               fi
               echo "- Database migrations were not started."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
+          ingress_classification="$(node scripts/classify-public-ingress-url.mjs --url "$DEPLOY_HEALTH_URL" --redirect-url "$DEPLOY_HTTP_REDIRECT_URL" --environment "$DEPLOY_TARGET" --expected-host "$EXPECTED_PUBLIC_HOST" --expected-mode "$PUBLIC_INGRESS_MODE")"
+
+          public_readyz_file="$RUNNER_TEMP/predeploy-public-readyz.json"
+          curl --fail --silent --show-error --max-time 15 "$DEPLOY_HEALTH_URL" > "$public_readyz_file"
+          node --input-type=module - "$public_readyz_file" <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const expectedProjectRef = new URL(process.env.SUPABASE_URL).hostname.split('.')[0];
+          if (readiness.build?.deployTarget !== process.env.DEPLOY_TARGET) {
+            console.error('Public predeploy readyz target mismatch');
+            process.exit(1);
+          }
+          if (readiness.build?.supabaseProjectRef !== expectedProjectRef) {
+            console.error('Public predeploy readyz Supabase project mismatch');
+            process.exit(1);
+          }
+          if (readiness.build?.databaseProjectRef !== expectedProjectRef) {
+            console.error('Public predeploy readyz database project mismatch');
+            process.exit(1);
+          }
+          NODE
+
+          redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$DEPLOY_HTTP_REDIRECT_URL")"
+          redirect_status="${redirect_result%% *}"
+          redirect_url="${redirect_result#* }"
+          case "$redirect_status" in
+            301|302|307|308) ;;
+            *)
+              echo "Public predeploy redirect source did not return a redirect." >&2
+              exit 1
+              ;;
+          esac
+          if [ "$redirect_url" != "$DEPLOY_HEALTH_URL" ]; then
+            echo "Public predeploy redirect target mismatch." >&2
+            exit 1
+          fi
+
+          hsts_header_present=false
+          if curl --fail --silent --show-error --head --max-time 15 "$DEPLOY_HEALTH_URL" \
+            | tr -d '\r' \
+            | grep -qi '^strict-transport-security:'; then
+            hsts_header_present=true
+          elif [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ]; then
+            echo "Domain HSTS mode requires a Strict-Transport-Security header." >&2
+            exit 1
+          fi
+          if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
+            ingress_readiness="transportTlsReady=true temporaryIngressReady=true hstsHeaderPresent=$hsts_header_present hstsUserAgentPolicyApplicable=false domainHstsReady=false"
+          else
+            ingress_readiness="transportTlsReady=true temporaryIngressReady=false hstsHeaderPresent=true hstsUserAgentPolicyApplicable=true domainHstsReady=true"
+          fi
+          {
+            echo "### Public ingress policy accepted"
+            echo ""
+            echo "- $ingress_readiness"
+            echo "- Classification: $ingress_classification"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify deployment target database identity
         env:
@@ -909,18 +988,30 @@ jobs:
           DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+          EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           health_url_valid=false
           if [[ "$DEPLOY_HEALTH_URL" == https://* ]]; then
             health_url_valid=true
           fi
+          redirect_url_valid=false
+          if [[ "$DEPLOY_HTTP_REDIRECT_URL" == http://* ]]; then
+            redirect_url_valid=true
+          fi
 
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ -n "$DEPLOY_HEALTH_URL" ] && [ "$health_url_valid" = "true" ]; then
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ -n "$DEPLOY_HEALTH_URL" ] && [ "$health_url_valid" = "true" ] && [ -n "$DEPLOY_HTTP_REDIRECT_URL" ] && [ "$redirect_url_valid" = "true" ] && [ -n "$EXPECTED_PUBLIC_HOST" ]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
             {
               echo "### Self-hosted deployment eligible"
               echo ""
-              echo "- Public HTTPS health, HSTS, HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory."
+              echo "- Public TLS health, explicit HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory."
+              if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
+                echo "- Temporary IP TLS is selected; domain HSTS closure remains false."
+              else
+                echo "- Domain HSTS mode is selected and must pass the public header probe."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "can_deploy=false" >> "$GITHUB_OUTPUT"
@@ -929,6 +1020,7 @@ jobs:
               echo ""
               echo "- \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`, and pinned \`DEPLOY_KNOWN_HOSTS\` are required."
               echo "- \`DEPLOY_HEALTH_URL\` is required and must begin with \`https://\`."
+              echo "- \`DEPLOY_HTTP_REDIRECT_URL\` is required and must begin with \`http://\`."
               echo "- Quality gates and browser checks completed, but no server deployment was attempted."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -957,6 +1049,9 @@ jobs:
           DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
           DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+          EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           RELEASE_ARCHIVE="/tmp/project-management-${RELEASE_SHA}.tar.gz"
           RELEASE_DIR="$(mktemp -d)"
@@ -977,7 +1072,7 @@ jobs:
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Verify API port is not externally reachable
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
