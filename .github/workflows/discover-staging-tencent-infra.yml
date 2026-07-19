@@ -1,0 +1,53 @@
+name: Discover Staging Tencent Infrastructure
+
+on:
+  push:
+    branches:
+      - codex/staging-known-hosts-bootstrap
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Read-only Tencent infrastructure discovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out temporary audit branch
+        uses: actions/checkout@v6
+
+      - name: Validate read-only discovery inputs
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$TENCENT_SECRET_ID"
+          test -n "$TENCENT_SECRET_KEY"
+          test -n "$DEPLOY_HEALTH_URL"
+
+      - name: Run local sanitization self-test
+        run: python3 .github/scripts/tencent-readonly-discovery.py --self-test
+
+      - name: Query Tencent read-only control planes
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+          CURRENT_DEPLOY_HOST_IP: 124.222.54.190
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tencent-infra-discovery"
+          python3 .github/scripts/tencent-readonly-discovery.py \
+            --output "$RUNNER_TEMP/tencent-infra-discovery/discovery.json"
+
+      - name: Upload sanitized discovery artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tencent-staging-infra-discovery-${{ github.run_id }}
+          path: ${{ runner.temp }}/tencent-infra-discovery/discovery.json
+          if-no-files-found: error
+          retention-days: 1
