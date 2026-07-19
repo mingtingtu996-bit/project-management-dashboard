@@ -85,7 +85,15 @@ function forecast(
   }
 }
 
-const calendar: ConstructionCalendarContext = { basis: 'calendar_day', windows: [] }
+const calendar: ConstructionCalendarContext = {
+  basis: 'official_construction_calendar_seed',
+  windows: [],
+  calendarRef: 'work_calendar',
+  calendarVersion: 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  availability: 'available',
+  unavailableReason: null,
+}
 
 describe('scopedDurationForecastService', () => {
   it('uses the latest constrained finish for every dimension and governing-task confidence only', () => {

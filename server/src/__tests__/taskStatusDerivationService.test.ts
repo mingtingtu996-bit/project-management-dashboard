@@ -144,7 +144,7 @@ describe('taskStatusDerivationService', () => {
     }))
   })
 
-  it('derives due and overdue days with construction production-day semantics when a calendar is supplied', () => {
+  it('uses calendar days for the future due window and production days only after actual overdue', () => {
     const calendar: ConstructionCalendarContext = {
       basis: 'official_construction_calendar_seed',
       windows: [{
@@ -154,6 +154,11 @@ describe('taskStatusDerivationService', () => {
         endDate: '2026-05-05',
         counts_as_construction_shutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     }
 
     const due = deriveTaskUnifiedStatus(
@@ -180,10 +185,22 @@ describe('taskStatusDerivationService', () => {
     )
 
     expect(due.dueStatus.status).toBe('approaching')
-    expect(due.dueStatus.daysUntilDue).toBe(4)
+    expect(due.dueStatus.daysUntilDue).toBe(6)
+    expect(due.dueStatus.duration).toEqual(expect.objectContaining({
+      value: 6,
+      unit: 'calendar_day',
+      availability: 'available',
+    }))
     expect(overdue.dueStatus.status).toBe('overdue')
     expect(overdue.dueStatus.daysUntilDue).toBe(-4)
-    expect(overdue.dueStatus.label).toBe('逾期 4天')
+    expect(overdue.dueStatus.duration).toEqual(expect.objectContaining({
+      value: -4,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      availability: 'available',
+    }))
+    expect(overdue.dueStatus.label).toBe('逾期 4个生产日')
   })
 
   it('prefers forecast lag signals over legacy lag cache fields', () => {

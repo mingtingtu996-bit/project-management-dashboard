@@ -1,6 +1,12 @@
 import { getTaskLagLevel, type TaskLagLevel } from './taskLagStatusService.js'
 import { delayDayDelta, signedDurationDayDelta } from '../utils/durationDays.js'
 import type { ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  buildCalendarDayDurationMetric,
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 
 export const TASK_STATUS_DERIVATION_RULE_VERSION = 'v1.4.5-task-status-unified-p6'
 
@@ -26,6 +32,8 @@ export interface TaskDerivedStatus {
 
 export interface TaskUnifiedDueStatus extends TaskDerivedStatus {
   status: TaskDueStatus
+  duration: DurationMetricDto
+  /** @deprecated Use duration. Removed after the v1.5 compatibility window. */
   daysUntilDue: number | null
 }
 
@@ -567,6 +575,10 @@ function deriveDueStatus(
   options: TaskUnifiedStatusOptions,
 ): TaskUnifiedDueStatus {
   const duePolicy = normalizeDuePolicy(input, options)
+  const now = options.currentDate ?? new Date()
+  const timezone = options.calendar?.timezone || 'Asia/Shanghai'
+  const asOf = businessDateKey(now, timezone)
+  const unavailableFutureDuration = buildCalendarDayDurationMetric(null, { asOf, timezone })
   const plannedEnd = input.planned_end_date || input.end_date || null
   const terminal = lifecycleStatus === 'completed' || lifecycleStatus === 'cancelled' || normalizeNumber(input.progress) >= 100
   if (!plannedEnd || terminal) {
@@ -576,6 +588,7 @@ function deriveDueStatus(
       reason: terminal ? '任务已结束，不参与到期窗口判定' : '未设置计划截止日期',
       evidence: { status: input.status, progress: input.progress, planned_end_date: plannedEnd, duePolicy } as any,
       sourceFields: ['status', 'progress', 'planned_end_date', 'end_date', ...duePolicy.sourceFields],
+      duration: unavailableFutureDuration,
       daysUntilDue: null,
     }
   }
@@ -588,24 +601,32 @@ function deriveDueStatus(
       reason: '计划截止日期无效',
       evidence: { planned_end_date: plannedEnd, duePolicy } as any,
       sourceFields: ['planned_end_date', 'end_date', ...duePolicy.sourceFields],
+      duration: unavailableFutureDuration,
       daysUntilDue: null,
     }
   }
 
-  const now = options.currentDate ?? new Date()
-  const daysUntilDue = options.calendar
-    ? -(delayDayDelta(planned, now, options.calendar) ?? 0)
-    : signedDurationDayDelta(now, planned) ?? 0
-  if (daysUntilDue < 0) {
+  const calendarDayDelta = signedDurationDayDelta(now, planned) ?? 0
+  if (calendarDayDelta < 0) {
+    const productionDayDelta = -(delayDayDelta(planned, now, options.calendar) ?? 0)
+    const duration = buildConstructionProductionDayDurationMetric(productionDayDelta, {
+      asOf,
+      timezone,
+      calendar: options.calendar,
+    })
+    const daysUntilDue = duration.availability === 'available' ? duration.value : null
     return {
       status: 'overdue',
-      label: `逾期 ${Math.abs(daysUntilDue)}天`,
-      reason: `已逾期 ${Math.abs(daysUntilDue)}天`,
-      evidence: { daysUntilDue, plannedEndDate: plannedEnd, duePolicy } as any,
+      label: daysUntilDue === null ? '已逾期 · 生产日口径不可用' : `逾期 ${Math.abs(daysUntilDue)}个生产日`,
+      reason: daysUntilDue === null ? '实际逾期已确认，但施工日历身份或版本缺失' : `已逾期 ${Math.abs(daysUntilDue)}个生产日`,
+      evidence: { daysUntilDue, duration, plannedEndDate: plannedEnd, duePolicy } as any,
       sourceFields: ['planned_end_date', 'end_date', ...duePolicy.sourceFields],
+      duration,
       daysUntilDue,
     }
   }
+  const duration = buildCalendarDayDurationMetric(calendarDayDelta, { asOf, timezone })
+  const daysUntilDue = duration.value ?? 0
   if (daysUntilDue === 0) {
     return {
       status: 'urgent',
@@ -613,35 +634,39 @@ function deriveDueStatus(
       reason: '今天截止',
       evidence: { daysUntilDue, plannedEndDate: plannedEnd, duePolicy } as any,
       sourceFields: ['planned_end_date', 'end_date', ...duePolicy.sourceFields],
+      duration,
       daysUntilDue,
     }
   }
   if (daysUntilDue <= duePolicy.urgentDays) {
     return {
       status: 'urgent',
-      label: `${daysUntilDue}天后`,
-      reason: `${daysUntilDue}天后到期`,
+      label: `${daysUntilDue}个日历天后`,
+      reason: `${daysUntilDue}个日历天后到期`,
       evidence: { daysUntilDue, plannedEndDate: plannedEnd, duePolicy } as any,
       sourceFields: ['planned_end_date', 'end_date', ...duePolicy.sourceFields],
+      duration,
       daysUntilDue,
     }
   }
   if (daysUntilDue <= duePolicy.approachingDays) {
     return {
       status: 'approaching',
-      label: `${daysUntilDue}天后`,
-      reason: `${daysUntilDue}天后到期`,
+      label: `${daysUntilDue}个日历天后`,
+      reason: `${daysUntilDue}个日历天后到期`,
       evidence: { daysUntilDue, plannedEndDate: plannedEnd, duePolicy } as any,
       sourceFields: ['planned_end_date', 'end_date', ...duePolicy.sourceFields],
+      duration,
       daysUntilDue,
     }
   }
   return {
     status: 'normal',
-    label: `${daysUntilDue}天后`,
+    label: `${daysUntilDue}个日历天后`,
     reason: '按计划推进',
     evidence: { daysUntilDue, plannedEndDate: plannedEnd, duePolicy } as any,
     sourceFields: ['planned_end_date', 'end_date', ...duePolicy.sourceFields],
+    duration,
     daysUntilDue,
   }
 }

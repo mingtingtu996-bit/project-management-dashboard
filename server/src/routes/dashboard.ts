@@ -25,11 +25,15 @@ import {
   loadCompanyHealthHistoryRows,
   type CompanySummaryResponse,
 } from '../services/companySummaryService.js'
-import { deriveTaskUnifiedStatus } from '../services/taskStatusDerivationService.js'
 import {
   resolveConstructionCalendarContext,
-  type ConstructionCalendarContext,
 } from '../services/constructionCalendar.js'
+import {
+  buildDashboardFocusTasksResponse,
+  normalizeDashboardFocusTaskFilter,
+  normalizeDashboardFocusTaskLimit,
+  type DashboardFocusTaskItem,
+} from '../services/dashboardFocusTaskService.js'
 
 const router = Router({ mergeParams: true })
 export const companyDashboardRouter = Router()
@@ -65,41 +69,6 @@ type TodayProgressItem = {
   currentProgress: number
   delta: number
   changedAt: string
-}
-
-type FocusTaskFilter = 'today' | '3days' | 'week' | 'urgent'
-
-type FocusTaskDueStatus = 'overdue' | 'urgent' | 'approaching' | 'normal'
-
-type FocusTaskItem = {
-  id: string
-  title: string
-  status: 'pending' | 'in_progress' | 'blocked' | 'completed'
-  statusLabel: string
-  progress: number
-  assignee?: string
-  assigneeUnit?: string
-  endDate?: string
-  daysUntilDue: number | null
-  dueStatus: FocusTaskDueStatus
-  dueLabel: string
-  updatedAt?: string
-  isTodayTodo?: boolean
-}
-
-type FocusTaskStats = {
-  total: number
-  overdue: number
-  urgent: number
-  approaching: number
-  normal: number
-}
-
-type FocusTasksResponse = {
-  filter: FocusTaskFilter
-  stats: FocusTaskStats
-  items: FocusTaskItem[]
-  totalCount: number
 }
 
 type AnyRow = Record<string, any>
@@ -284,79 +253,6 @@ function compareSnapshotRows(left: AnyRow, right: AnyRow): number {
   return new Date(String(left.created_at ?? 0)).getTime() - new Date(String(right.created_at ?? 0)).getTime()
 }
 
-function normalizeFocusTaskFilter(value: unknown): FocusTaskFilter {
-  const normalized = String(value ?? '').trim()
-  if (normalized === 'today' || normalized === '3days' || normalized === 'week' || normalized === 'urgent') return normalized
-  return 'week'
-}
-
-function normalizeFocusTaskLimit(value: unknown): number {
-  const numeric = Number(value ?? 6)
-  if (!Number.isFinite(numeric)) return 6
-  return Math.min(Math.max(Math.trunc(numeric), 1), 50)
-}
-
-function normalizeFocusTaskStatus(row: AnyRow): FocusTaskItem['status'] {
-  const status = String(row.status ?? '').trim().toLowerCase()
-  if (isCompletedTask(row)) return 'completed'
-  if (['in_progress', 'active', '进行中'].includes(status)) return 'in_progress'
-  if (['blocked', '阻塞', '受阻'].includes(status)) return 'blocked'
-  return 'pending'
-}
-
-function getFocusTaskStatusLabel(row: AnyRow): string {
-  const rawStatus = firstText(row, ['status'])
-  if (rawStatus) return rawStatus
-  const status = normalizeFocusTaskStatus(row)
-  if (status === 'completed') return '已完成'
-  if (status === 'in_progress') return '进行中'
-  if (status === 'blocked') return '受阻'
-  return '未开始'
-}
-
-function getDateOnly(value: unknown): string | null {
-  const text = String(value ?? '').trim()
-  if (!text) return null
-  return text.slice(0, 10)
-}
-
-function buildFocusTaskDueMeta(
-  row: AnyRow,
-  now = new Date(),
-  calendar?: ConstructionCalendarContext | null,
-): Pick<FocusTaskItem, 'endDate' | 'daysUntilDue' | 'dueStatus' | 'dueLabel'> {
-  const endDate = getDateOnly(row.planned_end_date ?? row.end_date ?? row.due_date)
-  const unifiedDue = deriveTaskUnifiedStatus(
-    {
-      status: row.status,
-      progress: row.progress,
-      planned_end_date: row.planned_end_date ?? row.due_date,
-      end_date: row.end_date,
-      duePolicy: row.duePolicy ?? row.due_policy,
-      due_policy: row.due_policy,
-      due_urgent_days: row.due_urgent_days,
-      due_approaching_days: row.due_approaching_days,
-    },
-    { currentDate: now, calendar },
-  ).dueStatus
-
-  if (!endDate) {
-    return {
-      endDate: undefined,
-      daysUntilDue: null,
-      dueStatus: unifiedDue.status,
-      dueLabel: unifiedDue.label,
-    }
-  }
-
-  return {
-    endDate,
-    daysUntilDue: unifiedDue.daysUntilDue,
-    dueStatus: unifiedDue.status,
-    dueLabel: unifiedDue.label,
-  }
-}
-
 function getTaskIdFromLinkedRow(row: AnyRow): string {
   return String(
     row.task_id
@@ -421,76 +317,6 @@ async function collectTodayTodoTaskIds(projectId: string, taskRows: AnyRow[]) {
   }
 
   return taskIds
-}
-
-function toFocusTaskItem(
-  row: AnyRow,
-  now = new Date(),
-  todayTodoTaskIds?: Set<string>,
-  calendar?: ConstructionCalendarContext | null,
-): FocusTaskItem {
-  const dueMeta = buildFocusTaskDueMeta(row, now, calendar)
-  const taskId = String(row.id ?? '')
-  return {
-    id: taskId,
-    title: firstText(row, ['title'], '未命名任务'),
-    status: normalizeFocusTaskStatus(row),
-    statusLabel: getFocusTaskStatusLabel(row),
-    progress: Math.max(0, Math.min(100, Number(row.progress ?? 0))),
-    assignee: firstText(row, ['assignee_name', 'assignee']),
-    assigneeUnit: firstText(row, ['participant_unit_name']),
-    endDate: dueMeta.endDate,
-    daysUntilDue: dueMeta.daysUntilDue,
-    dueStatus: dueMeta.dueStatus,
-    dueLabel: dueMeta.dueLabel,
-    updatedAt: firstText(row, ['updated_at', 'created_at']),
-    isTodayTodo: todayTodoTaskIds?.has(taskId) ?? false,
-  }
-}
-
-function buildFocusTaskStats(items: FocusTaskItem[]): FocusTaskStats {
-  return {
-    total: items.length,
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    overdue: items.filter((item) => item.dueStatus === 'overdue').length,
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    urgent: items.filter((item) => item.dueStatus === 'urgent').length,
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    approaching: items.filter((item) => item.dueStatus === 'approaching').length,
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    normal: items.filter((item) => item.dueStatus === 'normal').length,
-  }
-}
-
-function includeFocusTaskByFilter(item: FocusTaskItem, filter: FocusTaskFilter): boolean {
-  switch (filter) {
-    case 'today':
-      return item.isTodayTodo === true
-    case '3days':
-      return item.daysUntilDue !== null && item.daysUntilDue >= 0 && item.daysUntilDue <= 3
-    case 'urgent':
-      return item.dueStatus === 'urgent' || item.dueStatus === 'overdue'
-    case 'week':
-    default:
-      return item.daysUntilDue !== null && item.daysUntilDue >= 0 && item.daysUntilDue <= 7
-  }
-}
-
-function compareFocusTasks(left: FocusTaskItem, right: FocusTaskItem): number {
-  const priority: Record<FocusTaskDueStatus, number> = {
-    overdue: 0,
-    urgent: 1,
-    approaching: 2,
-    normal: 3,
-  }
-  const priorityDiff = priority[left.dueStatus] - priority[right.dueStatus]
-  if (priorityDiff !== 0) return priorityDiff
-
-  const leftDue = left.daysUntilDue ?? Number.POSITIVE_INFINITY
-  const rightDue = right.daysUntilDue ?? Number.POSITIVE_INFINITY
-  if (leftDue !== rightDue) return leftDue - rightDue
-
-  return new Date(right.updatedAt ?? 0).getTime() - new Date(left.updatedAt ?? 0).getTime()
 }
 
 function assertDashboardProjectRowsTable(table: string): asserts table is DashboardProjectRowsTable {
@@ -997,8 +823,8 @@ router.get(
       return res.status(400).json(response)
     }
 
-    const filter = normalizeFocusTaskFilter(req.query.filter)
-    const limit = normalizeFocusTaskLimit(req.query.limit)
+    const filter = normalizeDashboardFocusTaskFilter(req.query.filter)
+    const limit = normalizeDashboardFocusTaskLimit(req.query.limit)
     logger.info('Fetching dashboard focus tasks', { projectId, filter, limit })
 
     const [rows, workCalendar] = await Promise.all([
@@ -1009,20 +835,26 @@ router.get(
     const todayTodoTaskIds = filter === 'today'
       ? await collectTodayTodoTaskIds(projectId, leafRows as AnyRow[])
       : undefined
-    const focusTasks = leafRows
-      .filter((task) => String(task.id ?? '').trim())
-      .filter((task) => !isCompletedTask(task))
-      .map((task) => toFocusTaskItem(task, new Date(), todayTodoTaskIds, workCalendar))
-      .sort(compareFocusTasks)
-
-    const filteredTasks = focusTasks.filter((task) => includeFocusTaskByFilter(task, filter))
-    const response: ApiResponse<FocusTasksResponse> = {
+    const focusTasks = buildDashboardFocusTasksResponse({
+      rows: leafRows.filter((task) => String(task.id ?? '').trim()),
+      filter,
+      limit,
+      now: new Date(),
+      calendar: workCalendar,
+      todayTodoTaskIds,
+    })
+    const response: ApiResponse<{
+      filter: typeof filter
+      stats: typeof focusTasks.stats
+      items: DashboardFocusTaskItem[]
+      totalCount: number
+    }> = {
       success: true,
       data: {
-        filter,
-        stats: buildFocusTaskStats(focusTasks),
-        items: filteredTasks.slice(0, limit),
-        totalCount: filteredTasks.length,
+        filter: focusTasks.filter,
+        stats: focusTasks.stats,
+        items: focusTasks.items,
+        totalCount: focusTasks.totalCount,
       },
       timestamp: new Date().toISOString(),
     }
