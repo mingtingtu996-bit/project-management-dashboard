@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   const aggregationQuery: {
@@ -18,6 +18,9 @@ const mocks = vi.hoisted(() => {
     aggregationQuery,
     rawQuery: vi.fn(),
     from: vi.fn(),
+    externalFetch: vi.fn(async () => {
+      throw new Error('EXTERNAL_NETWORK_FORBIDDEN_IN_WBS_CANDIDATE_TEST')
+    }),
     logger: {
       warn: vi.fn(),
     },
@@ -48,6 +51,7 @@ const {
 describe('wbsTemplateCandidateEventService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('fetch', mocks.externalFetch)
     mocks.eventInsert.mockResolvedValue({ error: null })
     mocks.aggregationSelect.mockReturnValue(mocks.aggregationQuery)
     mocks.aggregationQuery.maybeSingle.mockResolvedValue({
@@ -78,6 +82,11 @@ describe('wbsTemplateCandidateEventService', () => {
       }
       return {}
     })
+  })
+
+  afterEach(() => {
+    expect(mocks.externalFetch).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
   })
 
   it('bridges WBS template commit candidates into unified algorithm asset governance events', async () => {
@@ -360,6 +369,9 @@ describe('wbsTemplateCandidateEventService', () => {
             runtimePublicationKey: 'duration-learning:special-work:canary-1',
           }],
           publication_lineage_status: 'linked',
+          runtime_publication_key: 'duration-learning:special-work:canary-1',
+          runtime_publication_artifact_key: 'china-gb55032-2022',
+          runtime_publication_input_task_ids: ['task-1', 'task-2', 'task-3'],
         }),
       }),
       { onConflict: 'id', ignoreDuplicates: false },
@@ -440,10 +452,10 @@ describe('wbsTemplateCandidateEventService', () => {
       },
       approvedCandidateEventIds: ['algorithm-candidate-event-id', 'algorithm-candidate-event-id'],
       seedVersionId: 'special-seed-version-v2',
-      runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
+      runtimePublicationKey: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-special-seed-1',
-      runtimeConsumerPublicationKey: 'wbs_template_runtime:special-seed-version-v2',
-      rollbackTarget: 'wbs_template_runtime:special-seed-version-v1',
+      runtimeConsumerPublicationKey: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
+      rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v1',
       generatedEntityIds: ['task-1', 'task-2'],
       enabledLearningScopes: ['system', 'segment_baseline', 'company', 'project'],
       releaseExitApproved: true,
@@ -473,8 +485,8 @@ describe('wbsTemplateCandidateEventService', () => {
     expect(readiness.seedVersionLineage).toEqual({
       seedType: 'special_work_duration',
       seedVersionId: 'special-seed-version-v2',
-      runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
-      rollbackTarget: 'wbs_template_runtime:special-seed-version-v1',
+      runtimePublicationKey: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
+      rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v1',
       approvedCandidateEventIds: ['algorithm-candidate-event-id'],
       generatedEntityIds: ['task-1', 'task-2'],
       generatedRowCount: 10,
@@ -546,19 +558,20 @@ describe('wbsTemplateCandidateEventService', () => {
       }],
       sourceRows: [
         {
-          sourceTable: 'wbs_template_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'wbs_template_runtime:special-seed-version-v2',
-            asset_kind: 'special_work_duration_seed',
-            asset_version_id: 'special-seed-version-v2',
-            runtime_publication_status: 'runtime_published',
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:armed',
-            },
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
+            asset_key: 'special_work_duration_seed',
+            artifact_key: 'special-seed-version-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:special-seed-version-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
           },
         },
@@ -568,8 +581,12 @@ describe('wbsTemplateCandidateEventService', () => {
             id: 'consumer-special-seed-1',
             asset_key: 'special_work_duration_seed',
             consumer_key: 'wbsTemplateGenerationService',
-            publication_key: 'wbs_template_runtime:special-seed-version-v2',
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'special-seed-version-v2' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
           },
@@ -581,7 +598,7 @@ describe('wbsTemplateCandidateEventService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'special_work_duration_seed',
-              publicationKey: 'wbs_template_runtime:special-seed-version-v2',
+              publicationKey: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
             },
             actual_context: {
               assetKey: 'special_work_duration_seed',
@@ -607,17 +624,17 @@ describe('wbsTemplateCandidateEventService', () => {
     }))
     expect(readiness.seedVersionLineage).toEqual(expect.objectContaining({
       seedVersionId: 'special-seed-version-v2',
-      runtimePublicationKey: 'wbs_template_runtime:special-seed-version-v2',
-      rollbackTarget: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+      runtimePublicationKey: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
+      rollbackTarget: 'rollback:duration_learning_runtime:special_work_duration_seed:special-seed-version-v2:rollback_verified',
       approvedCandidateEventIds: ['algorithm-candidate-event-id'],
       generatedEntityIds: ['task-1', 'task-2'],
     }))
     expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
       productionSampleEvidenceRef: 'network_outcomes:wbs-template-candidate-event-1',
-      publicationExecutionRef: 'wbs_template_runtime:special-seed-version-v2',
+      publicationExecutionRef: 'duration_learning_runtime_publications:duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-special-seed-1',
-      impactMonitoringEvidenceRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:armed',
-      rollbackDrillEvidenceRef: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+      impactMonitoringEvidenceRef: 'impact_monitoring:duration_learning_runtime:special_work_duration_seed:special-seed-version-v2:monitoring_passed',
+      rollbackDrillEvidenceRef: 'rollback:duration_learning_runtime:special_work_duration_seed:special-seed-version-v2:rollback_verified',
       accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-special-seed-1',
     }))
     expect(readiness.productionLineage.rejectedRows).toEqual([])
@@ -645,20 +662,34 @@ describe('wbsTemplateCandidateEventService', () => {
       }],
       sourceRows: [
         {
-          sourceTable: 'wbs_template_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'wbs_template_runtime:special-seed-version-v2',
-            asset_kind: 'special_work_duration_seed',
-            asset_version_id: 'special-seed-version-v2',
-            runtime_publication_status: 'runtime_published',
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:armed',
-            },
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v2',
+            asset_key: 'special_work_duration_seed',
+            artifact_key: 'special-seed-version-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:special-seed-version-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:wbs_template_runtime:special-seed-version-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
+          },
+        },
+        {
+          sourceTable: 'duration_learning_runtime_publications',
+          row: {
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v1',
+            asset_key: 'special_work_duration_seed',
+            artifact_key: 'special-seed-version-v1',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:special-seed-version-v1'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'failed',
           },
         },
         {
@@ -667,8 +698,12 @@ describe('wbsTemplateCandidateEventService', () => {
             id: 'consumer-special-seed-1',
             asset_key: 'special_work_duration_seed',
             consumer_key: 'wbsTemplateGenerationService',
-            publication_key: 'wbs_template_runtime:special-seed-version-v1',
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:special-seed-version-v1',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'special-seed-version-v1' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:special_work_duration_seed:special-seed-version-v1',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
           },

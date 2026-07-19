@@ -131,13 +131,14 @@ describe('WBS governance candidate adapters', () => {
     expect(candidateInsert?.params).toEqual(expect.arrayContaining([
       'wbs.dependency.cross_item_workflow.foundation_support_dewatering_to_earthwork',
       'constructionDependencyReplayCalibrationService',
+      'constructionDependencyReplayCalibrationService:wbs.dependency.cross_item_workflow.foundation_support_dewatering_to_earthwork:10000000-0000-4000-8000-000000000001:no_project',
       'company',
       '10000000-0000-4000-8000-000000000001',
       null,
       'dependency_order',
       'governed_candidate',
-      'manual_governance_required',
-      'auto_review_package',
+      'candidate_only',
+      'auto_shadow',
       'review_required',
     ]))
     expect(candidateInsert?.params).toEqual(expect.arrayContaining([
@@ -162,6 +163,12 @@ describe('WBS governance candidate adapters', () => {
         queueStatus: 'manual_review_required',
         recommendation: 'review_nonzero_lag_or_condition_profile',
         sampleDependencyIds: ['dependency-1'],
+      }),
+      expect.objectContaining({
+        decisionStatus: 'review_required',
+        runtimeAction: 'candidate_only',
+        canWriteRuntime: false,
+        canModifyPublishAnchor: false,
       }),
     ]))
     const writeSql = calls

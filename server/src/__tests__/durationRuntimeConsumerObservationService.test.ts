@@ -436,7 +436,7 @@ describe('durationRuntimeConsumerObservationService', () => {
         },
         {
           assetKey: 'wbs_reference_days',
-          publicationKey: 'wbs_reference_days_runtime:reference-v3',
+          publicationKey: 'duration_learning_runtime:wbs_reference_days:reference-v3',
           publicationStatus: 'runtime_published',
           observationContext: { projectId: 'project-a' },
           sourceEvidenceRefs: ['runtime_publication:wbs-reference-days:reference-v3'],
@@ -459,7 +459,7 @@ describe('durationRuntimeConsumerObservationService', () => {
       ],
       [
         'wbs_reference_days',
-        'wbs_reference_days_runtime:reference-v3',
+        'duration_learning_runtime:wbs_reference_days:reference-v3',
         'projectRemainingDurationForecastService',
         'remaining_duration_forecast',
       ],

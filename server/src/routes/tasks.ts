@@ -62,8 +62,10 @@ import { ExecutionFactIntent } from '../services/planningScheduleGovernanceServi
 import {
   generateWbsTemplateRows,
   listWbsTemplateCatalog,
+  recordWbsTemplateGenerationRuntimeConsumption,
   type GeneratedTemplateDependency,
   type GeneratedTemplateRow,
+  type WbsTemplateGenerationRuntimeArtifactPublication,
 } from '../services/wbsTemplateGenerationService.js'
 import {
   TASK_PLAN_DRILLDOWN_ROW_LIMIT,
@@ -74,7 +76,11 @@ import {
   resolveTaskPlanDrilldownStep,
   summarizeProjectExecutionPlanRows,
 } from '../services/taskPlanDrilldownPolicyService.js'
-import { recordWbsTemplateCandidateEvent } from '../services/wbsTemplateCandidateEventService.js'
+import {
+  buildSpecialWorkDurationCandidateNodes,
+  recordWbsTemplateCandidateEvent,
+} from '../services/wbsTemplateCandidateEventService.js'
+import { persistDurationLearningRuntimeConsumptions } from '../services/durationLearningRuntimeConsumptionService.js'
 import {
   buildDefaultMasterPlanVisibilityFeedback,
   buildDefaultMasterPlanVisibilityTaskAdjustmentFeedback,
@@ -1130,6 +1136,7 @@ function mapGeneratedDependencySourceType(source: GeneratedTemplateDependency['s
   if (source === 'sibling_sequence' || source === 'internal_flow') return 'template_internal_flow'
   if (source === 'cross_item_workflow') return 'template_cross_item_workflow'
   if (source === 'dependency_intent_template') return 'template_dependency_intent'
+  if (source === 'duration_learning_runtime_publication') return 'duration_learning_runtime_publication'
   return 'template_generated'
 }
 
@@ -1137,6 +1144,7 @@ function generatedDependencyMetadata(dependency: GeneratedTemplateDependency) {
   const raw = dependency as GeneratedTemplateDependency & Record<string, unknown>
   const evidence = readGeneratedTemplateRecord(raw.dependencyRuleEvidence)
   const sequencingBasis = String(raw.sequencingBasis ?? '').trim()
+  const publicationKey = String(raw.publicationKey ?? '').trim() || null
   return {
     source: String(raw.source ?? '').trim() || 'generated_dependency_network',
     intentCode: String(raw.intentCode ?? '').trim() || null,
@@ -1144,9 +1152,15 @@ function generatedDependencyMetadata(dependency: GeneratedTemplateDependency) {
     sequencingBasis: sequencingBasis || null,
     governanceGapCode: String(raw.governanceGapCode ?? '').trim() || null,
     dependencyRuleEvidence: Object.keys(evidence).length > 0 ? evidence : null,
+    publicationKey,
+    artifactKey: String(raw.artifactKey ?? '').trim() || null,
+    publicationStage: String(raw.publicationStage ?? '').trim() || null,
+    selectionBasis: String(raw.selectionBasis ?? '').trim() || null,
     learningPolicy: sequencingBasis
       ? 'candidate_only_until_dependency_rule_replay_publication'
-      : 'published_or_template_generated_dependency',
+      : publicationKey
+        ? 'published_duration_learning_runtime_dependency'
+        : 'published_or_template_generated_dependency',
   }
 }
 
@@ -2263,10 +2277,21 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
             childCount: projectTasks.filter((task) => String(task.parent_id ?? '') === requestedAttachUnderRowId).length,
           }
         }
+        const durationLearningRuntimeQueryExec = async <T = Record<string, unknown>>(
+          sql: string,
+          params: unknown[] = [],
+        ): Promise<T[]> => {
+          // database-query-dynamic-approved: the canonical 315 publication resolver owns fixed parameterized SELECTs; the task commit route only supplies its transaction executor.
+          const result = await rawQuery(sql, params as any[])
+          return (result.rows ?? []) as T[]
+        }
+        const runtimeArtifactPublications: WbsTemplateGenerationRuntimeArtifactPublication[] = []
         const generated = await generateWbsTemplateRows({
           projectId,
           surface: 'task_list',
           operation: generationOperation,
+          runtimePublicationQueryExec: durationLearningRuntimeQueryExec,
+          runtimeArtifactPublications,
         })
         const generatedRows = filterGeneratedRowsForPreviewSelection(generated.rows, generationOperation)
         logGeneratedTemplateCommitRenderBudget(generatedRows, generationOperation, projectId)
@@ -2371,6 +2396,33 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
           }
         }
         const companyId = await getProjectCompanyId(projectId)
+        if (!companyId) {
+          throw Object.assign(new Error('Task template generation requires project company scope for duration learning lineage.'), {
+            code: 'TASK_TEMPLATE_DURATION_LEARNING_COMPANY_SCOPE_REQUIRED',
+          })
+        }
+        await recordWbsTemplateGenerationRuntimeConsumption({
+          queryExec: durationLearningRuntimeQueryExec,
+          projectId,
+          generation: generated,
+          runtimeArtifactPublications,
+          inputTaskIds: [...generatedIdByClientRowId.values()],
+        })
+        await persistDurationLearningRuntimeConsumptions({
+          queryExec: durationLearningRuntimeQueryExec,
+          build: {
+            companyId,
+            projectId,
+            consumerKey: 'wbsTemplateGenerationService',
+            consumerSurface: 'task_list_commit',
+            generationBatchId: generated.generationBatchId,
+            templateIds: generated.templateIds,
+            rows: generatedRows,
+            runtimeArtifactPublications,
+            subjectType: 'task',
+            subjectIdByClientRowId: generatedIdByClientRowId,
+          },
+        })
         await registerDatabasePostCommitEffect('record_wbs_template_candidate_event', async () => {
           await recordWbsTemplateCandidateEvent({
             companyId,
@@ -2389,6 +2441,7 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
             retainedRowCount: generatedRows.length,
             rejectedRowCount: Math.max(0, generated.rows.length - generatedRows.length),
             generatedEntityIds: Array.from(generatedIdByClientRowId.values()),
+            durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows),
             actorId,
             metadata: {
               generationDepth: generated.generationDepth,

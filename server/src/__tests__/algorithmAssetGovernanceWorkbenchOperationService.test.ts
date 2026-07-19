@@ -17,12 +17,6 @@ import type {
   RollbackAlgorithmAssetColdStartBaselineRuntimePublicationResult,
 } from '../services/algorithmAssetGovernancePersistenceService.js'
 import type {
-  ConstructionDependencyRuleRuntimeRollbackResult,
-} from '../services/constructionDependencyRuleRuntimePublicationService.js'
-import type {
-  WbsTemplateRuntimeRollbackResult,
-} from '../services/wbsTemplateRuntimePublicationService.js'
-import type {
   ApplyConstructionOrganizationPlanNetworkApprovedDraftResult,
 } from '../services/constructionOrganizationPlanNetworkDomainWriter.js'
 import type {
@@ -123,29 +117,10 @@ function coldStartBaselineRollbackResult(): RollbackAlgorithmAssetColdStartBasel
   }
 }
 
-function wbsTemplateRollbackResult(): WbsTemplateRuntimeRollbackResult {
+function durationLearningRuntimeRollbackResult() {
   return {
-    status: 'rollback_executed',
-    sourcePublicationKey: 'wbs-template-runtime:special-work:v2',
-    rollbackTarget: 'wbs-template-runtime:special-work:v1',
-    restoredRuntimePolicy: 'previous_wbs_template_runtime_publication_retained',
-    writesWbsTemplateRuntime: true,
-    writesTemplatesDirectly: false,
-    writesTasksOrBaselinesDirectly: false,
-    writesSeedRuntimeDirectly: false,
-    reasons: [],
-  }
-}
-
-function dependencyRuleRollbackResult(): ConstructionDependencyRuleRuntimeRollbackResult {
-  return {
-    status: 'rollback_executed',
-    sourcePublicationKey: 'dependency-rule-runtime:sequence:v2',
-    rollbackTarget: 'dependency-rule-runtime:sequence:v1',
-    restoredRuntimePolicy: 'previous_dependency_rule_publication_retained',
-    writesDependencyRuleRuntime: true,
-    writesTaskDependenciesDirectly: false,
-    writesSeedRuntimeDirectly: false,
+    status: 'rollback_executed' as const,
+    restoredPublicationKey: 'duration_learning_runtime:special_work_duration_seed:previous',
     reasons: [],
   }
 }
@@ -790,7 +765,7 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       action: 'runtime_rollback',
       assetType: 'template_seed',
       evidenceToken: 'wbs-template-rollback-evidence-1',
-      sourcePublicationKey: 'wbs-template-runtime:special-work:v2',
+      sourcePublicationKey: 'duration_learning_runtime:special_work_duration_seed:v2',
       rollbackReason: 'impact_monitoring_regression',
     })
 
@@ -812,8 +787,8 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
     ]))
   })
 
-  it('delegates WBS template runtime rollback only to the explicit WBS runtime rollback writer', async () => {
-    const executeWbsTemplateRuntimeRollback = vi.fn(async () => wbsTemplateRollbackResult())
+  it('delegates template seed rollback only to the canonical duration-learning writer', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
 
     const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
       action: 'runtime_rollback',
@@ -821,15 +796,15 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       evidenceToken: 'wbs-template-rollback-evidence-1',
       companyId: 'company-a',
       projectId: 'project-a',
-      domainWriterKey: 'wbsTemplateRuntimePublicationService.executeWbsTemplateRuntimeRollback',
-      sourcePublicationKey: 'wbs-template-runtime:special-work:v2',
-      rollbackTarget: 'wbs-template-runtime:special-work:v1',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+      sourcePublicationKey: 'duration_learning_runtime:special_work_duration_seed:v2',
+      rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:previous',
       rollbackReason: 'impact_monitoring_regression',
-      consumerVerificationRefs: ['resolveWbsTemplateRuntimePublication.excludes_runtime_rolled_back'],
-      rollbackWriterRefs: ['executeWbsTemplateRuntimeRollback'],
+      consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+      rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
       executedAt: '2026-06-15T03:00:00.000Z',
       dependencies: {
-        executeWbsTemplateRuntimeRollback,
+        rollbackDurationLearningRuntimePublication,
       },
     })
 
@@ -840,23 +815,47 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       writesRuntimeDirectly: false,
       workbenchDoesNotGrantPublishRights: true,
       delegatedToDomainWriter: true,
-      domainWriterKey: 'wbsTemplateRuntimePublicationService.executeWbsTemplateRuntimeRollback',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
     }))
     expect(result.domainResult).toEqual(expect.objectContaining({
       status: 'rollback_executed',
-      writesWbsTemplateRuntime: true,
-      writesTemplatesDirectly: false,
-      writesTasksOrBaselinesDirectly: false,
-      writesSeedRuntimeDirectly: false,
+      restoredPublicationKey: 'duration_learning_runtime:special_work_duration_seed:previous',
     }))
-    expect(executeWbsTemplateRuntimeRollback).toHaveBeenCalledWith(expect.objectContaining({
-      companyId: 'company-a',
-      projectId: 'project-a',
-      sourcePublicationKey: 'wbs-template-runtime:special-work:v2',
-      rollbackTarget: 'wbs-template-runtime:special-work:v1',
+    expect(rollbackDurationLearningRuntimePublication).toHaveBeenCalledWith(expect.objectContaining({
+      publicationKey: 'duration_learning_runtime:special_work_duration_seed:v2',
+      expectedPreviousPublicationKey: 'duration_learning_runtime:special_work_duration_seed:previous',
       reason: 'impact_monitoring_regression',
-      executedAt: '2026-06-15T03:00:00.000Z',
+      rolledBackAt: '2026-06-15T03:00:00.000Z',
     }))
+  })
+
+  it('blocks template seed rollback for a legacy or cross-family publication key', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
+
+    for (const sourcePublicationKey of [
+      'wbs-template-runtime:special-work:v2',
+      'duration_learning_runtime:dependency_rule_candidate:v2',
+    ]) {
+      const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+        action: 'runtime_rollback',
+        assetType: 'template_seed',
+        evidenceToken: 'wbs-template-rollback-evidence-1',
+        companyId: 'company-a',
+        domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+        sourcePublicationKey,
+        rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:previous',
+        rollbackReason: 'impact_monitoring_regression',
+        consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+        rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
+        dependencies: { rollbackDurationLearningRuntimePublication },
+      })
+
+      expect(result).toEqual(expect.objectContaining({
+        status: 'operation_blocked',
+        reasons: expect.arrayContaining(['template_seed_runtime_publication_key_required']),
+      }))
+    }
+    expect(rollbackDurationLearningRuntimePublication).not.toHaveBeenCalled()
   })
 
   it('blocks dependency rule runtime rollback when writer, consumer, or rollback target is missing', async () => {
@@ -885,22 +884,25 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
     ]))
   })
 
-  it('delegates dependency rule runtime rollback only to the explicit dependency runtime rollback writer', async () => {
-    const executeConstructionDependencyRuleRuntimeRollback = vi.fn(async () => dependencyRuleRollbackResult())
+  it('delegates dependency rule rollback only to the canonical duration-learning writer', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => ({
+      ...durationLearningRuntimeRollbackResult(),
+      restoredPublicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
+    }))
 
     const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
       action: 'runtime_rollback',
       assetType: 'dependency_rule',
       evidenceToken: 'dependency-rule-rollback-evidence-1',
-      domainWriterKey: 'constructionDependencyRuleRuntimePublicationService.executeConstructionDependencyRuleRuntimeRollback',
-      sourcePublicationKey: 'dependency-rule-runtime:sequence:v2',
-      rollbackTarget: 'dependency-rule-runtime:sequence:v1',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+      sourcePublicationKey: 'duration_learning_runtime:dependency_rule_candidate:v2',
+      rollbackTarget: 'duration_learning_runtime:dependency_rule_candidate:previous',
       rollbackReason: 'impact_monitoring_regression',
-      consumerVerificationRefs: ['resolveConstructionDependencyRuleRuntimePublication.excludes_runtime_rolled_back'],
-      rollbackWriterRefs: ['executeConstructionDependencyRuleRuntimeRollback'],
+      consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+      rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
       executedAt: '2026-06-15T03:30:00.000Z',
       dependencies: {
-        executeConstructionDependencyRuleRuntimeRollback,
+        rollbackDurationLearningRuntimePublication,
       },
     })
 
@@ -911,20 +913,46 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       writesRuntimeDirectly: false,
       workbenchDoesNotGrantPublishRights: true,
       delegatedToDomainWriter: true,
-      domainWriterKey: 'constructionDependencyRuleRuntimePublicationService.executeConstructionDependencyRuleRuntimeRollback',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
     }))
     expect(result.domainResult).toEqual(expect.objectContaining({
       status: 'rollback_executed',
-      writesDependencyRuleRuntime: true,
-      writesTaskDependenciesDirectly: false,
-      writesSeedRuntimeDirectly: false,
+      restoredPublicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
     }))
-    expect(executeConstructionDependencyRuleRuntimeRollback).toHaveBeenCalledWith(expect.objectContaining({
-      sourcePublicationKey: 'dependency-rule-runtime:sequence:v2',
-      rollbackTarget: 'dependency-rule-runtime:sequence:v1',
+    expect(rollbackDurationLearningRuntimePublication).toHaveBeenCalledWith(expect.objectContaining({
+      publicationKey: 'duration_learning_runtime:dependency_rule_candidate:v2',
+      expectedPreviousPublicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
       reason: 'impact_monitoring_regression',
-      executedAt: '2026-06-15T03:30:00.000Z',
+      rolledBackAt: '2026-06-15T03:30:00.000Z',
     }))
+  })
+
+  it('blocks dependency rule rollback for a legacy or cross-family publication key', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
+
+    for (const sourcePublicationKey of [
+      'dependency-rule-runtime:sequence:v2',
+      'duration_learning_runtime:wbs_reference_days:v2',
+    ]) {
+      const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+        action: 'runtime_rollback',
+        assetType: 'dependency_rule',
+        evidenceToken: 'dependency-rule-rollback-evidence-1',
+        domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+        sourcePublicationKey,
+        rollbackTarget: 'duration_learning_runtime:dependency_rule_candidate:previous',
+        rollbackReason: 'impact_monitoring_regression',
+        consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+        rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
+        dependencies: { rollbackDurationLearningRuntimePublication },
+      })
+
+      expect(result).toEqual(expect.objectContaining({
+        status: 'operation_blocked',
+        reasons: expect.arrayContaining(['dependency_rule_runtime_publication_key_required']),
+      }))
+    }
+    expect(rollbackDurationLearningRuntimePublication).not.toHaveBeenCalled()
   })
 
   it('blocks construction organization draft handoff when writer, consumer, or draft evidence is missing', async () => {

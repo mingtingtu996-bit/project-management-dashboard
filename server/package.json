@@ -50,6 +50,7 @@
     "migrate:plan": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --plan",
     "verify:commercial-trigger-rpc-target": "tsx -r dotenv/config src/scripts/verify-commercial-trigger-rpc-target.ts",
     "verify:commercial-trigger-rpc-acl": "tsx -r dotenv/config src/scripts/verify-commercial-trigger-rpc-acl.ts",
+    "migrate:duration-learning-legacy-runtime-retirement": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --only=322 --duration-learning-legacy-runtime-retirement",
     "migrate:check": "tsx -r dotenv/config src/scripts/check-migration-safety.ts",
     "migrate:diagnose": "tsx -r dotenv/config src/scripts/check-migration-release-readiness.ts",
     "migrate:drift": "tsx -r dotenv/config src/scripts/check-schema-drift.ts",
@@ -89,6 +90,7 @@
     "migrate:adopt-baseline": "tsx -r dotenv/config src/scripts/adopt-migration-baseline.ts --through 084",
     "migrate:adopt-baseline:plan": "tsx -r dotenv/config src/scripts/adopt-migration-baseline.ts --through 084 --plan",
     "backup:t2-schedule-runtime-retirement": "tsx -r dotenv/config src/scripts/backup-t2-schedule-runtime-retirement.ts",
+    "backup:duration-learning-legacy-runtime-retirement": "tsx -r dotenv/config src/scripts/backup-duration-learning-legacy-runtime-retirement.ts",
     "restore:t2-schedule-runtime-retirement": "tsx -r dotenv/config src/scripts/restore-t2-schedule-runtime-retirement.ts"
   },
   "dependencies": {

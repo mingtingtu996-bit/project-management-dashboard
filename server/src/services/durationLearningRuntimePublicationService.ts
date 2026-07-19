@@ -241,11 +241,15 @@ function payloadReasons(assetKey: DurationLearningRuntimeAssetKey, payload: Reco
     )) reasons.push('standard_seed_duration_required')
   }
   if (assetKey === 'special_work_duration_seed') {
+    const basis = normalizeText(payload.durationDayBasis ?? payload.duration_day_basis)
+    if (basis !== 'construction_production_day') reasons.push('special_seed_production_day_basis_required')
     const hasStableCode = Boolean(normalizeText(payload.stableCode ?? payload.stable_code))
     const hasNodes = readList(payload.nodes).length > 0
     if (!hasStableCode && !hasNodes) reasons.push('special_seed_artifact_required')
   }
   if (assetKey === 'wbs_reference_days') {
+    const basis = normalizeText(payload.durationDayBasis ?? payload.duration_day_basis)
+    if (basis !== 'construction_production_day') reasons.push('wbs_reference_days_production_day_basis_required')
     const validNodeCount = readList(payload.nodes).filter((value) => {
       const node = readRecord(value)
       const identity = normalizeText(node.sourceId ?? node.source_id ?? node.stableCode ?? node.stable_code ?? node.path)
@@ -794,10 +798,12 @@ export async function promoteDurationLearningRuntimeCanary(input: {
 export async function rollbackDurationLearningRuntimePublication(input: {
   queryExec: DurationLearningRuntimePublicationQueryExec
   publicationKey: string
+  expectedPreviousPublicationKey?: string | null
   reason: string
   rolledBackAt?: string
 }) {
   const publicationKey = normalizeText(input.publicationKey)
+  const expectedPreviousPublicationKey = nullableText(input.expectedPreviousPublicationKey)
   const reason = normalizeText(input.reason)
   if (!publicationKey || !reason) {
     return {
@@ -827,6 +833,7 @@ export async function rollbackDurationLearningRuntimePublication(input: {
              from public.duration_learning_runtime_publications
             where publication_key = $1
               and publication_stage in ('canary', 'stable')
+              and ($4::text is null or previous_publication_key is not distinct from $4::text)
             for update
          ) source
         where publication.publication_key = source.publication_key
@@ -845,7 +852,7 @@ export async function rollbackDurationLearningRuntimePublication(input: {
             rolled_back.previous_publication_key
        from rolled_back
        left join restored on true`,
-    [publicationKey, reason, rolledBackAt],
+    [publicationKey, reason, rolledBackAt, expectedPreviousPublicationKey],
   )
   const row = rows[0]
   if (row) {
@@ -865,6 +872,17 @@ export async function rollbackDurationLearningRuntimePublication(input: {
     [publicationKey],
   )
   const terminal = terminalRows[0] ? rowToRecord(terminalRows[0]) : null
+  if (
+    terminal
+    && expectedPreviousPublicationKey
+    && terminal.previousPublicationKey !== expectedPreviousPublicationKey
+  ) {
+    return {
+      status: 'blocked' as const,
+      restoredPublicationKey: null,
+      reasons: ['rollback_target_mismatch'],
+    }
+  }
   return terminal?.publicationStage === 'rolled_back'
     ? {
         status: 'rollback_already_executed' as const,

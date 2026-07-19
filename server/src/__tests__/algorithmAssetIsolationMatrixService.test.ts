@@ -145,22 +145,26 @@ describe('algorithmAssetIsolationMatrixService', () => {
     }))
     expect(byKey.get('standard_work_duration.seed_version_runtime')).toEqual(expect.objectContaining({
       assetType: 'standard_work_duration_seed_runtime',
+      scopeType: 'project_company_industry_global',
       status: 'confirmed',
       missingReasons: [],
     }))
 
     expect(byKey.get('wbs.template.runtime')).toEqual(expect.objectContaining({
       assetType: 'wbs_template_runtime',
+      scopeType: 'project_company_industry_global',
       status: 'confirmed',
       missingReasons: [],
     }))
     expect(byKey.get('dependency.rule.runtime')).toEqual(expect.objectContaining({
       assetType: 'dependency_rule_runtime',
+      scopeType: 'project_company_industry_global',
       status: 'confirmed',
       missingReasons: [],
     }))
     expect(byKey.get('critical_path.rule_runtime')).toEqual(expect.objectContaining({
       assetType: 'critical_path_rule_runtime',
+      scopeType: 'project_company_industry_global',
       status: 'confirmed',
       missingReasons: [],
     }))

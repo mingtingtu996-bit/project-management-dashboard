@@ -3770,13 +3770,13 @@ describe('scheduleAccelerationService', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'dependency_rule_candidate',
-          publicationKey: 'dependency_rule_runtime:dependency-v7',
+          publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-v7',
           publicationStatus: 'published',
           sourceEvidenceRefs: ['runtime_publication:dependency-rule:dependency-v7'],
         },
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v7',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v7',
           publicationStatus: 'runtime_published',
           sourceEvidenceRefs: ['runtime_publication:critical-path-rule:critical-v7'],
         },
@@ -3797,7 +3797,7 @@ describe('scheduleAccelerationService', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'dependency_rule_candidate',
-        'dependency_rule_runtime:dependency-v7',
+        'duration_learning_runtime:dependency_rule_candidate:dependency-v7',
         'scheduleAccelerationService',
         'schedule_acceleration',
       ],
@@ -3829,13 +3829,13 @@ describe('scheduleAccelerationService', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'dependency_rule_candidate',
-          publicationKey: 'dependency_rule_runtime:dependency-v7',
+          publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-v7',
           publicationStatus: 'published',
           sourceEvidenceRefs: ['runtime_publication:dependency-rule:dependency-v7'],
         },
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v7',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v7',
           publicationStatus: 'runtime_published',
           sourceEvidenceRefs: ['runtime_publication:critical-path-rule:critical-v7'],
         },
@@ -3847,7 +3847,7 @@ describe('scheduleAccelerationService', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'dependency_rule_candidate',
-        'dependency_rule_runtime:dependency-v7',
+        'duration_learning_runtime:dependency_rule_candidate:dependency-v7',
         'scheduleAccelerationService',
         'schedule_acceleration',
       ],

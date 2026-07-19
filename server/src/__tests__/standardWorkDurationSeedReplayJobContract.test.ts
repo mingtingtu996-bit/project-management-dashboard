@@ -23,7 +23,7 @@ describe('standardWorkDurationSeedReplayJob contract', () => {
     expect(jobsRouteSource).toMatch(/result:\s+await standardWorkDurationSeedReplayJob\.executeNow\((?:projectScope)?\)/)
   })
 
-  it('keeps P50 replay governance report-only and separate from seed publishing', () => {
+  it('keeps replay seed writes blocked while routing eligible project P50 candidates through governance', () => {
     const jobSource = readServerFile('src', 'jobs', 'standardWorkDurationSeedReplayJob.ts')
     const serviceSource = readServerFile('src', 'services', 'standardWorkDurationSeedReplayGovernanceService.ts')
     const bridgeSource = readServerFile('src', 'services', 'standardWorkDurationSeedReplayCandidateBridgeService.ts')
@@ -36,8 +36,10 @@ describe('standardWorkDurationSeedReplayJob contract', () => {
     expect(serviceSource).toContain("seedWritePolicy: 'never_write_seed_from_replay'")
     expect(serviceSource).toContain("allowedUse: 'backend_governance_report'")
     expect(bridgeSource).toContain('createAlgorithmSeedUpgradeCandidate')
-    expect(bridgeSource).toContain("actionPolicy: 'candidate_only'")
-    expect(bridgeSource).toContain("runtimeGovernancePolicy: 'candidate_only_no_runtime_effect_until_governed'")
+    expect(bridgeSource).toContain("const autoGovernEligible = queueKind === 'p50_review' && Boolean(report.projectId)")
+    expect(bridgeSource).toContain("actionPolicy: autoGovernEligible ? 'auto_govern' : 'candidate_only'")
+    expect(bridgeSource).toContain("? 'auto_govern_only_through_duration_learning_lifecycle'")
+    expect(bridgeSource).toContain(": 'candidate_only_no_runtime_effect_until_governed'")
     expect(bridgeSource).toContain("seedWritePolicy: 'never_write_seed_from_replay'")
     expect(bridgeSource).not.toContain('autoGovernAlgorithmSeedUpgradeCandidate')
   })

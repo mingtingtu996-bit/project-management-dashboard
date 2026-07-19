@@ -226,7 +226,13 @@ describe('duration runtime orphan retirement', () => {
     const cleanMarker = '-- Source: 321_retire_duplicate_t2_schedule_runtime.sql\n-- ============================================================\n'
     const cleanStart = cleanBundle.indexOf(cleanMarker)
     expect(cleanStart).toBeGreaterThan(-1)
-    expect(cleanBundle.slice(cleanStart + cleanMarker.length).trim()).toBe(migration.trim())
+    const cleanBodyStart = cleanStart + cleanMarker.length
+    const nextCleanMarker = cleanBundle.indexOf(
+      '\n-- ============================================================\n-- Source: ',
+      cleanBodyStart,
+    )
+    expect(nextCleanMarker).toBeGreaterThan(cleanBodyStart)
+    expect(cleanBundle.slice(cleanBodyStart, nextCleanMarker).trim()).toBe(migration.trim())
     expect(normalizeSqlWhitespace(buildExpectedSchemaFromMigrationSql(rollback))).toEqual(
       normalizeSqlWhitespace(buildExpectedSchemaFromMigrationSql(sourceMigration)),
     )

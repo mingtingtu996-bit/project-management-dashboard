@@ -444,7 +444,7 @@ describe('taskDurationForecastService', () => {
         },
         {
           assetKey: 'wbs_reference_days',
-          publicationKey: 'wbs_reference_days_runtime:reference-v8',
+          publicationKey: 'duration_learning_runtime:wbs_reference_days:reference-v8',
           publicationStatus: 'published',
           sourceEvidenceRefs: ['runtime_publication:wbs-reference-days:reference-v8'],
         },

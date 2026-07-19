@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StandardWorkDurationSeedReplayGovernanceReport } from '../services/standardWorkDurationSeedReplayGovernanceService.js'
 
 const mocks = vi.hoisted(() => ({
@@ -30,6 +30,10 @@ const {
 } = await import('../services/experienceTierRegistryService.js')
 
 describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
+  beforeEach(() => {
+    mocks.createAlgorithmSeedUpgradeCandidate.mockClear()
+  })
+
   const governanceReport: StandardWorkDurationSeedReplayGovernanceReport = {
     reportCode: 'standard_work_duration_seed_replay_governance' as const,
     generatedAt: '2026-06-14T00:00:00.000Z',
@@ -193,7 +197,7 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
       sampleCount: 5,
       variance: 0.5,
       confidenceLevel: 'medium',
-      actionPolicy: 'candidate_only',
+      actionPolicy: 'auto_govern',
       candidatePayload: expect.objectContaining({
         stableCode: 'process_duration:cast_in_place_concrete',
         standardWorkCodes: ['02-01-03-P07'],
@@ -206,7 +210,7 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
         replayReportCode: 'standard_work_duration_seed_p50_replay',
         seedWritePolicy: 'never_write_seed_from_replay',
         promotionPolicy: 'review_required_before_seed_promotion',
-        runtimeEffectPolicy: 'candidate_only_no_runtime_effect_until_governed',
+        runtimeEffectPolicy: 'auto_govern_only_through_duration_learning_lifecycle',
       }),
     }))
     expect(mocks.createAlgorithmSeedUpgradeCandidate).toHaveBeenCalledWith(expect.objectContaining({
@@ -218,6 +222,26 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
         defaultDaysP50: 4,
       }),
     }))
+  })
+
+  it('does not persist a company-only candidate that the project-authority lifecycle collector cannot reach', async () => {
+    const companyOnlyReport: StandardWorkDurationSeedReplayGovernanceReport = {
+      ...governanceReport,
+      projectId: null,
+      source: {
+        ...governanceReport.source,
+        filters: {
+          ...governanceReport.source.filters,
+          projectId: null,
+        },
+      },
+    }
+
+    const result = await createStandardWorkDurationReplayUpgradeCandidates(companyOnlyReport)
+
+    expect(result.attemptedCandidateCount).toBe(0)
+    expect(result.evidenceCollectionSkippedCount).toBeGreaterThan(0)
+    expect(mocks.createAlgorithmSeedUpgradeCandidate).not.toHaveBeenCalled()
   })
 
   it('builds a release-exit publication readiness package for approved replay candidates without writing seeds', () => {
@@ -360,14 +384,21 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
           },
         },
         {
-          sourceTable: 'algorithm_seed_versions',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            id: 'seed-version-standard-work-duration-v2',
-            seed_type: 'standard_work_duration',
-            seed_version: 'v2',
-            status: 'active',
-            is_current: true,
-            published_at: '2026-06-14T00:00:00.000Z',
+            publication_key: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
+            asset_key: 'standard_work_duration_seed',
+            artifact_key: 'seed-version-standard-work-duration-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:standard-work-duration-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
+            rollback_execution: {
+              status: 'rollback_verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
+            },
           },
         },
         {
@@ -376,32 +407,14 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
             id: 'consumer-standard-seed-1',
             asset_key: 'standard_work_duration_seed',
             consumer_key: 'durationSuggestionService',
-            publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+            publication_key: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'seed-version-standard-work-duration-v2' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
-          },
-        },
-        {
-          sourceTable: 'algorithm_learnable_parameter_release_events',
-          row: {
-            event_type: 'impact_monitoring',
-            event_status: 'monitoring_passed',
-            source_publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
-            event_payload: {
-              assetKey: 'standard_work_duration_seed',
-            },
-          },
-        },
-        {
-          sourceTable: 'algorithm_learnable_parameter_release_events',
-          row: {
-            event_type: 'rollback_execution',
-            event_status: 'rollback_executed',
-            source_publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
-            event_payload: {
-              assetKey: 'standard_work_duration_seed',
-            },
           },
         },
         {
@@ -411,7 +424,7 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'standard_work_duration_seed',
-              publicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+              publicationKey: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
             },
             actual_context: {
               assetKey: 'standard_work_duration_seed',
@@ -434,16 +447,16 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
     }))
     expect(readiness.seedVersionLineage).toEqual(expect.objectContaining({
       seedVersionId: 'seed-version-standard-work-duration-v2',
-      runtimePublicationKey: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
-      rollbackTarget: 'rollback:algorithm_seed_versions:seed-version-standard-work-duration-v2:rollback_executed',
+      runtimePublicationKey: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
+      rollbackTarget: 'rollback:duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2:rollback_verified',
       approvedCandidateIds: ['candidate-process_duration:cast_in_place_concrete'],
     }))
     expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
       productionSampleEvidenceRef: 'duration_samples:sample-standard-seed-1',
-      publicationExecutionRef: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+      publicationExecutionRef: 'duration_learning_runtime_publications:duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-standard-seed-1',
-      impactMonitoringEvidenceRef: 'impact_monitoring:algorithm_seed_versions:seed-version-standard-work-duration-v2:monitoring_passed',
-      rollbackDrillEvidenceRef: 'rollback:algorithm_seed_versions:seed-version-standard-work-duration-v2:rollback_executed',
+      impactMonitoringEvidenceRef: 'impact_monitoring:duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2:monitoring_passed',
+      rollbackDrillEvidenceRef: 'rollback:duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2:rollback_verified',
       accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-standard-seed-1',
     }))
     expect(readiness.productionLineage.rejectedRows).toEqual([])
@@ -563,14 +576,34 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
           },
         },
         {
-          sourceTable: 'algorithm_seed_versions',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            id: 'seed-version-standard-work-duration-v2',
-            seed_type: 'standard_work_duration',
-            seed_version: 'v2',
-            status: 'active',
-            is_current: true,
-            published_at: '2026-06-14T00:00:00.000Z',
+            publication_key: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v2',
+            asset_key: 'standard_work_duration_seed',
+            artifact_key: 'seed-version-standard-work-duration-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:standard-work-duration-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
+            rollback_execution: {
+              status: 'rollback_verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
+            },
+          },
+        },
+        {
+          sourceTable: 'duration_learning_runtime_publications',
+          row: {
+            publication_key: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v1',
+            asset_key: 'standard_work_duration_seed',
+            artifact_key: 'seed-version-standard-work-duration-v1',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:standard-work-duration-v1'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'failed',
           },
         },
         {
@@ -579,32 +612,14 @@ describe('standardWorkDurationSeedReplayCandidateBridgeService', () => {
             id: 'consumer-standard-seed-1',
             asset_key: 'standard_work_duration_seed',
             consumer_key: 'durationSuggestionService',
-            publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v1',
+            publication_key: 'duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v1',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'seed-version-standard-work-duration-v1' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:standard_work_duration_seed:seed-version-standard-work-duration-v1',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
-          },
-        },
-        {
-          sourceTable: 'algorithm_learnable_parameter_release_events',
-          row: {
-            event_type: 'impact_monitoring',
-            event_status: 'monitoring_passed',
-            source_publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
-            event_payload: {
-              assetKey: 'standard_work_duration_seed',
-            },
-          },
-        },
-        {
-          sourceTable: 'algorithm_learnable_parameter_release_events',
-          row: {
-            event_type: 'rollback_execution',
-            event_status: 'rollback_executed',
-            source_publication_key: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
-            event_payload: {
-              assetKey: 'standard_work_duration_seed',
-            },
           },
         },
         {

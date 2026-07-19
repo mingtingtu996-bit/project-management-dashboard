@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   areRuntimeAndMigrationDatabaseUrlsSeparated,
+  readDefaultMasterPlanRuntimePublicationAssetKindReadback,
   readVerifiedAdvisorExport,
   type AdvisorUiOrApiExportEvidence,
 } from '../scripts/generate-production-migration-governance-evidence.js'
@@ -48,6 +49,69 @@ afterEach(() => {
 })
 
 describe('Advisor UI/API export evidence', () => {
+  it('validates migration 264 against the legacy constraint while the legacy table still exists', async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes('legacy_relation')) {
+          return { rows: [{ legacy_relation: 'wbs_template_runtime_publications', retirement_state_relation: null }] }
+        }
+        return {
+          rows: [{
+            definition: "CHECK (asset_kind = ANY (ARRAY['default_master_plan', 'special_work_duration_seed', 'wbs_reference_days']))",
+          }],
+        }
+      },
+    }
+
+    await expect(readDefaultMasterPlanRuntimePublicationAssetKindReadback(client as never)).resolves.toBe(true)
+  })
+
+  it('validates migration 264 after retirement only through exact 322 ledger and completed readback', async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes('legacy_relation')) {
+          return {
+            rows: [{
+              legacy_relation: null,
+              retirement_state_relation: 'duration_learning_legacy_runtime_retirement_state',
+            }],
+          }
+        }
+        return {
+          rows: [{
+            retirement_ledgered: true,
+            retirement_status: 'retired_readback_complete',
+          }],
+        }
+      },
+    }
+
+    await expect(readDefaultMasterPlanRuntimePublicationAssetKindReadback(client as never)).resolves.toBe(true)
+  })
+
+  it('fails migration 264 readback when the legacy table is absent without completed 322 retirement', async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql.includes('legacy_relation')) {
+          return {
+            rows: [{
+              legacy_relation: null,
+              retirement_state_relation: 'duration_learning_legacy_runtime_retirement_state',
+            }],
+          }
+        }
+        return {
+          rows: [{
+            retirement_ledgered: false,
+            retirement_status: 'archived_ready_for_explicit_322_authorization',
+          }],
+        }
+      },
+    }
+
+    await expect(readDefaultMasterPlanRuntimePublicationAssetKindReadback(client as never)).resolves.toBe(false)
+  })
+
   it('requires runtime and migration URLs to target the same project with different database roles', () => {
     expect(areRuntimeAndMigrationDatabaseUrlsSeparated({
       SUPABASE_MIGRATION_URL:

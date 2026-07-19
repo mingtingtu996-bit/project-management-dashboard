@@ -58,7 +58,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
         },
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v4',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v4',
           publicationStatus: 'runtime_published',
           observationContext: { projectId: 'project-a' },
           sourceEvidenceRefs: ['artifact-lineage:critical-v4'],
@@ -85,7 +85,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       runtimeAssetMode: 'published_artifact',
       runtimeArtifactCount: 2,
       runtimeArtifactPublicationKeys: [
-        'critical_path_rule_runtime:critical-v4',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v4',
         'forecast_residual_overlay_runtime:overlay-v4',
       ],
     }))
@@ -101,7 +101,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       ],
       [
         'critical_path_rule_candidate',
-        'critical_path_rule_runtime:critical-v4',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v4',
         'projectRemainingDurationForecastService',
         'remaining_duration_forecast',
       ],
@@ -128,7 +128,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       queryExec,
       artifacts: [{
         assetKey: 'wbs_reference_days',
-        publicationKey: 'wbs_reference_days_runtime:reference-v4',
+        publicationKey: 'duration_learning_runtime:wbs_reference_days:reference-v4',
         publicationStatus: 'runtime_published',
         sourceEvidenceRefs: ['artifact-lineage:wbs-reference-v4'],
       }],

@@ -41,6 +41,7 @@ const mocks = vi.hoisted(() => {
     const filters: Filter[] = []
     let orderArgs: [string, { ascending: boolean }] | null = null
     let limitValue: number | null = null
+    let rangeValue: [number, number] | null = null
     const builder: any = {
       select: vi.fn(() => builder),
       eq: vi.fn((column: string, value: unknown) => {
@@ -59,9 +60,14 @@ const mocks = vi.hoisted(() => {
         limitValue = value
         return builder
       }),
+      range: vi.fn((from: number, to: number) => {
+        rangeValue = [from, to]
+        return builder
+      }),
       then: vi.fn((resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) => {
         let rows = applyFilters(state.durationExperienceSamples, filters)
         rows = sortRows(rows, orderArgs)
+        if (rangeValue) rows = rows.slice(rangeValue[0], rangeValue[1] + 1)
         if (limitValue != null) rows = rows.slice(0, limitValue)
         return Promise.resolve({ data: table === 'duration_experience_samples' ? rows : [], error: null }).then(resolve, reject)
       }),
@@ -307,7 +313,38 @@ describe('durationContextSampleReadModelService', () => {
     expect(builder.eq).toHaveBeenCalledWith('sample_status', 'active')
     expect(builder.eq).toHaveBeenCalledWith('included_in_benchmark', true)
     expect(builder.not).toHaveBeenCalledWith('actual_duration', 'is', null)
-    expect(builder.order).toHaveBeenCalledWith('completed_at', { ascending: false })
-    expect(builder.limit).toHaveBeenCalledWith(1000)
+    expect(builder.order).toHaveBeenCalledWith('company_id', { ascending: true })
+    expect(builder.order).toHaveBeenCalledWith('project_id', { ascending: true })
+    expect(builder.order).toHaveBeenCalledWith('completed_at', { ascending: true })
+    expect(builder.order).toHaveBeenCalledWith('id', { ascending: true })
+    expect(builder.range).toHaveBeenCalledWith(0, 999)
+  })
+
+  it('pages through more than one thousand governed samples instead of starving older projects forever', async () => {
+    mocks.state.durationExperienceSamples = Array.from({ length: 1001 }, (_, index) => ({
+      id: `governed-${String(index + 1).padStart(4, '0')}`,
+      company_id: index < 1000 ? 'company-a' : 'company-z',
+      project_id: index < 1000 ? 'project-new' : 'project-old',
+      task_id: `task-${index + 1}`,
+      actual_duration: 8,
+      sample_status: 'active',
+      included_in_benchmark: true,
+      experience_tier: 'T1',
+      reuse_scope: 'project',
+      fact_source: 'actual_outcome',
+      evidence_fingerprint: `sha256:${index + 1}`,
+      source_lineage: { sourceType: 'task_actual_dates' },
+      duration_day_basis: 'construction_production_day',
+      actual_duration_production_days: 8,
+      completed_at: new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString(),
+    }))
+
+    const rows = await loadTemplateDurationGovernanceSamples({ limit: 1000 })
+
+    expect(rows).toHaveLength(1001)
+    expect(rows.at(-1)?.project_id).toBe('project-old')
+    expect(mocks.from).toHaveBeenCalledTimes(2)
+    expect(mocks.from.mock.results[0]?.value.range).toHaveBeenCalledWith(0, 999)
+    expect(mocks.from.mock.results[1]?.value.range).toHaveBeenCalledWith(1000, 1999)
   })
 })

@@ -145,6 +145,57 @@ describe('durationExperienceService', () => {
     })
   })
 
+  it('copies duration publication lineage from the trusted consumption table instead of editable task metadata', async () => {
+    mocks.rawQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM public.structured_cause_attributions')) return { rows: [] }
+      if (sql.includes('from public.duration_learning_runtime_consumptions')) {
+        return { rows: [{
+          consumption_key: 'trusted-consumption-1',
+          publication_key: 'duration_learning_runtime:wbs_reference_days:trusted-v3',
+          asset_key: 'wbs_reference_days',
+          artifact_key: 'china-facade-curtain-wall',
+          consumer_key: 'projectWizard',
+          consumer_surface: 'project_wizard_commit',
+          duration_day_basis: 'construction_production_day',
+          applied_duration_days: 99,
+          generation_batch_id: 'batch-trusted',
+          template_id: 'china-facade-curtain-wall',
+          consumed_at: '2026-05-01T00:00:00.000Z',
+        }] }
+      }
+      return { rows: [] }
+    })
+
+    await collectDurationExperienceSampleFromTask(completedTask({
+      standard_task_metadata: {
+        durationLearningPublicationKey: 'duration_learning_runtime:wbs_reference_days:forged',
+        durationLearningAssetKey: 'wbs_reference_days',
+      },
+    }))
+
+    const metadata = mocks.insert.mock.calls.at(-1)?.[0].metadata
+    expect(metadata.duration_learning_runtime_consumptions).toEqual([
+      expect.objectContaining({
+        consumptionKey: 'trusted-consumption-1',
+        publicationKey: 'duration_learning_runtime:wbs_reference_days:trusted-v3',
+        assetKey: 'wbs_reference_days',
+        durationDayBasis: 'construction_production_day',
+      }),
+    ])
+    expect(JSON.stringify(metadata.duration_learning_runtime_consumptions)).not.toContain('forged')
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      engineCode: 'standard_duration_reference',
+      actualContext: expect.objectContaining({
+        durationLearningRuntimeConsumptions: [expect.objectContaining({
+          consumptionKey: 'trusted-consumption-1',
+          publicationKey: 'duration_learning_runtime:wbs_reference_days:trusted-v3',
+          assetKey: 'wbs_reference_days',
+          artifactKey: 'china-facade-curtain-wall',
+        })],
+      }),
+    }))
+  })
+
   it('collects completed task duration samples with context for benchmark governance', async () => {
     const taskTitle = '主体结构钢筋绑扎'
 

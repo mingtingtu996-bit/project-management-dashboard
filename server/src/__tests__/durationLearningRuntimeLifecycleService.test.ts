@@ -39,6 +39,13 @@ function benchmarkProposal(input: {
     industryKeys: [input.industryKey],
     conflictCount: 0,
     replayPassed: true,
+    policyEvaluationRequired: true,
+    automationDecision: {
+      stage: 'auto_canary',
+      autoPromotionAllowed: true,
+      manualReviewRequired: false,
+      reasonCodes: [],
+    },
   }
 }
 
@@ -762,7 +769,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(calls.join('\n')).toContain('collection_cursor')
   })
 
-  it('binds monitoring accuracy to every canonical runtime-publication lineage key', async () => {
+  it('attributes monitoring only through exact publication, artifact, and consumed-input lineage', async () => {
     let capturedSql = ''
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
       capturedSql = sql
@@ -776,8 +783,24 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(capturedSql).toContain("source.prediction_context ->> 'publicationKey'")
     expect(capturedSql).toContain("source.prediction_context ->> 'publication_key'")
     expect(capturedSql).toContain("source.prediction_context -> 'runtimePublicationKeys' ? publication.publication_key")
-    expect(capturedSql).toContain("observation.observation_context -> 'appliedTaskIds'")
-    expect(capturedSql).toContain("outcome.metadata -> 'auto_task_ids'")
+    expect(capturedSql).toContain('from public.duration_learning_runtime_consumptions source')
+    expect(capturedSql).toContain('source.asset_key = publication.asset_key')
+    expect(capturedSql).toContain('source.artifact_key = publication.artifact_key')
+    expect(capturedSql).toContain("source.observation_context ->> 'artifactKey' = publication.artifact_key")
+    expect(capturedSql).toContain('source.publication_key = publication.publication_key')
+    expect(capturedSql).toContain("source.actual_context -> 'durationLearningRuntimeConsumptions'")
+    expect(capturedSql).toContain("consumption ->> 'artifactKey' = publication.artifact_key")
+    expect(capturedSql).toContain("source.metadata ->> 'runtime_publication_key' = publication.publication_key")
+    expect(capturedSql).toContain("source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key")
+    expect(capturedSql).toContain('from public.runtime_consumer_observations exact_observation')
+    expect(capturedSql).toContain("exact_observation.observation_context -> 'inputTaskIds'")
+    expect(capturedSql).toContain("source.metadata -> 'runtime_publication_input_task_ids'")
+    expect(capturedSql).toContain("publication.asset_key = 'special_work_duration_seed'")
+    expect(capturedSql).toContain("publication.asset_key in ('wbs_reference_days', 'dependency_rule_candidate')")
+    expect(capturedSql).toContain('from public.duration_learning_runtime_consumptions exact_consumption')
+    expect(capturedSql).not.toContain("publication.asset_key <> 'critical_path_rule_candidate'")
+    expect(capturedSql).not.toContain('outcome.publication_key is null')
+    expect(capturedSql).not.toContain("observation.observation_context -> 'appliedTaskIds'")
   })
 
   it('uses schema-real wizard business classification and project-owned company authority in every collector CTE', async () => {
@@ -1048,29 +1071,62 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(new Set(expanded.flatMap((proposal) => proposal.industryKeys))).toEqual(new Set(['general_civil']))
   })
 
-  it('aggregates different project benchmark values into one weighted industry payload', () => {
+  it('derives wider-scope benchmark percentiles from pooled project samples instead of averaging project percentiles', () => {
     const proposals = [
       benchmarkProposal({ projectId: 'p1', companyId: 'c1', industryKey: 'residential', sampleCount: 10 }),
       benchmarkProposal({ projectId: 'p2', companyId: 'c1', industryKey: 'residential', sampleCount: 10 }),
       benchmarkProposal({ projectId: 'p3', companyId: 'c2', industryKey: 'residential', sampleCount: 10 }),
       benchmarkProposal({ projectId: 'p4', companyId: 'c2', industryKey: 'residential', sampleCount: 10 }),
     ]
-    proposals[0].runtimePayload = { p50Days: 8, p80Days: 11, durationDayBasis: 'construction_production_day' }
-    proposals[1].runtimePayload = { p50Days: 10, p80Days: 13, durationDayBasis: 'construction_production_day' }
-    proposals[2].runtimePayload = { p50Days: 9, p80Days: 12, durationDayBasis: 'construction_production_day' }
-    proposals[3].runtimePayload = { p50Days: 11, p80Days: 14, durationDayBasis: 'construction_production_day' }
+    const projectSamples = [
+      [1, 2, 100],
+      [1, 2, 100],
+      [1, 2, 100],
+      [100, 100, 100],
+    ]
+    proposals.forEach((proposal, index) => {
+      proposal.sampleCount = projectSamples[index].length
+      proposal.runtimePayload = {
+        p50Days: index === 3 ? 100 : 2,
+        p80Days: 100,
+        durationDayBasis: 'construction_production_day',
+      }
+      ;(proposal as any).productionDaySamples = projectSamples[index]
+    })
 
     const industry = expandDurationLearningRuntimeCandidateScopes(proposals)
       .find((proposal) => proposal.scope.level === 'industry')
 
     expect(industry).toEqual(expect.objectContaining({
-      sampleCount: 40,
+      sampleCount: 12,
       runtimePayload: {
-        p50Days: 10,
-        p80Days: 13,
+        p50Days: 2,
+        p80Days: 100,
         durationDayBasis: 'construction_production_day',
       },
     }))
+  })
+
+  it('does not allow a caller to bypass the automation policy by setting policyEvaluationRequired false', async () => {
+    const persistPublication = vi.fn()
+    const proposal = benchmarkProposal({ projectId: 'p1', companyId: 'c1', industryKey: 'residential' })
+    proposal.policyEvaluationRequired = false
+    proposal.automationDecision = {
+      stage: 'auto_canary',
+      autoPromotionAllowed: true,
+      manualReviewRequired: false,
+      reasonCodes: [],
+    }
+
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => [proposal],
+      monitoringProvider: async () => [],
+      persistPublication: persistPublication as any,
+    })
+
+    expect(result.candidateCollecting).toBe(1)
+    expect(result.canaryPublished).toBe(0)
+    expect(persistPublication).not.toHaveBeenCalled()
   })
 
   it('preserves signed dependency lead lag while aggregating structural rules', () => {

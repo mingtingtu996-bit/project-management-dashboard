@@ -624,6 +624,7 @@ export interface RecordWbsTemplateGenerationRuntimeConsumptionInput {
   generation: WbsTemplateGenerationRuntimeEvidenceSummary
   runtimeArtifactPublications: readonly WbsTemplateGenerationRuntimeArtifactPublication[]
   projectId?: string | null
+  inputTaskIds?: readonly string[] | null
   observedAt?: string
 }
 
@@ -726,6 +727,7 @@ export type GeneratedTemplateDependency = {
   sequencingBasis?: 'execution_phase_order_fallback' | 'heuristic_stagger' | null
   governanceGapCode?: string | null
   publicationKey?: string | null
+  artifactKey?: string | null
   publicationStage?: string | null
   selectionBasis?: string | null
   confidenceScore?: number | null
@@ -1476,6 +1478,7 @@ export function buildWbsTemplateGenerationConsumedArtifacts(input: {
   generation: WbsTemplateGenerationRuntimeEvidenceSummary
   runtimeArtifactPublications: readonly WbsTemplateGenerationRuntimeArtifactPublication[]
   projectId?: string | null
+  inputTaskIds?: readonly string[] | null
 }): DurationRuntimeConsumerObservedArtifact[] {
   const projectId = normalizeText(input.projectId)
   const templateIds = uniqueStringArray([
@@ -1484,6 +1487,7 @@ export function buildWbsTemplateGenerationConsumedArtifacts(input: {
   ].filter(Boolean))
   const generationBatchId = normalizeText(input.generation.generationBatchId)
   const rowCount = Array.isArray(input.generation.rows) ? input.generation.rows.length : 0
+  const inputTaskIds = uniqueStringArray((input.inputTaskIds ?? []).map(normalizeText).filter(Boolean))
   return input.runtimeArtifactPublications
     .filter((publication) => WBS_TEMPLATE_GENERATION_CONSUMER_ASSET_KEYS.has(publication.assetKey))
     .filter((publication) => normalizeText(publication.publicationKey))
@@ -1510,6 +1514,7 @@ export function buildWbsTemplateGenerationConsumedArtifacts(input: {
           templateIds,
           generationDepth: input.generation.generationDepth ?? null,
           rowCount,
+          inputTaskIds,
         },
       }
     })
@@ -1525,6 +1530,7 @@ export function recordWbsTemplateGenerationRuntimeConsumption(
     ...((input.generation.templateIds ?? []).map(normalizeText)),
   ].filter(Boolean))
   const rowCount = Array.isArray(input.generation.rows) ? input.generation.rows.length : 0
+  const inputTaskIds = uniqueStringArray((input.inputTaskIds ?? []).map(normalizeText).filter(Boolean))
   return recordWbsTemplateGenerationConsumedArtifacts({
     queryExec: input.queryExec,
     observedAt: input.observedAt,
@@ -1535,6 +1541,7 @@ export function recordWbsTemplateGenerationRuntimeConsumption(
       templateIds,
       generationDepth: input.generation.generationDepth ?? null,
       rowCount,
+      inputTaskIds,
     },
     sourceEvidenceRefs: [
       [
@@ -1548,6 +1555,7 @@ export function recordWbsTemplateGenerationRuntimeConsumption(
       generation: input.generation,
       runtimeArtifactPublications: input.runtimeArtifactPublications,
       projectId,
+      inputTaskIds,
     }),
   })
 }
@@ -3355,18 +3363,40 @@ function applyDurationLearningPublicationToTemplateNodes(input: {
     if (matched?.days) {
       appliedNodeCount += 1
       clone.defaultDurationDays = matched.days
+      const durationDayBasis = normalizeText(
+        matched.entry.durationDayBasis
+          ?? matched.entry.duration_day_basis
+          ?? payload.durationDayBasis
+          ?? payload.duration_day_basis,
+      ) || 'construction_production_day'
+      const existingConsumptions = readArray(clone.metadata.durationLearningConsumptions)
+        .map(readRecord)
+        .filter((consumption) => normalizeText(consumption.publicationKey))
+      const currentConsumption = {
+        assetKey: input.assetKey,
+        publicationKey: input.resolution.publicationKey,
+        publicationStage: input.resolution.publication.publicationStage,
+        artifactKey: input.resolution.publication.artifactKey,
+        selectionBasis: input.resolution.selectionBasis,
+        durationDayBasis,
+        appliedDurationDays: matched.days,
+      }
+      const durationLearningConsumptions = [
+        ...existingConsumptions.filter((consumption) => !(
+          normalizeText(consumption.assetKey) === input.assetKey
+          && normalizeText(consumption.publicationKey) === input.resolution.publicationKey
+          && normalizeText(consumption.artifactKey) === input.resolution.publication?.artifactKey
+        )),
+        currentConsumption,
+      ]
       clone.metadata = {
         ...clone.metadata,
         durationLearningPublicationKey: input.resolution.publicationKey,
         durationLearningPublicationStage: input.resolution.publication.publicationStage,
         durationLearningSelectionBasis: input.resolution.selectionBasis,
         durationLearningAssetKey: input.assetKey,
-        durationDayBasis: normalizeText(
-          matched.entry.durationDayBasis
-            ?? matched.entry.duration_day_basis
-            ?? payload.durationDayBasis
-            ?? payload.duration_day_basis,
-        ) || 'construction_production_day',
+        durationDayBasis,
+        durationLearningConsumptions,
       }
     }
     clone.children = node.children.map((child) => visit(child, [...ancestorStableCodes, node.stableCode]))
@@ -3393,6 +3423,11 @@ function buildWbsDurationLearningRuntimeArtifactPublication(
     sourceEvidenceRefs: [`duration_learning_runtime_publications:${resolution.publicationKey}`],
     observationContext: {
       templateId,
+      artifactKey: resolution.publication.artifactKey,
+      scopeLevel: resolution.publication.scopeLevel,
+      companyId: resolution.publication.companyId,
+      projectId: resolution.publication.projectId,
+      industryKey: resolution.publication.industryKey,
       appliedNodeCount,
       selectionBasis: resolution.selectionBasis,
       durationDayBasis: 'construction_production_day',
@@ -8107,6 +8142,9 @@ function buildGeneratedStandardTaskMetadata(
     durationLearningPublicationStage: normalizeId(metadata.durationLearningPublicationStage),
     durationLearningSelectionBasis: normalizeId(metadata.durationLearningSelectionBasis),
     durationLearningAssetKey: normalizeId(metadata.durationLearningAssetKey),
+    durationLearningConsumptions: readArray(metadata.durationLearningConsumptions)
+      .map(readRecord)
+      .filter((consumption) => normalizeId(consumption.publicationKey)),
     durationDayBasis: normalizeId(metadata.durationDayBasis ?? metadata.duration_day_basis),
     floorRhythm: durationSuggestion?.floorRhythmAdjustment ?? null,
     durationSuggestion: buildGeneratedDurationSuggestionValue(durationSuggestion, durationContributionMode),
@@ -10876,6 +10914,7 @@ function applyDurationLearningDependencyPublications(
         strength: 'hard',
         source: 'duration_learning_runtime_publication',
         publicationKey: resolution.publicationKey,
+        artifactKey: publication.artifactKey,
         publicationStage: publication.publicationStage,
         selectionBasis: resolution.selectionBasis,
       }
@@ -19784,6 +19823,7 @@ async function generateWbsTemplateRowsInternal(params: {
   }> | null
   duplicatePolicy?: 'preserve_historical_skip_future'
   diagnosticDurationSuggestionMode?: WbsTemplateDurationSuggestionMode
+  runtimePublicationQueryExec?: DurationLearningRuntimePublicationQueryExec | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
   runtimeArtifactPublications?: readonly WbsTemplateGenerationRuntimeArtifactPublication[] | null
   runtimeConsumerObservedAt?: string | null
@@ -19854,7 +19894,8 @@ async function generateWbsTemplateRowsInternal(params: {
   const durationLearningProjectId = normalizeDurationLearningProjectId(params.projectId)
   const durationLearningQueryExec = params.runtimePublicationResolution === 'disabled'
     ? null
-    : params.runtimeConsumerObservationQueryExec
+    : params.runtimePublicationQueryExec
+      ?? params.runtimeConsumerObservationQueryExec
       ?? (process.env.NODE_ENV === 'test' ? null : executeDurationLearningRuntimePublicationQuery)
   const durationLearningCompanyId = await resolveProjectCompanyIdForDurationLearning({
     projectId: durationLearningProjectId,

@@ -45,12 +45,12 @@ describe('templateDurationGovernanceService', () => {
     learningAssetMocks.stageBenchmark.mockResolvedValue({ id: 'benchmark-new' })
   })
 
-  it('builds company-scoped process benchmarks from active duration samples', () => {
+  it('builds project-scoped process benchmarks with complete task and observation lineage', () => {
     const samples: DurationExperienceSampleRow[] = [
-      { id: 's1', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 4, metadata: { company_id: 'company-1' } },
-      { id: 's2', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 6, metadata: { company_id: 'company-1' } },
-      { id: 's3', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 8, metadata: { company_id: 'company-1' } },
-      { id: 's4', template_node_id: 'node-1', wbs_node_type: 'activity_step', actual_duration: 2, metadata: { company_id: 'company-1' } },
+      { id: 's1', company_id: 'company-1', project_id: 'project-1', task_id: 'task-1', completed_at: '2026-01-01T00:00:00.000Z', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 4 },
+      { id: 's2', company_id: 'company-1', project_id: 'project-1', task_id: 'task-2', completed_at: '2026-01-04T00:00:00.000Z', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 6 },
+      { id: 's3', company_id: 'company-1', project_id: 'project-1', task_id: 'task-3', completed_at: '2026-01-10T00:00:00.000Z', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 8 },
+      { id: 's4', company_id: 'company-1', project_id: 'project-1', task_id: 'task-4', completed_at: '2026-01-11T00:00:00.000Z', template_node_id: 'node-1', wbs_node_type: 'activity_step', actual_duration: 2 },
     ].map(asProductionSample)
 
     const candidates = buildDurationBenchmarkCandidates(samples)
@@ -58,6 +58,7 @@ describe('templateDurationGovernanceService', () => {
     expect(candidates).toHaveLength(1)
     expect(candidates[0]).toMatchObject({
       companyId: 'company-1',
+      projectId: 'project-1',
       benchmarkKey: 'node-1:process:all',
       sampleCount: 3,
       p50Days: 6,
@@ -67,20 +68,46 @@ describe('templateDurationGovernanceService', () => {
       coefficientOfVariation: 0.272,
       confidenceLevel: 'medium',
       confidenceScore: 55,
+      sampleIds: ['s1', 's2', 's3'],
+      taskIds: ['task-1', 'task-2', 'task-3'],
+      observationStartedAt: '2026-01-01T00:00:00.000Z',
+      observationEndedAt: '2026-01-10T00:00:00.000Z',
+      observationWindowDays: 10,
+      productionDaySamples: [4, 6, 8],
     })
+  })
+
+  it('does not merge one-sample project facts across projects or discard them before scope aggregation', () => {
+    const samples: DurationExperienceSampleRow[] = [
+      { id: 'p1-s1', company_id: 'company-1', project_id: 'project-1', task_id: 'p1-task', completed_at: '2026-01-01T00:00:00.000Z', standard_work_code: 'SW-1', wbs_node_type: 'process', actual_duration: 5 },
+      { id: 'p2-s1', company_id: 'company-1', project_id: 'project-2', task_id: 'p2-task', completed_at: '2026-01-02T00:00:00.000Z', standard_work_code: 'SW-1', wbs_node_type: 'process', actual_duration: 9 },
+    ].map(asProductionSample)
+
+    const candidates = buildDurationBenchmarkCandidates(samples)
+
+    expect(candidates).toHaveLength(2)
+    expect(candidates.map((candidate) => ({
+      projectId: candidate.projectId,
+      p50Days: candidate.p50Days,
+      sampleIds: candidate.sampleIds,
+    }))).toEqual([
+      { projectId: 'project-1', p50Days: 5, sampleIds: ['p1-s1'] },
+      { projectId: 'project-2', p50Days: 9, sampleIds: ['p2-s1'] },
+    ])
   })
 
   it('falls back to standard work code when template node identity is missing', () => {
     const samples: DurationExperienceSampleRow[] = [
-      { id: 's1', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 3 },
-      { id: 's2', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 5 },
-      { id: 's3', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 7 },
+      { id: 's1', company_id: 'company-1', project_id: 'project-1', task_id: 'task-1', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 3 },
+      { id: 's2', company_id: 'company-1', project_id: 'project-1', task_id: 'task-2', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 5 },
+      { id: 's3', company_id: 'company-1', project_id: 'project-1', task_id: 'task-3', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 7 },
     ].map(asProductionSample)
 
     const [candidate] = buildDurationBenchmarkCandidates(samples)
 
     expect(candidate).toMatchObject({
-      companyId: null,
+      companyId: 'company-1',
+      projectId: 'project-1',
       benchmarkKey: '01-02-03:process:all',
       standardWorkCode: '01-02-03',
       sampleCount: 3,
@@ -90,14 +117,19 @@ describe('templateDurationGovernanceService', () => {
 
   it('does not treat planned-only durations as real benchmark samples', () => {
     const samples: DurationExperienceSampleRow[] = [
-      { id: 'planned-only', standard_work_code: '01-02-03', wbs_node_type: 'process', planned_duration: 3, actual_duration: null },
-      { id: 'actual-1', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 5 },
-      { id: 'actual-2', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 7 },
+      { id: 'planned-only', company_id: 'company-1', project_id: 'project-1', task_id: 'task-planned', standard_work_code: '01-02-03', wbs_node_type: 'process', planned_duration: 3, actual_duration: null },
+      { id: 'actual-1', company_id: 'company-1', project_id: 'project-1', task_id: 'task-1', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 5 },
+      { id: 'actual-2', company_id: 'company-1', project_id: 'project-1', task_id: 'task-2', standard_work_code: '01-02-03', wbs_node_type: 'process', actual_duration: 7 },
     ].map(asProductionSample)
 
     const candidates = buildDurationBenchmarkCandidates(samples)
 
-    expect(candidates).toHaveLength(0)
+    expect(candidates).toHaveLength(1)
+    expect(candidates[0]).toMatchObject({
+      sampleCount: 2,
+      sampleIds: ['actual-1', 'actual-2'],
+      taskIds: ['task-1', 'task-2'],
+    })
   })
 
   it('separates benchmarks by engineering feature context when samples carry v1.4 feature facts', () => {
@@ -109,9 +141,9 @@ describe('templateDurationGovernanceService', () => {
       element_variant_codes: ['beam'],
     }
     const samples: DurationExperienceSampleRow[] = [
-      { id: 's1', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 4, metadata: featureMetadata },
-      { id: 's2', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 5, metadata: featureMetadata },
-      { id: 's3', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 6, metadata: featureMetadata },
+      { id: 's1', project_id: 'project-1', task_id: 'task-1', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 4, metadata: featureMetadata },
+      { id: 's2', project_id: 'project-1', task_id: 'task-2', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 5, metadata: featureMetadata },
+      { id: 's3', project_id: 'project-1', task_id: 'task-3', template_node_id: 'node-1', wbs_node_type: 'process', actual_duration: 6, metadata: featureMetadata },
     ].map(asProductionSample)
 
     const [candidate] = buildDurationBenchmarkCandidates(samples)
@@ -128,9 +160,9 @@ describe('templateDurationGovernanceService', () => {
   it('writes benchmark variance as dedicated columns with metadata compatibility mirror', async () => {
     const insertedBenchmarks: Array<Record<string, unknown>> = []
     const governanceSamples: DurationExperienceSampleRow[] = [
-      { id: 's1', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 4, metadata: { company_id: 'company-1' } },
-      { id: 's2', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 6, metadata: { company_id: 'company-1' } },
-      { id: 's3', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 8, metadata: { company_id: 'company-1' } },
+      { id: 's1', project_id: 'project-1', task_id: 'task-1', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 4, metadata: { company_id: 'company-1' } },
+      { id: 's2', project_id: 'project-1', task_id: 'task-2', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 6, metadata: { company_id: 'company-1' } },
+      { id: 's3', project_id: 'project-1', task_id: 'task-3', template_node_id: 'node-variance', wbs_node_type: 'process', actual_duration: 8, metadata: { company_id: 'company-1' } },
     ].map(asProductionSample)
 
     const chain = (result: unknown) => {
@@ -176,12 +208,48 @@ describe('templateDurationGovernanceService', () => {
     expect(learningAssetMocks.stageBenchmark).toHaveBeenCalledOnce()
   })
 
+  it('persists every source sample and task without a fifty-row lineage truncation', async () => {
+    const insertedBenchmarks: Array<Record<string, unknown>> = []
+    const governanceSamples = Array.from({ length: 51 }, (_, index): DurationExperienceSampleRow => asProductionSample({
+      id: `sample-${index + 1}`,
+      company_id: 'company-1',
+      project_id: 'project-1',
+      task_id: `task-${index + 1}`,
+      completed_at: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+      standard_work_code: 'SW-LINEAGE',
+      wbs_node_type: 'process',
+      actual_duration: index + 1,
+      planned_duration: index + 2,
+    }))
+    learningAssetMocks.loadGovernanceSamples.mockResolvedValue(governanceSamples)
+    learningAssetMocks.stageBenchmark.mockImplementation(async (payload: Record<string, unknown>) => {
+      insertedBenchmarks.push(payload)
+      return { id: 'benchmark-lineage' }
+    })
+
+    await runTemplateDurationGovernance({ minSampleCount: 1 })
+
+    expect(insertedBenchmarks).toHaveLength(1)
+    expect(insertedBenchmarks[0]).toMatchObject({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      sample_count: 51,
+      metadata: expect.objectContaining({
+        sample_ids: governanceSamples.map((sample) => sample.id),
+        task_ids: governanceSamples.map((sample) => sample.task_id),
+        observation_started_at: '2026-01-01T00:00:00.000Z',
+        observation_window_days: 51,
+        production_day_samples: Array.from({ length: 51 }, (_, index) => index + 1),
+      }),
+    })
+  })
+
   it('returns a C-19.10 non-live governance contract for sample-to-benchmark promotion without runtime mutation', async () => {
     const templateNodeId = '11111111-1111-4111-8111-111111111111'
     const governanceSamples: DurationExperienceSampleRow[] = [
-      { id: 's1', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 4 },
-      { id: 's2', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 6 },
-      { id: 's3', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 8 },
+      { id: 's1', company_id: 'company-1', project_id: 'project-1', task_id: 'task-1', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 4 },
+      { id: 's2', company_id: 'company-1', project_id: 'project-1', task_id: 'task-2', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 6 },
+      { id: 's3', company_id: 'company-1', project_id: 'project-1', task_id: 'task-3', template_node_id: templateNodeId, wbs_node_type: 'process', actual_duration: 8 },
     ].map(asProductionSample)
     const touchedTables: string[] = []
 

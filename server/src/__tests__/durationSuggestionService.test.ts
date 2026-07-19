@@ -5114,9 +5114,9 @@ describe('durationSuggestionService', () => {
         },
         {
           assetKey: 'special_work_duration_seed',
-          publicationKey: 'wbs_template_runtime:special-v1',
+          publicationKey: 'duration_learning_runtime:special_work_duration_seed:special-v1',
           publicationStatus: 'published',
-          sourceEvidenceRefs: ['wbs_template_runtime:special-v1'],
+          sourceEvidenceRefs: ['duration_learning_runtime:special_work_duration_seed:special-v1'],
         },
         {
           assetKey: 'forecast_residual_overlay',
@@ -5158,7 +5158,7 @@ describe('durationSuggestionService', () => {
       ],
       [
         'special_work_duration_seed',
-        'wbs_template_runtime:special-v1',
+        'duration_learning_runtime:special_work_duration_seed:special-v1',
         'durationSuggestionService',
         'duration_suggestion',
       ],

@@ -954,7 +954,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v6',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
           publicationStatus: 'runtime_published',
         },
         {
@@ -2312,7 +2312,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v6',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
           publicationStatus: 'runtime_published',
           sourceEvidenceRefs: ['runtime_publication:critical-path-rule:critical-v6'],
         },
@@ -2325,7 +2325,7 @@ describe('scheduleAccelerationRuntimeService', () => {
         },
         {
           assetKey: 'dependency_rule_candidate',
-          publicationKey: 'dependency_rule_runtime:dependency-v6',
+          publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-v6',
           publicationStatus: 'published',
           sourceEvidenceRefs: ['runtime_publication:dependency-rule:dependency-v6'],
         },
@@ -2346,7 +2346,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'critical_path_rule_candidate',
-        'critical_path_rule_runtime:critical-v6',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
         'scheduleAccelerationRuntimeService',
         'schedule_acceleration_runtime',
       ],
@@ -2371,13 +2371,13 @@ describe('scheduleAccelerationRuntimeService', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v6',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
           publicationStatus: 'runtime_published',
           sourceEvidenceRefs: ['runtime_publication:critical-path-rule:critical-v6'],
         },
         {
           assetKey: 'dependency_rule_candidate',
-          publicationKey: 'dependency_rule_runtime:dependency-v6',
+          publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-v6',
           publicationStatus: 'published',
           sourceEvidenceRefs: ['runtime_publication:dependency-rule:dependency-v6'],
         },
@@ -2393,19 +2393,19 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'critical_path_rule_candidate',
-        'critical_path_rule_runtime:critical-v6',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
         'projectRemainingDurationForecastService',
         'remaining_duration_forecast',
       ],
       [
         'dependency_rule_candidate',
-        'dependency_rule_runtime:dependency-v6',
+        'duration_learning_runtime:dependency_rule_candidate:dependency-v6',
         'scheduleAccelerationService',
         'schedule_acceleration',
       ],
       [
         'critical_path_rule_candidate',
-        'critical_path_rule_runtime:critical-v6',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
         'scheduleAccelerationRuntimeService',
         'schedule_acceleration_runtime',
       ],
@@ -2445,7 +2445,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'critical_path_rule_candidate',
-          publicationKey: 'critical_path_rule_runtime:critical-v6',
+          publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
           publicationStatus: 'runtime_published',
           sourceEvidenceRefs: ['runtime_publication:critical-path-rule:critical-v6'],
         },
@@ -2462,13 +2462,13 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(observations.map((call) => call.params.slice(0, 4))).toEqual([
       [
         'critical_path_rule_candidate',
-        'critical_path_rule_runtime:critical-v6',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
         'projectRemainingDurationForecastService',
         'remaining_duration_forecast',
       ],
       [
         'critical_path_rule_candidate',
-        'critical_path_rule_runtime:critical-v6',
+        'duration_learning_runtime:critical_path_rule_candidate:critical-v6',
         'scheduleAccelerationRuntimeService',
         'schedule_acceleration_runtime',
       ],

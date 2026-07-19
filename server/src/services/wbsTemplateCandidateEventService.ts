@@ -240,6 +240,11 @@ export function buildSpecialWorkDurationCandidateNodes(
   return normalizeDurationCandidateNodes(rows.map((row) => {
     const values = normalizeObject(row.values)
     const standardTaskMetadata = normalizeObject(values.standard_task_metadata)
+    const specialWorkConsumption = (Array.isArray(standardTaskMetadata.durationLearningConsumptions)
+      ? standardTaskMetadata.durationLearningConsumptions
+      : [])
+      .map(normalizeObject)
+      .find((consumption) => normalizeString(consumption.assetKey) === SPECIAL_WORK_DURATION_SEED_ASSET_KEY)
     const suggestion = row.durationSuggestion
     const sourceId = normalizeString(
       values.sourceId
@@ -250,6 +255,10 @@ export function buildSpecialWorkDurationCandidateNodes(
         ?? values.stable_code
         ?? row.clientRowId,
     ) ?? ''
+    const runtimePublicationKey = normalizeString(specialWorkConsumption?.publicationKey)
+      ?? (normalizeString(standardTaskMetadata.durationLearningAssetKey) === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
+        ? normalizeString(standardTaskMetadata.durationLearningPublicationKey)
+        : null)
     return {
       sourceId,
       stableCode: normalizeString(
@@ -259,7 +268,8 @@ export function buildSpecialWorkDurationCandidateNodes(
           ?? values.standard_work_code,
       ),
       p50Days: readPositiveDuration(
-        suggestion?.riskP50DurationDays
+        specialWorkConsumption?.appliedDurationDays
+          ?? suggestion?.riskP50DurationDays
           ?? suggestion?.planReferenceDays
           ?? suggestion?.recommendedDurationDays,
       ) ?? 0,
@@ -268,11 +278,7 @@ export function buildSpecialWorkDurationCandidateNodes(
           ?? suggestion?.conservativeDurationDays,
       ),
       durationDayBasis: 'construction_production_day' as const,
-      runtimePublicationKey: normalizeString(
-        standardTaskMetadata.durationLearningAssetKey,
-      ) === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
-        ? normalizeString(standardTaskMetadata.durationLearningPublicationKey)
-        : null,
+      runtimePublicationKey,
     }
   }))
 }
@@ -304,7 +310,19 @@ function specialWorkSeedObservationMatchesPublication(
   const observedPublicationKey = normalizeString(evidenceRefs.runtimeConsumerPublicationKey)
   return Boolean(publicationKey)
     && Boolean(observedPublicationKey)
-    && publicationKey === observedPublicationKey
+    && (
+      publicationKey === observedPublicationKey
+      || publicationKey.endsWith(`:${observedPublicationKey}`)
+    )
+}
+
+function runtimePublicationKeyFromExecutionRef(value: string | null | undefined) {
+  const executionRef = normalizeString(value)
+  if (!executionRef) return null
+  const canonicalPrefix = 'duration_learning_runtime_publications:'
+  return executionRef.startsWith(canonicalPrefix)
+    ? executionRef.slice(canonicalPrefix.length)
+    : executionRef
 }
 
 function readRowText(row: Record<string, unknown>, ...keys: string[]) {
@@ -319,14 +337,14 @@ function findCurrentPublishedSpecialWorkSeedVersionId(
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
 ) {
   for (const source of sourceRows ?? []) {
-    if (source.sourceTable !== 'wbs_template_runtime_publications') continue
+    if (source.sourceTable !== 'duration_learning_runtime_publications') continue
     const row = source.row
-    const seedVersionId = readRowText(row, 'asset_version_id', 'assetVersionId')
+    const seedVersionId = readRowText(row, 'artifact_key', 'artifactKey')
     if (
       seedVersionId
-      && readRowText(row, 'asset_kind', 'assetKind') === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
+      && readRowText(row, 'asset_key', 'assetKey') === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
       && readRowText(row, 'publication_key', 'publicationKey')
-      && readRowText(row, 'runtime_publication_status', 'runtimePublicationStatus') === 'runtime_published'
+      && ['canary', 'stable'].includes(readRowText(row, 'publication_stage', 'publicationStage'))
     ) {
       return seedVersionId
     }
@@ -617,6 +635,13 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
         duration_candidate_nodes: durationCandidateNodes,
         consumed_runtime_publication_keys: nodePublicationKeys,
         publication_lineage_status: publicationLineageStatus,
+        runtime_publication_key: runtimePublicationKey,
+        runtime_publication_artifact_key: runtimePublicationKey
+          ? normalizeString(input.templateId)
+          : null,
+        runtime_publication_input_task_ids: runtimePublicationKey
+          ? uniqueValues(generatedEntityIds)
+          : [],
         generated_row_count: counts.generatedRowCount,
         retained_row_count: counts.retainedRowCount,
         rejected_row_count: counts.rejectedRowCount,
@@ -1031,7 +1056,7 @@ export function buildSpecialWorkDurationSeedPublicationReadinessFromProductionRo
   const productionLineage = specialWorkSeedProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
   const seedVersionId = findCurrentPublishedSpecialWorkSeedVersionId(input.sourceRows)
-  const runtimePublicationKey = normalizeString(evidenceRefs.publicationExecutionRef)
+  const runtimePublicationKey = runtimePublicationKeyFromExecutionRef(evidenceRefs.publicationExecutionRef)
   const rollbackTarget = normalizeString(evidenceRefs.rollbackDrillEvidenceRef)
   const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
   const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation

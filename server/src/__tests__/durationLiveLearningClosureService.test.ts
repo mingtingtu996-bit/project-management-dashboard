@@ -197,10 +197,10 @@ describe('durationLiveLearningClosureService', () => {
       currentEvidence: expect.objectContaining({
         assetClassificationRegistered: true,
         predictionEventRecorded: true,
+        enabledLearningScopes: ['global', 'industry', 'company', 'project'],
+        impactMonitoringReady: true,
       }),
-      nextRuntimeSteps: expect.arrayContaining([
-        'prove_global_industry_company_project_scope_chain_for_base_duration_benchmark',
-      ]),
+      nextRuntimeSteps: [],
     }))
     expect(manifests.find((manifest) => manifest.assetKey === 'forecast_residual_overlay')).toEqual(expect.objectContaining({
       implementationAnchors: expect.objectContaining({
@@ -220,7 +220,7 @@ describe('durationLiveLearningClosureService', () => {
       allowedClaim: 'first_batch_manifest_established_not_ready_for_live_self_learning_claim',
       prohibitedClaim: 'all_duration_assets_are_live_self_learning',
       totalAssets: 4,
-      readyAssets: 0,
+      readyAssets: 1,
     }))
     expect(result.assetEvaluations.map((evaluation) => evaluation.assetKey)).toEqual([
       'base_duration_benchmark',
@@ -304,21 +304,25 @@ describe('durationLiveLearningClosureService', () => {
         primaryService: 'standardWorkDurationSeedReplayService.ts',
         runtimeConsumers: expect.arrayContaining(['durationSuggestionService.ts']),
         outcomeEventAnchors: expect.arrayContaining(['durationExperienceService.ts']),
-        releaseGateAnchors: expect.arrayContaining(['standardWorkDurationSeedPublicationService.ts']),
+        releaseGateAnchors: expect.arrayContaining([
+          'durationLearningRuntimeLifecycleService.ts',
+          'durationLearningRuntimePublicationService.ts',
+        ]),
       }),
     }))
-    expect(manifests.find((manifest) => manifest.assetKey === 'standard_work_duration_seed')?.nextRuntimeSteps)
-      .not.toContain('add_dedicated_seed_publication_writer_after_replay_candidate_approval')
-    expect(manifests.find((manifest) => manifest.assetKey === 'standard_work_duration_seed')?.nextRuntimeSteps)
-      .toEqual(expect.arrayContaining([
-        'record_runtime_consumer_observation_for_published_seed_version',
-        'bind_seed_replay_accuracy_to_release_exit_and_rollback',
-      ]))
+    expect(manifests.every((manifest) => manifest.nextRuntimeSteps.length === 0)).toBe(true)
+    expect(manifests.every((manifest) => (
+      manifest.currentEvidence.enabledLearningScopes?.join(',') === 'global,industry,company,project'
+      && manifest.currentEvidence.runtimeConsumerUsesPublishedArtifact === true
+      && manifest.currentEvidence.releaseExitApproved === true
+      && manifest.currentEvidence.impactMonitoringReady === true
+      && manifest.currentEvidence.rollbackTargetReady === true
+    ))).toBe(true)
     expect(manifests.find((manifest) => manifest.assetKey === 'critical_path_rule_candidate')).toEqual(expect.objectContaining({
       implementationAnchors: expect.objectContaining({
         releaseGateAnchors: expect.arrayContaining([
           'criticalPathRulePublicationReadinessService.ts',
-          'criticalPathRuleRuntimePublicationService.ts',
+          'durationLearningRuntimePublicationService.ts',
         ]),
       }),
     }))
@@ -326,7 +330,7 @@ describe('durationLiveLearningClosureService', () => {
       implementationAnchors: expect.objectContaining({
         releaseGateAnchors: expect.arrayContaining([
           'wbsTemplateCandidateEventService.ts',
-          'wbsTemplateRuntimePublicationService.ts',
+          'durationLearningRuntimePublicationService.ts',
         ]),
       }),
     }))
@@ -334,7 +338,7 @@ describe('durationLiveLearningClosureService', () => {
       implementationAnchors: expect.objectContaining({
         releaseGateAnchors: expect.arrayContaining([
           'wbsTemplateGoldenBenchmarkGateService.ts',
-          'wbsTemplateRuntimePublicationService.ts',
+          'durationLearningRuntimePublicationService.ts',
         ]),
       }),
     }))
@@ -348,7 +352,7 @@ describe('durationLiveLearningClosureService', () => {
         ),
         releaseGateAnchors: expect.arrayContaining([
           'constructionDependencyReplayCalibrationService.ts',
-          'constructionDependencyRuleRuntimePublicationService.ts',
+          'durationLearningRuntimePublicationService.ts',
         ]),
       }),
     }))
@@ -356,23 +360,18 @@ describe('durationLiveLearningClosureService', () => {
       .not.toContain('create_dependency_rule_runtime_writer_after_replay_candidate_approval')
   })
 
-  it('keeps the second-batch plan-network manifest not ready until writers and network outcomes exist', () => {
+  it('marks the second-batch code capability ready without issuing a live environment claim', () => {
     const result = evaluateDurationLiveLearningManifest('plan_network_core_b')
 
     expect(result).toEqual(expect.objectContaining({
       rolloutBatch: 'plan_network_core_b',
-      status: 'manifest_not_ready',
-      allowedClaim: 'batch_manifest_established_not_ready_for_live_self_learning_claim',
+      status: 'manifest_live_self_learning_ready',
+      allowedClaim: 'not_ready_for_live_self_learning_claim',
       prohibitedClaim: 'all_duration_assets_are_live_self_learning',
       totalAssets: 5,
-      readyAssets: 0,
+      readyAssets: 5,
+      missingClosureConditions: [],
     }))
-    expect(result.missingClosureConditions).toEqual(expect.arrayContaining([
-      'actual_outcome_event_required',
-      'runtime_consumer_must_use_published_or_canary_artifact',
-      'release_exit_required',
-      'rollback_target_required',
-    ]))
   })
 
   it('keeps a ready plan-network manifest from issuing the final live self-learning claim', () => {
@@ -401,8 +400,8 @@ describe('durationLiveLearningClosureService', () => {
       prohibitedClaim: 'all_duration_assets_are_live_self_learning',
       nextRecommendedAssetKeys: [
         'duration_cold_start_baseline',
-        'standard_work_duration_seed',
-        'special_work_duration_seed',
+        'forecast_residual_overlay',
+        'forecast_confidence_weight',
       ],
     }))
     expect(plan.gates.map((gate) => gate.gateKey)).toEqual([
@@ -416,10 +415,6 @@ describe('durationLiveLearningClosureService', () => {
       status: 'blocked',
       assetKeys: expect.arrayContaining([
         'duration_cold_start_baseline',
-        'special_work_duration_seed',
-        'wbs_reference_days',
-        'dependency_rule_candidate',
-        'critical_path_rule_candidate',
       ]),
       requiredActions: expect.arrayContaining([
         'record_prediction_event_for_each_runtime_prediction',
@@ -427,12 +422,8 @@ describe('durationLiveLearningClosureService', () => {
       ]),
     }))
     expect(plan.gates.find((gate) => gate.gateKey === 'runtime_consumer_publication')).toEqual(expect.objectContaining({
-      status: 'blocked',
-      assetKeys: expect.arrayContaining([
-        'standard_work_duration_seed',
-        'dependency_rule_candidate',
-        'critical_path_rule_candidate',
-      ]),
+      status: 'passed',
+      assetKeys: [],
       requiredActions: expect.arrayContaining([
         'wire_runtime_consumer_to_published_or_canary_artifact',
       ]),
@@ -485,7 +476,7 @@ describe('durationLiveLearningClosureService', () => {
       evidence: coldStartEvidence,
     }])
 
-    expect(manifest.readyAssets).toBe(1)
+    expect(manifest.readyAssets).toBe(2)
     expect(manifest.assetEvaluations.find((asset) => asset.assetKey === 'duration_cold_start_baseline')).toEqual(expect.objectContaining({
       status: 'live_self_learning_ready',
       missingClosureConditions: [],
@@ -501,9 +492,8 @@ describe('durationLiveLearningClosureService', () => {
     }])
 
     expect(plan.nextRecommendedAssetKeys).toEqual([
-      'standard_work_duration_seed',
-      'special_work_duration_seed',
-      'wbs_reference_days',
+      'forecast_residual_overlay',
+      'forecast_confidence_weight',
     ])
     expect(plan.gates.find((gate) => gate.gateKey === 'prediction_and_outcome_events')?.assetKeys)
       .not.toContain('duration_cold_start_baseline')

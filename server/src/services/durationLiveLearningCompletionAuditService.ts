@@ -36,6 +36,20 @@ const COMPLETION_ROLLOUT_BATCHES: DurationLiveLearningRolloutBatch[] = [
   'plan_network_core_b',
 ]
 
+const MISSING_LIVE_LEARNING_EVIDENCE: DurationLiveLearningEvidenceOverride['evidence'] = {
+  assetClassificationRegistered: false,
+  predictionEventRecorded: false,
+  actualOutcomeEventRecorded: false,
+  tieredLearningPolicyRegistered: false,
+  enabledLearningScopes: [],
+  scopeExceptionApproved: false,
+  runtimeConsumerUsesPublishedArtifact: false,
+  releaseExitApproved: false,
+  impactMonitoringReady: false,
+  rollbackTargetReady: false,
+  accuracyMetricsAvailable: false,
+}
+
 const FACT_LOCKED_DURATION_ASSET_KEYS: DurationLiveLearningAssetKey[] = [
   'baseline_commitment',
   'monthly_plan_commitment',
@@ -62,14 +76,18 @@ export function buildDurationLiveLearningCompletionAudit(
 ): DurationLiveLearningCompletionAudit {
   const evidenceOverrideMap = buildEvidenceOverrideMap(input.evidenceOverrides)
   const requestedFactRewriteAssetKeys = new Set(input.requestedFactRewriteAssetKeys ?? [])
-  const manifestEvaluations = COMPLETION_ROLLOUT_BATCHES.map((batch) =>
-    evaluateDurationLiveLearningManifest(batch, input.evidenceOverrides))
-  const executionPlan = evaluateDurationLiveLearningExecutionPlan(
-    COMPLETION_ROLLOUT_BATCHES,
-    input.evidenceOverrides,
-  )
   const learnableAssetKeys = COMPLETION_ROLLOUT_BATCHES
     .flatMap((batch) => listDurationLiveLearningManifests(batch).map((manifest) => manifest.assetKey))
+  const authoritativeEvidenceOverrides = learnableAssetKeys.map((assetKey) => ({
+    assetKey,
+    evidence: evidenceOverrideMap.get(assetKey) ?? MISSING_LIVE_LEARNING_EVIDENCE,
+  }))
+  const manifestEvaluations = COMPLETION_ROLLOUT_BATCHES.map((batch) =>
+    evaluateDurationLiveLearningManifest(batch, authoritativeEvidenceOverrides))
+  const executionPlan = evaluateDurationLiveLearningExecutionPlan(
+    COMPLETION_ROLLOUT_BATCHES,
+    authoritativeEvidenceOverrides,
+  )
 
   const portfolio = evaluateDurationLiveLearningPortfolio([
     ...learnableAssetKeys.map((assetKey) => ({

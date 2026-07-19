@@ -3,7 +3,7 @@ import type {
   WbsTemplateFeedbackReport,
   WbsTemplateReferenceDayFeedbackNode,
 } from '../types/planning.js'
-import { query as rawQuery } from '../database.js'
+import { query as rawQuery, withDatabaseTransaction } from '../database.js'
 import { logger } from '../middleware/logger.js'
 import {
   parseConstructionCalendarDate,
@@ -67,13 +67,32 @@ interface TemplateSourceCandidate {
   isLeaf: boolean
 }
 
-interface CollectWbsTemplateFeedbackOptions {
+export interface CollectWbsTemplateFeedbackOptions {
   projectIds?: string[] | null
   companyId?: string | null
   governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
   constructionCalendarResolver?: typeof resolveConstructionCalendarContext
   constructionCalendarsByProjectId?: Record<string, ConstructionCalendarContext>
   runtimePublicationKeysByAsset?: Record<string, string[]>
+  runtimePublicationInputTaskIdsByAsset?: Record<string, Record<string, string[]>>
+}
+
+export type WbsTemplateFeedbackTargetQueryExec = (
+  sql: string,
+  params?: unknown[],
+) => Promise<Record<string, unknown>[]>
+
+export interface WbsTemplateFeedbackGovernanceSweepOptions {
+  companyId?: string | null
+  pageSize?: number
+  targetQueryExec?: WbsTemplateFeedbackTargetQueryExec
+  governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
+}
+
+export interface WbsTemplateFeedbackProducerTarget {
+  companyId: string
+  projectId: string
+  templateId: string
 }
 
 function normalizeText(value?: string | null): string {
@@ -525,13 +544,16 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
   options: CollectWbsTemplateFeedbackOptions,
 ) {
   const outcomeStatus = wbsReferenceDaysOutcomeStatus(report)
-  if (!outcomeStatus) return
+  if (!outcomeStatus) return 0
 
   const projectId = getScopedProjectId(options.projectIds)
-  if (!projectId) return
+  if (!projectId) return 0
   const actionableNodes = getActionableReferenceDayFeedbackNodes(report)
   const consumedPublicationKeys = options.runtimePublicationKeysByAsset?.[WBS_REFERENCE_DAYS_ASSET_KEY] ?? []
   const runtimePublicationKey = consumedPublicationKeys.length === 1 ? consumedPublicationKeys[0]! : null
+  const runtimePublicationInputTaskIds = runtimePublicationKey
+    ? options.runtimePublicationInputTaskIdsByAsset?.[WBS_REFERENCE_DAYS_ASSET_KEY]?.[runtimePublicationKey] ?? []
+    : []
   const publicationLineageStatus = runtimePublicationKey
     ? 'linked'
     : consumedPublicationKeys.length > 1
@@ -562,6 +584,9 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
     construction_calendar_by_project: options.constructionCalendarsByProjectId ?? {},
     consumed_runtime_publication_keys: consumedPublicationKeys,
     publication_lineage_status: publicationLineageStatus,
+    runtime_publication_key: runtimePublicationKey,
+    runtime_publication_artifact_key: runtimePublicationKey ? report.template_id : null,
+    runtime_publication_input_task_ids: runtimePublicationInputTaskIds,
     writes_runtime_directly: false,
     writes_fact_directly: false,
   }
@@ -580,41 +605,8 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
     false,
   ]
 
-  try {
-    if (options.governanceQueryExec) {
-      await options.governanceQueryExec(
-        `INSERT INTO public.duration_plan_network_outcomes (
-        id,
-        asset_key,
-        outcome_status,
-        outcome_ref,
-        learning_scope,
-        learning_scope_source,
-        company_id,
-        project_id,
-        publication_key,
-        metadata,
-        writes_runtime_directly,
-        writes_fact_directly
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      ON CONFLICT (id) DO UPDATE SET
-        outcome_status = EXCLUDED.outcome_status,
-        outcome_ref = EXCLUDED.outcome_ref,
-        learning_scope = EXCLUDED.learning_scope,
-        learning_scope_source = EXCLUDED.learning_scope_source,
-        company_id = EXCLUDED.company_id,
-        project_id = EXCLUDED.project_id,
-        publication_key = EXCLUDED.publication_key,
-        observed_at = now(),
-        metadata = EXCLUDED.metadata,
-        writes_runtime_directly = false,
-        writes_fact_directly = false`,
-        params,
-      )
-      return
-    }
-
-    await rawQuery(
+  if (options.governanceQueryExec) {
+    await options.governanceQueryExec(
       `INSERT INTO public.duration_plan_network_outcomes (
         id,
         asset_key,
@@ -641,61 +633,122 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
         metadata = EXCLUDED.metadata,
         writes_runtime_directly = false,
         writes_fact_directly = false`,
-      params as any[],
+      params,
     )
-  } catch (error) {
-    logger.warn('[wbs-template-feedback] failed to record WBS reference-days network outcome', {
-      templateId: report.template_id,
-      companyId: options.companyId,
-      projectId,
-      error: error instanceof Error ? error.message : String(error),
-    })
+    return 1
   }
+
+  await rawQuery(
+    `INSERT INTO public.duration_plan_network_outcomes (
+        id,
+        asset_key,
+        outcome_status,
+        outcome_ref,
+        learning_scope,
+        learning_scope_source,
+        company_id,
+        project_id,
+        publication_key,
+        metadata,
+        writes_runtime_directly,
+        writes_fact_directly
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      ON CONFLICT (id) DO UPDATE SET
+        outcome_status = EXCLUDED.outcome_status,
+        outcome_ref = EXCLUDED.outcome_ref,
+        learning_scope = EXCLUDED.learning_scope,
+        learning_scope_source = EXCLUDED.learning_scope_source,
+        company_id = EXCLUDED.company_id,
+        project_id = EXCLUDED.project_id,
+        publication_key = EXCLUDED.publication_key,
+        observed_at = now(),
+        metadata = EXCLUDED.metadata,
+        writes_runtime_directly = false,
+        writes_fact_directly = false`,
+    params as any[],
+  )
+  return 1
+}
+
+function collectRuntimePublicationInputTaskIdsByAsset(tasks: readonly TaskRow[]) {
+  const byAsset = new Map<string, Map<string, Set<string>>>()
+  for (const task of tasks) {
+    const metadata = readObject(task.standard_task_metadata)
+    const suggestion = readObject(task.duration_suggestion)
+    const reasonParams = readObject(suggestion.businessReasonParams ?? suggestion.business_reason_params)
+    const assetKey = String(
+      metadata.durationLearningAssetKey
+        ?? metadata.duration_learning_asset_key
+        ?? reasonParams.durationLearningAssetKey
+        ?? reasonParams.duration_learning_asset_key
+        ?? '',
+    ).trim()
+    const publicationKey = String(
+      metadata.durationLearningPublicationKey
+        ?? metadata.duration_learning_publication_key
+        ?? reasonParams.durationLearningPublicationKey
+        ?? reasonParams.duration_learning_publication_key
+        ?? '',
+    ).trim()
+    const taskId = String(task.id ?? '').trim()
+    if (!assetKey || !publicationKey || !taskId) continue
+    const byPublication = byAsset.get(assetKey) ?? new Map<string, Set<string>>()
+    const taskIds = byPublication.get(publicationKey) ?? new Set<string>()
+    taskIds.add(taskId)
+    byPublication.set(publicationKey, taskIds)
+    byAsset.set(assetKey, byPublication)
+  }
+  return Object.fromEntries([...byAsset.entries()].map(([assetKey, byPublication]) => [
+    assetKey,
+    Object.fromEntries([...byPublication.entries()].map(([publicationKey, taskIds]) => [
+      publicationKey,
+      [...taskIds].sort(),
+    ])),
+  ]))
 }
 
 async function persistWbsTemplateFeedbackCandidateEvent(
   report: WbsTemplateFeedbackReport,
   options: CollectWbsTemplateFeedbackOptions,
 ) {
-  try {
-    await createAndPersistAlgorithmAssetCandidateEvent({
-      assetKey: `wbs.template_feedback.${report.template_id}`,
-      sourceSystem: 'wbsTemplateFeedback',
-      assetType: 'calibration',
-      companyId: options.companyId,
-      candidatePayload: {
-        templateId: report.template_id,
-        templateName: report.template_name,
-        completedProjectCount: report.completed_project_count,
-        sampleTaskCount: report.sample_task_count,
-        matchedAdHocTaskCount: report.matched_ad_hoc_task_count,
-        nodeCount: report.node_count,
-        automationLifecycle: 'duration_learning_runtime_candidate',
-        humanFallbackPolicy: 'conflict_or_exception_only',
-        nodes: report.nodes.map(mapFeedbackNodeForCandidate),
-        projectIds: normalizeProjectScope(options.projectIds),
-      },
-      learningTarget: 'base_duration',
-      learningMaturity: 'governed_candidate',
-      publishAnchor: 'candidate_only',
-      automationMaturity: 'auto_shadow',
-      requestedRuntimeEffect: 'candidate_only',
-      generatedBy: 'service',
-      queryExec: options.governanceQueryExec,
-    })
-  } catch (error) {
-    logger.warn('[wbs-template-feedback] failed to persist unified algorithm asset candidate event', {
+  const actionableNodes = getActionableReferenceDayFeedbackNodes(report)
+  if (actionableNodes.length === 0) return 0
+  const projectId = getScopedProjectId(options.projectIds)
+  if (!projectId) return 0
+
+  await createAndPersistAlgorithmAssetCandidateEvent({
+    assetKey: `wbs.template_feedback.${report.template_id}`,
+    sourceSystem: 'wbsTemplateFeedback',
+    assetType: 'calibration',
+    companyId: options.companyId,
+    projectId,
+    candidatePayload: {
       templateId: report.template_id,
-      companyId: options.companyId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-  }
+      templateName: report.template_name,
+      completedProjectCount: report.completed_project_count,
+      sampleTaskCount: report.sample_task_count,
+      matchedAdHocTaskCount: report.matched_ad_hoc_task_count,
+      nodeCount: report.node_count,
+      automationLifecycle: 'duration_learning_runtime_candidate',
+      humanFallbackPolicy: 'conflict_or_exception_only',
+      nodes: actionableNodes.map(mapFeedbackNodeForCandidate),
+      projectIds: [projectId],
+    },
+    learningTarget: 'base_duration',
+    learningMaturity: 'governed_candidate',
+    publishAnchor: 'candidate_only',
+    automationMaturity: 'auto_shadow',
+    requestedRuntimeEffect: 'candidate_only',
+    generatedBy: 'service',
+    queryExec: options.governanceQueryExec,
+  })
+  return 1
 }
 
-export async function collectWbsTemplateFeedback(
+async function collectWbsTemplateFeedbackWithContext(
   templateId: string,
   options: CollectWbsTemplateFeedbackOptions = {},
-): Promise<WbsTemplateFeedbackReport> {
+) {
   const normalizedProjectScope = normalizeProjectScope(options.projectIds) ?? []
   const companyId = normalizeId(options.companyId)
   const template = await readVisibleWbsTemplate(templateId, companyId, normalizedProjectScope)
@@ -765,6 +818,7 @@ export async function collectWbsTemplateFeedback(
     constructionCalendarsByProjectId,
   })
   effectiveOptions.runtimePublicationKeysByAsset = collectRuntimePublicationKeysByAsset(sampleMaps.matchedTasks)
+  effectiveOptions.runtimePublicationInputTaskIdsByAsset = collectRuntimePublicationInputTaskIdsByAsset(sampleMaps.matchedTasks)
   const flattenedRows = aggregateTreeFeedback(templateNodes, sampleMaps)
   const nodeCount = flattenTree(templateNodes).length
 
@@ -778,8 +832,188 @@ export async function collectWbsTemplateFeedback(
     nodes: flattenedRows,
   }
 
-  await persistWbsTemplateFeedbackCandidateEvent(report, effectiveOptions)
-  await recordWbsReferenceDaysPlanNetworkOutcome(report, effectiveOptions)
+  return { report, effectiveOptions }
+}
 
-  return report
+export async function collectWbsTemplateFeedback(
+  templateId: string,
+  options: CollectWbsTemplateFeedbackOptions = {},
+): Promise<WbsTemplateFeedbackReport> {
+  const collected = await collectWbsTemplateFeedbackWithContext(templateId, options)
+  return collected.report
+}
+
+async function persistWbsTemplateFeedbackGovernanceWrites(
+  report: WbsTemplateFeedbackReport,
+  options: CollectWbsTemplateFeedbackOptions,
+) {
+  const candidateEventCount = await persistWbsTemplateFeedbackCandidateEvent(report, options)
+  const recordedOutcomeCount = await recordWbsReferenceDaysPlanNetworkOutcome(report, options)
+  return { candidateEventCount, recordedOutcomeCount }
+}
+
+export async function produceWbsTemplateFeedback(
+  templateId: string,
+  options: CollectWbsTemplateFeedbackOptions = {},
+) {
+  const companyId = normalizeId(options.companyId)
+  const projectIds = normalizeProjectScope(options.projectIds) ?? []
+  if (!companyId) {
+    throw Object.assign(new Error('WBS template feedback producer requires company scope'), {
+      code: 'WBS_TEMPLATE_FEEDBACK_COMPANY_SCOPE_REQUIRED',
+    })
+  }
+  if (projectIds.length !== 1) {
+    throw Object.assign(new Error('WBS template feedback producer requires exactly one project scope'), {
+      code: 'WBS_TEMPLATE_FEEDBACK_PROJECT_SCOPE_REQUIRED',
+    })
+  }
+
+  const effectiveOptions: CollectWbsTemplateFeedbackOptions = {
+    ...options,
+    companyId,
+    projectIds,
+  }
+  const collected = await collectWbsTemplateFeedbackWithContext(templateId, effectiveOptions)
+  const report = collected.report
+  const writeOptions = collected.effectiveOptions
+  const writeResult = options.governanceQueryExec
+    ? await persistWbsTemplateFeedbackGovernanceWrites(report, writeOptions)
+    : await withDatabaseTransaction(async () => persistWbsTemplateFeedbackGovernanceWrites(report, writeOptions))
+
+  return {
+    report,
+    ...writeResult,
+  }
+}
+
+const WBS_TEMPLATE_FEEDBACK_TARGET_PAGE_SQL = `SELECT DISTINCT
+    p.company_id::text AS company_id,
+    p.id::text AS project_id,
+    COALESCE(t.source_template_id, t.template_id)::text AS template_id
+  FROM public.tasks t
+  JOIN public.projects p
+    ON p.id = t.project_id
+  JOIN public.wbs_templates wt
+    ON wt.id = COALESCE(t.source_template_id, t.template_id)
+  WHERE p.deleted_at IS NULL
+    AND t.deleted_at IS NULL
+    AND wt.deleted_at IS NULL
+    AND p.company_id IS NOT NULL
+    AND ($1::uuid IS NULL OR p.company_id = $1::uuid)
+    AND lower(trim(COALESCE(p.status, ''))) = ANY($2::text[])
+    AND t.actual_end_date IS NOT NULL
+    AND COALESCE(t.source_template_id, t.template_id) IS NOT NULL
+    AND (wt.company_id IS NULL OR wt.company_id = p.company_id)
+    AND (wt.project_id IS NULL OR wt.project_id = p.id)
+    AND (
+      $3::text IS NULL
+      OR (p.company_id::text, p.id::text, COALESCE(t.source_template_id, t.template_id)::text)
+        > ($3::text, $4::text, $5::text)
+    )
+  ORDER BY company_id, project_id, template_id
+  LIMIT $6`
+
+async function defaultWbsTemplateFeedbackTargetQueryExec(_sql: string, params: unknown[] = []) {
+  // database-query-dynamic-approved: this producer executes only the local fixed target-page SELECT above; every cursor and scope value remains parameter-bound.
+  const result = await rawQuery(WBS_TEMPLATE_FEEDBACK_TARGET_PAGE_SQL, params as any[])
+  return result.rows as Record<string, unknown>[]
+}
+
+function feedbackProducerTargetFromRow(row: Record<string, unknown>): WbsTemplateFeedbackProducerTarget {
+  const companyId = normalizeId(String(row.company_id ?? ''))
+  const projectId = normalizeId(String(row.project_id ?? ''))
+  const templateId = normalizeId(String(row.template_id ?? ''))
+  if (!companyId || !projectId || !templateId) {
+    throw Object.assign(new Error('WBS template feedback producer target is missing a required scope'), {
+      code: 'WBS_TEMPLATE_FEEDBACK_TARGET_SCOPE_INVALID',
+    })
+  }
+  return { companyId, projectId, templateId }
+}
+
+export async function loadWbsTemplateFeedbackProducerTargets(
+  options: Pick<WbsTemplateFeedbackGovernanceSweepOptions, 'companyId' | 'pageSize' | 'targetQueryExec'> = {},
+) {
+  const pageSize = Math.max(1, Math.min(1000, Math.floor(options.pageSize ?? 200)))
+  const queryExec = options.targetQueryExec ?? defaultWbsTemplateFeedbackTargetQueryExec
+  const targets: WbsTemplateFeedbackProducerTarget[] = []
+  const seen = new Set<string>()
+  let cursor: WbsTemplateFeedbackProducerTarget | null = null
+
+  while (true) {
+    const rows = await queryExec(WBS_TEMPLATE_FEEDBACK_TARGET_PAGE_SQL, [
+      normalizeId(options.companyId),
+      [...COMPLETED_PROJECT_STATUSES],
+      cursor?.companyId ?? null,
+      cursor?.projectId ?? null,
+      cursor?.templateId ?? null,
+      pageSize,
+    ])
+    if (rows.length === 0) break
+
+    const pageTargets = rows.map(feedbackProducerTargetFromRow)
+    for (const target of pageTargets) {
+      const key = `${target.companyId}:${target.projectId}:${target.templateId}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        targets.push(target)
+      }
+    }
+
+    const nextCursor = pageTargets[pageTargets.length - 1]!
+    if (cursor
+      && nextCursor.companyId === cursor.companyId
+      && nextCursor.projectId === cursor.projectId
+      && nextCursor.templateId === cursor.templateId) {
+      throw Object.assign(new Error('WBS template feedback target cursor did not advance'), {
+        code: 'WBS_TEMPLATE_FEEDBACK_TARGET_CURSOR_STALLED',
+      })
+    }
+    cursor = nextCursor
+    if (rows.length < pageSize) break
+  }
+
+  return targets
+}
+
+export async function runWbsTemplateFeedbackGovernanceSweep(
+  options: WbsTemplateFeedbackGovernanceSweepOptions = {},
+) {
+  const targets = await loadWbsTemplateFeedbackProducerTargets(options)
+  const result = {
+    targetCount: targets.length,
+    completedTargetCount: 0,
+    failedTargetCount: 0,
+    candidateEventCount: 0,
+    recordedOutcomeCount: 0,
+    failures: [] as Array<{ target: WbsTemplateFeedbackProducerTarget; error: string }>,
+  }
+
+  for (const target of targets) {
+    try {
+      const produced = await produceWbsTemplateFeedback(target.templateId, {
+        companyId: target.companyId,
+        projectIds: [target.projectId],
+        governanceQueryExec: options.governanceQueryExec,
+      })
+      result.completedTargetCount += 1
+      result.candidateEventCount += produced.candidateEventCount
+      result.recordedOutcomeCount += produced.recordedOutcomeCount
+    } catch (error) {
+      result.failedTargetCount += 1
+      result.failures.push({
+        target,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  if (result.failedTargetCount > 0) {
+    throw Object.assign(new Error('WBS template feedback governance sweep partially failed'), {
+      code: 'WBS_TEMPLATE_FEEDBACK_SWEEP_PARTIAL_FAILURE',
+      result,
+    })
+  }
+  return result
 }

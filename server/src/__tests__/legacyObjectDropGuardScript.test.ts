@@ -239,7 +239,7 @@ describe('check-legacy-object-drop-guard script', () => {
     })
   })
 
-  it('recognizes the dedicated retirement contracts for migrations 316 and 321', async () => {
+  it('recognizes the dedicated retirement contracts for migrations 316, 321, and 322', async () => {
     const result = await runLegacyObjectDropGuardCheck([
       '--ci-no-drop-candidates-ok',
       '--scan-migration-drops',
@@ -251,16 +251,24 @@ describe('check-legacy-object-drop-guard script', () => {
       listMigrationFiles: async () => [
         '316_task_fact_write_integrity.sql',
         '321_retire_duplicate_t2_schedule_runtime.sql',
+        '322_duration_learning_legacy_runtime_retirement.sql',
       ],
-      readMigrationFile: async (path) => path.includes('316_task_fact_write_integrity.sql')
-        ? `
+      readMigrationFile: async (path) => {
+        if (path.includes('316_task_fact_write_integrity.sql')) return `
             DROP TRIGGER IF EXISTS trigger_auto_record_snapshot ON public.tasks;
             DROP FUNCTION IF EXISTS public.auto_record_progress_snapshot();
           `
-        : `
+        if (path.includes('321_retire_duplicate_t2_schedule_runtime.sql')) return `
             DROP TABLE public.t2_rhythm_schedule_runtime_events;
             DROP TABLE public.t2_rhythm_schedule_runtime_publications;
-          `,
+          `
+        return `
+          DROP TABLE public.wbs_template_runtime_events;
+          DROP TABLE public.wbs_template_runtime_publications;
+          DROP TABLE public.construction_dependency_rule_runtime_events;
+          DROP TABLE public.construction_dependency_rule_runtime_publications;
+        `
+      },
     })
 
     expect(result.exitCode).toBe(0)

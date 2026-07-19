@@ -17,6 +17,7 @@ vi.mock('../services/dbService.js', () => ({
 
 vi.mock('../database.js', () => ({
   query: mocks.rawQuery,
+  withDatabaseTransaction: async <T>(runner: () => Promise<T>) => runner(),
 }))
 
 vi.mock('../services/constructionCalendar.js', async () => {
@@ -27,7 +28,11 @@ vi.mock('../services/constructionCalendar.js', async () => {
   }
 })
 
-const { collectWbsTemplateFeedback } = await import('../services/wbsTemplateFeedback.js')
+const {
+  collectWbsTemplateFeedback,
+  produceWbsTemplateFeedback,
+  runWbsTemplateFeedbackGovernanceSweep,
+} = await import('../services/wbsTemplateFeedback.js')
 const serviceSourcePath = fileURLToPath(new URL('../services/wbsTemplateFeedback.ts', import.meta.url))
 
 describe('wbsTemplateFeedback governance bridge', () => {
@@ -89,7 +94,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
     })
   })
 
-  it('bridges completed-project WBS feedback into unified candidate events without mutating runtime seeds', async () => {
+  it('keeps report collection read-only so GET consumers cannot create governance mutations', async () => {
     const report = await collectWbsTemplateFeedback('template-1', {
       projectIds: ['project-1'],
       companyId: '10000000-0000-4000-8000-000000000001',
@@ -97,11 +102,19 @@ describe('wbsTemplateFeedback governance bridge', () => {
 
     expect(report.sample_task_count).toBe(1)
     const sql = mocks.rawQuery.mock.calls.map((call) => String(call[0])).join('\n').toLowerCase()
-    expect(sql).toContain('insert into public.algorithm_asset_candidate_events')
+    expect(sql).not.toContain('insert into public.algorithm_asset_candidate_events')
+    expect(sql).not.toContain('insert into public.duration_plan_network_outcomes')
     expect(sql).not.toContain('algorithm_seed_records')
     expect(sql).not.toContain('algorithm_seed_versions')
     expect(sql).not.toContain('algorithm_seed_overrides')
     expect(sql).not.toContain('update public.wbs_templates')
+  })
+
+  it('bridges an explicit project-scoped producer into unified candidate events and outcomes', async () => {
+    const result = await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    } as any)
 
     const candidateInsert = mocks.rawQuery.mock.calls.find((call) =>
       String(call[0]).toLowerCase().includes('insert into public.algorithm_asset_candidate_events'),
@@ -110,9 +123,9 @@ describe('wbsTemplateFeedback governance bridge', () => {
     expect(candidateInsert?.[1]).toEqual(expect.arrayContaining([
       'wbs.template_feedback.template-1',
       'wbsTemplateFeedback',
-      'company',
+      'project',
       '10000000-0000-4000-8000-000000000001',
-      null,
+      'project-1',
       'base_duration',
       'governed_candidate',
       'candidate_only',
@@ -123,6 +136,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
     expect(candidateInsert?.[1]).toEqual(expect.arrayContaining([
       expect.objectContaining({
         templateId: 'template-1',
+        projectIds: ['project-1'],
         sampleTaskCount: 1,
         completedProjectCount: 1,
         automationLifecycle: 'duration_learning_runtime_candidate',
@@ -136,15 +150,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
         ]),
       }),
     ]))
-  })
 
-  it('records WBS reference-days feedback as a plan-network outcome without mutating facts or runtime', async () => {
-    const report = await collectWbsTemplateFeedback('template-1', {
-      projectIds: ['project-1'],
-      companyId: '10000000-0000-4000-8000-000000000001',
-    } as any)
-
-    expect(report.sample_task_count).toBe(1)
     const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
       String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
     )
@@ -170,16 +176,24 @@ describe('wbsTemplateFeedback governance bridge', () => {
         actionable_node_count: 1,
         publication_lineage_status: 'linked',
         consumed_runtime_publication_keys: ['duration-learning:wbs-reference:stable-1'],
+        runtime_publication_key: 'duration-learning:wbs-reference:stable-1',
+        runtime_publication_artifact_key: 'template-1',
+        runtime_publication_input_task_ids: ['task-1'],
         writes_runtime_directly: false,
         writes_fact_directly: false,
       }),
       false,
       false,
     ])
+    expect(result).toEqual(expect.objectContaining({
+      candidateEventCount: 1,
+      recordedOutcomeCount: 1,
+      report: expect.objectContaining({ sample_task_count: 1 }),
+    }))
   })
 
   it('stores WBS reference-day outcomes in construction production days with calendar lineage', async () => {
-    await collectWbsTemplateFeedback('template-1', {
+    await produceWbsTemplateFeedback('template-1', {
       projectIds: ['project-1'],
       companyId: '10000000-0000-4000-8000-000000000001',
     } as any)
@@ -207,6 +221,37 @@ describe('wbsTemplateFeedback governance bridge', () => {
       }),
     ]))
     expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledWith({ projectId: 'project-1' })
+  })
+
+  it('runs the scheduled producer by exact company, project, and template scope', async () => {
+    const targetQueryExec = vi.fn()
+      .mockResolvedValueOnce([{
+        company_id: '10000000-0000-4000-8000-000000000001',
+        project_id: 'project-1',
+        template_id: 'template-1',
+      }])
+      .mockResolvedValueOnce([])
+
+    const result = await runWbsTemplateFeedbackGovernanceSweep({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      targetQueryExec,
+      pageSize: 1,
+    } as any)
+
+    expect(targetQueryExec).toHaveBeenCalledTimes(2)
+    expect(targetQueryExec.mock.calls[0]?.[0]).toContain('SELECT DISTINCT')
+    expect(targetQueryExec.mock.calls[0]?.[0]).toContain('source_template_id')
+    expect(targetQueryExec.mock.calls[0]?.[1]).toEqual(expect.arrayContaining([
+      '10000000-0000-4000-8000-000000000001',
+      1,
+    ]))
+    expect(result).toEqual(expect.objectContaining({
+      targetCount: 1,
+      completedTargetCount: 1,
+      failedTargetCount: 0,
+      candidateEventCount: 1,
+      recordedOutcomeCount: 1,
+    }))
   })
 
   it('falls back to template-only reference-day inference when optional task feedback reads time out', async () => {
