@@ -43,7 +43,7 @@ function readAsOf(row: Record<string, unknown>, calendar?: ConstructionCalendarC
   const generatedAt = new Date(String(row.generated_at ?? ''))
   if (!Number.isNaN(generatedAt.getTime())) return businessDateKey(generatedAt, timezone)
   const weekStart = String(row.week_start ?? '').slice(0, 10)
-  return /^\d{4}-\d{2}-\d{2}$/.test(weekStart) ? weekStart : businessDateKey(new Date(), timezone)
+  return /^\d{4}-\d{2}-\d{2}$/.test(weekStart) ? weekStart : ''
 }
 
 function readDelayedTasks(value: unknown) {

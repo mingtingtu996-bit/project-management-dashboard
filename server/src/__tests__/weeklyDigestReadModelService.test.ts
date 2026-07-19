@@ -76,4 +76,37 @@ describe('weeklyDigestReadModelService', () => {
       availability: 'available',
     }))
   })
+
+  it.each([
+    ['missing', {}],
+    ['invalid', { generated_at: 'not-a-timestamp', week_start: 'not-a-date' }],
+  ])('fails closed when digest as-of metadata is %s', (_label, timestamps) => {
+    const result = buildWeeklyDigestReadModel({
+      project_id: 'project-1',
+      ...timestamps,
+      critical_nearest_delay_days: 3,
+      top_delayed_tasks: [{ task_id: 'task-1', title: 'Task 1', delay_days: 2 }],
+    }, {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    })
+
+    expect(result?.critical_nearest_delay).toEqual(expect.objectContaining({
+      value: null,
+      asOf: '',
+      availability: 'unavailable',
+      unavailableReason: 'as_of_missing',
+    }))
+    expect(result?.top_delayed_tasks[0].delay).toEqual(expect.objectContaining({
+      value: null,
+      asOf: '',
+      availability: 'unavailable',
+      unavailableReason: 'as_of_missing',
+    }))
+  })
 })

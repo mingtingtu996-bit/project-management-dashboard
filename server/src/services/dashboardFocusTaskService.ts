@@ -34,7 +34,7 @@ export function normalizeDashboardFocusTaskFilter(value: unknown): DashboardFocu
 
 export function normalizeDashboardFocusTaskLimit(value: unknown) {
   const parsed = Number(value)
-  return Number.isFinite(parsed) ? Math.min(50, Math.max(1, Math.floor(parsed))) : 12
+  return Number.isFinite(parsed) ? Math.min(50, Math.max(1, Math.floor(parsed))) : 6
 }
 
 function firstText(row: AnyRow, keys: string[], fallback = '') {
@@ -132,7 +132,8 @@ export function buildDashboardFocusTasksResponse(input: {
     .filter((task) => !isCompletedTask(task))
     .map((task) => toItem(task, input.now, input.calendar, input.todayTodoTaskIds))
     .sort(compare)
-  const items = allItems.filter((item) => include(item, input.filter)).slice(0, input.limit)
+  const filteredItems = allItems.filter((item) => include(item, input.filter))
+  const items = filteredItems.slice(0, input.limit)
   return {
     filter: input.filter,
     stats: {
@@ -143,7 +144,7 @@ export function buildDashboardFocusTasksResponse(input: {
       normal: allItems.filter((item) => item.dueStatus === 'normal').length,
     },
     items,
-    totalCount: items.length,
+    totalCount: filteredItems.length,
     allItems,
   }
 }

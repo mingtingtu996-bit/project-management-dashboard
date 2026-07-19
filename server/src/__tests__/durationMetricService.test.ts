@@ -62,4 +62,27 @@ describe('durationMetricService', () => {
       unavailableReason: null,
     }))
   })
+
+  it('accepts a real leap day as a strict date-only as-of value', () => {
+    expect(buildCalendarDayDurationMetric(1, {
+      asOf: '2028-02-29',
+      timezone: 'Asia/Shanghai',
+    })).toEqual(expect.objectContaining({
+      value: 1,
+      asOf: '2028-02-29',
+      availability: 'available',
+    }))
+  })
+
+  it.each(['2026-99-99', '2026-02-30', '2026-04-31'])('fails closed for invalid date-only as-of %s', (asOf) => {
+    expect(buildCalendarDayDurationMetric(1, {
+      asOf,
+      timezone: 'Asia/Shanghai',
+    })).toEqual(expect.objectContaining({
+      value: null,
+      asOf: '',
+      availability: 'unavailable',
+      unavailableReason: 'as_of_missing',
+    }))
+  })
 })
