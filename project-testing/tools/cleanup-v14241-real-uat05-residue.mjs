@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, relative, resolve } from 'node:path'
 
 import { createClient } from '@supabase/supabase-js'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const defaultEnvFile = '.tmp/v14241-controlled-staging/v14241-controlled-staging.refs.env'
 const defaultDbEnvFile = 'deploy/env/staging.env'
@@ -79,7 +80,7 @@ function responseDigest(result) {
   }
 }
 
-async function request({ url, method = 'GET', token, companyId, body, timeoutMs = 30000 }) {
+async function request({ url, method = 'GET', token, companyId, origin, body, timeoutMs = 30000 }) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const started = Date.now()
@@ -88,6 +89,7 @@ async function request({ url, method = 'GET', token, companyId, body, timeoutMs 
       method,
       headers: {
         accept: 'application/json',
+        ...(origin ? { origin } : {}),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(companyId ? { 'x-company-id': companyId } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
@@ -120,10 +122,11 @@ async function request({ url, method = 'GET', token, companyId, body, timeoutMs 
   }
 }
 
-async function login(apiBase, username, password) {
+async function login(apiBase, username, password, publicOrigin) {
   const result = await request({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
+    origin: publicOrigin,
     body: { username, password },
     timeoutMs: 30000,
   })
@@ -157,6 +160,10 @@ async function main() {
   const trace = JSON.parse((await readFile(traceFile, 'utf8')).replace(/^\uFEFF/, ''))
 
   const apiBase = requireEnv(env, 'V14241_STAGING_API_BASE_URL')
+  const publicOrigin = resolvePublicHttpsOrigin({
+    apiBaseUrl: apiBase,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
+  })
   const username = requireEnv(env, 'V14241_STAGING_TEST_USER_EMAIL_REF')
   const password = requireEnv(env, 'V14241_STAGING_TEST_USER_PASSWORD_REF')
   const companyId = requireEnv(env, 'V14241_STAGING_COMPANY_ID')
@@ -166,7 +173,7 @@ async function main() {
   const predecessorTaskId = String(trace.predecessorTaskId ?? '').trim()
   if (!taskId || !predecessorTaskId) throw new Error('Trace file does not contain targetTaskId and predecessorTaskId')
 
-  const token = await login(apiBase, username, password)
+  const token = await login(apiBase, username, password, publicOrigin)
   const beforeTask = await request({
     url: joinApiPath(apiBase, `/api/tasks/${encodeURIComponent(taskId)}`),
     token,

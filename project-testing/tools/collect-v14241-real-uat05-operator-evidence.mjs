@@ -4,6 +4,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
 const defaultArtifactRoot = join(defaultReleaseDir, 'v14241-real-env-evidence', 'staging')
@@ -77,7 +79,7 @@ function responseDigest(result) {
   }
 }
 
-async function request({ url, method = 'GET', token, companyId, body, timeoutMs = 30000 }) {
+async function request({ url, method = 'GET', token, companyId, origin, body, timeoutMs = 30000 }) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   const started = Date.now()
@@ -86,6 +88,7 @@ async function request({ url, method = 'GET', token, companyId, body, timeoutMs 
       method,
       headers: {
         accept: 'application/json',
+        ...(origin ? { origin } : {}),
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(companyId ? { 'x-company-id': companyId } : {}),
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
@@ -118,10 +121,11 @@ async function request({ url, method = 'GET', token, companyId, body, timeoutMs 
   }
 }
 
-async function login(apiBase, username, password) {
+async function login(apiBase, username, password, publicOrigin) {
   const result = await request({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
+    origin: publicOrigin,
     body: { username, password },
     timeoutMs: 30000,
   })
@@ -495,6 +499,10 @@ async function main() {
   const now = new Date()
   const env = parseEnv(await readFile(envFile, 'utf8'))
   const apiBase = requireEnv(env, 'V14241_STAGING_API_BASE_URL')
+  const publicOrigin = resolvePublicHttpsOrigin({
+    apiBaseUrl: apiBase,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
+  })
   const username = requireEnv(env, 'V14241_STAGING_TEST_USER_EMAIL_REF')
   const password = requireEnv(env, 'V14241_STAGING_TEST_USER_PASSWORD_REF')
   const companyId = requireEnv(env, 'V14241_STAGING_COMPANY_ID')
@@ -511,7 +519,7 @@ async function main() {
   const cleanupPath = join(operatorReadbacks, 'real-uat-05-cleanup-readback.json')
   const summaryPath = join(operatorEvidence, 'real-uat-05-operator-evidence-summary.json')
 
-  const token = await login(apiBase, username, password)
+  const token = await login(apiBase, username, password, publicOrigin)
   const tasksResult = await request({
     url: joinApiPath(apiBase, `/api/tasks?projectId=${encodeURIComponent(largeProjectId)}&surface=task_list&acceptance_impact=false`),
     token,

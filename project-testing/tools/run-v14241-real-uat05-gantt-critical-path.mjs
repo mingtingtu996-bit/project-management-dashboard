@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { evaluateHandoffReadiness } from './build-v14241-real-env-handoff-pack.mjs'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
@@ -244,11 +245,12 @@ async function writeReport(report, output) {
   return report
 }
 
-async function login({ apiBase, username, password, redactions }) {
+async function login({ apiBase, username, password, redactions, publicOrigin }) {
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const result = await request({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: resolvedPublicOrigin },
     body: { username, password },
     timeoutMs: 10000,
   })
@@ -323,6 +325,7 @@ async function executeScenario({
   criticalPathReadbackFile,
   performanceGanttP95File,
   cleanupReadbackFile,
+  publicOrigin,
   now,
 }) {
   const redactions = [resolvedRefs.username.value, resolvedRefs.password.value]
@@ -336,6 +339,7 @@ async function executeScenario({
     username: resolvedRefs.username.value,
     password: resolvedRefs.password.value,
     redactions,
+    publicOrigin,
   })
   report.commandsExecuted += 1
   report.checks.push({ id: 'auth-login', status: loginResult.token ? 'pass' : 'blocked', result: loginResult.digest })
@@ -475,6 +479,7 @@ export async function runUat05GanttCriticalPath({
   criticalPathReadbackFile = null,
   performanceGanttP95File = null,
   cleanupReadbackFile = null,
+  publicOrigin = null,
   flags = {},
   now = new Date(),
 } = {}) {
@@ -548,6 +553,7 @@ export async function runUat05GanttCriticalPath({
     criticalPathReadbackFile,
     performanceGanttP95File,
     cleanupReadbackFile,
+    publicOrigin,
     now,
   })
   return writeReport(executed, output)
@@ -579,6 +585,7 @@ async function main() {
     criticalPathReadbackFile: argValue('--critical-path-readback-file', null),
     performanceGanttP95File: argValue('--performance-gantt-p95-file', null),
     cleanupReadbackFile: argValue('--cleanup-readback-file', null),
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
     flags,
   })
   console.log(JSON.stringify({

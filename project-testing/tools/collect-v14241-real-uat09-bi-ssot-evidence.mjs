@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 import * as XLSX from '@e965/xlsx'
 import pg from 'pg'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
@@ -245,11 +246,11 @@ function authHeaders(token, companyId = null) {
   }
 }
 
-async function login({ apiBase, username, password, redactions }) {
+async function login({ apiBase, username, password, redactions, publicOrigin }) {
   const result = await requestJson({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: publicOrigin },
     body: { username, password },
     timeoutMs: 10000,
   })
@@ -364,7 +365,7 @@ function hasSnapshotLineage(lineage) {
     && Number(lineage?.metricValueSnapshots?.count ?? 0) > 0
 }
 
-async function loginForSnapshotJob({ apiBase, refsEnvFile, fallbackUsername, fallbackPassword, redactions }) {
+async function loginForSnapshotJob({ apiBase, refsEnvFile, fallbackUsername, fallbackPassword, redactions, publicOrigin }) {
   const refsEnv = await readEnvFile(refsEnvFile)
   const candidates = [
     {
@@ -395,6 +396,7 @@ async function loginForSnapshotJob({ apiBase, refsEnvFile, fallbackUsername, fal
       username: candidate.username,
       password: candidate.password,
       redactions: [...redactions, candidate.username, candidate.password],
+      publicOrigin,
     })
     attempts.push({
       credentialRef: candidate.usernameKey
@@ -474,6 +476,7 @@ export async function collectUat09BiSsotEvidence({
   artifactRoot = null,
   flags = {},
   allowSnapshotGeneration = false,
+  publicOrigin = null,
   now = new Date(),
 } = {}) {
   const normalizedTier = normalizeTier(tier)
@@ -521,6 +524,7 @@ export async function collectUat09BiSsotEvidence({
   const resolved = Object.fromEntries(Object.entries(refs.resolved).map(([key, value]) => [key, value.value]))
   const redactions = [resolved.username, resolved.password]
   const apiBase = resolved.apiBase
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const companyId = resolved.companyId
   const projectId = resolved.projectId
 
@@ -529,6 +533,7 @@ export async function collectUat09BiSsotEvidence({
     username: resolved.username,
     password: resolved.password,
     redactions,
+    publicOrigin: resolvedPublicOrigin,
   })
   commands.push({ id: 'auth-login', method: 'POST', path: '/api/auth/login' })
   checks.push(checkStatus('auth-login', Boolean(loginResult.token), { result: loginResult.digest }))
@@ -570,6 +575,7 @@ export async function collectUat09BiSsotEvidence({
       fallbackUsername: resolved.username,
       fallbackPassword: resolved.password,
       redactions,
+      publicOrigin: resolvedPublicOrigin,
     })
     commands.push({ id: 'snapshot-job-admin-login', method: 'POST', path: '/api/auth/login' })
     checks.push(checkStatus('snapshot-job-admin-login', Boolean(snapshotLogin.token), {
@@ -809,6 +815,7 @@ async function main() {
     artifactRoot,
     flags,
     allowSnapshotGeneration: hasFlag('--allow-snapshot-generation'),
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
   })
   console.log(JSON.stringify(report, null, 2))
 }

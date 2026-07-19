@@ -7,6 +7,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { evaluateHandoffReadiness } from './build-v14241-real-env-handoff-pack.mjs'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
@@ -394,11 +395,12 @@ async function writeReport(report, output) {
   return report
 }
 
-async function login({ apiBase, username, password, redactions }) {
+async function login({ apiBase, username, password, redactions, publicOrigin }) {
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const result = await request({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: resolvedPublicOrigin },
     body: { username, password },
     timeoutMs: 10000,
   })
@@ -531,6 +533,7 @@ async function executeScenario({
   cleanupReadbackFile,
   auditEnvFile,
   foreignTargetProvisioner,
+  publicOrigin,
   now,
 }) {
   const redactions = resolvedRefs.redactions
@@ -581,6 +584,7 @@ async function executeScenario({
       username: account.username.value,
       password: account.password.value,
       redactions,
+      publicOrigin,
     })
     report.commandsExecuted += 1
     tokens[role] = loginResult.token
@@ -752,6 +756,7 @@ export async function runUat03RlsRoleMatrix({
   cleanupReadbackFile = null,
   auditEnvFile = null,
   foreignTargetProvisioner = provisionDisposableForeignTarget,
+  publicOrigin = null,
   flags = {},
   now = new Date(),
 } = {}) {
@@ -815,6 +820,7 @@ export async function runUat03RlsRoleMatrix({
     cleanupReadbackFile,
     auditEnvFile,
     foreignTargetProvisioner,
+    publicOrigin,
     now,
   })
   return writeReport(executed, output)
@@ -846,6 +852,7 @@ async function main() {
     artifactRoot,
     cleanupReadbackFile: cleanupReadbackFile ? resolve(cleanupReadbackFile) : null,
     auditEnvFile: auditEnvFile ? resolve(auditEnvFile) : null,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
     flags,
   })
   console.log(JSON.stringify({

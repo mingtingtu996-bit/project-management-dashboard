@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { evaluateHandoffReadiness } from './build-v14241-real-env-handoff-pack.mjs'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
@@ -389,14 +390,15 @@ async function captureBrowserEvidence({ clientBase, apiBase, token, companyId, s
   }
 }
 
-async function executeScenario({ report, handoff, tier, resolvedRefs, artifactRoot, auditReadbackFile, auditEnvFile, now }) {
+async function executeScenario({ report, handoff, tier, resolvedRefs, artifactRoot, auditReadbackFile, auditEnvFile, publicOrigin, now }) {
   const redactions = [resolvedRefs.username.value, resolvedRefs.password.value]
   const apiBase = resolvedRefs.apiBase.value
   const clientBase = resolvedRefs.clientBase.value
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const login = await request({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: resolvedPublicOrigin },
     body: { username: resolvedRefs.username.value, password: resolvedRefs.password.value },
     timeoutMs: 10000,
   })
@@ -552,6 +554,7 @@ export async function runUat01CompanyCreateSwitch({
   artifactRoot = null,
   auditReadbackFile = null,
   auditEnvFile = null,
+  publicOrigin = null,
   flags = {},
   now = new Date(),
 } = {}) {
@@ -624,6 +627,7 @@ export async function runUat01CompanyCreateSwitch({
     artifactRoot: resolvedArtifactRoot,
     auditReadbackFile,
     auditEnvFile,
+    publicOrigin,
     now,
   })
   return writeReport(executed, output)
@@ -655,6 +659,7 @@ async function main() {
     artifactRoot,
     auditReadbackFile: auditReadbackFile ? resolve(auditReadbackFile) : null,
     auditEnvFile: auditEnvFile ? resolve(auditEnvFile) : null,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
     flags,
   })
   console.log(JSON.stringify({

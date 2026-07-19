@@ -4,6 +4,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = path.join(
   repoRoot,
@@ -16,6 +18,7 @@ const defaultManifestPath = path.join(repoRoot, '.tmp', 'full-app-test-env', 'ma
 function parseArgs(argv) {
   const args = {
     apiBase: process.env.API_BASE_URL || process.env.V1424_API_BASE_URL || 'http://127.0.0.1:3106',
+    publicOrigin: process.env.PUBLIC_HTTPS_ORIGIN || '',
     releaseDir: defaultReleaseDir,
     manifest: defaultManifestPath,
     writeCommandResult: false,
@@ -25,6 +28,9 @@ function parseArgs(argv) {
     const arg = argv[index]
     if (arg === '--api-base') {
       args.apiBase = String(argv[index + 1] ?? '').trim()
+      index += 1
+    } else if (arg === '--public-origin') {
+      args.publicOrigin = String(argv[index + 1] ?? '').trim()
       index += 1
     } else if (arg === '--release-dir') {
       args.releaseDir = path.resolve(String(argv[index + 1] ?? '').trim())
@@ -117,9 +123,10 @@ function authHeaders(session) {
   }
 }
 
-async function login(apiBase, account) {
+async function login(apiBase, account, publicOrigin) {
   const result = await requestJson(apiBase, '/api/auth/login', {
     method: 'POST',
+    headers: { origin: publicOrigin },
     body: {
       username: account.username,
       password: account.password,
@@ -296,6 +303,10 @@ export function containsSecretLikeText(value) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2))
+  const publicOrigin = resolvePublicHttpsOrigin({
+    apiBaseUrl: args.apiBase,
+    publicOrigin: args.publicOrigin,
+  })
   const generatedAt = nowIso()
   const manifest = readJson(args.manifest)
   const accounts = manifest.accounts ?? {}
@@ -314,7 +325,7 @@ async function main() {
       blockers.add(`${role}_account_missing`)
       continue
     }
-    const session = await login(args.apiBase, account)
+    const session = await login(args.apiBase, account, publicOrigin)
     sessions[role] = session
     cases.push({
       id: `G3-AUTH-${role}`,

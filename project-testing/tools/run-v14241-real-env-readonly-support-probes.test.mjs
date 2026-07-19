@@ -22,6 +22,7 @@ async function writeEnv(path, baseUrl) {
   await writeFile(path, [
     `API_BASE_URL=${baseUrl}`,
     `CLIENT_BASE_URL=${baseUrl}`,
+    'PUBLIC_HTTPS_ORIGIN=https://staging.example.test',
     'TEST_USER_EMAIL=readonly-qa@example.com',
     'TEST_USER_PASSWORD=secret-value-not-written',
   ].join('\n'), 'utf8')
@@ -43,6 +44,10 @@ function makeHandler({ slowProjectsSummary = false, localPermissionBypass = fals
   return (req, res) => {
     const authenticated = localPermissionBypass || String(req.headers.authorization ?? '').startsWith('Bearer ')
     if (req.url === '/api/auth/login' && req.method === 'POST') {
+      if (req.headers.origin !== 'https://staging.example.test') {
+        json(res, 403, { error: { code: 'CROSS_ENVIRONMENT_ORIGIN_FORBIDDEN' } })
+        return
+      }
       json(res, 200, { data: { token: 'eyJreadonly.header.payload' } })
       return
     }

@@ -17,6 +17,15 @@ const AUTH_RUNTIME_TARGETS = {
   },
 } as const
 
+const COOKIE_NAME_PATTERN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u
+
+function validatedCookieName(value: string): string {
+  if (!COOKIE_NAME_PATTERN.test(value)) {
+    throw new Error('AUTH_COOKIE_NAME must be an RFC token-safe cookie name')
+  }
+  return value
+}
+
 function isProductionRuntime(): boolean {
   return process.env.NODE_ENV === 'production'
 }
@@ -139,9 +148,9 @@ export const JWT_CONFIG = {
   // Cookie配置
   cookie: {
     get name(): string {
-      return isProductionRuntime()
+      return validatedCookieName(isProductionRuntime()
         ? productionValue('AUTH_COOKIE_NAME')
-        : (process.env.AUTH_COOKIE_NAME || 'auth_token')
+        : (process.env.AUTH_COOKIE_NAME || 'auth_token'))
     },
     httpOnly: true,
     get secure(): boolean {

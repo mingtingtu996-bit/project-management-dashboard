@@ -149,7 +149,7 @@ all four loopback calls to pass `--public-origin`.
 - [ ] **Step 2: Run the test and verify RED**
 
 ```powershell
-npx vitest run --config server/vitest.config.ts server/src/__tests__/authCookieConfiguration.test.ts
+npx vitest run --config server/vitest.config.ts server/src/__tests__/authRuntimeConfiguration.test.ts
 ```
 
 Expected: FAIL because `server/src/auth/http.ts` still hardcodes `auth_token`.

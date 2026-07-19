@@ -22,6 +22,7 @@ async function writeEnv(path, baseUrl) {
   await writeFile(path, [
     `API_BASE_URL=${baseUrl}`,
     `CLIENT_BASE_URL=${baseUrl}`,
+    'PUBLIC_HTTPS_ORIGIN=https://staging.example.test',
     'TEST_USER_EMAIL=qa@example.com',
     'TEST_USER_PASSWORD=secret-value-not-written',
   ].join('\n'), 'utf8')
@@ -40,6 +41,11 @@ test('passes read-only preflight against a reachable API and client without writ
       return
     }
     if (req.url === '/api/auth/login' && req.method === 'POST') {
+      if (req.headers.origin !== 'https://staging.example.test') {
+        res.writeHead(403, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { code: 'CROSS_ENVIRONMENT_ORIGIN_FORBIDDEN' } }))
+        return
+      }
       res.writeHead(200, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ data: { token: 'eyJtest.header.payload', user: { id: 'user-1' } } }))
       return
@@ -103,6 +109,11 @@ test('falls back from TEST_USER_EMAIL to TEST_USERNAME without writing credentia
       return
     }
     if (req.url === '/api/auth/login' && req.method === 'POST') {
+      if (req.headers.origin !== 'https://staging.example.test') {
+        res.writeHead(403, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: { code: 'CROSS_ENVIRONMENT_ORIGIN_FORBIDDEN' } }))
+        return
+      }
       let body = ''
       req.on('data', (chunk) => { body += chunk })
       req.on('end', () => {
@@ -131,6 +142,7 @@ test('falls back from TEST_USER_EMAIL to TEST_USERNAME without writing credentia
     await writeFile(envFile, [
       `API_BASE_URL=${baseUrl}`,
       `CLIENT_BASE_URL=${baseUrl}`,
+      'PUBLIC_HTTPS_ORIGIN=https://staging.example.test',
       'TEST_USER_EMAIL=wrong@example.com',
       'TEST_USERNAME=login-name',
       'TEST_USER_PASSWORD=secret-value-not-written',

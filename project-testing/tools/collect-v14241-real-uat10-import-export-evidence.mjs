@@ -6,6 +6,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import * as XLSX from '@e965/xlsx'
+import { resolvePublicHttpsOrigin } from '../../scripts/public-origin.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const defaultReleaseDir = join(repoRoot, 'project-testing', 'reports', 'release-v1.4.24-20260702-125254')
@@ -245,11 +246,11 @@ function authHeaders(token, companyId = null) {
   }
 }
 
-async function login({ apiBase, username, password, redactions }) {
+async function login({ apiBase, username, password, redactions, publicOrigin }) {
   const result = await requestJson({
     url: joinApiPath(apiBase, '/api/auth/login'),
     method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    headers: { 'content-type': 'application/json', accept: 'application/json', origin: publicOrigin },
     body: { username, password },
     timeoutMs: 10000,
   })
@@ -376,6 +377,7 @@ export async function collectUat10ImportExportEvidence({
   refsEnvFile = defaultRefsEnvFile,
   artifactRoot = null,
   flags = {},
+  publicOrigin = null,
   now = new Date(),
 } = {}) {
   const normalizedTier = normalizeTier(tier)
@@ -426,6 +428,7 @@ export async function collectUat10ImportExportEvidence({
   const resolved = Object.fromEntries(Object.entries(refs.resolved).map(([key, value]) => [key, value.value]))
   const redactions = [resolved.username, resolved.password]
   const apiBase = resolved.apiBase
+  const resolvedPublicOrigin = resolvePublicHttpsOrigin({ apiBaseUrl: apiBase, publicOrigin })
   const companyId = resolved.companyId
   const projectId = resolved.projectId
 
@@ -434,6 +437,7 @@ export async function collectUat10ImportExportEvidence({
     username: resolved.username,
     password: resolved.password,
     redactions,
+    publicOrigin: resolvedPublicOrigin,
   })
   commands.push({ id: 'auth-login', method: 'POST', path: '/api/auth/login' })
   checks.push(checkStatus('auth-login', Boolean(loginResult.token), { result: loginResult.digest }))
@@ -724,6 +728,7 @@ async function main() {
     refsEnvFile: resolve(argValue('--refs-env-file', defaultRefsEnvFile)),
     artifactRoot,
     flags,
+    publicOrigin: argValue('--public-origin', process.env.PUBLIC_HTTPS_ORIGIN ?? ''),
   })
   console.log(JSON.stringify(report, null, 2))
 }
