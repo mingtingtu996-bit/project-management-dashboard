@@ -2,6 +2,7 @@ import { logger } from '../middleware/logger.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
 import {
   collectConstructionDependencyReplayCalibrationReport,
+  persistConstructionDependencyReplayCalibrationCandidatesFromReport,
   type ConstructionDependencyReplayCalibrationReport,
 } from '../services/constructionDependencyReplayCalibrationService.js'
 import { persistConstructionDependencyReplayCalibrationReport } from '../services/constructionDependencyReplayCalibrationPersistenceService.js'
@@ -18,6 +19,9 @@ export type ConstructionDependencyReplayCalibrationJobResult = {
   failedReports: number
   persistedReportCount: number
   reportPersistenceFailedCount: number
+  producerCandidateEventCount: number
+  producerOutcomeCount: number
+  producerFailedCount: number
   inputDependencyCount: number
   matchedDependencyCount: number
   comparableActualDateCount: number
@@ -37,6 +41,9 @@ function emptyResult(): ConstructionDependencyReplayCalibrationJobResult {
     failedReports: 0,
     persistedReportCount: 0,
     reportPersistenceFailedCount: 0,
+    producerCandidateEventCount: 0,
+    producerOutcomeCount: 0,
+    producerFailedCount: 0,
     inputDependencyCount: 0,
     matchedDependencyCount: 0,
     comparableActualDateCount: 0,
@@ -84,13 +91,21 @@ export async function runConstructionDependencyReplayCalibrationSweep(params: {
 
   for (const projectId of projectIds) {
     result.scannedProjects += 1
+    let reportCollected = false
     try {
       const report = await collectConstructionDependencyReplayCalibrationReport({
         projectIds: [projectId],
         maxSamples: params.maxSamples ?? 1000,
         zeroLagReviewThresholdDays: params.zeroLagReviewThresholdDays ?? 2,
       })
+      reportCollected = true
       addReportSummary(result, report)
+      const produced = await persistConstructionDependencyReplayCalibrationCandidatesFromReport({
+        report,
+        projectId,
+      })
+      result.producerCandidateEventCount += produced.persistedEventCount
+      result.producerOutcomeCount += produced.recordedOutcomeCount
       if (params.writeReports !== false) {
         try {
           await persistConstructionDependencyReplayCalibrationReport({
@@ -111,11 +126,19 @@ export async function runConstructionDependencyReplayCalibrationSweep(params: {
       }
     } catch (error) {
       result.failedReports += 1
+      if (reportCollected) result.producerFailedCount += 1
       logger.warn('[constructionDependencyReplayCalibrationJob] project replay calibration failed', {
         projectId,
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  if (result.failedReports > 0 || result.reportPersistenceFailedCount > 0 || result.producerFailedCount > 0) {
+    throw Object.assign(new Error('construction dependency replay calibration sweep partially failed'), {
+      code: 'CONSTRUCTION_DEPENDENCY_REPLAY_PARTIAL_FAILURE',
+      result,
+    })
   }
 
   return result

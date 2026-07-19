@@ -7,6 +7,15 @@ const mocks = vi.hoisted(() => ({
     includedSampleCount: 3,
     promotedBenchmarkCount: 2,
   })),
+  runWbsTemplateFeedbackGovernanceSweep: vi.fn(async ({ companyId }: { companyId?: string }) => ({
+    companyId: companyId ?? null,
+    targetCount: 2,
+    completedTargetCount: 2,
+    failedTargetCount: 0,
+    candidateEventCount: 2,
+    recordedOutcomeCount: 2,
+    failures: [],
+  })),
   runJobWithRetry: vi.fn(async (context: unknown, runner: () => Promise<unknown>) => ({
     attempts: 1,
     context,
@@ -16,6 +25,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../services/templateDurationGovernanceService.js', () => ({
   runTemplateDurationGovernance: mocks.runTemplateDurationGovernance,
+}))
+
+vi.mock('../services/wbsTemplateFeedback.js', () => ({
+  runWbsTemplateFeedbackGovernanceSweep: mocks.runWbsTemplateFeedbackGovernanceSweep,
 }))
 
 vi.mock('../services/jobRuntime.js', () => ({
@@ -49,7 +62,7 @@ describe('templateDurationGovernanceJob', () => {
     expect(jobsRouteSource).toContain('result: await templateDurationGovernanceJob.executeNow(companyId ?? null)')
   })
 
-  it('delegates manual execution to runJobWithRetry and template duration governance service', async () => {
+  it('delegates manual execution to the benchmark and WBS feedback producers inside one retry boundary', async () => {
     const job = new TemplateDurationGovernanceJob()
 
     const result = await job.executeNow('company-42')
@@ -67,10 +80,25 @@ describe('templateDurationGovernanceJob', () => {
     expect(mocks.runTemplateDurationGovernance).toHaveBeenCalledWith({
       companyId: 'company-42',
     })
-    expect(result).toEqual({
+    expect(mocks.runWbsTemplateFeedbackGovernanceSweep).toHaveBeenCalledOnce()
+    expect(mocks.runWbsTemplateFeedbackGovernanceSweep).toHaveBeenCalledWith({
       companyId: 'company-42',
-      includedSampleCount: 3,
-      promotedBenchmarkCount: 2,
+    })
+    expect(result).toEqual({
+      durationBenchmarks: {
+        companyId: 'company-42',
+        includedSampleCount: 3,
+        promotedBenchmarkCount: 2,
+      },
+      wbsTemplateFeedback: {
+        companyId: 'company-42',
+        targetCount: 2,
+        completedTargetCount: 2,
+        failedTargetCount: 0,
+        candidateEventCount: 2,
+        recordedOutcomeCount: 2,
+        failures: [],
+      },
     })
   })
 

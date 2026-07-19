@@ -50,11 +50,19 @@ import {
 import {
   buildTemplateGenerateCreateOperations,
   generateWbsTemplateRows,
+  recordWbsTemplateGenerationRuntimeConsumption,
+  type WbsTemplateGenerationRuntimeArtifactPublication,
 } from '../services/wbsTemplateGenerationService.js'
 import {
   buildSpecialWorkDurationCandidateNodes,
   recordWbsTemplateCandidateEvent,
 } from '../services/wbsTemplateCandidateEventService.js'
+import {
+  persistDurationLearningRuntimeConsumptions,
+} from '../services/durationLearningRuntimeConsumptionService.js'
+import type {
+  DurationLearningRuntimePublicationQueryExec,
+} from '../services/durationLearningRuntimePublicationService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { PlanningTableOperation } from '../types/planningTable.js'
 import type {
@@ -629,19 +637,29 @@ function applyBaselineCommitOperations(
 async function expandBaselineTemplateGenerateOperations(
   projectId: string,
   operations: PlanningCommitOperation[],
-): Promise<PlanningCommitOperation[]> {
+  runtimePublicationQueryExec: DurationLearningRuntimePublicationQueryExec,
+) {
   const expanded: PlanningCommitOperation[] = []
+  const generationContexts: Array<{
+    operation: PlanningCommitOperation
+    generated: Awaited<ReturnType<typeof generateWbsTemplateRows>>
+    runtimeArtifactPublications: WbsTemplateGenerationRuntimeArtifactPublication[]
+  }> = []
   for (const operation of operations) {
     if (readCommitOperationType(operation) !== 'template_generate') {
       expanded.push(operation)
       continue
     }
 
+    const runtimeArtifactPublications: WbsTemplateGenerationRuntimeArtifactPublication[] = []
     const generated = await generateWbsTemplateRows({
       projectId,
       surface: 'baseline',
       operation,
+      runtimePublicationQueryExec,
+      runtimeArtifactPublications,
     })
+    generationContexts.push({ operation, generated, runtimeArtifactPublications })
     logGeneratedTemplateRowsRenderBudget(generated.rows, operation, projectId)
     expanded.push(
       ...buildTemplateGenerateCreateOperations(generated.rows)
@@ -659,7 +677,7 @@ async function expandBaselineTemplateGenerateOperations(
         }),
     )
   }
-  return expanded
+  return { operations: expanded, generationContexts }
 }
 
 
@@ -2489,10 +2507,20 @@ router.post(
       ))
     }
 
-    const operations = await expandBaselineTemplateGenerateOperations(
+    const durationLearningRuntimeQueryExec: DurationLearningRuntimePublicationQueryExec = async <T = Record<string, unknown>>(
+      sql: string,
+      params: unknown[] = [],
+    ) => {
+      // database-query-dynamic-approved: the canonical 315 publication resolver owns fixed parameterized SELECTs; the baseline route only supplies its transaction executor.
+      const result = await rawQuery(sql, params as any[])
+      return (result.rows ?? []) as T[]
+    }
+    const expandedTemplateOperations = await expandBaselineTemplateGenerateOperations(
       projectId,
       validation.request.operations as PlanningCommitOperation[],
+      durationLearningRuntimeQueryExec,
     )
+    const operations = expandedTemplateOperations.operations
     if (operations.length === 0) {
       const rows = await getBaselineItems(id)
       const response: ApiResponse = {
@@ -2564,15 +2592,41 @@ router.post(
       visibility: 'user',
     })
 
-    for (const operation of validation.request.operations as PlanningCommitOperation[]) {
-      if (readCommitOperationType(operation) !== 'template_generate') continue
+    for (const generationContext of expandedTemplateOperations.generationContexts) {
+      const operation = generationContext.operation
       const operationRecord = operation as Record<string, unknown>
-      const generated = await generateWbsTemplateRows({
-        projectId,
-        surface: 'baseline',
-        operation,
-      })
+      const generated = generationContext.generated
+      const runtimeArtifactPublications = generationContext.runtimeArtifactPublications
       const companyId = await getProjectCompanyId(projectId)
+      if (!companyId) {
+        throw Object.assign(new Error('Baseline template generation requires project company scope for duration learning lineage.'), {
+          code: 'BASELINE_TEMPLATE_DURATION_LEARNING_COMPANY_SCOPE_REQUIRED',
+        })
+      }
+      await recordWbsTemplateGenerationRuntimeConsumption({
+        queryExec: durationLearningRuntimeQueryExec,
+        projectId,
+        generation: generated,
+        runtimeArtifactPublications,
+        inputTaskIds: generated.rows
+          .map((row) => tempIdMap.get(row.clientRowId))
+          .filter((id): id is string => Boolean(id)),
+      })
+      await persistDurationLearningRuntimeConsumptions({
+        queryExec: durationLearningRuntimeQueryExec,
+        build: {
+          companyId,
+          projectId,
+          consumerKey: 'wbsTemplateGenerationService',
+          consumerSurface: 'baseline_commit',
+          generationBatchId: generated.generationBatchId,
+          templateIds: generated.templateIds,
+          rows: generated.rows,
+          runtimeArtifactPublications,
+          subjectType: 'baseline_item',
+          subjectIdByClientRowId: tempIdMap,
+        },
+      })
       await recordWbsTemplateCandidateEvent({
         companyId,
         projectId,

@@ -266,12 +266,12 @@ describe('construction dependency replay calibration service', () => {
 
     const result = await collectAndPersistConstructionDependencyReplayCalibrationCandidates({
       companyId: '10000000-0000-4000-8000-000000000001',
-      projectIds: ['project-1', 'project-2'],
-      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows as T[],
+      projectIds: ['project-1'],
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows.filter((row) => row.project_id === 'project-1') as T[],
       queryExec,
     })
 
-    expect(result.report.summary.comparableActualDateCount).toBe(2)
+    expect(result.report.summary.comparableActualDateCount).toBe(1)
     const outcomeInsert = queryExecCalls.find((call) =>
       call.sql.toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
     )
@@ -282,14 +282,14 @@ describe('construction dependency replay calibration service', () => {
     expect(outcomeInsert?.sql.toLowerCase()).not.toContain('insert into public.task_dependencies')
     expect(outcomeInsert?.sql.toLowerCase()).not.toContain('update public.task_dependencies')
     expect(outcomeInsert?.params).toEqual([
-      'dependency-rule-candidate:cross_item_workflow:prefab_factory_to_site_hoist_handoff:10000000-0000-4000-8000-000000000001:multi-project',
+      'dependency-rule-candidate:cross_item_workflow:prefab_factory_to_site_hoist_handoff:10000000-0000-4000-8000-000000000001:project-1',
       'dependency_rule_candidate',
       'weak',
       'construction_dependency_replay_calibration:cross_item_workflow:prefab_factory_to_site_hoist_handoff',
       'project',
       'project_business_outcome_writer',
       '10000000-0000-4000-8000-000000000001',
-      null,
+      'project-1',
       null,
       expect.objectContaining({
         source: 'construction_dependency_replay_calibration',
@@ -298,8 +298,8 @@ describe('construction dependency replay calibration service', () => {
         predecessor_stable_code: 'PFB-00-01-02-P01',
         successor_stable_code: 'PFB-01-01-03-P01',
         dependency_type: 'FS',
-        sample_count: 2,
-        project_count: 2,
+        sample_count: 1,
+        project_count: 1,
         conflict_count: 0,
         duration_day_unit: 'calendar_day_no_construction_calendar_context',
         durationDayUnit: 'calendar_day_no_construction_calendar_context',
@@ -311,6 +311,59 @@ describe('construction dependency replay calibration service', () => {
       false,
       false,
     ])
+  })
+
+  it('rejects a cross-project replay report before candidate or outcome mutation', async () => {
+    const rows = [
+      {
+        id: 'dep-project-1',
+        project_id: 'project-1',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'cross_item_workflow',
+        metadata: { seedRuleId: 'prefab_factory_to_site_hoist_handoff' },
+        predecessor_task_id: 'task-predecessor-1',
+        predecessor_task_code: 'PFB-00-01-02-P01',
+        predecessor_title: 'prefab factory release',
+        predecessor_actual_end_date: '2026-06-01',
+        successor_task_id: 'task-successor-1',
+        successor_task_code: 'PFB-01-01-03-P01',
+        successor_title: 'prefab site hoist start',
+        successor_actual_start_date: '2026-06-04',
+      },
+      {
+        id: 'dep-project-2',
+        project_id: 'project-2',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'cross_item_workflow',
+        metadata: { seedRuleId: 'prefab_factory_to_site_hoist_handoff' },
+        predecessor_task_id: 'task-predecessor-2',
+        predecessor_task_code: 'PFB-00-01-02-P02',
+        predecessor_title: 'prefab factory release',
+        predecessor_actual_end_date: '2026-07-01',
+        successor_task_id: 'task-successor-2',
+        successor_task_code: 'PFB-01-01-03-P02',
+        successor_title: 'prefab site hoist start',
+        successor_actual_start_date: '2026-07-05',
+      },
+    ]
+    const queryExecCalls: Array<{ sql: string; params: unknown[] }> = []
+
+    await expect(collectAndPersistConstructionDependencyReplayCalibrationCandidates({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectIds: ['project-1'],
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows as T[],
+      queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+        queryExecCalls.push({ sql, params })
+        return [] as T[]
+      },
+    })).rejects.toMatchObject({
+      code: 'DEPENDENCY_REPLAY_PROJECT_SCOPE_MISMATCH',
+      projectId: 'project-1',
+    })
+
+    expect(queryExecCalls).toEqual([])
   })
 
   it('uses construction production days and records calendar provenance for dependency replay lag evidence', async () => {
@@ -386,6 +439,7 @@ describe('construction dependency replay calibration service', () => {
       metadata: {
         seedRuleId: 'prefab_factory_to_site_hoist_handoff',
         publicationKey,
+        artifactKey: 'dependency-rule-artifact-v2',
         publicationStage: 'canary',
         selectionBasis: 'project_canary',
       },
@@ -414,6 +468,15 @@ describe('construction dependency replay calibration service', () => {
     expect(outcome?.params[8]).toBe(publicationKey)
     expect(outcome?.params[9]).toEqual(expect.objectContaining({
       runtime_publication_key: publicationKey,
+      runtime_publication_artifact_key: 'dependency-rule-artifact-v2',
+      runtime_publication_input_task_ids: [
+        'predecessor-0',
+        'predecessor-1',
+        'predecessor-2',
+        'successor-0',
+        'successor-1',
+        'successor-2',
+      ],
       runtime_publication_stage: 'canary',
       runtime_publication_selection_basis: 'project_canary',
     }))
@@ -551,10 +614,10 @@ describe('construction dependency replay calibration service', () => {
       dependencyOutcomeEventRecorded: true,
       approvedCandidateEventIds: ['dependency-candidate-1', 'dependency-candidate-1'],
       dependencyRuleVersionId: 'dependency-rule-version-v2',
-      runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+      runtimePublicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-dependency-rule-1',
-      runtimeConsumerPublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
-      rollbackTarget: 'dependency_rule_runtime:dependency-rule-version-v1',
+      runtimeConsumerPublicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
+      rollbackTarget: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v1',
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
       releaseExitApproved: true,
       impactMonitoringReady: true,
@@ -579,8 +642,8 @@ describe('construction dependency replay calibration service', () => {
     expect(readiness.dependencyRuleLineage).toEqual({
       assetType: 'dependency_rule_candidate',
       dependencyRuleVersionId: 'dependency-rule-version-v2',
-      runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
-      rollbackTarget: 'dependency_rule_runtime:dependency-rule-version-v1',
+      runtimePublicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
+      rollbackTarget: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v1',
       approvedCandidateEventIds: ['dependency-candidate-1'],
       sourceDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
       matchedSeedCodes: ['prefab_factory_to_site_hoist_handoff'],
@@ -646,19 +709,20 @@ describe('construction dependency replay calibration service', () => {
       }],
       sourceRows: [
         {
-          sourceTable: 'construction_dependency_rule_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
-            dependency_rule_version_id: 'dependency-rule-version-v2',
-            runtime_publication_status: 'runtime_published',
-            dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:armed',
-            },
+            publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
+            asset_key: 'dependency_rule_candidate',
+            artifact_key: 'dependency-rule-version-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:dependency-rule-version-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
           },
         },
@@ -668,8 +732,12 @@ describe('construction dependency replay calibration service', () => {
             id: 'consumer-dependency-rule-1',
             asset_key: 'dependency_rule_candidate',
             consumer_key: 'scheduleAccelerationService',
-            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
+            publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'dependency-rule-version-v2' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
           },
@@ -681,7 +749,7 @@ describe('construction dependency replay calibration service', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'dependency_rule_candidate',
-              publicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+              publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
             },
             actual_context: {
               assetKey: 'dependency_rule_candidate',
@@ -705,17 +773,17 @@ describe('construction dependency replay calibration service', () => {
     }))
     expect(readiness.dependencyRuleLineage).toEqual(expect.objectContaining({
       dependencyRuleVersionId: 'dependency-rule-version-v2',
-      runtimePublicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
-      rollbackTarget: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+      runtimePublicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
+      rollbackTarget: 'rollback:duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2:rollback_verified',
       approvedCandidateEventIds: ['dependency-candidate-1'],
       sourceDependencyIds: ['dep-1', 'dep-2', 'dep-3'],
     }))
     expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
       productionSampleEvidenceRef: 'network_outcomes:dependency-rule-outcome-1',
-      publicationExecutionRef: 'dependency_rule_runtime:dependency-rule-version-v2',
+      publicationExecutionRef: 'duration_learning_runtime_publications:duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-dependency-rule-1',
-      impactMonitoringEvidenceRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:armed',
-      rollbackDrillEvidenceRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+      impactMonitoringEvidenceRef: 'impact_monitoring:duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2:monitoring_passed',
+      rollbackDrillEvidenceRef: 'rollback:duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2:rollback_verified',
       accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-dependency-rule-1',
     }))
     expect(readiness.productionLineage.rejectedRows).toEqual([])
@@ -778,20 +846,34 @@ describe('construction dependency replay calibration service', () => {
       }],
       sourceRows: [
         {
-          sourceTable: 'construction_dependency_rule_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
-            dependency_rule_version_id: 'dependency-rule-version-v2',
-            runtime_publication_status: 'runtime_published',
-            dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:armed',
-            },
+            publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v2',
+            asset_key: 'dependency_rule_candidate',
+            artifact_key: 'dependency-rule-version-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:dependency-rule-version-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
+          },
+        },
+        {
+          sourceTable: 'duration_learning_runtime_publications',
+          row: {
+            publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v1',
+            asset_key: 'dependency_rule_candidate',
+            artifact_key: 'dependency-rule-version-v1',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:dependency-rule-version-v1'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'failed',
           },
         },
         {
@@ -800,8 +882,12 @@ describe('construction dependency replay calibration service', () => {
             id: 'consumer-dependency-rule-1',
             asset_key: 'dependency_rule_candidate',
             consumer_key: 'scheduleAccelerationService',
-            publication_key: 'dependency_rule_runtime:dependency-rule-version-v1',
+            publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v1',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'dependency-rule-version-v1' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:dependency_rule_candidate:dependency-rule-version-v1',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
           },

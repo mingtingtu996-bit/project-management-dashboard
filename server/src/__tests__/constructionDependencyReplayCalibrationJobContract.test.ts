@@ -23,17 +23,21 @@ describe('constructionDependencyReplayCalibrationJob contract', () => {
     expect(jobsRouteSource).toMatch(/result:\s+await constructionDependencyReplayCalibrationJob\.executeNow\((?:projectScope)?\)/)
   })
 
-  it('keeps L3/L4 replay governance report-only and separate from seed or task-dependency mutation', () => {
+  it('runs the real candidate and network-outcome producer while keeping seed and task-dependency facts immutable', () => {
     const jobSource = readServerFile('src', 'jobs', 'constructionDependencyReplayCalibrationJob.ts')
     const serviceSource = readServerFile('src', 'services', 'constructionDependencyReplayCalibrationService.ts')
 
     expect(jobSource).toContain('collectConstructionDependencyReplayCalibrationReport')
+    expect(jobSource).toContain('persistConstructionDependencyReplayCalibrationCandidatesFromReport')
+    expect(jobSource).toContain('producerOutcomeCount')
     expect(jobSource).toContain('seedWritesBlocked')
     expect(jobSource).toContain('taskDependencyWritesBlocked')
     expect(jobSource).not.toContain('createAlgorithmSeedUpgradeCandidate')
     expect(jobSource).not.toContain('autoGovernAlgorithmSeedUpgradeCandidate')
     expect(jobSource).not.toContain('INSERT INTO task_dependencies')
     expect(jobSource).not.toContain('UPDATE task_dependencies')
+    expect(serviceSource).toContain('INSERT INTO public.duration_plan_network_outcomes')
+    expect(serviceSource).toContain('createAndPersistAlgorithmAssetCandidateEvent')
     expect(serviceSource).toContain("seedWritePolicy: 'never_write_seed_from_replay'")
     expect(serviceSource).toContain("taskDependencyWritePolicy: 'never_write_task_dependencies_from_replay'")
   })

@@ -57,6 +57,7 @@ export interface DurationLearningRuntimeCandidateProposal {
   realOutcomeCount?: number
   replayCaseCount?: number
   observationWindowDays?: number
+  productionDaySamples?: number[]
   conflictCount: number
   replayPassed: boolean
   blockingReasons?: string[]
@@ -606,13 +607,16 @@ function aggregateProposal(
     realOutcomeCount: proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.realOutcomeCount), 0),
     replayCaseCount: proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.replayCaseCount), 0),
     observationWindowDays: Math.max(...proposals.map((proposal) => nonNegativeInteger(proposal.observationWindowDays)), 0),
+    productionDaySamples: proposals.flatMap((proposal) => (proposal.productionDaySamples ?? [])
+      .map(positiveNumber)
+      .filter((value): value is number => value !== null)),
     conflictCount,
     replayPassed: proposals.every((proposal) => proposal.replayPassed),
     blockingReasons: uniqueTexts([
       ...proposals.flatMap((proposal) => proposal.blockingReasons ?? []),
       ...aggregateNodeSetBlockingReasons(proposals),
     ]),
-    policyEvaluationRequired: proposals.some((proposal) => proposal.policyEvaluationRequired),
+    policyEvaluationRequired: true,
     automationEvidence: {
       maeBefore: weightedAverage(proposals, 'maeBefore'),
       maeAfter: weightedAverage(proposals, 'maeAfter'),
@@ -624,7 +628,17 @@ function aggregateProposal(
       exceptionalConflict: proposals.some((proposal) => proposal.automationEvidence?.exceptionalConflict === true),
     },
   }
-  return aggregate.policyEvaluationRequired ? withAutomationDecision(aggregate) : aggregate
+  return withAutomationDecision(aggregate)
+}
+
+function pooledPercentile(values: readonly number[], percentileValue: number) {
+  const sorted = values
+    .map(positiveNumber)
+    .filter((value): value is number => value !== null)
+    .sort((left, right) => left - right)
+  if (sorted.length === 0) return null
+  const index = Math.max(0, Math.ceil(sorted.length * percentileValue) - 1)
+  return sorted[Math.min(index, sorted.length - 1)]
 }
 
 function weightedPayloadNumber(
@@ -717,9 +731,12 @@ function aggregatePayloadNodes(proposals: DurationLearningRuntimeCandidatePropos
 function aggregateRuntimePayload(proposals: DurationLearningRuntimeCandidateProposal[]) {
   const first = proposals[0]
   if (first.assetKey === 'base_duration_benchmark') {
+    const productionDaySamples = proposals.flatMap((proposal) => proposal.productionDaySamples ?? [])
     return {
-      p50Days: weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
-      p80Days: weightedPayloadNumber(proposals, ['p80Days', 'p80_days'])
+      p50Days: pooledPercentile(productionDaySamples, 0.5)
+        ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
+      p80Days: pooledPercentile(productionDaySamples, 0.8)
+        ?? weightedPayloadNumber(proposals, ['p80Days', 'p80_days'])
         ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
       durationDayBasis: 'construction_production_day',
     }
@@ -950,6 +967,9 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
     realOutcomeCount: nonNegativeInteger(metadata.realOutcomeCount ?? metadata.real_outcome_count ?? row.sample_count),
     replayCaseCount: nonNegativeInteger(metadata.replayCaseCount ?? metadata.replay_case_count ?? row.sample_count),
     observationWindowDays: nonNegativeInteger(metadata.observationWindowDays ?? metadata.observation_window_days),
+    productionDaySamples: list(metadata.productionDaySamples ?? metadata.production_day_samples)
+      .map(positiveNumber)
+      .filter((value): value is number => value !== null),
     conflictCount: nonNegativeInteger(metadata.conflictCount ?? metadata.conflict_count),
     replayPassed: metadata.replayPassed !== false && metadata.replay_passed !== false,
     blockingReasons: text(row.duration_day_basis) === 'construction_production_day'
@@ -1989,39 +2009,124 @@ function durationLearningRuntimeMonitoringCollectorSql() {
        left join lateral (
          select count(*) filter (where source.observation_status = 'observed') as observed_count,
                 count(*) filter (where source.observation_status = 'rejected') as rejected_observation_count
-           from public.runtime_consumer_observations source
-          where source.publication_key = publication.publication_key
-            and source.observed_at >= publication.monitoring_started_at
+           from (
+             select source.observation_status,
+                    source.observed_at
+               from public.runtime_consumer_observations source
+              where source.publication_key = publication.publication_key
+                and source.asset_key = publication.asset_key
+                and source.observation_context ->> 'artifactKey' = publication.artifact_key
+                and source.source_evidence_refs ? (
+                  'duration_learning_runtime_publications:' || publication.publication_key
+                )
+             union all
+             select 'observed'::text as observation_status,
+                    source.consumed_at as observed_at
+               from public.duration_learning_runtime_consumptions source
+              where source.publication_key = publication.publication_key
+                and source.asset_key = publication.asset_key
+                and source.artifact_key = publication.artifact_key
+                and source.source_evidence_refs ? (
+                  'duration_learning_runtime_publications:' || publication.publication_key
+                )
+           ) source
+          where source.observed_at >= publication.monitoring_started_at
        ) observation on true
        left join lateral (
-         select count(*) filter (where measured.outcome_status = 'accepted') as accepted_outcome_count,
-                count(*) filter (where measured.outcome_status in ('weak', 'rejected')) as weak_or_rejected_outcome_count
-           from (
-             select source.outcome_status
-               from public.duration_plan_network_outcomes source
-              where source.publication_key = publication.publication_key
-                and source.observed_at >= publication.monitoring_started_at
-             union all
-             select case when exists (
+         select count(*) filter (where source.outcome_status = 'accepted') as accepted_outcome_count,
+                count(*) filter (where source.outcome_status in ('weak', 'rejected')) as weak_or_rejected_outcome_count
+           from public.duration_plan_network_outcomes source
+          where source.publication_key = publication.publication_key
+            and source.asset_key = publication.asset_key
+            and source.observed_at >= publication.monitoring_started_at
+            and (
+              publication.asset_key not in (
+                'special_work_duration_seed',
+                'wbs_reference_days',
+                'dependency_rule_candidate',
+                'critical_path_rule_candidate'
+              )
+              or (
+                source.metadata ->> 'runtime_publication_key' = publication.publication_key
+                and source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key
+                and jsonb_typeof(source.metadata -> 'runtime_publication_input_task_ids') = 'array'
+                and jsonb_array_length(source.metadata -> 'runtime_publication_input_task_ids') > 0
+                and (
+                  (
+                    (
+                      publication.asset_key = 'special_work_duration_seed'
+                      or publication.asset_key = 'critical_path_rule_candidate'
+                    )
+                    and exists (
                       select 1
-                        from jsonb_array_elements_text(
-                          coalesce(observation.observation_context -> 'appliedTaskIds', '[]'::jsonb)
-                        ) watched(task_id)
-                        join jsonb_array_elements_text(
-                          coalesce(outcome.metadata -> 'auto_task_ids', '[]'::jsonb)
-                        ) critical(task_id)
-                          on critical.task_id = watched.task_id
-                    ) then 'accepted' else 'weak' end as outcome_status
-               from public.runtime_consumer_observations observation
-               join public.duration_plan_network_outcomes outcome
-                 on outcome.asset_key = 'critical_path_rule_candidate'
-                and outcome.project_id::text = observation.observation_context ->> 'projectId'
-                and outcome.observed_at >= observation.observed_at
-              where publication.asset_key = 'critical_path_rule_candidate'
-                and observation.publication_key = publication.publication_key
-                and observation.observation_status = 'observed'
-                and outcome.publication_key is null
-           ) measured
+                        from public.runtime_consumer_observations exact_observation
+                       where exact_observation.publication_key = publication.publication_key
+                         and exact_observation.asset_key = publication.asset_key
+                         and exact_observation.observation_status = 'observed'
+                         and exact_observation.observed_at >= publication.monitoring_started_at
+                         and exact_observation.observation_context ->> 'artifactKey' = publication.artifact_key
+                         and exact_observation.observation_context ->> 'projectId' = source.project_id::text
+                         and exact_observation.observation_context -> 'inputTaskIds'
+                           = source.metadata -> 'runtime_publication_input_task_ids'
+                         and exact_observation.source_evidence_refs ? (
+                           'duration_learning_runtime_publications:' || publication.publication_key
+                         )
+                    )
+                  )
+                  or (
+                    publication.asset_key in ('wbs_reference_days', 'dependency_rule_candidate')
+                    and exists (
+                      select 1
+                        from (
+                          select coalesce(
+                                   jsonb_agg(consumed_input.task_id order by consumed_input.task_id),
+                                   '[]'::jsonb
+                                 ) as input_task_ids
+                            from (
+                              select distinct consumption_input.task_id
+                                from public.duration_learning_runtime_consumptions exact_consumption
+                                cross join lateral jsonb_array_elements_text(
+                                  case
+                                    when publication.asset_key = 'dependency_rule_candidate'
+                                    then coalesce(
+                                      exact_consumption.consumption_context -> 'inputTaskIds',
+                                      jsonb_build_array(exact_consumption.task_id::text)
+                                    )
+                                    else jsonb_build_array(exact_consumption.task_id::text)
+                                  end
+                                ) as consumption_input(task_id)
+                               where exact_consumption.publication_key = publication.publication_key
+                                 and exact_consumption.asset_key = publication.asset_key
+                                 and exact_consumption.artifact_key = publication.artifact_key
+                                 and exact_consumption.company_id = source.company_id
+                                 and exact_consumption.project_id = source.project_id
+                                 and exact_consumption.consumed_at >= publication.monitoring_started_at
+                                 and exact_consumption.source_evidence_refs ? (
+                                   'duration_learning_runtime_publications:' || publication.publication_key
+                                 )
+                                 and consumption_input.task_id is not null
+                                 and consumption_input.task_id <> ''
+                            ) consumed_input
+                        ) exact_consumed
+                        cross join lateral (
+                          select coalesce(
+                                   jsonb_agg(outcome_input.task_id order by outcome_input.task_id),
+                                   '[]'::jsonb
+                                 ) as input_task_ids
+                            from (
+                              select distinct metadata_input.task_id
+                                from jsonb_array_elements_text(
+                                  source.metadata -> 'runtime_publication_input_task_ids'
+                                ) as metadata_input(task_id)
+                            ) outcome_input
+                        ) exact_outcome
+                       where exact_consumed.input_task_ids = exact_outcome.input_task_ids
+                         and jsonb_array_length(exact_consumed.input_task_ids) > 0
+                    )
+                  )
+                )
+              )
+            )
        ) network on true
        left join lateral (
          select count(*) as accuracy_sample_count,
@@ -2042,6 +2147,19 @@ function durationLearningRuntimeMonitoringCollectorSql() {
                 source.prediction_context ->> 'publication_key'
               )
               or source.prediction_context -> 'runtimePublicationKeys' ? publication.publication_key
+              or exists (
+                select 1
+                  from jsonb_array_elements(
+                    coalesce(
+                      source.actual_context -> 'durationLearningRuntimeConsumptions',
+                      source.actual_context -> 'duration_learning_runtime_consumptions',
+                      '[]'::jsonb
+                    )
+                  ) consumption
+                 where consumption ->> 'publicationKey' = publication.publication_key
+                   and consumption ->> 'assetKey' = publication.asset_key
+                   and consumption ->> 'artifactKey' = publication.artifact_key
+              )
             )
        ) accuracy on true
       order by selected.collector_priority, publication.publication_key`
@@ -2152,10 +2270,8 @@ function proposalCanEnterCanary(proposal: DurationLearningRuntimeCandidatePropos
     && proposal.sourceEvidenceRefs.length > 0
     && Object.keys(proposal.runtimePayload).length > 0
     && (proposal.blockingReasons?.length ?? 0) === 0
-    && (
-      !proposal.policyEvaluationRequired
-      || proposal.automationDecision?.autoPromotionAllowed === true
-    )
+    && proposal.policyEvaluationRequired === true
+    && proposal.automationDecision?.autoPromotionAllowed === true
 }
 
 function publicationKeyFor(proposal: DurationLearningRuntimeCandidateProposal) {

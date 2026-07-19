@@ -250,89 +250,88 @@ export function buildV14223DomainReleaseRuntimeClosureMatrix(): DomainReleaseRun
       ]),
 
       verified('standard_work_duration_seed_runtime', 'asset_type_domain_writer', [
-        'server/src/services/standardWorkDurationSeedPublicationService.ts writes algorithm_seed_versions / algorithm_seed_records / algorithm_seed_import_logs only',
-        'server/src/__tests__/standardWorkDurationSeedPublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts publishes standard_work_duration_seed through the canonical writer',
+        'server/src/services/durationLearningRuntimePublicationService.ts writes duration_learning_runtime_publications only',
       ]),
       verified('standard_work_duration_seed_runtime', 'runtime_consumer_verification', [
-        'server/src/services/durationSuggestionService.ts records runtime consumer observations for active standard work duration seed versions',
+        'server/src/services/durationSuggestionService.ts resolves canonical standard_work_duration_seed publications and records trusted consumption',
         'server/src/__tests__/durationSuggestionService.test.ts',
       ]),
       verified('standard_work_duration_seed_runtime', 'impact_monitoring', [
-        'server/src/services/standardWorkDurationSeedPublicationService.ts persists readiness impact evidence into seed version validation and import logs',
-        'server/src/__tests__/standardWorkDurationSeedPublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts binds exact publication consumption and outcome metrics before promotion',
+        'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       ]),
       verified('standard_work_duration_seed_runtime', 'release_record', [
-        'server/src/services/standardWorkDurationSeedPublicationService.ts publishes current standard_work_duration algorithm_seed_versions rows',
-        'server/src/__tests__/standardWorkDurationSeedPublicationService.test.ts',
+        'server/migrations/315_duration_learning_runtime_publications.sql',
+        'server/src/__tests__/durationLearningRuntimePublicationMigrationContract.test.ts',
       ]),
       verified('standard_work_duration_seed_runtime', 'rollback_writer_and_target', [
-        'server/src/services/standardWorkDurationSeedPublicationService.ts restores the previous standard work duration seed version without rewriting facts',
-        'server/src/__tests__/standardWorkDurationSeedPublicationService.test.ts',
+        'server/src/services/durationLearningRuntimePublicationService.ts atomically rolls back and restores previous_publication_key',
+        'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
       ]),
 
       verified('wbs_template_runtime', 'asset_type_domain_writer', [
-        'server/src/services/wbsTemplateRuntimePublicationService.ts writes wbs_template_runtime_publications and events',
-        'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts publishes special_work_duration_seed and wbs_reference_days through the canonical writer',
+        'server/src/services/durationLearningRuntimePublicationService.ts writes duration_learning_runtime_publications only',
       ]),
       verified('wbs_template_runtime', 'runtime_consumer_verification', [
-        'server/src/services/wbsTemplateRuntimePublicationService.ts resolves only runtime_published scoped WBS template publications',
-        'server/src/services/wbsTemplateGenerationService.ts consumes governed T2 rhythm and learned template-duration assets before the canonical task/dependency commit',
-        'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+        'server/src/services/wbsTemplateGenerationService.ts resolves canonical scoped WBS learning publications before task/dependency commit',
+        'server/src/services/durationLearningRuntimeConsumptionService.ts records only trusted committed consumption',
         'server/src/__tests__/wbsTemplateGenerationService.test.ts',
       ]),
       verified('wbs_template_runtime', 'impact_monitoring', [
-        'server/src/services/wbsTemplateRuntimePublicationService.ts records impact monitoring payloads on runtime publication events',
-        'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts monitors exact publication, artifact, input, and committed consumption lineage',
+        'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       ]),
       verified('wbs_template_runtime', 'release_record', [
-        'server/migrations/203_v14223_wbs_template_runtime_publications.sql',
-        'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+        'server/migrations/315_duration_learning_runtime_publications.sql',
+        'server/src/__tests__/durationLearningRuntimePublicationMigrationContract.test.ts',
       ]),
       verified('wbs_template_runtime', 'rollback_writer_and_target', [
-        'server/src/services/wbsTemplateRuntimePublicationService.ts rolls back only scoped WBS template runtime publication rows',
-        'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimePublicationService.ts atomically rolls back and restores previous_publication_key',
+        'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
       ]),
 
       verified('construction_dependency_rule_runtime', 'asset_type_domain_writer', [
-        'server/src/services/constructionDependencyRuleRuntimePublicationService.ts writes construction_dependency_rule_runtime_publications and events',
-        'server/src/__tests__/constructionDependencyRuleRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts publishes dependency_rule_candidate through the canonical writer',
+        'server/src/services/durationLearningRuntimePublicationService.ts writes duration_learning_runtime_publications only',
       ]),
       verified('construction_dependency_rule_runtime', 'runtime_consumer_verification', [
-        'server/src/services/constructionDependencyRuleRuntimePublicationService.ts resolves only runtime_published dependency rule publications',
-        'server/src/__tests__/constructionDependencyRuleRuntimePublicationService.test.ts',
+        'server/src/services/wbsTemplateGenerationService.ts resolves canonical scoped dependency_rule_candidate publications',
+        'server/src/services/durationLearningRuntimeConsumptionService.ts records exact dependency publication and artifact lineage',
       ]),
       verified('construction_dependency_rule_runtime', 'impact_monitoring', [
-        'server/src/services/constructionDependencyRuleRuntimePublicationService.ts records report-only replay and runtime event monitoring payloads',
-        'server/src/__tests__/constructionDependencyRuleRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts monitors dependency outcomes against exact publication consumption',
+        'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       ]),
       verified('construction_dependency_rule_runtime', 'release_record', [
-        'server/migrations/202_v14223_dependency_rule_runtime_publications.sql',
-        'server/src/__tests__/constructionDependencyRuleRuntimePublicationService.test.ts',
+        'server/migrations/315_duration_learning_runtime_publications.sql',
+        'server/src/__tests__/durationLearningRuntimePublicationMigrationContract.test.ts',
       ]),
       verified('construction_dependency_rule_runtime', 'rollback_writer_and_target', [
-        'server/src/services/constructionDependencyRuleRuntimePublicationService.ts rolls back only matching dependency rule runtime publication rows',
-        'server/src/__tests__/constructionDependencyRuleRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimePublicationService.ts atomically rolls back and restores previous_publication_key',
+        'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
       ]),
 
       verified('critical_path_rule_runtime', 'asset_type_domain_writer', [
-        'server/src/services/criticalPathRuleRuntimePublicationService.ts writes critical-path scoped construction_dependency_rule_runtime_publications and events only',
-        'server/src/__tests__/criticalPathRuleRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts publishes critical_path_rule_candidate through the canonical writer',
+        'server/src/services/durationLearningRuntimePublicationService.ts writes duration_learning_runtime_publications only',
       ]),
       verified('critical_path_rule_runtime', 'runtime_consumer_verification', [
-        'server/src/services/criticalPathRuleRuntimePublicationService.ts resolves only runtime_published critical_path_rule_runtime publications',
-        'server/src/__tests__/criticalPathRuleRuntimePublicationService.test.ts',
+        'server/src/services/projectCriticalPathService.ts resolves canonical critical_path_rule_candidate publications and records exact inputs',
+        'server/src/services/durationLearningRuntimeConsumptionService.ts records exact publication and artifact lineage',
       ]),
       verified('critical_path_rule_runtime', 'impact_monitoring', [
-        'server/src/services/criticalPathRuleRuntimePublicationService.ts records critical-path impact monitoring payloads on runtime publication events',
-        'server/src/__tests__/criticalPathRuleRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimeLifecycleService.ts attributes critical-path outcomes to exact publication, artifact, and CPM input lineage',
+        'server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts',
       ]),
       verified('critical_path_rule_runtime', 'release_record', [
-        'server/migrations/202_v14223_dependency_rule_runtime_publications.sql',
-        'server/src/__tests__/criticalPathRuleRuntimePublicationService.test.ts',
+        'server/migrations/315_duration_learning_runtime_publications.sql',
+        'server/src/__tests__/durationLearningRuntimePublicationMigrationContract.test.ts',
       ]),
       verified('critical_path_rule_runtime', 'rollback_writer_and_target', [
-        'server/src/services/criticalPathRuleRuntimePublicationService.ts rolls back only matching critical-path rule runtime publication rows',
-        'server/src/__tests__/criticalPathRuleRuntimePublicationService.test.ts',
+        'server/src/services/durationLearningRuntimePublicationService.ts atomically rolls back and restores previous_publication_key',
+        'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
       ]),
 
       verified('metric_runtime', 'asset_type_domain_writer', [

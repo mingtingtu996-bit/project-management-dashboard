@@ -17,11 +17,6 @@ import {
   type RollbackAlgorithmAssetForecastResidualOverlayRuntimePublicationResult,
 } from './algorithmAssetGovernancePersistenceService.js'
 import {
-  executeConstructionDependencyRuleRuntimeRollback,
-  type ConstructionDependencyRuleRuntimePublicationQueryExec,
-  type ConstructionDependencyRuleRuntimeRollbackResult,
-} from './constructionDependencyRuleRuntimePublicationService.js'
-import {
   buildConstructionOrganizationPlanNetworkManualConflictReviewDecision,
   buildConstructionOrganizationPlanNetworkManualReviewHandoff,
   buildConstructionOrganizationPlanNetworkManualReviewApproval,
@@ -70,10 +65,9 @@ import {
   type RecordDurationRuntimeConsumerFacadeArtifactsInput,
 } from './durationRuntimeConsumerObservationAdapterService.js'
 import {
-  executeWbsTemplateRuntimeRollback,
-  type WbsTemplateRuntimePublicationQueryExec,
-  type WbsTemplateRuntimeRollbackResult,
-} from './wbsTemplateRuntimePublicationService.js'
+  rollbackDurationLearningRuntimePublication,
+  type DurationLearningRuntimePublicationQueryExec,
+} from './durationLearningRuntimePublicationService.js'
 import {
   publishApprovedAlgorithmSeedOverride,
   type AlgorithmSeedOverrideReleaseExecutionInput,
@@ -145,22 +139,13 @@ export type AlgorithmAssetGovernanceWorkbenchOperationDependencies = {
     rollbackTarget: string
     reason: string
   }) => Promise<RollbackAlgorithmAssetColdStartBaselineRuntimePublicationResult>
-  executeWbsTemplateRuntimeRollback?: (input: {
-    queryExec?: WbsTemplateRuntimePublicationQueryExec
-    companyId?: string
-    projectId?: string
-    sourcePublicationKey: string
-    rollbackTarget: string
-    reason?: string
-    executedAt?: string
-  }) => Promise<WbsTemplateRuntimeRollbackResult>
-  executeConstructionDependencyRuleRuntimeRollback?: (input: {
-    queryExec?: ConstructionDependencyRuleRuntimePublicationQueryExec
-    sourcePublicationKey: string
-    rollbackTarget: string
-    reason?: string
-    executedAt?: string
-  }) => Promise<ConstructionDependencyRuleRuntimeRollbackResult>
+  rollbackDurationLearningRuntimePublication?: (input: {
+    queryExec?: DurationLearningRuntimePublicationQueryExec
+    publicationKey: string
+    expectedPreviousPublicationKey: string
+    reason: string
+    rolledBackAt?: string
+  }) => Promise<Awaited<ReturnType<typeof rollbackDurationLearningRuntimePublication>>>
   executeConstructionOrganizationPlanNetworkManualReviewHandoff?: (input: {
     draft: ConstructionOrganizationPlanNetworkDraft
     companyId?: string | null
@@ -300,8 +285,7 @@ const LEARNABLE_PARAMETER_WRITER = 'algorithmAssetLearnableParameterReleaseExecu
 const ALGORITHM_SEED_OVERRIDE_RUNTIME_WRITER = 'algorithmSeedOverrideReleaseExecutionService.publishApprovedAlgorithmSeedOverride'
 const FORECAST_RESIDUAL_OVERLAY_ROLLBACK_WRITER = 'algorithmAssetForecastResidualOverlayService.rollbackRuntimePublication'
 const COLD_START_BASELINE_ROLLBACK_WRITER = 'algorithmAssetColdStartBaselineService.rollbackRuntimePublication'
-const WBS_TEMPLATE_RUNTIME_ROLLBACK_WRITER = 'wbsTemplateRuntimePublicationService.executeWbsTemplateRuntimeRollback'
-const CONSTRUCTION_DEPENDENCY_RULE_RUNTIME_ROLLBACK_WRITER = 'constructionDependencyRuleRuntimePublicationService.executeConstructionDependencyRuleRuntimeRollback'
+const DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER = 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication'
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_MANUAL_REVIEW_WRITER = 'constructionOrganizationPlanNetworkDraftService.manualReviewHandoff'
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_MANUAL_CONFLICT_REVIEW_WRITER = 'constructionOrganizationPlanNetworkDraftService.manualConflictReview'
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_MANUAL_APPROVAL_WRITER = 'constructionOrganizationPlanNetworkDraftService.manualReviewApproval'
@@ -509,21 +493,31 @@ function coldStartBaselineRollbackReasons(input: AlgorithmAssetGovernanceWorkben
 }
 
 function wbsTemplateRuntimeRollbackReasons(input: AlgorithmAssetGovernanceWorkbenchOperationInput) {
-  const reasons = runtimeRollbackWriterReasons(input, WBS_TEMPLATE_RUNTIME_ROLLBACK_WRITER)
-  if (!normalizeText(input.sourcePublicationKey)) reasons.push('source_publication_key_required')
+  const reasons = runtimeRollbackWriterReasons(input, DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER)
+  const publicationKey = normalizeText(input.sourcePublicationKey)
+  if (!publicationKey) reasons.push('source_publication_key_required')
+  else if (
+    !publicationKey.startsWith('duration_learning_runtime:special_work_duration_seed:')
+    && !publicationKey.startsWith('duration_learning_runtime:wbs_reference_days:')
+  ) reasons.push('template_seed_runtime_publication_key_required')
   if (!normalizeText(input.companyId)) reasons.push('company_scope_required')
-  const hasRollbackDependency = Boolean(input.dependencies?.executeWbsTemplateRuntimeRollback || input.queryExec)
-  if (normalizeText(input.domainWriterKey) === WBS_TEMPLATE_RUNTIME_ROLLBACK_WRITER && !hasRollbackDependency) {
+  const hasRollbackDependency = Boolean(input.dependencies?.rollbackDurationLearningRuntimePublication || input.queryExec)
+  if (normalizeText(input.domainWriterKey) === DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER && !hasRollbackDependency) {
     reasons.push('domain_writer_dependency_required')
   }
   return reasons
 }
 
 function constructionDependencyRuleRuntimeRollbackReasons(input: AlgorithmAssetGovernanceWorkbenchOperationInput) {
-  const reasons = runtimeRollbackWriterReasons(input, CONSTRUCTION_DEPENDENCY_RULE_RUNTIME_ROLLBACK_WRITER)
-  if (!normalizeText(input.sourcePublicationKey)) reasons.push('source_publication_key_required')
-  const hasRollbackDependency = Boolean(input.dependencies?.executeConstructionDependencyRuleRuntimeRollback || input.queryExec)
-  if (normalizeText(input.domainWriterKey) === CONSTRUCTION_DEPENDENCY_RULE_RUNTIME_ROLLBACK_WRITER && !hasRollbackDependency) {
+  const reasons = runtimeRollbackWriterReasons(input, DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER)
+  const publicationKey = normalizeText(input.sourcePublicationKey)
+  if (!publicationKey) reasons.push('source_publication_key_required')
+  else if (
+    !publicationKey.startsWith('duration_learning_runtime:dependency_rule_candidate:')
+    && !publicationKey.startsWith('duration_learning_runtime:critical_path_rule_candidate:')
+  ) reasons.push('dependency_rule_runtime_publication_key_required')
+  const hasRollbackDependency = Boolean(input.dependencies?.rollbackDurationLearningRuntimePublication || input.queryExec)
+  if (normalizeText(input.domainWriterKey) === DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER && !hasRollbackDependency) {
     reasons.push('domain_writer_dependency_required')
   }
   return reasons
@@ -911,43 +905,22 @@ async function delegateColdStartBaselineRollback(
   })
 }
 
-async function delegateWbsTemplateRuntimeRollback(
+async function delegateDurationLearningRuntimeRollback(
   input: AlgorithmAssetGovernanceWorkbenchOperationInput,
 ) {
-  const writer = input.dependencies?.executeWbsTemplateRuntimeRollback
+  const writer = input.dependencies?.rollbackDurationLearningRuntimePublication
   const rollbackInput = {
-    queryExec: input.queryExec as WbsTemplateRuntimePublicationQueryExec | undefined,
-    companyId: normalizeText(input.companyId),
-    projectId: normalizeText(input.projectId) || undefined,
-    sourcePublicationKey: normalizeText(input.sourcePublicationKey),
-    rollbackTarget: normalizeText(input.rollbackTarget),
-    reason: normalizeText(input.rollbackReason) || undefined,
-    executedAt: input.executedAt,
+    queryExec: input.queryExec as DurationLearningRuntimePublicationQueryExec | undefined,
+    publicationKey: normalizeText(input.sourcePublicationKey),
+    expectedPreviousPublicationKey: normalizeText(input.rollbackTarget),
+    reason: normalizeText(input.rollbackReason),
+    rolledBackAt: input.executedAt,
   }
   if (writer) return writer(rollbackInput)
 
-  return executeWbsTemplateRuntimeRollback({
+  return rollbackDurationLearningRuntimePublication({
     ...rollbackInput,
-    queryExec: input.queryExec as WbsTemplateRuntimePublicationQueryExec,
-  })
-}
-
-async function delegateConstructionDependencyRuleRuntimeRollback(
-  input: AlgorithmAssetGovernanceWorkbenchOperationInput,
-) {
-  const writer = input.dependencies?.executeConstructionDependencyRuleRuntimeRollback
-  const rollbackInput = {
-    queryExec: input.queryExec as ConstructionDependencyRuleRuntimePublicationQueryExec | undefined,
-    sourcePublicationKey: normalizeText(input.sourcePublicationKey),
-    rollbackTarget: normalizeText(input.rollbackTarget),
-    reason: normalizeText(input.rollbackReason) || undefined,
-    executedAt: input.executedAt,
-  }
-  if (writer) return writer(rollbackInput)
-
-  return executeConstructionDependencyRuleRuntimeRollback({
-    ...rollbackInput,
-    queryExec: input.queryExec as ConstructionDependencyRuleRuntimePublicationQueryExec,
+    queryExec: input.queryExec as DurationLearningRuntimePublicationQueryExec,
   })
 }
 
@@ -1690,11 +1663,11 @@ export async function executeAlgorithmAssetGovernanceWorkbenchOperation(
       return blockedResult({ action, assetType, domainWriterKey, reasons: wbsReasons })
     }
 
-    const domainResult = await delegateWbsTemplateRuntimeRollback(input)
+    const domainResult = await delegateDurationLearningRuntimeRollback(input)
     return delegatedResult({
       action,
       assetType,
-      domainWriterKey: WBS_TEMPLATE_RUNTIME_ROLLBACK_WRITER,
+      domainWriterKey: DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER,
       domainResult,
     })
   }
@@ -1705,11 +1678,11 @@ export async function executeAlgorithmAssetGovernanceWorkbenchOperation(
       return blockedResult({ action, assetType, domainWriterKey, reasons: dependencyRuleReasons })
     }
 
-    const domainResult = await delegateConstructionDependencyRuleRuntimeRollback(input)
+    const domainResult = await delegateDurationLearningRuntimeRollback(input)
     return delegatedResult({
       action,
       assetType,
-      domainWriterKey: CONSTRUCTION_DEPENDENCY_RULE_RUNTIME_ROLLBACK_WRITER,
+      domainWriterKey: DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER,
       domainResult,
     })
   }

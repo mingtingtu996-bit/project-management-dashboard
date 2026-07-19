@@ -40,6 +40,14 @@ import {
   resolveT2ScheduleRuntimeRetirementTargetIdentity,
   validateT2ScheduleRuntimeRetirementBackup,
 } from './t2ScheduleRuntimeRetirementSupport.js'
+import {
+  DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_EXPLICIT_FLAG,
+  DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION,
+  assertDurationLearningLegacyRuntimeRetirementInvocation,
+  planDurationLearningLegacyRuntimeRetirementPendingPhase,
+  prepareDurationLearningLegacyRuntimeRetirementFromEnvironment,
+  verifyDurationLearningLegacyRuntimeRetirementReadback,
+} from './durationLearningLegacyRuntimeRetirementSupport.js'
 
 const { Client } = pg
 
@@ -49,6 +57,9 @@ const checksumReconciliationRegistryPath = resolve(migrationsDir, 'checksum-reco
 const rawArgs = process.argv.slice(2)
 const args = new Set(rawArgs)
 const isPlanMode = args.has('--plan') || args.has('--dry-run')
+const explicitDurationLearningRetirement = args.has(
+  DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_EXPLICIT_FLAG,
+)
 const onlyArguments = rawArgs.filter((argument) => argument.startsWith('--only='))
 
 async function main() {
@@ -59,6 +70,11 @@ async function main() {
   if (onlyArguments.length === 1 && !onlyMigrationSelector) {
     throw new Error('migration selection requires a non-empty --only=<version-or-filename> argument')
   }
+  assertDurationLearningLegacyRuntimeRetirementInvocation({
+    explicitRetirementRequested: explicitDurationLearningRetirement,
+    onlyMigrationSelector,
+    isPlanMode,
+  })
 
   setDefaultResultOrder('ipv4first')
   const discovered = await discoverMigrationFiles(migrationsDir)
@@ -131,6 +147,12 @@ async function main() {
       }
       pending = allPending.filter((migration) => migration.filename === selectedMigration.filename)
     }
+    const durationLearningRetirementPhase = planDurationLearningLegacyRuntimeRetirementPendingPhase({
+      pendingMigrations: pending,
+      explicitRetirementRequested: explicitDurationLearningRetirement,
+    })
+    pending = durationLearningRetirementPhase.executableMigrations
+    const deferredMigrations = durationLearningRetirementPhase.deferredMigrations
 
     if (isPlanMode) {
       console.log(`发现 ${discovered.length} 个正式 migration 文件。`)
@@ -144,6 +166,13 @@ async function main() {
         })
       } else {
         console.log('没有待执行 migration。')
+      }
+      if (deferredMigrations.length > 0) {
+        console.log(JSON.stringify({
+          status: 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PHASE_BOUNDARY',
+          reason: durationLearningRetirementPhase.status,
+          deferredMigrations: deferredMigrations.map((migration) => migration.filename),
+        }))
       }
       return
     }
@@ -210,12 +239,33 @@ async function main() {
           resolveT2ScheduleRuntimeRetirementTargetIdentity(),
         )
       }
+      if (migration.filename === DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION) {
+        await prepareDurationLearningLegacyRuntimeRetirementFromEnvironment(
+          (sql, values) => client.query(sql, values),
+        )
+      }
       await applyMigration(client, migration)
+      if (migration.filename === DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION) {
+        const readback = await verifyDurationLearningLegacyRuntimeRetirementReadback(
+          (sql, values) => client.query(sql, values),
+        )
+        console.log(JSON.stringify({
+          status: 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE',
+          ...readback,
+        }))
+      }
       console.log(`已完成 ${migration.filename}`)
     }
 
     if (pending.length === 0) {
       console.log('没有待执行 migration。')
+    }
+    if (deferredMigrations.length > 0) {
+      console.log(JSON.stringify({
+        status: 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PHASE_BOUNDARY',
+        reason: durationLearningRetirementPhase.status,
+        deferredMigrations: deferredMigrations.map((migration) => migration.filename),
+      }))
     }
   } finally {
     try {

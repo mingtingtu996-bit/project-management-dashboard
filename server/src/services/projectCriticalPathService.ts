@@ -160,6 +160,7 @@ export interface CriticalPathLearningPublicationApplication {
   selectionBasis: string | null
   artifactKey: string
   criticalStableCodes: string[]
+  inputTaskIds: string[]
   appliedTaskIds: string[]
   role: 'watched_task_prior'
 }
@@ -384,6 +385,7 @@ function cloneCriticalPathSnapshot(snapshot: CriticalPathSnapshot): CriticalPath
     criticalPathLearningPublications: snapshot.criticalPathLearningPublications?.map((publication) => ({
       ...publication,
       criticalStableCodes: [...publication.criticalStableCodes],
+      inputTaskIds: [...publication.inputTaskIds],
       appliedTaskIds: [...publication.appliedTaskIds],
     })),
     edges: snapshot.edges.map((edge) => ({ ...edge })),
@@ -798,7 +800,7 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
     snapshot,
     actualDurationDays: actualSpan.actualDurationDays,
   })
-  const metadata = {
+  const metadata: Record<string, unknown> = {
     source: 'project_critical_path_cpm',
     algorithm_version: networkLineage.criticalPathAlgorithmVersion,
     duration_day_unit: 'construction_production_day',
@@ -833,49 +835,99 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
     writes_fact_directly: false,
   }
 
+  const learningScope = await loadCriticalPathLearningScope(
+    projectId,
+    {},
+    criticalPathDurationLearningQueryExec(),
+  )
+  if (!learningScope.companyId) {
+    logger.warn('[projectCriticalPathService] skipped critical path plan-network outcome without project company authority', {
+      projectId,
+      criticalSetHash: networkLineage.criticalSetHash,
+    })
+    return
+  }
+
+  const writeOutcome = async (input: {
+    id: string
+    outcomeStatus: CriticalPathPlanNetworkOutcomeStatus
+    outcomeRef: string
+    publicationKey: string | null
+    metadata: Record<string, unknown>
+  }) => rawQuery(
+    `INSERT INTO public.duration_plan_network_outcomes (
+      id,
+      asset_key,
+      outcome_status,
+      outcome_ref,
+      learning_scope,
+      learning_scope_source,
+      company_id,
+      project_id,
+      publication_key,
+      metadata,
+      writes_runtime_directly,
+      writes_fact_directly
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    ON CONFLICT (id) DO UPDATE SET
+      outcome_status = EXCLUDED.outcome_status,
+      outcome_ref = EXCLUDED.outcome_ref,
+      learning_scope = EXCLUDED.learning_scope,
+      learning_scope_source = EXCLUDED.learning_scope_source,
+      company_id = EXCLUDED.company_id,
+      project_id = EXCLUDED.project_id,
+      publication_key = EXCLUDED.publication_key,
+      observed_at = now(),
+      metadata = EXCLUDED.metadata,
+      writes_runtime_directly = false,
+      writes_fact_directly = false`,
+    [
+      input.id,
+      CRITICAL_PATH_RULE_CANDIDATE_ASSET_KEY,
+      input.outcomeStatus,
+      input.outcomeRef,
+      'project',
+      'project_business_outcome_writer',
+      learningScope.companyId,
+      projectId,
+      input.publicationKey,
+      input.metadata,
+      false,
+      false,
+    ],
+  )
+
   try {
-    await rawQuery(
-      `INSERT INTO public.duration_plan_network_outcomes (
-        id,
-        asset_key,
-        outcome_status,
-        outcome_ref,
-        learning_scope,
-        learning_scope_source,
-        company_id,
-        project_id,
-        publication_key,
-        metadata,
-        writes_runtime_directly,
-        writes_fact_directly
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      ON CONFLICT (id) DO UPDATE SET
-        outcome_status = EXCLUDED.outcome_status,
-        outcome_ref = EXCLUDED.outcome_ref,
-        learning_scope = EXCLUDED.learning_scope,
-        learning_scope_source = EXCLUDED.learning_scope_source,
-        company_id = EXCLUDED.company_id,
-        project_id = EXCLUDED.project_id,
-        publication_key = EXCLUDED.publication_key,
-        observed_at = now(),
-        metadata = EXCLUDED.metadata,
-        writes_runtime_directly = false,
-        writes_fact_directly = false`,
-      [
-        `critical-path-cpm:${projectId}:${networkLineage.criticalSetHash}`,
-        CRITICAL_PATH_RULE_CANDIDATE_ASSET_KEY,
-        outcomeStatus,
-        `critical_path_cpm:${projectId}:${networkLineage.criticalPathInputHash}`,
-        'project',
-        'project_business_outcome_writer',
-        null,
-        projectId,
-        null,
-        metadata,
-        false,
-        false,
-      ],
-    )
+    await writeOutcome({
+      id: `critical-path-cpm:${projectId}:${networkLineage.criticalSetHash}`,
+      outcomeStatus,
+      outcomeRef: `critical_path_cpm:${projectId}:${networkLineage.criticalPathInputHash}`,
+      publicationKey: null,
+      metadata,
+    })
+
+    const actualCriticalTaskIds = new Set(snapshot.autoTaskIds)
+    for (const application of snapshot.criticalPathLearningPublications ?? []) {
+      const inputTaskIds = unique(application.inputTaskIds)
+      if (inputTaskIds.length === 0) continue
+      const actualCriticalInputTaskIds = inputTaskIds.filter((taskId) => actualCriticalTaskIds.has(taskId))
+      await writeOutcome({
+        id: `critical-path-cpm:${projectId}:${networkLineage.criticalSetHash}:publication:${stableHash(application.publicationKey)}`,
+        outcomeStatus: actualCriticalInputTaskIds.length > 0 ? 'accepted' : 'weak',
+        outcomeRef: `critical_path_cpm:${projectId}:${networkLineage.criticalPathInputHash}:${application.publicationKey}`,
+        publicationKey: application.publicationKey,
+        metadata: {
+          ...metadata,
+          runtime_publication_key: application.publicationKey,
+          runtime_publication_artifact_key: application.artifactKey,
+          runtime_publication_input_task_ids: inputTaskIds,
+          runtime_publication_applied_task_ids: application.appliedTaskIds,
+          runtime_publication_actual_critical_task_ids: actualCriticalInputTaskIds,
+          runtime_publication_stage: application.publicationStage,
+          runtime_publication_selection_basis: application.selectionBasis,
+        },
+      })
+    }
   } catch (error) {
     logger.warn('[projectCriticalPathService] failed to record critical path plan-network outcome', {
       projectId,
@@ -2198,17 +2250,18 @@ async function resolveCriticalPathLearningPublications(input: {
             : []
       const criticalStableCodes = unique(rawCodes.map(normalizeText))
       const codeSet = new Set(criticalStableCodes.map((code) => code.toLowerCase()))
-      const appliedTaskIds = unique(input.rows
+      const inputTaskIds = unique(input.rows
         .filter((row) => readCriticalPathTaskStableCodes(row).some((code) => codeSet.has(code.toLowerCase())))
-        .map((row) => row.id)
-        .filter((taskId) => !autoTaskIds.has(taskId)))
-      if (appliedTaskIds.length === 0) continue
+        .map((row) => row.id))
+      if (inputTaskIds.length === 0) continue
+      const appliedTaskIds = inputTaskIds.filter((taskId) => !autoTaskIds.has(taskId))
       applications.push({
         publicationKey: resolution.publicationKey,
         publicationStage: publication.publicationStage,
         selectionBasis: resolution.selectionBasis,
         artifactKey: publication.artifactKey,
         criticalStableCodes,
+        inputTaskIds,
         appliedTaskIds,
         role: 'watched_task_prior',
       })
@@ -2221,6 +2274,7 @@ async function resolveCriticalPathLearningPublications(input: {
       observationContext: {
         projectId: input.projectId,
         artifactKey: application.artifactKey,
+        inputTaskIds: application.inputTaskIds,
         appliedTaskIds: application.appliedTaskIds,
         role: application.role,
         selectionBasis: application.selectionBasis,
@@ -2232,6 +2286,7 @@ async function resolveCriticalPathLearningPublications(input: {
       callContext: {
         projectId: input.projectId,
         autoCriticalTaskCount: input.autoTaskIds.length,
+        learnedInputTaskCount: unique(applications.flatMap((application) => application.inputTaskIds)).length,
         learnedWatchTaskCount: unique(applications.flatMap((application) => application.appliedTaskIds)).length,
       },
       sourceEvidenceRefs: [`critical_path_cpm:${input.projectId}`],

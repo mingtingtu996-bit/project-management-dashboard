@@ -61,6 +61,8 @@ export type ProgressVelocityCompanySampleQuery = {
 
 export type TemplateDurationGovernanceSampleQuery = {
   limit?: number
+  companyId?: string | null
+  projectId?: string | null
 }
 
 export type ProjectProductivityCalibrationSampleQuery = {
@@ -231,24 +233,46 @@ export async function loadProgressVelocityCompanyDurationExperienceSamples(
 export async function loadTemplateDurationGovernanceSamples(
   input: TemplateDurationGovernanceSampleQuery = {},
 ) {
-  let sampleQuery = (supabase as DurationExperienceSampleSupabaseLike)
-    .from('duration_experience_samples')
-    .select(DURATION_EXPERIENCE_SAMPLE_COLUMNS)
-  sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
-  sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
-  sampleQuery = chainCall(sampleQuery, 'eq', 'experience_tier', 'T1')
-  sampleQuery = chainCall(sampleQuery, 'eq', 'reuse_scope', 'project')
-  sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
-  sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
-  sampleQuery = chainCall(sampleQuery, 'order', 'completed_at', { ascending: false })
+  const companyId = normalizeText(input.companyId)
+  const projectId = normalizeText(input.projectId)
   const requestedLimit = Number(input.limit ?? 1000)
-  sampleQuery = chainCall(sampleQuery, 'limit', Number.isFinite(requestedLimit) ? Math.max(1, Math.floor(requestedLimit)) : 1000)
+  const pageSize = Number.isFinite(requestedLimit) ? Math.max(1, Math.floor(requestedLimit)) : 1000
+  const rows: DurationExperienceSampleRow[] = []
+  const seenIds = new Set<string>()
 
-  const result = await resolveQueryResult(sampleQuery)
-  if (result.error || !Array.isArray(result.data)) return []
-  return (result.data as DurationExperienceSampleRow[]).filter((row) => {
-    return hasGovernedProjectSampleIdentity(row)
-  })
+  for (let from = 0; ; from += pageSize) {
+    let sampleQuery = (supabase as DurationExperienceSampleSupabaseLike)
+      .from('duration_experience_samples')
+      .select(DURATION_EXPERIENCE_SAMPLE_COLUMNS)
+    if (companyId) sampleQuery = chainCall(sampleQuery, 'eq', 'company_id', companyId)
+    if (projectId) sampleQuery = chainCall(sampleQuery, 'eq', 'project_id', projectId)
+    sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
+    sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+    sampleQuery = chainCall(sampleQuery, 'eq', 'experience_tier', 'T1')
+    sampleQuery = chainCall(sampleQuery, 'eq', 'reuse_scope', 'project')
+    sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
+    sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
+    sampleQuery = chainCall(sampleQuery, 'order', 'company_id', { ascending: true })
+    sampleQuery = chainCall(sampleQuery, 'order', 'project_id', { ascending: true })
+    sampleQuery = chainCall(sampleQuery, 'order', 'completed_at', { ascending: true })
+    sampleQuery = chainCall(sampleQuery, 'order', 'id', { ascending: true })
+    sampleQuery = chainCall(sampleQuery, 'range', from, from + pageSize - 1)
+
+    const result = await resolveQueryResult(sampleQuery)
+    if (result.error || !Array.isArray(result.data)) return []
+    const page = (result.data as DurationExperienceSampleRow[]).filter(hasGovernedProjectSampleIdentity)
+    let added = 0
+    for (const row of page) {
+      const id = normalizeText(row.id)
+      if (!id || seenIds.has(id)) continue
+      seenIds.add(id)
+      rows.push(row)
+      added += 1
+    }
+    if (result.data.length < pageSize || added === 0) break
+  }
+
+  return rows
 }
 
 export async function loadProjectProductivityCalibrationDurationExperienceSamples(

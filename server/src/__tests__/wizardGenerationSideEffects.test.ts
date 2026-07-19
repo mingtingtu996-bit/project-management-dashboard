@@ -2,7 +2,7 @@
 import request from 'supertest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   rawQuery: vi.fn(),
@@ -14,6 +14,13 @@ const mocks = vi.hoisted(() => ({
   getProjectPermissionLevel: vi.fn(),
   getRequestCompanyId: vi.fn(),
   generateWbsTemplateRows: vi.fn(),
+  recordWbsTemplateGenerationRuntimeConsumption: vi.fn(),
+  persistDurationLearningRuntimeConsumptions: vi.fn(),
+  buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
+  recordWbsTemplateCandidateEvent: vi.fn(),
+  externalFetch: vi.fn(async () => {
+    throw new Error('EXTERNAL_NETWORK_FORBIDDEN_IN_WIZARD_SIDE_EFFECT_TEST')
+  }),
   buildCandidateNetworkEvaluationFromGeneratedDependencies: vi.fn(),
   createTaskInMainChain: vi.fn(),
   createTasksInWizardBatch: vi.fn(),
@@ -57,7 +64,17 @@ vi.mock('../database.js', () => ({
 vi.mock('../services/wbsTemplateGenerationService.js', () => ({
   CHINA_GB55032_TEMPLATE_ID: 'china-gb55032-template',
   generateWbsTemplateRows: mocks.generateWbsTemplateRows,
+  recordWbsTemplateGenerationRuntimeConsumption: mocks.recordWbsTemplateGenerationRuntimeConsumption,
   buildCandidateNetworkEvaluationFromGeneratedDependencies: mocks.buildCandidateNetworkEvaluationFromGeneratedDependencies,
+}))
+
+vi.mock('../services/durationLearningRuntimeConsumptionService.js', () => ({
+  persistDurationLearningRuntimeConsumptions: mocks.persistDurationLearningRuntimeConsumptions,
+}))
+
+vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
+  buildSpecialWorkDurationCandidateNodes: mocks.buildSpecialWorkDurationCandidateNodes,
+  recordWbsTemplateCandidateEvent: mocks.recordWbsTemplateCandidateEvent,
 }))
 
 vi.mock('../services/projectFactsToTemplateService.js', () => ({
@@ -366,6 +383,7 @@ function readCriticalPathRefreshMetadata() {
 describe('v1.4.22.1 project wizard route side effects', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.stubGlobal('fetch', mocks.externalFetch)
     mocks.rawQuery.mockReset()
     mocks.rawQuery.mockResolvedValue({ rows: [] })
     mocks.txClientQuery.mockReset()
@@ -1048,6 +1066,9 @@ describe('v1.4.22.1 project wizard route side effects', () => {
         },
       },
     })
+    mocks.recordWbsTemplateGenerationRuntimeConsumption.mockResolvedValue(undefined)
+    mocks.persistDurationLearningRuntimeConsumptions.mockResolvedValue({ requestedCount: 0, insertedCount: 0 })
+    mocks.recordWbsTemplateCandidateEvent.mockResolvedValue(undefined)
     mocks.buildCandidateNetworkEvaluationFromGeneratedDependencies.mockReset()
     mocks.buildCandidateNetworkEvaluationFromGeneratedDependencies.mockReturnValue(null)
     mocks.createTaskInMainChain.mockReset()
@@ -1135,6 +1156,11 @@ describe('v1.4.22.1 project wizard route side effects', () => {
       }
       return { rowCount: 0, rows: [] }
     })
+  })
+
+  afterEach(() => {
+    expect(mocks.externalFetch).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
   })
 
   it('keeps wizard raw SQL fixed instead of reintroducing dynamic executeSQL wrappers', () => {
@@ -3265,8 +3291,23 @@ describe('v1.4.22.1 project wizard route side effects', () => {
       duplicatePolicy: 'preserve_historical_skip_future',
     }))
     const generationCall = mocks.generateWbsTemplateRows.mock.calls.at(-1)?.[0] as any
-    expect(generationCall.runtimeConsumerObservationQueryExec).toEqual(expect.any(Function))
+    expect(generationCall.runtimePublicationQueryExec).toEqual(expect.any(Function))
+    expect(generationCall.runtimeConsumerObservationQueryExec).toBeUndefined()
     expect(generationCall.runtimeArtifactPublications).toEqual([])
+    expect(mocks.recordWbsTemplateGenerationRuntimeConsumption).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: committedProjectId,
+      generation: expect.any(Object),
+      runtimeArtifactPublications: generationCall.runtimeArtifactPublications,
+    }))
+    expect(mocks.persistDurationLearningRuntimeConsumptions).toHaveBeenCalledWith(expect.objectContaining({
+      build: expect.objectContaining({
+        companyId: 'company-1',
+        projectId: committedProjectId,
+        consumerSurface: 'project_wizard_commit',
+        subjectType: 'task',
+        subjectIdByClientRowId: expect.any(Map),
+      }),
+    }))
     expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledWith({ projectId: committedProjectId })
     expect(generationCall.operation).toEqual(expect.objectContaining({
       detailLevel: 'planning_skeleton',

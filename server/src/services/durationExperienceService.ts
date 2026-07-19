@@ -28,6 +28,7 @@ import {
   resolveConstructionCalendarContext,
 } from './constructionCalendar.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
+import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './durationLearningRuntimeConsumptionService.js'
 
 type SampleStrength = 'strong' | 'medium' | 'weak' | 'unusable'
 
@@ -485,6 +486,19 @@ function sampleHealthStatusForStrength(strength: SampleStrength) {
   return 'accepted'
 }
 
+function trustedDurationLearningRuntimeConsumptions(metadata: Record<string, unknown>) {
+  const value = metadata.duration_learning_runtime_consumptions
+  if (!Array.isArray(value)) return []
+  return value
+    .map(readRecord)
+    .filter((consumption) => (
+      normalizeText(consumption.consumptionKey ?? consumption.consumption_key)
+      && normalizeText(consumption.publicationKey ?? consumption.publication_key)
+      && normalizeText(consumption.assetKey ?? consumption.asset_key)
+      && normalizeText(consumption.artifactKey ?? consumption.artifact_key)
+    ))
+}
+
 async function backtestTaskRemainingForecastPrediction(params: {
   task: Task
   companyId: string | null
@@ -522,6 +536,7 @@ async function backtestTaskRemainingForecastPrediction(params: {
         actualStartSource: normalizeText(params.metadata.actual_start_source) || null,
         actualEndSource: normalizeText(params.metadata.actual_end_source) || null,
         benchmarkContextKey: normalizeText(params.metadata.benchmark_context_key) || null,
+        durationLearningRuntimeConsumptions: trustedDurationLearningRuntimeConsumptions(params.metadata),
       },
     })
   } catch (error) {
@@ -562,6 +577,7 @@ function buildTaskCompletionBacktestContext(params: {
     actualStartSource: normalizeText(params.metadata.actual_start_source) || null,
     actualEndSource: normalizeText(params.metadata.actual_end_source) || null,
     benchmarkContextKey: normalizeText(params.metadata.benchmark_context_key) || null,
+    durationLearningRuntimeConsumptions: trustedDurationLearningRuntimeConsumptions(params.metadata),
   }, lineage)
 }
 
@@ -764,6 +780,17 @@ export async function collectDurationExperienceSampleFromTask(
     projectId: String(task.project_id),
     taskId: String(task.id),
   })
+  const durationLearningRuntimeConsumptions = await readTrustedDurationLearningRuntimeConsumptionsForTask({
+    queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+      // database-query-dynamic-approved: the canonical 315 consumption reader owns fixed parameterized SELECTs; this adapter only supplies the database executor.
+      const result = await query(sql, params as any[])
+      const rows = Array.isArray(result) ? result : result.rows ?? []
+      return rows as T[]
+    },
+    companyId,
+    projectId: String(task.project_id),
+    taskId: String(task.id),
+  })
   const climate = await resolveProjectClimateRegion(String(task.project_id))
   const forecastLearningObservation = await buildForecastLearningObservation({
     task,
@@ -808,6 +835,7 @@ export async function collectDurationExperienceSampleFromTask(
     method_variant_codes: methodVariantCodes,
     element_variant_codes: elementVariantCodes,
     structured_cause_snapshot: structuredCauseSnapshot,
+    duration_learning_runtime_consumptions: durationLearningRuntimeConsumptions,
     algorithm_fact_context: summarizeAlgorithmFactContext(factContext),
     climate_region: climate.regionCode,
     thermal_zone: climate.thermalZone,

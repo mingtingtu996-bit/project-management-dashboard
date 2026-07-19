@@ -9,6 +9,7 @@ import { supabase } from './dbService.js'
 import { loadTemplateDurationGovernanceSamples } from './durationContextSampleReadModelService.js'
 import { stageDurationBenchmarkCandidateAtomically } from './durationLearningAssetAtomicStoreService.js'
 import { readProductionDurationDays } from '../utils/durationDayBasis.js'
+import { inclusiveDurationDays } from '../utils/durationDays.js'
 
 type ConfidenceLevel = 'high' | 'medium' | 'low'
 
@@ -32,11 +33,14 @@ export interface DurationExperienceSampleRow {
   sample_strength?: string | null
   confidence_score?: number | null
   duration_calibration_source?: string | null
+  completed_at?: string | Date | null
+  created_at?: string | Date | null
   metadata?: Record<string, unknown> | null
 }
 
 export interface DurationBenchmarkCandidate {
   companyId: string | null
+  projectId: string
   benchmarkKey: string
   benchmarkContextKey: string
   templateNodeId: string | null
@@ -54,6 +58,11 @@ export interface DurationBenchmarkCandidate {
   confidenceLevel: ConfidenceLevel
   confidenceScore: number
   sampleIds: string[]
+  taskIds: string[]
+  observationStartedAt: string | null
+  observationEndedAt: string | null
+  observationWindowDays: number
+  productionDaySamples: number[]
   durationDayBasis: 'construction_production_day'
 }
 
@@ -91,7 +100,7 @@ export interface TemplateDurationGovernanceContract {
   }
 }
 
-const DEFAULT_MIN_SAMPLE_COUNT = 3
+const DEFAULT_MIN_SAMPLE_COUNT = 1
 const DEFAULT_MIN_OVERRIDE_SAMPLE_COUNT = 5
 const DEFAULT_OVERRIDE_DEVIATION_RATIO = 0.25
 const DEFAULT_MAX_SAMPLES = 1000
@@ -128,6 +137,29 @@ function readPositiveDays(value: unknown) {
 
 function readCompanyId(sample: DurationExperienceSampleRow) {
   return normalizeText(sample.company_id ?? sample.metadata?.company_id) ?? null
+}
+
+function readProjectId(sample: DurationExperienceSampleRow) {
+  return normalizeText(sample.project_id ?? sample.metadata?.project_id) ?? null
+}
+
+function normalizeTimestamp(value: unknown) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString()
+  const parsed = new Date(String(value ?? ''))
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null
+}
+
+function observationWindow(rows: DurationExperienceSampleRow[]) {
+  const timestamps = rows
+    .map((row) => normalizeTimestamp(row.completed_at ?? row.created_at))
+    .filter((value): value is string => Boolean(value))
+    .sort()
+  const startedAt = timestamps[0] ?? null
+  const endedAt = timestamps[timestamps.length - 1] ?? null
+  const windowDays = startedAt && endedAt
+    ? inclusiveDurationDays(startedAt, endedAt) ?? 0
+    : 0
+  return { startedAt, endedAt, windowDays }
 }
 
 function readCodeArray(value: unknown): string[] {
@@ -207,12 +239,14 @@ export function buildDurationBenchmarkCandidates(
   for (const sample of samples) {
     if (!isUsableSample(sample, { includeActivitySteps })) continue
     const companyId = readCompanyId(sample)
+    const projectId = readProjectId(sample)
+    if (!companyId || !projectId) continue
     if (options.companyId !== undefined && normalizeText(options.companyId) !== companyId) continue
 
     const benchmarkKey = buildBenchmarkKey(sample)
     if (!benchmarkKey) continue
 
-    const key = `${companyId ?? 'global'}::${benchmarkKey}`
+    const key = `${companyId}::${projectId}::${benchmarkKey}`
     const rows = groups.get(key) ?? []
     rows.push(sample)
     groups.set(key, rows)
@@ -229,9 +263,11 @@ export function buildDurationBenchmarkCandidates(
       const meanDays = days.reduce((sum, value) => sum + value, 0) / Math.max(days.length, 1)
       const coefficientOfVariation = roundedCoefficientOfVariation(days, meanDays)
       const confidence = confidenceForSampleCount(days.length)
+      const observed = observationWindow(rows)
 
       return {
         companyId: readCompanyId(first),
+        projectId: readProjectId(first) as string,
         benchmarkKey: buildBenchmarkKey(first) ?? 'unclassified',
         benchmarkContextKey: readBenchmarkContextKey(first),
         templateNodeId: normalizeText(first.template_node_id),
@@ -249,20 +285,29 @@ export function buildDurationBenchmarkCandidates(
         confidenceLevel: confidence.level,
         confidenceScore: confidence.score,
         sampleIds: rows.map((sample) => normalizeText(sample.id)).filter((value): value is string => value !== null),
+        taskIds: rows.map((sample) => normalizeText(sample.task_id)).filter((value): value is string => value !== null),
+        observationStartedAt: observed.startedAt,
+        observationEndedAt: observed.endedAt,
+        observationWindowDays: observed.windowDays,
+        productionDaySamples: days,
         durationDayBasis: 'construction_production_day' as const,
       }
     })
+    .sort((left, right) => [left.companyId, left.projectId, left.benchmarkKey].join(':')
+      .localeCompare([right.companyId, right.projectId, right.benchmarkKey].join(':')))
 }
 
 async function loadGovernanceSamples(options: TemplateDurationGovernanceOptions) {
   return loadTemplateDurationGovernanceSamples({
     limit: options.maxSamples ?? DEFAULT_MAX_SAMPLES,
+    companyId: options.companyId,
   }) as Promise<DurationExperienceSampleRow[]>
 }
 
 async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: string) {
   const candidateOperationId = createHash('sha256').update(JSON.stringify({
     companyId: candidate.companyId,
+    projectId: candidate.projectId,
     benchmarkKey: candidate.benchmarkKey,
     durationDayBasis: candidate.durationDayBasis,
     sampleIds: [...candidate.sampleIds].sort(),
@@ -271,6 +316,7 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
   })).digest('hex')
   await stageDurationBenchmarkCandidateAtomically({
       company_id: candidate.companyId,
+      project_id: candidate.projectId,
       benchmark_key: candidate.benchmarkKey,
       benchmark_version: `candidate:${nowIso.slice(0, 10)}:${candidateOperationId.slice(0, 16)}`,
       template_node_id: isUuid(candidate.templateNodeId) ? candidate.templateNodeId : null,
@@ -295,7 +341,13 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
         runtime_publication_status: 'candidate',
         candidate_operation_id: candidateOperationId,
         benchmark_context_key: candidate.benchmarkContextKey,
-        sample_ids: candidate.sampleIds.slice(0, 50),
+        sample_ids: candidate.sampleIds,
+        task_ids: candidate.taskIds,
+        source_evidence_refs: candidate.sampleIds.map((sampleId) => `duration_experience_samples:${sampleId}`),
+        observation_started_at: candidate.observationStartedAt,
+        observation_ended_at: candidate.observationEndedAt,
+        observation_window_days: candidate.observationWindowDays,
+        production_day_samples: candidate.productionDaySamples,
         duration_day_basis: candidate.durationDayBasis,
         standard_work_code: candidate.standardWorkCode,
         standard_work_name: candidate.standardWorkName,

@@ -510,18 +510,21 @@ describe('v1.4.7.2 WBS template generation service', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'special_work_duration_seed',
-          publicationKey: 'wbs_template_runtime:special-v9',
+          publicationKey: 'duration_learning_runtime:special_work_duration_seed:special-v9',
           publicationStatus: 'published',
+          observationContext: { artifactKey: 'tpl-specialty' },
         },
         {
           assetKey: 'wbs_reference_days',
-          publicationKey: 'wbs_reference_days_runtime:reference-v9',
+          publicationKey: 'duration_learning_runtime:wbs_reference_days:reference-v9',
           publicationStatus: 'runtime_published',
+          observationContext: { artifactKey: 'tpl-specialty' },
         },
         {
           assetKey: 'dependency_rule_candidate',
-          publicationKey: 'dependency_rule_runtime:dependency-v9',
+          publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-v9',
           publicationStatus: 'canary',
+          observationContext: { artifactKey: 'dependency-v9' },
         },
         {
           assetKey: 'forecast_confidence_weight',
@@ -545,19 +548,19 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'special_work_duration_seed',
-        'wbs_template_runtime:special-v9',
+        'duration_learning_runtime:special_work_duration_seed:special-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
       [
         'wbs_reference_days',
-        'wbs_reference_days_runtime:reference-v9',
+        'duration_learning_runtime:wbs_reference_days:reference-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
       [
         'dependency_rule_candidate',
-        'dependency_rule_runtime:dependency-v9',
+        'duration_learning_runtime:dependency_rule_candidate:dependency-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
@@ -587,18 +590,21 @@ describe('v1.4.7.2 WBS template generation service', () => {
       runtimeArtifactPublications: [
         {
           assetKey: 'special_work_duration_seed',
-          publicationKey: 'wbs_template_runtime:special-v9',
+          publicationKey: 'duration_learning_runtime:special_work_duration_seed:special-v9',
           publicationStatus: 'published',
+          observationContext: { artifactKey: 'tpl-specialty' },
         },
         {
           assetKey: 'wbs_reference_days',
-          publicationKey: 'wbs_reference_days_runtime:reference-v9',
+          publicationKey: 'duration_learning_runtime:wbs_reference_days:reference-v9',
           publicationStatus: 'runtime_published',
+          observationContext: { artifactKey: 'tpl-specialty' },
         },
         {
           assetKey: 'dependency_rule_candidate',
-          publicationKey: 'dependency_rule_runtime:dependency-v9',
+          publicationKey: 'duration_learning_runtime:dependency_rule_candidate:dependency-v9',
           publicationStatus: 'canary',
+          observationContext: { artifactKey: 'dependency-v9' },
         },
         {
           assetKey: 'forecast_confidence_weight',
@@ -614,19 +620,19 @@ describe('v1.4.7.2 WBS template generation service', () => {
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toEqual([
       [
         'special_work_duration_seed',
-        'wbs_template_runtime:special-v9',
+        'duration_learning_runtime:special_work_duration_seed:special-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
       [
         'wbs_reference_days',
-        'wbs_reference_days_runtime:reference-v9',
+        'duration_learning_runtime:wbs_reference_days:reference-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
       [
         'dependency_rule_candidate',
-        'dependency_rule_runtime:dependency-v9',
+        'duration_learning_runtime:dependency_rule_candidate:dependency-v9',
         'wbsTemplateGenerationService',
         'wbs_template_generation',
       ],
@@ -768,7 +774,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
             nodes: [{ sourceId: 'FAC-01-01-01-P04', referenceDays: 99 }],
             durationDayBasis: 'construction_production_day',
           },
-          previous_publication_key: 'wbs_reference_days_runtime:facade-v1',
+          previous_publication_key: 'duration_learning_runtime:wbs_reference_days:facade-v1',
           traffic_percent: 100,
           monitoring_status: 'collecting',
           published_at: '2026-07-17T00:00:00.000Z',
@@ -821,6 +827,104 @@ describe('v1.4.7.2 WBS template generation service', () => {
       planReferenceDays: 99,
     }))
     expect(target?.values.smart_reference_days).toBe(99)
+  }, 30000)
+
+  it('preserves both special-work and WBS-reference publication lineage when both affect one generated task', async () => {
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      if (
+        sql.includes('from public.duration_learning_runtime_publications')
+        && params[1] === 'china-facade-curtain-wall'
+      ) {
+        if (params[0] === 'special_work_duration_seed') {
+          return [{
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:facade-v2',
+            asset_key: 'special_work_duration_seed',
+            artifact_key: 'china-facade-curtain-wall',
+            scope_level: 'company',
+            company_id: '00000000-0000-4000-8000-000000000010',
+            project_id: null,
+            industry_key: null,
+            publication_stage: 'stable',
+            runtime_payload: {
+              nodes: [{ sourceId: 'FAC-01-01-01-P04', p50Days: 77 }],
+              durationDayBasis: 'construction_production_day',
+            },
+            traffic_percent: 100,
+            monitoring_status: 'passed',
+            published_at: '2026-07-17T00:00:00.000Z',
+          }] as T[]
+        }
+        if (params[0] === 'wbs_reference_days') {
+          return [{
+            publication_key: 'duration_learning_runtime:wbs_reference_days:facade-v3',
+            asset_key: 'wbs_reference_days',
+            artifact_key: 'china-facade-curtain-wall',
+            scope_level: 'company',
+            company_id: '00000000-0000-4000-8000-000000000010',
+            project_id: null,
+            industry_key: null,
+            publication_stage: 'stable',
+            runtime_payload: {
+              nodes: [{ sourceId: 'FAC-01-01-01-P04', referenceDays: 99 }],
+              durationDayBasis: 'construction_production_day',
+            },
+            traffic_percent: 100,
+            monitoring_status: 'passed',
+            published_at: '2026-07-18T00:00:00.000Z',
+          }] as T[]
+        }
+      }
+      return [] as T[]
+    }
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-dual-duration-lineage',
+        templateId: 'china-facade-curtain-wall',
+        selectedNodeIds: ['FAC-01-01-01'],
+        plannedStartDate: '2026-06-01',
+        projectFacts: {
+          companyId: '00000000-0000-4000-8000-000000000010',
+          businessType: 'commercial',
+          projectTypeCode: 'commercial',
+        },
+        scope: { building_object_id: 'building-1' },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    const target = generated.rows.find((row) => (
+      String((row.values.standard_task_metadata as Record<string, unknown> | undefined)?.stableCode ?? '')
+        === 'FAC-01-01-01-P04'
+    ))
+    const metadata = target?.values.standard_task_metadata as Record<string, unknown> | undefined
+
+    expect(metadata?.durationLearningConsumptions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        assetKey: 'special_work_duration_seed',
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:facade-v2',
+        artifactKey: 'china-facade-curtain-wall',
+        durationDayBasis: 'construction_production_day',
+        appliedDurationDays: 77,
+      }),
+      expect.objectContaining({
+        assetKey: 'wbs_reference_days',
+        publicationKey: 'duration_learning_runtime:wbs_reference_days:facade-v3',
+        artifactKey: 'china-facade-curtain-wall',
+        durationDayBasis: 'construction_production_day',
+        appliedDurationDays: 99,
+      }),
+    ]))
+    expect(buildSpecialWorkDurationCandidateNodes(generated.rows)).toContainEqual(expect.objectContaining({
+      sourceId: 'FAC-01-01-01-P04',
+      p50Days: 77,
+      runtimePublicationKey: 'duration_learning_runtime:special_work_duration_seed:facade-v2',
+    }))
   }, 30000)
 
   it('carries a consumed special-work publication from generated rows into learning candidate nodes', async () => {
@@ -963,6 +1067,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         dependencyType: 'SS',
         lagDays: 13,
         publicationKey: 'duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
+        artifactKey: 'facade-p04-p05',
       }))
       const predecessor = predecessors.find((row) => row.clientRowId === learned[0]?.clientRowId)
       expect(predecessor?.values.building_object_id).toBe(successor.values.building_object_id)

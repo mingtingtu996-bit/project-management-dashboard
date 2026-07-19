@@ -278,6 +278,17 @@ const GOVERNED_NON_LEGACY_MIGRATION_DROPS = [
     objectName: `public.${tableName}`,
     reason: 'Migration 321 uses a project-bound v2 immutable export covering both retired tables and strictly eligible inactive real-closeout task_dependencies, locked data fingerprint preflight, an active-publication guard, and full schema/data rollback.',
   })),
+  ...[
+    'wbs_template_runtime_events',
+    'wbs_template_runtime_publications',
+    'construction_dependency_rule_runtime_events',
+    'construction_dependency_rule_runtime_publications',
+  ].map((tableName) => ({
+    migrationFile: '322_duration_learning_legacy_runtime_retirement.sql',
+    objectType: 'table',
+    objectName: `public.${tableName}`,
+    reason: 'Migration 322 is authorized only after migration 315 exact archive/mapping readback and requires explicit authorization, backup, source, and manifest fingerprints with full schema/data rollback.',
+  })),
   {
     migrationFile: '259_v14231_supabase_advisor_security_closeout.sql',
     objectType: 'policy',

@@ -52,6 +52,7 @@ const mocks = vi.hoisted(() => {
     ],
     task_critical_overrides: [],
     duration_learning_runtime_publications: [],
+    projects: [{ id: 'project-1', company_id: 'company-1', project_type: 'residential' }],
   }
   const updates: Array<{ sql: string; params: any[] }> = []
 
@@ -84,6 +85,12 @@ const mocks = vi.hoisted(() => {
     if (sql.startsWith('select') && sql.includes('from public.duration_learning_runtime_publications')) {
       return tables.duration_learning_runtime_publications
         .filter((row) => row.asset_key === params[0])
+        .map((row) => ({ ...row }))
+    }
+
+    if (sql.startsWith('select') && sql.includes('from public.projects')) {
+      return tables.projects
+        .filter((row) => row.id === params[0])
         .map((row) => ({ ...row }))
     }
 
@@ -293,6 +300,7 @@ describe('project critical path service', () => {
     ]
     mocks.tables.task_critical_overrides = []
     mocks.tables.duration_learning_runtime_publications = []
+    mocks.tables.projects = [{ id: 'project-1', company_id: 'company-1', project_type: 'residential' }]
     mocks.updates.length = 0
     mocks.recordDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.recordDurationAccuracyBacktest.mockResolvedValue(null)
@@ -349,6 +357,7 @@ describe('project critical path service', () => {
     expect((result.snapshot as any).criticalPathLearningPublications).toEqual([
       expect.objectContaining({
         publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:global-watch-v1',
+        inputTaskIds: ['task-a'],
         appliedTaskIds: ['task-a'],
       }),
     ])
@@ -964,7 +973,7 @@ describe('project critical path service', () => {
       expect.stringMatching(/^critical_path_cpm:project-1:sha256:/),
       'project',
       'project_business_outcome_writer',
-      null,
+      'company-1',
       'project-1',
       null,
       expect.objectContaining({
@@ -989,6 +998,48 @@ describe('project critical path service', () => {
       false,
       false,
     ])
+  })
+
+  it('records completed critical-path impact against the exact consumed publication, artifact, and input tasks', async () => {
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      standard_work_code: row.id === 'task-b' ? 'SW-LEARNED-CRITICAL' : row.standard_work_code,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.end_date,
+    }))
+    mocks.tables.duration_learning_runtime_publications = [{
+      publication_key: 'duration_learning_runtime:critical_path_rule_candidate:exact-v1',
+      asset_key: 'critical_path_rule_candidate',
+      artifact_key: 'critical-watch-exact-v1',
+      scope_level: 'global',
+      company_id: null,
+      project_id: null,
+      industry_key: null,
+      publication_stage: 'stable',
+      runtime_payload: { criticalStableCodes: ['SW-LEARNED-CRITICAL'] },
+      previous_publication_key: null,
+      traffic_percent: 100,
+      monitoring_status: 'passed',
+      published_at: '2026-07-17T00:00:00.000Z',
+    }]
+
+    await recalculateProjectCriticalPath('project-1')
+
+    const linkedOutcome = mocks.rawQuery.mock.calls.find((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
+      && call[1]?.[8] === 'duration_learning_runtime:critical_path_rule_candidate:exact-v1'
+    ))
+    expect(linkedOutcome).toBeTruthy()
+    expect(linkedOutcome?.[1]?.[2]).toBe('accepted')
+    expect(linkedOutcome?.[1]?.[6]).toBe('company-1')
+    expect(linkedOutcome?.[1]?.[9]).toEqual(expect.objectContaining({
+      runtime_publication_key: 'duration_learning_runtime:critical_path_rule_candidate:exact-v1',
+      runtime_publication_artifact_key: 'critical-watch-exact-v1',
+      runtime_publication_input_task_ids: ['task-b'],
+      critical_path_input_hash: expect.stringMatching(/^sha256:/),
+    }))
   })
 
   it('projects live CPM criticality and float fields back to task rows after recalculation', async () => {

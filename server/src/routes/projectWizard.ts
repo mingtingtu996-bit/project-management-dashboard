@@ -17,10 +17,19 @@ import {
   CHINA_GB55032_TEMPLATE_ID,
   buildCandidateNetworkEvaluationFromGeneratedDependencies,
   generateWbsTemplateRows,
+  recordWbsTemplateGenerationRuntimeConsumption,
   type GeneratedTemplateDependency,
   type GeneratedTemplateRow,
   type GeneratedTargetFeasibility,
+  type WbsTemplateGenerationRuntimeArtifactPublication,
 } from '../services/wbsTemplateGenerationService.js'
+import {
+  persistDurationLearningRuntimeConsumptions,
+} from '../services/durationLearningRuntimeConsumptionService.js'
+import {
+  buildSpecialWorkDurationCandidateNodes,
+  recordWbsTemplateCandidateEvent,
+} from '../services/wbsTemplateCandidateEventService.js'
 import {
   analyzeExecutableDefaultMasterPlanNetwork,
   analyzeExecutableDefaultMasterPlanSchedulePropagation,
@@ -7516,6 +7525,7 @@ function assertWizardGenerationNotInProgress(metadata: Record<string, unknown>) 
 
 async function commitWizardGeneration(params: {
   projectId: string
+  companyId?: string | null
   payload: z.infer<typeof wizardPayloadSchema>
   actorId?: string | null
   generationAttemptId?: string | null
@@ -7537,6 +7547,12 @@ async function commitWizardGeneration(params: {
   let passedMilestoneResult: Awaited<ReturnType<typeof writePassedMilestones>> = { count: 0, ids: [] }
   let candidateBaseline: WizardCandidateBaselineDraft | null = null
   let transactionCommitted = false
+  const durationLearningProjectCompanyId = normalizeText(params.companyId) || null
+  if (!durationLearningProjectCompanyId) {
+    throw Object.assign(new Error('Wizard duration learning consumption requires project company scope.'), {
+      code: 'WIZARD_DURATION_LEARNING_COMPANY_SCOPE_REQUIRED',
+    })
+  }
   const generationStartedAt = Date.now()
   let previousStageAt = generationStartedAt
   await beginWizardGenerationAttempt({
@@ -7600,6 +7616,13 @@ async function commitWizardGeneration(params: {
       constructionCalendar,
     },
   }
+  const durationLearningRuntimeQueryExec = createDurationRuntimeConsumerObservationQueryExec(
+    async <T = Record<string, unknown>>(sql: string, queryParams?: unknown[]) => {
+      const result = await transactionClient.query(sql, queryParams)
+      return (result.rows ?? []) as T[]
+    },
+  )
+  const runtimeArtifactPublications: WbsTemplateGenerationRuntimeArtifactPublication[] = []
   const generated = await generateWbsTemplateRows({
     projectId: params.projectId,
     surface: 'task_list',
@@ -7610,13 +7633,8 @@ async function commitWizardGeneration(params: {
     scopeAssignmentRules: recommendation.scopeAssignmentRules,
     diagnosticDurationSuggestionMode: 'fast_template',
     duplicatePolicy: materializedPayload.mode === 'starting_line' ? 'preserve_historical_skip_future' : undefined,
-    runtimeConsumerObservationQueryExec: createDurationRuntimeConsumerObservationQueryExec(
-      async <T = Record<string, unknown>>(sql: string, queryParams?: unknown[]) => {
-        const result = await transactionClient.query(sql, queryParams)
-        return (result.rows ?? []) as T[]
-      },
-    ),
-    runtimeArtifactPublications: [],
+    runtimePublicationQueryExec: durationLearningRuntimeQueryExec,
+    runtimeArtifactPublications,
   })
   const durationAssetAdjustedRows = applyWizardDurationAssetPlanDatesToRows(generated.rows, constructionCalendar)
   const candidateNetworkEvaluationBeforeTaskWrite = buildWizardCandidateNetworkEvaluationFromAdjustedRows(
@@ -7718,6 +7736,28 @@ async function commitWizardGeneration(params: {
       isHistorical: row.values?.is_historical === true || row.values?.is_historical === 'true',
     })
   }
+  await recordWbsTemplateGenerationRuntimeConsumption({
+    queryExec: durationLearningRuntimeQueryExec,
+    projectId: params.projectId,
+    generation: generated,
+    runtimeArtifactPublications,
+    inputTaskIds: [...idByClientRowId.values()],
+  })
+  await persistDurationLearningRuntimeConsumptions({
+    queryExec: durationLearningRuntimeQueryExec,
+    build: {
+      companyId: durationLearningProjectCompanyId,
+      projectId: params.projectId,
+      consumerKey: 'projectWizard',
+      consumerSurface: 'project_wizard_commit',
+      generationBatchId,
+      templateIds: generated.templateIds,
+      rows: generatedRows,
+      runtimeArtifactPublications,
+      subjectType: 'task',
+      subjectIdByClientRowId: idByClientRowId,
+    },
+  })
   injectWizardDiagnosticFailureIfRequested({
     injection: params.diagnosticFailureInjection,
     stage: 'after_tasks',
@@ -7991,6 +8031,27 @@ async function commitWizardGeneration(params: {
   })
   await transactionClient.query('COMMIT')
   transactionCommitted = true
+  await recordWbsTemplateCandidateEvent({
+    companyId: durationLearningProjectCompanyId,
+    projectId: params.projectId,
+    surface: 'task_list',
+    generationBatchId,
+    templateId: generated.templateId,
+    selectedNodeIds: readStringArray(operation.selectedNodeIds),
+    scope: readRecord(operation.scope),
+    generatedRowCount: generated.rows.length,
+    retainedRowCount: generatedRows.length,
+    rejectedRowCount: Math.max(0, generated.rows.length - generatedRows.length),
+    generatedEntityIds: Array.from(idByClientRowId.values()),
+    durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows),
+    actorId: params.actorId,
+    metadata: {
+      generationDepth: generated.generationDepth,
+      source: 'project_wizard_commit',
+      durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary ?? null,
+    },
+    scheduleTrustGate: generated.scheduleTrustGate,
+  })
   let criticalPathRefresh: ReturnType<typeof buildWizardCriticalPathRefreshSummary> | null = null
   let postCommitDerivations: WizardPostCommitDerivationState = pendingPostCommitDerivations
   try {
@@ -8174,6 +8235,7 @@ async function runQueuedWizardGeneration(job: QueuedWizardGeneration) {
   try {
     const generation = await commitWizardGeneration({
       projectId: job.projectId,
+      companyId: job.companyId,
       payload: job.payload,
       actorId: job.actorId,
       generationAttemptId: job.attemptId,
@@ -8412,6 +8474,7 @@ router.post('/api/projects/wizard', authenticate, asyncHandler(async (req, res) 
     }
     generation = await commitWizardGeneration({
       projectId: created.projectId,
+      companyId,
       payload,
       actorId,
       diagnosticFailureInjection,

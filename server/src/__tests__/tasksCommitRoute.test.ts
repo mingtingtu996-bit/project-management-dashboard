@@ -39,6 +39,9 @@ const mocks = vi.hoisted(() => ({
   getProjectCriticalPathSnapshot: vi.fn(),
   recalculateProjectCriticalPath: vi.fn(),
   generateWbsTemplateRows: vi.fn(),
+  recordWbsTemplateGenerationRuntimeConsumption: vi.fn(),
+  persistDurationLearningRuntimeConsumptions: vi.fn(),
+  getProjectCompanyId: vi.fn(),
   listWbsTemplateCatalog: vi.fn(),
   buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
   recordWbsTemplateCandidateEvent: vi.fn(async () => undefined),
@@ -153,7 +156,16 @@ vi.mock('../services/planningRealtimeEventService.js', () => ({
 
 vi.mock('../services/wbsTemplateGenerationService.js', () => ({
   generateWbsTemplateRows: mocks.generateWbsTemplateRows,
+  recordWbsTemplateGenerationRuntimeConsumption: mocks.recordWbsTemplateGenerationRuntimeConsumption,
   listWbsTemplateCatalog: mocks.listWbsTemplateCatalog,
+}))
+
+vi.mock('../services/durationLearningRuntimeConsumptionService.js', () => ({
+  persistDurationLearningRuntimeConsumptions: mocks.persistDurationLearningRuntimeConsumptions,
+}))
+
+vi.mock('../auth/access.js', () => ({
+  getProjectCompanyId: mocks.getProjectCompanyId,
 }))
 
 vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
@@ -254,6 +266,9 @@ describe('tasks commit route', () => {
       }
     })
     mocks.rawQuery.mockResolvedValue({ rows: [], rowCount: 0 })
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.recordWbsTemplateGenerationRuntimeConsumption.mockResolvedValue(undefined)
+    mocks.persistDurationLearningRuntimeConsumptions.mockResolvedValue({ requestedCount: 0, insertedCount: 0 })
     mocks.executeSQL.mockResolvedValue([])
     mocks.writeChangeLog.mockResolvedValue('change-log-1')
     mocks.reserveTaskCommitRequest.mockResolvedValue({

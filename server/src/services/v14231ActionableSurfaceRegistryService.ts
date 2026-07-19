@@ -264,11 +264,11 @@ const ACTIONABLE_SURFACES: V14231ActionableSurface[] = [
     stableTargetRoute: '/admin/rule-assets/governance-workbench',
     codeEvidence: [
       'server/src/services/algorithmAssetGovernanceWorkbenchOperationService.ts',
-      'server/src/services/wbsTemplateRuntimePublicationService.ts',
+      'server/src/services/durationLearningRuntimePublicationService.ts',
     ],
     testEvidence: [
       'server/src/__tests__/algorithmAssetGovernanceWorkbenchOperationService.test.ts',
-      'server/src/__tests__/wbsTemplateRuntimePublicationService.test.ts',
+      'server/src/__tests__/durationLearningRuntimePublicationService.test.ts',
     ],
   }),
   defineActionableSurface({

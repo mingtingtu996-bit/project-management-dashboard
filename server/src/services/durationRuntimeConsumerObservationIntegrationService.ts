@@ -115,22 +115,15 @@ const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationRuntimeC
     'duration_learning_runtime:standard_work_duration_seed:',
   ],
   special_work_duration_seed: [
-    'wbs_template_runtime:',
-    'wbs-template-runtime:',
     'duration_learning_runtime:special_work_duration_seed:',
   ],
   wbs_reference_days: [
-    'wbs_reference_days_runtime:',
     'duration_learning_runtime:wbs_reference_days:',
   ],
   dependency_rule_candidate: [
-    'dependency_rule_runtime:',
-    'dependency-rule-runtime:',
     'duration_learning_runtime:dependency_rule_candidate:',
   ],
   critical_path_rule_candidate: [
-    'critical_path_rule_runtime:',
-    'critical-path-rule-runtime:',
     'duration_learning_runtime:critical_path_rule_candidate:',
   ],
   construction_organization_plan_network: [

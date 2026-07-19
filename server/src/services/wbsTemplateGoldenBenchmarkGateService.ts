@@ -235,7 +235,17 @@ function wbsReferenceDaysObservationMatchesPublication(
   const observedPublicationKey = normalizeText(evidenceRefs.runtimeConsumerPublicationKey)
   return Boolean(publicationKey)
     && Boolean(observedPublicationKey)
-    && publicationKey === observedPublicationKey
+    && (
+      publicationKey === observedPublicationKey
+      || publicationKey.endsWith(`:${observedPublicationKey}`)
+    )
+}
+
+function wbsReferenceDaysRuntimePublicationKeyFromExecutionRef(value: unknown) {
+  const executionRef = normalizeText(value)
+  if (!executionRef) return null
+  const prefix = 'duration_learning_runtime_publications:'
+  return executionRef.startsWith(prefix) ? executionRef.slice(prefix.length) : executionRef
 }
 
 function normalizeLower(value: unknown): string {
@@ -254,14 +264,14 @@ function findCurrentPublishedWbsReferenceDaysVersionId(
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
 ) {
   for (const source of sourceRows ?? []) {
-    if (source.sourceTable !== 'wbs_template_runtime_publications') continue
+    if (source.sourceTable !== 'duration_learning_runtime_publications') continue
     const row = source.row
-    const referenceDaysVersionId = readRowText(row, 'asset_version_id', 'assetVersionId')
+    const referenceDaysVersionId = readRowText(row, 'artifact_key', 'artifactKey')
     if (
       referenceDaysVersionId
-      && readRowText(row, 'asset_kind', 'assetKind') === WBS_REFERENCE_DAYS_ASSET_KEY
+      && readRowText(row, 'asset_key', 'assetKey') === WBS_REFERENCE_DAYS_ASSET_KEY
       && readRowText(row, 'publication_key', 'publicationKey')
-      && readRowText(row, 'runtime_publication_status', 'runtimePublicationStatus') === 'runtime_published'
+      && ['canary', 'stable'].includes(readRowText(row, 'publication_stage', 'publicationStage'))
     ) {
       return referenceDaysVersionId
     }
@@ -689,7 +699,9 @@ export function buildWbsReferenceDaysPublicationReadinessFromProductionRows(
   const productionLineage = wbsReferenceDaysProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
   const referenceDaysVersionId = findCurrentPublishedWbsReferenceDaysVersionId(input.sourceRows)
-  const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
+  const runtimePublicationKey = wbsReferenceDaysRuntimePublicationKeyFromExecutionRef(
+    evidenceRefs.publicationExecutionRef,
+  )
   const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef)
   const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
   const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation

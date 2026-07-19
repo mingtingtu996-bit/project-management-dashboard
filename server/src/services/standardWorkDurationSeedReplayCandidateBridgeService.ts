@@ -106,10 +106,6 @@ function readRowText(row: Record<string, unknown>, ...keys: string[]) {
   return ''
 }
 
-function readRowBoolean(row: Record<string, unknown>, key: string) {
-  return row[key] === true
-}
-
 function normalizeDays(value: unknown) {
   const number = Number(value)
   return Number.isFinite(number) && number > 0 ? Math.max(1, Math.round(number)) : 1
@@ -171,15 +167,14 @@ function findCurrentPublishedStandardWorkSeedVersionId(
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
 ) {
   for (const source of sourceRows ?? []) {
-    if (source.sourceTable !== 'algorithm_seed_versions') continue
+    if (source.sourceTable !== 'duration_learning_runtime_publications') continue
     const row = source.row
-    const seedVersionId = readRowText(row, 'id')
+    const seedVersionId = readRowText(row, 'artifact_key', 'artifactKey')
     if (
       seedVersionId
-      && readRowText(row, 'seed_type', 'seedType') === 'standard_work_duration'
-      && readRowText(row, 'status') === 'active'
-      && readRowBoolean(row, 'is_current')
-      && readRowText(row, 'published_at', 'publishedAt')
+      && readRowText(row, 'asset_key', 'assetKey') === STANDARD_WORK_DURATION_SEED_ASSET_KEY
+      && readRowText(row, 'publication_key', 'publicationKey')
+      && ['canary', 'stable'].includes(readRowText(row, 'publication_stage', 'publicationStage'))
     ) {
       return seedVersionId
     }
@@ -221,7 +216,17 @@ function standardWorkSeedObservationMatchesPublication(
   const observedPublicationKey = normalizeText(evidenceRefs.runtimeConsumerPublicationKey)
   return Boolean(publicationKey)
     && Boolean(observedPublicationKey)
-    && publicationKey === observedPublicationKey
+    && (
+      publicationKey === observedPublicationKey
+      || publicationKey.endsWith(`:${observedPublicationKey}`)
+    )
+}
+
+function standardWorkSeedRuntimePublicationKeyFromExecutionRef(value: unknown) {
+  const executionRef = normalizeText(value)
+  if (!executionRef) return null
+  const prefix = 'duration_learning_runtime_publications:'
+  return executionRef.startsWith(prefix) ? executionRef.slice(prefix.length) : executionRef
 }
 
 function buildCandidatePayload(
@@ -241,6 +246,7 @@ function buildCandidatePayload(
     `T1:replay_context:${replayContextGroupKey}`,
     `T1:seed_candidate:${stableCode}`,
   ].filter(Boolean)))
+  const autoGovernEligible = queueKind === 'p50_review' && Boolean(report.projectId)
 
   return normalizeAlgorithmSeedRecordPayload('standard_work_duration', {
     stableCode,
@@ -289,7 +295,9 @@ function buildCandidatePayload(
     reviewNeeded: true,
     replayCandidateBridge: true,
     replayQueueKind: queueKind,
-    runtimeGovernancePolicy: 'candidate_only_no_runtime_effect_until_governed',
+    runtimeGovernancePolicy: autoGovernEligible
+      ? 'auto_govern_only_through_duration_learning_lifecycle'
+      : 'candidate_only_no_runtime_effect_until_governed',
     seedWritePolicy: 'never_write_seed_from_replay',
     promotionPolicy: 'review_required_before_seed_promotion',
   })
@@ -300,6 +308,7 @@ function buildEvidenceSummary(
   item: StandardWorkDurationSeedReplayCalibrationQueueItem,
   queueKind: ReplayQueueKind,
 ) {
+  const autoGovernEligible = queueKind === 'p50_review' && Boolean(report.projectId)
   return {
     replayReportCode: report.replay.reportCode,
     governanceReportCode: report.reportCode,
@@ -321,7 +330,9 @@ function buildEvidenceSummary(
     sourceTable: report.source.table,
     seedWritePolicy: 'never_write_seed_from_replay',
     promotionPolicy: 'review_required_before_seed_promotion',
-    runtimeEffectPolicy: 'candidate_only_no_runtime_effect_until_governed',
+    runtimeEffectPolicy: autoGovernEligible
+      ? 'auto_govern_only_through_duration_learning_lifecycle'
+      : 'candidate_only_no_runtime_effect_until_governed',
   }
 }
 
@@ -331,6 +342,7 @@ async function persistCandidate(
   queueKind: ReplayQueueKind,
 ) {
   const stableCode = buildStableCode(item)
+  const autoGovernEligible = queueKind === 'p50_review' && Boolean(report.projectId)
   return createAlgorithmSeedUpgradeCandidate({
     seedType: 'standard_work_duration',
     stableCode,
@@ -342,7 +354,7 @@ async function persistCandidate(
     variance: item.medianAbsolutePercentageError ?? null,
     confidenceLevel: resolveConfidenceLevel(item),
     evidenceSummary: buildEvidenceSummary(report, item, queueKind),
-    actionPolicy: 'candidate_only',
+    actionPolicy: autoGovernEligible ? 'auto_govern' : 'candidate_only',
   })
 }
 
@@ -360,6 +372,12 @@ export async function createStandardWorkDurationReplayUpgradeCandidates(
     failedCandidateCount: 0,
     seedWritesBlocked: 1,
     failed: [],
+  }
+
+  if (!normalizeText(report.projectId)) {
+    result.evidenceCollectionSkippedCount += report.replay.calibrationQueues.p50ReviewCandidates.length
+      + report.replay.calibrationQueues.missingSeedCandidates.length
+    return result
   }
 
   const candidates: Array<{
@@ -467,7 +485,9 @@ export function buildStandardWorkDurationSeedPublicationReadinessFromProductionR
   const productionLineage = standardWorkSeedProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
   const seedVersionId = findCurrentPublishedStandardWorkSeedVersionId(input.sourceRows)
-  const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef) || null
+  const runtimePublicationKey = standardWorkSeedRuntimePublicationKeyFromExecutionRef(
+    evidenceRefs.publicationExecutionRef,
+  )
   const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef) || null
   const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
   const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation

@@ -5,6 +5,7 @@ import {
   runTemplateDurationGovernance,
   type TemplateDurationGovernanceResult,
 } from '../services/templateDurationGovernanceService.js'
+import { runWbsTemplateFeedbackGovernanceSweep } from '../services/wbsTemplateFeedback.js'
 
 function createJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
@@ -12,10 +13,21 @@ function createJobId() {
 
 export async function runTemplateDurationGovernanceSweep(params: {
   companyId?: string | null
-} = {}): Promise<TemplateDurationGovernanceResult> {
-  return await runTemplateDurationGovernance({
-    companyId: params.companyId ?? undefined,
+} = {}): Promise<{
+  durationBenchmarks: TemplateDurationGovernanceResult
+  wbsTemplateFeedback: Awaited<ReturnType<typeof runWbsTemplateFeedbackGovernanceSweep>>
+}> {
+  const companyId = params.companyId ?? undefined
+  const durationBenchmarks = await runTemplateDurationGovernance({
+    companyId,
   })
+  const wbsTemplateFeedback = await runWbsTemplateFeedbackGovernanceSweep({
+    companyId,
+  })
+  return {
+    durationBenchmarks,
+    wbsTemplateFeedback,
+  }
 }
 
 export class TemplateDurationGovernanceJob {

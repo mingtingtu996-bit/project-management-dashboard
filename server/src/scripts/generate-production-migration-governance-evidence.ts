@@ -785,11 +785,44 @@ async function readSupabaseAdvisorSecurityCloseoutReadback(client: InstanceType<
     && extensionNamespace !== 'public'
 }
 
-async function readDefaultMasterPlanRuntimePublicationAssetKindReadback(client: InstanceType<typeof Client>) {
+export async function readDefaultMasterPlanRuntimePublicationAssetKindReadback(
+  client: InstanceType<typeof Client>,
+) {
+  const catalog = await client.query<{
+    legacy_relation: string | null
+    retirement_state_relation: string | null
+  }>(`
+    SELECT to_regclass('public.wbs_template_runtime_publications')::text AS legacy_relation,
+           to_regclass('public.duration_learning_legacy_runtime_retirement_state')::text AS retirement_state_relation
+  `)
+  const catalogRow = catalog.rows[0]
+  if (!catalogRow?.legacy_relation) {
+    if (!catalogRow?.retirement_state_relation) return false
+    const retirement = await client.query<{
+      retirement_ledgered: boolean
+      retirement_status: string | null
+    }>(`
+      SELECT EXISTS (
+               SELECT 1
+                 FROM public.schema_migrations
+                WHERE version = '322'
+                  AND filename = '322_duration_learning_legacy_runtime_retirement.sql'
+             ) AS retirement_ledgered,
+             (
+               SELECT state.retirement_status
+                 FROM public.duration_learning_legacy_runtime_retirement_state state
+                WHERE state.retirement_key = 'duration_learning_legacy_runtime_v1'
+                LIMIT 1
+             ) AS retirement_status
+    `)
+    return retirement.rows[0]?.retirement_ledgered === true
+      && retirement.rows[0]?.retirement_status === 'retired_readback_complete'
+  }
+
   const result = await client.query<{ definition: string | null }>(`
     SELECT pg_get_constraintdef(oid) AS definition
       FROM pg_constraint
-     WHERE conrelid = 'public.wbs_template_runtime_publications'::regclass
+     WHERE conrelid = to_regclass('public.wbs_template_runtime_publications')
        AND conname = 'wbs_template_runtime_publications_asset_kind_check'
   `)
   const definition = result.rows[0]?.definition ?? ''

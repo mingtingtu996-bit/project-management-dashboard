@@ -154,6 +154,47 @@ describe('durationLearningRuntimePublicationService', () => {
     expect(queryMock).not.toHaveBeenCalled()
   })
 
+  it.each([
+    {
+      assetKey: 'special_work_duration_seed' as const,
+      payload: {
+        nodes: [{ sourceId: 'node-a', p50Days: 12 }],
+      },
+      reason: 'special_seed_production_day_basis_required',
+    },
+    {
+      assetKey: 'wbs_reference_days' as const,
+      payload: {
+        nodes: [{ sourceId: 'node-a', referenceDays: 12 }],
+        durationDayBasis: 'calendar_day',
+      },
+      reason: 'wbs_reference_days_production_day_basis_required',
+    },
+  ])('rejects $assetKey payloads without a top-level production-day basis before querying', async ({
+    assetKey,
+    payload,
+    reason,
+  }) => {
+    const queryMock = vi.fn()
+
+    const result = await persistDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: `duration-learning:${assetKey}:bad-basis`,
+      assetKey,
+      artifactKey: 'template-a',
+      scope: { level: 'company', companyId },
+      stage: 'canary',
+      runtimePayload: payload,
+      sourceCandidateRefs: ['algorithm_asset_candidate_events:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+      trafficPercent: 10,
+    })
+
+    expect(result.status).toBe('blocked')
+    expect(result.reasons).toContain(reason)
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
   it('resolves a selected project canary before lower-scope stable and falls back without project traffic identity', async () => {
     const rows = [
       {
@@ -308,6 +349,42 @@ describe('durationLearningRuntimePublicationService', () => {
     expect(impact.status).toBe('impact_recorded')
     expect(rollback.status).toBe('rollback_executed')
     expect(rollback.restoredPublicationKey).toBe('duration-learning:stable-0')
+  })
+
+  it('fails closed without mutation when the declared rollback target does not match previous publication lineage', async () => {
+    const queryMock = vi.fn(async (sql: string) => {
+      if (sql.includes('with rolled_back as')) return []
+      if (sql.includes('where publication_key = $1')) {
+        return [{
+          publication_key: 'duration-learning:canary-1',
+          publication_stage: 'canary',
+          previous_publication_key: 'duration-learning:stable-other',
+        }]
+      }
+      return []
+    })
+
+    const result = await rollbackDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration-learning:canary-1',
+      expectedPreviousPublicationKey: 'duration-learning:stable-0',
+      reason: 'mae_regression_detected',
+      rolledBackAt: '2026-07-17T02:00:00.000Z',
+    })
+
+    expect(result).toEqual({
+      status: 'blocked',
+      restoredPublicationKey: null,
+      reasons: ['rollback_target_mismatch'],
+    })
+    const queryCalls = queryMock.mock.calls as unknown as Array<[string, unknown[]]>
+    expect(queryCalls[0]?.[0]).toContain('previous_publication_key is not distinct from $4::text')
+    expect(queryCalls[0]?.[1]).toEqual([
+      'duration-learning:canary-1',
+      'mae_regression_detected',
+      '2026-07-17T02:00:00.000Z',
+      'duration-learning:stable-0',
+    ])
   })
 
   it('reuses an already-rolled-back terminal state without restoring the prior stable twice', async () => {

@@ -378,57 +378,21 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
     `
   }
 
-  if (sourceTable === 'algorithm_seed_versions') {
+  if (sourceTable === 'duration_learning_runtime_publications') {
     return `
       select *
-      from public.algorithm_seed_versions
-      where seed_type = 'standard_work_duration'
-        and status = 'active'
-        and is_current = true
-        and published_at is not null
+      from public.duration_learning_runtime_publications
+      where publication_stage in ('canary', 'stable', 'rolled_back')
       order by published_at desc, updated_at desc
       limit $1
     `
   }
 
-  if (sourceTable === 'wbs_template_runtime_publications') {
+  if (sourceTable === 'duration_learning_runtime_consumptions') {
     return `
       select *
-      from public.wbs_template_runtime_publications
-      where runtime_publication_status = 'runtime_published'
-      order by published_at desc
-      limit $1
-    `
-  }
-
-  if (sourceTable === 'wbs_template_runtime_events') {
-    return `
-      select *
-      from public.wbs_template_runtime_events
-      where event_type in ('impact_monitoring', 'rollback_execution')
-        and event_status in ('monitoring_passed', 'rollback_executed')
-      order by executed_at desc
-      limit $1
-    `
-  }
-
-  if (sourceTable === 'construction_dependency_rule_runtime_publications') {
-    return `
-      select *
-      from public.construction_dependency_rule_runtime_publications
-      where runtime_publication_status = 'runtime_published'
-      order by published_at desc
-      limit $1
-    `
-  }
-
-  if (sourceTable === 'construction_dependency_rule_runtime_events') {
-    return `
-      select *
-      from public.construction_dependency_rule_runtime_events
-      where event_type in ('impact_monitoring', 'rollback_execution')
-        and event_status in ('monitoring_passed', 'rollback_executed')
-      order by executed_at desc
+      from public.duration_learning_runtime_consumptions
+      order by consumed_at desc, created_at desc
       limit $1
     `
   }
@@ -530,57 +494,21 @@ async function queryCanonicalSourceTableRows<T = Record<string, unknown>>(
     `, [maxRowsPerSourceTable]))
   }
 
-  if (sourceTable === 'algorithm_seed_versions') {
+  if (sourceTable === 'duration_learning_runtime_publications') {
     return normalizeQueryRows<T>(await rawQuery(`
       select *
-      from public.algorithm_seed_versions
-      where seed_type = 'standard_work_duration'
-        and status = 'active'
-        and is_current = true
-        and published_at is not null
+      from public.duration_learning_runtime_publications
+      where publication_stage in ('canary', 'stable', 'rolled_back')
       order by published_at desc, updated_at desc
       limit $1
     `, [maxRowsPerSourceTable]))
   }
 
-  if (sourceTable === 'wbs_template_runtime_publications') {
+  if (sourceTable === 'duration_learning_runtime_consumptions') {
     return normalizeQueryRows<T>(await rawQuery(`
       select *
-      from public.wbs_template_runtime_publications
-      where runtime_publication_status = 'runtime_published'
-      order by published_at desc
-      limit $1
-    `, [maxRowsPerSourceTable]))
-  }
-
-  if (sourceTable === 'wbs_template_runtime_events') {
-    return normalizeQueryRows<T>(await rawQuery(`
-      select *
-      from public.wbs_template_runtime_events
-      where event_type in ('impact_monitoring', 'rollback_execution')
-        and event_status in ('monitoring_passed', 'rollback_executed')
-      order by executed_at desc
-      limit $1
-    `, [maxRowsPerSourceTable]))
-  }
-
-  if (sourceTable === 'construction_dependency_rule_runtime_publications') {
-    return normalizeQueryRows<T>(await rawQuery(`
-      select *
-      from public.construction_dependency_rule_runtime_publications
-      where runtime_publication_status = 'runtime_published'
-      order by published_at desc
-      limit $1
-    `, [maxRowsPerSourceTable]))
-  }
-
-  if (sourceTable === 'construction_dependency_rule_runtime_events') {
-    return normalizeQueryRows<T>(await rawQuery(`
-      select *
-      from public.construction_dependency_rule_runtime_events
-      where event_type in ('impact_monitoring', 'rollback_execution')
-        and event_status in ('monitoring_passed', 'rollback_executed')
-      order by executed_at desc
+      from public.duration_learning_runtime_consumptions
+      order by consumed_at desc, created_at desc
       limit $1
     `, [maxRowsPerSourceTable]))
   }

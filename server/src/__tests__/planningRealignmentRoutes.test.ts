@@ -242,12 +242,16 @@ const state = vi.hoisted(() => {
       return Promise.resolve(this.executeSingle())
     }
 
+    maybeSingle() {
+      return Promise.resolve(this.executeSingle())
+    }
+
     then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
       return Promise.resolve(this.execute()).then(resolve, reject)
     }
 
     private execute() {
-      const rows = state.tables[this.table]
+      const rows = state.tables[this.table] ?? []
       if (this.mode === 'update') {
         const matched = rows.filter((row) => matchesFilters(row, this.filters))
         const updated = matched.map((row) => Object.assign(row, clone(this.payload)))
@@ -403,12 +407,18 @@ vi.mock('../middleware/validation.js', () => ({
   validateIdParam: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
 }))
 
+vi.mock('../auth/access.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../auth/access.js')>(),
+  getProjectCompanyId: vi.fn(async () => 'company-1'),
+}))
+
 vi.mock('../services/dbService.js', () => ({
   supabase: state.supabase,
 }))
 
 vi.mock('../database.js', () => ({
   getClient: state.getClient,
+  query: state.clientQuery,
 }))
 
 vi.mock('../services/transactionInsertService.js', () => ({

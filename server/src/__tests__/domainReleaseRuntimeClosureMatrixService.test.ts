@@ -68,25 +68,31 @@ describe('domainReleaseRuntimeClosureMatrixService', () => {
         assetType: 'standard_work_duration_seed_runtime',
         surface: 'asset_type_domain_writer',
         evidenceRefs: expect.arrayContaining([
-          expect.stringContaining('standardWorkDurationSeedPublicationService.ts'),
+          expect.stringContaining('durationLearningRuntimePublicationService.ts'),
         ]),
         missingReasons: [],
       }),
       expect.objectContaining({
         assetType: 'wbs_template_runtime',
         surface: 'release_record',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('315_duration_learning_runtime_publications.sql'),
+        ]),
         missingReasons: [],
       }),
       expect.objectContaining({
         assetType: 'construction_dependency_rule_runtime',
         surface: 'runtime_consumer_verification',
+        evidenceRefs: expect.arrayContaining([
+          expect.stringContaining('durationLearningRuntimeConsumptionService.ts'),
+        ]),
         missingReasons: [],
       }),
       expect.objectContaining({
         assetType: 'critical_path_rule_runtime',
         surface: 'rollback_writer_and_target',
         evidenceRefs: expect.arrayContaining([
-          expect.stringContaining('criticalPathRuleRuntimePublicationService.ts'),
+          expect.stringContaining('durationLearningRuntimePublicationService.ts'),
         ]),
         missingReasons: [],
       }),
@@ -150,6 +156,9 @@ describe('domainReleaseRuntimeClosureMatrixService', () => {
         missingReasons: [],
       }),
     ]))
+    const evidence = JSON.stringify(matrix)
+    expect(evidence).not.toMatch(/(?:wbsTemplate|constructionDependencyRule|criticalPathRule)RuntimePublicationService/)
+    expect(evidence).not.toMatch(/(?:wbs_template|construction_dependency_rule)_runtime_(?:publications|events)/)
   })
 
   it('blocks completion when any current domain runtime surface lacks evidence or a not-applicable reason', () => {
