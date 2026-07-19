@@ -10,13 +10,32 @@ const simulationSource = fs.readFileSync(
   path.join(scriptDir, 'generate-executable-default-master-plan-simulation.mjs'),
   'utf8',
 )
+const constructionQualitySource = fs.readFileSync(
+  path.join(scriptDir, 'executable-default-master-plan-construction-quality.test.mjs'),
+  'utf8',
+)
 
 test('local static executable plan simulation resolves built-in duration assets without runtime DB fallback waits', () => {
+  assert.match(simulationSource, /createRequire/)
+  assert.match(simulationSource, /createRequire\(path\.join\(REPO_ROOT, 'server', 'package\.json'\)\)/)
+  assert.match(simulationSource, /serverRequire\.resolve\('tsx\/cli'\)/)
+  assert.doesNotMatch(simulationSource, /node_modules', 'tsx', 'dist', 'cli\.mjs'/)
   assert.match(simulationSource, /environmentTarget:\s*'local_static'/)
   assert.match(simulationSource, /algorithmSeedSourcePolicy:\s*'built_in_only'/)
+  assert.match(simulationSource, /runtimePublicationResolution:\s*'disabled'/)
   assert.match(
     simulationSource,
     /diagnosticStageTimings:\s*process\.env\.WORKBUDDY_EXECUTABLE_PLAN_SIMULATION_TRACE\s*===\s*'1'/,
+  )
+})
+
+test('construction quality gate generates same-checkout plans without a historical report dependency', () => {
+  assert.match(constructionQualitySource, /mkdtemp/)
+  assert.match(constructionQualitySource, /generate-executable-default-master-plan-simulation\.mjs/)
+  assert.match(constructionQualitySource, /NODE_ENV:\s*'staging'/)
+  assert.doesNotMatch(
+    constructionQualitySource,
+    /executable-default-master-plan-current-\d{8}-r\d+/,
   )
 })
 

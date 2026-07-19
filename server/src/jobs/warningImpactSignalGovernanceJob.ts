@@ -1,6 +1,6 @@
 import { logger } from '../middleware/logger.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
-import { runJobWithRetry } from '../services/jobRuntime.js'
+import { runJobWithRetry, runWithJobLease } from '../services/jobRuntime.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 import { WarningService } from '../services/warningService.js'
 
@@ -145,17 +145,38 @@ export class WarningImpactSignalGovernanceJob {
     const jobId = createJobId()
     try {
       this.lastRun = new Date()
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'warningImpactSignalGovernanceJob',
-          triggeredBy,
           jobId,
         },
-        async () => runWarningImpactSignalGovernanceSweep(
-          Array.isArray(projectIds) ? projectIds : null,
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'warningImpactSignalGovernanceJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const value = await runWarningImpactSignalGovernanceSweep(
+              Array.isArray(projectIds) ? projectIds : null,
+            )
+            lease.assertActive()
+            return value
+          },
         ),
       )
 
+      if (!lease.acquired) {
+        logger.warn('warningImpactSignalGovernanceJob skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return emptyResult()
+      }
+
+      const { attempts, value } = lease.value
       logger.info('warningImpactSignalGovernanceJob completed', {
         triggeredBy,
         jobId,

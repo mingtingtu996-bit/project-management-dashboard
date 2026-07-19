@@ -8,6 +8,28 @@ import {
   normalizePgConnectionStringForLivegate,
   runProductionLivegateEvidence,
 } from './run-production-livegate-evidence.mjs';
+import { hashC19RuntimeConsumerLedgerRows } from './check-c19-runtime-preflight.mjs';
+import { readProjectBusinessResidueReadback } from './project-residue-policy.mjs';
+
+const RELEASE_SHA = 'a'.repeat(40);
+const PROJECT_ID = '00000000-0000-4000-8000-000000000101';
+const GENERATION_BATCH_ID = 'production-livegate-generation-1';
+const RUNTIME_CALL_ROWS = [{
+  id: '00000000-0000-4000-8000-000000000201',
+  consumer_key: 'wbsTemplateGenerationService',
+  runtime_entry_ref: 'wbsTemplateGenerationService:generateWbsTemplateRows',
+  call_status: 'called',
+  call_context: {
+    projectId: PROJECT_ID,
+    generationBatchId: GENERATION_BATCH_ID,
+    runtimeAssetMode: 'no_published_artifact',
+    runtimeArtifactCount: 0,
+    runtimeArtifactPublicationKeys: [],
+  },
+  source_evidence_refs: ['wbs_template_generation:production-livegate'],
+  called_at: new Date('2026-07-01T01:59:00.000Z'),
+}];
+const RUNTIME_OBSERVATION_ROWS = [];
 
 test('production livegate normalizes sslmode=require before opening a non-verifying Supabase pg connection', () => {
   const normalized = normalizePgConnectionStringForLivegate(
@@ -21,20 +43,29 @@ test('production livegate normalizes sslmode=require before opening a non-verify
   );
 });
 
-test('production livegate writes DB-backed C18/C19 evidence and no-safe old-object closeout', async () => {
+test('production livegate uses a session temp probe and validates canonical wizard/WBS evidence', async () => {
   const artifactRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-production-livegate-'));
   const handoffFile = path.join(artifactRoot, 'handoff.json');
+  const canonicalWizardSmokeFile = path.join(artifactRoot, 'production-wizard-smoke.json');
 
   try {
     await writeJson(handoffFile, buildHandoff());
+    await writeJson(canonicalWizardSmokeFile, buildCanonicalWizardSmoke());
     const env = {
-      SUPABASE_MIGRATION_URL: 'postgres://user@example.invalid:5432/postgres',
+      SUPABASE_MIGRATION_URL: 'postgres://postgres.wwdrkjnbvcbfytwnnyvs:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres',
     };
+    const fakeClient = new FakePgClient({
+      relations: [
+        { schema_name: 'public', object_name: 'projects', relkind: 'r', comment: null, rowCount: 3 },
+        { schema_name: 'public', object_name: 'tasks', relkind: 'r', comment: null, rowCount: 12 },
+      ],
+    });
     const result = await runProductionLivegateEvidence({
       env,
       envFile: 'deploy/env/server.production.env',
       handoffFile,
       artifactRoot,
+      canonicalWizardSmokeFile,
       includeLive: true,
       confirmLiveHandoff: true,
       includeDb: true,
@@ -44,27 +75,23 @@ test('production livegate writes DB-backed C18/C19 evidence and no-safe old-obje
         'c19-runtime-publication-release-rollback',
         'old-object-physical-drop-closeout',
       ],
-      dbClientFactory: () => new FakePgClient({
-        relations: [
-          { schema_name: 'public', object_name: 'projects', relkind: 'r', comment: null, rowCount: 3 },
-          { schema_name: 'public', object_name: 'tasks', relkind: 'r', comment: null, rowCount: 12 },
-        ],
-      }),
+      dbClientFactory: () => fakeClient,
       now: new Date('2026-07-01T02:00:00.000Z'),
     });
 
-    assert.equal(result.status, 'pass');
+    const earlyC19Validation = await readJson(
+      path.join(artifactRoot, 'c19-runtime-publication-release-rollback-evidence-validation.json'),
+    );
+    assert.equal(result.status, 'pass', JSON.stringify({ result, earlyC19Validation }, null, 2));
     assert.equal(result.mayCloseAll, true);
     assert.deepEqual(result.openGateIds, []);
 
     const closeout = await readJson(path.join(artifactRoot, 'old-object-no-safe-candidate-closeout.json'));
     const discovery = await readJson(path.join(artifactRoot, 'old-object-candidate-discovery.all.json'));
     const c18Summary = await readJson(path.join(artifactRoot, 'c18-live-evidence-summary.json'));
-    const c19Apply = await readJson(path.join(artifactRoot, 'c19-runtime-publication-apply.json'));
-    const c19Monitoring = await readJson(path.join(artifactRoot, 'c19-impact-monitoring-observation.json'));
-    const c19Rollback = await readJson(path.join(artifactRoot, 'c19-runtime-rollback-saved-outcome.json'));
-    const c19ConstructionOrganization = await readJson(path.join(artifactRoot, 'c19-construction-organization-e1-e3-e5.json'));
-    const c19Summary = await readJson(path.join(artifactRoot, 'c19-live-evidence-summary.json'));
+    const c19Smoke = await readJson(path.join(artifactRoot, 'wizard-baseline-revision-live.json'));
+    const c19Cleanup = await readJson(path.join(artifactRoot, 'wizard-baseline-revision-cleanup-readback.json'));
+    const c19Preflight = await readJson(path.join(artifactRoot, 'c19-canonical-wizard-preflight.json'));
     const c19Validation = await readJson(path.join(artifactRoot, 'c19-runtime-publication-release-rollback-evidence-validation.json'));
     const serialized = await readFile(path.join(artifactRoot, 'production-livegate-execution-summary.json'), 'utf8');
 
@@ -75,16 +102,303 @@ test('production livegate writes DB-backed C18/C19 evidence and no-safe old-obje
     assert.equal(c18Summary.status, 'pass');
     assert.equal(c18Summary.dbMutation, true);
     assert.equal(c18Summary.cleanupReadback.status, 'pass');
-    assert.equal(c19Apply.result.status, 'runtime_apply_ready');
-    assert.equal(c19Monitoring.result.status, 'runtime_event_recorded');
-    assert.equal(c19Rollback.result.status, 'runtime_rollback_ready');
-    assert.equal(c19ConstructionOrganization.status, 'pass');
-    assert.equal(c19Summary.result.apply.status, 'runtime_apply_ready');
-    assert.equal(c19Summary.result.constructionOrganization.status, 'pass');
-    assert.equal(c19Summary.liveMutation, true);
-    assert.equal(c19Summary.dbMutation, true);
+    assert.equal(c18Summary.boundary.probeStorage, 'session_temp_only');
+    assert.equal(c18Summary.cleanupReadback.persistentResidual, 0);
+    assert.equal(c19Smoke.productionLive, true);
+    assert.equal(c19Smoke.status, 'pass');
+    assert.equal(c19Cleanup.projectPhysicallyDeleted, true);
+    assert.equal(c19Cleanup.projectResidueReadback.status, 'pass');
+    assert.equal(c19Cleanup.projectResidueReadback.scannedTableCount, 2);
+    assert.equal(c19Cleanup.projectResidueReadback.totalBusinessResidueCount, 0);
+    assert.deepEqual(c19Cleanup.projectResidueReadback.nonZeroBusinessTables, []);
+    assert.deepEqual(c19Cleanup.projectResidueReadback.retainedHistoricalResidue, [
+      { tableName: 'operation_logs', rowCount: 2 },
+    ]);
+    assert.equal(c19Preflight.status, 'ready');
+    assert.equal(c19Preflight.readiness.canonicalWizardCommitReady, true);
+    assert.equal(c19Preflight.readiness.baselineRevisionRollbackReady, true);
+    assert.equal(c19Preflight.readiness.cleanupReady, true);
+    assert.equal(c19Preflight.readiness.runtimeConsumerCallDeltaReady, true);
+    assert.equal(c19Preflight.readiness.runtimeConsumerObservationDeltaReady, true);
+    assert.match(c19Preflight.canonicalWizardSmokeInputSha256, /^[0-9a-f]{64}$/u);
+    assert.match(
+      c19Preflight.canonicalWizardWbsReadiness.canonicalWizardSmokeFile,
+      /inputs[\\/]c19-wizard-smoke-[0-9a-f]{64}\.json$/u,
+    );
     assert.equal(c19Validation.status, 'pass');
+    assert.equal(fakeClient.queries.some((query) => (
+      /delete\s+from\s+public\.runtime_consumer_(?:runtime_calls|observations)/iu.test(query.sql)
+    )), false);
     assert.equal(serialized.includes('postgres://'), false);
+  } finally {
+    await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('project residue scan is type-aware and fails closed on incomplete table readback', async () => {
+  const queries = [];
+  const queryExec = async (sql) => {
+    queries.push(sql);
+    if (sql.includes('information_schema.columns')) {
+      return [
+        { table_name: 'legacy_text_project_rows', data_type: 'text', udt_name: 'text' },
+        { table_name: 'tasks', data_type: 'uuid', udt_name: 'uuid' },
+      ];
+    }
+    if (sql.includes('workbuddy_c19_project_residue_scan')) {
+      return [{ table_name: 'tasks', residue_count: 0 }];
+    }
+    throw new Error(`Unexpected residue query: ${sql}`);
+  };
+
+  const readback = await readProjectBusinessResidueReadback(queryExec, { projectId: PROJECT_ID });
+  const countQuery = queries.find((sql) => sql.includes('workbuddy_c19_project_residue_scan'));
+
+  assert.match(
+    countQuery,
+    /FROM public\."legacy_text_project_rows"[\s\S]*?project_id::text = \$1/u,
+  );
+  assert.match(countQuery, /FROM public\."tasks"[\s\S]*?project_id = \$1::uuid/u);
+  assert.equal(readback.status, 'blocked');
+  assert.equal(readback.reason, 'project_residue_scan_count_readback_incomplete');
+});
+
+test('production livegate workflow runs a same-SHA disposable wizard smoke with always cleanup and canonical handoff', async () => {
+  const workflow = await readFile(
+    path.resolve('.github/workflows/production-livegate-execution.yml'),
+    'utf8',
+  );
+  const matrix = JSON.parse(await readFile(
+    path.resolve('project-testing/matrix/release-test-matrix.json'),
+    'utf8',
+  ));
+
+  for (const requiredSource of [
+    'production_mutation_approval',
+    'I_APPROVE_DISPOSABLE_PRODUCTION_WIZARD_SMOKE',
+    '/api/readyz',
+    'readiness.build?.releaseSha',
+    'readiness.build?.deployTarget',
+    'readiness.build?.supabaseProjectRef',
+    'readiness.build?.databaseProjectRef',
+    '${{ github.sha }}',
+    'scripts/run-wizard-baseline-revision-staging.mjs',
+    '--target-environment production',
+    '--deployed-readiness-file',
+    '--production-mutation-approval',
+    '--cleanup-report',
+    'if: always()',
+    'check-c19-runtime-preflight.mjs',
+    'project-residue-policy.mjs',
+    '--wizard-smoke-file',
+    '--expected-environment production',
+    '--expected-release-sha',
+    '--expected-project-ref',
+    'production-wizard-smoke.json',
+    'exit "$livegate_status"',
+  ]) {
+    assert.ok(workflow.includes(requiredSource), requiredSource);
+  }
+  assert.equal(workflow.includes('deployed_staging_private_server'), false);
+  assert.equal(workflow.includes('ssh-keyscan'), false);
+  assert.match(workflow, /if \[ -z "\$DEPLOY_KNOWN_HOSTS" \]/u);
+  const c19Gate = matrix.gateGroups.find(
+    (gate) => gate.id === 'c19-runtime-publication-release-rollback',
+  );
+  assert.ok(c19Gate.artifactValidationPolicy.requiredMetadata.includes('projectResidueReadback'));
+  assert.ok(c19Gate.artifactValidationPolicy.rejectIf.includes('disposable-project-residue'));
+});
+
+test('production C19 writes only blocked artifacts for an invalid smoke', async () => {
+  const artifactRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-production-livegate-invalid-smoke-'));
+  const handoffFile = path.join(artifactRoot, 'handoff.json');
+  const smokeFile = path.join(artifactRoot, 'source-smoke.json');
+  const fakeClient = new FakePgClient({ relations: [] });
+
+  try {
+    const smoke = buildCanonicalWizardSmoke();
+    smoke.productionLive = false;
+    smoke.environmentClassification = 'deployed_staging_private_server';
+    await writeJson(handoffFile, buildHandoff());
+    await writeJson(smokeFile, smoke);
+
+    const result = await runProductionLivegateEvidence({
+      env: {
+        SUPABASE_MIGRATION_URL: 'postgres://postgres.wwdrkjnbvcbfytwnnyvs:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres',
+      },
+      envFile: 'deploy/env/server.production.env',
+      handoffFile,
+      artifactRoot,
+      canonicalWizardSmokeFile: smokeFile,
+      includeLive: true,
+      confirmLiveHandoff: true,
+      includeDb: true,
+      confirmDbReady: true,
+      gateIds: ['c19-runtime-publication-release-rollback'],
+      dbClientFactory: () => fakeClient,
+    });
+
+    assert.equal(result.status, 'fail');
+    for (const artifactName of [
+      'wizard-baseline-revision-live.json',
+      'wizard-baseline-revision-cleanup-readback.json',
+      'c19-canonical-wizard-preflight.json',
+    ]) {
+      const artifact = await readJson(path.join(artifactRoot, artifactName));
+      assert.equal(artifact.status, 'blocked', artifactName);
+      assert.equal(artifact.liveMutation, false, artifactName);
+      assert.equal(artifact.dbMutation, false, artifactName);
+    }
+    assert.equal(fakeClient.queries.length, 0);
+  } finally {
+    await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('production C19 does not infer mutation from production labels without commit proof', async () => {
+  const artifactRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-production-livegate-no-commit-'));
+  const handoffFile = path.join(artifactRoot, 'handoff.json');
+  const smokeFile = path.join(artifactRoot, 'source-smoke.json');
+  const fakeClient = new FakePgClient({ relations: [] });
+
+  try {
+    const smoke = buildCanonicalWizardSmoke();
+    delete smoke.steps.commitWizardGeneration;
+    await writeJson(handoffFile, buildHandoff());
+    await writeJson(smokeFile, smoke);
+    const result = await runProductionLivegateEvidence({
+      env: {
+        SUPABASE_MIGRATION_URL: 'postgres://postgres.wwdrkjnbvcbfytwnnyvs:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres',
+      },
+      envFile: 'deploy/env/server.production.env',
+      handoffFile,
+      artifactRoot,
+      canonicalWizardSmokeFile: smokeFile,
+      includeLive: true,
+      confirmLiveHandoff: true,
+      includeDb: true,
+      confirmDbReady: true,
+      gateIds: ['c19-runtime-publication-release-rollback'],
+      dbClientFactory: () => fakeClient,
+    });
+
+    assert.equal(result.status, 'fail');
+    const c19GateResult = result.gateResults.find(
+      (gate) => gate.gateId === 'c19-runtime-publication-release-rollback',
+    );
+    assert.equal(c19GateResult.status, 'blocked');
+    assert.equal(c19GateResult.mutationOccurred, false);
+    assert.equal(c19GateResult.liveMutation, false);
+    assert.equal(c19GateResult.dbMutation, false);
+  } finally {
+    await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('production C19 rejects a selected database target from another project before connect or query', async () => {
+  const artifactRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-production-livegate-wrong-db-'));
+  const handoffFile = path.join(artifactRoot, 'handoff.json');
+  const smokeFile = path.join(artifactRoot, 'source-smoke.json');
+  const fakeClient = new FakePgClient({ relations: [] });
+
+  try {
+    await writeJson(handoffFile, buildHandoff());
+    await writeJson(smokeFile, buildCanonicalWizardSmoke());
+    const result = await runProductionLivegateEvidence({
+      env: {
+        SUPABASE_MIGRATION_URL: 'postgres://postgres.xemqmqpifsstkovbkatp:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres',
+      },
+      envFile: 'deploy/env/server.production.env',
+      handoffFile,
+      artifactRoot,
+      canonicalWizardSmokeFile: smokeFile,
+      includeLive: true,
+      confirmLiveHandoff: true,
+      includeDb: true,
+      confirmDbReady: true,
+      gateIds: ['c19-runtime-publication-release-rollback'],
+      dbClientFactory: () => fakeClient,
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.equal(fakeClient.connectCount, 0);
+    assert.equal(fakeClient.queries.length, 0);
+    assert.equal((await readJson(path.join(artifactRoot, 'wizard-baseline-revision-live.json'))).status, 'blocked');
+  } finally {
+    await rm(artifactRoot, { recursive: true, force: true });
+  }
+});
+
+test('production C19 blocks when API cleanup leaves project-scoped business residue', async () => {
+  const artifactRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-production-livegate-residue-'));
+  const handoffFile = path.join(artifactRoot, 'handoff.json');
+  const smokeFile = path.join(artifactRoot, 'source-smoke.json');
+  const fakeClient = new FakePgClient({
+    relations: [],
+    projectResidues: {
+      notifications: 1,
+      operation_logs: 3,
+    },
+  });
+
+  try {
+    await writeJson(handoffFile, buildHandoff());
+    await writeJson(smokeFile, buildCanonicalWizardSmoke());
+    const result = await runProductionLivegateEvidence({
+      env: {
+        SUPABASE_MIGRATION_URL: 'postgres://postgres.wwdrkjnbvcbfytwnnyvs:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres',
+      },
+      envFile: 'deploy/env/server.production.env',
+      handoffFile,
+      artifactRoot,
+      canonicalWizardSmokeFile: smokeFile,
+      includeLive: true,
+      confirmLiveHandoff: true,
+      includeDb: true,
+      confirmDbReady: true,
+      gateIds: ['c19-runtime-publication-release-rollback'],
+      dbClientFactory: () => fakeClient,
+    });
+
+    assert.equal(result.status, 'fail');
+    const c19GateResult = result.gateResults.find(
+      (gate) => gate.gateId === 'c19-runtime-publication-release-rollback',
+    );
+    assert.equal(c19GateResult.status, 'blocked');
+    assert.match(c19GateResult.reason, /disposable_project_business_residue/u);
+    assert.equal(c19GateResult.liveMutation, true);
+    assert.equal(c19GateResult.dbMutation, true);
+    assert.equal(c19GateResult.mutationOccurred, true);
+    const live = await readJson(path.join(artifactRoot, 'wizard-baseline-revision-live.json'));
+    const cleanup = await readJson(
+      path.join(artifactRoot, 'wizard-baseline-revision-cleanup-readback.json'),
+    );
+    assert.equal(live.status, 'blocked');
+    assert.equal(live.productionLive, true);
+    assert.equal(live.liveMutation, true);
+    assert.equal(live.dbMutation, true);
+    assert.equal(live.cleanup.status, 'pass');
+    assert.equal(live.cleanup.projectPhysicallyDeleted, true);
+    assert.equal(live.cleanup.projectUnreadable, true);
+    assert.equal(cleanup.status, 'blocked');
+    assert.equal(cleanup.productionLive, true);
+    assert.equal(cleanup.liveMutation, true);
+    assert.equal(cleanup.dbMutation, true);
+    assert.equal(cleanup.mutationAttempted, true);
+    assert.equal(cleanup.mutationOccurred, true);
+    assert.equal(cleanup.projectPhysicallyDeleted, true);
+    assert.equal(cleanup.projectUnreadable, true);
+    assert.equal(cleanup.sourceCleanup.status, 'pass');
+    assert.equal(cleanup.sourceCleanup.projectPhysicallyDeleted, true);
+    assert.equal(cleanup.sourceCleanup.projectUnreadable, true);
+    assert.equal(cleanup.projectResidueReadback.status, 'blocked');
+    assert.equal(cleanup.projectResidueReadback.totalBusinessResidueCount, 1);
+    assert.deepEqual(cleanup.projectResidueReadback.nonZeroBusinessTables, [
+      { tableName: 'notifications', rowCount: 1 },
+    ]);
+    assert.deepEqual(cleanup.projectResidueReadback.retainedHistoricalResidue, [
+      { tableName: 'operation_logs', rowCount: 3 },
+    ]);
   } finally {
     await rm(artifactRoot, { recursive: true, force: true });
   }
@@ -134,6 +448,12 @@ test('production livegate does not write no-safe closeout when an old-object can
 function buildHandoff() {
   return {
     schemaVersion: 'workbuddy-release-handoff-input/v1',
+    deployment: {
+      environment: 'production',
+      environmentClassification: 'deployed_production_private_server',
+      releaseSha: RELEASE_SHA,
+      supabaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+    },
     unlockFlags: {
       includeLive: true,
       confirmLiveHandoff: true,
@@ -158,7 +478,7 @@ function buildHandoff() {
         },
         targets: {
           companyId: 'company-1',
-          projectId: 'project-1',
+          projectId: PROJECT_ID,
         },
         release: {
           phase1L5Ref: 'github-actions://run/test/phase1-l5',
@@ -185,15 +505,86 @@ function buildHandoff() {
   };
 }
 
+function buildCanonicalWizardSmoke() {
+  return {
+    source: 'wizard_baseline_revision_live_probe',
+    environmentClassification: 'deployed_production_private_server',
+    deployedStagingCode: false,
+    productionLive: true,
+    releaseSha: RELEASE_SHA,
+    supabaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+    deployedReadiness: {
+      releaseSha: RELEASE_SHA,
+      deployTarget: 'production',
+      supabaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+      databaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+    },
+    status: 'pass',
+    projectId: PROJECT_ID,
+    generationBatchId: GENERATION_BATCH_ID,
+    steps: {
+      commitWizardGeneration: { status: 'pass', createdTaskCount: 72 },
+      taskDependencyReadback: {
+        status: 'pass',
+        dependencyReadbackCount: 111,
+        inventoryDependencyCount: 111,
+        danglingDependencyCount: 0,
+      },
+      criticalPathReadback: {
+        status: 'pass',
+        calculationStatus: 'fresh',
+        dependencyEdgeCount: 111,
+        projectDurationDays: 420,
+      },
+      readCandidateBaseline: { status: 'pass', itemCount: 72 },
+      publishBaseline: { status: 'pass', baselineStatus: 'confirmed' },
+      startRevision: { status: 'pass', idempotent: true },
+      rollbackRevisionDraft: {
+        status: 'pass',
+        revisionPhysicallyDeleted: true,
+        confirmedBaselineStatus: 'confirmed',
+      },
+      runtimeConsumerLedgerReadback: {
+        status: 'pass',
+        appendOnly: true,
+        projectId: PROJECT_ID,
+        generationBatchId: GENERATION_BATCH_ID,
+        callBefore: 0,
+        callAfter: RUNTIME_CALL_ROWS.length,
+        callDelta: RUNTIME_CALL_ROWS.length,
+        observationBefore: 0,
+        observationAfter: RUNTIME_OBSERVATION_ROWS.length,
+        observationDelta: RUNTIME_OBSERVATION_ROWS.length,
+        expectedPublicationKeys: [],
+        publishedArtifactCount: 0,
+        expectedObservationDelta: 0,
+        callRowIds: RUNTIME_CALL_ROWS.map((row) => row.id),
+        callRowsHash: hashC19RuntimeConsumerLedgerRows(RUNTIME_CALL_ROWS),
+        observationRowIds: [],
+        observationRowsHash: hashC19RuntimeConsumerLedgerRows([]),
+        deleteMutationCount: 0,
+      },
+    },
+    cleanup: {
+      status: 'pass',
+      projectPhysicallyDeleted: true,
+      projectUnreadable: true,
+    },
+  };
+}
+
 class FakePgClient {
-  constructor({ relations }) {
+  constructor({ relations, projectResidues = { operation_logs: 2, tasks: 0 } }) {
     this.relations = relations;
-    this.events = [];
-    this.publications = new Map();
+    this.projectResidues = projectResidues;
+    this.tempProbeRows = [];
     this.connected = false;
+    this.connectCount = 0;
+    this.queries = [];
   }
 
   async connect() {
+    this.connectCount += 1;
     this.connected = true;
   }
 
@@ -202,81 +593,47 @@ class FakePgClient {
   }
 
   async query(sql, params = []) {
+    this.queries.push({ sql, params });
     const normalized = sql.replace(/\s+/g, ' ').toLowerCase();
-    if (normalized.includes('select to_regclass($1)')) {
-      const relationName = String(params[0] ?? '');
-      const known = [
-        'public.t2_rhythm_schedule_runtime_events',
-        'public.t2_rhythm_schedule_runtime_publications',
-      ];
-      return { rows: [{ relation_name: known.includes(relationName) ? relationName : null }] };
+    if (normalized === 'begin' || normalized === 'rollback') return { rows: [] };
+    if (normalized.includes('create temp table workbuddy_production_livegate_probe')) return { rows: [] };
+    if (normalized.includes('insert into workbuddy_production_livegate_probe')) {
+      this.tempProbeRows = safeParseJson(params[0]);
+      return { rows: this.tempProbeRows.map((row) => ({ item_id: row.item_id })) };
+    }
+    if (normalized.includes('delete from workbuddy_production_livegate_probe')) {
+      const rows = this.tempProbeRows.map((row) => ({ item_id: row.item_id }));
+      this.tempProbeRows = [];
+      return { rows };
+    }
+    if (normalized.includes('from workbuddy_production_livegate_probe')) {
+      return { rows: [{ row_count: this.tempProbeRows.length }] };
+    }
+    if (normalized.includes('from public.duration_experience_samples')) {
+      return { rows: [{ duration_sample_count: 0, t2_window_sample_count: 0 }] };
+    }
+    if (normalized.includes('from public.tasks') && normalized.includes('completed_actual_task_count')) {
+      return { rows: [{ completed_actual_task_count: 0, t2_metadata_task_count: 0 }] };
+    }
+    if (normalized.includes('from public.runtime_consumer_runtime_calls')) {
+      return { rows: RUNTIME_CALL_ROWS };
+    }
+    if (normalized.includes('from public.runtime_consumer_observations')) {
+      return { rows: RUNTIME_OBSERVATION_ROWS };
+    }
+    if (normalized.includes('workbuddy_c19_project_residue_scan')) {
+      return {
+        rows: Object.entries(this.projectResidues).map(([tableName, rowCount]) => ({
+          table_name: tableName,
+          residue_count: rowCount,
+        })),
+      };
     }
     if (normalized.includes('select pg_try_advisory_lock(hashtext($1))')) {
       return { rows: [{ acquired: true }] };
     }
     if (normalized.includes('select pg_advisory_unlock(hashtext($1))')) {
       return { rows: [{ released: true }] };
-    }
-    if (normalized.includes('insert into public.t2_rhythm_schedule_runtime_events')) {
-      const event = {
-        event_id: `event-${this.events.length + 1}`,
-        event_type: params[0],
-        event_status: params[1],
-        source_publication_key: params[2],
-        event_payload: safeParseJson(params[3]),
-      };
-      this.events.push(event);
-      return { rows: [event] };
-    }
-    if (normalized.includes('delete from public.t2_rhythm_schedule_runtime_events')) {
-      const sourceKey = params[0];
-      const removed = this.events.filter((event) => event.source_publication_key === sourceKey);
-      this.events = this.events.filter((event) => event.source_publication_key !== sourceKey);
-      return { rows: removed.map((event) => ({ event_id: event.event_id })) };
-    }
-    if (normalized.includes('from public.t2_rhythm_schedule_runtime_events') && normalized.includes('group by')) {
-      const sourceKey = params[0];
-      const grouped = new Map();
-      for (const event of this.events.filter((item) => item.source_publication_key === sourceKey)) {
-        const key = `${event.event_type}:${event.event_status}`;
-        grouped.set(key, {
-          event_type: event.event_type,
-          event_status: event.event_status,
-          event_count: (grouped.get(key)?.event_count ?? 0) + 1,
-        });
-      }
-      return { rows: [...grouped.values()] };
-    }
-    if (normalized.includes('from public.t2_rhythm_schedule_runtime_events') && normalized.includes('count(*)::int as event_count')) {
-      const sourceKey = params[0];
-      return { rows: [{ event_count: this.events.filter((event) => event.source_publication_key === sourceKey).length }] };
-    }
-    if (normalized.includes('insert into public.t2_rhythm_schedule_runtime_publications')) {
-      const publication = {
-        runtime_publication_id: `publication-${this.publications.size + 1}`,
-        publication_key: params[0],
-        runtime_publication_status: 'runtime_published',
-        company_id: params[1],
-        project_id: params[2],
-        candidate_id: params[3],
-        selected_template_ids: safeParseJson(params[4]),
-        rollback_target: params[10],
-      };
-      this.publications.set(publication.publication_key, publication);
-      return { rows: [publication] };
-    }
-    if (normalized.includes('update public.t2_rhythm_schedule_runtime_publications')) {
-      const publicationKey = params[0];
-      const publication = this.publications.get(publicationKey);
-      if (!publication) return { rows: [] };
-      publication.runtime_publication_status = 'runtime_rolled_back';
-      publication.rollback_execution = safeParseJson(params[1]);
-      publication.impact_monitoring = safeParseJson(params[2]);
-      return { rows: [publication] };
-    }
-    if (normalized.includes('from public.t2_rhythm_schedule_runtime_publications')) {
-      const publication = this.publications.get(params[0]);
-      return { rows: publication ? [publication] : [] };
     }
     if (normalized.includes('from pg_depend')) {
       return { rows: [] };
@@ -288,6 +645,16 @@ class FakePgClient {
       const objectName = params.at(-1) ?? extractRelationName(sql);
       const relation = this.relations.find((item) => item.object_name === objectName);
       return { rows: [{ row_count: relation?.rowCount ?? 0 }] };
+    }
+    if (normalized.includes('from information_schema.columns')
+      && normalized.includes("column_name = 'project_id'")) {
+      return {
+        rows: Object.keys(this.projectResidues).sort().map((tableName) => ({
+          table_name: tableName,
+          data_type: tableName === 'operation_logs' ? 'text' : 'uuid',
+          udt_name: tableName === 'operation_logs' ? 'text' : 'uuid',
+        })),
+      };
     }
     if (normalized.includes('from information_schema.columns')) {
       return { rows: [] };

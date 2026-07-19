@@ -4,6 +4,11 @@ import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import {
+  RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES,
+  hashProjectBusinessResidueReadback,
+} from './project-residue-policy.mjs';
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -12,11 +17,9 @@ const C15_GATE_ID = 'c15-live-learning-closeout';
 const C15_REWARD_MAE_ARTIFACT = 'c15-reward-mae-quality-readback.json';
 const C15_SUMMARY_ARTIFACT = 'c15-live-evidence-summary.json';
 const C19_GATE_ID = 'c19-runtime-publication-release-rollback';
-const C19_APPLY_ARTIFACT = 'c19-runtime-publication-apply.json';
-const C19_MONITORING_ARTIFACT = 'c19-impact-monitoring-observation.json';
-const C19_ROLLBACK_ARTIFACT = 'c19-runtime-rollback-saved-outcome.json';
-const C19_CONSTRUCTION_ORGANIZATION_ARTIFACT = 'c19-construction-organization-e1-e3-e5.json';
-const C19_SUMMARY_ARTIFACT = 'c19-live-evidence-summary.json';
+const C19_WIZARD_SMOKE_ARTIFACT = 'wizard-baseline-revision-live.json';
+const C19_CLEANUP_ARTIFACT = 'wizard-baseline-revision-cleanup-readback.json';
+const C19_PREFLIGHT_ARTIFACT = 'c19-canonical-wizard-preflight.json';
 const OLD_OBJECT_GATE_ID = 'old-object-physical-drop-closeout';
 const OLD_OBJECT_NO_SAFE_CLOSEOUT = 'old-object-no-safe-candidate-closeout.json';
 const OLD_OBJECT_FULL_DISCOVERY = 'old-object-candidate-discovery.all.json';
@@ -308,7 +311,7 @@ async function validateGateSpecificContent({
   }
 
   if (gateId === C19_GATE_ID) {
-    return validateC19RuntimePublicationEvidence(filesByBasename);
+    return validateC19CanonicalWizardEvidence(filesByBasename);
   }
 
   if (gateId !== OLD_OBJECT_GATE_ID) {
@@ -390,62 +393,142 @@ async function validateC15LearningCloseoutEvidence(filesByBasename) {
   };
 }
 
-async function validateC19RuntimePublicationEvidence(filesByBasename) {
+async function validateC19CanonicalWizardEvidence(filesByBasename) {
   const items = [
-    'runtime-apply-ready',
-    'impact-monitoring-recorded',
-    'runtime-rollback-ready',
-    'consumer-observation-archived',
-    'runtime-mutation-recorded',
-    'construction-organization-runtime-evidence',
+    'production-same-sha-identity',
+    'wizard-commit-ready',
+    'dependency-and-critical-path-ready',
+    'baseline-revision-rollback-ready',
+    'disposable-project-cleanup-ready',
+    'runtime-consumer-ledger-readback-ready',
+    'immutable-smoke-input-bound',
   ];
   const passed = [];
   const failures = [];
-  const applyDoc = await readJsonFileForContent(filesByBasename.get(C19_APPLY_ARTIFACT), C19_APPLY_ARTIFACT, failures);
-  const monitoringDoc = await readJsonFileForContent(filesByBasename.get(C19_MONITORING_ARTIFACT), C19_MONITORING_ARTIFACT, failures);
-  const rollbackDoc = await readJsonFileForContent(filesByBasename.get(C19_ROLLBACK_ARTIFACT), C19_ROLLBACK_ARTIFACT, failures);
-  const constructionOrganizationDoc = await readJsonFileForContent(filesByBasename.get(C19_CONSTRUCTION_ORGANIZATION_ARTIFACT), C19_CONSTRUCTION_ORGANIZATION_ARTIFACT, failures);
-  const summaryDoc = await readJsonFileForContent(filesByBasename.get(C19_SUMMARY_ARTIFACT), C19_SUMMARY_ARTIFACT, failures);
+  const smoke = await readJsonFileForContent(
+    filesByBasename.get(C19_WIZARD_SMOKE_ARTIFACT),
+    C19_WIZARD_SMOKE_ARTIFACT,
+    failures,
+  );
+  const cleanup = await readJsonFileForContent(
+    filesByBasename.get(C19_CLEANUP_ARTIFACT),
+    C19_CLEANUP_ARTIFACT,
+    failures,
+  );
+  const preflight = await readJsonFileForContent(
+    filesByBasename.get(C19_PREFLIGHT_ARTIFACT),
+    C19_PREFLIGHT_ARTIFACT,
+    failures,
+  );
+  const releaseSha = String(smoke?.releaseSha ?? '').toLowerCase();
+  const projectRef = String(smoke?.supabaseProjectRef ?? '').toLowerCase();
+  const inputSha = String(preflight?.canonicalWizardSmokeInputSha256 ?? '').toLowerCase();
+  const projectResidueReadback = cleanup?.projectResidueReadback ?? {};
+  const scannedTables = Array.isArray(projectResidueReadback.scannedTables)
+    ? projectResidueReadback.scannedTables.map(normalizeText).filter(Boolean).sort()
+    : [];
+  const retainedHistoricalTables = Array.isArray(
+    projectResidueReadback.retainedHistoricalProjectReferenceTables,
+  )
+    ? projectResidueReadback.retainedHistoricalProjectReferenceTables
+      .map(normalizeText)
+      .filter(Boolean)
+      .sort()
+    : [];
+  const nonZeroBusinessTables = Array.isArray(projectResidueReadback.nonZeroBusinessTables)
+    ? projectResidueReadback.nonZeroBusinessTables
+    : [];
+  const projectResidueReadbackHash = normalizeText(projectResidueReadback.readbackHash).toLowerCase();
 
   expectEqual(failures, passed, {
-    condition: hasStatus(applyDoc, 'runtime_apply_ready') || hasStatus(summaryDoc?.result?.apply, 'runtime_apply_ready'),
-    detail: 'runtime-apply-ready',
-    artifact: C19_APPLY_ARTIFACT,
-    message: 'C-19 runtime publication closeout requires nested result.status=runtime_apply_ready in apply evidence or summary.result.apply.',
+    condition: smoke?.status === 'pass'
+      && smoke?.productionLive === true
+      && smoke?.environmentClassification === 'deployed_production_private_server'
+      && /^[0-9a-f]{40}$/.test(releaseSha)
+      && /^[a-z0-9]{20}$/.test(projectRef)
+      && smoke?.deployedReadiness?.releaseSha === releaseSha
+      && smoke?.deployedReadiness?.deployTarget === 'production'
+      && smoke?.deployedReadiness?.supabaseProjectRef === projectRef
+      && smoke?.deployedReadiness?.databaseProjectRef === projectRef
+      && preflight?.expectedEnvironment === 'production'
+      && preflight?.expectedReleaseSha === releaseSha
+      && preflight?.expectedProjectRef === projectRef
+      && preflight?.selectedDatabaseProjectRef === projectRef,
+    detail: 'production-same-sha-identity',
+    artifact: C19_WIZARD_SMOKE_ARTIFACT,
+    message: 'C-19 requires exact production classification, deployed readyz identity, release SHA, Supabase project ref, and selected database target agreement.',
   });
   expectEqual(failures, passed, {
-    condition: hasStatus(monitoringDoc, 'runtime_event_recorded') || hasStatus(summaryDoc?.result?.monitoring, 'runtime_event_recorded'),
-    detail: 'impact-monitoring-recorded',
-    artifact: C19_MONITORING_ARTIFACT,
-    message: 'C-19 runtime publication closeout requires nested result.status=runtime_event_recorded in monitoring evidence or summary.result.monitoring.',
+    condition: preflight?.status === 'ready'
+      && preflight?.readiness?.canonicalWizardCommitReady === true
+      && Number(smoke?.steps?.commitWizardGeneration?.createdTaskCount ?? 0) > 0,
+    detail: 'wizard-commit-ready',
+    artifact: C19_PREFLIGHT_ARTIFACT,
+    message: 'C-19 requires a ready canonical preflight and a nonempty wizard commit.',
   });
   expectEqual(failures, passed, {
-    condition: hasStatus(rollbackDoc, 'runtime_rollback_ready') || hasStatus(summaryDoc?.result?.rollback, 'runtime_rollback_ready'),
-    detail: 'runtime-rollback-ready',
-    artifact: C19_ROLLBACK_ARTIFACT,
-    message: 'C-19 runtime publication closeout requires nested result.status=runtime_rollback_ready in rollback evidence or summary.result.rollback.',
+    condition: preflight?.readiness?.dependencyReadbackReady === true
+      && preflight?.readiness?.criticalPathReady === true,
+    detail: 'dependency-and-critical-path-ready',
+    artifact: C19_PREFLIGHT_ARTIFACT,
+    message: 'C-19 requires exact dependency inventory readback and a fresh nonempty critical path.',
   });
   expectEqual(failures, passed, {
-    condition: hasNonEmptyText(applyDoc?.consumerObservationRef)
-      && hasNonEmptyText(monitoringDoc?.consumerObservationRef)
-      && hasNonEmptyText(rollbackDoc?.consumerObservationRef)
-      && hasNonEmptyText(summaryDoc?.consumerObservationRef),
-    detail: 'consumer-observation-archived',
-    artifact: C19_SUMMARY_ARTIFACT,
-    message: 'C-19 runtime publication closeout requires archived consumerObservationRef on apply, monitoring, rollback, and summary evidence.',
+    condition: preflight?.readiness?.baselineRevisionRollbackReady === true,
+    detail: 'baseline-revision-rollback-ready',
+    artifact: C19_PREFLIGHT_ARTIFACT,
+    message: 'C-19 requires confirmed baseline publication, idempotent revision, and physical revision rollback.',
   });
   expectEqual(failures, passed, {
-    condition: [applyDoc, monitoringDoc, rollbackDoc, summaryDoc].every((doc) => doc?.liveMutation === true && doc?.dbMutation === true),
-    detail: 'runtime-mutation-recorded',
-    artifact: C19_SUMMARY_ARTIFACT,
-    message: 'C-19 runtime publication closeout requires liveMutation=true and dbMutation=true on runtime apply, monitoring, rollback, and summary evidence.',
+    condition: cleanup?.status === 'pass'
+      && cleanup?.projectPhysicallyDeleted === true
+      && cleanup?.projectUnreadable === true
+      && cleanup?.projectId === smoke?.projectId
+      && preflight?.readiness?.cleanupReady === true,
+    detail: 'disposable-project-cleanup-ready',
+    artifact: C19_CLEANUP_ARTIFACT,
+    message: 'C-19 requires physical disposable-project cleanup and unreadable post-delete readback.',
   });
   expectEqual(failures, passed, {
-    condition: hasConstructionOrganizationRuntimeEvidence(constructionOrganizationDoc)
-      && hasStatus(summaryDoc?.result?.constructionOrganization, 'pass'),
-    detail: 'construction-organization-runtime-evidence',
-    artifact: C19_CONSTRUCTION_ORGANIZATION_ARTIFACT,
-    message: 'C-19 construction organization closeout requires pass status plus E1/E3/E5 runtime evidence details, not metadata-only artifacts.',
+    condition: projectResidueReadback.schemaVersion === 'workbuddy-project-residue-readback/v1'
+      && projectResidueReadback.status === 'pass'
+      && projectResidueReadback.projectId === smoke?.projectId
+      && Number(projectResidueReadback.scannedTableCount) > 0
+      && Number(projectResidueReadback.scannedTableCount) === scannedTables.length
+      && JSON.stringify(retainedHistoricalTables)
+        === JSON.stringify([...RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES])
+      && nonZeroBusinessTables.length === 0
+      && Number(projectResidueReadback.totalBusinessResidueCount) === 0
+      && Number(projectResidueReadback.queryMutationCount) === 0
+      && /^[0-9a-f]{64}$/.test(projectResidueReadbackHash)
+      && projectResidueReadbackHash === hashProjectBusinessResidueReadback(projectResidueReadback)
+      && preflight?.readiness?.projectResidueReadbackReady === true
+      && preflight?.canonicalWizardWbsReadiness?.projectResidueReadback?.databaseVerified === true
+      && preflight?.canonicalWizardWbsReadiness?.projectResidueReadback?.readbackHash
+        === projectResidueReadbackHash,
+    detail: 'project-business-residue-zero',
+    artifact: C19_CLEANUP_ARTIFACT,
+    message: 'C-19 requires an independently database-verified zero-residue scan across public project_id business tables.',
+  });
+  expectEqual(failures, passed, {
+    condition: preflight?.readiness?.runtimeConsumerCallDeltaReady === true
+      && preflight?.readiness?.runtimeConsumerObservationDeltaReady === true
+      && Number(preflight?.canonicalWizardWbsReadiness?.runtimeConsumerLedger?.callDelta ?? 0) > 0
+      && Number(preflight?.canonicalWizardWbsReadiness?.runtimeConsumerLedger?.deleteMutationCount ?? -1) === 0,
+    detail: 'runtime-consumer-ledger-readback-ready',
+    artifact: C19_PREFLIGHT_ARTIFACT,
+    message: 'C-19 requires a real runtime call delta, independently consistent observation delta, and zero append-only ledger deletes.',
+  });
+  expectEqual(failures, passed, {
+    condition: /^[0-9a-f]{64}$/.test(inputSha)
+      && smoke?.canonicalWizardSmokeInputSha256 === inputSha
+      && cleanup?.canonicalWizardSmokeInputSha256 === inputSha
+      && /inputs[\\/]c19-wizard-smoke-[0-9a-f]{64}\.json$/u.test(
+        String(preflight?.canonicalWizardWbsReadiness?.canonicalWizardSmokeFile ?? ''),
+      ),
+    detail: 'immutable-smoke-input-bound',
+    artifact: C19_PREFLIGHT_ARTIFACT,
+    message: 'C-19 must bind all pass artifacts to one immutable SHA-256 wizard smoke input.',
   });
 
   return {

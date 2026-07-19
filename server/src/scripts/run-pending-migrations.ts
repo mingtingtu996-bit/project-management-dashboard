@@ -37,6 +37,7 @@ import {
 import {
   T2_SCHEDULE_RUNTIME_RETIREMENT_MIGRATION,
   prepareT2ScheduleRuntimeRetirementApplySession,
+  resolveT2ScheduleRuntimeRetirementTargetIdentity,
   validateT2ScheduleRuntimeRetirementBackup,
 } from './t2ScheduleRuntimeRetirementSupport.js'
 
@@ -206,6 +207,7 @@ async function main() {
           (sql, values) => client.query(sql, values),
           backup,
           expectedSha256,
+          resolveT2ScheduleRuntimeRetirementTargetIdentity(),
         )
       }
       await applyMigration(client, migration)

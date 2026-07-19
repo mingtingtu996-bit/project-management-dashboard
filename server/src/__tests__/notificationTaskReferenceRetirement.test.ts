@@ -153,10 +153,15 @@ describe('notification task reference retirement', () => {
       resolve(workspaceRoot, 'scripts', 'diagnostics', 'live-workspace-isolation-regression.mjs'),
       'utf8',
     )
+    const residuePolicy = readFileSync(
+      resolve(workspaceRoot, 'project-testing', 'tools', 'project-residue-policy.mjs'),
+      'utf8',
+    )
 
-    expect(diagnostic).toContain("const retainedHistoricalProjectReferenceTables = new Set(['operation_logs'])")
+    expect(diagnostic).toContain("from '../../project-testing/tools/project-residue-policy.mjs'")
     expect(diagnostic).toContain('!retainedHistoricalProjectReferenceTables.has(table)')
+    expect(residuePolicy).toContain("Object.freeze(['operation_logs'])")
+    expect(residuePolicy).not.toContain('notifications')
     expect(diagnostic).toContain("recordCheck('retained historical project references', 'done'")
-    expect(diagnostic).not.toContain("new Set(['operation_logs', 'notifications'])")
   })
 })

@@ -5,6 +5,8 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import pg from 'pg'
 
+import { RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES } from '../../project-testing/tools/project-residue-policy.mjs'
+
 const { Client } = pg
 
 const __filename = fileURLToPath(import.meta.url)
@@ -69,7 +71,7 @@ const client = new Client(connection)
 const errors = []
 const warnings = []
 const checks = []
-const retainedHistoricalProjectReferenceTables = new Set(['operation_logs'])
+const retainedHistoricalProjectReferenceTables = new Set(RETAINED_HISTORICAL_PROJECT_REFERENCE_TABLES)
 
 function recordCheck(name, status, details = {}) {
   checks.push({ name, status, ...details })

@@ -650,9 +650,14 @@
         "C-19.disposable-project-cleanup"
       ],
       "unlockPolicy": {
-        "profile": "staging",
-        "requiredFlags": [],
-        "liveHandoffRequired": false,
+        "profile": "production",
+        "requiredFlags": [
+          "includeLive",
+          "confirmLiveHandoff",
+          "includeDb",
+          "confirmDbReady"
+        ],
+        "liveHandoffRequired": true,
         "dbReadyRequired": true,
         "writeApprovalRequired": true,
         "manualApprovalRequired": false,
@@ -663,15 +668,21 @@
       "artifactValidationPolicy": {
         "requiredMetadata": [
           "environmentClassification",
+          "productionLive",
+          "releaseSha",
+          "supabaseProjectRef",
           "source",
           "projectId",
+          "generationBatchId",
           "status",
-          "steps.commitWizardGeneration",
-          "steps.taskDependencyReadback",
-          "steps.criticalPathReadback",
-          "steps.publishBaseline",
-          "steps.rollbackRevisionDraft",
-          "cleanup"
+          "commitWizardGeneration",
+          "taskDependencyReadback",
+          "criticalPathReadback",
+          "publishBaseline",
+          "rollbackRevisionDraft",
+          "cleanup",
+          "projectResidueReadback",
+          "runtimeConsumerLedgerReadback"
         ],
         "rejectIf": [
           "wizard-commit-failed",
@@ -682,18 +693,15 @@
           "revision-rollback-failed",
           "disposable-project-residue"
         ],
-        "requiredArtifactPatterns": [
-          "staging-wizard-baseline-revision-*.json",
-          "staging-wizard-baseline-revision-*-cleanup-readback.json"
-        ]
+        "requiredArtifactPatterns": []
       },
       "commands": [
-        "node project-testing/tools/run-wizard-baseline-revision-staging.mjs --env-file <staging.env> --api-base-url <current-code-staging-api-url> --report <artifact-root>/staging-wizard-baseline-revision.json",
-        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <staging.env> --project-id <project-id> --wizard-smoke-file <artifact-root>/staging-wizard-baseline-revision.json --output <artifact-root>/c19-canonical-wizard-preflight.json"
+        "node scripts/run-wizard-baseline-revision-staging.mjs --env-file <production.env> --api-base-url <same-sha-production-private-api-url> --report <artifact-root>/wizard-baseline-revision-live.json --release-sha <sha>",
+        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <production.env> --project-id <project-id> --wizard-smoke-file <artifact-root>/inputs/c19-wizard-smoke-<sha256>.json --expected-environment production --expected-release-sha <sha> --expected-project-ref <production-project-ref> --output <artifact-root>/c19-canonical-wizard-preflight.json"
       ],
       "commandTemplates": [
-        "node project-testing/tools/run-wizard-baseline-revision-staging.mjs --env-file <staging.env> --api-base-url <current-code-staging-api-url> --report <staging-wizard-baseline-revision.json>",
-        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <staging.env> --project-id <project-id> --wizard-smoke-file <staging-wizard-baseline-revision.json> --output <c19-canonical-wizard-preflight.json>"
+        "node scripts/run-wizard-baseline-revision-staging.mjs --env-file <production.env> --api-base-url <same-sha-production-private-api-url> --report <wizard-baseline-revision-live.json> --release-sha <sha>",
+        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <production.env> --project-id <project-id> --wizard-smoke-file <immutable-wizard-input.json> --expected-environment production --expected-release-sha <sha> --expected-project-ref <project-ref> --output <c19-canonical-wizard-preflight.json>"
       ],
       "requiredEvidence": [
         "Canonical wizard commit created the expected tasks and dependencies in one transaction.",
@@ -701,7 +709,7 @@
         "Disposable project cleanup readback shows no business residue; environment classification remains explicit."
       ],
       "handoffChecklist": [
-        "Staging environment, current-code API endpoint, login company context, and disposable-project boundary are recorded.",
+        "Production environment, same-SHA private API endpoint, login company context, explicit approval, and disposable-project boundary are recorded.",
         "Migration state and runtime RLS required by the canonical wizard chain are read back before smoke.",
         "Cleanup owner and residue scan are defined before creating the disposable project."
       ],
@@ -716,17 +724,17 @@
         "Disposable project deletion and residue readback pass; local-current-code, deployed staging, and production/live remain separately classified."
       ],
       "expectedArtifacts": [
-        "staging-wizard-baseline-revision.json",
-        "staging-wizard-baseline-revision-cleanup-readback.json",
+        "wizard-baseline-revision-live.json",
+        "wizard-baseline-revision-cleanup-readback.json",
         "c19-canonical-wizard-preflight.json"
       ],
       "evidenceOwners": [
-        "staging-environment-owner",
+        "production-environment-owner",
         "wizard-smoke-owner",
         "database-readback-owner",
         "cleanup-owner"
       ],
-      "mutationBoundary": "writes only a disposable staging project through canonical product APIs, then confirms revision rollback and physical project cleanup; duplicate T2 runtime publication tables are never written"
+      "mutationBoundary": "writes only an explicitly approved disposable production project through canonical product APIs, then confirms revision rollback and physical project cleanup; append-only runtime consumer ledgers are read but never deleted, and duplicate T2 runtime publication tables are never written"
     },
     {
       "id": "database-migration-and-recovery",

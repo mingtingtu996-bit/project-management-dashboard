@@ -7,6 +7,7 @@ import { resolveMigrationRuntimeConnectionConfig } from '../services/migrationRu
 import {
   T2_SCHEDULE_RUNTIME_RETIREMENT_CONFIRMATION,
   restoreT2ScheduleRuntimeRetirementBackup,
+  resolveT2ScheduleRuntimeRetirementTargetIdentity,
   validateT2ScheduleRuntimeRetirementBackup,
 } from './t2ScheduleRuntimeRetirementSupport.js'
 
@@ -42,6 +43,7 @@ async function main() {
       (sql, values) => client.query(sql, values),
       backup,
       confirmation,
+      resolveT2ScheduleRuntimeRetirementTargetIdentity(),
     )
     console.log(JSON.stringify({
       status: 'pass',

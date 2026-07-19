@@ -723,7 +723,27 @@ export async function promoteDurationLearningRuntimeCanary(input: {
     [publicationKey],
   )
   const candidate = candidates[0] ? rowToRecord(candidates[0]) : null
-  if (!candidate) return { status: 'blocked' as const, previousPublicationKey: null, reasons: ['canary_publication_not_found'] }
+  if (!candidate) {
+    const terminalRows = await input.queryExec<RuntimePublicationRow>(
+      `select publication_key,
+              publication_stage,
+              monitoring_status,
+              previous_publication_key
+         from public.duration_learning_runtime_publications
+        where publication_key = $1
+        limit 1`,
+      [publicationKey],
+    )
+    const terminal = terminalRows[0] ? rowToRecord(terminalRows[0]) : null
+    if (terminal?.publicationStage === 'stable' && terminal.monitoringStatus === 'passed') {
+      return {
+        status: 'stable_already_promoted' as const,
+        previousPublicationKey: terminal.previousPublicationKey,
+        reasons: [],
+      }
+    }
+    return { status: 'blocked' as const, previousPublicationKey: null, reasons: ['canary_publication_not_found'] }
+  }
   if (candidate.monitoringStatus !== 'passed') {
     return { status: 'blocked' as const, previousPublicationKey: candidate.previousPublicationKey, reasons: ['canary_monitoring_pass_required'] }
   }
@@ -828,10 +848,27 @@ export async function rollbackDurationLearningRuntimePublication(input: {
     [publicationKey, reason, rolledBackAt],
   )
   const row = rows[0]
-  return row
+  if (row) {
+    return {
+      status: 'rollback_executed' as const,
+      restoredPublicationKey: nullableText(field(row, 'previous_publication_key', 'previousPublicationKey')),
+      reasons: [],
+    }
+  }
+  const terminalRows = await input.queryExec<RuntimePublicationRow>(
+    `select publication_key,
+            publication_stage,
+            previous_publication_key
+       from public.duration_learning_runtime_publications
+      where publication_key = $1
+      limit 1`,
+    [publicationKey],
+  )
+  const terminal = terminalRows[0] ? rowToRecord(terminalRows[0]) : null
+  return terminal?.publicationStage === 'rolled_back'
     ? {
-        status: 'rollback_executed' as const,
-        restoredPublicationKey: nullableText(field(row, 'previous_publication_key', 'previousPublicationKey')),
+        status: 'rollback_already_executed' as const,
+        restoredPublicationKey: terminal.previousPublicationKey,
         reasons: [],
       }
     : { status: 'blocked' as const, restoredPublicationKey: null, reasons: ['runtime_publication_not_found'] }

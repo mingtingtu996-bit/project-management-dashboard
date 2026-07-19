@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 process.env.LOG_LEVEL ||= 'error'
@@ -17,7 +18,8 @@ const DEFAULT_OUTPUT_ROOT = path.join(
   'executable-default-master-plan-20260710',
 )
 const TSX_BOOTSTRAP_ENV = 'WORKBUDDY_EXECUTABLE_PLAN_SIMULATION_TSX_BOOTSTRAPPED'
-const LOCAL_TSX_CLI_MODULE = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+const serverRequire = createRequire(path.join(REPO_ROOT, 'server', 'package.json'))
+const LOCAL_TSX_CLI_MODULE = serverRequire.resolve('tsx/cli')
 
 const BUSINESS_TYPE_LABELS = {
   general_civil: '民用建筑（住宅）',
@@ -1200,6 +1202,7 @@ async function generatePlan(params) {
     detailLevel: 'planning_skeleton',
     diagnosticDurationSuggestionMode: 'fast_template',
     algorithmSeedSourcePolicy: 'built_in_only',
+    runtimePublicationResolution: 'disabled',
     operation: {
       type: 'template_generate',
       diagnosticStageTimings: process.env.WORKBUDDY_EXECUTABLE_PLAN_SIMULATION_TRACE === '1',

@@ -140,12 +140,14 @@ npm run calendar:refresh-official -- --year=2026
 - `DEPLOY_USER`
 - `DEPLOY_PATH`
 - `DEPLOY_SSH_PRIVATE_KEY`
+- `DEPLOY_KNOWN_HOSTS`
+- `DEPLOY_HEALTH_URL`，必须为可从部署环境访问的外部 `https://` 健康检查地址
 
 可选：
 
 - `DEPLOY_PORT`，默认 `22`
-- `DEPLOY_KNOWN_HOSTS`，不配置时 workflow 会用 `ssh-keyscan`
-- `DEPLOY_HEALTH_URL`，默认 `http://127.0.0.1/api/health`
+
+部署会同时校验外部 HTTPS、HSTS、HTTP 到 HTTPS 重定向，以及通过 SSH 隧道访问的内部 `/api/readyz`；内部只读检查不能替代外部 TLS 门禁。
 
 `DEPLOY_PATH` 建议使用服务器上的绝对路径，例如 `/home/deploy/project-management-dashboard`。服务器目录内必须已经存在仓库和 `deploy/env/server.production.env`。
 

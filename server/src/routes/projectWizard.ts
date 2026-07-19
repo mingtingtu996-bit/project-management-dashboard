@@ -2697,6 +2697,10 @@ async function buildWizardProfilePreview(
     detailLevel: WIZARD_MANAGED_FRONTIER_DETAIL_LEVEL,
     generationDepth: WIZARD_MANAGED_FRONTIER_GENERATION_DEPTH,
     includeActivitySteps: false,
+    projectFacts: {
+      ...readRecord(operation.projectFacts),
+      ...(options.companyId ? { companyId: options.companyId } : {}),
+    },
     clientContext: {
       ...readRecord(operation.clientContext),
       detailLevel: WIZARD_MANAGED_FRONTIER_DETAIL_LEVEL,

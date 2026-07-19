@@ -49,6 +49,18 @@ type RuntimeHostResolution = {
   family?: 4
 }
 
+export type MigrationConnectionTargetSelection =
+  | {
+      mode: 'connection_string'
+      source: 'SUPABASE_MIGRATION_URL' | 'DIRECT_DATABASE_URL' | 'DATABASE_URL' | 'DB_CONNECTION_STRING'
+      connectionString: string
+    }
+  | {
+      mode: 'host'
+      host: string | undefined
+      user: string
+    }
+
 function isCanonicalMigrationFile(filename: string) {
   if (!MIGRATION_FILE_PATTERN.test(filename)) {
     return false
@@ -214,6 +226,29 @@ function deriveSupabaseHostFromUrl(value?: string | null) {
   }
 }
 
+export function selectMigrationConnectionTarget(
+  env: Record<string, string | undefined> = process.env,
+): MigrationConnectionTargetSelection {
+  const connectionInputs = [
+    ['SUPABASE_MIGRATION_URL', env.SUPABASE_MIGRATION_URL],
+    ['DIRECT_DATABASE_URL', env.DIRECT_DATABASE_URL],
+    ['DATABASE_URL', env.DATABASE_URL],
+    ['DB_CONNECTION_STRING', env.DB_CONNECTION_STRING],
+  ] as const
+  for (const [source, value] of connectionInputs) {
+    const connectionString = String(value ?? '').trim()
+    if (connectionString) {
+      return { mode: 'connection_string', source, connectionString }
+    }
+  }
+
+  return {
+    mode: 'host',
+    host: env.PGHOST ?? env.SUPABASE_HOST ?? deriveSupabaseHostFromUrl(env.SUPABASE_URL) ?? undefined,
+    user: env.PGUSER ?? env.SUPABASE_USER ?? 'postgres',
+  }
+}
+
 function deriveSupabaseProjectRef(value?: string | null) {
   const text = String(value ?? '').trim()
   if (!text) return null
@@ -266,18 +301,12 @@ function normalizeMigrationConnectionString(
 }
 
 export function resolveMigrationConnectionConfig() {
-  const connectionString = [
-    process.env.SUPABASE_MIGRATION_URL,
-    process.env.DIRECT_DATABASE_URL,
-    process.env.DATABASE_URL,
-    process.env.DB_CONNECTION_STRING,
-  ]
-    .map((value) => String(value ?? '').trim())
-    .find(Boolean)
-  const host = process.env.PGHOST ?? process.env.SUPABASE_HOST ?? deriveSupabaseHostFromUrl(process.env.SUPABASE_URL)
+  const target = selectMigrationConnectionTarget(process.env)
+  const connectionString = target.mode === 'connection_string' ? target.connectionString : undefined
+  const host = target.mode === 'host' ? target.host : undefined
   const port = Number.parseInt(process.env.PGPORT ?? process.env.SUPABASE_PORT ?? '5432', 10)
   const database = process.env.PGDATABASE ?? process.env.SUPABASE_DATABASE ?? 'postgres'
-  const user = process.env.PGUSER ?? process.env.SUPABASE_USER ?? 'postgres'
+  const user = target.mode === 'host' ? target.user : process.env.PGUSER ?? process.env.SUPABASE_USER ?? 'postgres'
   const password = process.env.PGPASSWORD ?? process.env.SUPABASE_PASSWORD ?? process.env.DB_PASSWORD
 
   const ssl = process.env.PGSSLMODE === 'disable'

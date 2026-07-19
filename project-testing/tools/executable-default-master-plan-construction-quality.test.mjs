@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
-import test from 'node:test'
+import test, { after, before } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import {
@@ -12,13 +14,46 @@ import {
 } from './generate-executable-default-master-plan-simulation.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
-const REPORT_PATH = path.resolve(
-  SCRIPT_DIR,
-  '..',
-  'reports',
-  'executable-default-master-plan-current-20260713-r35-business-facing-simple-plans',
-  'all-business-type-plans.json',
-)
+const REPO_ROOT = path.resolve(SCRIPT_DIR, '..', '..')
+const GENERATOR_PATH = path.join(SCRIPT_DIR, 'generate-executable-default-master-plan-simulation.mjs')
+let generatedOutputRoot = ''
+let generatedReport = null
+
+before(async () => {
+  generatedOutputRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'workbuddy-executable-plan-quality-'))
+  const result = spawnSync(process.execPath, [
+    GENERATOR_PATH,
+    '--output-root',
+    generatedOutputRoot,
+  ], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      NODE_ENV: 'staging',
+      SUPABASE_URL: 'http://127.0.0.1:1',
+      SUPABASE_ANON_KEY: 'offline-construction-quality-key',
+      SUPABASE_SERVICE_KEY: 'offline-construction-quality-key',
+      DATABASE_URL: 'postgresql://offline:offline@127.0.0.1:1/offline',
+    },
+    maxBuffer: 64 * 1024 * 1024,
+  })
+  assert.equal(
+    result.status,
+    0,
+    `same-checkout executable plan generation failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  )
+  generatedReport = JSON.parse(await fs.readFile(
+    path.join(generatedOutputRoot, 'all-business-type-plans.json'),
+    'utf8',
+  ))
+}, { timeout: 600_000 })
+
+after(async () => {
+  if (generatedOutputRoot) {
+    await fs.rm(generatedOutputRoot, { recursive: true, force: true })
+  }
+})
 
 test('simulation facts accept a high-difference business subtype without changing project scale', () => {
   const facts = buildSimulationFacts({ businessType: 'industrial' }, 'industrial_logistics')
@@ -39,7 +74,7 @@ test('simulation labels office and complex civil subtypes without presenting the
 })
 
 test('all 11 generated plans pass construction-quality network and semantic gates', async () => {
-  const report = JSON.parse(await fs.readFile(REPORT_PATH, 'utf8'))
+  const report = generatedReport
   assert.equal(report.plans.length, 11)
   for (const plan of report.plans) {
     const audit = auditConstructionQuality(plan)
@@ -72,7 +107,7 @@ test('all 11 generated plans pass construction-quality network and semantic gate
 })
 
 test('all 11 generated plans render the same business-facing simple schedule contract', async () => {
-  const report = JSON.parse(await fs.readFile(REPORT_PATH, 'utf8'))
+  const report = generatedReport
   assert.equal(report.plans.length, 11)
   for (const plan of report.plans) {
     const markdown = buildSimplePlanMarkdown(plan)
@@ -84,7 +119,7 @@ test('all 11 generated plans render the same business-facing simple schedule con
 })
 
 test('residential master plan hides internal vertical-transport constraints without deleting them', async () => {
-  const report = JSON.parse(await fs.readFile(REPORT_PATH, 'utf8'))
+  const report = generatedReport
   const residential = report.plans.find((plan) => plan.project.businessType === 'general_civil')
   assert.ok(residential)
   assert.equal(residential.summary.visibleSignificanceLeakRowCount, 0)

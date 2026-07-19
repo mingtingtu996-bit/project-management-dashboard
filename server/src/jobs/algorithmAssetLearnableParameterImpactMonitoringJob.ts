@@ -88,6 +88,27 @@ export type AlgorithmAssetLearnableParameterImpactMonitoringJobOptions = {
   durationLearningRuntimeLifecycleSweep?: () => Promise<DurationLearningRuntimeLifecycleSweepResult>
 }
 
+export class DurationLearningRuntimeLifecyclePartialFailureError extends Error {
+  readonly details: {
+    result: DurationLearningRuntimeLifecycleSweepResult
+    failureRefs: DurationLearningRuntimeLifecycleSweepResult['failureRefs']
+  }
+
+  constructor(result: DurationLearningRuntimeLifecycleSweepResult) {
+    const references = result.failureRefs.map((failure) => `${failure.phase}:${failure.reference}`).join(',')
+    super(`duration_learning_runtime_lifecycle_partial_failure:${result.failed}:${references || 'unclassified'}`)
+    this.name = 'DurationLearningRuntimeLifecyclePartialFailureError'
+    this.details = { result, failureRefs: result.failureRefs }
+  }
+}
+
+function assertDurationLearningRuntimeLifecycleSweepSucceeded(
+  result: DurationLearningRuntimeLifecycleSweepResult,
+) {
+  if (result.failed > 0) throw new DurationLearningRuntimeLifecyclePartialFailureError(result)
+  return result
+}
+
 function emptyResult(total = 0): AlgorithmAssetLearnableParameterImpactMonitoringSweepResult {
   return {
     total,
@@ -417,23 +438,17 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
 
       let durationLearningRuntimeLifecycle: DurationLearningRuntimeLifecycleSweepResult | null = null
       if (this.options.durationLearningRuntimeLifecycleSweep) {
-        try {
-          const lifecycleRun = await runJobWithRetry(
-            {
-              jobName: 'durationLearningRuntimeLifecycleSweep',
-              triggeredBy,
-              jobId,
-            },
-            this.options.durationLearningRuntimeLifecycleSweep,
-          )
-          durationLearningRuntimeLifecycle = lifecycleRun.value
-        } catch (error) {
-          logger.error('durationLearningRuntimeLifecycleSweep failed', {
+        const lifecycleRun = await runJobWithRetry(
+          {
+            jobName: 'durationLearningRuntimeLifecycleSweep',
             triggeredBy,
             jobId,
-            error: error instanceof Error ? error.message : String(error),
-          })
-        }
+          },
+          async () => assertDurationLearningRuntimeLifecycleSweepSucceeded(
+            await this.options.durationLearningRuntimeLifecycleSweep!(),
+          ),
+        )
+        durationLearningRuntimeLifecycle = lifecycleRun.value
       }
 
       logger.info('algorithmAssetLearnableParameterImpactMonitoringJob completed', {
@@ -449,6 +464,9 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
         triggeredBy,
         jobId,
         error: error instanceof Error ? error.message : String(error),
+        details: error instanceof DurationLearningRuntimeLifecyclePartialFailureError
+          ? error.details
+          : null,
       })
       if (triggeredBy === 'scheduler') throw error
       return emptyResult()

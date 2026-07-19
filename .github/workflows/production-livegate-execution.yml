@@ -13,6 +13,10 @@ on:
         required: false
         default: false
         type: boolean
+      production_mutation_approval:
+        description: Must equal I_APPROVE_DISPOSABLE_PRODUCTION_WIZARD_SMOKE.
+        required: true
+        type: string
 
 concurrency:
   group: production-livegate-execution-${{ github.ref }}
@@ -26,7 +30,7 @@ jobs:
   livegate:
     name: Production Livegate
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: production
     steps:
       - name: Checkout code
@@ -53,15 +57,179 @@ jobs:
             echo "Missing required deploy SSH secrets." >&2
             exit 1
           fi
+          if [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "Missing required pinned production SSH known_hosts." >&2
+            exit 1
+          fi
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-production-livegate
           chmod 600 ~/.ssh/workbuddy-production-livegate
-          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
-            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run same-SHA production wizard smoke through SSH tunnel
+        id: production-smoke
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_MUTATION_APPROVAL: ${{ inputs.production_mutation_approval }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
+          PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
+          PRODUCTION_TEST_USER_EMAIL: ${{ secrets.PRODUCTION_TEST_USER_EMAIL }}
+          PRODUCTION_TEST_USER_PASSWORD: ${{ secrets.PRODUCTION_TEST_USER_PASSWORD }}
+          OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$PRODUCTION_MUTATION_APPROVAL" != "I_APPROVE_DISPOSABLE_PRODUCTION_WIZARD_SMOKE" ]; then
+            echo "Explicit production mutation approval phrase is required." >&2
+            exit 1
           fi
+          for required_name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH PRODUCTION_SUPABASE_URL PRODUCTION_TEST_USER_EMAIL PRODUCTION_TEST_USER_PASSWORD; do
+            if [ -z "${!required_name}" ]; then
+              echo "Missing required production smoke value: $required_name" >&2
+              exit 1
+            fi
+          done
+
+          mkdir -p "$OUTPUT_ROOT"
+          smoke_env="$RUNNER_TEMP/production-wizard-smoke.env"
+          smoke_report="$OUTPUT_ROOT/production-wizard-smoke.json"
+          readyz_file="$OUTPUT_ROOT/deployed-api-readiness.json"
+          build_file="$OUTPUT_ROOT/production-build.json"
+          local_smoke_port=18082
+          tunnel_pid=""
+          cleanup_local() {
+            rm -f "$smoke_env"
+            if [ -n "$tunnel_pid" ]; then kill "$tunnel_pid" 2>/dev/null || true; fi
+          }
+          trap cleanup_local EXIT
+
+          expected_project_ref="$(node -e "const value=new URL(process.env.PRODUCTION_SUPABASE_URL).hostname.split('.')[0]; if(!/^[a-z0-9]{20}$/.test(value)){process.exit(1)} process.stdout.write(value)")"
+          planned_project_id="$(node -e "process.stdout.write(require('node:crypto').randomUUID())")"
+          printf 'SUPABASE_URL=%s\nTEST_USERNAME=%s\nTEST_USER_PASSWORD=%s\n' \
+            "$PRODUCTION_SUPABASE_URL" \
+            "$PRODUCTION_TEST_USER_EMAIL" \
+            "$PRODUCTION_TEST_USER_PASSWORD" \
+            > "$smoke_env"
+          chmod 600 "$smoke_env"
+
+          remote_web_port="$(ssh \
+            -i ~/.ssh/workbuddy-production-livegate \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "awk -F= '\$1 == \"WEB_PORT\" { value=\$2 } END { gsub(/\\r/, \"\", value); print value }' \"$DEPLOY_PATH/deploy/env/server.production.env\"")"
+          remote_web_port="${remote_web_port:-8080}"
+          if [[ ! "$remote_web_port" =~ ^[0-9]{2,5}$ ]]; then
+            echo "Invalid remote WEB_PORT; refusing production smoke." >&2
+            exit 1
+          fi
+
+          ssh -N -L "127.0.0.1:${local_smoke_port}:127.0.0.1:${remote_web_port}" \
+            -i ~/.ssh/workbuddy-production-livegate \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            -o ExitOnForwardFailure=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" &
+          tunnel_pid=$!
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error \
+              "http://127.0.0.1:${local_smoke_port}/api/readyz" \
+              > "$readyz_file"; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              echo "Production API readiness tunnel did not become healthy." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:${local_smoke_port}/workbuddy-build.json" \
+            > "$build_file"
+          node -e "const fs=require('fs'); const readiness=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const manifest=JSON.parse(fs.readFileSync(process.argv[2],'utf8')); const expectedRef=process.argv[3]; if(readiness.build?.releaseSha!==process.env.RELEASE_SHA) throw new Error('readyz releaseSha mismatch'); if(readiness.build?.deployTarget!=='production') throw new Error('readyz deployTarget mismatch'); if(readiness.build?.supabaseProjectRef!==expectedRef) throw new Error('readyz supabaseProjectRef mismatch'); if(readiness.build?.databaseProjectRef!==expectedRef) throw new Error('readyz databaseProjectRef mismatch'); if(manifest.releaseSha!==process.env.RELEASE_SHA) throw new Error('build manifest releaseSha mismatch');" \
+            "$readyz_file" "$build_file" "$expected_project_ref"
+
+          node scripts/run-wizard-baseline-revision-staging.mjs \
+            --env-file "$smoke_env" \
+            --api-base-url "http://127.0.0.1:${local_smoke_port}" \
+            --report "$smoke_report" \
+            --project-id "$planned_project_id" \
+            --target-environment production \
+            --production-mutation-approval "$PRODUCTION_MUTATION_APPROVAL" \
+            --deployed-readiness-file "$readyz_file" \
+            --expected-project-ref "$expected_project_ref" \
+            --release-sha "$RELEASE_SHA"
+
+          node -e "const fs=require('fs'); const report=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const sha=process.argv[2]; const ref=process.argv[3]; if(report.status!=='pass'||report.productionLive!==true||report.environmentClassification!=='deployed_production_private_server'||report.releaseSha!==sha||report.supabaseProjectRef!==ref||!report.generationBatchId||report.cleanup?.projectPhysicallyDeleted!==true||report.cleanup?.projectUnreadable!==true) throw new Error('production wizard smoke failed closed');" \
+            "$smoke_report" "$RELEASE_SHA" "$expected_project_ref"
+
+      - name: Always clean the production disposable wizard project
+        if: always()
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_MUTATION_APPROVAL: ${{ inputs.production_mutation_approval }}
+          DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.PRODUCTION_DEPLOY_PATH }}
+          PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
+          PRODUCTION_TEST_USER_EMAIL: ${{ secrets.PRODUCTION_TEST_USER_EMAIL }}
+          PRODUCTION_TEST_USER_PASSWORD: ${{ secrets.PRODUCTION_TEST_USER_PASSWORD }}
+          OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          smoke_report="$OUTPUT_ROOT/production-wizard-smoke.json"
+          cleanup_report="$OUTPUT_ROOT/production-wizard-smoke.cleanup.json"
+          readyz_file="$OUTPUT_ROOT/deployed-api-readiness.json"
+          if [ ! -s "$smoke_report" ]; then
+            exit 0
+          fi
+          smoke_env="$RUNNER_TEMP/production-wizard-smoke-cleanup.env"
+          local_smoke_port=18083
+          tunnel_pid=""
+          cleanup_local() {
+            rm -f "$smoke_env"
+            if [ -n "$tunnel_pid" ]; then kill "$tunnel_pid" 2>/dev/null || true; fi
+          }
+          trap cleanup_local EXIT
+          expected_project_ref="$(node -e "process.stdout.write(new URL(process.env.PRODUCTION_SUPABASE_URL).hostname.split('.')[0])")"
+          printf 'SUPABASE_URL=%s\nTEST_USERNAME=%s\nTEST_USER_PASSWORD=%s\n' \
+            "$PRODUCTION_SUPABASE_URL" \
+            "$PRODUCTION_TEST_USER_EMAIL" \
+            "$PRODUCTION_TEST_USER_PASSWORD" \
+            > "$smoke_env"
+          chmod 600 "$smoke_env"
+          remote_web_port="$(ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "awk -F= '\$1 == \"WEB_PORT\" { value=\$2 } END { gsub(/\\r/, \"\", value); print value }' \"$DEPLOY_PATH/deploy/env/server.production.env\"")"
+          remote_web_port="${remote_web_port:-8080}"
+          [[ "$remote_web_port" =~ ^[0-9]{2,5}$ ]]
+          ssh -N -L "127.0.0.1:${local_smoke_port}:127.0.0.1:${remote_web_port}" \
+            -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes -o ExitOnForwardFailure=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" &
+          tunnel_pid=$!
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent "http://127.0.0.1:${local_smoke_port}/api/readyz" >/dev/null; then break; fi
+            if [ "$attempt" -eq 20 ]; then exit 1; fi
+            sleep 2
+          done
+          node scripts/run-wizard-baseline-revision-staging.mjs \
+            --env-file "$smoke_env" \
+            --api-base-url "http://127.0.0.1:${local_smoke_port}" \
+            --cleanup-report "$smoke_report" \
+            --report "$cleanup_report" \
+            --target-environment production \
+            --production-mutation-approval "$PRODUCTION_MUTATION_APPROVAL" \
+            --deployed-readiness-file "$readyz_file" \
+            --expected-project-ref "$expected_project_ref" \
+            --release-sha "$RELEASE_SHA" \
+            --request-timeout-ms 20000
+          node -e "const fs=require('fs'); const report=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(report.status!=='pass'||report.cleanup?.projectPhysicallyDeleted!==true||report.cleanup?.projectUnreadable!==true) throw new Error('production wizard cleanup failed closed');" \
+            "$cleanup_report"
 
       - name: Collect server-side discovery signals
         env:
@@ -144,12 +312,26 @@ jobs:
           OUTPUT_ROOT: project-testing/reports/production-livegate-${{ github.run_id }}
           GATE_IDS: ${{ inputs.gate_ids }}
           INCLUDE_C15: ${{ inputs.include_c15 }}
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from 'node:fs';
           const outputRoot = process.env.OUTPUT_ROOT;
           const signals = JSON.parse(readFileSync(`${outputRoot}/server-handoff-signals.json`, 'utf8'));
+          const readiness = JSON.parse(readFileSync(`${outputRoot}/deployed-api-readiness.json`, 'utf8'));
+          const wizardSmoke = JSON.parse(readFileSync(`${outputRoot}/production-wizard-smoke.json`, 'utf8'));
+          const expectedProjectRef = new URL(process.env.PRODUCTION_SUPABASE_URL).hostname.split('.')[0];
+          if (readiness.build?.releaseSha !== process.env.RELEASE_SHA
+            || readiness.build?.deployTarget !== 'production'
+            || readiness.build?.supabaseProjectRef !== expectedProjectRef
+            || readiness.build?.databaseProjectRef !== expectedProjectRef
+            || wizardSmoke.releaseSha !== process.env.RELEASE_SHA
+            || wizardSmoke.supabaseProjectRef !== expectedProjectRef
+            || wizardSmoke.productionLive !== true) {
+            throw new Error('production handoff identity mismatch');
+          }
           writeFileSync(`${outputRoot}/handoff-signals.json`, `${JSON.stringify(signals, null, 2)}\n`);
           const discovered = signals.discoveredTargets ?? {};
           const requested = String(process.env.GATE_IDS || '')
@@ -170,6 +352,13 @@ jobs:
             schemaVersion: 'workbuddy-release-handoff-input/v1',
             generatedAt: new Date().toISOString(),
             source: 'github-actions-production-livegate-execution',
+            deployment: {
+              environment: 'production',
+              environmentClassification: 'deployed_production_private_server',
+              releaseSha: process.env.RELEASE_SHA,
+              supabaseProjectRef: expectedProjectRef,
+              databaseProjectRef: readiness.build.databaseProjectRef,
+            },
             boundary: {
               secretsEmbedded: false,
               envFileUploaded: false,
@@ -228,8 +417,8 @@ jobs:
                   artifactRoot,
                 },
                 targets: {
-                  companyId: String(discovered.companyId || ''),
-                  projectId: String(discovered.projectId || ''),
+                  companyId: String(wizardSmoke.companyId || ''),
+                  projectId: String(wizardSmoke.projectId || ''),
                 },
                 release: {
                   phase1L5Ref: `${artifactRoot}/phase1-l5-handoff.json`,
@@ -269,6 +458,8 @@ jobs:
 
       - name: Run production livegate inside production container
         env:
+          RELEASE_SHA: ${{ github.sha }}
+          PRODUCTION_SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
           DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
           DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
@@ -283,6 +474,7 @@ jobs:
           remote_artifacts="$remote_root/artifacts"
           remote_handoff="$remote_root/production-handoff.generated.json"
           remote_matrix="$remote_root/release-test-matrix.json"
+          remote_wizard_smoke="$remote_root/production-wizard-smoke.json"
           remote_gate_args="$remote_root/production-livegate-container-gate-args.txt"
           remote_env="$DEPLOY_PATH/deploy/env/server.production.env"
           mkdir -p "$OUTPUT_ROOT/artifacts"
@@ -293,12 +485,18 @@ jobs:
             "$local_tool_root/collect-release-handoff-signals.mjs" \
             "$local_tool_root/validate-release-evidence.mjs" \
             "$local_tool_root/evaluate-release-closeout.mjs" \
+            "$local_tool_root/check-c19-runtime-preflight.mjs" \
+            "$local_tool_root/project-residue-policy.mjs" \
             "$local_tool_root/run-production-livegate-evidence.mjs" \
             "$DEPLOY_USER@$DEPLOY_HOST:$remote_tools/"
           scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
             "$local_matrix" "$DEPLOY_USER@$DEPLOY_HOST:$remote_matrix"
           scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
             "$OUTPUT_ROOT/production-handoff.generated.json" "$DEPLOY_USER@$DEPLOY_HOST:$remote_handoff"
+          scp -i ~/.ssh/workbuddy-production-livegate -P "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$OUTPUT_ROOT/production-wizard-smoke.json" "$DEPLOY_USER@$DEPLOY_HOST:$remote_wizard_smoke"
+
+          expected_project_ref="$(node -e "const value=new URL(process.env.PRODUCTION_SUPABASE_URL).hostname.split('.')[0]; if(!/^[a-z0-9]{20}$/.test(value)){process.exit(1)} process.stdout.write(value)")"
 
           container_gate_args=()
           container_gate_args_file="$OUTPUT_ROOT/production-livegate-container-gate-args.txt"
@@ -326,7 +524,7 @@ jobs:
 
           set +e
           ssh -i ~/.ssh/workbuddy-production-livegate -p "$DEPLOY_PORT" -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -e; gate_args=\"\$(tr '\n' ' ' < '$remote_gate_args')\"; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts\"; for f in '$remote_tools'/*.mjs '$remote_matrix' '$remote_handoff'; do \$docker_cmd cp \"\$f\" project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/; done; set +e; \$docker_cmd exec project-management-api sh -lc \"node -- /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/run-production-livegate-evidence.mjs --env-source process --env-file deploy/env/server.production.env --handoff-file /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/production-handoff.generated.json --artifact-root /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts --matrix /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/release-test-matrix.json --include-live --confirm-live-handoff --include-db --confirm-db-ready \$gate_args\"; run_status=\$?; set -e; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts '$remote_root/artifacts.out'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}\" >/dev/null 2>&1 || true; exit \$run_status"
+            "set -e; gate_args=\"\$(tr '\n' ' ' < '$remote_gate_args')\"; if docker info >/dev/null 2>&1; then docker_cmd='docker'; elif sudo -n docker info >/dev/null 2>&1; then docker_cmd='sudo -n docker'; else exit 1; fi; \$docker_cmd exec project-management-api sh -lc \"mkdir -p /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts\"; for f in '$remote_tools'/*.mjs '$remote_matrix' '$remote_handoff' '$remote_wizard_smoke'; do \$docker_cmd cp \"\$f\" project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/; done; set +e; \$docker_cmd exec project-management-api sh -lc \"node -- /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/run-production-livegate-evidence.mjs --env-source process --env-file deploy/env/server.production.env --handoff-file /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/production-handoff.generated.json --artifact-root /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts --matrix /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/release-test-matrix.json --wizard-smoke-file /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/production-wizard-smoke.json --expected-environment production --expected-release-sha '$RELEASE_SHA' --expected-project-ref '$expected_project_ref' --include-live --confirm-live-handoff --include-db --confirm-db-ready \$gate_args\"; run_status=\$?; set -e; \$docker_cmd cp project-management-api:/tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}/artifacts '$remote_root/artifacts.out'; \$docker_cmd exec --user 0 project-management-api sh -lc \"rm -rf /tmp/workbuddy-production-livegate-${GITHUB_RUN_ID}\" >/dev/null 2>&1 || true; exit \$run_status"
           livegate_status=$?
           set -e
 
@@ -354,6 +552,7 @@ jobs:
 
           if [ "$livegate_status" -ne 0 ]; then
             echo "Production livegate command exited nonzero as expected for open gates. See closeout-decision.json." >&2
+            exit "$livegate_status"
           fi
 
       - name: Publish livegate summary

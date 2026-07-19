@@ -259,12 +259,13 @@ describe('deploy workflow contract', () => {
     expect(preflightJob).toContain('Verify deployment target database identity')
     expect(preflightJob).toContain('node scripts/check-deployment-target-identity.mjs')
     expect(preflightJob).toContain('Target deployment preflight blocked')
-    expect(preflightJob).toContain('Public HTTPS health is optional')
+    expect(preflightJob).not.toContain('Public HTTPS health is optional')
+    expect(preflightJob).toContain('External HTTPS health URL is required')
     expect(preflightJob).toContain(
-      'if [ -n "$DEPLOY_HEALTH_URL" ] && [[ "$DEPLOY_HEALTH_URL" != https://* ]]',
+      'if [[ "$DEPLOY_HEALTH_URL" != https://* ]]',
     )
-    expect(preflightJob).not.toMatch(
-      /DEPLOY_SSH_PRIVATE_KEY \\\r?\n\s+DEPLOY_HEALTH_URL \\/,
+    expect(preflightJob).toMatch(
+      /DEPLOY_KNOWN_HOSTS \\\r?\n\s+DEPLOY_HEALTH_URL \\/,
     )
     expect(preflightJob).toContain('exit 1')
 
@@ -432,7 +433,10 @@ describe('deploy workflow contract', () => {
     expect(workflow).toContain("env.DEPLOY_TARGET == 'staging'")
     expect(workflow).toContain('steps.staging-smoke.outcome')
     expect(workflow).toContain('staging-wizard-baseline-revision-${{ github.run_id }}')
-    expect(workflow).toContain('Public HTTPS health is optional')
+    expect(workflow).not.toContain('Public HTTPS health is optional')
+    expect(workflow).toContain(
+      'Public HTTPS health, HSTS, HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory.',
+    )
     expect(workflow).not.toContain("needs.database-migration.result == 'skipped'")
 
     const deployJob = workflow.slice(workflow.indexOf('  deploy-server:'))
@@ -465,6 +469,8 @@ describe('deploy workflow contract', () => {
     expect(deployScript).toContain('read_env_value SUPABASE_ANON_KEY')
     expect(deployScript).toContain('export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY')
     expect(deployScript).toContain('INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"')
+    expect(deployScript).toContain(': "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"')
+    expect(deployScript).not.toContain('HEALTH_URL="${HEALTH_URL:-$INTERNAL_HEALTH_URL}"')
     expect(deployScript).toContain('curl --fail --silent --show-error "$INTERNAL_HEALTH_URL"')
     expect(deployScript).toContain('/api/performance-reports/summary')
     expect(deployScript).toContain('External deployment health URL must use https://')

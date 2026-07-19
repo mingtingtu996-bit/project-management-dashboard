@@ -8,6 +8,7 @@ import {
   T2_SCHEDULE_RUNTIME_RETIREMENT_MIGRATION,
   calculateT2ScheduleRuntimeBackupSha256,
   captureT2ScheduleRuntimeRetirementBackup,
+  resolveT2ScheduleRuntimeRetirementTargetIdentity,
   serializeT2ScheduleRuntimeRetirementBackup,
 } from './t2ScheduleRuntimeRetirementSupport.js'
 
@@ -47,6 +48,7 @@ async function main() {
 
     const backup = await captureT2ScheduleRuntimeRetirementBackup(
       (sql, values) => client.query(sql, values),
+      { targetIdentity: resolveT2ScheduleRuntimeRetirementTargetIdentity() },
     )
     const serialized = serializeT2ScheduleRuntimeRetirementBackup(backup)
     const sha256 = calculateT2ScheduleRuntimeBackupSha256(serialized)

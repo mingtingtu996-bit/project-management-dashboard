@@ -99,8 +99,36 @@ export interface DurationLearningRuntimeLifecycleSweepResult {
   monitoringPassed: number
   monitoringFailed: number
   stablePromoted: number
+  stablePromotionReused: number
   rollbackExecuted: number
+  rollbackReused: number
   failed: number
+  failureRefs: DurationLearningRuntimeLifecycleFailureRef[]
+  collectionCursorAdvanced: boolean
+}
+
+export interface DurationLearningRuntimeLifecycleFailureRef {
+  phase: 'candidate_collection' | 'candidate_publication' | 'monitoring_collection' | 'monitoring' | 'collection_cursor'
+  reference: string
+  message: string
+}
+
+export interface DurationLearningRuntimeCollectionCursorPosition {
+  lastGroupKey: string | null
+  wrapCount: number
+}
+
+export interface DurationLearningRuntimeCollectionCursorState {
+  version: number
+  positions: Record<string, DurationLearningRuntimeCollectionCursorPosition>
+}
+
+export interface DurationLearningRuntimeCollectionCursorStore {
+  load(): Promise<DurationLearningRuntimeCollectionCursorState>
+  commit(
+    expected: DurationLearningRuntimeCollectionCursorState,
+    next: DurationLearningRuntimeCollectionCursorState,
+  ): Promise<DurationLearningRuntimeCollectionCursorState>
 }
 
 type PersistPublication = (
@@ -114,6 +142,7 @@ export interface RunDurationLearningRuntimeLifecycleSweepInput {
   persistPublication?: PersistPublication
   checkpointStore?: DurationContextPolicyLearningCheckpointStore | null
   checkpointOwnerId?: string
+  collectionCursorStore?: DurationLearningRuntimeCollectionCursorStore | null
   recordImpact?: typeof recordDurationLearningRuntimeImpact
   promoteCanary?: typeof promoteDurationLearningRuntimeCanary
   rollbackPublication?: typeof rollbackDurationLearningRuntimePublication
@@ -121,6 +150,320 @@ export interface RunDurationLearningRuntimeLifecycleSweepInput {
 }
 
 type SourceRow = Record<string, unknown>
+
+const COLLECTION_CURSOR_OPERATION_ID = 'duration-learning-runtime-collection-cursor'
+const COLLECTION_CURSOR_STAGE_KEY = 'collection_cursor'
+const COLLECTION_CURSOR_SCHEMA = 'duration-learning-runtime-collection-cursor/v1'
+const COLLECTION_CURSOR_INPUT_HASH = `${COLLECTION_CURSOR_SCHEMA}:asset-artifact-keyset-fair-history-v1`
+const SOURCE_GROUP_LIMIT = 25
+const SOURCE_STREAM_COUNT = 7
+const PROJECT_SCOPE_STREAM_BUDGET = 64
+const COMPANY_SCOPE_PROJECT_LIMIT = 40
+const INDUSTRY_SCOPE_PROJECT_LIMIT = 150
+const GLOBAL_SCOPE_PROJECT_LIMIT = 250
+const SCOPE_CURSOR_SEPARATOR = '\u001f'
+const ACTIVE_MONITORING_LIMIT = 400
+const STABLE_MONITORING_LIMIT = 100
+const MONITORING_CURSOR_STREAM_KEYS = ['monitor:active', 'monitor:stable'] as const
+
+const DURATION_LEARNING_CANONICAL_INDUSTRY_ALIASES = {
+  general_civil: [
+    'general_civil',
+    'civil',
+    'civil_building',
+    'residential',
+    'civil_residential',
+    'general_civil_residential',
+    'high_rise_residential',
+    'residential_high_rise',
+    'civil_office_commercial',
+    'civil_complex',
+    'commercial_complex',
+    'office',
+    'commercial',
+  ],
+  hotel: ['hotel'],
+  hospital: ['hospital'],
+  school: ['school'],
+  industrial: [
+    'industrial',
+    'factory',
+    'manufacturing_plant',
+    'industrial_general',
+    'industrial_logistics',
+    'industrial_cleanroom',
+    'industrial_heavy',
+    'logistics',
+    'logistics_warehouse',
+    'automated_warehouse',
+    'clean_industrial',
+    'process_facility',
+    'clean_manufacturing',
+    'pharma_factory',
+    'heavy_manufacturing',
+    'heavy_industry',
+    'heavy_industrial_plant',
+    'equipment_manufacturing',
+  ],
+  data_center: ['data_center', 'datacenter'],
+  transportation_hub: [
+    'transportation_hub',
+    'transportation',
+    'transport_hub',
+    'multimodal_hub',
+    'transport_multimodal',
+    'transport_railway_station',
+    'transport_metro_interchange',
+    'transport_bus_terminal',
+    'railway_station',
+    'metro_interchange',
+    'underground_station',
+    'bus_terminal',
+  ],
+  sports_culture: [
+    'sports_culture',
+    'sports',
+    'culture',
+    'sports_venue',
+    'culture_venue',
+    'large_span_public',
+    'sports_stadium',
+    'sports_indoor_arena',
+    'sports_theater',
+    'sports_exhibition',
+    'indoor_arena',
+    'arena',
+    'theater',
+    'performing_arts_center',
+    'exhibition_venue',
+    'museum',
+    'convention_center',
+  ],
+  tod_upper_cover: ['tod_upper_cover', 'tod'],
+  renovation: [
+    'renovation',
+    'renovation_seismic',
+    'renovation_energy',
+    'renovation_heritage',
+    'energy_retrofit',
+    'heritage',
+    'historic_preservation',
+    'heritage_preservation',
+  ],
+  modular_building: ['modular_building', 'modular', 'mic', 'modular_mic'],
+} as const
+
+type DurationLearningCanonicalIndustryKey = keyof typeof DURATION_LEARNING_CANONICAL_INDUSTRY_ALIASES
+
+function normalizeDurationLearningIndustryAlias(value: unknown) {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+}
+
+const DURATION_LEARNING_INDUSTRY_ALIAS_TO_CANONICAL = new Map<string, DurationLearningCanonicalIndustryKey>()
+for (const [canonicalKey, aliases] of Object.entries(DURATION_LEARNING_CANONICAL_INDUSTRY_ALIASES)) {
+  for (const alias of aliases) {
+    const normalized = normalizeDurationLearningIndustryAlias(alias)
+    const existing = DURATION_LEARNING_INDUSTRY_ALIAS_TO_CANONICAL.get(normalized)
+    if (existing && existing !== canonicalKey) {
+      throw new Error(`duration_learning_industry_alias_conflict:${normalized}:${existing}:${canonicalKey}`)
+    }
+    DURATION_LEARNING_INDUSTRY_ALIAS_TO_CANONICAL.set(
+      normalized,
+      canonicalKey as DurationLearningCanonicalIndustryKey,
+    )
+  }
+}
+
+export function canonicalizeDurationLearningIndustryKey(value: unknown): DurationLearningCanonicalIndustryKey | null {
+  return DURATION_LEARNING_INDUSTRY_ALIAS_TO_CANONICAL.get(
+    normalizeDurationLearningIndustryAlias(value),
+  ) ?? null
+}
+
+function sqlStringLiteral(value: string) {
+  return `'${value.replace(/'/g, "''")}'`
+}
+
+export function durationLearningProjectIndustrySqlExpression(projectAlias = 'project') {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(projectAlias)) {
+    throw new Error('duration_learning_project_sql_alias_invalid')
+  }
+  const candidates = [
+    `${projectAlias}.metadata ->> 'wizard_business_type'`,
+    `${projectAlias}.metadata ->> 'wizardBusinessType'`,
+    `${projectAlias}.metadata ->> 'businessType'`,
+    `${projectAlias}.metadata ->> 'business_type'`,
+    `${projectAlias}.metadata #>> '{projectGenerationFacts,businessType}'`,
+    `${projectAlias}.metadata #>> '{projectGenerationFacts,business_type}'`,
+    `${projectAlias}.metadata #>> '{project_generation_facts,businessType}'`,
+    `${projectAlias}.metadata #>> '{project_generation_facts,business_type}'`,
+    `${projectAlias}.project_type::text`,
+    `${projectAlias}.building_type::text`,
+  ]
+  const aliasRows = [...DURATION_LEARNING_INDUSTRY_ALIAS_TO_CANONICAL.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([alias, canonicalKey]) => `(${sqlStringLiteral(alias)}, ${sqlStringLiteral(canonicalKey)})`)
+  return `coalesce((
+      select alias_map.canonical_key
+        from unnest(array[
+          ${candidates.join(',\n          ')}
+        ]) with ordinality as candidate(raw_key, priority)
+        join (values
+          ${aliasRows.join(',\n          ')}
+        ) as alias_map(alias_key, canonical_key)
+          on alias_map.alias_key = lower(regexp_replace(btrim(candidate.raw_key), '[[:space:]-]+', '_', 'g'))
+       where nullif(btrim(candidate.raw_key), '') is not null
+       order by candidate.priority
+       limit 1
+    ), '')`
+}
+
+export const DURATION_LEARNING_RUNTIME_SWEEP_BUDGETS = Object.freeze({
+  sourceStreamCount: SOURCE_STREAM_COUNT,
+  artifactDiscoveryPerSourceStream: SOURCE_GROUP_LIMIT,
+  projectProposalsPerSourceStream: PROJECT_SCOPE_STREAM_BUDGET,
+  projectProposalsTotal: SOURCE_STREAM_COUNT * PROJECT_SCOPE_STREAM_BUDGET,
+  explicitScopeProposalsPerSourceStream: 3,
+  explicitScopeProposalsTotal: SOURCE_STREAM_COUNT * 3,
+  candidateProposalsTotal: SOURCE_STREAM_COUNT * PROJECT_SCOPE_STREAM_BUDGET + SOURCE_STREAM_COUNT * 3,
+  expandedProposalsTotal: 1024,
+  companyEvidenceRowsTotal: SOURCE_STREAM_COUNT * COMPANY_SCOPE_PROJECT_LIMIT,
+  industryEvidenceRowsTotal: SOURCE_STREAM_COUNT * INDUSTRY_SCOPE_PROJECT_LIMIT,
+  globalEvidenceRowsTotal: SOURCE_STREAM_COUNT * GLOBAL_SCOPE_PROJECT_LIMIT,
+})
+
+function emptyCollectionCursorState(): DurationLearningRuntimeCollectionCursorState {
+  return { version: 0, positions: {} }
+}
+
+function normalizeCursorPosition(value: unknown): DurationLearningRuntimeCollectionCursorPosition {
+  const source = record(value)
+  return {
+    lastGroupKey: nullableText(source.lastGroupKey ?? source.last_group_key),
+    wrapCount: nonNegativeInteger(source.wrapCount ?? source.wrap_count),
+  }
+}
+
+function normalizeCollectionCursorState(value: unknown, versionFallback = 0): DurationLearningRuntimeCollectionCursorState {
+  const source = record(value)
+  const positions = record(source.positions)
+  return {
+    version: nonNegativeInteger(source.version ?? versionFallback),
+    positions: Object.fromEntries(
+      Object.entries(positions)
+        .map(([key, position]) => [text(key), normalizeCursorPosition(position)] as const)
+        .filter(([key]) => Boolean(key)),
+    ),
+  }
+}
+
+function cursorPayload(state: DurationLearningRuntimeCollectionCursorState) {
+  return normalizeCollectionCursorState(state, state.version)
+}
+
+function cursorOutputHash(state: DurationLearningRuntimeCollectionCursorState) {
+  return hashDurationContextPolicyLearningValue(cursorPayload(state))
+}
+
+export function createInMemoryDurationLearningRuntimeCollectionCursorStore(
+  initial: DurationLearningRuntimeCollectionCursorState = emptyCollectionCursorState(),
+): DurationLearningRuntimeCollectionCursorStore {
+  let current = structuredClone(normalizeCollectionCursorState(initial))
+  return {
+    async load() {
+      return structuredClone(current)
+    },
+    async commit(expected, next) {
+      if (cursorOutputHash(current) !== cursorOutputHash(normalizeCollectionCursorState(expected))) {
+        throw new Error('duration_learning_runtime_collection_cursor_conflict')
+      }
+      current = {
+        ...normalizeCollectionCursorState(next),
+        version: current.version + 1,
+      }
+      return structuredClone(current)
+    },
+  }
+}
+
+export function createDatabaseDurationLearningRuntimeCollectionCursorStore(
+  queryExec: DurationLearningRuntimePublicationQueryExec = executeSQL,
+): DurationLearningRuntimeCollectionCursorStore {
+  return {
+    async load() {
+      const rows = await queryExec<SourceRow>(
+        `/* duration-learning-runtime-collection-cursor:read */
+         select stage_status,
+                input_hash,
+                output_hash,
+                output_payload,
+                attempt_count
+           from public.duration_context_policy_learning_checkpoints
+          where operation_id = $1
+            and stage_key = '${COLLECTION_CURSOR_STAGE_KEY}'
+          limit 1`,
+        [COLLECTION_CURSOR_OPERATION_ID],
+      )
+      const row = rows[0]
+      if (!row) return emptyCollectionCursorState()
+      if (text(row.stage_status) !== 'succeeded' || text(row.input_hash) !== COLLECTION_CURSOR_INPUT_HASH) {
+        throw new Error('duration_learning_runtime_collection_cursor_contract_mismatch')
+      }
+      const state = normalizeCollectionCursorState(row.output_payload, row.attempt_count as number)
+      if (text(row.output_hash) !== cursorOutputHash(state)) {
+        throw new Error('duration_learning_runtime_collection_cursor_hash_mismatch')
+      }
+      return { ...state, version: nonNegativeInteger(row.attempt_count) }
+    },
+    async commit(expected, next) {
+      const nextState = {
+        ...normalizeCollectionCursorState(next),
+        version: expected.version + 1,
+      }
+      const payload = cursorPayload(nextState)
+      const outputHash = cursorOutputHash(nextState)
+      const now = new Date().toISOString()
+      const expectedHash = expected.version > 0 ? cursorOutputHash(expected) : null
+      const rows = await queryExec<SourceRow>(
+        `/* duration-learning-runtime-collection-cursor:commit collection_cursor */
+         insert into public.duration_context_policy_learning_checkpoints (
+           operation_id, stage_key, stage_status, input_hash, output_hash, output_payload,
+           attempt_count, operation_identity, created_at, updated_at
+         ) values ($1, '${COLLECTION_CURSOR_STAGE_KEY}', 'succeeded', $2, $3, $4::jsonb, 1, $5::jsonb, $6, $6)
+         on conflict (operation_id, stage_key) do update
+           set stage_status = 'succeeded',
+               output_hash = excluded.output_hash,
+               output_payload = excluded.output_payload,
+               attempt_count = public.duration_context_policy_learning_checkpoints.attempt_count + 1,
+               operation_identity = excluded.operation_identity,
+               error_message = null,
+               lease_owner = null,
+               lease_expires_at = null,
+               updated_at = excluded.updated_at
+         where public.duration_context_policy_learning_checkpoints.stage_status = 'succeeded'
+           and public.duration_context_policy_learning_checkpoints.input_hash = $2
+           and public.duration_context_policy_learning_checkpoints.attempt_count = $7
+           and public.duration_context_policy_learning_checkpoints.output_hash is not distinct from $8
+         returning output_payload, output_hash, attempt_count`,
+        [
+          COLLECTION_CURSOR_OPERATION_ID,
+          COLLECTION_CURSOR_INPUT_HASH,
+          outputHash,
+          payload,
+          { cursorSchema: COLLECTION_CURSOR_SCHEMA },
+          now,
+          expected.version,
+          expectedHash,
+        ],
+      )
+      if (!rows[0]) throw new Error('duration_learning_runtime_collection_cursor_conflict')
+      return {
+        ...normalizeCollectionCursorState(rows[0].output_payload, rows[0].attempt_count as number),
+        version: nonNegativeInteger(rows[0].attempt_count),
+      }
+    },
+  }
+}
 
 function text(value: unknown) {
   return String(value ?? '').trim()
@@ -187,16 +530,26 @@ function scopeIdentity(scope: DurationLearningRuntimeScope) {
   return 'global'
 }
 
+function canonicalIndustryKeys(values: readonly unknown[]) {
+  return uniqueTexts(values.map(canonicalizeDurationLearningIndustryKey).filter(Boolean))
+}
+
 function cloneProposal(proposal: DurationLearningRuntimeCandidateProposal): DurationLearningRuntimeCandidateProposal {
+  const scope = proposal.scope.level === 'industry'
+    ? {
+        ...proposal.scope,
+        industryKey: canonicalizeDurationLearningIndustryKey(proposal.scope.industryKey) ?? '',
+      }
+    : { ...proposal.scope }
   return {
     ...proposal,
-    scope: { ...proposal.scope },
+    scope,
     runtimePayload: structuredClone(proposal.runtimePayload),
     sourceCandidateRefs: uniqueTexts(proposal.sourceCandidateRefs),
     sourceEvidenceRefs: uniqueTexts(proposal.sourceEvidenceRefs),
     projectIds: uniqueTexts(proposal.projectIds),
     companyIds: uniqueTexts(proposal.companyIds),
-    industryKeys: uniqueTexts(proposal.industryKeys),
+    industryKeys: canonicalIndustryKeys(proposal.industryKeys),
     taskIds: uniqueTexts(proposal.taskIds ?? []),
     blockingReasons: uniqueTexts(proposal.blockingReasons ?? []),
     automationEvidence: proposal.automationEvidence
@@ -460,14 +813,25 @@ function groupProjectProposals(
 export function expandDurationLearningRuntimeCandidateScopes(
   input: readonly DurationLearningRuntimeCandidateProposal[],
 ) {
-  const projectProposals = input.map(cloneProposal)
-  const expanded = [...projectProposals]
+  const cloned = input
+    .map(cloneProposal)
+    .filter((proposal) => proposal.scope.level !== 'industry' || Boolean(proposal.scope.industryKey))
+  const projectProposals = cloned.filter((proposal) => proposal.scope.level === 'project')
+  const explicitScopes = new Map<string, DurationLearningRuntimeCandidateProposal>()
+  for (const proposal of cloned) {
+    if (proposal.scope.level === 'project') continue
+    const key = `${proposalGroupingIdentity(proposal)}:${scopeIdentity(proposal.scope)}`
+    if (!explicitScopes.has(key)) explicitScopes.set(key, proposal)
+  }
+  const expanded = [...projectProposals, ...explicitScopes.values()]
 
   const companyGroups = groupProjectProposals(projectProposals, (proposal) => proposal.companyIds[0] ?? null)
   for (const proposals of companyGroups.values()) {
     const companyId = proposals[0]?.companyIds[0]
     if (!companyId) continue
-    const aggregate = aggregateProposal(proposals, { level: 'company', companyId })
+    const scope = { level: 'company' as const, companyId }
+    if (explicitScopes.has(`${proposalGroupingIdentity(proposals[0])}:${scopeIdentity(scope)}`)) continue
+    const aggregate = aggregateProposal(proposals, scope)
     if (meetsAggregationFloor(aggregate, 'company')) expanded.push(aggregate)
   }
 
@@ -475,13 +839,17 @@ export function expandDurationLearningRuntimeCandidateScopes(
   for (const proposals of industryGroups.values()) {
     const industryKey = proposals[0]?.industryKeys[0]
     if (!industryKey) continue
-    const aggregate = aggregateProposal(proposals, { level: 'industry', industryKey })
+    const scope = { level: 'industry' as const, industryKey }
+    if (explicitScopes.has(`${proposalGroupingIdentity(proposals[0])}:${scopeIdentity(scope)}`)) continue
+    const aggregate = aggregateProposal(proposals, scope)
     if (meetsAggregationFloor(aggregate, 'industry')) expanded.push(aggregate)
   }
 
   const globalGroups = groupProjectProposals(projectProposals, () => 'global')
   for (const proposals of globalGroups.values()) {
-    const aggregate = aggregateProposal(proposals, { level: 'global' })
+    const scope = { level: 'global' as const }
+    if (explicitScopes.has(`${proposalGroupingIdentity(proposals[0])}:${scopeIdentity(scope)}`)) continue
+    const aggregate = aggregateProposal(proposals, scope)
     if (meetsAggregationFloor(aggregate, 'global')) expanded.push(aggregate)
   }
 
@@ -494,14 +862,36 @@ export function expandDurationLearningRuntimeCandidateScopes(
 }
 
 function rowIndustryKey(row: SourceRow, metadata: Record<string, unknown>) {
-  return text(
-    row.industry_key
-      ?? row.business_type
-      ?? row.project_type
-      ?? metadata.businessType
-      ?? metadata.business_type
-      ?? metadata.projectTypeCode
-      ?? metadata.project_type_code,
+  for (const candidate of [
+    row.industry_key,
+    row.business_type,
+    row.project_type,
+    metadata.wizard_business_type,
+    metadata.wizardBusinessType,
+    metadata.businessType,
+    metadata.business_type,
+    record(metadata.projectGenerationFacts ?? metadata.project_generation_facts).businessType,
+    record(metadata.projectGenerationFacts ?? metadata.project_generation_facts).business_type,
+    metadata.projectTypeCode,
+    metadata.project_type_code,
+  ]) {
+    const canonical = canonicalizeDurationLearningIndustryKey(candidate)
+    if (canonical) return canonical
+  }
+  return ''
+}
+
+function hasProjectCompanyAuthority(row: SourceRow) {
+  const hasAuthorityReadback = Object.prototype.hasOwnProperty.call(row, 'source_company_id')
+    || Object.prototype.hasOwnProperty.call(row, 'project_company_id')
+  if (!hasAuthorityReadback) return true
+  const projectId = text(row.project_id)
+  const sourceCompanyId = text(row.source_company_id)
+  const projectCompanyId = text(row.project_company_id)
+  return Boolean(
+    projectId
+    && projectCompanyId
+    && (!sourceCompanyId || sourceCompanyId === projectCompanyId),
   )
 }
 
@@ -529,6 +919,7 @@ function evidenceRefs(value: unknown, fallback: string) {
 }
 
 function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidateProposal | null {
+  if (!hasProjectCompanyAuthority(row)) return null
   const metadata = record(row.metadata)
   const id = text(row.id)
   const artifactKey = text(row.benchmark_key)
@@ -593,6 +984,7 @@ function seedAssetKey(seedType: string): DurationLearningRuntimeAssetKey | null 
 }
 
 function seedProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidateProposal | null {
+  if (!hasProjectCompanyAuthority(row)) return null
   const id = text(row.id)
   const seedType = text(row.seed_type)
   const assetKey = seedAssetKey(seedType)
@@ -679,6 +1071,7 @@ function networkArtifactAndPayload(row: SourceRow) {
 }
 
 function networkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidateProposal | null {
+  if (!hasProjectCompanyAuthority(row)) return null
   const assetKey = text(row.asset_key) as DurationLearningRuntimeAssetKey
   if (![
     'special_work_duration_seed',
@@ -748,63 +1141,760 @@ function networkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidat
   })
 }
 
+type SourceCollectionStreamResult = {
+  rows: SourceRow[]
+  positions: Array<readonly [string, DurationLearningRuntimeCollectionCursorPosition]>
+}
+
+export interface DurationLearningRuntimeCandidateBatch {
+  candidates: DurationLearningRuntimeCandidateProposal[]
+  nextCursorState: DurationLearningRuntimeCollectionCursorState
+}
+
+export interface DurationLearningRuntimeMonitoringBatch {
+  candidates: DurationLearningRuntimeMonitoringCandidate[]
+  nextCursorState: DurationLearningRuntimeCollectionCursorState
+}
+
+function cursorPositionFor(
+  state: DurationLearningRuntimeCollectionCursorState,
+  streamKey: string,
+) {
+  return normalizeCursorPosition(state.positions[streamKey])
+}
+
+function nextCursorStateWithPositions(
+  state: DurationLearningRuntimeCollectionCursorState,
+  positions: ReadonlyArray<readonly [string, DurationLearningRuntimeCollectionCursorPosition]>,
+) {
+  return normalizeCollectionCursorState({
+    version: state.version,
+    positions: {
+      ...state.positions,
+      ...Object.fromEntries(positions),
+    },
+  })
+}
+
+function scopeCursorKey(
+  streamKey: string,
+  artifactKey: string,
+  scopeLevel: 'project' | 'company-selector' | 'company' | 'industry-selector' | 'industry' | 'global' | 'scope-artifact',
+  scopeId = '*',
+) {
+  return [streamKey, artifactKey, scopeLevel, scopeId].join(SCOPE_CURSOR_SEPARATOR)
+}
+
+function advancedCursorPosition(
+  current: DurationLearningRuntimeCollectionCursorPosition,
+  lastGroupKey: string | null,
+  wrapped = false,
+): DurationLearningRuntimeCollectionCursorPosition {
+  return {
+    lastGroupKey: lastGroupKey || current.lastGroupKey,
+    wrapCount: current.wrapCount + Number(wrapped),
+  }
+}
+
+async function discoverSourceGroups(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  streamKey: string
+  cursorState: DurationLearningRuntimeCollectionCursorState
+  discoverySql: string
+  fallbackGroupKey: (row: SourceRow) => string
+  cursorKey?: string
+  limit?: number
+}) {
+  const cursorKey = input.cursorKey ?? input.streamKey
+  const limit = input.limit ?? SOURCE_GROUP_LIMIT
+  const current = cursorPositionFor(input.cursorState, cursorKey)
+  const discover = async (after: string) => {
+    const rows = await input.queryExec<SourceRow>(input.discoverySql, [after, limit])
+    return uniqueTexts(rows.map((row) => row.collector_group_key ?? input.fallbackGroupKey(row)))
+      .slice(0, limit)
+  }
+  let selectedGroupKeys = await discover(current.lastGroupKey ?? '')
+  let wrapped = false
+  if (selectedGroupKeys.length === 0 && current.lastGroupKey) {
+    selectedGroupKeys = await discover('')
+    wrapped = selectedGroupKeys.length > 0
+  }
+  if (selectedGroupKeys.length === 0) {
+    return { selectedGroupKeys: [], cursorKey, position: current }
+  }
+  return {
+    selectedGroupKeys,
+    cursorKey,
+    position: advancedCursorPosition(current, selectedGroupKeys.at(-1) ?? null, wrapped),
+  }
+}
+
+function lastScopePageRow(rows: SourceRow[], target: string, artifactKey: string) {
+  return rows
+    .filter((row) => (
+      text(row.collector_scope_target) === target
+      && (text(row.collector_group_key) || artifactKey) === artifactKey
+    ))
+    .sort((left, right) => nonNegativeInteger(right.collector_scope_page_rank) - nonNegativeInteger(left.collector_scope_page_rank))[0]
+}
+
+async function collectSourceStream(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  streamKey: string
+  cursorState: DurationLearningRuntimeCollectionCursorState
+  discoverySql: string
+  historySql: string
+  fallbackGroupKey: (row: SourceRow) => string
+}): Promise<SourceCollectionStreamResult> {
+  const discovery = await discoverSourceGroups(input)
+  if (discovery.selectedGroupKeys.length === 0) {
+    return { rows: [], positions: [[discovery.cursorKey, discovery.position]] }
+  }
+  const projectCursorByArtifact = Object.fromEntries(discovery.selectedGroupKeys.map((artifactKey) => [
+    artifactKey,
+    cursorPositionFor(input.cursorState, scopeCursorKey(input.streamKey, artifactKey, 'project')).lastGroupKey ?? '',
+  ]))
+  const queriedRows = await input.queryExec<SourceRow>(input.historySql, [
+    discovery.selectedGroupKeys,
+    projectCursorByArtifact,
+    PROJECT_SCOPE_STREAM_BUDGET,
+  ])
+  const rows = queriedRows.slice(0, PROJECT_SCOPE_STREAM_BUDGET)
+  const positions: Array<readonly [string, DurationLearningRuntimeCollectionCursorPosition]> = [
+    [discovery.cursorKey, discovery.position],
+  ]
+  for (const artifactKey of discovery.selectedGroupKeys) {
+    const cursorKey = scopeCursorKey(input.streamKey, artifactKey, 'project')
+    const current = cursorPositionFor(input.cursorState, cursorKey)
+    const last = lastScopePageRow(rows, 'project', artifactKey)
+      ?? rows.filter((row) => input.fallbackGroupKey(row) === artifactKey).at(-1)
+    if (!last) continue
+    positions.push([cursorKey, advancedCursorPosition(
+      current,
+      text(last.project_id),
+      last.collector_scope_wrapped === true,
+    )])
+  }
+  return { rows, positions }
+}
+
+function benchmarkGroupKey(row: SourceRow) {
+  return text(row.collector_group_key ?? row.benchmark_key)
+}
+
+function seedGroupKey(row: SourceRow) {
+  return text(row.collector_group_key ?? row.stable_code)
+}
+
+function networkGroupKey(row: SourceRow) {
+  return text(row.collector_group_key) || networkArtifactAndPayload(row).artifactKey
+}
+
+function projectScopeHistorySql(streamKey: string, eligibleCte: string) {
+  return `/* duration-learning-collector:history:${streamKey} */
+    with ${eligibleCte}, project_ranked as (
+      select eligible.*,
+             row_number() over (
+               partition by collector_group_key, collector_project_key
+               order by collector_sort_at desc, id desc
+             ) as collector_project_history_rank
+        from eligible
+       where collector_group_key = any($1::text[])
+         and collector_project_key <> ''
+         and collector_company_key <> ''
+    ), project_representatives as (
+      select *
+        from project_ranked
+       where collector_project_history_rank = 1
+    ), project_scope_ordered as (
+      select project_representatives.*,
+             row_number() over (
+               partition by collector_group_key
+               order by
+                 case when collector_project_key > coalesce($2::jsonb ->> collector_group_key, '') then 0 else 1 end,
+                 collector_project_key
+             ) as artifact_project_round,
+             coalesce($2::jsonb ->> collector_group_key, '') <> ''
+               and collector_project_key <= coalesce($2::jsonb ->> collector_group_key, '') as collector_scope_wrapped
+        from project_representatives
+    ), project_scope_interleaved as (
+      select project_scope_ordered.*,
+             row_number() over (
+               order by artifact_project_round, collector_group_key
+             ) as stream_project_rank
+        from project_scope_ordered
+    )
+    select project_scope_interleaved.*,
+           'project'::text as collector_scope_target,
+           collector_project_key as collector_scope_id,
+           collector_project_key as collector_scope_cursor_value,
+           artifact_project_round as collector_scope_page_rank
+      from project_scope_interleaved
+     where stream_project_rank <= $3
+     order by stream_project_rank`
+}
+
+function scopeBucketSql(streamKey: string, eligibleCte: string) {
+  return `/* duration-learning-collector:scope-buckets:${streamKey} */
+    with ${eligibleCte}, project_ranked as (
+      select eligible.*,
+             row_number() over (
+               partition by collector_group_key, collector_project_key
+               order by collector_sort_at desc, id desc
+             ) as collector_project_history_rank
+        from eligible
+       where collector_group_key = $1
+         and collector_project_key <> ''
+         and collector_company_key <> ''
+    ), project_representatives as (
+      select *
+        from project_ranked
+       where collector_project_history_rank = 1
+    ), company_buckets as (
+      select distinct collector_company_key
+        from project_representatives
+       where collector_company_key <> ''
+    ), industry_buckets as (
+      select distinct collector_industry_key
+        from project_representatives
+       where collector_industry_key <> ''
+    ), selected_company as (
+      select collector_company_key
+        from company_buckets
+       order by case when collector_company_key > $2 then 0 else 1 end, collector_company_key
+       limit 1
+    ), selected_industry as (
+      select collector_industry_key
+        from industry_buckets
+       order by case when collector_industry_key > $3 then 0 else 1 end, collector_industry_key
+       limit 1
+    )
+    select (select collector_company_key from selected_company) as selected_company_id,
+           (select collector_industry_key from selected_industry) as selected_industry_key,
+           coalesce($2 <> '' and (select collector_company_key from selected_company) <= $2, false) as company_selector_wrapped,
+           coalesce($3 <> '' and (select collector_industry_key from selected_industry) <= $3, false) as industry_selector_wrapped`
+}
+
+function scopeBatchSql(streamKey: string, eligibleCte: string) {
+  return `/* duration-learning-collector:scope-batches:${streamKey} */
+    with ${eligibleCte}, project_ranked as (
+      select eligible.*,
+             row_number() over (
+               partition by collector_group_key, collector_project_key
+               order by collector_sort_at desc, id desc
+             ) as collector_project_history_rank
+        from eligible
+       where collector_group_key = $1
+         and collector_project_key <> ''
+         and collector_company_key <> ''
+    ), project_representatives as (
+      select *
+        from project_ranked
+       where collector_project_history_rank = 1
+    ), company_scope_ordered as (
+      select id,
+             collector_project_key,
+             row_number() over (
+               order by case when collector_project_key > $3 then 0 else 1 end, collector_project_key
+             ) as page_rank,
+             $3 <> '' and collector_project_key <= $3 as page_wrapped
+        from project_representatives
+       where collector_company_key = $2
+    ), company_scope_page as (
+      select id,
+             'company'::text as scope_target,
+             $2::text as scope_id,
+             collector_project_key as cursor_value,
+             page_rank,
+             page_wrapped
+        from company_scope_ordered
+       where page_rank <= $7
+    ), industry_scope_company_projects as (
+      select project_representatives.*,
+             row_number() over (
+               partition by collector_company_key
+               order by collector_project_key
+             ) as company_project_rank,
+             count(*) over (partition by collector_company_key) as company_project_count
+        from project_representatives
+       where collector_industry_key = $4
+    ), industry_scope_rotated as (
+      select industry_scope_company_projects.*,
+             mod(company_project_rank - 1 + $5::bigint, company_project_count) as rotation_rank
+        from industry_scope_company_projects
+    ), industry_scope_diversity as (
+      select id,
+             row_number() over (
+               order by rotation_rank, collector_company_key, collector_project_key
+             ) as page_rank
+        from industry_scope_rotated
+    ), industry_scope_page as (
+      select id,
+             'industry'::text as scope_target,
+             $4::text as scope_id,
+             ($5::bigint + 1)::text as cursor_value,
+             page_rank,
+             false as page_wrapped
+        from industry_scope_diversity
+       where page_rank <= $8
+    ), global_scope_company_projects as (
+      select project_representatives.*,
+             row_number() over (
+               partition by collector_industry_key, collector_company_key
+               order by collector_project_key
+             ) as company_project_rank,
+             count(*) over (
+               partition by collector_industry_key, collector_company_key
+             ) as company_project_count
+        from project_representatives
+    ), global_scope_rotated as (
+      select global_scope_company_projects.*,
+             mod(company_project_rank - 1 + $6::bigint, company_project_count) as rotation_rank
+        from global_scope_company_projects
+    ), global_scope_interleaved as (
+      select global_scope_rotated.*,
+             row_number() over (
+               partition by rotation_rank, collector_industry_key
+               order by collector_company_key, collector_project_key
+             ) as industry_company_round
+        from global_scope_rotated
+    ), global_scope_diversity as (
+      select id,
+             row_number() over (
+               order by rotation_rank, industry_company_round, collector_industry_key, collector_company_key, collector_project_key
+             ) as page_rank
+        from global_scope_interleaved
+    ), global_scope_page as (
+      select id,
+             'global'::text as scope_target,
+             'global'::text as scope_id,
+             ($6::bigint + 1)::text as cursor_value,
+             page_rank,
+             false as page_wrapped
+        from global_scope_diversity
+       where page_rank <= $9
+    ), selected_scope_rows as (
+      select * from company_scope_page
+      union all
+      select * from industry_scope_page
+      union all
+      select * from global_scope_page
+    )
+    select project_representatives.*,
+           selected_scope_rows.scope_target as collector_scope_target,
+           selected_scope_rows.scope_id as collector_scope_id,
+           selected_scope_rows.cursor_value as collector_scope_cursor_value,
+           selected_scope_rows.page_rank as collector_scope_page_rank,
+           selected_scope_rows.page_wrapped as collector_scope_wrapped
+      from selected_scope_rows
+      join project_representatives on project_representatives.id = selected_scope_rows.id
+     order by collector_scope_target, collector_scope_page_rank`
+}
+
+function benchmarkEligibleCte() {
+  const projectIndustrySql = durationLearningProjectIndustrySqlExpression('project')
+  return `eligible as (
+    select benchmark.*,
+           benchmark.benchmark_key as collector_group_key,
+           coalesce(benchmark.project_id::text, '') as collector_project_key,
+           project.company_id::text as collector_company_key,
+           project_classification.business_type as collector_industry_key,
+           benchmark.company_id as source_company_id,
+           project.company_id as project_company_id,
+           project_classification.business_type as business_type,
+           benchmark.updated_at as collector_sort_at
+      from public.duration_benchmarks benchmark
+      join public.projects project on project.id = benchmark.project_id
+      cross join lateral (
+        select ${projectIndustrySql} as business_type
+      ) project_classification
+     where benchmark.is_active = true
+       and benchmark.is_current = false
+       and benchmark.duration_day_basis = 'construction_production_day'
+       and benchmark.metadata ->> 'runtime_publication_status' = 'candidate'
+       and project.company_id is not null
+       and (benchmark.company_id is null or benchmark.company_id = project.company_id)
+  )`
+}
+
+function benchmarkDiscoverySql(streamKey: string) {
+  return `/* duration-learning-collector:discover:${streamKey} */
+    select distinct benchmark.benchmark_key as collector_group_key
+      from public.duration_benchmarks benchmark
+     where benchmark.is_active = true
+       and benchmark.is_current = false
+       and benchmark.duration_day_basis = 'construction_production_day'
+       and benchmark.metadata ->> 'runtime_publication_status' = 'candidate'
+       and benchmark.benchmark_key > $1
+     order by collector_group_key
+     limit $2`
+}
+
+function benchmarkHistorySql(streamKey: string) {
+  return projectScopeHistorySql(streamKey, benchmarkEligibleCte())
+}
+
+function seedDiscoverySql(streamKey: string, seedType: string) {
+  return `/* duration-learning-collector:discover:${streamKey} */
+    select distinct candidate.stable_code as collector_group_key
+      from public.algorithm_seed_upgrade_candidates candidate
+     where candidate.seed_type = '${seedType}'
+       and candidate.action_policy = 'auto_govern'
+       and candidate.status in ('pending', 'candidate_only', 'auto_published')
+       and candidate.stable_code > $1
+     order by collector_group_key
+     limit $2`
+}
+
+function seedEligibleCte(seedType: string) {
+  const projectIndustrySql = durationLearningProjectIndustrySqlExpression('project')
+  return `eligible as (
+    select candidate.*,
+           candidate.stable_code as collector_group_key,
+           coalesce(candidate.project_id::text, '') as collector_project_key,
+           project.company_id::text as collector_company_key,
+           project_classification.business_type as collector_industry_key,
+           candidate.company_id as source_company_id,
+           project.company_id as project_company_id,
+           project.company_id as resolved_company_id,
+           project_classification.business_type as business_type,
+           candidate.updated_at as collector_sort_at
+      from public.algorithm_seed_upgrade_candidates candidate
+      join public.projects project on project.id = candidate.project_id
+      cross join lateral (
+        select ${projectIndustrySql} as business_type
+      ) project_classification
+     where candidate.seed_type = '${seedType}'
+       and candidate.action_policy = 'auto_govern'
+       and candidate.status in ('pending', 'candidate_only', 'auto_published')
+       and project.company_id is not null
+       and (candidate.company_id is null or candidate.company_id = project.company_id)
+  )`
+}
+
+function seedHistorySql(streamKey: string, seedType: string) {
+  return projectScopeHistorySql(streamKey, seedEligibleCte(seedType))
+}
+
+function networkCollectorGroupExpression(assetKey: DurationLearningRuntimeAssetKey) {
+  if (assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days') {
+    return `coalesce(nullif(outcome.metadata ->> 'template_id', ''), nullif(outcome.metadata ->> 'templateId', ''), '')`
+  }
+  if (assetKey === 'dependency_rule_candidate') {
+    return `concat(
+      coalesce(outcome.metadata ->> 'predecessor_stable_code', outcome.metadata ->> 'predecessorStableCode', ''),
+      '->',
+      coalesce(outcome.metadata ->> 'successor_stable_code', outcome.metadata ->> 'successorStableCode', ''),
+      ':',
+      upper(coalesce(outcome.metadata ->> 'dependency_type', outcome.metadata ->> 'dependencyType', ''))
+    )`
+  }
+  return `coalesce((
+    select jsonb_agg(stable_code order by stable_code)::text
+      from (
+        select distinct stable_code
+          from (
+            select jsonb_array_elements_text(coalesce(outcome.metadata -> 'auto_task_stable_codes', '[]'::jsonb)) as stable_code
+            union all
+            select jsonb_array_elements_text(coalesce(outcome.metadata -> 'primary_chain_stable_codes', '[]'::jsonb)) as stable_code
+          ) source_codes
+         where btrim(stable_code) <> ''
+      ) canonical_codes
+  ), '[]')`
+}
+
+function networkEligibleCte(assetKey: DurationLearningRuntimeAssetKey) {
+  const groupExpression = networkCollectorGroupExpression(assetKey)
+  const projectIndustrySql = durationLearningProjectIndustrySqlExpression('project')
+  return `eligible as (
+    select outcome.*,
+           ${groupExpression} as collector_group_key,
+           coalesce(outcome.project_id::text, '') as collector_project_key,
+           project.company_id::text as collector_company_key,
+           project_classification.business_type as collector_industry_key,
+           outcome.company_id as source_company_id,
+           project.company_id as project_company_id,
+           project.company_id as resolved_company_id,
+           project_classification.business_type as business_type,
+           outcome.observed_at as collector_sort_at
+      from public.duration_plan_network_outcomes outcome
+      join public.projects project on project.id = outcome.project_id
+      cross join lateral (
+        select ${projectIndustrySql} as business_type
+      ) project_classification
+     where outcome.asset_key = '${assetKey}'
+       and outcome.outcome_status in ('accepted', 'weak', 'rejected')
+       and project.company_id is not null
+       and (outcome.company_id is null or outcome.company_id = project.company_id)
+  )`
+}
+
+function networkDiscoverySql(streamKey: string, assetKey: DurationLearningRuntimeAssetKey) {
+  return `/* duration-learning-collector:discover:${streamKey} */
+    with ${networkEligibleCte(assetKey)}
+    select distinct collector_group_key
+      from eligible
+     where collector_group_key <> ''
+       and collector_group_key > $1
+     order by collector_group_key
+     limit $2`
+}
+
+function networkHistorySql(streamKey: string, assetKey: DurationLearningRuntimeAssetKey) {
+  return projectScopeHistorySql(streamKey, networkEligibleCte(assetKey))
+}
+
+type SourceStreamDefinition = {
+  streamKey: string
+  discoverySql: string
+  historySql: string
+  scopeBucketsSql: string
+  scopeBatchesSql: string
+  fallbackGroupKey: (row: SourceRow) => string
+  proposalFromRow: (row: SourceRow) => DurationLearningRuntimeCandidateProposal | null
+  normalizeRow: (row: SourceRow) => SourceRow
+}
+
+function scopedProposalRows(
+  rows: SourceRow[],
+  definition: SourceStreamDefinition,
+): DurationLearningRuntimeCandidateProposal[] {
+  const proposals: DurationLearningRuntimeCandidateProposal[] = []
+  for (const target of ['project', 'company', 'industry', 'global'] as const) {
+    const sourceRows = rows.filter((row) => text(row.collector_scope_target) === target)
+    const projectProposals = sourceRows
+      .map((row) => definition.proposalFromRow(definition.normalizeRow({
+        ...row,
+        learning_scope: 'project',
+        scope_level: 'project',
+      })))
+      .filter((proposal): proposal is DurationLearningRuntimeCandidateProposal => Boolean(proposal))
+    if (target === 'project') {
+      proposals.push(...projectProposals)
+      continue
+    }
+    if (projectProposals.length === 0) continue
+    const scopeId = text(sourceRows[0]?.collector_scope_id)
+    const scope: DurationLearningRuntimeScope | null = target === 'company' && scopeId
+      ? { level: 'company', companyId: scopeId }
+      : target === 'industry' && scopeId
+        ? { level: 'industry', industryKey: scopeId }
+        : target === 'global'
+          ? { level: 'global' }
+          : null
+    if (!scope) continue
+    const aggregate = aggregateProposal(projectProposals, scope)
+    if (meetsAggregationFloor(aggregate, target)) proposals.push(aggregate)
+  }
+  return proposals
+}
+
+async function collectScopeAggregateStream(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  definition: SourceStreamDefinition
+  cursorState: DurationLearningRuntimeCollectionCursorState
+}) {
+  const scopeArtifactCursorKey = scopeCursorKey(input.definition.streamKey, '*', 'scope-artifact')
+  const discovery = await discoverSourceGroups({
+    queryExec: input.queryExec,
+    streamKey: input.definition.streamKey,
+    cursorState: input.cursorState,
+    discoverySql: input.definition.discoverySql,
+    fallbackGroupKey: input.definition.fallbackGroupKey,
+    cursorKey: scopeArtifactCursorKey,
+    limit: 1,
+  })
+  const positions: Array<readonly [string, DurationLearningRuntimeCollectionCursorPosition]> = [
+    [scopeArtifactCursorKey, discovery.position],
+  ]
+  const artifactKey = discovery.selectedGroupKeys[0]
+  if (!artifactKey) return { candidates: [], positions }
+
+  const companySelectorKey = scopeCursorKey(input.definition.streamKey, artifactKey, 'company-selector')
+  const industrySelectorKey = scopeCursorKey(input.definition.streamKey, artifactKey, 'industry-selector')
+  const companySelector = cursorPositionFor(input.cursorState, companySelectorKey)
+  const industrySelector = cursorPositionFor(input.cursorState, industrySelectorKey)
+  const bucketRows = await input.queryExec<SourceRow>(input.definition.scopeBucketsSql, [
+    artifactKey,
+    companySelector.lastGroupKey ?? '',
+    industrySelector.lastGroupKey ?? '',
+  ])
+  const selectedCompanyId = text(bucketRows[0]?.selected_company_id)
+  const selectedIndustryKey = text(bucketRows[0]?.selected_industry_key)
+  if (selectedCompanyId) {
+    positions.push([companySelectorKey, advancedCursorPosition(
+      companySelector,
+      selectedCompanyId,
+      bucketRows[0]?.company_selector_wrapped === true,
+    )])
+  }
+  if (selectedIndustryKey) {
+    positions.push([industrySelectorKey, advancedCursorPosition(
+      industrySelector,
+      selectedIndustryKey,
+      bucketRows[0]?.industry_selector_wrapped === true,
+    )])
+  }
+
+  const companyCursorKey = selectedCompanyId
+    ? scopeCursorKey(input.definition.streamKey, artifactKey, 'company', selectedCompanyId)
+    : null
+  const industryCursorKey = selectedIndustryKey
+    ? scopeCursorKey(input.definition.streamKey, artifactKey, 'industry', selectedIndustryKey)
+    : null
+  const globalCursorKey = scopeCursorKey(input.definition.streamKey, artifactKey, 'global', 'global')
+  const companyCursor = companyCursorKey
+    ? cursorPositionFor(input.cursorState, companyCursorKey)
+    : normalizeCursorPosition(null)
+  const industryCursor = industryCursorKey
+    ? cursorPositionFor(input.cursorState, industryCursorKey)
+    : normalizeCursorPosition(null)
+  const globalCursor = cursorPositionFor(input.cursorState, globalCursorKey)
+  const queriedRows = await input.queryExec<SourceRow>(input.definition.scopeBatchesSql, [
+    artifactKey,
+    selectedCompanyId,
+    companyCursor.lastGroupKey ?? '',
+    selectedIndustryKey,
+    nonNegativeInteger(industryCursor.lastGroupKey),
+    nonNegativeInteger(globalCursor.lastGroupKey),
+    COMPANY_SCOPE_PROJECT_LIMIT,
+    INDUSTRY_SCOPE_PROJECT_LIMIT,
+    GLOBAL_SCOPE_PROJECT_LIMIT,
+  ])
+  const rows = [
+    ...queriedRows.filter((row) => text(row.collector_scope_target) === 'company').slice(0, COMPANY_SCOPE_PROJECT_LIMIT),
+    ...queriedRows.filter((row) => text(row.collector_scope_target) === 'industry').slice(0, INDUSTRY_SCOPE_PROJECT_LIMIT),
+    ...queriedRows.filter((row) => text(row.collector_scope_target) === 'global').slice(0, GLOBAL_SCOPE_PROJECT_LIMIT),
+  ]
+
+  const companyLast = lastScopePageRow(rows, 'company', artifactKey)
+  if (companyCursorKey && companyLast) {
+    positions.push([companyCursorKey, advancedCursorPosition(
+      companyCursor,
+      text(companyLast.collector_scope_cursor_value ?? companyLast.project_id),
+      companyLast.collector_scope_wrapped === true,
+    )])
+  }
+  const industryLast = lastScopePageRow(rows, 'industry', artifactKey)
+  if (industryCursorKey && industryLast) {
+    positions.push([industryCursorKey, advancedCursorPosition(
+      industryCursor,
+      text(industryLast.collector_scope_cursor_value) || String(nonNegativeInteger(industryCursor.lastGroupKey) + 1),
+    )])
+  }
+  const globalLast = lastScopePageRow(rows, 'global', artifactKey)
+  if (globalLast) {
+    positions.push([globalCursorKey, advancedCursorPosition(
+      globalCursor,
+      text(globalLast.collector_scope_cursor_value) || String(nonNegativeInteger(globalCursor.lastGroupKey) + 1),
+    )])
+  }
+
+  return {
+    candidates: scopedProposalRows(rows, input.definition),
+    positions,
+  }
+}
+
 // workspace-isolation-system-job-approved: the singleton duration-learning lifecycle scheduler reads candidate evidence across tenants, preserves company/project lineage on every proposal, and only publishes scoped reversible overlays.
+export async function collectDurationLearningRuntimeCandidateBatch(
+  queryExec: DurationLearningRuntimePublicationQueryExec = executeSQL,
+  cursorStateInput: DurationLearningRuntimeCollectionCursorState = emptyCollectionCursorState(),
+): Promise<DurationLearningRuntimeCandidateBatch> {
+  const cursorState = normalizeCollectionCursorState(cursorStateInput)
+  const benchmarkStreamKey = 'benchmark:base_duration_benchmark'
+  const seedStreams = [
+    ['seed:standard_work_duration_seed', 'standard_work_duration'],
+    ['seed:special_work_duration_seed', 'special_work_duration'],
+  ] as const
+  const networkStreams = [
+    ['network:special_work_duration_seed', 'special_work_duration_seed'],
+    ['network:wbs_reference_days', 'wbs_reference_days'],
+    ['network:dependency_rule_candidate', 'dependency_rule_candidate'],
+    ['network:critical_path_rule_candidate', 'critical_path_rule_candidate'],
+  ] as const
+  const definitions: SourceStreamDefinition[] = [
+    {
+      streamKey: benchmarkStreamKey,
+      discoverySql: benchmarkDiscoverySql(benchmarkStreamKey),
+      historySql: benchmarkHistorySql(benchmarkStreamKey),
+      scopeBucketsSql: scopeBucketSql(benchmarkStreamKey, benchmarkEligibleCte()),
+      scopeBatchesSql: scopeBatchSql(benchmarkStreamKey, benchmarkEligibleCte()),
+      fallbackGroupKey: benchmarkGroupKey,
+      proposalFromRow: benchmarkProposalFromRow,
+      normalizeRow: (row) => ({ ...row, company_id: row.project_company_id ?? row.company_id }),
+    },
+    ...seedStreams.map(([streamKey, seedType]): SourceStreamDefinition => ({
+      streamKey,
+      discoverySql: seedDiscoverySql(streamKey, seedType),
+      historySql: seedHistorySql(streamKey, seedType),
+      scopeBucketsSql: scopeBucketSql(streamKey, seedEligibleCte(seedType)),
+      scopeBatchesSql: scopeBatchSql(streamKey, seedEligibleCte(seedType)),
+      fallbackGroupKey: seedGroupKey,
+      proposalFromRow: seedProposalFromRow,
+      normalizeRow: (row) => ({
+        ...row,
+        company_id: row.project_company_id ?? row.resolved_company_id ?? row.company_id,
+      }),
+    })),
+    ...networkStreams.map(([streamKey, assetKey]): SourceStreamDefinition => ({
+      streamKey,
+      discoverySql: networkDiscoverySql(streamKey, assetKey),
+      historySql: networkHistorySql(streamKey, assetKey),
+      scopeBucketsSql: scopeBucketSql(streamKey, networkEligibleCte(assetKey)),
+      scopeBatchesSql: scopeBatchSql(streamKey, networkEligibleCte(assetKey)),
+      fallbackGroupKey: networkGroupKey,
+      proposalFromRow: networkProposalFromRow,
+      normalizeRow: (row) => ({
+        ...row,
+        company_id: row.project_company_id ?? row.resolved_company_id ?? row.company_id,
+      }),
+    })),
+  ]
+  const baseResults = await Promise.all(definitions.map((definition) => collectSourceStream({
+    queryExec,
+    streamKey: definition.streamKey,
+    cursorState,
+    discoverySql: definition.discoverySql,
+    historySql: definition.historySql,
+    fallbackGroupKey: definition.fallbackGroupKey,
+  })))
+  const scopeResults = await Promise.all(definitions.map((definition) => collectScopeAggregateStream({
+    queryExec,
+    definition,
+    cursorState,
+  })))
+  const candidates = definitions.flatMap((definition, index) => [
+    ...baseResults[index].rows
+      .map((row) => definition.proposalFromRow(definition.normalizeRow(row)))
+      .filter((proposal): proposal is DurationLearningRuntimeCandidateProposal => Boolean(proposal)),
+    ...scopeResults[index].candidates,
+  ])
+  const deduped = new Map<string, DurationLearningRuntimeCandidateProposal>()
+  for (const proposal of candidates) {
+    const key = `${proposal.proposalKey}:${scopeIdentity(proposal.scope)}`
+    if (!deduped.has(key)) deduped.set(key, proposal)
+  }
+  if (deduped.size > DURATION_LEARNING_RUNTIME_SWEEP_BUDGETS.candidateProposalsTotal) {
+    throw new Error(`duration_learning_runtime_candidate_budget_exceeded:${deduped.size}`)
+  }
+  const expandedCount = expandDurationLearningRuntimeCandidateScopes([...deduped.values()]).length
+  if (expandedCount > DURATION_LEARNING_RUNTIME_SWEEP_BUDGETS.expandedProposalsTotal) {
+    throw new Error(`duration_learning_runtime_expanded_candidate_budget_exceeded:${expandedCount}`)
+  }
+  return {
+    candidates: [...deduped.values()],
+    nextCursorState: nextCursorStateWithPositions(cursorState, [
+      ...baseResults.flatMap((result) => result.positions),
+      ...scopeResults.flatMap((result) => result.positions),
+    ]),
+  }
+}
+
 export async function collectDurationLearningRuntimeCandidateProposals(
   queryExec: DurationLearningRuntimePublicationQueryExec = executeSQL,
 ) {
-  const [benchmarkRows, seedRows, networkRows] = await Promise.all([
-    queryExec<SourceRow>(
-      `select benchmark.*,
-              project.company_id as project_company_id,
-              coalesce(project.business_type, project.project_type) as business_type
-         from public.duration_benchmarks benchmark
-         left join public.projects project on project.id = benchmark.project_id
-        where benchmark.is_active = true
-          and benchmark.is_current = false
-          and benchmark.duration_day_basis = 'construction_production_day'
-          and benchmark.metadata ->> 'runtime_publication_status' = 'candidate'
-        order by benchmark.updated_at asc
-        limit 500`,
-    ),
-    queryExec<SourceRow>(
-      `select candidate.*,
-              coalesce(candidate.company_id, project.company_id) as resolved_company_id,
-              coalesce(project.business_type, project.project_type) as business_type
-         from public.algorithm_seed_upgrade_candidates candidate
-         left join public.projects project on project.id = candidate.project_id
-        where candidate.seed_type in ('standard_work_duration', 'special_work_duration')
-          and candidate.action_policy = 'auto_govern'
-          and candidate.status in ('pending', 'candidate_only', 'auto_published')
-        order by candidate.updated_at asc
-        limit 500`,
-    ),
-    queryExec<SourceRow>(
-      `select outcome.*,
-              coalesce(outcome.company_id, project.company_id) as resolved_company_id,
-              coalesce(project.business_type, project.project_type) as business_type
-         from public.duration_plan_network_outcomes outcome
-         left join public.projects project on project.id = outcome.project_id
-        where outcome.outcome_status in ('accepted', 'weak', 'rejected')
-          and outcome.publication_key is null
-        order by outcome.observed_at asc
-        limit 1000`,
-    ),
-  ])
-  const normalizedRows = [
-    ...benchmarkRows.map((row) => ({
-      ...row,
-      company_id: row.company_id ?? row.project_company_id,
-    })).map(benchmarkProposalFromRow),
-    ...seedRows.map((row) => ({
-      ...row,
-      company_id: row.company_id ?? row.resolved_company_id,
-    })).map(seedProposalFromRow),
-    ...networkRows.map((row) => ({
-      ...row,
-      company_id: row.company_id ?? row.resolved_company_id,
-    })).map(networkProposalFromRow),
-  ]
-  return normalizedRows.filter((proposal): proposal is DurationLearningRuntimeCandidateProposal => Boolean(proposal))
+  return (await collectDurationLearningRuntimeCandidateBatch(queryExec)).candidates
 }
 
 function optionalNumber(value: unknown) {
@@ -847,15 +1937,39 @@ function monitoringCandidateFromRow(row: SourceRow): DurationLearningRuntimeMoni
   }
 }
 
-// workspace-isolation-system-job-approved: the singleton duration-learning lifecycle scheduler measures scoped runtime publications across tenants; results update only the matching publication_key and never return tenant rows to a request.
-export async function collectDurationLearningRuntimeMonitoringCandidates(
-  queryExec: DurationLearningRuntimePublicationQueryExec = executeSQL,
-) {
-  const rows = await queryExec<SourceRow>(
-    `select publication.publication_key,
-            publication.asset_key,
-            publication.publication_stage,
-            publication.scope_level,
+function durationLearningRuntimeMonitoringCollectorSql() {
+  return `/* duration-learning-monitor-collector */
+    with active_publications as (
+      select publication.publication_key,
+             'monitor:active'::text as collector_stream_key,
+             0 as collector_priority
+        from public.duration_learning_runtime_publications publication
+       where (
+         (publication.publication_stage = 'canary' and publication.monitoring_status in ('pending', 'collecting', 'passed'))
+         or (publication.publication_stage = 'stable' and publication.monitoring_status in ('pending', 'collecting'))
+       )
+         and publication.publication_key > $1
+       order by publication.publication_key
+       limit $3
+    ), stable_publications as (
+      select publication.publication_key,
+             'monitor:stable'::text as collector_stream_key,
+             1 as collector_priority
+        from public.duration_learning_runtime_publications publication
+       where publication.publication_stage = 'stable'
+         and publication.monitoring_status = 'passed'
+         and publication.publication_key > $2
+       order by publication.publication_key
+       limit $4
+    ), selected_publications as (
+      select * from active_publications
+      union all
+      select * from stable_publications
+    )
+    select publication.publication_key,
+             publication.asset_key,
+             publication.publication_stage,
+             publication.scope_level,
             publication.automation_decision,
             publication.monitoring_window_hours,
             extract(epoch from (now() - publication.monitoring_started_at)) / 3600.0 as monitoring_elapsed_hours,
@@ -864,10 +1978,14 @@ export async function collectDurationLearningRuntimeMonitoringCandidates(
             coalesce(network.accepted_outcome_count, 0) as accepted_outcome_count,
             coalesce(network.weak_or_rejected_outcome_count, 0) as weak_or_rejected_outcome_count,
             coalesce(accuracy.accuracy_sample_count, 0) as accuracy_sample_count,
-            accuracy.mae_before,
-            accuracy.mae_after,
-            accuracy.regression_rate
-       from public.duration_learning_runtime_publications publication
+             accuracy.mae_before,
+             accuracy.mae_after,
+             accuracy.regression_rate,
+             selected.collector_stream_key,
+             publication.publication_key as collector_group_key
+       from selected_publications selected
+       join public.duration_learning_runtime_publications publication
+         on publication.publication_key = selected.publication_key
        left join lateral (
          select count(*) filter (where source.observation_status = 'observed') as observed_count,
                 count(*) filter (where source.observation_status = 'rejected') as rejected_observation_count
@@ -926,14 +2044,84 @@ export async function collectDurationLearningRuntimeMonitoringCandidates(
               or source.prediction_context -> 'runtimePublicationKeys' ? publication.publication_key
             )
        ) accuracy on true
-      where publication.publication_stage in ('canary', 'stable')
-        and publication.monitoring_status in ('pending', 'collecting', 'passed')
-      order by publication.monitoring_started_at asc
-      limit 500`,
+      order by selected.collector_priority, publication.publication_key`
+}
+
+function uniqueMonitoringRows(rows: SourceRow[]) {
+  const byKey = new Map<string, SourceRow>()
+  for (const row of rows) {
+    const key = text(row.publication_key)
+    if (key && !byKey.has(key)) byKey.set(key, row)
+  }
+  return [...byKey.values()].sort((left, right) => {
+    const priority = Number(text(left.collector_stream_key) === 'monitor:stable')
+      - Number(text(right.collector_stream_key) === 'monitor:stable')
+    return priority || text(left.publication_key).localeCompare(text(right.publication_key))
+  })
+}
+
+// workspace-isolation-system-job-approved: the singleton duration-learning lifecycle scheduler measures scoped runtime publications across tenants; results update only the matching publication_key and never return tenant rows to a request.
+export async function collectDurationLearningRuntimeMonitoringBatch(
+  queryExec: DurationLearningRuntimePublicationQueryExec = executeSQL,
+  cursorStateInput: DurationLearningRuntimeCollectionCursorState = emptyCollectionCursorState(),
+): Promise<DurationLearningRuntimeMonitoringBatch> {
+  const cursorState = normalizeCollectionCursorState(cursorStateInput)
+  const activeKey = 'monitor:active'
+  const stableKey = 'monitor:stable'
+  const activePosition = cursorPositionFor(cursorState, activeKey)
+  const stablePosition = cursorPositionFor(cursorState, stableKey)
+  const runQuery = (activeAfter: string, stableAfter: string) => queryExec<SourceRow>(
+    durationLearningRuntimeMonitoringCollectorSql(),
+    [activeAfter, stableAfter, ACTIVE_MONITORING_LIMIT, STABLE_MONITORING_LIMIT],
   )
-  return rows
-    .map(monitoringCandidateFromRow)
-    .filter((candidate): candidate is DurationLearningRuntimeMonitoringCandidate => Boolean(candidate))
+  const initialRows = await runQuery(activePosition.lastGroupKey ?? '', stablePosition.lastGroupKey ?? '')
+  const initialStreams = new Set(initialRows.map((row) => text(row.collector_stream_key)).filter(Boolean))
+  const wrapActive = Boolean(activePosition.lastGroupKey) && !initialStreams.has(activeKey)
+  const wrapStable = Boolean(stablePosition.lastGroupKey) && !initialStreams.has(stableKey)
+  const wrappedRows = wrapActive || wrapStable
+    ? await runQuery(
+        wrapActive ? '' : activePosition.lastGroupKey ?? '',
+        wrapStable ? '' : stablePosition.lastGroupKey ?? '',
+      )
+    : []
+  const rows = uniqueMonitoringRows([...initialRows, ...wrappedRows])
+  const groupKeysByStream = new Map<string, string[]>()
+  for (const row of rows) {
+    const streamKey = text(row.collector_stream_key)
+    const groupKey = text(row.collector_group_key ?? row.publication_key)
+    if (!streamKey || !groupKey) continue
+    const keys = groupKeysByStream.get(streamKey) ?? []
+    keys.push(groupKey)
+    groupKeysByStream.set(streamKey, uniqueTexts(keys))
+  }
+  const nextPosition = (
+    streamKey: string,
+    current: DurationLearningRuntimeCollectionCursorPosition,
+    wrapped: boolean,
+  ): DurationLearningRuntimeCollectionCursorPosition => {
+    const keys = groupKeysByStream.get(streamKey) ?? []
+    return keys.length === 0
+      ? current
+      : {
+          lastGroupKey: keys.at(-1) ?? current.lastGroupKey,
+          wrapCount: current.wrapCount + Number(wrapped),
+        }
+  }
+  return {
+    candidates: rows
+      .map(monitoringCandidateFromRow)
+      .filter((candidate): candidate is DurationLearningRuntimeMonitoringCandidate => Boolean(candidate)),
+    nextCursorState: nextCursorStateWithPositions(cursorState, [
+      [activeKey, nextPosition(activeKey, activePosition, wrapActive)],
+      [stableKey, nextPosition(stableKey, stablePosition, wrapStable)],
+    ]),
+  }
+}
+
+export async function collectDurationLearningRuntimeMonitoringCandidates(
+  queryExec: DurationLearningRuntimePublicationQueryExec = executeSQL,
+) {
+  return (await collectDurationLearningRuntimeMonitoringBatch(queryExec)).candidates
 }
 
 function emptySweepResult(): DurationLearningRuntimeLifecycleSweepResult {
@@ -948,8 +2136,12 @@ function emptySweepResult(): DurationLearningRuntimeLifecycleSweepResult {
     monitoringPassed: 0,
     monitoringFailed: 0,
     stablePromoted: 0,
+    stablePromotionReused: 0,
     rollbackExecuted: 0,
+    rollbackReused: 0,
     failed: 0,
+    failureRefs: [],
+    collectionCursorAdvanced: false,
   }
 }
 
@@ -1163,14 +2355,69 @@ export async function runDurationLearningRuntimeLifecycleSweep(
   const promoteCanary = input.promoteCanary ?? promoteDurationLearningRuntimeCanary
   const rollbackPublication = input.rollbackPublication ?? rollbackDurationLearningRuntimePublication
   const observedAt = input.observedAt ?? new Date().toISOString()
-  const candidates = input.candidateProvider
-    ? await input.candidateProvider()
-    : await collectDurationLearningRuntimeCandidateProposals(queryExec)
-  const expanded = expandDurationLearningRuntimeCandidateScopes(candidates)
-  const monitoringCandidates = input.monitoringProvider
-    ? await input.monitoringProvider()
-    : await collectDurationLearningRuntimeMonitoringCandidates(queryExec)
   const result = emptySweepResult()
+  const collectionCursorStore = input.collectionCursorStore === undefined
+    ? input.candidateProvider || input.monitoringProvider
+      ? null
+      : createDatabaseDurationLearningRuntimeCollectionCursorStore(queryExec)
+    : input.collectionCursorStore
+  const addFailure = (
+    phase: DurationLearningRuntimeLifecycleFailureRef['phase'],
+    reference: string,
+    error: unknown,
+  ) => {
+    result.failed += 1
+    result.failureRefs.push({
+      phase,
+      reference,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+  const operationBlockedError = (operation: string, response: { reasons?: readonly string[] }) => new Error(
+    `${operation}_blocked:${(response.reasons ?? []).join(',') || 'unknown'}`,
+  )
+
+  let cursorState = emptyCollectionCursorState()
+  if (collectionCursorStore) {
+    try {
+      cursorState = await collectionCursorStore.load()
+    } catch (error) {
+      addFailure('collection_cursor', COLLECTION_CURSOR_OPERATION_ID, error)
+      return result
+    }
+  }
+  let nextCursorState = normalizeCollectionCursorState(cursorState)
+  let candidates: DurationLearningRuntimeCandidateProposal[] = []
+  try {
+    if (input.candidateProvider) {
+      candidates = await input.candidateProvider()
+    } else {
+      const batch = await collectDurationLearningRuntimeCandidateBatch(queryExec, cursorState)
+      candidates = batch.candidates
+      nextCursorState = nextCursorStateWithPositions(
+        nextCursorState,
+        Object.entries(batch.nextCursorState.positions),
+      )
+    }
+  } catch (error) {
+    addFailure('candidate_collection', 'duration-learning-runtime-candidates', error)
+  }
+  let monitoringCandidates: DurationLearningRuntimeMonitoringCandidate[] = []
+  try {
+    if (input.monitoringProvider) {
+      monitoringCandidates = await input.monitoringProvider()
+    } else {
+      const batch = await collectDurationLearningRuntimeMonitoringBatch(queryExec, cursorState)
+      monitoringCandidates = batch.candidates
+      nextCursorState = nextCursorStateWithPositions(nextCursorState, MONITORING_CURSOR_STREAM_KEYS.map((streamKey) => [
+        streamKey,
+        cursorPositionFor(batch.nextCursorState, streamKey),
+      ]))
+    }
+  } catch (error) {
+    addFailure('monitoring_collection', 'duration-learning-runtime-monitoring', error)
+  }
+  const expanded = expandDurationLearningRuntimeCandidateScopes(candidates)
   result.candidateCount = candidates.length
   result.expandedCandidateCount = expanded.length
 
@@ -1236,8 +2483,8 @@ export async function runDurationLearningRuntimeLifecycleSweep(
       const publication = await persistPublication(publicationInput)
       if (publication.status === 'published') result.canaryPublished += 1
       else result.candidateCollecting += 1
-    } catch {
-      result.failed += 1
+    } catch (error) {
+      addFailure('candidate_publication', proposal.proposalKey, error)
     }
   }
 
@@ -1245,19 +2492,19 @@ export async function runDurationLearningRuntimeLifecycleSweep(
     try {
       const evaluation = evaluateMonitoring(candidate)
       if (evaluation.status === 'pending') {
-        result.monitoringPending += 1
-        await recordImpact({
+        const impact = await recordImpact({
           queryExec,
           publicationKey: candidate.publicationKey,
           monitoringStatus: 'collecting',
           metrics: { ...evaluation.metrics, reasonCodes: evaluation.reasons },
           observedAt,
         })
+        if (impact.status !== 'impact_recorded') throw operationBlockedError('duration_learning_runtime_impact', impact)
+        result.monitoringPending += 1
         continue
       }
       if (evaluation.status === 'failed') {
-        result.monitoringFailed += 1
-        await recordImpact({
+        const impact = await recordImpact({
           queryExec,
           publicationKey: candidate.publicationKey,
           monitoringStatus: 'failed',
@@ -1271,6 +2518,12 @@ export async function runDurationLearningRuntimeLifecycleSweep(
           rolledBackAt: observedAt,
         })
         if (rollback.status === 'rollback_executed') result.rollbackExecuted += 1
+        else if (rollback.status === 'rollback_already_executed') result.rollbackReused += 1
+        else throw operationBlockedError('duration_learning_runtime_rollback', rollback)
+        if (impact.status !== 'impact_recorded' && rollback.status !== 'rollback_already_executed') {
+          throw operationBlockedError('duration_learning_runtime_impact', impact)
+        }
+        result.monitoringFailed += 1
         continue
       }
       if (candidate.publicationStage === 'canary') {
@@ -1282,8 +2535,7 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         if (!stableDecision.autoPromotionAllowed) {
           if (stableDecision.manualReviewRequired) result.manualFallback += 1
           if (stableDecision.retainPreviousStable && stableDecision.stage === 'blocked_retain_previous') {
-            result.monitoringFailed += 1
-            await recordImpact({
+            const impact = await recordImpact({
               queryExec,
               publicationKey: candidate.publicationKey,
               monitoringStatus: 'failed',
@@ -1297,21 +2549,27 @@ export async function runDurationLearningRuntimeLifecycleSweep(
               rolledBackAt: observedAt,
             })
             if (rollback.status === 'rollback_executed') result.rollbackExecuted += 1
+            else if (rollback.status === 'rollback_already_executed') result.rollbackReused += 1
+            else throw operationBlockedError('duration_learning_runtime_rollback', rollback)
+            if (impact.status !== 'impact_recorded' && rollback.status !== 'rollback_already_executed') {
+              throw operationBlockedError('duration_learning_runtime_impact', impact)
+            }
+            result.monitoringFailed += 1
           } else {
-            result.monitoringPending += 1
-            await recordImpact({
+            const impact = await recordImpact({
               queryExec,
               publicationKey: candidate.publicationKey,
               monitoringStatus: 'collecting',
               metrics: stableMetrics,
               observedAt,
             })
+            if (impact.status !== 'impact_recorded') throw operationBlockedError('duration_learning_runtime_impact', impact)
+            result.monitoringPending += 1
           }
           continue
         }
         evaluation.metrics = stableMetrics
       }
-      result.monitoringPassed += 1
       const impact = await recordImpact({
         queryExec,
         publicationKey: candidate.publicationKey,
@@ -1319,16 +2577,33 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         metrics: evaluation.metrics,
         observedAt,
       })
-      if (candidate.publicationStage === 'canary' && impact.status === 'impact_recorded') {
+      if (impact.status !== 'impact_recorded') throw operationBlockedError('duration_learning_runtime_impact', impact)
+      if (candidate.publicationStage === 'canary') {
         const promotion = await promoteCanary({
           queryExec,
           publicationKey: candidate.publicationKey,
           promotedAt: observedAt,
         })
         if (promotion.status === 'stable_promoted') result.stablePromoted += 1
+        else if (promotion.status === 'stable_already_promoted') result.stablePromotionReused += 1
+        else throw operationBlockedError('duration_learning_runtime_promotion', promotion)
       }
-    } catch {
-      result.failed += 1
+      result.monitoringPassed += 1
+    } catch (error) {
+      addFailure('monitoring', candidate.publicationKey, error)
+    }
+  }
+
+  if (
+    collectionCursorStore
+    && result.failed === 0
+    && cursorOutputHash(cursorState) !== cursorOutputHash(nextCursorState)
+  ) {
+    try {
+      await collectionCursorStore.commit(cursorState, nextCursorState)
+      result.collectionCursorAdvanced = true
+    } catch (error) {
+      addFailure('collection_cursor', COLLECTION_CURSOR_OPERATION_ID, error)
     }
   }
 

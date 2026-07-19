@@ -34,6 +34,25 @@ function buildCandidate(
 }
 
 describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
+  it('runs retryable sweeps only while holding the distributed job lease', () => {
+    const jobSource = readFileSync(
+      new URL('../jobs/constructionOrganizationPlanNetworkRuntimeEvidenceJob.ts', import.meta.url),
+      'utf8',
+    )
+    const executeSource = jobSource.slice(jobSource.indexOf("private async execute(triggeredBy"))
+
+    expect(jobSource).toContain("import { runJobWithRetry, runWithJobLease } from '../services/jobRuntime.js'")
+    expect(executeSource).toContain('const leaseRun = await runWithJobLease(')
+    expect(executeSource).toContain('async (lease) => runJobWithRetry(')
+    expect(executeSource).toContain("jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob'")
+    expect(executeSource).toContain('triggeredBy,')
+    expect(executeSource).toContain('jobId,')
+    expect(executeSource.match(/lease\.assertActive\(\)/g)).toHaveLength(2)
+    expect(executeSource).toContain('await runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options)')
+    expect(executeSource).toContain('if (!leaseRun.acquired)')
+    expect(executeSource).toContain('const { attempts, value } = leaseRun.value')
+  })
+
   it('is registered in the scheduler and manual jobs route', () => {
     const schedulerSource = readFileSync(new URL('../scheduler.ts', import.meta.url), 'utf8')
     const jobsRouteSource = readFileSync(new URL('../routes/jobs.ts', import.meta.url), 'utf8')

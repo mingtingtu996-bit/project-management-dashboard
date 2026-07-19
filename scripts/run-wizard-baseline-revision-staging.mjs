@@ -69,10 +69,20 @@ const args = parseArgs(process.argv.slice(2))
 const envPath = path.resolve(workspaceRoot, args.get('env-file') ?? 'deploy/env/staging.env')
 const env = loadEnvFile(envPath)
 const apiBaseUrl = requireValue(args.get('api-base-url') ?? 'http://127.0.0.1:3107', 'api-base-url').replace(/\/$/, '')
+const targetEnvironment = String(args.get('target-environment') ?? 'staging').trim()
+if (!['staging', 'production'].includes(targetEnvironment)) {
+  throw new Error('target-environment must be staging or production')
+}
+const productionLive = targetEnvironment === 'production'
+const productionMutationApproval = String(args.get('production-mutation-approval') ?? '').trim()
+const PRODUCTION_MUTATION_APPROVAL = 'I_APPROVE_DISPOSABLE_PRODUCTION_WIZARD_SMOKE'
+if (productionLive && productionMutationApproval !== PRODUCTION_MUTATION_APPROVAL) {
+  throw new Error(`production-mutation-approval must equal ${PRODUCTION_MUTATION_APPROVAL}`)
+}
 const deployedStagingCode = args.get('deployed-staging-code') === 'true'
 const releaseSha = String(args.get('release-sha') ?? '').trim()
-if (deployedStagingCode && !/^[0-9a-f]{40}$/i.test(releaseSha)) {
-  throw new Error('release-sha must be a 40-character Git SHA for deployed staging code')
+if ((deployedStagingCode || productionLive) && !/^[0-9a-f]{40}$/i.test(releaseSha)) {
+  throw new Error('release-sha must be a 40-character Git SHA for deployed code')
 }
 const requestedCompanyId = String(args.get('company-id') ?? '').trim()
 let companyId = ''
@@ -85,6 +95,33 @@ const cleanupSourceReportPath = args.get('cleanup-report')
   ? path.resolve(workspaceRoot, args.get('cleanup-report'))
   : null
 const supabaseUrl = requireValue(env.SUPABASE_URL, 'SUPABASE_URL')
+const supabaseProjectRef = new URL(supabaseUrl).hostname.split('.')[0].toLowerCase()
+const expectedProjectRefInput = String(args.get('expected-project-ref') ?? '').trim().toLowerCase()
+const expectedProjectRef = expectedProjectRefInput || supabaseProjectRef
+if ((productionLive || deployedStagingCode || expectedProjectRefInput)
+  && !/^[a-z0-9]{20}$/.test(expectedProjectRef)) {
+  throw new Error('expected-project-ref must be a 20-character Supabase project ref')
+}
+if (supabaseProjectRef !== expectedProjectRef) {
+  throw new Error('SUPABASE_URL does not match expected-project-ref')
+}
+let deployedReadiness = null
+if (productionLive) {
+  const deployedReadinessFile = requireValue(args.get('deployed-readiness-file'), 'deployed-readiness-file')
+  const readinessDocument = JSON.parse(fs.readFileSync(path.resolve(workspaceRoot, deployedReadinessFile), 'utf8'))
+  deployedReadiness = {
+    releaseSha: String(readinessDocument?.build?.releaseSha ?? '').trim().toLowerCase(),
+    deployTarget: String(readinessDocument?.build?.deployTarget ?? '').trim(),
+    supabaseProjectRef: String(readinessDocument?.build?.supabaseProjectRef ?? '').trim().toLowerCase(),
+    databaseProjectRef: String(readinessDocument?.build?.databaseProjectRef ?? '').trim().toLowerCase(),
+  }
+  if (deployedReadiness.releaseSha !== releaseSha.toLowerCase()
+    || deployedReadiness.deployTarget !== 'production'
+    || deployedReadiness.supabaseProjectRef !== expectedProjectRef
+    || deployedReadiness.databaseProjectRef !== expectedProjectRef) {
+    throw new Error('deployed-readiness-file identity does not match production release and project ref')
+  }
+}
 const testUsername = requireValue(env.TEST_USERNAME, 'TEST_USERNAME')
 const testUserPassword = requireValue(env.TEST_USER_PASSWORD, 'TEST_USER_PASSWORD')
 const requestTimeoutMs = Number(args.get('request-timeout-ms') ?? 120_000)
@@ -99,30 +136,302 @@ if (!Number.isInteger(recoveryAttempts) || recoveryAttempts < 1 || recoveryAttem
 if (!Number.isInteger(recoveryDelayMs) || recoveryDelayMs < 10 || recoveryDelayMs > 10_000) {
   throw new Error('recovery-delay-ms must be an integer between 10 and 10000')
 }
-const runId = `staging-baseline-${Date.now()}`
+const runId = `${targetEnvironment}-baseline-${Date.now()}`
 const diagnosticProjectName = `Disposable Residential Baseline ${runId}`
 const plannedProjectId = String(args.get('project-id') ?? randomUUID()).trim()
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(plannedProjectId)) {
   throw new Error('project-id must be a UUID when provided')
 }
 
+const BUSINESS_TYPE_PREVIEW_CASES = [
+  {
+    businessType: 'general_civil',
+    businessSubtype: 'civil_residential',
+    markerPrefix: 'RMP-',
+    functionalUsageCodes: ['residential'],
+    functionalCategoryCodes: ['residential'],
+    specialRoomTypeCodes: [],
+    physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site'],
+    methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
+    hardConstraintCodes: [],
+    buildingCount: 1,
+    standardFloorCount: 22,
+    basementLevelCount: 2,
+  },
+  {
+    businessType: 'hotel',
+    businessSubtype: null,
+    markerPrefix: 'BTMP-HTL-',
+    functionalUsageCodes: ['hotel'],
+    functionalCategoryCodes: ['hotel'],
+    specialRoomTypeCodes: ['guestroom', 'lobby', 'kitchen'],
+    physicalZoneTypeCodes: ['tower', 'basement', 'podium', 'outdoor_site'],
+    methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
+    hardConstraintCodes: [],
+    buildingCount: 1,
+    standardFloorCount: 22,
+    basementLevelCount: 3,
+  },
+  {
+    businessType: 'hospital',
+    businessSubtype: null,
+    markerPrefix: 'BTMP-HSP-',
+    functionalUsageCodes: ['hospital'],
+    functionalCategoryCodes: ['cleanroom'],
+    specialRoomTypeCodes: ['cleanroom', 'operating_room'],
+    physicalZoneTypeCodes: ['tower', 'basement'],
+    methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
+    hardConstraintCodes: [],
+    buildingCount: 4,
+    standardFloorCount: 12,
+    basementLevelCount: 3,
+  },
+  {
+    businessType: 'school',
+    businessSubtype: null,
+    markerPrefix: 'BTMP-SCH-',
+    functionalUsageCodes: ['school'],
+    functionalCategoryCodes: ['education'],
+    specialRoomTypeCodes: ['classroom', 'laboratory'],
+    physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site', 'playground'],
+    methodVariantCodes: ['pile_foundation', 'vertical_retaining_support', 'no_horizontal_strut'],
+    hardConstraintCodes: [],
+    buildingCount: 3,
+    standardFloorCount: 6,
+    basementLevelCount: 1,
+  },
+  {
+    businessType: 'industrial',
+    businessSubtype: 'industrial_general',
+    markerPrefix: 'BTMP-IND-',
+    functionalUsageCodes: ['industrial'],
+    functionalCategoryCodes: ['factory'],
+    specialRoomTypeCodes: ['workshop', 'equipment_foundation'],
+    physicalZoneTypeCodes: ['tower', 'basement', 'outdoor_site', 'logistics_yard'],
+    methodVariantCodes: ['pile_foundation', 'steel_frame', 'industrial_superflat_floor'],
+    hardConstraintCodes: [],
+    buildingCount: 3,
+    standardFloorCount: 2,
+    basementLevelCount: 1,
+  },
+  {
+    businessType: 'data_center',
+    businessSubtype: null,
+    markerPrefix: 'BTMP-DTC-',
+    functionalUsageCodes: ['data_center'],
+    functionalCategoryCodes: ['data_center'],
+    specialRoomTypeCodes: ['computer_room', 'battery_room'],
+    physicalZoneTypeCodes: ['tower', 'basement'],
+    methodVariantCodes: ['pile_foundation', 'steel_frame', 'no_horizontal_strut'],
+    hardConstraintCodes: [],
+    buildingCount: 2,
+    standardFloorCount: 5,
+    basementLevelCount: 1,
+  },
+  {
+    businessType: 'transportation_hub',
+    businessSubtype: 'transport_multimodal',
+    markerPrefix: 'BTMP-TRH-',
+    functionalUsageCodes: ['transportation_hub'],
+    functionalCategoryCodes: ['transportation'],
+    specialRoomTypeCodes: ['concourse', 'platform_interface'],
+    physicalZoneTypeCodes: ['tower', 'basement', 'metro_interface', 'outdoor_site'],
+    methodVariantCodes: ['pile_foundation', 'steel_frame', 'no_horizontal_strut'],
+    hardConstraintCodes: ['non_stop_operation'],
+    buildingCount: 1,
+    standardFloorCount: 3,
+    basementLevelCount: 2,
+  },
+  {
+    businessType: 'sports_culture',
+    businessSubtype: 'sports_stadium',
+    markerPrefix: 'BTMP-SPC-',
+    functionalUsageCodes: ['sports_culture'],
+    functionalCategoryCodes: ['large_span_public'],
+    specialRoomTypeCodes: ['arena', 'auditorium'],
+    physicalZoneTypeCodes: ['large_span_hall', 'basement', 'outdoor_site'],
+    methodVariantCodes: ['pile_foundation', 'steel_frame', 'large_span_roof'],
+    hardConstraintCodes: [],
+    buildingCount: 1,
+    standardFloorCount: 4,
+    basementLevelCount: 2,
+  },
+  {
+    businessType: 'tod_upper_cover',
+    businessSubtype: null,
+    markerPrefix: 'BTMP-TOD-',
+    functionalUsageCodes: ['tod_upper_cover'],
+    functionalCategoryCodes: ['tod'],
+    specialRoomTypeCodes: ['podium', 'metro_interface'],
+    physicalZoneTypeCodes: ['tower', 'basement', 'metro_interface', 'outdoor_site'],
+    methodVariantCodes: ['pile_foundation', 'steel_frame', 'no_horizontal_strut'],
+    hardConstraintCodes: ['non_stop_operation'],
+    buildingCount: 2,
+    standardFloorCount: 26,
+    basementLevelCount: 2,
+  },
+  {
+    businessType: 'renovation',
+    businessSubtype: 'renovation_energy',
+    markerPrefix: 'BTMP-RNV-',
+    functionalUsageCodes: ['renovation'],
+    functionalCategoryCodes: ['renovation'],
+    specialRoomTypeCodes: [],
+    physicalZoneTypeCodes: ['renovation_zone', 'outdoor_site'],
+    methodVariantCodes: ['cast_in_situ', 'vertical_retaining_support'],
+    hardConstraintCodes: ['occupied_renovation'],
+    buildingCount: 1,
+    standardFloorCount: 6,
+    basementLevelCount: 1,
+  },
+  {
+    businessType: 'modular_building',
+    businessSubtype: null,
+    markerPrefix: 'BTMP-MOD-',
+    functionalUsageCodes: ['modular_building'],
+    functionalCategoryCodes: ['modular_building'],
+    specialRoomTypeCodes: [],
+    physicalZoneTypeCodes: ['tower', 'basement'],
+    methodVariantCodes: ['modular_mic', 'modular_prefab', 'pile_foundation'],
+    hardConstraintCodes: [],
+    buildingCount: 1,
+    standardFloorCount: 18,
+    basementLevelCount: 1,
+  },
+]
+
+function buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2) {
+  const aboveGroundAreaM2 = totalAreaM2 - basementAreaM2
+  const buildings = Array.from({ length: previewCase.buildingCount }, (_, index) => ({
+    id: `${previewCase.businessType}-building-${index + 1}`,
+    type: 'building',
+    name: `${previewCase.businessType} building ${index + 1}`,
+    metadata: {
+      functionalUsage: previewCase.functionalUsageCodes[index % previewCase.functionalUsageCodes.length],
+      standardFloorCount: previewCase.standardFloorCount,
+      areaM2: Math.round(aboveGroundAreaM2 / previewCase.buildingCount),
+      methodVariantCodes: previewCase.methodVariantCodes,
+      childrenComplete: true,
+    },
+    children: [],
+  }))
+  const functionalAreas = [
+    ...previewCase.functionalCategoryCodes.map((functionalCategory, index) => ({
+      id: `${previewCase.businessType}-functional-category-${index + 1}`,
+      type: 'functional_area',
+      name: `${functionalCategory} functional area`,
+      metadata: {
+        functionalCategory,
+        partitionMode: 'trigger_tag',
+        coverageRole: 'overlay_trigger',
+        areaAccountingMode: 'not_counted',
+      },
+      children: [],
+    })),
+    ...previewCase.specialRoomTypeCodes.map((specialRoomType, index) => ({
+      id: `${previewCase.businessType}-special-room-${index + 1}`,
+      type: 'functional_area',
+      name: `${specialRoomType} special room`,
+      metadata: {
+        specialRoomType,
+        partitionMode: 'trigger_tag',
+        coverageRole: 'overlay_trigger',
+        areaAccountingMode: 'not_counted',
+      },
+      children: [],
+    })),
+  ]
+  const physicalZones = previewCase.physicalZoneTypeCodes.map((physicalCategory, index) => ({
+    id: `${previewCase.businessType}-physical-zone-${index + 1}`,
+    type: 'physical_zone',
+    name: `${physicalCategory} zone`,
+    metadata: {
+      physicalCategory,
+      coverageRole: 'overlay_trigger',
+      areaAccountingMode: 'not_counted',
+    },
+    children: [],
+  }))
+  const basement = previewCase.basementLevelCount > 0
+    ? [{
+        id: `${previewCase.businessType}-basement-1`,
+        type: 'basement',
+        name: `${previewCase.businessType} basement`,
+        metadata: {
+          basementLevelCount: previewCase.basementLevelCount,
+          basementAreaM2,
+          foundationDepthM: previewCase.basementLevelCount * 4.5,
+          childrenComplete: true,
+        },
+        children: [],
+      }]
+    : []
+  return [...buildings, ...basement, ...functionalAreas, ...physicalZones]
+}
+
+function buildBusinessPreviewPayload(previewCase, projectName = `${diagnosticProjectName} Preview ${previewCase.businessType}`) {
+  const totalAreaM2 = Math.max(18_000, previewCase.buildingCount * previewCase.standardFloorCount * 1_200)
+  const basementAreaM2 = previewCase.basementLevelCount > 0
+    ? Math.max(3_000, previewCase.buildingCount * previewCase.basementLevelCount * 1_000)
+    : 0
+  const projectFeatures = {
+    standardFloorCount: previewCase.standardFloorCount,
+    basementLevelCount: previewCase.basementLevelCount,
+    ...(previewCase.methodVariantCodes.includes('steel_frame') ? { integral_lifting: true } : {}),
+    ...(previewCase.businessType === 'sports_culture' ? { large_span: 60 } : {}),
+    ...(previewCase.hardConstraintCodes.includes('non_stop_operation') ? { non_stop_operation: true, near_metro: true } : {}),
+    ...(previewCase.hardConstraintCodes.includes('occupied_renovation') ? { occupied_renovation: true } : {}),
+  }
+  return {
+    step: 6,
+    mode: 'new',
+    projectName,
+    location: 'Shanghai',
+    plannedStartDate: '2026-08-01',
+    plannedEndDate: '2030-12-31',
+    planScopeCaliber: 'full_project_master',
+    deliveryStandard: 'full_fitout',
+    terminalEvent: 'owner_handover',
+    totalAreaM2,
+    aboveGroundAreaM2: totalAreaM2 - basementAreaM2,
+    basementAreaM2: Math.max(1, basementAreaM2),
+    siteAreaM2: Math.max(9_000, Math.round(totalAreaM2 * 0.45)),
+    businessType: previewCase.businessType,
+    ...(previewCase.businessSubtype ? { businessSubtype: previewCase.businessSubtype } : {}),
+    buildingCount: previewCase.buildingCount,
+    detailLevel: 'overview',
+    methodVariantCodes: previewCase.methodVariantCodes,
+    prefabSystemCodes: previewCase.businessType === 'modular_building' ? ['modular_mic'] : [],
+    projectFeatures,
+    scopeTree: buildBusinessPreviewScopeTree(previewCase, totalAreaM2, basementAreaM2),
+  }
+}
+
 const result = {
   generatedAt: new Date().toISOString(),
   source: 'wizard_baseline_revision_live_probe',
-  environmentClassification: deployedStagingCode
-    ? 'deployed_staging_private_server'
-    : 'staging_db_with_local_current_workspace_code',
-  stagingProjectRef: new URL(supabaseUrl).hostname.split('.')[0],
+  environmentClassification: productionLive
+    ? 'deployed_production_private_server'
+    : deployedStagingCode
+      ? 'deployed_staging_private_server'
+      : 'staging_db_with_local_current_workspace_code',
+  targetEnvironment,
+  supabaseProjectRef,
+  stagingProjectRef: targetEnvironment === 'staging' ? supabaseProjectRef : null,
   deployedStagingCode,
+  deployedReadiness,
   releaseSha: releaseSha || null,
-  productionLive: false,
-  mutationBoundary: 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted',
+  productionLive,
+  mutationBoundary: productionLive
+    ? 'explicitly_approved_disposable_production_project_only_created_adjusted_confirmed_revised_then_physically_deleted'
+    : 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted',
   diagnosticRunId: runId,
   projectName: diagnosticProjectName,
   createRequestOutcome: 'not_started',
   status: 'running',
   companyId: null,
   projectId: plannedProjectId,
+  generationBatchId: null,
   baselineId: null,
   revisionId: null,
   steps: {},
@@ -419,79 +728,149 @@ if (cleanupSourceReportPath) {
     process.stdout.write(`${JSON.stringify({ status: result.status, reportPath, projectId: result.projectId, cleanup: result.cleanup })}\n`)
   }
 } else {
-const wizardPayload = {
-  step: 6,
-  mode: 'new',
-  projectName: diagnosticProjectName,
-  location: 'Shanghai',
-  plannedStartDate: '2026-08-01',
-  plannedEndDate: '2028-09-30',
-  planScopeCaliber: 'full_project_master',
-  deliveryStandard: 'full_fitout',
-  terminalEvent: 'completion_acceptance',
-  totalAreaM2: 18000,
-  aboveGroundAreaM2: 15000,
-  basementAreaM2: 3000,
-  siteAreaM2: 9000,
-  businessType: 'residential',
-  businessSubtype: 'high_rise_residential',
-  buildingCount: 1,
-  detailLevel: 'overview',
-  methodVariantCodes: [],
-  prefabSystemCodes: [],
-  projectFeatures: {
-    standardFloorCount: 18,
-    hasFullFitout: true,
-  },
-  scopeTree: [
-    {
-      id: 'building-1',
-      type: 'building',
-      name: '1# Residential Tower',
-      metadata: {
-        functionalUsage: 'residential_tower',
-        standardFloorCount: 18,
-        childrenComplete: true,
-      },
-      children: [],
-    },
-    {
-      id: 'basement-1',
-      type: 'basement',
-      name: 'Shared Basement',
-      metadata: {
-        basementLevelCount: 1,
-        childrenComplete: true,
-      },
-      children: [],
-    },
-    {
-      id: 'outdoor-site-1',
-      type: 'physical_zone',
-      name: 'Outdoor Site',
-      metadata: {
-        physicalSpaceKind: 'outdoor_site',
-        physicalCategory: 'outdoor_site_plan',
-      },
-      children: [],
-    },
-  ],
+function isValidIsoDate(value) {
+  const normalized = String(value ?? '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) && Number.isFinite(Date.parse(`${normalized}T00:00:00.000Z`))
 }
+
+function assertPreviewCondition(condition, message, details) {
+  if (condition) return
+  const error = new Error(message)
+  error.details = details
+  throw error
+}
+
+function validateBusinessTypePreview(previewCase, preview, httpStatus) {
+  const identity = preview?.profile?.identity ?? {}
+  const generation = preview?.profile?.generation ?? {}
+  const masterPlanProfile = generation.masterPlanProfile ?? {}
+  const assembly = generation.executableDefaultMasterPlanAssembly ?? {}
+  const executablePreview = generation.executableDefaultMasterPlanPreview ?? {}
+  const quality = generation.planQualityDiagnostics ?? {}
+  const profileRange = Array.isArray(masterPlanProfile.rowCountRange)
+    ? masterPlanProfile.rowCountRange.map(Number)
+    : []
+  const scheduleRowCount = Number(executablePreview.scheduleRowCount ?? assembly.scheduleRowCount)
+  const visibleDependencyCount = Number(assembly.visibleDependencyCount ?? executablePreview.visibleDependencyCount)
+  const visibleDependencyCoverageRate = Number(assembly.visibleDependencyCoverageRate)
+  const rows = Array.isArray(executablePreview.rows) ? executablePreview.rows : []
+  const expectedSubtype = previewCase.businessSubtype ?? null
+  const observedSubtype = identity.businessSubtype ?? null
+  const details = {
+    businessType: previewCase.businessType,
+    expectedSubtype,
+    identity,
+    masterPlanProfile,
+    assembly,
+    quality,
+    executablePreview: {
+      ...executablePreview,
+      rows: undefined,
+    },
+  }
+
+  assertPreviewCondition(httpStatus === 200, `${previewCase.businessType} preview did not return HTTP 200`, details)
+  assertPreviewCondition(identity.businessType === previewCase.businessType, `${previewCase.businessType} preview returned a different canonical business type`, details)
+  assertPreviewCondition(observedSubtype === expectedSubtype, `${previewCase.businessType} preview returned a different canonical business subtype`, details)
+  assertPreviewCondition(assembly.status === 'executable_default_master_plan_ready', `${previewCase.businessType} preview assembly is not ready`, details)
+  assertPreviewCondition(assembly.readyForWizardCommit === true, `${previewCase.businessType} preview is not ready for wizard commit`, details)
+  assertPreviewCondition(Number.isInteger(scheduleRowCount) && scheduleRowCount >= 60 && scheduleRowCount <= 300, `${previewCase.businessType} preview row count is outside 60-300`, details)
+  assertPreviewCondition(profileRange.length === 2 && profileRange.every(Number.isFinite), `${previewCase.businessType} preview profile range is unavailable`, details)
+  assertPreviewCondition(scheduleRowCount >= profileRange[0] && scheduleRowCount <= profileRange[1], `${previewCase.businessType} preview row count is outside its profile range`, details)
+  assertPreviewCondition(Number.isFinite(visibleDependencyCount) && visibleDependencyCount > 0, `${previewCase.businessType} preview has no visible dependencies`, details)
+  assertPreviewCondition(Number.isFinite(visibleDependencyCoverageRate) && visibleDependencyCoverageRate >= 0.9, `${previewCase.businessType} preview dependency coverage is below 0.9`, details)
+  assertPreviewCondition(Number(quality.unresolvedDependencyCount ?? 0) === 0, `${previewCase.businessType} preview has unresolved dependencies`, details)
+  assertPreviewCondition(Number(assembly.dependencyCycleRowCount ?? executablePreview.dependencyCycleRowCount ?? 0) === 0, `${previewCase.businessType} preview has dependency cycles`, details)
+  assertPreviewCondition(Number(assembly.schedulePropagationCycleRowCount ?? executablePreview.schedulePropagationCycleRowCount ?? 0) === 0, `${previewCase.businessType} preview has schedule propagation cycles`, details)
+  assertPreviewCondition(quality.runtimeApprovalRequired === false, `${previewCase.businessType} preview unexpectedly requires runtime approval`, details)
+  assertPreviewCondition(quality.blocksWizardCommit === false, `${previewCase.businessType} preview blocks wizard commit`, details)
+  assertPreviewCondition(executablePreview.previewOnly === true, `${previewCase.businessType} response is not marked preview-only`, details)
+  assertPreviewCondition(executablePreview.mutationBoundary === 'preview_only_no_db_write', `${previewCase.businessType} response does not attest the preview mutation boundary`, details)
+  assertPreviewCondition(isValidIsoDate(executablePreview.projectStartDate) && isValidIsoDate(executablePreview.projectEndDate), `${previewCase.businessType} preview project dates are invalid`, details)
+  assertPreviewCondition(executablePreview.projectStartDate <= executablePreview.projectEndDate, `${previewCase.businessType} preview project dates are reversed`, details)
+  assertPreviewCondition(rows.length > 0 && rows.every((row) => (
+    isValidIsoDate(row.plannedStartDate)
+    && isValidIsoDate(row.plannedEndDate)
+    && row.plannedStartDate <= row.plannedEndDate
+  )), `${previewCase.businessType} preview contains an invalid row date`, details)
+
+  const businessMarkerRow = rows.find((row) => (
+    String(row.wbsCode ?? '').startsWith(previewCase.markerPrefix)
+    && String(row.standardWorkDurationSeedStableCode ?? '').trim()
+    && String(row.t2RhythmTemplateId ?? '').trim()
+  ))
+  assertPreviewCondition(Boolean(businessMarkerRow), `${previewCase.businessType} preview did not consume its business marker, T2 rhythm, and duration seed together`, details)
+
+  return {
+    businessType: previewCase.businessType,
+    businessSubtype: expectedSubtype,
+    httpStatus,
+    profileRowCountRange: profileRange,
+    scheduleRowCount,
+    assemblyStatus: assembly.status,
+    readyForWizardCommit: assembly.readyForWizardCommit,
+    visibleDependencyCount,
+    visibleDependencyCoverageRate,
+    unresolvedDependencyCount: Number(quality.unresolvedDependencyCount ?? 0),
+    runtimeApprovalRequired: quality.runtimeApprovalRequired,
+    blocksWizardCommit: quality.blocksWizardCommit,
+    projectStartDate: executablePreview.projectStartDate,
+    projectEndDate: executablePreview.projectEndDate,
+    businessMarkerCode: businessMarkerRow.wbsCode,
+    standardWorkDurationSeedStableCode: businessMarkerRow.standardWorkDurationSeedStableCode,
+    t2RhythmTemplateId: businessMarkerRow.t2RhythmTemplateId,
+    previewOnly: executablePreview.previewOnly,
+    mutationBoundary: executablePreview.mutationBoundary,
+  }
+}
+
+const wizardPayload = buildBusinessPreviewPayload(BUSINESS_TYPE_PREVIEW_CASES[0], diagnosticProjectName)
 
 try {
   await authenticate()
   await readDurationAccuracySummary()
   writeResultReport()
 
-  let previewCall = await apiRequest('POST', '/api/projects/wizard/preview', wizardPayload)
-  let preview = assertApi('preview wizard candidate plan', previewCall, [200])
-  let previewGeneration = preview?.profile?.generation ?? {}
-  let previewQualityDiagnostics = previewGeneration.planQualityDiagnostics ?? {}
-  let previewTargetAlignment = previewQualityDiagnostics.targetAlignmentSnapshot ?? preview?.profile?.targetFeasibility ?? null
+  result.steps.previewBusinessTypeMatrix = {
+    status: 'running',
+    previewCount: 0,
+    expectedPreviewCount: BUSINESS_TYPE_PREVIEW_CASES.length,
+    canonicalBusinessTypes: BUSINESS_TYPE_PREVIEW_CASES.map((previewCase) => previewCase.businessType),
+    mutationBoundary: 'authenticated_preview_only_no_project_fact_write',
+    cases: [],
+  }
+  writeResultReport()
+  let canonicalResidentialPreview = null
+  for (const previewCase of BUSINESS_TYPE_PREVIEW_CASES) {
+    const previewPayload = buildBusinessPreviewPayload(
+      previewCase,
+      previewCase.businessType === 'general_civil'
+        ? diagnosticProjectName
+        : `${diagnosticProjectName} Preview ${previewCase.businessType}`,
+    )
+    const previewCall = await apiRequest('POST', '/api/projects/wizard/preview', previewPayload)
+    const preview = assertApi(`preview ${previewCase.businessType} wizard candidate plan`, previewCall, [200])
+    const evidence = validateBusinessTypePreview(previewCase, preview, previewCall.response.status)
+    result.steps.previewBusinessTypeMatrix.cases.push(evidence)
+    result.steps.previewBusinessTypeMatrix.previewCount = result.steps.previewBusinessTypeMatrix.cases.length
+    if (previewCase.businessType === 'general_civil') canonicalResidentialPreview = preview
+    writeResultReport()
+  }
+  result.steps.previewBusinessTypeMatrix.status = 'pass'
+  result.steps.previewBusinessTypeMatrix.allCanonicalTypesReady = true
+  result.steps.previewBusinessTypeMatrix.allPreviewsReadOnly = true
+
+  const previewGeneration = canonicalResidentialPreview?.profile?.generation ?? {}
+  const previewQualityDiagnostics = previewGeneration.planQualityDiagnostics ?? {}
+  const previewTargetAlignment = previewQualityDiagnostics.targetAlignmentSnapshot
+    ?? canonicalResidentialPreview?.profile?.targetFeasibility
+    ?? null
   result.steps.previewCandidatePlan = {
     status: 'pass',
-    httpStatus: previewCall.response.status,
-    estimatedRowCount: preview?.estimatedRowCount ?? null,
+    httpStatus: 200,
+    canonicalBusinessType: wizardPayload.businessType,
+    canonicalBusinessSubtype: wizardPayload.businessSubtype,
+    estimatedRowCount: canonicalResidentialPreview?.estimatedRowCount ?? null,
     generatedScheduleRowCount: previewGeneration.durationAssetUtilizationSummary?.scheduleRowCount ?? null,
     assemblyStatus: previewGeneration.executableDefaultMasterPlanAssembly?.status ?? null,
     planQualityStatus: previewQualityDiagnostics.status ?? null,
@@ -503,12 +882,7 @@ try {
     targetOvershootDays: previewTargetAlignment?.overshootDays ?? null,
     targetUnrecoverableDays: previewTargetAlignment?.unrecoverableDays ?? null,
   }
-
-  if (previewQualityDiagnostics.runtimeApprovalRequired === true || previewQualityDiagnostics.blocksWizardCommit === true) {
-    const error = new Error('wizard preview unexpectedly requires runtime approval')
-    error.details = previewQualityDiagnostics
-    throw error
-  }
+  writeResultReport()
 
   const createRequest = {
     newProjectId: projectId,
@@ -552,10 +926,11 @@ try {
   })
   const committed = assertApi('commit wizard generation', committedCall, [200])
   const generation = committed?.generation ?? {}
+  result.generationBatchId = requireValue(generation.generationBatchId, 'generation batch id')
   result.steps.commitWizardGeneration = {
     status: 'pass',
     httpStatus: committedCall.response.status,
-    generationBatchId: generation.generationBatchId ?? null,
+    generationBatchId: result.generationBatchId,
     generatedRowCount: generation.generatedRowCount ?? null,
     createdTaskCount: generation.createdTaskCount ?? null,
     assemblyStatus: generation.executableDefaultMasterPlanAssembly?.status ?? null,

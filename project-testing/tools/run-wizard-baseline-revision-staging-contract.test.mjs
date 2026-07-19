@@ -15,6 +15,20 @@ const smokeSource = fs.readFileSync(
 )
 const smokeScriptPath = path.join(workspaceRoot, 'scripts', 'run-wizard-baseline-revision-staging.mjs')
 
+const canonicalBusinessPreviewCases = [
+  { businessType: 'general_civil', businessSubtype: 'civil_residential', markerPrefix: 'RMP-' },
+  { businessType: 'hotel', businessSubtype: null, markerPrefix: 'BTMP-HTL-' },
+  { businessType: 'hospital', businessSubtype: null, markerPrefix: 'BTMP-HSP-' },
+  { businessType: 'school', businessSubtype: null, markerPrefix: 'BTMP-SCH-' },
+  { businessType: 'industrial', businessSubtype: 'industrial_general', markerPrefix: 'BTMP-IND-' },
+  { businessType: 'data_center', businessSubtype: null, markerPrefix: 'BTMP-DTC-' },
+  { businessType: 'transportation_hub', businessSubtype: 'transport_multimodal', markerPrefix: 'BTMP-TRH-' },
+  { businessType: 'sports_culture', businessSubtype: 'sports_stadium', markerPrefix: 'BTMP-SPC-' },
+  { businessType: 'tod_upper_cover', businessSubtype: null, markerPrefix: 'BTMP-TOD-' },
+  { businessType: 'renovation', businessSubtype: 'renovation_energy', markerPrefix: 'BTMP-RNV-' },
+  { businessType: 'modular_building', businessSubtype: null, markerPrefix: 'BTMP-MOD-' },
+]
+
 test('wizard baseline revision staging smoke uses ordinary plan confirmation', () => {
   assert.match(smokeSource, /planQualityDiagnostics/)
   assert.match(smokeSource, /publish edited baseline/)
@@ -73,11 +87,80 @@ test('wizard baseline revision staging smoke can attest an exact deployed stagin
   assert.match(smokeSource, /writeResultReport\(\)/)
 })
 
+test('wizard baseline revision smoke requires explicit same-SHA production identity and approval', async () => {
+  assert.match(smokeSource, /args\.get\('target-environment'\)/)
+  assert.match(smokeSource, /args\.get\('production-mutation-approval'\)/)
+  assert.match(smokeSource, /args\.get\('deployed-readiness-file'\)/)
+  assert.match(smokeSource, /deployed_production_private_server/)
+  assert.match(smokeSource, /databaseProjectRef/)
+  assert.match(smokeSource, /generationBatchId/)
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'workbuddy-production-smoke-guard-'))
+  const envPath = path.join(root, 'production.env')
+  const reportPath = path.join(root, 'report.json')
+  const readyzPath = path.join(root, 'readyz.json')
+  fs.writeFileSync(envPath, [
+    'SUPABASE_URL=https://wwdrkjnbvcbfytwnnyvs.supabase.co',
+    'TEST_USERNAME=smoke@example.com',
+    'TEST_USER_PASSWORD=test-password',
+    '',
+  ].join('\n'))
+  fs.writeFileSync(readyzPath, JSON.stringify({
+    build: {
+      releaseSha: 'a'.repeat(40),
+      deployTarget: 'production',
+      supabaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+      databaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+    },
+  }))
+
+  try {
+    const childResult = await new Promise((resolveChild, rejectChild) => {
+      const child = spawn(process.execPath, [
+        smokeScriptPath,
+        '--env-file', envPath,
+        '--target-environment', 'production',
+        '--release-sha', 'a'.repeat(40),
+        '--expected-project-ref', 'wwdrkjnbvcbfytwnnyvs',
+        '--deployed-readiness-file', readyzPath,
+        '--report', reportPath,
+      ], { cwd: workspaceRoot })
+      let stderr = ''
+      child.stderr.on('data', (chunk) => { stderr += chunk })
+      child.once('error', rejectChild)
+      child.once('close', (code) => resolveChild({ code, stderr }))
+    })
+
+    assert.equal(childResult.code, 1)
+    assert.match(childResult.stderr, /production-mutation-approval/u)
+    assert.equal(fs.existsSync(reportPath), false)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('wizard baseline revision staging smoke reads duration accuracy from the real staging database without inventing an accuracy claim', () => {
   assert.match(smokeSource, /\/api\/admin\/duration-accuracy\/summary/)
   assert.match(smokeSource, /durationAccuracyReadback/)
   assert.match(smokeSource, /empty_no_completed_samples/)
   assert.match(smokeSource, /readback_only_not_accuracy_acceptance/)
+})
+
+test('wizard baseline revision staging smoke previews all 11 canonical business types before its one disposable commit chain', () => {
+  for (const previewCase of canonicalBusinessPreviewCases) {
+    assert.match(smokeSource, new RegExp(`businessType: '${previewCase.businessType}'`))
+    assert.match(smokeSource, new RegExp(previewCase.markerPrefix.replaceAll('-', '\\-')))
+    if (previewCase.businessSubtype) {
+      assert.match(smokeSource, new RegExp(`businessSubtype: '${previewCase.businessSubtype}'`))
+    }
+  }
+
+  assert.match(smokeSource, /previewBusinessTypeMatrix/)
+  assert.match(smokeSource, /visibleDependencyCoverageRate/)
+  assert.match(smokeSource, /readyForWizardCommit/)
+  assert.match(smokeSource, /previewOnly/)
+  assert.equal(smokeSource.includes("businessType: 'residential'"), false)
+  assert.equal(smokeSource.includes("businessSubtype: 'high_rise_residential'"), false)
 })
 
 test('wizard baseline revision staging smoke recovers and deletes a project when create commits before the response times out', async (t) => {
@@ -86,6 +169,7 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
 
   const companyId = '11111111-1111-4111-8111-111111111111'
   const createdProjectId = '22222222-2222-4222-8222-222222222222'
+  const previewRequests = []
   let project = null
   const server = http.createServer(async (req, res) => {
     const chunks = []
@@ -101,12 +185,61 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
       return
     }
     if (req.method === 'POST' && req.url === '/api/projects/wizard/preview') {
+      previewRequests.push(requestBody)
+      const previewCase = canonicalBusinessPreviewCases.find((candidate) => (
+        candidate.businessType === requestBody.businessType
+      ))
+      assert.ok(previewCase, `unexpected preview business type: ${requestBody.businessType}`)
+      const businessMarkerCode = `${previewCase.markerPrefix}01`
       send(200, {
+        estimatedRowCount: 120,
         profile: {
+          identity: {
+            businessType: previewCase.businessType,
+            businessSubtype: previewCase.businessSubtype,
+          },
           generation: {
+            masterPlanProfile: {
+              layer: 'master_plan',
+              rowCountRange: [60, 180],
+            },
+            executableDefaultMasterPlanAssembly: {
+              status: 'executable_default_master_plan_ready',
+              businessType: previewCase.businessType,
+              readyForWizardCommit: true,
+              scheduleRowCount: 120,
+              visibleDependencyCount: 119,
+              visibleDependencyCoverageRate: 0.99,
+              dependencyCycleRowCount: 0,
+              schedulePropagationCycleRowCount: 0,
+            },
+            executableDefaultMasterPlanPreview: {
+              status: 'executable_default_master_plan_ready',
+              businessType: previewCase.businessType,
+              readyForWizardCommit: true,
+              scheduleRowCount: 120,
+              visibleDependencyCount: 119,
+              dependencyCycleRowCount: 0,
+              schedulePropagationCycleRowCount: 0,
+              projectStartDate: '2026-08-01',
+              projectEndDate: '2027-08-01',
+              previewOnly: true,
+              mutationBoundary: 'preview_only_no_db_write',
+              rows: [{
+                clientRowId: `${previewCase.businessType}-marker`,
+                wbsCode: businessMarkerCode,
+                plannedStartDate: '2026-08-01',
+                plannedEndDate: '2026-08-15',
+                standardWorkDurationSeedStableCode: `${previewCase.businessType}-duration-seed`,
+                t2RhythmTemplateId: `${previewCase.businessType}-t2-rhythm-v1`,
+              }],
+            },
             planQualityDiagnostics: {
+              status: 'ready',
+              readyForWizardCommit: true,
               runtimeApprovalRequired: false,
               blocksWizardCommit: false,
+              unresolvedDependencyCount: 0,
             },
           },
         },
@@ -178,11 +311,17 @@ test('wizard baseline revision staging smoke recovers and deletes a project when
   })
 
   assert.equal(childResult.code, 1, childResult.stderr)
+  assert.deepEqual(
+    previewRequests.map(({ businessType, businessSubtype = null }) => ({ businessType, businessSubtype })),
+    canonicalBusinessPreviewCases.map(({ businessType, businessSubtype }) => ({ businessType, businessSubtype })),
+  )
   const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'))
   assert.equal(report.projectId, createdProjectId)
   assert.equal(report.steps.projectRecovery.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.status, 'pass')
   assert.equal(report.steps.durationAccuracyReadback.dataState, 'empty_no_completed_samples')
+  assert.equal(report.steps.previewBusinessTypeMatrix.status, 'pass')
+  assert.equal(report.steps.previewBusinessTypeMatrix.previewCount, 11)
   assert.equal(report.cleanup.status, 'pass')
   assert.equal(report.cleanup.projectPhysicallyDeleted, true)
   assert.equal(project, null)

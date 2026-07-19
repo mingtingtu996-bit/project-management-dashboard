@@ -41,10 +41,12 @@ import { scanAllProjectBaselineValidity } from './services/baselineGovernanceSer
 import { scanStableDurationPublicationBaselineImpacts } from './services/durationAssetBaselineRevisionBridgeService.js'
 import { materialArrivalReminderService } from './services/materialArrivalReminderService.js'
 import { recordProjectDailySnapshots } from './services/projectDailySnapshotService.js'
+import { runScheduledProjectDailySnapshotCycle } from './services/scheduledDurationJobResultPolicyService.js'
 import { SystemAnomalyService } from './services/systemAnomalyService.js'
 import { WarningService } from './services/warningService.js'
 import { weeklyDigestService } from './services/weeklyDigestService.js'
 import { reconcileResolvedNotifications } from './services/notificationReconciliationService.js'
+import { reconcileAllProjectTaskProgressSnapshots } from './services/taskProgressSnapshotReconciliationService.js'
 import {
   ScopedBatchOperationError,
   type ScopedBatchFailure,
@@ -221,22 +223,47 @@ class ProjectDailySnapshotJob {
 
     try {
       logger.info('Start project daily snapshot recording', { triggeredBy, jobId })
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'projectDailySnapshotJob',
-          triggeredBy,
           jobId,
         },
-        async () => recordProjectDailySnapshots(),
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'projectDailySnapshotJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            return runScheduledProjectDailySnapshotCycle({
+              reconcileTaskProgressSnapshots: () => reconcileAllProjectTaskProgressSnapshots(),
+              assertLeaseActive: lease.assertActive,
+              writeProjectDailySnapshots: () => recordProjectDailySnapshots(),
+            })
+          },
+        ),
       )
 
+      if (!lease.acquired) {
+        logger.warn('Project daily snapshot recording skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts, value } = lease.value
       logger.info('Project daily snapshot recording completed', {
         triggeredBy,
         jobId,
         attempts,
-        recorded: value.recorded,
-        failed: value.failed,
-        snapshotDate: value.snapshotDate,
+        reconciledTaskProgressSnapshots: value.reconciliation.repaired,
+        taskProgressSnapshotDrift: value.reconciliation.driftCount,
+        recorded: value.snapshot.recorded,
+        failed: value.snapshot.failed,
+        snapshotDate: value.snapshot.snapshotDate,
       })
     } catch (error) {
       logger.error('Project daily snapshot recording failed', {
@@ -440,69 +467,88 @@ class PlanningGovernanceJob {
 
     try {
       logger.info('Start planning governance scan', { triggeredBy, jobId })
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'planningGovernanceJob',
-          triggeredBy,
           jobId,
         },
-        async () => {
-          const planningGovernanceFailures: ScopedBatchFailure[] = []
-          const successfulPlanningGovernanceScopes: string[] = []
-          const safeRun = async <T>(label: string, fn: () => Promise<T[]>): Promise<T[]> => {
-            try {
-              const value = await fn()
-              successfulPlanningGovernanceScopes.push(label)
-              return value
-            } catch (error) {
-              logger.error(`[planningGovernanceJob] ${label} failed`, {
-                error: error instanceof Error ? error.message : String(error),
-              })
-              planningGovernanceFailures.push({
-                scopeId: label,
-                attempts: 1,
-                errorMessage: error instanceof Error ? error.message : String(error),
-              })
-              return []
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'planningGovernanceJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            const planningGovernanceFailures: ScopedBatchFailure[] = []
+            const successfulPlanningGovernanceScopes: string[] = []
+            const safeRun = async <T>(label: string, fn: () => Promise<T[]>): Promise<T[]> => {
+              lease.assertActive()
+              try {
+                const value = await fn()
+                lease.assertActive()
+                successfulPlanningGovernanceScopes.push(label)
+                return value
+              } catch (error) {
+                lease.assertActive()
+                logger.error(`[planningGovernanceJob] ${label} failed`, {
+                  error: error instanceof Error ? error.message : String(error),
+                })
+                planningGovernanceFailures.push({
+                  scopeId: label,
+                  attempts: 1,
+                  errorMessage: error instanceof Error ? error.message : String(error),
+                })
+                return []
+              }
             }
-          }
 
-          const baselineValidityReports = await safeRun('baselineValidity', () => scanAllProjectBaselineValidity())
-          const healthReports = await safeRun('healthScan', () => new PlanningHealthService().scanAllProjectHealth())
-          const integrityReports = await safeRun('integrityScan', () => new PlanningIntegrityService().scanAllProjectIntegrity())
-          const anomalyReports = await safeRun('anomalyScan', () => new SystemAnomalyService().scanAllProjectPassiveReorder())
-          const notifications = await safeRun('governanceNotifications', () => planningGovernanceService.persistProjectGovernanceNotifications())
-          const baselineRevisionReports = await safeRun(
-            'stableDurationPublicationBaselineImpact',
-            () => scanStableDurationPublicationBaselineImpacts(),
-          )
-
-          if (planningGovernanceFailures.length > 0) {
-            throw new ScopedBatchOperationError(
-              'planning_governance_scan',
-              planningGovernanceFailures,
-              successfulPlanningGovernanceScopes,
+            const baselineValidityReports = await safeRun('baselineValidity', () => scanAllProjectBaselineValidity())
+            const healthReports = await safeRun('healthScan', () => new PlanningHealthService().scanAllProjectHealth())
+            const integrityReports = await safeRun('integrityScan', () => new PlanningIntegrityService().scanAllProjectIntegrity())
+            const anomalyReports = await safeRun('anomalyScan', () => new SystemAnomalyService().scanAllProjectPassiveReorder())
+            const notifications = await safeRun('governanceNotifications', () => planningGovernanceService.persistProjectGovernanceNotifications())
+            const baselineRevisionReports = await safeRun(
+              'stableDurationPublicationBaselineImpact',
+              () => scanStableDurationPublicationBaselineImpacts(),
             )
-          }
 
-          return {
-            healthReports: healthReports.length,
-            integrityReports: integrityReports.length,
-            anomalyReports: anomalyReports.length,
-            baselineValidityReports: baselineValidityReports.length,
-            baselinesQueuedForRealign: baselineValidityReports.filter((item) => item.action === 'queued_realign').length,
-            baselineRevisionImpactReports: baselineRevisionReports.length,
-            baselineRevisionDraftsCreated: baselineRevisionReports.filter((item) => item.status === 'revision_draft_created').length,
-            baselineRevisionNoChange: baselineRevisionReports.filter((item) => item.status === 'no_revision_required').length,
-            baselineRevisionBlocked: baselineRevisionReports.filter((item) => item.status === 'blocked').length,
-            notifications_written: notifications.length,
-            closeout_notifications: notifications.filter((item) => String(item.type ?? '').includes('closeout')).length,
-            reorder_notifications: notifications.filter((item) => String(item.type ?? '').includes('reorder')).length,
-            ad_hoc_notifications: notifications.filter((item) => String(item.type ?? '').includes('ad_hoc_cross_month')).length,
-          }
-        },
+            if (planningGovernanceFailures.length > 0) {
+              throw new ScopedBatchOperationError(
+                'planning_governance_scan',
+                planningGovernanceFailures,
+                successfulPlanningGovernanceScopes,
+              )
+            }
+
+            return {
+              healthReports: healthReports.length,
+              integrityReports: integrityReports.length,
+              anomalyReports: anomalyReports.length,
+              baselineValidityReports: baselineValidityReports.length,
+              baselinesQueuedForRealign: baselineValidityReports.filter((item) => item.action === 'queued_realign').length,
+              baselineRevisionImpactReports: baselineRevisionReports.length,
+              baselineRevisionDraftsCreated: baselineRevisionReports.filter((item) => item.status === 'revision_draft_created').length,
+              baselineRevisionNoChange: baselineRevisionReports.filter((item) => item.status === 'no_revision_required').length,
+              baselineRevisionBlocked: baselineRevisionReports.filter((item) => item.status === 'blocked').length,
+              notifications_written: notifications.length,
+              closeout_notifications: notifications.filter((item) => String(item.type ?? '').includes('closeout')).length,
+              reorder_notifications: notifications.filter((item) => String(item.type ?? '').includes('reorder')).length,
+              ad_hoc_notifications: notifications.filter((item) => String(item.type ?? '').includes('ad_hoc_cross_month')).length,
+            }
+          },
+        ),
       )
 
+      if (!lease.acquired) {
+        logger.warn('Planning governance scan skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts, value } = lease.value
       logger.info('Planning governance scan completed', {
         triggeredBy,
         jobId,
@@ -563,22 +609,40 @@ class OperationalNotificationJob {
 
     try {
       logger.info('Start operational notification scan', { triggeredBy, jobId })
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'operationalNotificationJob',
-          triggeredBy,
           jobId,
         },
-        async () => {
-          const notifications = await this.service.syncAllProjectNotifications()
-          return {
-            notificationsWritten: notifications.length,
-            dateInversionNotifications: notifications.filter((item) => item.type === 'date_inversion').length,
-            statusProgressNotifications: notifications.filter((item) => item.type === 'status_progress_mismatch').length,
-          }
-        },
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'operationalNotificationJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const notifications = await this.service.syncAllProjectNotifications()
+            lease.assertActive()
+            return {
+              notificationsWritten: notifications.length,
+              dateInversionNotifications: notifications.filter((item) => item.type === 'date_inversion').length,
+              statusProgressNotifications: notifications.filter((item) => item.type === 'status_progress_mismatch').length,
+            }
+          },
+        ),
       )
 
+      if (!lease.acquired) {
+        logger.warn('Operational notification scan skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts, value } = lease.value
       logger.info('Operational notification scan completed', {
         triggeredBy,
         jobId,
@@ -638,15 +702,36 @@ class NotificationLifecycleJob {
 
     try {
       logger.info('Start notification lifecycle cleanup', { triggeredBy, jobId })
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'notificationLifecycleJob',
-          triggeredBy,
           jobId,
         },
-        async () => this.service.runRetentionPolicy(),
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'notificationLifecycleJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const value = await this.service.runRetentionPolicy()
+            lease.assertActive()
+            return value
+          },
+        ),
       )
 
+      if (!lease.acquired) {
+        logger.warn('Notification lifecycle cleanup skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts, value } = lease.value
       logger.info('Notification lifecycle cleanup completed', {
         triggeredBy,
         jobId,
@@ -705,14 +790,36 @@ class NotificationReconciliationJob {
     this.isRunning = true
     const jobId = createJobId()
     try {
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'notificationReconciliationJob',
-          triggeredBy,
           jobId,
         },
-        async () => reconcileResolvedNotifications(),
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'notificationReconciliationJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const value = await reconcileResolvedNotifications()
+            lease.assertActive()
+            return value
+          },
+        ),
       )
+
+      if (!lease.acquired) {
+        logger.warn('Notification reconciliation skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts, value } = lease.value
       logger.info('Notification reconciliation completed', {
         triggeredBy,
         jobId,
@@ -770,14 +877,36 @@ class WeeklyDigestJob {
     this.isRunning = true
     const jobId = createJobId()
     try {
-      const { attempts } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'weeklyDigestJob',
-          triggeredBy,
           jobId,
         },
-        async () => weeklyDigestService.generateForAllProjects(),
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'weeklyDigestJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const value = await weeklyDigestService.generateForAllProjects()
+            lease.assertActive()
+            return value
+          },
+        ),
       )
+
+      if (!lease.acquired) {
+        logger.warn('Weekly digest generation skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts } = lease.value
       logger.info('Weekly digest generation completed', { triggeredBy, jobId, attempts })
     } catch (error) {
       logger.error('Weekly digest generation failed', {
@@ -831,15 +960,36 @@ class MaterialArrivalReminderJob {
 
     try {
       logger.info('Start material arrival reminder scan', { triggeredBy, jobId })
-      const { attempts, value } = await runJobWithRetry(
+      const lease = await runWithJobLease(
         {
           jobName: 'materialArrivalReminderJob',
-          triggeredBy,
           jobId,
         },
-        async () => materialArrivalReminderService.run(),
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'materialArrivalReminderJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const value = await materialArrivalReminderService.run()
+            lease.assertActive()
+            return value
+          },
+        ),
       )
 
+      if (!lease.acquired) {
+        logger.warn('Material arrival reminder scan skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return
+      }
+
+      const { attempts, value } = lease.value
       logger.info('Material arrival reminder scan completed', {
         triggeredBy,
         jobId,

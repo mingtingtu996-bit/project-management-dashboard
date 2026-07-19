@@ -633,6 +633,119 @@ describe('v1.4.7.2 WBS template generation service', () => {
     ])
   }, 30000)
 
+  it('keeps non-UUID preview identities out of every duration learning UUID query', async () => {
+    const placeholderProjectId = 'wizard-preview:general-civil'
+    const companyId = '00000000-0000-4000-8000-000000000010'
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      if (params.some((value) => value === placeholderProjectId)) {
+        throw new Error('preview placeholder reached a UUID-cast runtime query')
+      }
+      return [] as T[]
+    }
+
+    const generated = await generateWbsTemplateRowsRaw({
+      projectId: placeholderProjectId,
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-non-uuid-preview-runtime',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['01-01-01'],
+        plannedStartDate: '2026-06-01',
+        projectFacts: {
+          businessType: 'general_civil',
+          projectTypeCode: 'civil_residential',
+          companyId,
+        },
+        scope: { building_object_id: 'building-1' },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(generated.rows.length).toBeGreaterThan(0)
+    expect(calls.some((call) => call.sql.includes('from public.projects'))).toBe(false)
+    const publicationCalls = calls.filter((call) => call.sql.includes('from public.duration_learning_runtime_publications'))
+    expect(publicationCalls).toHaveLength(3)
+    expect(publicationCalls.every((call) => !call.params.includes(placeholderProjectId))).toBe(true)
+    expect(publicationCalls.every((call) => call.params.includes(companyId))).toBe(true)
+  }, 30000)
+
+  it('keeps the project lookup and project-scoped duration overlays for a real UUID project', async () => {
+    const projectId = '00000000-0000-4000-8000-000000000001'
+    const companyId = '00000000-0000-4000-8000-000000000010'
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      calls.push({ sql, params })
+      if (sql.includes('from public.projects')) return [{ company_id: companyId }] as T[]
+      return [] as T[]
+    }
+
+    await generateWbsTemplateRowsRaw({
+      projectId,
+      surface: 'task_list',
+      detailLevel: 'standard',
+      diagnosticDurationSuggestionMode: 'fast_template',
+      operation: {
+        type: 'template_generate',
+        generationBatchId: 'batch-real-project-runtime',
+        templateId: CHINA_GB55032_TEMPLATE_ID,
+        selectedNodeIds: ['01-01-01'],
+        plannedStartDate: '2026-06-01',
+        projectFacts: { businessType: 'general_civil', projectTypeCode: 'civil_residential' },
+        scope: { building_object_id: 'building-1' },
+      },
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(calls).toContainEqual(expect.objectContaining({
+      sql: expect.stringContaining('from public.projects'),
+      params: [projectId],
+    }))
+    const publicationCalls = calls.filter((call) => call.sql.includes('from public.duration_learning_runtime_publications'))
+    expect(publicationCalls).toHaveLength(3)
+    expect(publicationCalls.every((call) => call.params.includes(companyId))).toBe(true)
+    expect(publicationCalls.every((call) => call.params.includes(projectId))).toBe(true)
+  }, 30000)
+
+  it('lets offline simulation disable runtime publication resolution outside the test environment', async () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'staging'
+    dbServiceMocks.executeSQL.mockImplementation(async (sql?: string) => {
+      if (String(sql).includes('duration_learning_runtime_publications') || String(sql).includes('from public.projects')) {
+        throw new Error('offline simulation attempted a runtime database query')
+      }
+      return []
+    })
+    try {
+      const generated = await generateWbsTemplateRowsRaw({
+        projectId: 'wizard-preview:offline-simulation',
+        surface: 'task_list',
+        detailLevel: 'standard',
+        diagnosticDurationSuggestionMode: 'fast_template',
+        runtimePublicationResolution: 'disabled',
+        operation: {
+          type: 'template_generate',
+          generationBatchId: 'batch-offline-simulation',
+          templateId: CHINA_GB55032_TEMPLATE_ID,
+          selectedNodeIds: ['01-01-01'],
+          plannedStartDate: '2026-06-01',
+          projectFacts: { businessType: 'general_civil', projectTypeCode: 'civil_residential' },
+          scope: { building_object_id: 'building-1' },
+        },
+      } as any)
+
+      expect(generated.rows.length).toBeGreaterThan(0)
+      expect(dbServiceMocks.executeSQL).not.toHaveBeenCalled()
+    } finally {
+      if (previousNodeEnv == null) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = previousNodeEnv
+    }
+  }, 30000)
+
   it('applies a scoped WBS reference-days publication before schedule rows are generated', async () => {
     const calls: Array<{ sql: string, params: unknown[] }> = []
     const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
