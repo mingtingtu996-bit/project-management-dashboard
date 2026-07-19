@@ -69,10 +69,20 @@ const args = parseArgs(process.argv.slice(2))
 const envPath = path.resolve(workspaceRoot, args.get('env-file') ?? 'deploy/env/staging.env')
 const env = loadEnvFile(envPath)
 const apiBaseUrl = requireValue(args.get('api-base-url') ?? 'http://127.0.0.1:3107', 'api-base-url').replace(/\/$/, '')
+const targetEnvironment = String(args.get('target-environment') ?? 'staging').trim()
+if (!['staging', 'production'].includes(targetEnvironment)) {
+  throw new Error('target-environment must be staging or production')
+}
+const productionLive = targetEnvironment === 'production'
+const productionMutationApproval = String(args.get('production-mutation-approval') ?? '').trim()
+const PRODUCTION_MUTATION_APPROVAL = 'I_APPROVE_DISPOSABLE_PRODUCTION_WIZARD_SMOKE'
+if (productionLive && productionMutationApproval !== PRODUCTION_MUTATION_APPROVAL) {
+  throw new Error(`production-mutation-approval must equal ${PRODUCTION_MUTATION_APPROVAL}`)
+}
 const deployedStagingCode = args.get('deployed-staging-code') === 'true'
 const releaseSha = String(args.get('release-sha') ?? '').trim()
-if (deployedStagingCode && !/^[0-9a-f]{40}$/i.test(releaseSha)) {
-  throw new Error('release-sha must be a 40-character Git SHA for deployed staging code')
+if ((deployedStagingCode || productionLive) && !/^[0-9a-f]{40}$/i.test(releaseSha)) {
+  throw new Error('release-sha must be a 40-character Git SHA for deployed code')
 }
 const requestedCompanyId = String(args.get('company-id') ?? '').trim()
 let companyId = ''
@@ -85,6 +95,33 @@ const cleanupSourceReportPath = args.get('cleanup-report')
   ? path.resolve(workspaceRoot, args.get('cleanup-report'))
   : null
 const supabaseUrl = requireValue(env.SUPABASE_URL, 'SUPABASE_URL')
+const supabaseProjectRef = new URL(supabaseUrl).hostname.split('.')[0].toLowerCase()
+const expectedProjectRefInput = String(args.get('expected-project-ref') ?? '').trim().toLowerCase()
+const expectedProjectRef = expectedProjectRefInput || supabaseProjectRef
+if ((productionLive || deployedStagingCode || expectedProjectRefInput)
+  && !/^[a-z0-9]{20}$/.test(expectedProjectRef)) {
+  throw new Error('expected-project-ref must be a 20-character Supabase project ref')
+}
+if (supabaseProjectRef !== expectedProjectRef) {
+  throw new Error('SUPABASE_URL does not match expected-project-ref')
+}
+let deployedReadiness = null
+if (productionLive) {
+  const deployedReadinessFile = requireValue(args.get('deployed-readiness-file'), 'deployed-readiness-file')
+  const readinessDocument = JSON.parse(fs.readFileSync(path.resolve(workspaceRoot, deployedReadinessFile), 'utf8'))
+  deployedReadiness = {
+    releaseSha: String(readinessDocument?.build?.releaseSha ?? '').trim().toLowerCase(),
+    deployTarget: String(readinessDocument?.build?.deployTarget ?? '').trim(),
+    supabaseProjectRef: String(readinessDocument?.build?.supabaseProjectRef ?? '').trim().toLowerCase(),
+    databaseProjectRef: String(readinessDocument?.build?.databaseProjectRef ?? '').trim().toLowerCase(),
+  }
+  if (deployedReadiness.releaseSha !== releaseSha.toLowerCase()
+    || deployedReadiness.deployTarget !== 'production'
+    || deployedReadiness.supabaseProjectRef !== expectedProjectRef
+    || deployedReadiness.databaseProjectRef !== expectedProjectRef) {
+    throw new Error('deployed-readiness-file identity does not match production release and project ref')
+  }
+}
 const testUsername = requireValue(env.TEST_USERNAME, 'TEST_USERNAME')
 const testUserPassword = requireValue(env.TEST_USER_PASSWORD, 'TEST_USER_PASSWORD')
 const requestTimeoutMs = Number(args.get('request-timeout-ms') ?? 120_000)
@@ -99,7 +136,7 @@ if (!Number.isInteger(recoveryAttempts) || recoveryAttempts < 1 || recoveryAttem
 if (!Number.isInteger(recoveryDelayMs) || recoveryDelayMs < 10 || recoveryDelayMs > 10_000) {
   throw new Error('recovery-delay-ms must be an integer between 10 and 10000')
 }
-const runId = `staging-baseline-${Date.now()}`
+const runId = `${targetEnvironment}-baseline-${Date.now()}`
 const diagnosticProjectName = `Disposable Residential Baseline ${runId}`
 const plannedProjectId = String(args.get('project-id') ?? randomUUID()).trim()
 if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(plannedProjectId)) {
@@ -373,20 +410,28 @@ function buildBusinessPreviewPayload(previewCase, projectName = `${diagnosticPro
 const result = {
   generatedAt: new Date().toISOString(),
   source: 'wizard_baseline_revision_live_probe',
-  environmentClassification: deployedStagingCode
-    ? 'deployed_staging_private_server'
-    : 'staging_db_with_local_current_workspace_code',
-  stagingProjectRef: new URL(supabaseUrl).hostname.split('.')[0],
+  environmentClassification: productionLive
+    ? 'deployed_production_private_server'
+    : deployedStagingCode
+      ? 'deployed_staging_private_server'
+      : 'staging_db_with_local_current_workspace_code',
+  targetEnvironment,
+  supabaseProjectRef,
+  stagingProjectRef: targetEnvironment === 'staging' ? supabaseProjectRef : null,
   deployedStagingCode,
+  deployedReadiness,
   releaseSha: releaseSha || null,
-  productionLive: false,
-  mutationBoundary: 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted',
+  productionLive,
+  mutationBoundary: productionLive
+    ? 'explicitly_approved_disposable_production_project_only_created_adjusted_confirmed_revised_then_physically_deleted'
+    : 'disposable_staging_project_only_created_adjusted_confirmed_revised_then_physically_deleted',
   diagnosticRunId: runId,
   projectName: diagnosticProjectName,
   createRequestOutcome: 'not_started',
   status: 'running',
   companyId: null,
   projectId: plannedProjectId,
+  generationBatchId: null,
   baselineId: null,
   revisionId: null,
   steps: {},
@@ -881,10 +926,11 @@ try {
   })
   const committed = assertApi('commit wizard generation', committedCall, [200])
   const generation = committed?.generation ?? {}
+  result.generationBatchId = requireValue(generation.generationBatchId, 'generation batch id')
   result.steps.commitWizardGeneration = {
     status: 'pass',
     httpStatus: committedCall.response.status,
-    generationBatchId: generation.generationBatchId ?? null,
+    generationBatchId: result.generationBatchId,
     generatedRowCount: generation.generatedRowCount ?? null,
     createdTaskCount: generation.createdTaskCount ?? null,
     assemblyStatus: generation.executableDefaultMasterPlanAssembly?.status ?? null,

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,6 +12,12 @@ const toolsRoot = path.dirname(fileURLToPath(import.meta.url))
 const releaseRoot = process.env.RELEASE_ROOT ?? path.resolve(toolsRoot, '..', '..')
 const scriptPath = path.join(releaseRoot, 'server', 'scripts', 'workbuddy-staging-duration-learning-cycle-v2.mjs')
 const workflowPath = path.join(releaseRoot, '.github', 'workflows', 'staging-duration-learning-cycle-v2.yml')
+const retirementMigrationPath = path.join(
+  releaseRoot,
+  'server',
+  'migrations',
+  '321_retire_duplicate_t2_schedule_runtime.sql',
+)
 const requireFromServer = createRequire(path.join(releaseRoot, 'server', 'package.json'))
 const yaml = requireFromServer('js-yaml')
 const SELF_TEST_CONNECTION_ENV_KEYS = [
@@ -56,6 +63,10 @@ function createSelfTestEnv(parentEnv = process.env) {
   }
 }
 const selfTestEnv = createSelfTestEnv()
+
+function sha256File(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
 
 test('pure self-test environment cannot inherit live database credentials', () => {
   const inherited = Object.fromEntries(SELF_TEST_CONNECTION_ENV_KEYS.map((key) => [key, `live-${key}`]))
@@ -103,6 +114,15 @@ test('v2 harness is isolated from the retired v1 flow and covers the full matrix
   assert.match(source, /forcedRollback/)
   assert.match(source, /const rows = await runtimeQueryExec\(/)
   assert.doesNotMatch(source, /const rows = await approvedObservationQueryExec\(\s*`select/)
+})
+
+test('v2 harness pins the same-SHA 321 retirement migration body', () => {
+  const source = fs.readFileSync(scriptPath, 'utf8')
+  const migrationHash = sha256File(retirementMigrationPath)
+  assert.match(
+    source,
+    new RegExp(`'321_retire_duplicate_t2_schedule_runtime\\.sql': '${migrationHash}'`),
+  )
 })
 
 test('real candidate aggregation coverage is mandatory before any controlled mutation', () => {

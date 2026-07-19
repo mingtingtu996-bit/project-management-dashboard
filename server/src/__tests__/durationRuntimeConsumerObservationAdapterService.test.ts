@@ -33,6 +33,7 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       projectId: 'project-a',
       runtimeAssetMode: 'no_published_artifact',
       runtimeArtifactCount: 0,
+      runtimeArtifactPublicationKeys: [],
     }))
     expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
   })
@@ -80,6 +81,14 @@ describe('durationRuntimeConsumerObservationAdapterService', () => {
       'projectRemainingDurationForecastService',
       'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
     ])
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params[3]).toEqual(expect.objectContaining({
+      runtimeAssetMode: 'published_artifact',
+      runtimeArtifactCount: 2,
+      runtimeArtifactPublicationKeys: [
+        'critical_path_rule_runtime:critical-v4',
+        'forecast_residual_overlay_runtime:overlay-v4',
+      ],
+    }))
     expect(callsForTable(calls, 'runtime_consumer_runtime_calls')[0].params[4]).toEqual([
       'project_remaining_forecast:project-a:2026-06-30',
     ])

@@ -276,7 +276,7 @@ const GOVERNED_NON_LEGACY_MIGRATION_DROPS = [
     migrationFile: '321_retire_duplicate_t2_schedule_runtime.sql',
     objectType: 'table',
     objectName: `public.${tableName}`,
-    reason: 'Migration 321 uses an immutable export checksum, locked data fingerprint preflight, active-publication guard, and full schema/data rollback.',
+    reason: 'Migration 321 uses a project-bound v2 immutable export covering both retired tables and strictly eligible inactive real-closeout task_dependencies, locked data fingerprint preflight, an active-publication guard, and full schema/data rollback.',
   })),
   {
     migrationFile: '259_v14231_supabase_advisor_security_closeout.sql',

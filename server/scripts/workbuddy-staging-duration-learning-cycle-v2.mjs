@@ -49,7 +49,7 @@ const ALLOWED_MUTATION_TABLES = new Set([
 const MIGRATION_HASHES = {
   '314_duration_day_basis_contract.sql': '9311df5c818ca087397aff526331d6461b3d083a83aa764ea43dbf690dfb3e3f',
   '315_duration_learning_runtime_publications.sql': 'b94cf44f1da17925def0fc2e15791bb8f94e62b73100be070a19c1c40a0e7c43',
-  '321_retire_duplicate_t2_schedule_runtime.sql': 'b898ca1003cd2e547d72928ce3107e9c99e9f6e8fecee450edd5138c3ee9ebb7',
+  '321_retire_duplicate_t2_schedule_runtime.sql': '82450a8de36f219972bad62f5beff89952daf956f9b0e0f058ef16871428a7d1',
 }
 const APPROVAL_PHRASE = 'I_ACKNOWLEDGE_DISPOSABLE_STAGING_LEARNING_MUTATIONS'
 const ADVISOR_MAX_AGE_MS = 24 * 60 * 60 * 1000

@@ -117,6 +117,10 @@ async function recordConsumerArtifacts(
   const sourceEvidenceRefs = Array.from(new Set((input.sourceEvidenceRefs ?? [])
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)))
+  const runtimeArtifactPublicationKeys = Array.from(new Set(input.artifacts
+    .map((artifact) => String(artifact.publicationKey ?? '').trim())
+    .filter(Boolean)))
+    .sort()
   const runtimeCallResult = await recordDurationRuntimeConsumerRuntimeCall({
     queryExec: input.queryExec,
     consumerKey,
@@ -125,6 +129,7 @@ async function recordConsumerArtifacts(
       ...(input.callContext ?? {}),
       runtimeAssetMode: input.artifacts.length > 0 ? 'published_artifact' : 'no_published_artifact',
       runtimeArtifactCount: input.artifacts.length,
+      runtimeArtifactPublicationKeys,
     },
     sourceEvidenceRefs,
     calledAt: input.calledAt ?? input.observedAt,

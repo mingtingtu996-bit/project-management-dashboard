@@ -87,6 +87,58 @@ test('wizard baseline revision staging smoke can attest an exact deployed stagin
   assert.match(smokeSource, /writeResultReport\(\)/)
 })
 
+test('wizard baseline revision smoke requires explicit same-SHA production identity and approval', async () => {
+  assert.match(smokeSource, /args\.get\('target-environment'\)/)
+  assert.match(smokeSource, /args\.get\('production-mutation-approval'\)/)
+  assert.match(smokeSource, /args\.get\('deployed-readiness-file'\)/)
+  assert.match(smokeSource, /deployed_production_private_server/)
+  assert.match(smokeSource, /databaseProjectRef/)
+  assert.match(smokeSource, /generationBatchId/)
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'workbuddy-production-smoke-guard-'))
+  const envPath = path.join(root, 'production.env')
+  const reportPath = path.join(root, 'report.json')
+  const readyzPath = path.join(root, 'readyz.json')
+  fs.writeFileSync(envPath, [
+    'SUPABASE_URL=https://wwdrkjnbvcbfytwnnyvs.supabase.co',
+    'TEST_USERNAME=smoke@example.com',
+    'TEST_USER_PASSWORD=test-password',
+    '',
+  ].join('\n'))
+  fs.writeFileSync(readyzPath, JSON.stringify({
+    build: {
+      releaseSha: 'a'.repeat(40),
+      deployTarget: 'production',
+      supabaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+      databaseProjectRef: 'wwdrkjnbvcbfytwnnyvs',
+    },
+  }))
+
+  try {
+    const childResult = await new Promise((resolveChild, rejectChild) => {
+      const child = spawn(process.execPath, [
+        smokeScriptPath,
+        '--env-file', envPath,
+        '--target-environment', 'production',
+        '--release-sha', 'a'.repeat(40),
+        '--expected-project-ref', 'wwdrkjnbvcbfytwnnyvs',
+        '--deployed-readiness-file', readyzPath,
+        '--report', reportPath,
+      ], { cwd: workspaceRoot })
+      let stderr = ''
+      child.stderr.on('data', (chunk) => { stderr += chunk })
+      child.once('error', rejectChild)
+      child.once('close', (code) => resolveChild({ code, stderr }))
+    })
+
+    assert.equal(childResult.code, 1)
+    assert.match(childResult.stderr, /production-mutation-approval/u)
+    assert.equal(fs.existsSync(reportPath), false)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('wizard baseline revision staging smoke reads duration accuracy from the real staging database without inventing an accuracy claim', () => {
   assert.match(smokeSource, /\/api\/admin\/duration-accuracy\/summary/)
   assert.match(smokeSource, /durationAccuracyReadback/)

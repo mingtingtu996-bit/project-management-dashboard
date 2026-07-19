@@ -6,7 +6,7 @@ import {
   type ConstructionOrganizationPlanNetworkRuntimeEngineCode,
   type ConstructionOrganizationPlanNetworkRuntimeEvidenceQueryExec,
 } from '../services/constructionOrganizationPlanNetworkRuntimeEvidenceService.js'
-import { runJobWithRetry } from '../services/jobRuntime.js'
+import { runJobWithRetry, runWithJobLease } from '../services/jobRuntime.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 
 const RUNTIME_ENGINE_CODES: ConstructionOrganizationPlanNetworkRuntimeEngineCode[] = [
@@ -625,14 +625,36 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
     const jobId = createJobId()
     try {
       this.lastRun = new Date()
-      const { attempts, value } = await runJobWithRetry(
+      const leaseRun = await runWithJobLease(
         {
           jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob',
-          triggeredBy,
           jobId,
         },
-        async () => runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options),
+        async (lease) => runJobWithRetry(
+          {
+            jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob',
+            triggeredBy,
+            jobId,
+          },
+          async () => {
+            lease.assertActive()
+            const value = await runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options)
+            lease.assertActive()
+            return value
+          },
+        ),
       )
+
+      if (!leaseRun.acquired) {
+        logger.warn('constructionOrganizationPlanNetworkRuntimeEvidenceJob skipped because distributed lease was not acquired', {
+          triggeredBy,
+          jobId,
+          reason: 'lease_not_acquired',
+        })
+        return emptyResult()
+      }
+
+      const { attempts, value } = leaseRun.value
       logger.info('constructionOrganizationPlanNetworkRuntimeEvidenceJob completed', {
         triggeredBy,
         jobId,

@@ -6,6 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { validateReleaseEvidence } from './validate-release-evidence.mjs';
+import { hashProjectBusinessResidueReadback } from './project-residue-policy.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const matrixPath = path.join(repoRoot, 'project-testing/matrix/release-test-matrix.json');
@@ -353,7 +354,7 @@ test('C-15 learning closeout rejects improved MAE when live/db mutation evidence
   }
 });
 
-test('C-19 runtime publication evidence passes only when apply, monitoring, rollback, and observation artifacts exist', async () => {
+test('C-19 canonical wizard evidence passes only with same-SHA identity, append-only ledgers, and cleanup', async () => {
   const evidenceRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-c19-evidence-'));
 
   try {
@@ -365,11 +366,7 @@ test('C-19 runtime publication evidence passes only when apply, monitoring, roll
         {
           id: 'c19-runtime-publication-release-rollback',
           artifactValidationPolicy: {
-            rejectIf: [
-              'generated-package-only',
-              'missing-runtime-apply',
-              'missing-impact-monitoring',
-            ],
+            rejectIf: ['staging-only', 'missing-cleanup', 'forged-ledger'],
           },
         },
       ],
@@ -383,30 +380,45 @@ test('C-19 runtime publication evidence passes only when apply, monitoring, roll
       matrixPath,
     });
 
-    assert.equal(result.status, 'pass');
+    assert.equal(result.status, 'pass', JSON.stringify(result, null, 2));
     assert.equal(result.counts.failures, 0);
-    assert.equal(result.counts.requiredPatternsMatched, 6);
-    assert.ok(result.checks.content.passed.some((item) => item.detail === 'runtime-apply-ready'));
-    assert.ok(result.checks.content.passed.some((item) => item.detail === 'construction-organization-runtime-evidence'));
+    assert.equal(result.counts.requiredPatternsMatched, 0);
+    assert.ok(result.checks.content.passed.some((item) => item.detail === 'production-same-sha-identity'));
+    assert.ok(result.checks.content.passed.some((item) => item.detail === 'runtime-consumer-ledger-readback-ready'));
+    assert.ok(result.checks.content.passed.some((item) => item.detail === 'project-business-residue-zero'));
   } finally {
     await rm(evidenceRoot, { recursive: true, force: true });
   }
 });
 
-test('C-19 runtime publication validation rejects metadata-only artifacts without nested runtime proof', async () => {
+test('C-19 canonical wizard validation rejects API-404 cleanup with business-table residue', async () => {
+  const evidenceRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-c19-residue-evidence-'));
+
+  try {
+    await writeC19EvidenceArtifacts(evidenceRoot, {
+      nonZeroBusinessTables: [{ tableName: 'notifications', rowCount: 1 }],
+    });
+    const result = await validateReleaseEvidence({
+      gateId: 'c19-runtime-publication-release-rollback',
+      evidenceRoot,
+      matrixPath,
+    });
+
+    assert.equal(result.status, 'fail');
+    assert.ok(result.failures.some((failure) => failure.detail === 'project-business-residue-zero'));
+  } finally {
+    await rm(evidenceRoot, { recursive: true, force: true });
+  }
+});
+
+test('C-19 canonical wizard validation rejects pass-looking artifacts without runtime and cleanup proof', async () => {
   const evidenceRoot = await mkdtemp(path.join(tmpdir(), 'workbuddy-c19-shallow-evidence-'));
 
   try {
     for (const artifact of [
-      'c19-t2-rhythm-live-replay.json',
-      'c19-release-closure-artifact.json',
-      'c19-release-closure-verification.json',
-      'c19-manual-approval-preflight.json',
-      'c19-runtime-publication-apply.json',
-      'c19-impact-monitoring-observation.json',
-      'c19-runtime-rollback-saved-outcome.json',
-      'c19-construction-organization-e1-e3-e5.json',
-      'c19-live-evidence-summary.json',
+      'wizard-baseline-revision-live.json',
+      'wizard-baseline-revision-cleanup-readback.json',
+      'c19-canonical-wizard-preflight.json',
     ]) {
       await writeJson(path.join(evidenceRoot, artifact), c19BaseDoc());
     }
@@ -418,10 +430,9 @@ test('C-19 runtime publication validation rejects metadata-only artifacts withou
     });
 
     assert.equal(result.status, 'fail');
-    assert.ok(result.failures.some((failure) => failure.detail === 'runtime-apply-ready'));
-    assert.ok(result.failures.some((failure) => failure.detail === 'impact-monitoring-recorded'));
-    assert.ok(result.failures.some((failure) => failure.detail === 'runtime-rollback-ready'));
-    assert.ok(result.failures.some((failure) => failure.detail === 'construction-organization-runtime-evidence'));
+    assert.ok(result.failures.some((failure) => failure.detail === 'production-same-sha-identity'));
+    assert.ok(result.failures.some((failure) => failure.detail === 'disposable-project-cleanup-ready'));
+    assert.ok(result.failures.some((failure) => failure.detail === 'runtime-consumer-ledger-readback-ready'));
   } finally {
     await rm(evidenceRoot, { recursive: true, force: true });
   }
@@ -636,88 +647,99 @@ function liveDiagnosticDoc(artifactPath) {
   };
 }
 
-async function writeC19EvidenceArtifacts(evidenceRoot) {
-  const base = c19BaseDoc();
-  await writeJson(path.join(evidenceRoot, 'c19-t2-rhythm-live-replay.json'), {
-    ...base,
+async function writeC19EvidenceArtifacts(evidenceRoot, { nonZeroBusinessTables = [] } = {}) {
+  const releaseSha = 'a'.repeat(40);
+  const projectRef = 'wwdrkjnbvcbfytwnnyvs';
+  const inputSha = 'b'.repeat(64);
+  const projectId = '00000000-0000-4000-8000-000000000101';
+  const generationBatchId = 'production-livegate-generation-1';
+  const projectResidueReadback = {
+    schemaVersion: 'workbuddy-project-residue-readback/v1',
+    status: nonZeroBusinessTables.length === 0 ? 'pass' : 'blocked',
+    reason: nonZeroBusinessTables.length === 0 ? null : 'disposable_project_business_residue',
+    projectId,
+    scannedTableCount: 2,
+    scannedTables: ['operation_logs', 'tasks'],
+    retainedHistoricalProjectReferenceTables: ['operation_logs'],
+    retainedHistoricalResidue: [{ tableName: 'operation_logs', rowCount: 1 }],
+    totalRetainedHistoricalResidueCount: 1,
+    nonZeroBusinessTables,
+    totalBusinessResidueCount: nonZeroBusinessTables.reduce((sum, row) => sum + row.rowCount, 0),
+    queryMutationCount: 0,
+  };
+  projectResidueReadback.readbackHash = hashProjectBusinessResidueReadback(projectResidueReadback);
+  await writeJson(path.join(evidenceRoot, 'wizard-baseline-revision-live.json'), {
+    source: 'wizard_baseline_revision_live_probe',
+    environmentClassification: 'deployed_production_private_server',
+    productionLive: true,
+    releaseSha,
+    supabaseProjectRef: projectRef,
+    deployedReadiness: {
+      releaseSha,
+      deployTarget: 'production',
+      supabaseProjectRef: projectRef,
+      databaseProjectRef: projectRef,
+    },
     status: 'pass',
-    liveMutation: true,
-    dbMutation: true,
-    result: { status: 'pass', replaySampleCount: 3 },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-release-closure-artifact.json'), {
-    ...base,
-    status: 'manual_publication_candidate_ready',
-    report: { status: 'manual_publication_candidate_ready' },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-release-closure-verification.json'), {
-    ...base,
-    status: 'pass',
-    manualApproval: { status: 'pass' },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-manual-approval-preflight.json'), {
-    ...base,
-    status: 'pass',
-    manualApproval: { status: 'pass' },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-runtime-publication-apply.json'), {
-    ...base,
-    status: 'pass',
-    liveMutation: true,
-    dbMutation: true,
-    result: { status: 'runtime_apply_ready', publicationKey: 'publication-c19' },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-impact-monitoring-observation.json'), {
-    ...base,
-    status: 'pass',
-    liveMutation: true,
-    dbMutation: true,
-    result: { status: 'runtime_event_recorded', eventCount: 1 },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-runtime-rollback-saved-outcome.json'), {
-    ...base,
-    status: 'pass',
-    liveMutation: true,
-    dbMutation: true,
-    result: { status: 'runtime_rollback_ready', rollbackPlanId: 'rollback-c19' },
-  });
-  await writeJson(path.join(evidenceRoot, 'c19-construction-organization-e1-e3-e5.json'), {
-    ...base,
-    status: 'pass',
-    liveMutation: true,
-    dbMutation: true,
-    result: {
+    projectId,
+    generationBatchId,
+    canonicalWizardSmokeInputSha256: inputSha,
+    steps: {
+      commitWizardGeneration: { status: 'pass', createdTaskCount: 72 },
+      taskDependencyReadback: { status: 'pass' },
+      criticalPathReadback: { status: 'pass' },
+      publishBaseline: { status: 'pass' },
+      rollbackRevisionDraft: { status: 'pass' },
+      runtimeConsumerLedgerReadback: { status: 'pass' },
+    },
+    cleanup: {
       status: 'pass',
-      e1RuntimeEvidence: { status: 'pass', evidenceRef: 'e1-runtime' },
-      e3RuntimeEvidence: { status: 'pass', evidenceRef: 'e3-runtime' },
-      e5RuntimeEvidence: { status: 'pass', evidenceRef: 'e5-runtime' },
+      projectPhysicallyDeleted: true,
+      projectUnreadable: true,
+      projectResidueReadback,
     },
   });
-  await writeJson(path.join(evidenceRoot, 'c19-live-evidence-summary.json'), {
-    ...base,
+  await writeJson(path.join(evidenceRoot, 'wizard-baseline-revision-cleanup-readback.json'), {
     status: 'pass',
-    liveMutation: true,
-    dbMutation: true,
-    result: {
-      apply: { status: 'runtime_apply_ready' },
-      monitoring: { status: 'runtime_event_recorded' },
-      rollback: { status: 'runtime_rollback_ready' },
-      constructionOrganization: { status: 'pass' },
+    projectId,
+    projectPhysicallyDeleted: true,
+    projectUnreadable: true,
+    projectResidueReadback,
+    canonicalWizardSmokeInputSha256: inputSha,
+  });
+  await writeJson(path.join(evidenceRoot, 'c19-canonical-wizard-preflight.json'), {
+    status: 'ready',
+    expectedEnvironment: 'production',
+    expectedReleaseSha: releaseSha,
+    expectedProjectRef: projectRef,
+    selectedDatabaseProjectRef: projectRef,
+    canonicalWizardSmokeInputSha256: inputSha,
+    readiness: {
+      canonicalWizardCommitReady: true,
+      dependencyReadbackReady: true,
+      criticalPathReady: true,
+      baselineRevisionRollbackReady: true,
+      cleanupReady: true,
+      projectResidueReadbackReady: nonZeroBusinessTables.length === 0,
+      runtimeConsumerCallDeltaReady: true,
+      runtimeConsumerObservationDeltaReady: true,
+    },
+    canonicalWizardWbsReadiness: {
+      canonicalWizardSmokeFile: `inputs/c19-wizard-smoke-${inputSha}.json`,
+      projectResidueReadback: {
+        ...projectResidueReadback,
+        databaseVerified: nonZeroBusinessTables.length === 0,
+      },
+      runtimeConsumerLedger: { callDelta: 1, deleteMutationCount: 0 },
     },
   });
 }
 
 function c19BaseDoc() {
   return {
-    environment: 'live',
+    status: 'pass',
+    source: 'wizard_baseline_revision_live_probe',
     projectId: 'project-live-1',
-    releasePackageId: 'release-package-c19',
-    phase1L5Ref: 'phase1-l5-handoff',
-    approvalRef: 'approval-c19',
-    runtimePublicationId: 'runtime-publication-1',
-    monitoringWindow: '2026-06-29T02:00:00+08:00/PT30M',
-    rollbackRef: 'rollback-c19',
-    consumerObservationRef: 'consumer-observation-c19',
   };
 }
 
