@@ -4,7 +4,7 @@
 
 **Goal:** Provide isolated temporary production and staging TLS entry points on one public IPv4 address while keeping application ports loopback-only, reporting HSTS as inapplicable, and keeping every release/recovery path fail closed.
 
-**Architecture:** A digest-pinned Caddy 2.10.2 host-network container owns public ports 80, 443, and 8443 and proxies only to loopback web ports 8080 and 8081. Port 80 uses a fixed staging redirect path instead of another public cleartext port. Deployment receives independent HTTPS health and HTTP redirect-source URLs, reports IP-literal HSTS policy as inapplicable, production recovery requires the public probe, and environment-specific HTTP-only cookie names prevent cross-port session collision.
+**Architecture:** A digest-pinned Caddy 2.10.2 host-network container owns public ports 80, 443, and 8443 and proxies only to loopback web ports 8080 and 8081. Port 80 uses a fixed staging redirect path instead of another public cleartext port. Deployment receives independent HTTPS health and HTTP redirect-source URLs, requires an explicit `temporary_ip_tls` or `domain_hsts` mode, reports IP-literal HSTS policy as inapplicable, production recovery requires the public probe, and environment-specific HTTP-only cookie names prevent overwrite while both cookies remain visible to both same-host ports.
 
 **Tech Stack:** GitHub Actions, Bash, Docker Compose, Caddy 2.10.1+, Node.js test runner, TypeScript, Vitest.
 
@@ -15,7 +15,8 @@
 - Ports 8080 and 8081 remain loopback-only.
 - Caddy ACME uses the `shortlived` profile and persistent storage.
 - The ingress image is `caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d`.
-- RFC 6797 HSTS policy is inapplicable to the IP literal; STS header presence never satisfies the production HSTS gate.
+- RFC 6797 HSTS policy is inapplicable to the IP literal; STS header presence never satisfies final domain HSTS closure.
+- Explicit `temporary_ip_tls` mode may deploy with valid TLS, readyz, redirect, and same-SHA checks while reporting `domainHstsReady=false`.
 - No workflow may use `ssh-keyscan` or disable strict host checking.
 - Ingress provisioning never runs migrations, deploys application source, or writes application data.
 - Every behavior change starts with a focused failing test.
@@ -39,7 +40,9 @@
 - [ ] **Step 1: Write failing static contracts**
 
 Add unit cases proving an IPv4 or IPv6 literal returns
-`hstsUserAgentPolicyApplicable=false`, while a DNS hostname returns `true`.
+`hstsUserAgentPolicyApplicable=false` and passes only with expected mode
+`temporary_ip_tls`, while a DNS hostname returns `true` and passes only with
+expected mode `domain_hsts`.
 Add assertions that the workflow requires the target-specific
 `*_DEPLOY_HTTP_REDIRECT_URL`, passes `HTTP_REDIRECT_URL` to the remote script,
 and that the script contains no `http://${HEALTH_URL#https://}` derivation.
@@ -49,7 +52,8 @@ Require an exact redirect comparison:
 expect(deployScript).toContain(': "${HTTP_REDIRECT_URL:?External HTTP redirect URL is required}"')
 expect(deployScript).not.toContain('HTTP_HEALTH_URL="http://${HEALTH_URL#https://}"')
 expect(deployScript).toContain('if [ "$redirect_url" != "$HEALTH_URL" ]; then')
-expect(deployScript).toContain('hsts_policy_inapplicable_ip_literal')
+expect(deployScript).toContain('temporary_ip_tls')
+expect(deployScript).toContain('domainHstsReady')
 ```
 
 - [ ] **Step 2: Run the contracts and verify RED**
@@ -61,9 +65,9 @@ node --test scripts/classify-public-ingress-url.test.mjs
 npx vitest run --config server/vitest.config.ts server/src/__tests__/deployWorkflowContract.test.ts server/src/__tests__/runtimeDeploymentSecurityContract.test.ts
 ```
 
-Expected: FAIL because the classifier and redirect-source secret do not exist,
-the same-authority derivation remains, and an IP STS header can still appear to
-satisfy the production gate.
+Expected: FAIL because the classifier, explicit ingress mode, and redirect-source
+secret do not exist, the same-authority derivation remains, and an IP STS header
+can still appear to satisfy final domain closure.
 
 - [ ] **Step 3: Implement the minimum redirect contract**
 
@@ -83,10 +87,10 @@ bash -s
 Use `node:net.isIP` in `classify-public-ingress-url.mjs`; never classify by
 substring. Invoke it in `deployment-target-preflight`, before the migration job
 can start, and again in the remote script as defense in depth. The remote
-deployment records `hstsHeaderPresent` independently. A staging IP URL is
-allowed with a degraded classification, but a production IP URL exits before
-migration or application deployment with
-`hsts_policy_inapplicable_ip_literal`.
+deployment records `hstsHeaderPresent` independently. An IP URL passes only
+when `public_ingress_mode=temporary_ip_tls`, with `temporaryIngressReady=true`
+and `domainHstsReady=false`. A DNS URL passes only when
+`public_ingress_mode=domain_hsts`, with HSTS header verification still required.
 
 - [ ] **Step 4: Run focused tests and verify GREEN**
 
@@ -99,19 +103,31 @@ git add scripts/classify-public-ingress-url.mjs scripts/classify-public-ingress-
 git commit -m "fix: support split-port HTTPS redirects"
 ```
 
-### Task 2: Isolate Authentication Cookies By Environment
+### Task 2: Select Authentication Cookies By Environment
 
 **Files:**
-- Create: `server/src/__tests__/authCookieConfiguration.test.ts`
+- Create: `server/src/__tests__/authRuntimeConfiguration.test.ts`
+- Create: `server/src/__tests__/requestOriginGuard.test.ts`
+- Create: `server/src/middleware/requestOriginGuard.ts`
+- Create: `scripts/public-origin.mjs`
+- Create: `scripts/public-origin.contract.test.mjs`
 - Modify: `server/src/auth/config.ts`
 - Modify: `server/src/auth/http.ts`
+- Modify: `server/src/index.ts`
 - Modify: `deploy/env/server.production.example`
 - Modify: `scripts/deploy-lighthouse-server.sh`
+- Modify: `scripts/run-wizard-baseline-revision-staging.mjs`
+- Modify: `scripts/browser-auth-fixture.mjs`
+- Modify: `.github/workflows/deploy.yml`
+- Modify: `.github/workflows/production-livegate-execution.yml`
+- Modify: `server/src/__tests__/deployWorkflowContract.test.ts`
 - Modify: `deploy/README.md`
 
 **Interfaces:**
 - Consumes: `AUTH_COOKIE_NAME` from the runtime environment.
 - Produces: `JWT_CONFIG.cookie.name`, shared by login, extraction, refresh, and logout.
+- Consumes: target-specific JWT issuer/audience/secret and exact public HTTPS origin.
+- Produces: a pre-route unsafe-method Origin guard and loopback-safe release smoke headers.
 
 - [ ] **Step 1: Write failing cookie tests**
 
@@ -119,6 +135,16 @@ Use isolated module imports after setting `process.env.AUTH_COOKIE_NAME`. Verify
 `workbuddy_production_auth_token` is used by `setAuthTokenCookie` and
 `clearAuthTokenCookie`; verify test mode defaults to `auth_token`; verify an
 invalid name such as `bad cookie` throws before a response cookie is written.
+The test must not claim port-level cookie isolation; it proves only that each API
+selects its configured name.
+Add deployment-contract cases requiring production to use
+`workbuddy_production_auth_token` and staging to use
+`workbuddy_staging_auth_token`; either environment using the other name must
+fail before source or database mutation.
+Add RED cases for missing or multi-value CORS, staging/production origin swaps,
+unsafe cross-origin mutations, and loopback login without the external Origin.
+Enumerate every staging and production wizard smoke/cleanup command and require
+all four loopback calls to pass `--public-origin`.
 
 - [ ] **Step 2: Run the test and verify RED**
 
@@ -140,18 +166,27 @@ pattern:
 In production, reject a missing name; in development/test, default to
 `auth_token`. Replace both hardcoded names
 in `server/src/auth/http.ts` with `JWT_CONFIG.cookie.name`. Require
-`AUTH_COOKIE_NAME` in the remote production env preflight and document exact
-values:
+`AUTH_COOKIE_NAME` in the remote runtime env preflight. Derive the one allowed
+value from `DEPLOY_TARGET` inside the deployment script and require exact
+equality; do not accept an arbitrary token-safe production value. Document
+exact values:
 
 ```text
 production: workbuddy_production_auth_token
 staging: workbuddy_staging_auth_token
 ```
 
+Require target-specific JWT issuer and audience, independent secrets, a single
+exact HTTPS `PUBLIC_HTTPS_ORIGIN`, and `CORS_ORIGIN` equality at runtime startup.
+Install the Origin guard before CORS and route handlers. Add the shared strict
+HTTPS-origin parser to the official wizard smoke and browser auth fixture; do
+not exempt login when Origin is missing.
+
 - [ ] **Step 4: Run cookie and existing auth regression tests**
 
 ```powershell
-npx vitest run --config server/vitest.config.ts server/src/__tests__/authCookieConfiguration.test.ts server/src/__tests__/authCredentialRevocation.test.ts server/src/__tests__/authLoginRoute.test.ts server/src/__tests__/authRegisterRoute.test.ts
+npx vitest run --config server/vitest.config.ts server/src/__tests__/authRuntimeConfiguration.test.ts server/src/__tests__/requestOriginGuard.test.ts server/src/__tests__/authCredentialRevocation.test.ts server/src/__tests__/authLoginRoute.test.ts server/src/__tests__/authRegisterRoute.test.ts server/src/__tests__/deployWorkflowContract.test.ts
+node --test scripts/public-origin.contract.test.mjs
 ```
 
 Expected: all pass.
@@ -289,6 +324,7 @@ git commit -m "feat: provision split-port ingress safely"
 
 **Files:**
 - Modify: `scripts/production-runtime-recovery.contract.test.mjs`
+- Modify: `scripts/recover-production-runtime.sh`
 - Modify: `.github/workflows/production-runtime-recovery.yml`
 - Modify: `deploy/README.md`
 
@@ -306,6 +342,10 @@ assert.match(workflow, /preflightPassed && localVerificationPassed && publicProb
 assert.doesNotMatch(workflow, /!publicProbeConfigured \|\| publicProbeAfterPassed/)
 ```
 
+Also assert the remote script rejects `PUBLIC_PROBE_CONFIGURED!=true`, never
+names a local-only result `healthy_no_action`, and cannot set final recovery
+success from `local_verification_passed` alone.
+
 - [ ] **Step 2: Run the contract and verify RED**
 
 ```powershell
@@ -318,8 +358,13 @@ Expected: FAIL because public HTTPS remains optional.
 
 Require the URL in preflight, always run before/after probes, classify missing
 configuration as blocked and failed public reachability as ingress failure,
-and require public probe success in `runtimeHealthy`. Keep the rule that healthy
-local containers plus failed ingress does not restart application containers.
+and require public probe success in `runtimeHealthy`. Update the remote script
+so missing public-probe configuration exits nonzero before inspection, local
+health alone is reported only as `local_runtime_healthy`, and post-recovery
+local verification is never named final success. The workflow performs the
+authoritative after-probe and combines it with the remote local result. Keep the
+rule that healthy local containers plus failed ingress does not restart
+application containers.
 
 - [ ] **Step 4: Run the contract and verify GREEN**
 
@@ -328,7 +373,7 @@ Run the command from Step 2. Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```powershell
-git add scripts/production-runtime-recovery.contract.test.mjs .github/workflows/production-runtime-recovery.yml deploy/README.md
+git add scripts/production-runtime-recovery.contract.test.mjs scripts/recover-production-runtime.sh .github/workflows/production-runtime-recovery.yml deploy/README.md
 git commit -m "fix: require public HTTPS in runtime recovery"
 ```
 

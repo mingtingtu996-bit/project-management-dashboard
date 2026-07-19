@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolvePublicHttpsOrigin } from './public-origin.mjs'
+
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
@@ -37,9 +39,16 @@ async function loginWithFullAppFixture() {
     throw new Error(`Missing companyAdmin/owner account in ${manifestPath}`)
   }
 
+  const publicOrigin = resolvePublicHttpsOrigin({
+    apiBaseUrl,
+    publicOrigin: process.env.PUBLIC_HTTPS_ORIGIN,
+  })
   const response = await fetch(`${apiBaseUrl}/api/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: publicOrigin,
+    },
     body: JSON.stringify({
       username: account.username,
       password: account.password,
