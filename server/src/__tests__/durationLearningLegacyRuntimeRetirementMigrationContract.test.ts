@@ -236,4 +236,24 @@ describe('duration learning legacy runtime retirement migration', () => {
     )
     expect(runner).toContain('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PHASE_BOUNDARY')
   })
+
+  it('requires effective target validation before any destructive 322 client or file access', () => {
+    const runner = readSql('src/scripts/run-pending-migrations.ts')
+    const backup = readSql('src/scripts/backup-duration-learning-legacy-runtime-retirement.ts')
+    const runnerParserCall = runner.lastIndexOf('parseStrictPostgresConnectionTarget(')
+    const runnerClient = runner.indexOf('new Client(')
+    const backupTargetValidation = backup.lastIndexOf(
+      'resolveDurationLearningLegacyRuntimeRetirementTargetIdentity()',
+    )
+    const backupConnectionConfig = backup.indexOf('resolveMigrationRuntimeConnectionConfig()')
+    const backupClient = backup.indexOf('new Client(')
+
+    expect(runner).toContain('selectMigrationConnectionTarget')
+    expect(runner).toContain('parseStrictPostgresConnectionTarget')
+    expect(runnerParserCall).toBeGreaterThan(-1)
+    expect(runnerParserCall).toBeLessThan(runnerClient)
+    expect(backupTargetValidation).toBeGreaterThan(-1)
+    expect(backupTargetValidation).toBeLessThan(backupConnectionConfig)
+    expect(backupConnectionConfig).toBeLessThan(backupClient)
+  })
 })

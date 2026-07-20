@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 import { selectMigrationConnectionTarget } from '../services/migrationRunner.js'
+import { parseStrictPostgresConnectionTarget } from '../utils/postgresConnectionTargetIdentity.js'
 
 export const DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION =
   '322_duration_learning_legacy_runtime_retirement.sql'
@@ -281,14 +282,10 @@ function projectRefFromSupabaseUrl(value: string | undefined) {
 function projectRefsFromSelectedTarget(env: RetirementEnv) {
   const selected = selectMigrationConnectionTarget(env)
   if (selected.mode === 'connection_string') {
-    try {
-      const url = new URL(selected.connectionString)
-      const direct = /^(?:db\.)?([a-z0-9]{20})\.supabase\.co$/.exec(url.hostname.toLowerCase())?.[1]
-      const pooler = /(?:^|\.)([a-z0-9]{20})$/i.exec(decodeURIComponent(url.username))?.[1]?.toLowerCase()
-      return [direct, pooler].filter((value): value is string => Boolean(value))
-    } catch {
-      return []
-    }
+    const effective = parseStrictPostgresConnectionTarget(selected.connectionString)
+    const direct = /^(?:db\.)?([a-z0-9]{20})\.supabase\.co$/.exec(effective.host)?.[1]
+    const pooler = /(?:^|\.)([a-z0-9]{20})$/i.exec(effective.user)?.[1]?.toLowerCase()
+    return [direct, pooler].filter((value): value is string => Boolean(value))
   }
   const host = text(selected.host).toLowerCase()
   const direct = /^(?:db\.)?([a-z0-9]{20})\.supabase\.co$/.exec(host)?.[1]
@@ -632,6 +629,7 @@ export async function prepareDurationLearningLegacyRuntimeRetirementFromEnvironm
   if (!approvedBy) {
     throw new Error('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_AUTHORIZATION_REF_REQUIRED')
   }
+  const targetIdentity = resolveDurationLearningLegacyRuntimeRetirementTargetIdentity(env)
   const resolvedBackupPath = resolve(backupPath)
   const serialized = await readTextFile(resolvedBackupPath)
   const checksumFile = await readTextFile(`${resolvedBackupPath}.sha256`)
@@ -641,6 +639,6 @@ export async function prepareDurationLearningLegacyRuntimeRetirementFromEnvironm
     backup,
     backupSha256: expectedSha256,
     authorizationRef: approvedBy,
-    targetIdentity: resolveDurationLearningLegacyRuntimeRetirementTargetIdentity(env),
+    targetIdentity,
   })
 }
