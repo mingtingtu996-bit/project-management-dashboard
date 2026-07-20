@@ -148,7 +148,7 @@ async function main() {
       pending = allPending.filter((migration) => migration.filename === selectedMigration.filename)
     }
     const durationLearningRetirementPhase = planDurationLearningLegacyRuntimeRetirementPendingPhase({
-      pendingMigrations: pending,
+      pendingMigrations: explicitDurationLearningRetirement ? allPending : pending,
       explicitRetirementRequested: explicitDurationLearningRetirement,
     })
     pending = durationLearningRetirementPhase.executableMigrations

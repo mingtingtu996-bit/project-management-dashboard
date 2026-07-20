@@ -18,7 +18,7 @@ export function planDurationLearningLegacyRuntimeRetirementPendingPhase<
   explicitRetirementRequested: boolean
 }) {
   const pendingMigrations = [...input.pendingMigrations]
-  const retirementIndex = pendingMigrations.findIndex((migration) => (
+  const retirementPending = pendingMigrations.some((migration) => (
     migration.filename === DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION
   ))
   if (input.explicitRetirementRequested) {
@@ -34,7 +34,7 @@ export function planDurationLearningLegacyRuntimeRetirementPendingPhase<
       deferredMigrations: [] as T[],
     }
   }
-  if (retirementIndex < 0) {
+  if (!retirementPending) {
     return {
       status: 'ordinary_pending_ready' as const,
       executableMigrations: pendingMigrations,
@@ -43,8 +43,12 @@ export function planDurationLearningLegacyRuntimeRetirementPendingPhase<
   }
   return {
     status: 'explicit_322_retirement_required' as const,
-    executableMigrations: pendingMigrations.slice(0, retirementIndex),
-    deferredMigrations: pendingMigrations.slice(retirementIndex),
+    executableMigrations: pendingMigrations.filter((migration) => (
+      migration.filename !== DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION
+    )),
+    deferredMigrations: pendingMigrations.filter((migration) => (
+      migration.filename === DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION
+    )),
   }
 }
 

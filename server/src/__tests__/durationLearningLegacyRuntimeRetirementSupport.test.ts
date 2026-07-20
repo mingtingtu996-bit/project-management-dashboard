@@ -90,13 +90,12 @@ const targetEnv = {
 }
 
 describe('duration learning legacy runtime retirement support', () => {
-  it('stops an ordinary pending sweep before 322 and defers 322 plus every later migration', () => {
+  it('defers only exact 322 while an ordinary sweep executes safe migrations on both sides', () => {
     const phase = planDurationLearningLegacyRuntimeRetirementPendingPhase({
       pendingMigrations: [
         { filename: '315_duration_learning_runtime_publications.sql' },
-        { filename: '321_retirement.sql' },
         { filename: '322_duration_learning_legacy_runtime_retirement.sql' },
-        { filename: '323_after_retirement.sql' },
+        { filename: '323_duration_learning_runtime_evidence_outbox.sql' },
       ],
       explicitRetirementRequested: false,
     })
@@ -104,12 +103,36 @@ describe('duration learning legacy runtime retirement support', () => {
     expect(phase.status).toBe('explicit_322_retirement_required')
     expect(phase.executableMigrations.map((migration) => migration.filename)).toEqual([
       '315_duration_learning_runtime_publications.sql',
-      '321_retirement.sql',
+      '323_duration_learning_runtime_evidence_outbox.sql',
     ])
     expect(phase.deferredMigrations.map((migration) => migration.filename)).toEqual([
       '322_duration_learning_legacy_runtime_retirement.sql',
-      '323_after_retirement.sql',
     ])
+  })
+
+  it('fails closed when dedicated retirement still sees pending migrations besides exact 322', () => {
+    expect(() => planDurationLearningLegacyRuntimeRetirementPendingPhase({
+      pendingMigrations: [
+        { filename: '322_duration_learning_legacy_runtime_retirement.sql' },
+        { filename: '323_duration_learning_runtime_evidence_outbox.sql' },
+      ],
+      explicitRetirementRequested: true,
+    })).toThrow('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_EXACT_PENDING_SET_REQUIRED')
+  })
+
+  it('selects exact 322 after safe post-322 migrations are already ledgered', () => {
+    const phase = planDurationLearningLegacyRuntimeRetirementPendingPhase({
+      pendingMigrations: [
+        { filename: '322_duration_learning_legacy_runtime_retirement.sql' },
+      ],
+      explicitRetirementRequested: true,
+    })
+
+    expect(phase.status).toBe('explicit_322_retirement_selected')
+    expect(phase.executableMigrations).toEqual([
+      { filename: '322_duration_learning_legacy_runtime_retirement.sql' },
+    ])
+    expect(phase.deferredMigrations).toEqual([])
   })
 
   it('allows only the dedicated exact-322 selector and validates its environment before connection', () => {

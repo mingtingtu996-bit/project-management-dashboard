@@ -231,6 +231,9 @@ describe('duration learning legacy runtime retirement migration', () => {
     expect(runner).toContain('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_EXPLICIT_FLAG')
     expect(runner).toContain('assertDurationLearningLegacyRuntimeRetirementInvocation')
     expect(runner).toContain('planDurationLearningLegacyRuntimeRetirementPendingPhase')
+    expect(runner).toMatch(
+      /pendingMigrations:\s*explicitDurationLearningRetirement\s*\?\s*allPending\s*:\s*pending/,
+    )
     expect(runner).toContain('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PHASE_BOUNDARY')
   })
 })
