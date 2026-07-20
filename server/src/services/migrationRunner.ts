@@ -275,8 +275,13 @@ function assertEffectiveMigrationTargetMatchesSupabaseProject(target: {
   host: string
   user: string
 }) {
-  const expectedRef = deriveSupabaseProjectRef(process.env.SUPABASE_URL)
-  if (!expectedRef) return
+  const configuredSupabaseUrl = String(process.env.SUPABASE_URL ?? '').trim()
+  if (!configuredSupabaseUrl) return
+
+  const expectedRef = deriveSupabaseProjectRef(configuredSupabaseUrl)
+  if (!expectedRef) {
+    throw new Error('SUPABASE_URL_INVALID: non-empty SUPABASE_URL must be a valid Supabase project URL')
+  }
 
   const directRef = deriveSupabaseProjectRef(`postgresql://${target.host}`)
   if (!directRef && !isSupabasePoolerHost(target.host)) {

@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, sep } from 'node:path'
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   APPLY_MIGRATION_CHECKSUM_CONTRACT_VERSION,
@@ -25,6 +25,11 @@ const serverRoot = process.cwd().endsWith(`${sep}server`)
   : resolve(process.cwd(), 'server')
 
 const originalEnv = { ...process.env }
+delete originalEnv.SUPABASE_URL
+
+beforeEach(() => {
+  process.env = { ...originalEnv }
+})
 
 function buildHardenedCommercialTriggerAclRows() {
   const functionIdentities = [
@@ -278,6 +283,13 @@ describe('migration runner contract', () => {
     process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres.aaaaaaaaaaaaaaaaaaaa:secret@evil.example:5432/postgres'
 
     expect(() => resolveMigrationConnectionConfig()).toThrow('MIGRATION_TARGET_HOST_UNTRUSTED')
+  })
+
+  it('rejects malformed non-empty SUPABASE_URL before evaluating an external migration host', () => {
+    process.env.SUPABASE_URL = 'not-a-url'
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres.aaaaaaaaaaaaaaaaaaaa:secret@evil.example:5432/postgres'
+
+    expect(() => resolveMigrationConnectionConfig()).toThrow('SUPABASE_URL_INVALID')
   })
 
   it('rejects a host-based migration target outside the authoritative Supabase project', () => {
