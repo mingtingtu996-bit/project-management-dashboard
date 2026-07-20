@@ -152,10 +152,12 @@ describe('projectRemainingForecastApi governed project duration output', () => {
     const response = await getProjectRemainingDurationForecast('project-1')
 
     expect(response.projectRemainingForecast).toMatchObject({
+      projectRemainingForecastDays: null,
       projectRemainingForecast: expect.objectContaining({
         availability: 'unavailable',
       }),
       forecastFinishDate: null,
+      targetGapDays: null,
       targetGap: expect.objectContaining({
         value: null,
         availability: 'unavailable',
@@ -224,8 +226,28 @@ describe('projectRemainingForecastApi governed project duration output', () => {
       projectRemainingForecast: {
         durationOutputCode: 'project_remaining_forecast',
         projectRemainingForecastDays: 0,
+        projectRemainingForecast: {
+          value: 0,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: null,
         targetGapDays: 0,
+        targetGap: {
+          value: 0,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         rowsEvaluated: 0,
       },
     })
@@ -399,6 +421,16 @@ describe('projectRemainingForecastApi governed project duration output', () => {
       projectRemainingForecast: {
         durationOutputCode: 'project_remaining_forecast',
         projectRemainingForecastDays: 42,
+        projectRemainingForecast: {
+          value: 42,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: '2027-04-30',
       },
       targetFeasibility: {
