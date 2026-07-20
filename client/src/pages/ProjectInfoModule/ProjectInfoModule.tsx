@@ -38,6 +38,7 @@ import {
   type WizardStep,
 } from '@/components/project/wizard/types'
 import { ApiClientError } from '@/lib/apiClient'
+import { readAvailableDurationValue } from '@/lib/durationMetric'
 import { Button } from '@/components/ui/button'
 
 const TOTAL_STEPS = 6
@@ -653,18 +654,17 @@ export default function ProjectInfoModule({
           generationBatchId: status.generationBatchId ?? result.generation?.generationBatchId,
         }
       }
-      if (targetFeasibility && targetFeasibility.overshootDays > 0 && typeof window !== 'undefined') {
+      const targetOvershootDays = readAvailableDurationValue(targetFeasibility?.overshoot, 'calendar_day')
+      if (targetFeasibility && (
+        (targetOvershootDays !== null && targetOvershootDays > 0)
+        || targetFeasibility.overshoot?.availability === 'unavailable'
+      ) && typeof window !== 'undefined') {
         window.sessionStorage.setItem(`${WIZARD_ACCELERATION_STORAGE_PREFIX}${result.projectId}`, JSON.stringify({
           targetFeasibility,
           generatedAt: new Date().toISOString(),
         }))
       }
       const handoffSearchParams = new URLSearchParams()
-      if (targetFeasibility && targetFeasibility.overshootDays > 0) {
-        handoffSearchParams.set('target_overshoot_days', String(targetFeasibility.overshootDays))
-        handoffSearchParams.set('target_natural_end', targetFeasibility.naturalEndDate)
-        handoffSearchParams.set('target_end', targetFeasibility.targetEndDate)
-      }
       if (persistWizardCommitGenerationEvidence(result.projectId, generationEvidence)) {
         handoffSearchParams.set('wizard_evidence', 'true')
       }

@@ -390,7 +390,7 @@ describe('scheduleAccelerationService', () => {
     expect(feasibility?.overshootDays).toBe(5)
   })
 
-  it('calculates target overshoot with shutdown-aware construction production days', () => {
+  it('keeps target overshoot as a Gregorian date shift while production recovery fails closed without calendar identity', () => {
     const rows: ScheduleAccelerationRow[] = [
       buildRow({
         clientRowId: 'shutdown-sensitive',
@@ -420,7 +420,25 @@ describe('scheduleAccelerationService', () => {
       },
     })
 
-    expect(feasibility?.overshootDays).toBe(1)
+    expect(feasibility?.overshootDays).toBe(3)
+    expect(feasibility?.overshoot).toEqual(expect.objectContaining({
+      value: 3,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    }))
+    expect(feasibility?.recoverable).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }))
+    expect(feasibility?.unrecoverable).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    }))
   })
 
   it('can re-evaluate an existing task schedule without WBS template generation', () => {
@@ -1951,6 +1969,23 @@ describe('scheduleAccelerationService', () => {
       ],
       targetEndDate: '2026-06-15',
       mode: 'compression_preview',
+      context: {
+        asOfDate: '2026-06-01',
+        constructionCalendar: {
+          basis: 'official_construction_calendar_seed',
+          windows: [{
+            holidayCode: 'identified_calendar_marker',
+            startDate: '2026-01-01',
+            endDate: '2026-01-01',
+            calendarKind: 'compensatory_workday',
+          }],
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
     })
 
     expect(feasibility?.accelerationProposal).toEqual(expect.objectContaining({
@@ -1976,12 +2011,19 @@ describe('scheduleAccelerationService', () => {
     }))
     expect(crashing).toEqual(expect.objectContaining({
       type: 'crashing',
+      recoverDuration: expect.objectContaining({
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
       durationAdjustments: expect.arrayContaining([
         expect.objectContaining({
           clientRowId: 'structure',
           currentDurationDays: 10,
           proposedDurationDays: expect.any(Number),
           recoverDays: expect.any(Number),
+          currentDuration: expect.objectContaining({ unit: 'construction_production_day' }),
+          proposedDuration: expect.objectContaining({ unit: 'construction_production_day' }),
+          recoverDuration: expect.objectContaining({ unit: 'construction_production_day' }),
         }),
       ]),
     }))
@@ -2000,6 +2042,9 @@ describe('scheduleAccelerationService', () => {
           clientRowId: 'structure',
           currentDurationDays: 10,
           proposedDurationDays: expect.any(Number),
+          currentDuration: expect.objectContaining({ unit: 'construction_production_day' }),
+          proposedDuration: expect.objectContaining({ unit: 'construction_production_day' }),
+          recoverDuration: expect.objectContaining({ unit: 'construction_production_day' }),
           changedFields: expect.arrayContaining(['planned_end_date']),
           visualDiff: expect.objectContaining({
             durationDeltaDays: expect.any(Number),

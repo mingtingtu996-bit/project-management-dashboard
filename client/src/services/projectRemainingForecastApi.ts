@@ -1,8 +1,10 @@
 import { apiPost } from '@/lib/apiClient'
-import type {
-  WbsAccelerationProposal,
-  WbsConstructionOrganizationProductOutcomeCloseoutProgress,
-  WbsTargetFeasibility,
+import { normalizeDurationMetricDto, type DurationMetricDto } from '@/lib/durationMetric'
+import {
+  normalizeWbsTargetFeasibility,
+  type WbsAccelerationProposal,
+  type WbsConstructionOrganizationProductOutcomeCloseoutProgress,
+  type WbsTargetFeasibility,
 } from './wbsTemplateGenerationApi'
 
 export interface ProjectRemainingDurationForecastContext {
@@ -32,10 +34,14 @@ export interface ProjectRemainingDurationForecastContext {
 export interface ProjectRemainingDurationForecast {
   durationOutputCode: 'project_remaining_forecast' | string | null
   durationOutputSemanticFieldName?: string | null
+  /** @deprecated Use projectRemainingForecast. */
   projectRemainingForecastDays: number | null
+  projectRemainingForecast: DurationMetricDto | null
   forecastFinishDate: string | null
   targetEndDate?: string | null
+  /** @deprecated Use targetGap. */
   targetGapDays?: number | null
+  targetGap: DurationMetricDto | null
   rowsEvaluated?: number | null
   calculationContext?: ProjectRemainingDurationForecastContext | null
 }
@@ -115,9 +121,11 @@ function normalizeForecast(raw: any): ProjectRemainingDurationForecast | null {
     durationOutputCode: raw.durationOutputCode ?? null,
     durationOutputSemanticFieldName: raw.durationOutputSemanticFieldName ?? null,
     projectRemainingForecastDays: normalizeNumber(raw.projectRemainingForecastDays),
+    projectRemainingForecast: normalizeDurationMetricDto(raw.projectRemainingForecast),
     forecastFinishDate: raw.forecastFinishDate ?? null,
     targetEndDate: raw.targetEndDate ?? null,
     targetGapDays: normalizeNumber(raw.targetGapDays),
+    targetGap: normalizeDurationMetricDto(raw.targetGap),
     rowsEvaluated: normalizeNumber(raw.rowsEvaluated),
     calculationContext: raw.calculationContext ?? null,
   }
@@ -200,9 +208,7 @@ export async function evaluateProjectScheduleAcceleration(
     targetEndDate: raw?.targetEndDate ?? request.targetEndDate ?? null,
     rowsEvaluated: normalizeNumber(raw?.rowsEvaluated),
     projectRemainingForecast: normalizeForecast(raw?.projectRemainingForecast),
-    targetFeasibility: raw?.targetFeasibility && typeof raw.targetFeasibility === 'object'
-      ? raw.targetFeasibility as WbsTargetFeasibility
-      : null,
+    targetFeasibility: normalizeWbsTargetFeasibility(raw?.targetFeasibility),
     constructionOrganizationProductOutcomeCloseoutProgress:
       normalizeConstructionOrganizationProductOutcomeCloseoutProgress(
         raw?.constructionOrganizationProductOutcomeCloseoutProgress,

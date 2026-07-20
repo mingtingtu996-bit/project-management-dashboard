@@ -714,7 +714,14 @@ describe('scheduleAccelerationRuntimeService', () => {
 
     expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-02-18')
     expect(result.projectRemainingForecast.projectRemainingForecastDays).toBe(2)
-    expect(result.projectRemainingForecast.targetGapDays).toBe(1)
+    expect(result.projectRemainingForecast.targetGapDays).toBe(3)
+    expect(result.projectRemainingForecast.targetGap).toEqual(expect.objectContaining({
+      value: 3,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    }))
   })
 
   it('resolves the construction calendar for production runtime forecasts when no context calendar is passed', async () => {

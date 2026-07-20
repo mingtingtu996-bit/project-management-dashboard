@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from '@/lib/apiClient'
+import { normalizeDurationMetricDto, type DurationMetricDto } from '@/lib/durationMetric'
 import type { PlanningSurface } from '@/components/planning/PlanningCommitModel'
 import type { LinkedProjectionSource, PlanItemKind, ProgressMode, RelationRole, ScheduleParticipation, ScopeExpansionMode } from '@/lib/planItemSemantics'
 
@@ -504,14 +505,22 @@ export interface WbsTargetFeasibility {
   scenario?: 'baseline_target_alignment' | 'runtime_delay_recovery'
   targetEndDate: string
   naturalEndDate: string
+  /** @deprecated Use overshoot. */
   overshootDays: number
+  overshoot?: DurationMetricDto | null
+  /** @deprecated Use recoverable. */
   recoverableDays: number
+  recoverable?: DurationMetricDto | null
+  /** @deprecated Use unrecoverable. */
   unrecoverableDays: number
+  unrecoverable?: DurationMetricDto | null
   verdict: 'fit' | 'tight' | 'compressible' | 'requires_scope_change' | 'infeasible'
   strategies: Array<{
     type: 'fast_track' | 'crashing' | 'scope_reduction'
     affectedRowIds: string[]
+    /** @deprecated Use recoverDuration. */
     recoverDays: number
+    recoverDuration?: DurationMetricDto | null
     riskLevel: 'low' | 'medium' | 'high'
     explanation: string
   }>
@@ -689,9 +698,15 @@ export interface WbsAccelerationProposal {
   source: 'target_end_compression'
   targetEndDate: string
   naturalEndDate: string
+  /** @deprecated Use overshoot. */
   overshootDays: number
+  overshoot?: DurationMetricDto | null
+  /** @deprecated Use totalRecover. */
   totalRecoverDays: number
+  totalRecover?: DurationMetricDto | null
+  /** @deprecated Use remainingGap. */
   remainingGapDays: number
+  remainingGap?: DurationMetricDto | null
   verdict: 'draft_recoverable' | 'needs_scope_decision' | 'infeasible'
   commitmentDisclaimer?: string
   actions: WbsAccelerationProposalAction[]
@@ -700,17 +715,21 @@ export interface WbsAccelerationProposal {
     clientRowId: string
     title: string
     reasonCode: string
+    /** @deprecated Use duration. */
     durationDays: number
+    duration?: DurationMetricDto | null
   }>
   calculationBasis?: {
     scenario?: 'baseline_target_alignment' | 'runtime_delay_recovery'
     naturalDurationDays: number
+    naturalDuration?: DurationMetricDto | null
     totalRecoverCapRatio: number
     seasonalFactor: number
     projectTypeProfile: string
     criticalCandidateDays: number
     resourceGroupedCandidateDays: number
     hardConstraintDays: number
+    hardConstraintDuration?: DurationMetricDto | null
     constructionOrganizationScenario?: WbsConstructionOrganizationScenarioSummary | null
     constructionOrganizationRecoveryFactor?: number
     fastTrackBudgetDays?: number
@@ -747,8 +766,11 @@ export interface WbsAccelerationRescheduleDraft {
     proposedStartDate: string | null
     proposedEndDate: string | null
     currentDurationDays: number
+    currentDuration?: DurationMetricDto | null
     proposedDurationDays: number
+    proposedDuration?: DurationMetricDto | null
     recoverDays: number
+    recoverDuration?: DurationMetricDto | null
     changedFields: string[]
     visualDiff: {
       durationDeltaDays: number
@@ -768,9 +790,13 @@ export interface WbsAccelerationRescheduleDraft {
   resourceAdjustments: Array<{
     clientRowId: string
     currentDurationDays: number
+    currentDuration?: DurationMetricDto | null
     proposedDurationDays: number
+    proposedDuration?: DurationMetricDto | null
     minDurationDays: number
+    minDuration?: DurationMetricDto | null
     recoverDays: number
+    recoverDuration?: DurationMetricDto | null
     basis: 'p50_to_p20' | 'resource_crash_preview'
   }>
   operations: Array<{
@@ -785,6 +811,7 @@ export type WbsAccelerationProposalAction =
     type: 'fast_track'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto | null
     riskLevel: 'low' | 'medium' | 'high'
     explanation: string
     dependencyAdjustments: Array<{
@@ -800,14 +827,19 @@ export type WbsAccelerationProposalAction =
     type: 'crashing'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto | null
     riskLevel: 'low' | 'medium' | 'high'
     explanation: string
     durationAdjustments: Array<{
       clientRowId: string
       currentDurationDays: number
+      currentDuration?: DurationMetricDto | null
       proposedDurationDays: number
+      proposedDuration?: DurationMetricDto | null
       minDurationDays: number
+      minDuration?: DurationMetricDto | null
       recoverDays: number
+      recoverDuration?: DurationMetricDto | null
       basis: 'p50_to_p20' | 'resource_crash_preview'
     }>
   }
@@ -815,6 +847,7 @@ export type WbsAccelerationProposalAction =
     type: 'scope_reduction'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto | null
     riskLevel: 'high'
     explanation: string
     decisionOptions: string[]
@@ -872,6 +905,79 @@ export interface WbsTemplateGeneratePreviewPayload {
   generationBatchId?: string
 }
 
+function normalizeAccelerationDurationAdjustment<T extends Record<string, unknown>>(adjustment: T) {
+  return {
+    ...adjustment,
+    currentDuration: normalizeDurationMetricDto(adjustment.currentDuration),
+    proposedDuration: normalizeDurationMetricDto(adjustment.proposedDuration),
+    minDuration: normalizeDurationMetricDto(adjustment.minDuration),
+    recoverDuration: normalizeDurationMetricDto(adjustment.recoverDuration),
+  }
+}
+
+export function normalizeWbsTargetFeasibility(value: unknown): WbsTargetFeasibility | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = value as Record<string, any>
+  const proposal = raw.accelerationProposal && typeof raw.accelerationProposal === 'object'
+    ? raw.accelerationProposal as Record<string, any>
+    : null
+  const normalizedProposal = proposal
+    ? {
+        ...proposal,
+        overshoot: normalizeDurationMetricDto(proposal.overshoot),
+        totalRecover: normalizeDurationMetricDto(proposal.totalRecover),
+        remainingGap: normalizeDurationMetricDto(proposal.remainingGap),
+        actions: Array.isArray(proposal.actions)
+          ? proposal.actions.map((action: Record<string, any>) => ({
+              ...action,
+              recoverDuration: normalizeDurationMetricDto(action.recoverDuration),
+              ...(action.type === 'crashing' && Array.isArray(action.durationAdjustments)
+                ? { durationAdjustments: action.durationAdjustments.map(normalizeAccelerationDurationAdjustment) }
+                : {}),
+            }))
+          : [],
+        rescheduleDraft: proposal.rescheduleDraft && typeof proposal.rescheduleDraft === 'object'
+          ? {
+              ...proposal.rescheduleDraft,
+              taskDateAdjustments: Array.isArray(proposal.rescheduleDraft.taskDateAdjustments)
+                ? proposal.rescheduleDraft.taskDateAdjustments.map(normalizeAccelerationDurationAdjustment)
+                : [],
+              resourceAdjustments: Array.isArray(proposal.rescheduleDraft.resourceAdjustments)
+                ? proposal.rescheduleDraft.resourceAdjustments.map(normalizeAccelerationDurationAdjustment)
+                : [],
+            }
+          : null,
+        protectedConstraints: Array.isArray(proposal.protectedConstraints)
+          ? proposal.protectedConstraints.map((constraint: Record<string, any>) => ({
+              ...constraint,
+              duration: normalizeDurationMetricDto(constraint.duration),
+            }))
+          : [],
+        calculationBasis: proposal.calculationBasis && typeof proposal.calculationBasis === 'object'
+          ? {
+              ...proposal.calculationBasis,
+              naturalDuration: normalizeDurationMetricDto(proposal.calculationBasis.naturalDuration),
+              hardConstraintDuration: normalizeDurationMetricDto(proposal.calculationBasis.hardConstraintDuration),
+            }
+          : undefined,
+      }
+    : null
+
+  return {
+    ...raw,
+    overshoot: normalizeDurationMetricDto(raw.overshoot),
+    recoverable: normalizeDurationMetricDto(raw.recoverable),
+    unrecoverable: normalizeDurationMetricDto(raw.unrecoverable),
+    strategies: Array.isArray(raw.strategies)
+      ? raw.strategies.map((strategy: Record<string, any>) => ({
+          ...strategy,
+          recoverDuration: normalizeDurationMetricDto(strategy.recoverDuration),
+        }))
+      : [],
+    accelerationProposal: normalizedProposal,
+  } as WbsTargetFeasibility
+}
+
 export async function listWbsTemplateCatalog(options: { includeNodes?: boolean } = {}) {
   const params = new URLSearchParams()
   if (options.includeNodes) params.set('includeNodes', 'true')
@@ -883,12 +989,18 @@ export async function getWbsTemplateCatalogItem(templateId: string) {
   return apiGet<WbsTemplateCatalogItem>(`/api/planning/wbs-templates/catalog/${encodeURIComponent(templateId)}`)
 }
 
-export async function generateWbsTemplatePreview(payload: WbsTemplateGeneratePreviewPayload) {
+export async function generateWbsTemplatePreview(
+  payload: WbsTemplateGeneratePreviewPayload,
+): Promise<WbsTemplateGeneratePreview> {
   const requestPayload = sanitizeLegacyScopeObjectFields({
     ...payload,
     duplicatePolicy: payload.duplicatePolicy ?? 'skip',
   })
-  return apiPost<WbsTemplateGeneratePreview>('/api/planning/wbs-templates/generate-preview', requestPayload)
+  const preview = await apiPost<WbsTemplateGeneratePreview>('/api/planning/wbs-templates/generate-preview', requestPayload)
+  return {
+    ...preview,
+    targetFeasibility: normalizeWbsTargetFeasibility(preview.targetFeasibility),
+  }
 }
 
 export async function getWbsTemplateInferredFeatures(projectId: string) {

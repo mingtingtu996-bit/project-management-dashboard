@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   buildProjectRemainingDurationForecast,
   recordProjectRemainingDurationForecastRuntimeConsumption,
@@ -46,7 +46,38 @@ function row(overrides: Partial<ScheduleAccelerationRow> = {}): ScheduleAccelera
   }
 }
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('projectRemainingDurationForecastService', () => {
+  it('derives a missing asOf in the construction-calendar timezone', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-19T16:30:00.000Z'))
+
+    const forecast = buildProjectRemainingDurationForecast({
+      rows: [row()],
+      targetEndDate: '2026-07-25',
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'identified_calendar_marker',
+          startDate: '2026-01-01',
+          endDate: '2026-01-01',
+          calendarKind: 'compensatory_workday',
+        }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    })
+
+    expect(forecast.projectRemainingForecast.asOf).toBe('2026-07-20')
+    expect(forecast.targetGap.asOf).toBe('2026-07-20')
+  })
+
   it('builds a governed project-level remaining forecast from critical path, monthly commitments and external gates', () => {
     const forecast = buildProjectRemainingDurationForecast({
       rows: [
@@ -94,6 +125,19 @@ describe('projectRemainingDurationForecastService', () => {
       forecastFinishDate: '2026-06-28',
       targetGapDays: 3,
       rowsEvaluated: 2,
+    }))
+    expect(forecast.projectRemainingForecast).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }))
+    expect(forecast.targetGap).toEqual(expect.objectContaining({
+      value: 3,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
     }))
     expect(forecast.calculationContext).toEqual(expect.objectContaining({
       primaryLayer: 'runtimeExecutionFacts',
@@ -763,12 +807,31 @@ describe('projectRemainingDurationForecastService', () => {
           endDate: '2026-02-17',
           counts_as_construction_shutdown: true,
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
     expect(forecast.forecastFinishDate).toBe('2026-02-18')
     expect(forecast.projectRemainingForecastDays).toBe(2)
-    expect(forecast.targetGapDays).toBe(1)
+    expect(forecast.targetGapDays).toBe(3)
+    expect(forecast.projectRemainingForecast).toEqual(expect.objectContaining({
+      value: 2,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      availability: 'available',
+    }))
+    expect(forecast.targetGap).toEqual(expect.objectContaining({
+      value: 3,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    }))
     expect(forecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-02-18')
   })
 

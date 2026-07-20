@@ -1,8 +1,9 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/apiClient'
-import type {
-  WbsConstructionOrganizationScenarioSummary,
-  WbsTemplateGeneratePreview,
-  WbsTargetFeasibility,
+import {
+  normalizeWbsTargetFeasibility,
+  type WbsConstructionOrganizationScenarioSummary,
+  type WbsTemplateGeneratePreview,
+  type WbsTargetFeasibility,
 } from '@/services/wbsTemplateGenerationApi'
 import type { DetailLevel, WizardDraftPayload, WizardStep } from './types'
 
@@ -586,6 +587,31 @@ export interface WizardProfilePreview {
   }
 }
 
+function normalizeWizardCreateResult(result: WizardCreateResult): WizardCreateResult {
+  if (!result.generation) return result
+  return {
+    ...result,
+    generation: {
+      ...result.generation,
+      targetFeasibility: normalizeWbsTargetFeasibility(result.generation.targetFeasibility),
+    },
+  }
+}
+
+function normalizeWizardGenerationStatus(result: WizardGenerationStatus): WizardGenerationStatus {
+  return {
+    ...result,
+    targetFeasibility: normalizeWbsTargetFeasibility(result.targetFeasibility),
+  }
+}
+
+function normalizeWizardProfilePreview(result: WizardProfilePreview): WizardProfilePreview {
+  return {
+    ...result,
+    targetFeasibility: normalizeWbsTargetFeasibility(result.targetFeasibility),
+  }
+}
+
 export interface FoundationMethodCandidate {
   code: string
   label: string
@@ -658,12 +684,12 @@ export function deleteWizardProjectDraft(projectId: string) {
   return apiDelete<void>(`/api/projects/${encodeURIComponent(projectId)}/wizard/draft`)
 }
 
-export function commitWizardProject(payload: WizardDraftPayload, options?: {
+export async function commitWizardProject(payload: WizardDraftPayload, options?: {
   projectId?: string | null
   companyId?: string | null
   asyncGeneration?: boolean
 }) {
-  return apiPost<WizardCreateResult>('/api/projects/wizard', {
+  const result = await apiPost<WizardCreateResult>('/api/projects/wizard', {
     projectId: options?.projectId ?? undefined,
     companyId: options?.companyId ?? undefined,
     name: payload.projectName || undefined,
@@ -678,15 +704,17 @@ export function commitWizardProject(payload: WizardDraftPayload, options?: {
     commit: true,
     asyncGeneration: options?.asyncGeneration ?? true,
   })
+  return normalizeWizardCreateResult(result)
 }
 
-export function getWizardGenerationStatus(projectId: string, attemptId: string) {
-  return apiGet<WizardGenerationStatus>(
+export async function getWizardGenerationStatus(projectId: string, attemptId: string) {
+  const result = await apiGet<WizardGenerationStatus>(
     `/api/projects/${encodeURIComponent(projectId)}/wizard/generation/${encodeURIComponent(attemptId)}`,
   )
+  return normalizeWizardGenerationStatus(result)
 }
 
-export function previewWizardProfile(payload: WizardDraftPayload, projectId?: string | null) {
+export async function previewWizardProfile(payload: WizardDraftPayload, projectId?: string | null) {
   const { projectId: _discardedProjectId, ...previewPayload } = payload as WizardDraftPayload & {
     projectId?: unknown
   }
@@ -694,7 +722,8 @@ export function previewWizardProfile(payload: WizardDraftPayload, projectId?: st
   const endpoint = normalizedProjectId
     ? `/api/projects/${encodeURIComponent(normalizedProjectId)}/wizard/preview`
     : '/api/projects/wizard/preview'
-  return apiPost<WizardProfilePreview>(endpoint, previewPayload)
+  const result = await apiPost<WizardProfilePreview>(endpoint, previewPayload)
+  return normalizeWizardProfilePreview(result)
 }
 
 export function listMilestonePresets(params: { businessType?: string | null; mainStage?: string | null }) {

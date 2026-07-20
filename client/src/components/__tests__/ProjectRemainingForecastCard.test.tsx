@@ -71,4 +71,50 @@ describe('ProjectRemainingForecastCard', () => {
     expect(disabledButton?.disabled).toBe(true)
     expect(onOpenAcceleration).not.toHaveBeenCalled()
   })
+
+  it('renders units from typed facts and ignores conflicting legacy numerics', async () => {
+    apiState.response = {
+      projectId: 'project-1',
+      status: 'ready',
+      degraded: false,
+      rowsEvaluated: 3,
+      projectRemainingForecast: {
+        durationOutputCode: 'project_remaining_forecast',
+        projectRemainingForecastDays: 999,
+        projectRemainingForecast: {
+          value: 12,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        targetGapDays: 999,
+        targetGap: {
+          value: 30,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        forecastFinishDate: '2027-04-30',
+        targetEndDate: '2027-03-31',
+      },
+    }
+
+    await act(async () => {
+      root?.render(<ProjectRemainingForecastCard projectId="project-1" />)
+      await flush()
+    })
+    await act(async () => { await flush() })
+
+    expect(container.textContent).toContain('12 个生产日')
+    expect(container.textContent).toContain('超目标 30 个日历天')
+    expect(container.textContent).not.toContain('999')
+  })
 })

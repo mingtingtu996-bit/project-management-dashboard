@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { toast } from '@/hooks/use-toast'
 import { apiPost, getApiErrorMessage } from '@/lib/apiClient'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 import type { DataQualityLiveCheckSummary } from '@/services/dataQualityApi'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
@@ -316,9 +317,9 @@ function buildAccelerationReschedulePreviewMap(targetFeasibility: WbsTargetFeasi
       taskId,
       proposedStartDate: adjustment.proposedStartDate ?? null,
       proposedEndDate: adjustment.proposedEndDate ?? null,
-      currentDurationDays: Number(adjustment.currentDurationDays ?? 0) || 0,
-      proposedDurationDays: Number(adjustment.proposedDurationDays ?? 0) || 0,
-      recoverDays: Number(adjustment.recoverDays ?? 0) || 0,
+      currentDuration: adjustment.currentDuration ?? null,
+      proposedDuration: adjustment.proposedDuration ?? null,
+      recoverDuration: adjustment.recoverDuration ?? null,
     })
   }
 
@@ -578,12 +579,6 @@ function GanttViewContent() {
   const highlightTaskId = new URLSearchParams(location.search).get('highlight') || null
   const milestoneFilterId = searchParams.get('milestoneId')?.trim() || ''
   const milestoneFilterLabel = searchParams.get('milestoneName')?.trim() || milestoneFilterId
-  const wizardTargetOvershootDays = Number(searchParams.get('target_overshoot_days') ?? 0)
-  const wizardTargetNaturalEnd = searchParams.get('target_natural_end')?.trim() || ''
-  const wizardTargetEnd = searchParams.get('target_end')?.trim() || ''
-  const showWizardTargetWarning = searchParams.get('wizard_generated') === 'true'
-    && Number.isFinite(wizardTargetOvershootDays)
-    && wizardTargetOvershootDays > 0
   const wizardGenerationEvidenceRequested = searchParams.get('wizard_evidence') === 'true'
   const [wizardTargetFeasibility, setWizardTargetFeasibility] = useState<WbsTargetFeasibility | null>(() => readStoredTargetFeasibility(id))
   const [wizardGenerationEvidence, setWizardGenerationEvidence] = useState<WizardGenerationEvidenceSnapshot | null>(() => (
@@ -1103,11 +1098,12 @@ function GanttViewContent() {
         targetEndDate,
         mode: 'compression_preview',
       })
-      if (result.targetFeasibility?.accelerationProposal && result.targetFeasibility.overshootDays > 0) {
+      const overshootValue = readAvailableDurationValue(result.targetFeasibility?.overshoot, 'calendar_day')
+      if (result.targetFeasibility?.accelerationProposal && overshootValue !== null && overshootValue > 0) {
         setWizardTargetFeasibility(result.targetFeasibility)
         toast({
           title: '已生成运行期赶工建议',
-          description: `预计晚于目标 ${result.targetFeasibility.overshootDays} 天，可追回约 ${result.targetFeasibility.recoverableDays} 天。`,
+          description: `预计晚于目标 ${formatDurationMetric(result.targetFeasibility.overshoot, { absolute: true })}，可追回约 ${formatDurationMetric(result.targetFeasibility.recoverable, { absolute: true })}。`,
         })
         return
       }
@@ -1115,7 +1111,7 @@ function GanttViewContent() {
       setWizardTargetFeasibility(result.targetFeasibility ?? null)
       toast({
         title: '当前暂无可审阅赶工草案',
-        description: result.projectRemainingForecast?.targetGapDays && result.projectRemainingForecast.targetGapDays > 0
+        description: (readAvailableDurationValue(result.projectRemainingForecast?.targetGap, 'calendar_day') ?? 0) > 0
           ? '系统识别到目标缺口，但当前关键路径、硬约束或施工组织条件不足以生成可采纳草案。'
           : '当前项目整体剩余工期未形成目标缺口。',
       })
@@ -1515,7 +1511,10 @@ function GanttViewContent() {
         accelerationActionLoading={evaluatingRuntimeAcceleration}
       />
 
-      {wizardTargetFeasibility && wizardTargetFeasibility.overshootDays > 0 ? (
+      {wizardTargetFeasibility && (
+        (readAvailableDurationValue(wizardTargetFeasibility.overshoot, 'calendar_day') ?? 0) > 0
+        || wizardTargetFeasibility.overshoot?.availability === 'unavailable'
+      ) ? (
         <TargetAccelerationReviewPanel
           targetFeasibility={wizardTargetFeasibility}
           tasks={tasks as Task[]}
@@ -1532,12 +1531,6 @@ function GanttViewContent() {
             setWizardTargetFeasibility(null)
           }}
         />
-      ) : showWizardTargetWarning ? (
-        <Alert className="border-amber-200 bg-amber-50 text-amber-900">
-          <AlertDescription className="text-sm">
-            模板自然排期预计 {wizardTargetNaturalEnd || '目标之后'} 完工，超出目标 {wizardTargetEnd || '竣工目标'} {wizardTargetOvershootDays} 天；系统未自动压缩任务日期，请在关键路径和模板治理中生成赶工建议后再人工确认。
-          </AlertDescription>
-        </Alert>
       ) : null}
 
       {showWizardGenerationEvidence && wizardGenerationEvidence ? (

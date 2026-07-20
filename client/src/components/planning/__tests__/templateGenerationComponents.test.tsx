@@ -16,6 +16,28 @@ import {
 } from '@/services/wbsTemplateGenerationApi'
 import { Button } from '@/components/ui/button'
 
+const productionMetric = (value: number) => ({
+  value,
+  unit: 'construction_production_day' as const,
+  calendarRef: 'work_calendar',
+  calendarVersion: 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  asOf: '2028-05-01',
+  availability: 'available' as const,
+  unavailableReason: null,
+})
+
+const calendarMetric = (value: number) => ({
+  value,
+  unit: 'calendar_day' as const,
+  calendarRef: 'gregorian',
+  calendarVersion: 'ISO-8601',
+  timezone: 'Asia/Shanghai',
+  asOf: '2028-05-01',
+  availability: 'available' as const,
+  unavailableReason: null,
+})
+
 vi.mock('@/services/wbsTemplateGenerationApi', () => ({
   listWbsTemplateCatalog: vi.fn(),
   getWbsTemplateCatalogItem: vi.fn(),
@@ -471,8 +493,11 @@ describe('template generation planning components', () => {
           targetEndDate: '2028-05-10',
           naturalEndDate: '2028-08-21',
           overshootDays: 103,
+          overshoot: calendarMetric(103),
           recoverableDays: 72,
+          recoverable: productionMetric(72),
           unrecoverableDays: 31,
+          unrecoverable: productionMetric(31),
           verdict: 'requires_scope_change',
           strategies: [
             {
@@ -491,7 +516,7 @@ describe('template generation planning components', () => {
     )
 
     expect(screen.getByText(/目标工期偏紧/)).toBeInTheDocument()
-    expect(screen.getByText(/超出目标 103 天/)).toBeInTheDocument()
+    expect(screen.getByText(/超出目标 103 个日历天/)).toBeInTheDocument()
     expect(screen.getByText(/未自动压缩/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /生成赶工建议/ }))
     expect(onRequestAcceleration).toHaveBeenCalledTimes(1)
@@ -511,8 +536,11 @@ describe('template generation planning components', () => {
           targetEndDate: '2028-05-10',
           naturalEndDate: '2028-08-21',
           overshootDays: 103,
+          overshoot: calendarMetric(103),
           recoverableDays: 72,
+          recoverable: productionMetric(72),
           unrecoverableDays: 31,
+          unrecoverable: productionMetric(31),
           verdict: 'requires_scope_change',
           strategies: [],
           accelerationProposal: {
@@ -521,14 +549,18 @@ describe('template generation planning components', () => {
             targetEndDate: '2028-05-10',
             naturalEndDate: '2028-08-21',
             overshootDays: 103,
+            overshoot: calendarMetric(103),
             totalRecoverDays: 72,
+            totalRecover: productionMetric(72),
             remainingGapDays: 31,
+            remainingGap: productionMetric(31),
             verdict: 'needs_scope_decision',
             actions: [
               {
                 type: 'fast_track',
                 affectedRowIds: ['preview-2'],
-                recoverDays: 36,
+                recoverDays: 999,
+                recoverDuration: productionMetric(36),
                 riskLevel: 'medium',
                 explanation: '主体、机电、装饰可做穿插搭接。',
                 dependencyAdjustments: [{
@@ -543,22 +575,28 @@ describe('template generation planning components', () => {
               {
                 type: 'crashing',
                 affectedRowIds: ['preview-1'],
-                recoverDays: 36,
+                recoverDays: 999,
+                recoverDuration: productionMetric(36),
                 riskLevel: 'medium',
                 explanation: '关键路径资源赶工预览。',
                 durationAdjustments: [{
                   clientRowId: 'preview-1',
-                  currentDurationDays: 10,
-                  proposedDurationDays: 8,
-                  minDurationDays: 7,
-                  recoverDays: 2,
+                  currentDurationDays: 999,
+                  currentDuration: productionMetric(10),
+                  proposedDurationDays: 999,
+                  proposedDuration: productionMetric(8),
+                  minDurationDays: 999,
+                  minDuration: productionMetric(7),
+                  recoverDays: 999,
+                  recoverDuration: productionMetric(2),
                   basis: 'resource_crash_preview',
                 }],
               },
               {
                 type: 'scope_reduction',
                 affectedRowIds: [],
-                recoverDays: 31,
+                recoverDays: 999,
+                recoverDuration: productionMetric(31),
                 riskLevel: 'high',
                 explanation: '仍需项目负责人决策交付范围。',
                 decisionOptions: ['分批交付', '调整目标日期'],
@@ -568,7 +606,8 @@ describe('template generation planning components', () => {
               clientRowId: 'preview-2',
               title: '混凝土养护',
               reasonCode: 'hard_process_wait',
-              durationDays: 28,
+              durationDays: 999,
+              duration: productionMetric(28),
             }],
           },
         }}
@@ -582,8 +621,10 @@ describe('template generation planning components', () => {
     expect(screen.getByText(/搭接优化/)).toBeInTheDocument()
     expect(screen.getAllByText(/资源赶工/).length).toBeGreaterThan(0)
     expect(screen.getByText(/范围\/交付决策/)).toBeInTheDocument()
-    expect(screen.getByText(/预计可追回 72 天/)).toBeInTheDocument()
-    expect(screen.getByText(/剩余缺口 31 天/)).toBeInTheDocument()
+    expect(screen.getByText(/预计可追回 72 个生产日/)).toBeInTheDocument()
+    expect(screen.getByText(/剩余缺口 31 个生产日/)).toBeInTheDocument()
+    expect(screen.getAllByText(/可追回 36 个生产日/).length).toBeGreaterThan(0)
+    expect(document.body.textContent).not.toContain('999')
     expect(screen.getByText(/硬约束保护/)).toBeInTheDocument()
   })
 

@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { GANTT_BAR_PALETTE } from '@/lib/chartPalette'
+import { formatDurationMetric, type DurationMetricDto } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 
 import type { Task, WBSNode } from '../GanttViewTypes'
@@ -39,9 +40,9 @@ export interface TaskTimelineReschedulePreview {
   taskId: string
   proposedStartDate: string | null
   proposedEndDate: string | null
-  currentDurationDays: number
-  proposedDurationDays: number
-  recoverDays: number
+  currentDuration: DurationMetricDto | null
+  proposedDuration: DurationMetricDto | null
+  recoverDuration: DurationMetricDto | null
 }
 
 interface TaskTimelineViewProps {
@@ -769,7 +770,7 @@ export const TaskTimelineView = forwardRef<TaskTimelineViewHandle, TaskTimelineV
                         compareMode === 'baseline' ? `对比：${layout.compareDateLabel}` : `实际：${layout.compareDateLabel}`,
                         `进度：${clampProgress(layout.task.progress)}%`,
                         layout.reschedulePreview
-                          ? `重排建议：${layout.rescheduleDateLabel}，${layout.reschedulePreview.currentDurationDays}天改为 ${layout.reschedulePreview.proposedDurationDays}天`
+                          ? `重排建议：${layout.rescheduleDateLabel}，${formatDurationMetric(layout.reschedulePreview.currentDuration)}改为 ${formatDurationMetric(layout.reschedulePreview.proposedDuration)}`
                           : '',
                         `责任单位：${getUnitLabel(layout.task)}`,
                         `责任人：${getAssigneeLabel(layout.task)}`,

@@ -471,7 +471,16 @@ describe('ProjectInfoModule embedded workbench content', () => {
         attemptId: 'attempt-1',
         state: 'completed',
         targetFeasibility: {
-          overshootDays: 4,
+          overshootDays: 999,
+          overshoot: {
+            value: 4,
+            unit: 'calendar_day',
+            calendarRef: 'gregorian',
+            calendarVersion: 'ISO-8601',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-07-20',
+            availability: 'available',
+          },
           naturalEndDate: '2027-01-10',
           targetEndDate: '2027-01-06',
         },
@@ -512,7 +521,7 @@ describe('ProjectInfoModule embedded workbench content', () => {
     await waitFor(() => expect(statusMock).toHaveBeenCalledWith('project-1', 'attempt-1'))
     await waitFor(() => expect(onGenerated).toHaveBeenCalledWith(
       'project-1',
-      expect.stringContaining('target_overshoot_days=4'),
+      expect.not.stringContaining('target_overshoot_days='),
     ))
     await waitFor(() => expect(onGenerated).toHaveBeenCalledWith(
       'project-1',
