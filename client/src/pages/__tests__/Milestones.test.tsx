@@ -71,6 +71,22 @@ function findTab(container: HTMLElement, label: string) {
   ) as HTMLButtonElement | undefined
 }
 
+function availableDurationMetric(
+  value: number,
+  unit: 'calendar_day' | 'construction_production_day',
+) {
+  return {
+    value,
+    unit,
+    calendarRef: unit === 'calendar_day' ? 'gregorian' : 'construction-calendar-project-1',
+    calendarVersion: unit === 'calendar_day' ? 'ISO-8601' : 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-04-04',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 describe('Milestones page story coverage', () => {
   const projectId = 'project-1'
   const navigateMock = vi.fn()
@@ -124,6 +140,8 @@ describe('Milestones page story coverage', () => {
             planned_date: '2026-04-01',
             current_planned_date: '2026-04-03',
             actual_date: '2026-04-04',
+            planDateShift: availableDurationMetric(2, 'calendar_day'),
+            actualScheduleVariance: availableDurationMetric(1, 'construction_production_day'),
             progress: 100,
             status: 'completed',
             statusLabel: '已兑现',
