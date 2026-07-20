@@ -256,4 +256,14 @@ describe('duration learning legacy runtime retirement migration', () => {
     expect(backupTargetValidation).toBeLessThan(backupConnectionConfig)
     expect(backupConnectionConfig).toBeLessThan(backupClient)
   })
+
+  it('requires pooler user project refs to be gated by the effective Supabase pooler host', () => {
+    const support = readSql('src/scripts/durationLearningLegacyRuntimeRetirementSupport.ts')
+    const hostGate = support.indexOf('isSupabasePoolerHost(effective.host)')
+    const userRefExtraction = support.indexOf('exec(effective.user)')
+
+    expect(support).toContain('isSupabasePoolerHost')
+    expect(hostGate).toBeGreaterThan(-1)
+    expect(userRefExtraction).toBeGreaterThan(hostGate)
+  })
 })

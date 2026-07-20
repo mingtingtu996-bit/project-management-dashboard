@@ -3,7 +3,10 @@ import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
 import { selectMigrationConnectionTarget } from '../services/migrationRunner.js'
-import { parseStrictPostgresConnectionTarget } from '../utils/postgresConnectionTargetIdentity.js'
+import {
+  isSupabasePoolerHost,
+  parseStrictPostgresConnectionTarget,
+} from '../utils/postgresConnectionTargetIdentity.js'
 
 export const DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION =
   '322_duration_learning_legacy_runtime_retirement.sql'
@@ -284,7 +287,9 @@ function projectRefsFromSelectedTarget(env: RetirementEnv) {
   if (selected.mode === 'connection_string') {
     const effective = parseStrictPostgresConnectionTarget(selected.connectionString)
     const direct = /^(?:db\.)?([a-z0-9]{20})\.supabase\.co$/.exec(effective.host)?.[1]
-    const pooler = /(?:^|\.)([a-z0-9]{20})$/i.exec(effective.user)?.[1]?.toLowerCase()
+    const pooler = isSupabasePoolerHost(effective.host)
+      ? /(?:^|\.)([a-z0-9]{20})$/i.exec(effective.user)?.[1]?.toLowerCase()
+      : null
     return [direct, pooler].filter((value): value is string => Boolean(value))
   }
   const host = text(selected.host).toLowerCase()
