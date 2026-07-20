@@ -365,6 +365,10 @@ test('server Vitest slice runner avoids shell-args deprecation on Windows child 
 test('testing center governs default master-plan staging and real-outcome evidence tools', async () => {
   const packageJson = await readJson('package.json')
   const matrix = await readJson('project-testing/matrix/release-test-matrix.json')
+  const readinessChecker = await readFile(
+    join(repoRoot, 'project-testing/tools/check-default-master-plan-production-readiness.mjs'),
+    'utf8',
+  )
 
   for (const relativePath of [
     'project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs',
@@ -609,10 +613,35 @@ test('testing center governs default master-plan staging and real-outcome eviden
     /wizardGenerationSideEffects\.test\.ts/,
     'concurrent default-master-plan regression should include wizard PM candidate acceptance record pre-commit gate checks',
   )
-  assert.match(
+  assert.doesNotMatch(
     packageJson.scripts['evidence:default-master-plan:test-concurrent'],
     /wbsTemplateRuntimePublicationService\.test\.ts/,
-    'concurrent default-master-plan regression should include default master-plan runtime publication hard-gate checks',
+    'concurrent default-master-plan regression must not invoke a retired WBS runtime publication test',
+  )
+  assert.match(
+    packageJson.scripts['evidence:default-master-plan:test-concurrent'],
+    /durationLearningRuntimePublicationService\.test\.ts/,
+    'concurrent default-master-plan regression should include the canonical publication lifecycle contract',
+  )
+  assert.match(
+    packageJson.scripts['evidence:default-master-plan:test-concurrent'],
+    /durationLearningRuntimeConsumptionService\.test\.ts/,
+    'concurrent default-master-plan regression should include canonical trusted consumption checks',
+  )
+  assert.doesNotMatch(
+    readinessChecker,
+    /wbsTemplateRuntimePublicationService(?:\.test)?\.ts/,
+    'production readiness must not read retired WBS publication sources',
+  )
+  assert.match(
+    readinessChecker,
+    /durationLearningRuntimePublicationService\.ts/,
+    'production readiness should inspect the canonical publication lifecycle',
+  )
+  assert.match(
+    readinessChecker,
+    /durationLearningRuntimeConsumptionService\.ts/,
+    'production readiness should inspect canonical trusted consumption',
   )
   assert.doesNotMatch(
     packageJson.scripts['evidence:default-master-plan:test-concurrent'],
@@ -628,6 +657,54 @@ test('testing center governs default master-plan staging and real-outcome eviden
   assert.ok(stagingGroup.commands.includes('npm run evidence:default-master-plan:staging-runtime'))
   assert.match(stagingGroup.mutationBoundary, /staging/i)
   assert.match(stagingGroup.mutationBoundary, /production-ready/i)
+})
+
+test('authoritative v1.4 plans identify the canonical duration-learning runtime after legacy retirement', async () => {
+  const planPaths = [
+    'docs/plans/v1.4.22.3规则资产公司隔离与自学习体系执行方案.md',
+    'docs/plans/v1.4.22.6可学习工期资产live自升级闭环专项方案.md',
+    'docs/plans/v1.4.23.1体系收口台账与验收门禁矩阵.md',
+    'docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md',
+    'docs/plans/v1.4.24上线验收测试方案.md',
+  ]
+
+  for (const relativePath of planPaths) {
+    const source = await readFile(join(repoRoot, relativePath), 'utf8')
+    assert.match(
+      source,
+      /工期学习 runtime 当前权威口径（authoritative）/u,
+      `${relativePath} should mark the current runtime authority`,
+    )
+    assert.match(source, /migration 315/u, `${relativePath} should identify the canonical migration`)
+    assert.match(
+      source,
+      /durationLearningRuntimePublicationService\.ts/u,
+      `${relativePath} should name the canonical publication service`,
+    )
+    assert.match(
+      source,
+      /durationLearningRuntimeConsumptionService\.ts/u,
+      `${relativePath} should name the canonical consumption service`,
+    )
+    assert.match(
+      source,
+      /archive \/ mapping/u,
+      `${relativePath} should limit legacy default-master-plan rows to archive and mapping`,
+    )
+    assert.match(source, /migration 322/u, `${relativePath} should identify the explicit retirement boundary`)
+    assert.match(
+      source,
+      /仅为历史实施记录/u,
+      `${relativePath} should classify retired service and table references as historical`,
+    )
+    if (relativePath.endsWith('v1.4.24上线验收测试方案.md')) {
+      assert.doesNotMatch(
+        source,
+        /wbsTemplateRuntimePublicationService\.test\.ts/u,
+        `${relativePath} should use canonical publication and consumption tests in its active release matrix`,
+      )
+    }
+  }
 })
 
 test('testing center check validates matrix and tool inventory without live or DB execution', () => {

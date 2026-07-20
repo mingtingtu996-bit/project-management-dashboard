@@ -1815,8 +1815,10 @@ async function checkLegacySerialRemoval() {
   const postPublishSmokeBuilderTestPath = path.join(REPO_ROOT, 'project-testing', 'tools', 'build-default-master-plan-post-publish-smoke-rollback-evidence.test.mjs')
   const serverDependencyWriterEvidenceFlowPath = path.join(REPO_ROOT, 'server', 'src', 'services', 'defaultMasterPlanDependencyWriterEvidenceFlowService.ts')
   const serverDependencyWriterEvidenceFlowTestPath = path.join(REPO_ROOT, 'server', 'src', '__tests__', 'defaultMasterPlanDependencyWriterEvidenceFlow.test.ts')
-  const serverRuntimePublicationServicePath = path.join(REPO_ROOT, 'server', 'src', 'services', 'wbsTemplateRuntimePublicationService.ts')
-  const serverRuntimePublicationServiceTestPath = path.join(REPO_ROOT, 'server', 'src', '__tests__', 'wbsTemplateRuntimePublicationService.test.ts')
+  const serverDurationLearningRuntimePublicationServicePath = path.join(REPO_ROOT, 'server', 'src', 'services', 'durationLearningRuntimePublicationService.ts')
+  const serverDurationLearningRuntimePublicationServiceTestPath = path.join(REPO_ROOT, 'server', 'src', '__tests__', 'durationLearningRuntimePublicationService.test.ts')
+  const serverDurationLearningRuntimeConsumptionServicePath = path.join(REPO_ROOT, 'server', 'src', 'services', 'durationLearningRuntimeConsumptionService.ts')
+  const serverDurationLearningRuntimeConsumptionServiceTestPath = path.join(REPO_ROOT, 'server', 'src', '__tests__', 'durationLearningRuntimeConsumptionService.test.ts')
   const entryTemplateInstallerPath = path.join(REPO_ROOT, 'project-testing', 'tools', 'ensure-default-master-plan-entry-templates.mjs')
   const [
     planningBootstrap,
@@ -1868,8 +1870,10 @@ async function checkLegacySerialRemoval() {
     postPublishSmokeBuilderTest,
     serverDependencyWriterEvidenceFlow,
     serverDependencyWriterEvidenceFlowTest,
-    serverRuntimePublicationService,
-    serverRuntimePublicationServiceTest,
+    serverDurationLearningRuntimePublicationService,
+    serverDurationLearningRuntimePublicationServiceTest,
+    serverDurationLearningRuntimeConsumptionService,
+    serverDurationLearningRuntimeConsumptionServiceTest,
     entryTemplateInstaller,
   ] = await Promise.all([
     fs.readFile(path.join(REPO_ROOT, 'server', 'src', 'services', 'planningBootstrap.ts'), 'utf8'),
@@ -1921,8 +1925,10 @@ async function checkLegacySerialRemoval() {
     fs.readFile(postPublishSmokeBuilderTestPath, 'utf8'),
     fs.readFile(serverDependencyWriterEvidenceFlowPath, 'utf8'),
     fs.readFile(serverDependencyWriterEvidenceFlowTestPath, 'utf8'),
-    fs.readFile(serverRuntimePublicationServicePath, 'utf8'),
-    fs.readFile(serverRuntimePublicationServiceTestPath, 'utf8'),
+    fs.readFile(serverDurationLearningRuntimePublicationServicePath, 'utf8'),
+    fs.readFile(serverDurationLearningRuntimePublicationServiceTestPath, 'utf8'),
+    fs.readFile(serverDurationLearningRuntimeConsumptionServicePath, 'utf8'),
+    fs.readFile(serverDurationLearningRuntimeConsumptionServiceTestPath, 'utf8'),
     fs.readFile(entryTemplateInstallerPath, 'utf8'),
   ])
   const fromTemplateStart = wbsTemplateRoute.indexOf("router.post('/bootstrap/from-template'")
@@ -2033,10 +2039,14 @@ async function checkLegacySerialRemoval() {
     serverDependencyWriterEvidenceFlowPath,
     serverDependencyWriterEvidenceFlowTest,
     serverDependencyWriterEvidenceFlowTestPath,
-    serverRuntimePublicationService,
-    serverRuntimePublicationServicePath,
-    serverRuntimePublicationServiceTest,
-    serverRuntimePublicationServiceTestPath,
+    serverDurationLearningRuntimePublicationService,
+    serverDurationLearningRuntimePublicationServicePath,
+    serverDurationLearningRuntimePublicationServiceTest,
+    serverDurationLearningRuntimePublicationServiceTestPath,
+    serverDurationLearningRuntimeConsumptionService,
+    serverDurationLearningRuntimeConsumptionServicePath,
+    serverDurationLearningRuntimeConsumptionServiceTest,
+    serverDurationLearningRuntimeConsumptionServiceTestPath,
   })
   const manualComparisonGuardGaps = Object.entries(manualComparisonGuardEvidence.coverage)
     .filter(([, covered]) => !covered)
@@ -2316,10 +2326,14 @@ function buildManualComparisonGuardEvidence({
   serverDependencyWriterEvidenceFlowPath,
   serverDependencyWriterEvidenceFlowTest,
   serverDependencyWriterEvidenceFlowTestPath,
-  serverRuntimePublicationService,
-  serverRuntimePublicationServicePath,
-  serverRuntimePublicationServiceTest,
-  serverRuntimePublicationServiceTestPath,
+  serverDurationLearningRuntimePublicationService,
+  serverDurationLearningRuntimePublicationServicePath,
+  serverDurationLearningRuntimePublicationServiceTest,
+  serverDurationLearningRuntimePublicationServiceTestPath,
+  serverDurationLearningRuntimeConsumptionService,
+  serverDurationLearningRuntimeConsumptionServicePath,
+  serverDurationLearningRuntimeConsumptionServiceTest,
+  serverDurationLearningRuntimeConsumptionServiceTestPath,
 }) {
   const containsAll = (source, ...needles) => needles.every((needle) => source.includes(needle))
   return {
@@ -2363,6 +2377,10 @@ function buildManualComparisonGuardEvidence({
       postPublishSmokeBuilderTest: repoRelative(postPublishSmokeBuilderTestPath),
       serverDependencyWriterEvidenceFlow: repoRelative(serverDependencyWriterEvidenceFlowPath),
       serverDependencyWriterEvidenceFlowTest: repoRelative(serverDependencyWriterEvidenceFlowTestPath),
+      serverDurationLearningRuntimePublicationService: repoRelative(serverDurationLearningRuntimePublicationServicePath),
+      serverDurationLearningRuntimePublicationServiceTest: repoRelative(serverDurationLearningRuntimePublicationServiceTestPath),
+      serverDurationLearningRuntimeConsumptionService: repoRelative(serverDurationLearningRuntimeConsumptionServicePath),
+      serverDurationLearningRuntimeConsumptionServiceTest: repoRelative(serverDurationLearningRuntimeConsumptionServiceTestPath),
     },
     coverage: {
       scenarioOptionComparisonPackageReadOnly: containsAll(
@@ -2599,21 +2617,30 @@ function buildManualComparisonGuardEvidence({
         'reviewProof',
         'legacy_template_reverse_inference',
       ),
-      runtimePublicationServiceDefaultMasterPlanLearningGateCoverage: containsAll(
-        serverRuntimePublicationService,
-        'DefaultMasterPlanRuntimeLineage',
-        'defaultMasterPlanPublicationControlReasons',
-        'duration_calibration_evidence_ref_required',
-        'dependency_writer_evidence_ref_required',
-        'defaultMasterPlanProjectScopeReasons',
-        'project_scope_required_for_default_master_plan',
-        'default_master_plan_project_id_mismatch',
+      canonicalDurationLearningPublicationConsumptionBoundaryCoverage: containsAll(
+        serverDurationLearningRuntimePublicationService,
+        'persistDurationLearningRuntimePublication',
+        'resolveDurationLearningRuntimePublication',
+        'listApplicableDurationLearningRuntimePublications',
+        'rollbackDurationLearningRuntimePublication',
+        'duration_learning_runtime_publications',
       ) && containsAll(
-        serverRuntimePublicationServiceTest,
-        'persists default master-plan runtime publications without runtime PM approval evidence',
-        'blocks default master-plan runtime publication when learned-asset publication controls are missing',
-        'blocks default master-plan runtime publication when lineage project does not match the publication scope',
-        'keeps default master-plan runtime publications non-consumable without a project scope',
+        serverDurationLearningRuntimePublicationServiceTest,
+        'returns the existing publication for an identical publication key without replacing active rows',
+        'resolves a selected project canary before lower-scope stable and falls back without project traffic identity',
+        'records measured impact and restores the previous stable publication on rollback',
+      ) && containsAll(
+        serverDurationLearningRuntimeConsumptionService,
+        'buildGeneratedTemplateRuntimeConsumptions',
+        'persistDurationLearningRuntimeConsumptions',
+        'readTrustedDurationLearningRuntimeConsumptionsForTask',
+        'duration_learning_runtime_consumptions',
+        'publication.artifact_key = requested.artifact_key',
+      ) && containsAll(
+        serverDurationLearningRuntimeConsumptionServiceTest,
+        'rejects user-editable metadata that is not backed by the resolver publication set before SQL',
+        'persists validated consumptions with publication/artifact scope checks in one statement',
+        'reads task completion lineage only from the trusted consumption table with tenant and project predicates',
       ),
       sourceExportMetadataScansRuntimePublicationAliases: containsAll(
         sourceExportMetadata,

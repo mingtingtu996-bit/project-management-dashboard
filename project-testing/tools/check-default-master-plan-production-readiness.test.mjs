@@ -2835,7 +2835,7 @@ test('legacy serial removal gate covers active server materializer paths', async
       sourceExportMetadataStagingRuntimeWriterBoundary: true,
       productionPipelineRootPayloadGovernanceFieldCoverage: true,
       productionSourceExporterRootPayloadGovernanceFieldCoverage: true,
-      runtimePublicationServiceDefaultMasterPlanLearningGateCoverage: true,
+      canonicalDurationLearningPublicationConsumptionBoundaryCoverage: true,
       sourceExportMetadataScansRuntimePublicationAliases: true,
       sourceExportMetadataIgnoresExportMetadataSourceNames: true,
       runtimePublicationEvidenceAssetKindGuardCoverage: true,

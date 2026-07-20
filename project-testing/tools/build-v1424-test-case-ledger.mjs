@@ -324,7 +324,10 @@ const baselineDefinitions = [
         expected: ['消费者读回旧版本', 'version pointer 回退'],
         failIf: ['commandsExecuted=0', '从 canary 直接标 rolled_back', '无消费者读回'],
         evidence: ['rollback-readiness.json', 'c19-runtime-rollback-saved-outcome.json'],
-        existingCoverage: ['wbsTemplateRuntimePublicationService.test.ts'],
+        existingCoverage: [
+          'durationLearningRuntimePublicationService.test.ts',
+          'durationLearningRuntimeConsumptionService.test.ts',
+        ],
         coverageStatus: 'missing-live',
       }),
       caseRecord({
