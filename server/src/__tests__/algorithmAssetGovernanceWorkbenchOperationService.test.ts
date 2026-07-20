@@ -23,6 +23,9 @@ import type {
   DurationRuntimeConsumerFacadeArtifactsResult,
 } from '../services/durationRuntimeConsumerObservationAdapterService.js'
 import type {
+  DurationLearningRuntimePublicationQueryExec,
+} from '../services/durationLearningRuntimePublicationService.js'
+import type {
   RecordConstructionOrganizationPlanNetworkRecommendationDecisionResult,
   RecordConstructionOrganizationPlanNetworkRuntimeEngineEvidenceResult,
   RecordConstructionOrganizationPlanNetworkSavedOutcomeResult,
@@ -122,6 +125,45 @@ function durationLearningRuntimeRollbackResult() {
     status: 'rollback_executed' as const,
     restoredPublicationKey: 'duration_learning_runtime:special_work_duration_seed:previous',
     reasons: [],
+  }
+}
+
+function durationLearningRuntimePublicationRow(input: {
+  publicationKey: string
+  assetKey: string
+  artifactKey: string
+  companyId: string
+  projectId: string | null
+  industryKey?: string | null
+  publicationStage?: string
+}) {
+  return {
+    publication_key: input.publicationKey,
+    asset_key: input.assetKey,
+    artifact_key: input.artifactKey,
+    scope_level: input.projectId ? 'project' : 'company',
+    company_id: input.companyId,
+    project_id: input.projectId,
+    industry_key: input.industryKey ?? null,
+    publication_stage: input.publicationStage ?? 'stable',
+    runtime_payload: {},
+    source_candidate_refs: ['candidate:rollback'],
+    source_evidence_refs: ['evidence:rollback'],
+    automation_decision: {},
+    previous_publication_key: null,
+    traffic_percent: 100,
+    monitoring_window_hours: 72,
+    monitoring_status: 'passed',
+    published_at: '2026-06-15T00:00:00.000Z',
+  }
+}
+
+function durationLearningRuntimeRollbackQuery(
+  rows: Record<string, unknown>[],
+): DurationLearningRuntimePublicationQueryExec {
+  return async <T = Record<string, unknown>>(_sql: string, params: unknown[] = []) => {
+    const key = String(params[0] ?? '')
+    return rows.filter((row) => row.publication_key === key) as T[]
   }
 }
 
@@ -789,6 +831,23 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
 
   it('delegates template seed rollback only to the canonical duration-learning writer', async () => {
     const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
+    const queryExec = durationLearningRuntimeRollbackQuery([
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:v2',
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'artifact-special-work',
+        companyId: 'company-a',
+        projectId: 'project-a',
+      }),
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:previous',
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'artifact-special-work',
+        companyId: 'company-a',
+        projectId: 'project-a',
+        publicationStage: 'superseded',
+      }),
+    ])
 
     const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
       action: 'runtime_rollback',
@@ -803,6 +862,7 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
       rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
       executedAt: '2026-06-15T03:00:00.000Z',
+      queryExec,
       dependencies: {
         rollbackDurationLearningRuntimePublication,
       },
@@ -824,6 +884,9 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
     expect(rollbackDurationLearningRuntimePublication).toHaveBeenCalledWith(expect.objectContaining({
       publicationKey: 'duration_learning_runtime:special_work_duration_seed:v2',
       expectedPreviousPublicationKey: 'duration_learning_runtime:special_work_duration_seed:previous',
+      assetKey: 'special_work_duration_seed',
+      artifactKey: 'artifact-special-work',
+      scope: { level: 'project', companyId: 'company-a', projectId: 'project-a' },
       reason: 'impact_monitoring_regression',
       rolledBackAt: '2026-06-15T03:00:00.000Z',
     }))
@@ -889,6 +952,23 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       ...durationLearningRuntimeRollbackResult(),
       restoredPublicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
     }))
+    const queryExec = durationLearningRuntimeRollbackQuery([
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:v2',
+        assetKey: 'dependency_rule_candidate',
+        artifactKey: 'artifact-dependency-rule',
+        companyId: 'company-a',
+        projectId: 'project-a',
+      }),
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
+        assetKey: 'dependency_rule_candidate',
+        artifactKey: 'artifact-dependency-rule',
+        companyId: 'company-a',
+        projectId: 'project-a',
+        publicationStage: 'superseded',
+      }),
+    ])
 
     const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
       action: 'runtime_rollback',
@@ -901,6 +981,9 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
       consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
       rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
       executedAt: '2026-06-15T03:30:00.000Z',
+      companyId: 'company-a',
+      projectId: 'project-a',
+      queryExec,
       dependencies: {
         rollbackDurationLearningRuntimePublication,
       },
@@ -922,6 +1005,9 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
     expect(rollbackDurationLearningRuntimePublication).toHaveBeenCalledWith(expect.objectContaining({
       publicationKey: 'duration_learning_runtime:dependency_rule_candidate:v2',
       expectedPreviousPublicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
+      assetKey: 'dependency_rule_candidate',
+      artifactKey: 'artifact-dependency-rule',
+      scope: { level: 'project', companyId: 'company-a', projectId: 'project-a' },
       reason: 'impact_monitoring_regression',
       rolledBackAt: '2026-06-15T03:30:00.000Z',
     }))
@@ -952,6 +1038,109 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
         reasons: expect.arrayContaining(['dependency_rule_runtime_publication_key_required']),
       }))
     }
+    expect(rollbackDurationLearningRuntimePublication).not.toHaveBeenCalled()
+  })
+
+  it('rejects a template rollback when the canonical source publication belongs to another company', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
+    const queryExec = durationLearningRuntimeRollbackQuery([
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:foreign',
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'artifact-foreign',
+        companyId: 'company-b',
+        projectId: 'project-b',
+      }),
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:foreign-previous',
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'artifact-foreign',
+        companyId: 'company-b',
+        projectId: 'project-b',
+        publicationStage: 'superseded',
+      }),
+    ])
+
+    const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+      action: 'runtime_rollback',
+      assetType: 'template_seed',
+      evidenceToken: 'wbs-template-rollback-cross-company',
+      companyId: 'company-a',
+      projectId: 'project-a',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+      sourcePublicationKey: 'duration_learning_runtime:special_work_duration_seed:foreign',
+      rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:foreign-previous',
+      rollbackReason: 'cross_company_attempt',
+      consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+      rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
+      queryExec,
+      dependencies: { rollbackDurationLearningRuntimePublication },
+    })
+
+    expect(result.status).toBe('operation_blocked')
+    expect(result.reasons).toContain('rollback_company_scope_mismatch')
+    expect(rollbackDurationLearningRuntimePublication).not.toHaveBeenCalled()
+  })
+
+  it('rejects a rollback target whose canonical identity differs from the source publication', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
+    const queryExec = durationLearningRuntimeRollbackQuery([
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:source',
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'artifact-source',
+        companyId: 'company-a',
+        projectId: 'project-a',
+      }),
+      durationLearningRuntimePublicationRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:wrong-target',
+        assetKey: 'wbs_reference_days',
+        artifactKey: 'artifact-other',
+        companyId: 'company-a',
+        projectId: 'project-a',
+        publicationStage: 'superseded',
+      }),
+    ])
+
+    const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+      action: 'runtime_rollback',
+      assetType: 'template_seed',
+      evidenceToken: 'wbs-template-rollback-cross-asset',
+      companyId: 'company-a',
+      projectId: 'project-a',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+      sourcePublicationKey: 'duration_learning_runtime:special_work_duration_seed:source',
+      rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:wrong-target',
+      rollbackReason: 'cross_asset_attempt',
+      consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+      rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
+      queryExec,
+      dependencies: { rollbackDurationLearningRuntimePublication },
+    })
+
+    expect(result.status).toBe('operation_blocked')
+    expect(result.reasons).toContain('rollback_target_identity_mismatch')
+    expect(rollbackDurationLearningRuntimePublication).not.toHaveBeenCalled()
+  })
+
+  it('requires a company scope for dependency and critical-path runtime rollback', async () => {
+    const rollbackDurationLearningRuntimePublication = vi.fn(async () => durationLearningRuntimeRollbackResult())
+
+    const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+      action: 'runtime_rollback',
+      assetType: 'dependency_rule',
+      evidenceToken: 'dependency-rule-rollback-without-company',
+      domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+      sourcePublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:v2',
+      rollbackTarget: 'duration_learning_runtime:critical_path_rule_candidate:previous',
+      rollbackReason: 'missing_company_scope',
+      consumerVerificationRefs: ['resolveDurationLearningRuntimePublication.excludes_rolled_back'],
+      rollbackWriterRefs: ['rollbackDurationLearningRuntimePublication'],
+      dependencies: { rollbackDurationLearningRuntimePublication },
+    })
+
+    expect(result.status).toBe('operation_blocked')
+    expect(result.reasons).toContain('company_scope_required')
     expect(rollbackDurationLearningRuntimePublication).not.toHaveBeenCalled()
   })
 

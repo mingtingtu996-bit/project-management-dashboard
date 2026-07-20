@@ -156,6 +156,36 @@ function buildApp() {
   return app
 }
 
+function durationLearningRuntimePublicationIdentityRow(input: {
+  publicationKey: string
+  assetKey?: string
+  artifactKey?: string
+  scopeLevel?: 'project' | 'company'
+  companyId?: string
+  projectId?: string | null
+}) {
+  const scopeLevel = input.scopeLevel ?? 'company'
+  return {
+    publication_key: input.publicationKey,
+    asset_key: input.assetKey ?? 'special_work_duration_seed',
+    artifact_key: input.artifactKey ?? 'artifact-special-work',
+    scope_level: scopeLevel,
+    company_id: input.companyId ?? 'company-1',
+    project_id: scopeLevel === 'project' ? input.projectId ?? 'project-1' : null,
+    industry_key: null,
+    publication_stage: input.publicationKey.endsWith(':previous') ? 'superseded' : 'stable',
+    runtime_payload: {},
+    source_candidate_refs: ['candidate:rollback'],
+    source_evidence_refs: ['evidence:rollback'],
+    automation_decision: {},
+    previous_publication_key: null,
+    traffic_percent: 100,
+    monitoring_window_hours: 72,
+    monitoring_status: 'passed',
+    published_at: '2026-06-15T00:00:00.000Z',
+  }
+}
+
 function buildReadyConstructionOrganizationRouteFixture(options: {
   projectId?: string
   businessType?: string
@@ -3695,6 +3725,161 @@ describe('algorithm seed routes', () => {
       evidenceToken: 'manual-admin-evidence-1',
       companyId: 'company-1',
       requestedByUserId: 'user-1',
+      queryExec: mocks.executeSQL,
+    }))
+  })
+
+  it('rejects a duration runtime rollback whose canonical source publication belongs to another company', async () => {
+    const rows = [
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:foreign',
+        companyId: 'company-2',
+      }),
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:foreign:previous',
+        companyId: 'company-2',
+      }),
+    ]
+    mocks.executeSQL.mockImplementation(async (_sql: string, params: unknown[] = []) => (
+      rows.filter((row) => row.publication_key === String(params[0] ?? ''))
+    ))
+
+    const response = await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'runtime_rollback',
+        assetType: 'template_seed',
+        evidenceToken: 'rollback-cross-company-source',
+        domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+        sourcePublicationKey: 'duration_learning_runtime:special_work_duration_seed:foreign',
+        rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:foreign:previous',
+        rollbackReason: 'cross_company_attempt',
+        consumerVerificationRefs: ['resolver'],
+        rollbackWriterRefs: ['writer'],
+      })
+      .expect(403)
+
+    expect(response.body.error.code).toBe('FORBIDDEN_COMPANY_SCOPE')
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
+  })
+
+  it('rejects a duration runtime rollback target with a different canonical tenant or artifact identity', async () => {
+    const rows = [
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:source',
+        companyId: 'company-1',
+        artifactKey: 'artifact-source',
+      }),
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:target',
+        companyId: 'company-2',
+        artifactKey: 'artifact-target',
+      }),
+    ]
+    mocks.executeSQL.mockImplementation(async (_sql: string, params: unknown[] = []) => (
+      rows.filter((row) => row.publication_key === String(params[0] ?? ''))
+    ))
+
+    await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'runtime_rollback',
+        assetType: 'template_seed',
+        evidenceToken: 'rollback-cross-company-target',
+        domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+        sourcePublicationKey: 'duration_learning_runtime:special_work_duration_seed:source',
+        rollbackTarget: 'duration_learning_runtime:special_work_duration_seed:target',
+        rollbackReason: 'cross_company_target_attempt',
+        consumerVerificationRefs: ['resolver'],
+        rollbackWriterRefs: ['writer'],
+      })
+      .expect(403)
+
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
+  })
+
+  it('rejects a duration runtime rollback when the optional project does not match publication scope', async () => {
+    const rows = [
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:source',
+        assetKey: 'dependency_rule_candidate',
+        artifactKey: 'artifact-dependency',
+        scopeLevel: 'project',
+        projectId: 'project-2',
+      }),
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:previous',
+        assetKey: 'dependency_rule_candidate',
+        artifactKey: 'artifact-dependency',
+        scopeLevel: 'project',
+        projectId: 'project-2',
+      }),
+    ]
+    mocks.executeSQL.mockImplementation(async (_sql: string, params: unknown[] = []) => (
+      rows.filter((row) => row.publication_key === String(params[0] ?? ''))
+    ))
+
+    await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'runtime_rollback',
+        assetType: 'dependency_rule',
+        evidenceToken: 'rollback-project-mismatch',
+        projectId: 'project-1',
+        domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+        sourcePublicationKey: 'duration_learning_runtime:dependency_rule_candidate:source',
+        rollbackTarget: 'duration_learning_runtime:dependency_rule_candidate:previous',
+        rollbackReason: 'project_mismatch_attempt',
+        consumerVerificationRefs: ['resolver'],
+        rollbackWriterRefs: ['writer'],
+      })
+      .expect(403)
+
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
+  })
+
+  it('passes an authorized same-project duration rollback to the identity-validating workbench', async () => {
+    const rows = [
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:source',
+        assetKey: 'critical_path_rule_candidate',
+        artifactKey: 'artifact-critical-path',
+        scopeLevel: 'project',
+        projectId: 'project-1',
+      }),
+      durationLearningRuntimePublicationIdentityRow({
+        publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:previous',
+        assetKey: 'critical_path_rule_candidate',
+        artifactKey: 'artifact-critical-path',
+        scopeLevel: 'project',
+        projectId: 'project-1',
+      }),
+    ]
+    mocks.executeSQL.mockImplementation(async (_sql: string, params: unknown[] = []) => (
+      rows.filter((row) => row.publication_key === String(params[0] ?? ''))
+    ))
+
+    await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'runtime_rollback',
+        assetType: 'dependency_rule',
+        evidenceToken: 'rollback-same-project',
+        projectId: 'project-1',
+        domainWriterKey: 'durationLearningRuntimePublicationService.rollbackDurationLearningRuntimePublication',
+        sourcePublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:source',
+        rollbackTarget: 'duration_learning_runtime:critical_path_rule_candidate:previous',
+        rollbackReason: 'same_project_rollback',
+        consumerVerificationRefs: ['resolver'],
+        rollbackWriterRefs: ['writer'],
+      })
+      .expect(200)
+
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'runtime_rollback',
+      assetType: 'dependency_rule',
+      companyId: 'company-1',
+      projectId: 'project-1',
       queryExec: mocks.executeSQL,
     }))
   })

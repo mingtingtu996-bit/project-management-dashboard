@@ -65,8 +65,13 @@ import {
   type RecordDurationRuntimeConsumerFacadeArtifactsInput,
 } from './durationRuntimeConsumerObservationAdapterService.js'
 import {
+  durationLearningRuntimePublicationIdentitiesMatch,
+  resolveDurationLearningRuntimePublicationIdentity,
   rollbackDurationLearningRuntimePublication,
+  type DurationLearningRuntimeAssetKey,
+  type DurationLearningRuntimePublicationIdentity,
   type DurationLearningRuntimePublicationQueryExec,
+  type DurationLearningRuntimeScope,
 } from './durationLearningRuntimePublicationService.js'
 import {
   publishApprovedAlgorithmSeedOverride,
@@ -142,6 +147,9 @@ export type AlgorithmAssetGovernanceWorkbenchOperationDependencies = {
   rollbackDurationLearningRuntimePublication?: (input: {
     queryExec?: DurationLearningRuntimePublicationQueryExec
     publicationKey: string
+    assetKey: DurationLearningRuntimeAssetKey
+    artifactKey: string
+    scope: DurationLearningRuntimeScope
     expectedPreviousPublicationKey: string
     reason: string
     rolledBackAt?: string
@@ -516,6 +524,7 @@ function constructionDependencyRuleRuntimeRollbackReasons(input: AlgorithmAssetG
     !publicationKey.startsWith('duration_learning_runtime:dependency_rule_candidate:')
     && !publicationKey.startsWith('duration_learning_runtime:critical_path_rule_candidate:')
   ) reasons.push('dependency_rule_runtime_publication_key_required')
+  if (!normalizeText(input.companyId)) reasons.push('company_scope_required')
   const hasRollbackDependency = Boolean(input.dependencies?.rollbackDurationLearningRuntimePublication || input.queryExec)
   if (normalizeText(input.domainWriterKey) === DURATION_LEARNING_RUNTIME_ROLLBACK_WRITER && !hasRollbackDependency) {
     reasons.push('domain_writer_dependency_required')
@@ -905,13 +914,82 @@ async function delegateColdStartBaselineRollback(
   })
 }
 
+function durationLearningRuntimeRollbackAssetMatches(
+  assetType: 'template_seed' | 'dependency_rule',
+  assetKey: DurationLearningRuntimeAssetKey,
+) {
+  return assetType === 'template_seed'
+    ? assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days'
+    : assetKey === 'dependency_rule_candidate' || assetKey === 'critical_path_rule_candidate'
+}
+
+async function resolveDurationLearningRuntimeRollbackIdentity(input: {
+  operation: AlgorithmAssetGovernanceWorkbenchOperationInput
+  assetType: 'template_seed' | 'dependency_rule'
+}): Promise<{
+  identity: DurationLearningRuntimePublicationIdentity | null
+  reasons: string[]
+}> {
+  const queryExec = input.operation.queryExec as DurationLearningRuntimePublicationQueryExec | undefined
+  if (!queryExec) {
+    return { identity: null, reasons: ['runtime_publication_identity_query_required'] }
+  }
+  const sourcePublicationKey = normalizeText(input.operation.sourcePublicationKey)
+  const targetPublicationKey = normalizeText(input.operation.rollbackTarget)
+  const source = await resolveDurationLearningRuntimePublicationIdentity({
+    queryExec,
+    publicationKey: sourcePublicationKey,
+  })
+  if (!source) {
+    return { identity: null, reasons: ['rollback_source_publication_not_found'] }
+  }
+
+  const reasons: string[] = []
+  if (!durationLearningRuntimeRollbackAssetMatches(input.assetType, source.assetKey)) {
+    reasons.push(input.assetType === 'template_seed'
+      ? 'template_seed_runtime_publication_identity_required'
+      : 'dependency_rule_runtime_publication_identity_required')
+  }
+
+  const requestedCompanyId = normalizeText(input.operation.companyId)
+  const requestedProjectId = normalizeText(input.operation.projectId)
+  if (source.scope.level === 'project' || source.scope.level === 'company') {
+    if (source.scope.companyId !== requestedCompanyId) reasons.push('rollback_company_scope_mismatch')
+  } else {
+    reasons.push('rollback_company_scope_mismatch')
+  }
+  if (source.scope.level === 'project') {
+    if (!requestedProjectId) reasons.push('rollback_project_scope_required')
+    else if (source.scope.projectId !== requestedProjectId) reasons.push('rollback_project_scope_mismatch')
+  } else if (requestedProjectId) {
+    reasons.push('rollback_project_scope_mismatch')
+  }
+
+  const target = await resolveDurationLearningRuntimePublicationIdentity({
+    queryExec,
+    publicationKey: targetPublicationKey,
+  })
+  if (!target) reasons.push('rollback_target_publication_not_found')
+  else if (!durationLearningRuntimePublicationIdentitiesMatch(target, source)) {
+    reasons.push('rollback_target_identity_mismatch')
+  }
+
+  return reasons.length > 0
+    ? { identity: null, reasons: [...new Set(reasons)] }
+    : { identity: source, reasons: [] }
+}
+
 async function delegateDurationLearningRuntimeRollback(
   input: AlgorithmAssetGovernanceWorkbenchOperationInput,
+  identity: DurationLearningRuntimePublicationIdentity,
 ) {
   const writer = input.dependencies?.rollbackDurationLearningRuntimePublication
   const rollbackInput = {
     queryExec: input.queryExec as DurationLearningRuntimePublicationQueryExec | undefined,
     publicationKey: normalizeText(input.sourcePublicationKey),
+    assetKey: identity.assetKey,
+    artifactKey: identity.artifactKey,
+    scope: identity.scope,
     expectedPreviousPublicationKey: normalizeText(input.rollbackTarget),
     reason: normalizeText(input.rollbackReason),
     rolledBackAt: input.executedAt,
@@ -1663,7 +1741,14 @@ export async function executeAlgorithmAssetGovernanceWorkbenchOperation(
       return blockedResult({ action, assetType, domainWriterKey, reasons: wbsReasons })
     }
 
-    const domainResult = await delegateDurationLearningRuntimeRollback(input)
+    const rollbackIdentity = await resolveDurationLearningRuntimeRollbackIdentity({
+      operation: input,
+      assetType,
+    })
+    if (!rollbackIdentity.identity) {
+      return blockedResult({ action, assetType, domainWriterKey, reasons: rollbackIdentity.reasons })
+    }
+    const domainResult = await delegateDurationLearningRuntimeRollback(input, rollbackIdentity.identity)
     return delegatedResult({
       action,
       assetType,
@@ -1678,7 +1763,14 @@ export async function executeAlgorithmAssetGovernanceWorkbenchOperation(
       return blockedResult({ action, assetType, domainWriterKey, reasons: dependencyRuleReasons })
     }
 
-    const domainResult = await delegateDurationLearningRuntimeRollback(input)
+    const rollbackIdentity = await resolveDurationLearningRuntimeRollbackIdentity({
+      operation: input,
+      assetType,
+    })
+    if (!rollbackIdentity.identity) {
+      return blockedResult({ action, assetType, domainWriterKey, reasons: rollbackIdentity.reasons })
+    }
+    const domainResult = await delegateDurationLearningRuntimeRollback(input, rollbackIdentity.identity)
     return delegatedResult({
       action,
       assetType,
