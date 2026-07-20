@@ -1018,6 +1018,30 @@ describe('project critical path service', () => {
     ])
   })
 
+  it('counts one completed project network as one replay outcome while retaining all distinct task ids', async () => {
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      end_date: row.id === 'task-c' ? '2026-04-10' : row.end_date,
+      planned_end_date: row.id === 'task-c' ? '2026-04-10' : row.planned_end_date,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.id === 'task-c' ? '2026-04-10' : row.end_date,
+    }))
+
+    await recalculateProjectCriticalPath('project-1')
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+    expect(metadata.task_ids).toEqual(expect.arrayContaining(['task-a', 'task-c']))
+    expect((metadata.task_ids as string[]).length).toBeGreaterThan(1)
+    expect(metadata.sample_count).toBe(1)
+    expect(metadata.real_outcome_count).toBe(1)
+    expect(metadata.replay_case_count).toBe(1)
+  })
+
   it('records completed critical-path impact against the exact consumed publication, artifact, and input tasks', async () => {
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,

@@ -145,7 +145,7 @@ describe('duration learning legacy runtime retirement migration', () => {
     expect(normalizeSqlWhitespace(rollbackSchema)).toEqual(normalizeSqlWhitespace(sourceSchema))
   })
 
-  it('is byte-equivalent at the true end of the canonical bundle after migration 315', () => {
+  it('is byte-equivalent in its canonical source block before later safe migrations', () => {
     const migration = readSql('migrations', migrationName).trim()
     const clean = readSql('migrations', 'CLEAN_MIGRATION_V4.sql')
     const sourceHeader = [
@@ -154,12 +154,14 @@ describe('duration learning legacy runtime retirement migration', () => {
       '-- ============================================================',
     ].join('\n')
     const sourceIndex = clean.indexOf(sourceHeader)
+    const nextSourceIndex = clean.indexOf('\n-- ============================================================\n-- Source:', sourceIndex + sourceHeader.length)
     const migration315Index = clean.indexOf('Source: 315_duration_learning_runtime_publications.sql')
 
     expect(sourceIndex).toBeGreaterThan(migration315Index)
-    expect(clean.slice(sourceIndex + sourceHeader.length).trim()).toBe(migration)
-    expect(clean.trimEnd().endsWith(migration)).toBe(true)
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 322')
+    expect(nextSourceIndex).toBeGreaterThan(sourceIndex)
+    expect(clean.slice(sourceIndex + sourceHeader.length, nextSourceIndex).trim()).toBe(migration)
+    expect(clean.indexOf('Source: 323_duration_learning_runtime_evidence_outbox.sql')).toBeGreaterThan(sourceIndex)
+    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 323')
   })
 
   it('removes production-reachable legacy runtime services after canonical 315 wiring', () => {

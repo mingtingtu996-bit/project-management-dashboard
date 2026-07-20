@@ -80,6 +80,7 @@ import {
   executeDurationLearningRuntimePublicationQuery,
   resolveDurationLearningRuntimePublication,
   type DurationLearningRuntimePublicationQueryExec,
+  type DurationLearningRuntimeScope,
 } from './durationLearningRuntimePublicationService.js'
 import type {
   DurationRuntimeConsumerObservationQueryExec,
@@ -280,6 +281,35 @@ export interface RecordDurationSuggestionRuntimeConsumptionInput {
   standardWorkCode?: string | null
   observedAt?: string
 }
+
+export interface CommittedDurationSuggestionPredictionEvidence {
+  companyId: string
+  projectId: string
+  taskId: string
+  generationBatchId?: string | null
+  standardWorkCode?: string | null
+  plannedStartDate?: string | null
+  plannedEndDate?: string | null
+  recommendedDurationDays: number
+  forecastSource?: string | null
+  confidenceLevel?: string | null
+  confidenceScore?: number | null
+  runtimeApplications: ReadonlyArray<{
+    assetKey: string
+    publicationKey: string
+    artifactKey: string
+    scopeLevel: DurationLearningRuntimeScope['level']
+    industryKey?: string | null
+    inputTaskIds: readonly string[]
+  }>
+}
+
+const DURATION_LEARNING_RUNTIME_SCOPE_LEVELS = new Set<DurationLearningRuntimeScope['level']>([
+  'project',
+  'company',
+  'industry',
+  'global',
+])
 
 const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
   'base_duration_benchmark',
@@ -4322,6 +4352,87 @@ async function recordDurationSuggestionPredictionEvent(
       error,
     })
   }
+}
+
+export async function recordCommittedDurationSuggestionPredictionEvidence(
+  input: CommittedDurationSuggestionPredictionEvidence,
+) {
+  const companyId = normalizeId(input.companyId)
+  const projectId = normalizeId(input.projectId)
+  const taskId = normalizeId(input.taskId)
+  const recommendedDurationDays = readPositiveNumber(input.recommendedDurationDays)
+  const normalizedRuntimeApplications = input.runtimeApplications
+    .map((application) => ({
+      assetKey: normalizeId(application.assetKey),
+      publicationKey: normalizeId(application.publicationKey),
+      artifactKey: normalizeId(application.artifactKey),
+      scopeLevel: normalizeId(application.scopeLevel),
+      industryKey: normalizeId(application.industryKey) || null,
+      inputTaskIds: Array.from(new Set(application.inputTaskIds.map(normalizeId).filter(Boolean))).sort(),
+    }))
+  const runtimeApplications = normalizedRuntimeApplications.filter((application) => (
+      application.assetKey
+      && application.publicationKey
+      && application.artifactKey
+      && DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(
+        application.scopeLevel as DurationLearningRuntimeScope['level'],
+      )
+      && (application.scopeLevel !== 'industry' || Boolean(application.industryKey))
+      && application.inputTaskIds.includes(taskId)
+    ))
+  if (
+    !companyId
+    || !projectId
+    || !taskId
+    || !recommendedDurationDays
+    || runtimeApplications.length === 0
+    || runtimeApplications.length !== normalizedRuntimeApplications.length
+  ) {
+    throw new Error('committed_duration_prediction_lineage_invalid')
+  }
+  const runtimePublicationKeys = Array.from(new Set(
+    runtimeApplications.map((application) => application.publicationKey),
+  )).sort()
+  const generationBatchId = normalizeId(input.generationBatchId) || null
+  const forecastSource = normalizeId(input.forecastSource) || 'duration_learning_runtime_publication'
+  const result = await recordDurationAccuracyPrediction({
+    engineCode: 'standard_duration_reference',
+    outputKind: 'new_task_reference_duration',
+    projectId,
+    taskId,
+    dedupeKey: [
+      projectId,
+      taskId,
+      generationBatchId ?? 'no_batch',
+      ...runtimePublicationKeys,
+    ].join(':'),
+    predictionBasis: forecastSource,
+    predictionSource: 'durationSuggestionService.committed_materialization',
+    modelVersion: 'durationSuggestionService.v1.4.22.4',
+    predictedStartDate: input.plannedStartDate,
+    predictedFinishDate: input.plannedEndDate,
+    predictedDurationDays: recommendedDurationDays,
+    runtimeConsumptionState: 'duration_learning_runtime_publication',
+    predictionContext: {
+      sourceService: 'durationSuggestionService',
+      sourceWriter: 'committed_materialization_durable_evidence',
+      companyId,
+      projectId,
+      taskId,
+      generationBatchId,
+      standardWorkCode: normalizeId(input.standardWorkCode) || null,
+      confidenceLevel: normalizeId(input.confidenceLevel) || null,
+      confidenceScore: Number.isFinite(Number(input.confidenceScore)) ? Number(input.confidenceScore) : null,
+      runtimePublicationKeys,
+      runtimeApplications,
+    },
+    seedLineage: {
+      standardWorkCode: normalizeId(input.standardWorkCode) || null,
+      runtimeApplications,
+    },
+  })
+  if (!result) throw new Error('duration_accuracy_prediction_not_persisted')
+  return result
 }
 
 async function applyProjectExecutionEnvironment(

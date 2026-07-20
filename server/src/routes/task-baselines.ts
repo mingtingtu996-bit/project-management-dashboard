@@ -50,16 +50,18 @@ import {
 import {
   buildTemplateGenerateCreateOperations,
   generateWbsTemplateRows,
-  recordWbsTemplateGenerationRuntimeConsumption,
   type WbsTemplateGenerationRuntimeArtifactPublication,
 } from '../services/wbsTemplateGenerationService.js'
 import {
   buildSpecialWorkDurationCandidateNodes,
-  recordWbsTemplateCandidateEvent,
 } from '../services/wbsTemplateCandidateEventService.js'
 import {
   persistDurationLearningRuntimeConsumptions,
 } from '../services/durationLearningRuntimeConsumptionService.js'
+import {
+  buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch,
+} from '../services/durationLearningRuntimeEvidenceOutboxService.js'
 import type {
   DurationLearningRuntimePublicationQueryExec,
 } from '../services/durationLearningRuntimePublicationService.js'
@@ -2625,15 +2627,6 @@ router.post(
       for (const generationContext of expandedTemplateOperations.generationContexts) {
         const generated = generationContext.generated
         const runtimeArtifactPublications = generationContext.runtimeArtifactPublications
-        await recordWbsTemplateGenerationRuntimeConsumption({
-          queryExec: transactionDurationLearningRuntimeQueryExec,
-          projectId,
-          generation: generated,
-          runtimeArtifactPublications,
-          inputTaskIds: generated.rows
-            .map((row) => tempIdMap.get(row.clientRowId))
-            .filter((itemId): itemId is string => Boolean(itemId)),
-        })
         await persistDurationLearningRuntimeConsumptions({
           queryExec: transactionDurationLearningRuntimeQueryExec,
           build: {
@@ -2648,6 +2641,52 @@ router.post(
             subjectType: 'baseline_item',
             subjectIdByClientRowId: tempIdMap,
           },
+        })
+        const operation = generationContext.operation
+        const operationRecord = operation as Record<string, unknown>
+        const generatedItemIds = generated.rows
+          .map((row) => tempIdMap.get(row.clientRowId))
+          .filter((itemId): itemId is string => Boolean(itemId))
+        const wbsCandidateAnchorItemId = generatedItemIds[0]
+        await enqueueDurationLearningRuntimeEvidenceBatch({
+          queryExec: transactionDurationLearningRuntimeQueryExec,
+          events: wbsCandidateAnchorItemId
+            ? [buildWbsCandidateOutboxEvent({
+                companyId: companyId!,
+                projectId,
+                subjectType: 'baseline_item',
+                subjectId: wbsCandidateAnchorItemId,
+                runtimeArtifactPublications,
+                candidate: {
+                  companyId: companyId!,
+                  projectId,
+                  surface: 'baseline',
+                  generationBatchId: String(operationRecord.generationBatchId ?? ''),
+                  templateId: String(operationRecord.templateId ?? ''),
+                  selectedNodeIds: Array.isArray(operationRecord.selectedNodeIds) ? operationRecord.selectedNodeIds : [],
+                  scope: operationRecord.scope && typeof operationRecord.scope === 'object'
+                    ? operationRecord.scope as Record<string, unknown>
+                    : {},
+                  attachUnderRowId: String(operationRecord.attachUnderRowId ?? ''),
+                  generatedRowCount: generated.rows.length,
+                  retainedRowCount: generated.rows.length,
+                  rejectedRowCount: 0,
+                  generatedEntityIds: generatedItemIds,
+                  durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generated.rows),
+                  actorId: req.user?.id ?? null,
+                  metadata: {
+                    baselineId: id,
+                    generationDepth: generated.generationDepth,
+                    retainedRowCount: generated.rows.length,
+                    source: 'baseline_commit',
+                    ...(generated.durationAssetUtilizationSummary
+                      ? { durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary }
+                      : {}),
+                  },
+                  scheduleTrustGate: generated.scheduleTrustGate,
+                },
+              })]
+            : [],
         })
       }
       await client.query('COMMIT')
@@ -2699,48 +2738,6 @@ router.post(
       },
       visibility: 'user',
     })
-
-    for (const generationContext of expandedTemplateOperations.generationContexts) {
-      const operation = generationContext.operation
-      const operationRecord = operation as Record<string, unknown>
-      const generated = generationContext.generated
-      try {
-        await recordWbsTemplateCandidateEvent({
-          companyId: companyId!,
-          projectId,
-          surface: 'baseline',
-          generationBatchId: String(operationRecord.generationBatchId ?? ''),
-          templateId: String(operationRecord.templateId ?? ''),
-          selectedNodeIds: Array.isArray(operationRecord.selectedNodeIds) ? operationRecord.selectedNodeIds : [],
-          scope: operationRecord.scope && typeof operationRecord.scope === 'object'
-            ? operationRecord.scope as Record<string, unknown>
-            : {},
-          attachUnderRowId: String(operationRecord.attachUnderRowId ?? ''),
-          generatedRowCount: generated.rows.length,
-          retainedRowCount: generated.rows.length,
-          rejectedRowCount: 0,
-          durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generated.rows),
-          actorId: req.user?.id ?? null,
-          metadata: {
-            baselineId: id,
-            generationDepth: generated.generationDepth,
-            retainedRowCount: generated.rows.length,
-            source: 'baseline_commit',
-            ...(generated.durationAssetUtilizationSummary
-              ? { durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary }
-              : {}),
-          },
-          scheduleTrustGate: generated.scheduleTrustGate,
-        })
-      } catch (error) {
-        logger.warn('[task-baselines] post-commit WBS candidate reporting failed', {
-          baselineId: id,
-          projectId,
-          generationBatchId: generated.generationBatchId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-    }
 
     broadcastPlanningTableChanged({
       projectId: baseline.project_id,

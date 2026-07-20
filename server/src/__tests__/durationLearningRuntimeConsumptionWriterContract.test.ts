@@ -7,12 +7,12 @@ function source(path: string) {
 }
 
 describe('duration learning runtime consumption writer contracts', () => {
-  it('writes wizard task lineage and observations before the wizard transaction commits', () => {
+  it('writes wizard task lineage and durable evidence before the wizard transaction commits', () => {
     const wizard = source('../routes/projectWizard.ts')
     const persistIndex = wizard.indexOf('await persistDurationLearningRuntimeConsumptions({')
     const observationIndex = wizard.indexOf('await recordWbsTemplateGenerationRuntimeConsumption({')
+    const durableEvidenceIndex = wizard.indexOf('await enqueueDurationLearningRuntimeEvidenceBatch({', persistIndex)
     const commitIndex = wizard.indexOf("await transactionClient.query('COMMIT')", persistIndex)
-    const candidateIndex = wizard.indexOf('await recordWbsTemplateCandidateEvent({', commitIndex)
 
     expect(wizard).toContain('runtimePublicationQueryExec: durationLearningRuntimeQueryExec')
     expect(wizard).toContain('runtimeArtifactPublications,')
@@ -22,23 +22,26 @@ describe('duration learning runtime consumption writer contracts', () => {
     expect(wizard).toContain('inputTaskIds: [...idByClientRowId.values()]')
     expect(observationIndex).toBeGreaterThan(0)
     expect(persistIndex).toBeGreaterThan(observationIndex)
+    expect(durableEvidenceIndex).toBeGreaterThan(persistIndex)
+    expect(commitIndex).toBeGreaterThan(durableEvidenceIndex)
     expect(commitIndex).toBeGreaterThan(persistIndex)
-    expect(candidateIndex).toBeGreaterThan(commitIndex)
+    expect(wizard.indexOf('await recordWbsTemplateCandidateEvent({', commitIndex)).toBe(-1)
     expect(wizard).toContain('durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows)')
   })
 
-  it('writes task-list lineage inside the existing request transaction and defers only candidate reporting', () => {
+  it('writes task-list lineage and durable evidence inside the existing request transaction', () => {
     const tasks = source('../routes/tasks.ts')
     const transactionIndex = tasks.indexOf('await withDatabaseTransaction(async () => {')
     const persistIndex = tasks.indexOf('await persistDurationLearningRuntimeConsumptions({', transactionIndex)
-    const candidateEffectIndex = tasks.indexOf("registerDatabasePostCommitEffect('record_wbs_template_candidate_event'", persistIndex)
+    const durableEvidenceIndex = tasks.indexOf('await enqueueDurationLearningRuntimeEvidenceBatch({', persistIndex)
 
     expect(tasks).toContain('runtimePublicationQueryExec: durationLearningRuntimeQueryExec')
     expect(tasks).toContain("consumerSurface: 'task_list_commit'")
     expect(tasks).toContain("subjectType: 'task'")
     expect(tasks).toContain('inputTaskIds: [...generatedIdByClientRowId.values()]')
     expect(persistIndex).toBeGreaterThan(transactionIndex)
-    expect(candidateEffectIndex).toBeGreaterThan(persistIndex)
+    expect(durableEvidenceIndex).toBeGreaterThan(persistIndex)
+    expect(tasks).not.toContain("registerDatabasePostCommitEffect('record_wbs_template_candidate_event'")
     expect(tasks).toContain('durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows)')
   })
 
@@ -46,7 +49,8 @@ describe('duration learning runtime consumption writer contracts', () => {
     const baseline = source('../routes/task-baselines.ts')
     const expandIndex = baseline.indexOf('const expandedTemplateOperations = await expandBaselineTemplateGenerateOperations(')
     const persistIndex = baseline.indexOf('await persistDurationLearningRuntimeConsumptions({', expandIndex)
-    const candidateIndex = baseline.indexOf('await recordWbsTemplateCandidateEvent({', persistIndex)
+    const durableEvidenceIndex = baseline.indexOf('await enqueueDurationLearningRuntimeEvidenceBatch({', persistIndex)
+    const commitIndex = baseline.indexOf("await client.query('COMMIT')", persistIndex)
 
     expect(baseline).toContain('const generationContexts: Array<{')
     expect(baseline).toContain('runtimePublicationQueryExec,')
@@ -54,9 +58,30 @@ describe('duration learning runtime consumption writer contracts', () => {
     expect(baseline).toContain("consumerSurface: 'baseline_commit'")
     expect(baseline).toContain("subjectType: 'baseline_item'")
     expect(baseline).toContain('subjectIdByClientRowId: tempIdMap')
-    expect(baseline).toContain('inputTaskIds: generated.rows')
+    expect(baseline.indexOf('await recordWbsTemplateGenerationRuntimeConsumption({', expandIndex)).toBe(-1)
     expect(persistIndex).toBeGreaterThan(expandIndex)
-    expect(candidateIndex).toBeGreaterThan(persistIndex)
+    expect(durableEvidenceIndex).toBeGreaterThan(persistIndex)
+    expect(commitIndex).toBeGreaterThan(durableEvidenceIndex)
+    expect(baseline.indexOf('await recordWbsTemplateCandidateEvent({', commitIndex)).toBe(-1)
+  })
+
+  it('materializes default-master-plan baseline lineage and durable evidence in one transaction', () => {
+    const route = source('../routes/wbs-templates.ts')
+    const materializeIndex = route.indexOf('const items = materializeGeneratedTemplateRowsToBaselineItems({')
+    const beforeCommitHookIndex = route.indexOf('await params.beforeCommit({ queryExec, baselineId, items })', materializeIndex)
+    const commitIndex = route.indexOf("await client.query('COMMIT')", beforeCommitHookIndex)
+    const callbackIndex = route.indexOf('beforeCommit: async ({ queryExec, items }) => {', commitIndex)
+    const persistIndex = route.indexOf('await persistDurationLearningRuntimeConsumptions({', callbackIndex)
+    const durableEvidenceIndex = route.indexOf('await enqueueDurationLearningRuntimeEvidenceBatch({', persistIndex)
+
+    expect(route).toContain('runtimeArtifactPublications,')
+    expect(route).toContain("consumerSurface: 'default_master_plan_baseline_draft'")
+    expect(route).toContain("subjectType: 'baseline_item'")
+    expect(beforeCommitHookIndex).toBeGreaterThan(materializeIndex)
+    expect(commitIndex).toBeGreaterThan(beforeCommitHookIndex)
+    expect(callbackIndex).toBeGreaterThan(commitIndex)
+    expect(persistIndex).toBeGreaterThan(callbackIndex)
+    expect(durableEvidenceIndex).toBeGreaterThan(persistIndex)
   })
 
   it('keeps every WBS preview/replay call no-write and reserves recording for trusted materialization writers', () => {
@@ -79,5 +104,9 @@ describe('duration learning runtime consumption writer contracts', () => {
     expect(wizard).toContain("runtimeEvidenceMode: 'no_write'")
     expect(tasks).toContain("runtimeEvidenceMode: 'no_write'")
     expect(baseline).toContain("runtimeEvidenceMode: 'no_write'")
+    expect(previewRoute).not.toContain("runtimeEvidenceMode: 'record'")
+    expect(wizard).not.toContain("runtimeEvidenceMode: 'record'")
+    expect(tasks).not.toContain("runtimeEvidenceMode: 'record'")
+    expect(baseline).not.toContain("runtimeEvidenceMode: 'record'")
   })
 })

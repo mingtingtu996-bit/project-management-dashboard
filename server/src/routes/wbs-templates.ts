@@ -9,7 +9,7 @@ import { getCurrentCompanyMembership, getProjectCompanyId, getProjectPermissionL
 import { getRequestCompanyId } from '../auth/companyContext.js'
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
-import type { WBSTemplate } from '../types/db.js'
+import type { TaskBaselineItem, WBSTemplate } from '../types/db.js'
 import { ValidationService } from '../services/validationService.js'
 import { PlanningBootstrapService } from '../services/planningBootstrap.js'
 import { sanitizeLegacyScopeObjectFields } from '../services/legacyScopeObjectSanitizer.js'
@@ -42,7 +42,15 @@ import {
   type GeneratedCandidateNetworkEvaluation,
   type GeneratedDurationAssetUtilizationSummary,
   type GeneratedTemplateRow,
+  type WbsTemplateGenerationRuntimeArtifactPublication,
 } from '../services/wbsTemplateGenerationService.js'
+import { persistDurationLearningRuntimeConsumptions } from '../services/durationLearningRuntimeConsumptionService.js'
+import type { DurationLearningRuntimePublicationQueryExec } from '../services/durationLearningRuntimePublicationService.js'
+import {
+  buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch,
+} from '../services/durationLearningRuntimeEvidenceOutboxService.js'
+import { buildSpecialWorkDurationCandidateNodes } from '../services/wbsTemplateCandidateEventService.js'
 import multer from 'multer'
 import * as XLSX from '@e965/xlsx'
 import { v4 as uuidv4 } from 'uuid'
@@ -516,6 +524,7 @@ async function ensureWbsTemplateEditable(req: any, res: any, templateId: string)
 
 const PROJECT_BOOTSTRAP_FIELDS = [
   'id',
+  'company_id',
   'name',
   'status',
   'project_type',
@@ -1027,6 +1036,11 @@ async function insertBaselineDraftFromGeneratedRows(params: {
   sourceVersionLabel?: string | null
   governanceMetadata?: Record<string, unknown> | null
   rows: GeneratedTemplateRow[]
+  beforeCommit?: (context: {
+    queryExec: DurationLearningRuntimePublicationQueryExec
+    baselineId: string
+    items: TaskBaselineItem[]
+  }) => Promise<void>
 }) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const version = null
@@ -1074,6 +1088,18 @@ async function insertBaselineDraftFromGeneratedRows(params: {
         await insertRows(client, 'task_baseline_items', items)
       }
       itemElapsedMs = Date.now() - itemStartedAt
+
+      if (params.beforeCommit) {
+        const queryExec: DurationLearningRuntimePublicationQueryExec = async <T = Record<string, unknown>>(
+          sql: string,
+          queryParams: unknown[] = [],
+        ) => {
+          // database-query-dynamic-approved: canonical 315 consumption and 323 outbox writers own fixed parameterized SQL; this adapter binds them to baseline materialization.
+          const result = await client.query(sql, queryParams)
+          return (result.rows ?? []) as T[]
+        }
+        await params.beforeCommit({ queryExec, baselineId, items })
+      }
 
       const commitStartedAt = Date.now()
       await client.query('COMMIT')
@@ -1316,6 +1342,7 @@ async function buildDefaultMasterPlanBaselineDraft(params: {
     },
   }
 
+  const runtimeArtifactPublications: WbsTemplateGenerationRuntimeArtifactPublication[] = []
   const generated = await generateWbsTemplateRows({
     projectId: params.projectId,
     surface: 'baseline',
@@ -1323,6 +1350,7 @@ async function buildDefaultMasterPlanBaselineDraft(params: {
     detailLevel: 'planning_skeleton' as never,
     diagnosticDurationSuggestionMode: 'benchmark_plan_reference',
     operation: operation as never,
+    runtimeArtifactPublications,
   })
   const scheduleRows = tagGeneratedRowsForBaselineDraft(
     generated.rows.filter(isDefaultMasterPlanPrimaryScheduleRow),
@@ -1366,6 +1394,67 @@ async function buildDefaultMasterPlanBaselineDraft(params: {
     sourceVersionLabel: params.profile.sourceVersionLabel,
     governanceMetadata: baselineGovernanceMetadata,
     rows: scheduleRows,
+    beforeCommit: async ({ queryExec, items }) => {
+      const companyId = normalizeText(params.project.company_id)
+      if (!companyId) throw new Error('default_master_plan_duration_learning_company_scope_required')
+      const subjectIdByClientRowId = new Map(items.flatMap((item) => {
+        const clientRowId = normalizeText(readRecord(item.generation_metadata).clientRowId)
+        return clientRowId && item.id ? [[clientRowId, String(item.id)] as const] : []
+      }))
+      const generatedItemIds = Array.from(subjectIdByClientRowId.values())
+      await persistDurationLearningRuntimeConsumptions({
+        queryExec,
+        build: {
+          companyId,
+          projectId: params.projectId,
+          consumerKey: 'wbsTemplateGenerationService',
+          consumerSurface: 'default_master_plan_baseline_draft',
+          generationBatchId: generated.generationBatchId,
+          templateIds: generated.templateIds,
+          rows: scheduleRows,
+          runtimeArtifactPublications,
+          subjectType: 'baseline_item',
+          subjectIdByClientRowId,
+        },
+      })
+      const anchorItemId = generatedItemIds[0]
+      await enqueueDurationLearningRuntimeEvidenceBatch({
+        queryExec,
+        events: anchorItemId
+          ? [buildWbsCandidateOutboxEvent({
+              companyId,
+              projectId: params.projectId,
+              subjectType: 'baseline_item',
+              subjectId: anchorItemId,
+              runtimeArtifactPublications,
+              candidate: {
+                companyId,
+                projectId: params.projectId,
+                surface: 'baseline',
+                generationBatchId,
+                templateId: generated.templateId,
+                selectedNodeIds: [],
+                scope: operation.scope,
+                generatedRowCount: generated.rows.length,
+                retainedRowCount: scheduleRows.length,
+                rejectedRowCount: Math.max(0, generated.rows.length - scheduleRows.length),
+                generatedEntityIds: generatedItemIds,
+                durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(scheduleRows),
+                metadata: {
+                  source: 'wbs_template_bootstrap_from_template',
+                  sourceAssetLineage: {
+                    assetKind: 'builtin_default_master_plan',
+                    templateId: generated.templateId,
+                    sourceVersionLabel: params.profile.sourceVersionLabel,
+                    canonicalPublicationCount: runtimeArtifactPublications.length,
+                  },
+                },
+                scheduleTrustGate: generated.scheduleTrustGate,
+              },
+            })]
+          : [],
+      })
+    },
   })
 
   return {
