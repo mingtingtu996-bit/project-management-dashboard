@@ -117,15 +117,28 @@ function normalizeNumber(value: unknown): number | null {
 
 function normalizeForecast(raw: any): ProjectRemainingDurationForecast | null {
   if (!raw || typeof raw !== 'object') return null
+  const projectRemainingForecast = normalizeDurationMetricDto(raw.projectRemainingForecast)
+  const targetGap = normalizeDurationMetricDto(raw.targetGap)
+  const productionFactAvailable = projectRemainingForecast?.availability === 'available'
+    && projectRemainingForecast.unit === 'construction_production_day'
+    && projectRemainingForecast.value !== null
+  const failClosedTargetGap = productionFactAvailable || !targetGap
+    ? targetGap
+    : {
+        ...targetGap,
+        value: null,
+        availability: 'unavailable' as const,
+        unavailableReason: 'production_fact_unavailable',
+      }
   return {
     durationOutputCode: raw.durationOutputCode ?? null,
     durationOutputSemanticFieldName: raw.durationOutputSemanticFieldName ?? null,
     projectRemainingForecastDays: normalizeNumber(raw.projectRemainingForecastDays),
-    projectRemainingForecast: normalizeDurationMetricDto(raw.projectRemainingForecast),
-    forecastFinishDate: raw.forecastFinishDate ?? null,
+    projectRemainingForecast,
+    forecastFinishDate: productionFactAvailable ? raw.forecastFinishDate ?? null : null,
     targetEndDate: raw.targetEndDate ?? null,
     targetGapDays: normalizeNumber(raw.targetGapDays),
-    targetGap: normalizeDurationMetricDto(raw.targetGap),
+    targetGap: failClosedTargetGap,
     rowsEvaluated: normalizeNumber(raw.rowsEvaluated),
     calculationContext: raw.calculationContext ?? null,
   }

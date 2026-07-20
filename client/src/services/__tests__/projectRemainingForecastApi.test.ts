@@ -113,7 +113,55 @@ describe('projectRemainingForecastApi governed project duration output', () => {
     const response = await getProjectRemainingDurationForecast('project-1')
 
     expect(response.projectRemainingForecast?.projectRemainingForecast).toBeNull()
+    expect(response.projectRemainingForecast?.forecastFinishDate).toBeNull()
     expect(response.projectRemainingForecast?.targetGap).toBeNull()
+  })
+
+  it('fails the forecast finish date and dependent target gap closed when the production-day fact is unavailable', async () => {
+    mocks.apiPost.mockResolvedValueOnce({
+      projectId: 'project-1',
+      projectRemainingForecast: {
+        durationOutputCode: 'project_remaining_forecast',
+        projectRemainingForecastDays: 42,
+        projectRemainingForecast: {
+          value: null,
+          unit: 'construction_production_day',
+          calendarRef: null,
+          calendarVersion: null,
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        forecastFinishDate: '2027-04-30',
+        targetEndDate: '2027-03-31',
+        targetGapDays: 30,
+        targetGap: {
+          value: 30,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
+    })
+
+    const response = await getProjectRemainingDurationForecast('project-1')
+
+    expect(response.projectRemainingForecast).toMatchObject({
+      projectRemainingForecast: expect.objectContaining({
+        availability: 'unavailable',
+      }),
+      forecastFinishDate: null,
+      targetGap: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'production_fact_unavailable',
+      }),
+    })
   })
 
   it('does not derive project-level remaining duration from legacy snake_case aliases', async () => {
@@ -204,12 +252,32 @@ describe('projectRemainingForecastApi governed project duration output', () => {
         duration_output_semantic_field_name: 'legacyProjectRemainingForecastDays',
         projectRemainingForecastDays: 42,
         project_remaining_forecast_days: 999,
+        projectRemainingForecast: {
+          value: 42,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: '2027-04-30',
         forecast_finish_date: '2099-04-30',
         targetEndDate: '2027-03-31',
         target_end_date: '2099-03-31',
         targetGapDays: 30,
         target_gap_days: 999,
+        targetGap: {
+          value: 30,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         rowsEvaluated: 2,
         rows_evaluated: 99,
         calculationContext: { primaryLayer: 'runtimeExecutionFacts' },
