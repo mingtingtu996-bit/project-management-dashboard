@@ -10,6 +10,7 @@ import type {
   WizardProfilePreview,
 } from './projectWizardApi'
 import { getWizardScopeIcon, wizardIconTestId } from './wizardScopeIcons'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 
 interface Props {
   preview: WizardProfilePreview | null
@@ -535,6 +536,7 @@ export function Step6ProjectProfileConfirmation({
 
   const feasibility = preview.targetFeasibility
   const proposal = feasibility?.accelerationProposal
+  const targetOvershootValue = readAvailableDurationValue(feasibility?.overshoot, 'calendar_day')
   const scopeCoverageDiagnostics = preview.profile.scopeCoverageDiagnostics ?? []
   const scopeTemplateCoverage = preview.profile.scopeTemplateCoverage ?? null
   const scopeWbsReadinessIssues = preview.profile.issues.filter((issue) => issue.code === 'SCOPE_WBS_READINESS_MISSING')
@@ -1054,7 +1056,7 @@ export function Step6ProjectProfileConfirmation({
         </section>
       ) : null}
 
-      {feasibility?.overshootDays && feasibility.overshootDays > 0 ? (
+      {feasibility && targetOvershootValue !== null && targetOvershootValue > 0 ? (
         <section className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-950">
             <TargetIcon className="h-4 w-4 text-amber-700" data-testid={wizardIconTestId('schedule_target')} />
@@ -1062,19 +1064,19 @@ export function Step6ProjectProfileConfirmation({
           </div>
           <p className="mt-2 text-sm leading-6 text-amber-900">
             模板按正常施工组织预计 {feasibility.naturalEndDate} 完工，目标竣工为 {feasibility.targetEndDate}，
-            晚于目标 {feasibility.overshootDays} 天。系统不会直接改写任务日期，会先形成可审阅的工期调整预案。
+            晚于目标 {formatDurationMetric(feasibility.overshoot, { absolute: true })}。系统不会直接改写任务日期，会先形成可审阅的工期调整预案。
           </p>
           {proposal ? (
             <div className="mt-3 space-y-3">
               <div className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs text-slate-700">
-                预案结论：{verdictText(proposal.verdict)}；预计追回 {proposal.totalRecoverDays} 天，剩余缺口 {proposal.remainingGapDays} 天。
+                预案结论：{verdictText(proposal.verdict)}；预计追回 {formatDurationMetric(proposal.totalRecover, { absolute: true })}，剩余缺口 {formatDurationMetric(proposal.remainingGap, { absolute: true })}。
                 {proposal.commitmentDisclaimer ? ` ${proposal.commitmentDisclaimer}` : ''}
               </div>
               <div className="grid gap-2 md:grid-cols-3">
                 {proposal.actions.map((action) => (
                   <div key={action.type} className="rounded-lg border border-amber-200 bg-white p-3">
                     <p className="text-sm font-semibold text-slate-900">{actionTitle(action.type)}</p>
-                    <p className="mt-1 text-xs text-slate-600">预计追回 {action.recoverDays} 天</p>
+                    <p className="mt-1 text-xs text-slate-600">预计追回 {formatDurationMetric(action.recoverDuration)}</p>
                     <p className="mt-2 line-clamp-3 text-xs leading-5 text-slate-500">{action.explanation}</p>
                   </div>
                 ))}
@@ -1086,6 +1088,16 @@ export function Step6ProjectProfileConfirmation({
               ) : null}
             </div>
           ) : null}
+        </section>
+      ) : feasibility && targetOvershootValue === null ? (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="flex items-center gap-2 font-semibold">
+            <TargetIcon className="h-4 w-4" data-testid={wizardIconTestId('schedule_target')} />
+            目标工期口径暂不可用
+          </div>
+          <p className="mt-1 leading-6">
+            目标竣工为 {feasibility.targetEndDate}，自然排期为 {feasibility.naturalEndDate}；日历天口径不可用，当前不展示未经验证的偏移天数。
+          </p>
         </section>
       ) : feasibility ? (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">

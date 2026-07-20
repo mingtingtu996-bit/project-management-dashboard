@@ -16,14 +16,37 @@ const tasks: Task[] = [
 ]
 
 function buildTargetFeasibility(): WbsTargetFeasibility {
+  const productionMetric = (value: number) => ({
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-11-01',
+    availability: 'available' as const,
+    unavailableReason: null,
+  })
+  const calendarMetric = (value: number) => ({
+    value,
+    unit: 'calendar_day' as const,
+    calendarRef: 'gregorian',
+    calendarVersion: 'ISO-8601',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-11-01',
+    availability: 'available' as const,
+    unavailableReason: null,
+  })
   return {
     mode: 'compression_preview',
     scenario: 'runtime_delay_recovery',
     targetEndDate: '2026-11-30',
     naturalEndDate: '2026-12-20',
     overshootDays: 20,
+    overshoot: calendarMetric(20),
     recoverableDays: 12,
+    recoverable: productionMetric(12),
     unrecoverableDays: 8,
+    unrecoverable: productionMetric(8),
     verdict: 'compressible',
     strategies: [],
           accelerationProposal: {
@@ -32,25 +55,68 @@ function buildTargetFeasibility(): WbsTargetFeasibility {
       targetEndDate: '2026-11-30',
       naturalEndDate: '2026-12-20',
       overshootDays: 20,
+      overshoot: calendarMetric(20),
       totalRecoverDays: 12,
+      totalRecover: productionMetric(12),
       remainingGapDays: 8,
+      remainingGap: productionMetric(8),
       verdict: 'needs_scope_decision',
       actions: [{
         type: 'crashing',
         affectedRowIds: ['task-structure'],
-        recoverDays: 12,
+        recoverDays: 999,
+        recoverDuration: productionMetric(12),
         riskLevel: 'medium',
         explanation: '关键路径资源赶工预览。',
         durationAdjustments: [{
           clientRowId: 'task-structure',
-          currentDurationDays: 30,
-          proposedDurationDays: 26,
-          minDurationDays: 24,
-          recoverDays: 4,
+          currentDurationDays: 999,
+          currentDuration: productionMetric(30),
+          proposedDurationDays: 999,
+          proposedDuration: productionMetric(26),
+          minDurationDays: 999,
+          minDuration: productionMetric(24),
+          recoverDays: 999,
+          recoverDuration: productionMetric(4),
           basis: 'resource_crash_preview',
         }],
       }],
-      protectedConstraints: [],
+      rescheduleDraft: {
+        mode: 'proposal_review',
+        source: 'target_end_compression',
+        writePolicy: 'requires_user_acceptance',
+        taskDateAdjustments: [{
+          clientRowId: 'task-structure',
+          title: '主体结构',
+          currentStartDate: '2026-11-01',
+          currentEndDate: '2026-11-30',
+          proposedStartDate: '2026-11-01',
+          proposedEndDate: '2026-11-26',
+          currentDurationDays: 999,
+          currentDuration: productionMetric(30),
+          proposedDurationDays: 999,
+          proposedDuration: productionMetric(26),
+          recoverDays: 999,
+          recoverDuration: productionMetric(4),
+          changedFields: ['planned_end_date'],
+          visualDiff: {
+            durationDeltaDays: -4,
+            startDeltaDays: 0,
+            endDeltaDays: -4,
+            barDeltaKind: 'compressed',
+          },
+        }],
+        dependencyAdjustments: [],
+        resourceAdjustments: [],
+        operations: [],
+      },
+      protectedConstraints: [{
+        clientRowId: 'task-structure',
+        title: '混凝土养护',
+        reasonCode: 'hard_process_wait',
+        durationDays: 999,
+        duration: productionMetric(28),
+      }],
           calculationBasis: {
             scenario: 'runtime_delay_recovery',
         naturalDurationDays: 220,
@@ -236,6 +302,38 @@ function buildTargetFeasibility(): WbsTargetFeasibility {
 }
 
 describe('TargetAccelerationReviewPanel', () => {
+  it('renders calendar shift and production recovery only from typed facts', () => {
+    const targetFeasibility = buildTargetFeasibility()
+    targetFeasibility.overshootDays = 999
+    targetFeasibility.recoverableDays = 999
+    targetFeasibility.unrecoverableDays = 999
+    if (targetFeasibility.accelerationProposal) {
+      targetFeasibility.accelerationProposal.overshootDays = 999
+      targetFeasibility.accelerationProposal.totalRecoverDays = 999
+      targetFeasibility.accelerationProposal.remainingGapDays = 999
+    }
+
+    render(<TargetAccelerationReviewPanel targetFeasibility={targetFeasibility} tasks={tasks} />)
+
+    expect(screen.getByText('晚于目标 20 个日历天')).toBeInTheDocument()
+    expect(screen.getByText('预计可追回 12 个生产日')).toBeInTheDocument()
+    expect(screen.getByText('仍需决策 8 个生产日')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('999')
+  })
+
+  it('renders nested acceleration work amounts only from typed production-day facts', () => {
+    render(<TargetAccelerationReviewPanel targetFeasibility={buildTargetFeasibility()} tasks={tasks} />)
+
+    fireEvent.click(screen.getByRole('button', { name: /查看赶工建议/ }))
+
+    expect(screen.getAllByText(/预计可追回 12 个生产日/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/30 个生产日/).length).toBeGreaterThan(0)
+    expect(screen.getByText(/改为 26 个生产日/)).toBeInTheDocument()
+    expect(screen.getByText(/追回 4 个生产日/)).toBeInTheDocument()
+    expect(screen.getByText(/混凝土养护 \/ 28 个生产日/)).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('999')
+  })
+
   it('surfaces the construction organization plan option behind runtime acceleration', () => {
     render(
       <TargetAccelerationReviewPanel

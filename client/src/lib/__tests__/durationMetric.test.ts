@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatDurationMetric,
+  normalizeDurationMetricDto,
   readAvailableDurationValue,
   type DurationMetricDto,
 } from '../durationMetric'
@@ -48,5 +49,13 @@ describe('durationMetric', () => {
       calendarRef: 'gregorian',
       calendarVersion: 'ISO-8601',
     })).toBe('30 个日历天')
+  })
+
+  it('strictly rejects impossible asOf dates while accepting leap day', () => {
+    expect(normalizeDurationMetricDto({ ...productionMetric, asOf: '2026-02-30' })).toBeNull()
+    expect(normalizeDurationMetricDto({ ...productionMetric, asOf: '2026-99-01' })).toBeNull()
+    expect(normalizeDurationMetricDto({ ...productionMetric, asOf: '2024-02-29' })).toEqual(
+      expect.objectContaining({ asOf: '2024-02-29', availability: 'available' }),
+    )
   })
 })

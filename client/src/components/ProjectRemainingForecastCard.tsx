@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatDate, formatNumber } from '@/lib/formatters'
+import { formatDurationMetric, readAvailableDurationValue, type DurationMetricDto } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 import {
   getProjectRemainingDurationForecast,
@@ -69,10 +70,11 @@ function normalizeNumber(value: unknown, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function getGapLabel(gapDays: number | null | undefined) {
-  if (gapDays == null) return '--'
-  if (gapDays > 0) return `超目标 ${formatNumber(gapDays)} 天`
-  return `${formatNumber(Math.abs(gapDays))} 天余量`
+function getGapLabel(metric: DurationMetricDto | null | undefined) {
+  const value = readAvailableDurationValue(metric, 'calendar_day')
+  if (value === null) return formatDurationMetric(metric)
+  if (value > 0) return `超目标 ${formatDurationMetric(metric, { absolute: true })}`
+  return `${formatDurationMetric(metric, { absolute: true })}余量`
 }
 
 function buildSignalItems(forecast: ProjectRemainingDurationForecast | null) {
@@ -192,8 +194,9 @@ export function ProjectRemainingForecastCard({
   }, [loadForecast])
 
   const signalItems = buildSignalItems(forecast)
-  const remainingDays = forecast?.projectRemainingForecastDays ?? null
-  const targetGapDays = forecast?.targetGapDays ?? null
+  const remainingDuration = forecast?.projectRemainingForecast ?? null
+  const targetGap = forecast?.targetGap ?? null
+  const targetGapValue = readAvailableDurationValue(targetGap, 'calendar_day')
   const degradedMessage = readState.degraded ? getForecastUnavailableMessage(readState.message, Boolean(forecast)) : null
   const accelerationActionUnavailable = readState.degraded && !forecast
 
@@ -275,7 +278,7 @@ export function ProjectRemainingForecastCard({
                   <DurationBasisBadge basis="remaining" compact variant="outline" />
                 </div>
                 <div className="mt-1 text-xl font-semibold tabular-nums text-slate-950">
-                  {remainingDays == null ? '—' : `${formatNumber(remainingDays)}天`}
+                  {formatDurationMetric(remainingDuration)}
                 </div>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
@@ -287,8 +290,8 @@ export function ProjectRemainingForecastCard({
               </div>
               <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
                 <div className="text-xs text-slate-500">目标差值</div>
-                <div className={cn('mt-1 text-sm font-semibold tabular-nums', (targetGapDays ?? 0) > 0 ? 'text-red-700' : 'text-emerald-700')}>
-                  {getGapLabel(targetGapDays)}
+                <div className={cn('mt-1 text-sm font-semibold tabular-nums', (targetGapValue ?? 0) > 0 ? 'text-red-700' : 'text-emerald-700')}>
+                  {getGapLabel(targetGap)}
                 </div>
               </div>
             </div>

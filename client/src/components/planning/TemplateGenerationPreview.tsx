@@ -25,6 +25,7 @@ import {
   type RowProjectionMode,
 } from '@/lib/planItemSemantics'
 import { cn } from '@/lib/utils'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import type {
   WbsAccelerationProposal,
   WbsConstructionOrganizationScenarioSummary,
@@ -292,10 +293,10 @@ function AccelerationProposalPreview({
         </div>
         <div className="flex flex-wrap gap-2 tabular-nums">
           <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-            预计可追回 {proposal.totalRecoverDays} 天
+            预计可追回 {formatDurationMetric(proposal.totalRecover, { absolute: true })}
           </Badge>
           <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-800">
-            剩余缺口 {proposal.remainingGapDays} 天
+            剩余缺口 {formatDurationMetric(proposal.remainingGap, { absolute: true })}
           </Badge>
         </div>
       </div>
@@ -307,7 +308,7 @@ function AccelerationProposalPreview({
               <div className="font-semibold text-slate-800">{getAccelerationActionLabel(action.type)}</div>
               <div className="flex flex-wrap gap-1.5 tabular-nums">
                 <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">
-                  可追回 {action.recoverDays} 天
+                  可追回 {formatDurationMetric(action.recoverDuration)}
                 </Badge>
                 <Badge variant="outline" className="border-slate-200 bg-white text-slate-600">
                   {getRiskLabel(action.riskLevel)}
@@ -321,7 +322,7 @@ function AccelerationProposalPreview({
                 {action.dependencyAdjustments.slice(0, 3).map((adjustment) => (
                   <div key={`${adjustment.predecessorClientRowId}-${adjustment.successorClientRowId}`} className="flex flex-wrap gap-1.5 text-slate-500">
                     <span className="font-medium text-slate-700">{rowTitleById.get(adjustment.successorClientRowId) ?? adjustment.successorClientRowId}</span>
-                    <span>{adjustment.fromDependencyType}{formatLagDays(adjustment.lagDaysBefore)} → {adjustment.toDependencyType}{formatLagDays(adjustment.lagDaysAfter)}</span>
+                    <span>{adjustment.fromDependencyType} → {adjustment.toDependencyType}</span>
                   </div>
                 ))}
               </div>
@@ -332,7 +333,9 @@ function AccelerationProposalPreview({
                 {action.durationAdjustments.slice(0, 3).map((adjustment) => (
                   <div key={adjustment.clientRowId} className="flex flex-wrap gap-1.5 text-slate-500">
                     <span className="font-medium text-slate-700">{rowTitleById.get(adjustment.clientRowId) ?? adjustment.clientRowId}</span>
-                    <span>{adjustment.currentDurationDays} 天 → {adjustment.proposedDurationDays} 天，下限 {adjustment.minDurationDays} 天</span>
+                    <span>
+                      {formatDurationMetric(adjustment.currentDuration)} → {formatDurationMetric(adjustment.proposedDuration)}，下限 {formatDurationMetric(adjustment.minDuration)}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -357,7 +360,7 @@ function AccelerationProposalPreview({
           <div className="mt-1 flex flex-wrap gap-1.5">
             {proposal.protectedConstraints.slice(0, 6).map((constraint) => (
               <Badge key={`${constraint.clientRowId}-${constraint.reasonCode}`} variant="outline" className="border-slate-200 bg-white text-slate-600">
-                {constraint.title} {constraint.durationDays} 天
+                {constraint.title} {formatDurationMetric(constraint.duration)}
               </Badge>
             ))}
           </div>
@@ -478,7 +481,10 @@ export function TemplateGenerationPreview({
   const hardRowLimitExceeded = rowLimitBehavior === 'hard_limit' && rowLimitExceeded
   const hiddenPreviewRowCount = Math.max(orderedRows.length - visibleOrderedRows.length, 0)
   const canApply = selectedRows.length > 0 && !hardRowLimitExceeded && !applyPending
-  const showTargetWarning = Boolean(targetFeasibility && targetFeasibility.overshootDays > 0)
+  const showTargetWarning = Boolean(
+    targetFeasibility
+    && (readAvailableDurationValue(targetFeasibility.overshoot, 'calendar_day') ?? 0) > 0,
+  )
   const accelerationProposal = targetFeasibility?.accelerationProposal ?? null
 
   return (
@@ -564,7 +570,7 @@ export function TemplateGenerationPreview({
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="leading-5">
-              自然排期预计 {targetFeasibility.naturalEndDate} 完工，超出目标 {targetFeasibility.overshootDays} 天；当前未自动压缩。
+              自然排期预计 {targetFeasibility.naturalEndDate} 完工，超出目标 {formatDurationMetric(targetFeasibility.overshoot, { absolute: true })}；当前未自动压缩。
             </span>
             {onRequestAccelerationProposal || accelerationProposal ? (
               <Button

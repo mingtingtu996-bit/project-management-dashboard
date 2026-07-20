@@ -29,6 +29,12 @@ import {
 } from './constructionCalendar.js'
 import { buildDownstreamDurationAssetConsumption } from './durationAssetDownstreamConsumptionService.js'
 import {
+  buildCalendarDayDurationMetric,
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  type DurationMetricDto,
+} from './durationMetricService.js'
+import {
   simulateDurationNetworkProbability,
   type DurationNetworkProbabilityResult,
 } from './durationNetworkMonteCarloService.js'
@@ -49,10 +55,14 @@ export type ProjectRemainingDurationForecast = {
   durationOutputCode: 'project_remaining_forecast'
   durationOutputSemanticFieldName: 'projectRemainingForecastDays'
   durationOutputContract?: Record<string, unknown> | null
+  /** @deprecated Use projectRemainingForecast. */
   projectRemainingForecastDays: number
+  projectRemainingForecast: DurationMetricDto
   forecastFinishDate: string | null
   targetEndDate?: string | null
+  /** @deprecated Use targetGap. */
   targetGapDays?: number | null
+  targetGap: DurationMetricDto
   rowsEvaluated: number
   calculationContext: {
     primaryLayer: 'projectGenerationFacts' | 'runtimeExecutionFacts'
@@ -246,18 +256,10 @@ function projectRemainingDurationDays(
 function projectRemainingGapDays(
   targetEndDate: string | null | undefined,
   forecastFinishDate: string | null | undefined,
-  calendar?: ConstructionCalendarContext | null,
+  _calendar?: ConstructionCalendarContext | null,
 ) {
   if (!targetEndDate || !forecastFinishDate) return null
-  if (!hasConstructionCalendarRules(calendar)) {
-    return Math.max(0, signedDurationDayDelta(targetEndDate, forecastFinishDate) ?? 0)
-  }
-  const target = parseConstructionCalendarDate(targetEndDate)
-  const forecast = parseConstructionCalendarDate(forecastFinishDate)
-  if (!target || !forecast || forecast <= target) return 0
-  const next = new Date(target)
-  next.setUTCDate(next.getUTCDate() + 1)
-  return productionDaysBetweenInclusive(next, forecast, calendar)
+  return Math.max(0, signedDurationDayDelta(targetEndDate, forecastFinishDate) ?? 0)
 }
 
 function readRecord(value: unknown): Record<string, unknown> {
@@ -1083,8 +1085,9 @@ export function buildProjectRemainingDurationForecast(params: {
   runtimeConsumerObservedAt?: string | null
   runtimeConsumerErrorHandler?: (error: unknown) => void
 }): ProjectRemainingDurationForecast {
-  const asOfDate = normalizeDate(params.asOfDate) ?? new Date().toISOString().slice(0, 10)
   const constructionCalendar = params.constructionCalendar ?? null
+  const asOfDate = normalizeDate(params.asOfDate)
+    ?? businessDateKey(new Date(), constructionCalendar?.timezone)
   const scheduleRows = applyFreshCriticalPathSnapshotToRows(params.rows.filter(isScheduleRow), params.criticalPathSnapshot)
   const remainingRows = scheduleRows.filter((row) => !isCompletedRow(row))
   const criticalRows = remainingRows.filter(isCriticalOrNearCriticalRow)
@@ -1257,6 +1260,15 @@ export function buildProjectRemainingDurationForecast(params: {
     forecastFinishDate,
     constructionCalendar,
   )
+  const finalTargetGapDays = projectRemainingGapDays(targetEndDate, forecastFinishDate, constructionCalendar)
+  const projectRemainingForecast = buildConstructionProductionDayDurationMetric(
+    finalProjectRemainingForecastDays,
+    { asOf: asOfDate, timezone: constructionCalendar?.timezone, calendar: constructionCalendar },
+  )
+  const targetGap = buildCalendarDayDurationMetric(finalTargetGapDays, {
+    asOf: asOfDate,
+    timezone: constructionCalendar?.timezone,
+  })
   const downstreamAssetConsumption = buildDownstreamDurationAssetConsumption({
     consumer: 'project_remaining_duration_forecast',
     upstreamReceipts: upstreamAssetConsumptionReceipts,
@@ -1281,9 +1293,11 @@ export function buildProjectRemainingDurationForecast(params: {
     durationOutputSemanticFieldName: 'projectRemainingForecastDays',
     durationOutputContract,
     projectRemainingForecastDays: finalProjectRemainingForecastDays,
+    projectRemainingForecast,
     forecastFinishDate,
     targetEndDate,
-    targetGapDays: projectRemainingGapDays(targetEndDate, forecastFinishDate, constructionCalendar),
+    targetGapDays: finalTargetGapDays,
+    targetGap,
     rowsEvaluated: scheduleRows.length,
     calculationContext: {
       primaryLayer: factContext.primaryLayer,

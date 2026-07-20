@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { AlertTriangle, ChevronDown, ChevronUp, Rocket, Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { WbsTargetFeasibility } from '@/services/wbsTemplateGenerationApi'
 
 interface Props {
@@ -45,7 +46,9 @@ export function GeneratedWbsBanner({
   onRequestAccelerationProposal,
 }: Props) {
   const [showDetail, setShowDetail] = useState(false)
-  const showTargetWarning = Boolean(targetFeasibility && targetFeasibility.overshootDays > 0)
+  const overshootValue = readAvailableDurationValue(targetFeasibility?.overshoot, 'calendar_day')
+  const unrecoverableValue = readAvailableDurationValue(targetFeasibility?.unrecoverable, 'construction_production_day')
+  const showTargetWarning = Boolean(targetFeasibility && overshootValue !== null && overshootValue > 0)
   const sourceLabel = [businessType ?? '未知业态', ...(methodCodes ?? []), featureSummary].filter(Boolean).join(' + ')
 
   return (
@@ -76,18 +79,18 @@ export function GeneratedWbsBanner({
                 <span>目标工期偏紧</span>
               </div>
               <p className="text-xs leading-5 text-amber-900">
-                自然排期预计 {targetFeasibility.naturalEndDate} 完工，超出目标 {targetFeasibility.overshootDays} 天；当前未自动压缩任务日期。
+                自然排期预计 {targetFeasibility.naturalEndDate} 完工，超出目标 {formatDurationMetric(targetFeasibility.overshoot, { absolute: true })}；当前未自动压缩任务日期。
               </p>
               <p className="text-xs text-amber-800">
                 可先生成赶工建议预览，再由项目负责人确认是否调整搭接、资源或交付范围。
               </p>
               <div className="flex flex-wrap gap-2 pt-1 text-xs tabular-nums">
                 <span className="rounded-lg border border-amber-200 bg-white/70 px-2 py-0.5 text-amber-800">
-                  可模拟追回约 {targetFeasibility.recoverableDays} 天
+                  可模拟追回约 {formatDurationMetric(targetFeasibility.recoverable, { absolute: true })}
                 </span>
-                {targetFeasibility.unrecoverableDays > 0 ? (
+                {(unrecoverableValue ?? 0) > 0 ? (
                   <span className="rounded-lg border border-amber-200 bg-white/70 px-2 py-0.5 text-amber-800">
-                    仍需决策 {targetFeasibility.unrecoverableDays} 天
+                    仍需决策 {formatDurationMetric(targetFeasibility.unrecoverable, { absolute: true })}
                   </span>
                 ) : null}
               </div>

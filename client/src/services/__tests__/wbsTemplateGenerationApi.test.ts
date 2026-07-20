@@ -91,4 +91,59 @@ describe('wbsTemplateGenerationApi', () => {
     expect(postedKeys).not.toContain('project_scope_dimensions')
     expect(postedKeys).not.toContain('legacy_object_type')
   })
+
+  it('fails closed when target feasibility duration metadata is malformed', async () => {
+    mocks.apiPost.mockResolvedValueOnce({
+      generationBatchId: 'batch-typed-duration',
+      templateId: 'template-1',
+      generationDepth: 'item_work',
+      rows: [],
+      previewRows: [],
+      scopeCombos: [],
+      operations: [],
+      writeMode: 'preview_only',
+      targetFeasibility: {
+        mode: 'compression_preview',
+        targetEndDate: '2026-07-20',
+        naturalEndDate: '2026-07-25',
+        overshootDays: 999,
+        overshoot: {
+          value: 5,
+          unit: 'calendar_day',
+          calendarRef: null,
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-07-20',
+          availability: 'available',
+        },
+        recoverableDays: 999,
+        recoverable: {
+          value: 3,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-07-20',
+          availability: 'available',
+        },
+        unrecoverableDays: 999,
+        unrecoverable: null,
+        verdict: 'compressible',
+        strategies: [],
+      },
+    })
+
+    const preview = await generateWbsTemplatePreview({
+      projectId: 'project-1',
+      surface: 'task_list',
+      templateId: 'template-1',
+    })
+
+    expect(preview.targetFeasibility?.overshoot).toBeNull()
+    expect(preview.targetFeasibility?.recoverable).toEqual(expect.objectContaining({
+      value: 3,
+      unit: 'construction_production_day',
+      availability: 'available',
+    }))
+  })
 })

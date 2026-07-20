@@ -1853,6 +1853,8 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
         mode: params.mode ?? 'compression_preview',
         context: {
           ...accelerationContext,
+          constructionCalendar,
+          asOfDate: normalizeDate(params.asOfDate),
           runtime: {
             ...mergedRuntimeContext,
             projectRemainingForecastFinishDate: projectRemainingForecast.forecastFinishDate,

@@ -19,6 +19,7 @@ import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { WbsAccelerationProposal, WbsAccelerationProposalAction, WbsTargetFeasibility } from '@/services/wbsTemplateGenerationApi'
 import type { Task } from '../GanttViewTypes'
 
@@ -67,12 +68,12 @@ function buildBusinessBasis(proposal: WbsAccelerationProposal) {
   const basis = proposal.calculationBasis
   if (!basis) return []
   const notes: string[] = []
-  notes.push(`当前预测自然排期约 ${basis.naturalDurationDays} 天，系统没有把所有任务工期简单相加。`)
+  notes.push(`当前预测自然排期约 ${formatDurationMetric(basis.naturalDuration)}，系统没有把所有任务工期简单相加。`)
   if (basis.resourceGroupedCandidateDays > 0) {
     notes.push('同一类关键资源只按代表性施工面估算，避免塔吊、泵车或班组被重复计算。')
   }
   if (basis.hardConstraintDays > 0) {
-    notes.push(`约 ${basis.hardConstraintDays} 天受硬约束保护，不能被压缩。`)
+    notes.push(`约 ${formatDurationMetric(basis.hardConstraintDuration)}受硬约束保护，不能被压缩。`)
   }
   if (basis.seasonalFactor < 1) {
     notes.push('项目跨冬季、雨季或节假日窗口，可追回时间已按季节影响打折。')
@@ -104,7 +105,18 @@ export function TargetAccelerationReviewPanel({
   const [expanded, setExpanded] = useState(false)
   const proposal = targetFeasibility.accelerationProposal ?? null
   const taskById = useMemo(() => new Map(tasks.map((task) => [task.id, task])), [tasks])
-  if (!proposal || targetFeasibility.overshootDays <= 0) return null
+  const overshootValue = readAvailableDurationValue(targetFeasibility.overshoot, 'calendar_day')
+  if (!proposal) return null
+  if (overshootValue === null) {
+    return (
+      <Alert className="border-amber-200 bg-amber-50 text-amber-900">
+        <AlertDescription className="text-sm">
+          目标竣工为 {targetFeasibility.targetEndDate}，自然排期为 {targetFeasibility.naturalEndDate}；日历天口径不可用，当前不展示未经验证的超期天数。
+        </AlertDescription>
+      </Alert>
+    )
+  }
+  if (overshootValue <= 0) return null
 
   const rescheduleDraft = proposal.rescheduleDraft ?? null
   const canAcceptDraft = Boolean(onAcceptRescheduleDraft && rescheduleDraft && rescheduleDraft.operations.length > 0)
@@ -129,7 +141,7 @@ export function TargetAccelerationReviewPanel({
             <h3 className="text-sm font-semibold text-slate-950">{panelTitle}</h3>
             <DurationBasisBadge basis="forecast" compact variant="outline" className="border-amber-200 bg-white text-amber-800" />
             <Badge variant="outline" className="border-amber-200 bg-white text-amber-800">
-              晚于目标 {targetFeasibility.overshootDays} 天
+              晚于目标 {formatDurationMetric(targetFeasibility.overshoot, { absolute: true })}
             </Badge>
           </div>
           <p className="text-sm leading-6 text-slate-700">
@@ -137,11 +149,11 @@ export function TargetAccelerationReviewPanel({
           </p>
           <div className="flex flex-wrap gap-2 text-xs tabular-nums">
             <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-              预计可追回 {proposal.totalRecoverDays} 天
+              预计可追回 {formatDurationMetric(proposal.totalRecover, { absolute: true })}
             </Badge>
-            {proposal.remainingGapDays > 0 ? (
+            {(readAvailableDurationValue(proposal.remainingGap, 'construction_production_day') ?? 0) > 0 ? (
               <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700">
-                仍需决策 {proposal.remainingGapDays} 天
+                仍需决策 {formatDurationMetric(proposal.remainingGap, { absolute: true })}
               </Badge>
             ) : (
               <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
@@ -221,9 +233,9 @@ export function TargetAccelerationReviewPanel({
                   </div>
                   <p className="mt-2 text-xs leading-5 text-slate-600">
                     {action.type === 'fast_track'
-                      ? `调整前后关系与穿插安排，预计可追回 ${action.recoverDays} 天。`
+                      ? `调整前后关系与穿插安排，预计可追回 ${formatDurationMetric(action.recoverDuration)}。`
                       : action.type === 'crashing'
-                        ? `通过增加资源投入、设备或施工面，预计可追回 ${action.recoverDays} 天。`
+                        ? `通过增加资源投入、设备或施工面，预计可追回 ${formatDurationMetric(action.recoverDuration)}。`
                         : `穿插和资源调整后仍不足的时间，需要决定分批交付、减少范围或调整目标。`}
                   </p>
                 </div>
@@ -248,7 +260,7 @@ export function TargetAccelerationReviewPanel({
                     <span className="font-medium text-slate-800">{getTaskTitle(taskById, adjustment.predecessorClientRowId)}</span>
                     <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
                     <span className="font-medium text-slate-800">{getTaskTitle(taskById, adjustment.successorClientRowId)}</span>
-                    <span className="ml-auto tabular-nums text-blue-700">提前 {Math.abs(adjustment.lagDaysAfter)} 天介入</span>
+                    <span className="ml-auto text-blue-700">调整为提前穿插关系</span>
                   </Button>
                 ))}
               </div>
@@ -270,19 +282,19 @@ export function TargetAccelerationReviewPanel({
                     onClick={() => onFocusTask?.(adjustment.clientRowId)}
                   >
                     <span className="min-w-0 flex-1 truncate font-medium text-slate-800">{getTaskTitle(taskById, adjustment.clientRowId)}</span>
-                    <span className="tabular-nums text-slate-500">{adjustment.currentDurationDays} 天</span>
+                    <span className="tabular-nums text-slate-500">{formatDurationMetric(adjustment.currentDuration)}</span>
                     <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
-                    <span className="tabular-nums text-blue-700">{adjustment.proposedDurationDays} 天</span>
+                    <span className="tabular-nums text-blue-700">{formatDurationMetric(adjustment.proposedDuration)}</span>
                   </Button>
                 ))}
               </div>
             </div>
           ) : null}
 
-          {scope?.type === 'scope_reduction' && scope.recoverDays > 0 ? (
+          {scope?.type === 'scope_reduction' ? (
             <Alert className="border-rose-200 bg-rose-50 text-rose-900">
               <AlertDescription className="text-sm">
-                仍有 {scope.recoverDays} 天差距，建议由项目负责人确认是否分批交付、增加施工面、减少低优先级专项或调整目标竣工日期。
+                仍有 {formatDurationMetric(scope.recoverDuration)}差距，建议由项目负责人确认是否分批交付、增加施工面、减少低优先级专项或调整目标竣工日期。
               </AlertDescription>
             </Alert>
           ) : null}
@@ -309,10 +321,10 @@ export function TargetAccelerationReviewPanel({
                       <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
                       <span className="text-blue-700">{adjustment.proposedStartDate || '-'} → {adjustment.proposedEndDate || '-'}</span>
                       <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
-                        {adjustment.currentDurationDays} 天改为 {adjustment.proposedDurationDays} 天
+                        {formatDurationMetric(adjustment.currentDuration)}改为 {formatDurationMetric(adjustment.proposedDuration)}
                       </Badge>
                       <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                        追回 {adjustment.recoverDays} 天
+                        追回 {formatDurationMetric(adjustment.recoverDuration)}
                       </Badge>
                     </span>
                   </Button>
@@ -327,7 +339,7 @@ export function TargetAccelerationReviewPanel({
                       <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
                       <span className="font-medium text-slate-800">{getTaskTitle(taskById, adjustment.successorClientRowId)}</span>
                       <span className="tabular-nums text-blue-700">
-                        {adjustment.fromDependencyType} 改为 {adjustment.toDependencyType} / lag {adjustment.lagDaysAfter}
+                        {adjustment.fromDependencyType} 改为 {adjustment.toDependencyType}
                       </span>
                     </div>
                   ))}
@@ -353,7 +365,7 @@ export function TargetAccelerationReviewPanel({
               <div className="flex flex-wrap gap-2">
                 {proposal.protectedConstraints.slice(0, 8).map((constraint) => (
                   <Badge key={`${constraint.clientRowId}-${constraint.reasonCode}`} variant="outline" className="border-slate-200 bg-slate-50 text-slate-600">
-                    {constraint.title} / {constraint.durationDays} 天
+                    {constraint.title} / {formatDurationMetric(constraint.duration)}
                   </Badge>
                 ))}
               </div>

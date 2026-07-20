@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { getApiErrorMessage } from '@/lib/apiClient'
+import { formatDurationMetric } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 import { useTemplateLibrary } from '@/hooks/useTemplateLibrary'
 import {
@@ -463,7 +464,7 @@ export function TemplateInlineExpand({
           onRequestAccelerationProposal={() => {
             const feasibility = preview.targetFeasibility
             setAccelerationNotice(feasibility
-              ? `当前自然排期超出目标 ${feasibility.overshootDays} 天，需生成赶工建议并由人工确认。`
+              ? `当前自然排期超出目标 ${formatDurationMetric(feasibility.overshoot, { absolute: true })}，需生成赶工建议并由人工确认。`
               : '当前自然排期未发现目标工期缺口。')
           }}
           generationBatches={preview.generationBatches}

@@ -4,6 +4,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { Step6ProjectProfileConfirmation } from '@/components/project/wizard/Step6ProjectProfileConfirmation'
 import type { WizardProfilePreview } from '@/components/project/wizard/projectWizardApi'
 
+const durationMetric = (value: number, unit: 'calendar_day' | 'construction_production_day') => ({
+  value,
+  unit,
+  calendarRef: unit === 'calendar_day' ? 'gregorian' : 'work_calendar',
+  calendarVersion: unit === 'calendar_day' ? 'ISO-8601' : 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  asOf: '2026-07-20',
+  availability: 'available' as const,
+  unavailableReason: null,
+})
+
 const basePreview: WizardProfilePreview = {
   recommendation: {
     matchedTemplates: ['china-gb50300-base'],
@@ -113,6 +124,95 @@ const basePreview: WizardProfilePreview = {
 }
 
 describe('Step6ProjectProfileConfirmation', () => {
+  it('uses typed production-day facts for nested acceleration actions', () => {
+    render(
+      <Step6ProjectProfileConfirmation
+        preview={{
+          ...basePreview,
+          targetFeasibility: {
+            mode: 'compression_preview',
+            targetEndDate: '2026-07-20',
+            naturalEndDate: '2026-07-25',
+            overshootDays: 999,
+            overshoot: durationMetric(5, 'calendar_day'),
+            recoverableDays: 999,
+            recoverable: durationMetric(3, 'construction_production_day'),
+            unrecoverableDays: 999,
+            unrecoverable: durationMetric(2, 'construction_production_day'),
+            verdict: 'compressible',
+            strategies: [],
+            accelerationProposal: {
+              mode: 'preview_only',
+              source: 'target_end_compression',
+              targetEndDate: '2026-07-20',
+              naturalEndDate: '2026-07-25',
+              overshootDays: 999,
+              overshoot: durationMetric(5, 'calendar_day'),
+              totalRecoverDays: 999,
+              totalRecover: durationMetric(3, 'construction_production_day'),
+              remainingGapDays: 999,
+              remainingGap: durationMetric(2, 'construction_production_day'),
+              verdict: 'needs_scope_decision',
+              actions: [{
+                type: 'scope_reduction',
+                affectedRowIds: [],
+                recoverDays: 999,
+                recoverDuration: durationMetric(2, 'construction_production_day'),
+                riskLevel: 'high',
+                explanation: '需要人工确认交付范围。',
+                decisionOptions: [],
+              }],
+              protectedConstraints: [],
+            },
+          },
+        }}
+        onGenerate={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/预计追回 2 个生产日/)).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('999')
+  })
+
+  it('shows an unavailable state instead of treating missing calendar-day metadata as target-aligned', () => {
+    render(
+      <Step6ProjectProfileConfirmation
+        preview={{
+          ...basePreview,
+          targetFeasibility: {
+            mode: 'compare_only',
+            targetEndDate: '2026-07-20',
+            naturalEndDate: '2026-07-25',
+            overshootDays: 999,
+            overshoot: {
+              value: null,
+              unit: 'calendar_day',
+              calendarRef: null,
+              calendarVersion: null,
+              timezone: 'Asia/Shanghai',
+              asOf: '',
+              availability: 'unavailable',
+              unavailableReason: 'as_of_missing',
+            },
+            recoverableDays: 999,
+            recoverable: null,
+            unrecoverableDays: 999,
+            unrecoverable: null,
+            verdict: 'tight',
+            strategies: [],
+          },
+        }}
+        onGenerate={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText(/日历天口径不可用/)).toBeInTheDocument()
+    expect(screen.queryByText(/基本匹配/)).not.toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('999')
+  })
+
   it('shows commercial readiness for the five static fact groups before generation', () => {
     render(
       <Step6ProjectProfileConfirmation

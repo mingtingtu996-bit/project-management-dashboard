@@ -23,7 +23,7 @@ import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
-import { delayDayDelta, inclusiveDurationDays, normalizeDurationDateUtc } from '../utils/durationDays.js'
+import { delayDayDelta, inclusiveDurationDays, normalizeDurationDateUtc, signedDurationDayDelta } from '../utils/durationDays.js'
 import {
   addConstructionProductionDays,
   isConstructionProductionDay,
@@ -54,6 +54,12 @@ import {
   getScheduleAccelerationSeasonalFactorSeedFromResolver,
   resolveDurationContributionModeFromResolver as normalizeDurationContributionMode,
 } from './algorithmSeedResolver.js'
+import {
+  buildCalendarDayDurationMetric,
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 
 export { SCHEDULE_ACCELERATION_PROFILE_SOURCE_FROM_RESOLVER as SCHEDULE_ACCELERATION_PROFILE_SOURCE } from './algorithmSeedResolver.js'
 export {
@@ -104,6 +110,7 @@ export type ScheduleAccelerationContext = {
   constructionOrganizationScenario?: ConstructionOrganizationScenarioSelection | null
   constructionCalendar?: ConstructionCalendarContext | null
   workCalendar?: ConstructionCalendarContext | null
+  asOfDate?: string | null
   runtime?: ScheduleRuntimeRecoveryContext
 }
 
@@ -158,14 +165,21 @@ export type ScheduleTargetFeasibility = {
   scenario: ScheduleAccelerationScenario
   targetEndDate: string
   naturalEndDate: string
+  /** @deprecated Use overshoot. */
   overshootDays: number
+  overshoot: DurationMetricDto
+  /** @deprecated Use recoverable. */
   recoverableDays: number
+  recoverable: DurationMetricDto
+  /** @deprecated Use unrecoverable. */
   unrecoverableDays: number
+  unrecoverable: DurationMetricDto
   verdict: 'fit' | 'tight' | 'compressible' | 'requires_scope_change' | 'infeasible'
   strategies: Array<{
     type: 'fast_track' | 'crashing' | 'scope_reduction'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto
     riskLevel: 'low' | 'medium' | 'high'
     explanation: string
   }>
@@ -195,9 +209,15 @@ export type ScheduleAccelerationProposal = {
   source: 'target_end_compression'
   targetEndDate: string
   naturalEndDate: string
+  /** @deprecated Use overshoot. */
   overshootDays: number
+  overshoot?: DurationMetricDto
+  /** @deprecated Use totalRecover. */
   totalRecoverDays: number
+  totalRecover?: DurationMetricDto
+  /** @deprecated Use remainingGap. */
   remainingGapDays: number
+  remainingGap?: DurationMetricDto
   verdict: 'draft_recoverable' | 'needs_scope_decision' | 'infeasible'
   durationOutputCode?: DurationOutputCode
   durationOutputSemanticFieldName?: string | null
@@ -213,17 +233,20 @@ export type ScheduleAccelerationProposal = {
     title: string
     reasonCode: string
     durationDays: number
+    duration?: DurationMetricDto
   }>
   calculationBasis?: {
     scenario?: ScheduleAccelerationScenario
     algorithmFactContext?: ReturnType<typeof summarizeAlgorithmFactContext>
     naturalDurationDays: number
+    naturalDuration?: DurationMetricDto
     totalRecoverCapRatio: number
     seasonalFactor: number
     projectTypeProfile: string
     criticalCandidateDays: number
     resourceGroupedCandidateDays: number
     hardConstraintDays: number
+    hardConstraintDuration?: DurationMetricDto
     constructionOrganizationScenario?: {
       source: ConstructionOrganizationScenarioSelection['source']
       sourceVersion?: string
@@ -310,8 +333,11 @@ export type ScheduleAccelerationRescheduleDraft = {
     proposedStartDate: string | null
     proposedEndDate: string | null
     currentDurationDays: number
+    currentDuration?: DurationMetricDto
     proposedDurationDays: number
+    proposedDuration?: DurationMetricDto
     recoverDays: number
+    recoverDuration?: DurationMetricDto
     reschedulePolicy: 'resource_crash_preview' | 'dependency_propagation_preview'
     changedFields: string[]
     visualDiff: {
@@ -335,6 +361,7 @@ export type ScheduleAccelerationProposalAction =
     type: 'fast_track'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto
     rawRecoverDays: number
     reworkRiskDiscountDays: number
     effectiveRecoverDays: number
@@ -357,14 +384,19 @@ export type ScheduleAccelerationProposalAction =
     type: 'crashing'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto
     riskLevel: 'low' | 'medium' | 'high'
     explanation: string
     durationAdjustments: Array<{
       clientRowId: string
       currentDurationDays: number
+      currentDuration?: DurationMetricDto
       proposedDurationDays: number
+      proposedDuration?: DurationMetricDto
       minDurationDays: number
+      minDuration?: DurationMetricDto
       recoverDays: number
+      recoverDuration?: DurationMetricDto
       basis: 'p50_to_p20' | 'resource_crash_preview'
     }>
     networkSlackFacts?: {
@@ -381,6 +413,7 @@ export type ScheduleAccelerationProposalAction =
     type: 'scope_reduction'
     affectedRowIds: string[]
     recoverDays: number
+    recoverDuration?: DurationMetricDto
     riskLevel: 'high'
     explanation: string
     decisionOptions: string[]
@@ -2906,28 +2939,30 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
   const naturalEndDate = runtimeForecastFinishDate ?? getGeneratedRowsLatestEnd(comparableRows)
   if (!naturalEndDate) return undefined
   const calendar = resolveScheduleAccelerationCalendar(params.context)
-  const overshootDays = Math.max(0, scheduleShiftDays(targetEndDate, naturalEndDate, calendar))
+  const overshootDays = Math.max(0, signedDurationDayDelta(targetEndDate, naturalEndDate) ?? 0)
+  const productionOvershootDays = Math.max(0, scheduleShiftDays(targetEndDate, naturalEndDate, calendar))
+  const asOf = normalizeDate(params.context?.asOfDate) ?? businessDateKey(new Date(), calendar?.timezone)
   const naturalStartDate = getGeneratedRowsEarliestStart(comparableRows)
   const budget = estimateRecoverableTargetBudget({
     rows: comparableRows,
     naturalStartDate,
     naturalEndDate,
-    overshootDays,
+    overshootDays: productionOvershootDays,
     context: {
       ...params.context,
       scenario: params.scenario ?? params.context?.scenario,
     },
   })
-  const recoverableBudgetDays = overshootDays > 0 ? budget.recoverableDays : 0
+  const recoverableBudgetDays = productionOvershootDays > 0 ? budget.recoverableDays : 0
   const naturalDurationDays = Math.max(1, planSpanDays(
     naturalStartDate ?? naturalEndDate,
     naturalEndDate,
     budget.constructionCalendar,
   ))
   const targetBeforeStart = naturalStartDate ? comparePlanDates(targetEndDate, naturalStartDate) < 0 : false
-  const preliminaryUnrecoverableDays = Math.max(0, overshootDays - recoverableBudgetDays)
+  const preliminaryUnrecoverableDays = Math.max(0, productionOvershootDays - recoverableBudgetDays)
   const preliminaryVerdict = resolveTargetFeasibilityVerdict({
-    overshootDays,
+    overshootDays: productionOvershootDays,
     targetBeforeStart,
     naturalDurationDays,
     unrecoverableDays: preliminaryUnrecoverableDays,
@@ -2937,7 +2972,7 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
     scenario,
     targetEndDate,
     naturalEndDate,
-    overshootDays,
+    overshootDays: productionOvershootDays,
     recoverableDays: recoverableBudgetDays,
     unrecoverableDays: preliminaryUnrecoverableDays,
     verdict: preliminaryVerdict,
@@ -2946,28 +2981,101 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
   const recoverableDays = accelerationProposal
     ? accelerationProposal.totalRecoverDays
     : recoverableBudgetDays
-  const unrecoverableDays = Math.max(0, overshootDays - recoverableDays)
+  const unrecoverableDays = Math.max(0, productionOvershootDays - recoverableDays)
   const recoverableDaysConfidenceBand = accelerationProposal?.recoverableDaysConfidenceBand
     ?? buildRecoverableDaysConfidenceBand(recoverableDays, null)
   const verdictUnrecoverableDays = confidenceAdjustedUnrecoverableDays({
-    overshootDays,
+    overshootDays: productionOvershootDays,
     deterministicUnrecoverableDays: unrecoverableDays,
     recoverableBand: recoverableDaysConfidenceBand,
   })
   const verdict = resolveTargetFeasibilityVerdict({
-    overshootDays,
+    overshootDays: productionOvershootDays,
     targetBeforeStart,
     naturalDurationDays,
     unrecoverableDays: verdictUnrecoverableDays,
   })
+  const overshoot = buildCalendarDayDurationMetric(overshootDays, {
+    asOf,
+    timezone: calendar?.timezone,
+  })
+  const recoverable = buildConstructionProductionDayDurationMetric(recoverableDays, {
+    asOf,
+    timezone: calendar?.timezone,
+    calendar,
+  })
+  const unrecoverable = buildConstructionProductionDayDurationMetric(unrecoverableDays, {
+    asOf,
+    timezone: calendar?.timezone,
+    calendar,
+  })
+  const productionDuration = (value: number | null | undefined) => (
+    buildConstructionProductionDayDurationMetric(value, {
+      asOf,
+      timezone: calendar?.timezone,
+      calendar,
+    })
+  )
+  const durationAdjustmentWithMetrics = (
+    adjustment: Extract<ScheduleAccelerationProposalAction, { type: 'crashing' }>['durationAdjustments'][number],
+  ) => ({
+    ...adjustment,
+    currentDuration: productionDuration(adjustment.currentDurationDays),
+    proposedDuration: productionDuration(adjustment.proposedDurationDays),
+    minDuration: productionDuration(adjustment.minDurationDays),
+    recoverDuration: productionDuration(adjustment.recoverDays),
+  })
+  const accelerationProposalWithMetrics = accelerationProposal
+    ? {
+        ...accelerationProposal,
+        overshootDays,
+        overshoot,
+        totalRecover: recoverable,
+        remainingGap: unrecoverable,
+        actions: accelerationProposal.actions.map((action) => ({
+          ...action,
+          recoverDuration: productionDuration(action.recoverDays),
+          ...(action.type === 'crashing'
+            ? { durationAdjustments: action.durationAdjustments.map(durationAdjustmentWithMetrics) }
+            : {}),
+        })),
+        rescheduleDraft: accelerationProposal.rescheduleDraft
+          ? {
+              ...accelerationProposal.rescheduleDraft,
+              taskDateAdjustments: accelerationProposal.rescheduleDraft.taskDateAdjustments.map((adjustment) => ({
+                ...adjustment,
+                currentDuration: productionDuration(adjustment.currentDurationDays),
+                proposedDuration: productionDuration(adjustment.proposedDurationDays),
+                recoverDuration: productionDuration(adjustment.recoverDays),
+              })),
+              resourceAdjustments: accelerationProposal.rescheduleDraft.resourceAdjustments
+                .map(durationAdjustmentWithMetrics),
+            }
+          : undefined,
+        protectedConstraints: accelerationProposal.protectedConstraints.map((constraint) => ({
+          ...constraint,
+          duration: productionDuration(constraint.durationDays),
+        })),
+        calculationBasis: accelerationProposal.calculationBasis
+          ? {
+              ...accelerationProposal.calculationBasis,
+              naturalDuration: productionDuration(accelerationProposal.calculationBasis.naturalDurationDays),
+              hardConstraintDuration: productionDuration(accelerationProposal.calculationBasis.hardConstraintDays),
+            }
+          : undefined,
+      }
+    : undefined
   const result: ScheduleTargetFeasibility = {
     mode: params.mode ?? 'compare_only',
     scenario,
     targetEndDate,
     naturalEndDate,
     overshootDays,
+    overshoot,
     recoverableDays,
+    recoverable,
     unrecoverableDays,
+    unrecoverable,
     verdict,
     strategies: buildTargetFeasibilityStrategies({
       rows: comparableRows,
@@ -2976,10 +3084,13 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
       unrecoverableDays,
       budget,
       proposal: accelerationProposal,
-    }),
+    }).map((strategy) => ({
+      ...strategy,
+      recoverDuration: productionDuration(strategy.recoverDays),
+    })),
     recoverableDaysConfidenceBand,
   }
-  result.accelerationProposal = accelerationProposal
+  result.accelerationProposal = accelerationProposalWithMetrics
   if (result.accelerationProposal) {
     result.durationOutputCode = result.accelerationProposal.durationOutputCode
     result.durationOutputSemanticFieldName = result.accelerationProposal.durationOutputSemanticFieldName

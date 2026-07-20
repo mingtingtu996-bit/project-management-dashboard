@@ -27,9 +27,29 @@ describe('projectRemainingForecastApi governed project duration output', () => {
         durationOutputCode: 'project_remaining_forecast',
         durationOutputSemanticFieldName: 'projectRemainingForecastDays',
         projectRemainingForecastDays: 42,
+        projectRemainingForecast: {
+          value: 42,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: '2027-04-30',
         targetEndDate: '2027-03-31',
         targetGapDays: 30,
+        targetGap: {
+          value: 30,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         rowsEvaluated: 2,
         calculationContext: {
           primaryLayer: 'runtimeExecutionFacts',
@@ -50,9 +70,19 @@ describe('projectRemainingForecastApi governed project duration output', () => {
         durationOutputCode: 'project_remaining_forecast',
         durationOutputSemanticFieldName: 'projectRemainingForecastDays',
         projectRemainingForecastDays: 42,
+        projectRemainingForecast: expect.objectContaining({
+          value: 42,
+          unit: 'construction_production_day',
+          availability: 'available',
+        }),
         forecastFinishDate: '2027-04-30',
         targetEndDate: '2027-03-31',
         targetGapDays: 30,
+        targetGap: expect.objectContaining({
+          value: 30,
+          unit: 'calendar_day',
+          availability: 'available',
+        }),
         rowsEvaluated: 2,
       },
     })
@@ -66,6 +96,24 @@ describe('projectRemainingForecastApi governed project duration output', () => {
       },
       undefined,
     )
+  })
+
+  it('does not synthesize typed facts from legacy numeric duration fields', async () => {
+    mocks.apiPost.mockResolvedValueOnce({
+      projectId: 'project-1',
+      rowsEvaluated: 1,
+      projectRemainingForecast: {
+        durationOutputCode: 'project_remaining_forecast',
+        projectRemainingForecastDays: 42,
+        targetGapDays: 30,
+        forecastFinishDate: '2027-04-30',
+      },
+    })
+
+    const response = await getProjectRemainingDurationForecast('project-1')
+
+    expect(response.projectRemainingForecast?.projectRemainingForecast).toBeNull()
+    expect(response.projectRemainingForecast?.targetGap).toBeNull()
   })
 
   it('does not derive project-level remaining duration from legacy snake_case aliases', async () => {
