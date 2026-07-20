@@ -17,6 +17,13 @@ import { delayDayDelta, inclusiveDurationDays, signedDurationDayDelta } from '..
 import { isCompletedMilestone, isCompletedTask, isInProgressTask } from '../utils/taskStatus.js'
 import { isPendingCondition } from '../utils/conditionStatus.js'
 import { mapProjectHealthStatus, type ProjectHealthStatus } from '../utils/projectHealthStatus.js'
+import {
+  buildCalendarDayDurationMetric,
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  hasIdentifiedConstructionCalendar,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 import { resolveLiveTaskCriticalityProjection } from './taskCriticalityProjectionService.js'
 import {
   getMonthlyPlanFulfillmentTrend,
@@ -495,6 +502,10 @@ export interface MilestoneOverviewItem {
   planned_date: string | null
   current_planned_date: string | null
   actual_date: string | null
+  planDateShift: DurationMetricDto
+  futureDueWindow: DurationMetricDto
+  actualOverdue: DurationMetricDto
+  actualScheduleVariance: DurationMetricDto
   milestone_level: number | null
   wbs_level: number | null
   wbs_code: string | null
@@ -1500,20 +1511,13 @@ function getMilestoneTargetDate(task: Pick<Task, 'planned_end_date' | 'end_date'
 }
 
 function getMilestoneLifecycleStatus(
-  task: Pick<Task, 'status' | 'planned_end_date' | 'end_date'>,
-  now = Date.now(),
+  task: Pick<Task, 'status'>,
+  daysUntilTarget: number | null,
 ): MilestoneLifecycleStatus {
   if (isCompletedTask(task)) return 'completed'
-
-  const targetDate = getMilestoneTargetDate(task)
-  if (!targetDate) return 'upcoming'
-
-  const targetTime = new Date(targetDate).getTime()
-  if (Number.isNaN(targetTime)) return 'upcoming'
-
-  const daysUntil = signedDurationDayDelta(new Date(now), targetDate) ?? Number.POSITIVE_INFINITY
-  if (daysUntil < 0) return 'overdue'
-  if (daysUntil <= 7) return 'soon'
+  if (daysUntilTarget === null) return 'upcoming'
+  if (daysUntilTarget < 0) return 'overdue'
+  if (daysUntilTarget <= 7) return 'soon'
   return 'upcoming'
 }
 
@@ -1891,12 +1895,12 @@ export function buildMilestoneOverview(
   asOf = new Date(),
   calendar?: ConstructionCalendarContext | null,
 ): MilestoneOverview {
-  const asOfTime = asOf.getTime()
+  const durationAsOf = businessDateKey(asOf, calendar?.timezone ?? undefined)
+  const hasProductionCalendar = hasIdentifiedConstructionCalendar(calendar)
   const items = tasks
     .filter((task) => task.is_milestone)
     .map((task) => {
       const milestoneTask = task as DecoratedMilestoneTask
-      const status = getMilestoneLifecycleStatus(task, asOfTime)
       const targetDate = getMilestoneTargetDate(task)
 
       const non_base_labels = [...new Set(milestoneTask.milestone_non_base_labels ?? [])]
@@ -1934,6 +1938,34 @@ export function buildMilestoneOverview(
         && !Boolean(milestoneTask.milestone_mapping_pending)
         && !hasMilestoneLabel(non_base_labels, BASELINE_RELATION_INVALID_LABELS)
       const baselineTargetDate = hasComparableBaseline ? rawBaselineTargetDate : null
+      const normalizedCurrentPlanDate = String(currentPlanDate || '').trim() || null
+      const normalizedActualDate = String(task.actual_end_date || '').trim() || null
+      const planDateShift = buildCalendarDayDurationMetric(
+        signedDurationDayDelta(baselineTargetDate, normalizedCurrentPlanDate),
+        { asOf: durationAsOf, timezone: calendar?.timezone },
+      )
+      const futureDueWindowValue = signedDurationDayDelta(durationAsOf, normalizedCurrentPlanDate)
+      const futureDueWindow = buildCalendarDayDurationMetric(
+        futureDueWindowValue,
+        { asOf: durationAsOf, timezone: calendar?.timezone },
+      )
+      const status = getMilestoneLifecycleStatus(task, futureDueWindowValue)
+      const actualOverdueValue = normalizedCurrentPlanDate && !isCompletedTask(task) && hasProductionCalendar
+        ? Math.max(0, delayDayDelta(normalizedCurrentPlanDate, durationAsOf, calendar) ?? 0)
+        : null
+      const actualScheduleVarianceValue = normalizedCurrentPlanDate && normalizedActualDate && hasProductionCalendar
+        ? delayDayDelta(normalizedCurrentPlanDate, normalizedActualDate, calendar)
+        : null
+      const actualOverdue = buildConstructionProductionDayDurationMetric(actualOverdueValue, {
+        calendar,
+        asOf: durationAsOf,
+        timezone: calendar?.timezone,
+      })
+      const actualScheduleVariance = buildConstructionProductionDayDurationMetric(actualScheduleVarianceValue, {
+        calendar,
+        asOf: durationAsOf,
+        timezone: calendar?.timezone,
+      })
 
       return {
         id: String(task.id ?? ''),
@@ -1945,8 +1977,12 @@ export function buildMilestoneOverview(
         statusLabel: getMilestoneStatusLabel(status),
         updatedAt: String(task.updated_at || task.created_at || '').trim(),
         planned_date: String(baselineTargetDate || '').trim() || null,
-        current_planned_date: String(currentPlanDate || '').trim() || null,
-        actual_date: String(task.actual_end_date || '').trim() || null,
+        current_planned_date: normalizedCurrentPlanDate,
+        actual_date: normalizedActualDate,
+        planDateShift,
+        futureDueWindow,
+        actualOverdue,
+        actualScheduleVariance,
         milestone_level: typeof task.milestone_level === 'number' ? task.milestone_level : null,
         wbs_level: typeof task.wbs_level === 'number' ? task.wbs_level : null,
         wbs_code: String(task.wbs_code || '').trim() || null,
@@ -1998,11 +2034,10 @@ export function buildMilestoneOverview(
     ).length,
     dueSoon30dCount: items.filter((item) => {
       if (item.status === 'completed') return false
-      if (!item.current_planned_date) return false
-      const plannedTime = new Date(item.current_planned_date).getTime()
-      if (Number.isNaN(plannedTime)) return false
-      const daysUntil = signedDurationDayDelta(asOf, item.current_planned_date) ?? Number.NEGATIVE_INFINITY
-      return daysUntil >= 0 && daysUntil <= 30
+      const daysUntil = item.futureDueWindow.availability === 'available'
+        ? item.futureDueWindow.value
+        : null
+      return daysUntil !== null && daysUntil >= 0 && daysUntil <= 30
     }).length,
     highRiskCount: items.filter((item) => {
       if (item.status === 'overdue') return true

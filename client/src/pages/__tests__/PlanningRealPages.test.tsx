@@ -839,6 +839,48 @@ describe('Planning real pages', () => {
     await waitForCondition(() => usePlanningStore.getState().selectedItemIds.length === 1)
   })
 
+  it('labels batch date movement as calendar days and rejects fractional shifts', async () => {
+    const versions: MonthlyPlanVersion[] = [{ ...monthlyDraft, items: undefined } as never]
+    mockedApiGet.mockImplementation(async (url: string) => {
+      if (url.startsWith('/api/monthly-plans?project_id=')) return versions as never
+      if (url.startsWith('/api/monthly-plans/monthly-v3?project_id=')) return monthlyDraft as never
+      if (url.startsWith('/api/task-baselines?project_id=')) return baselineVersions as never
+      if (url.startsWith('/api/tasks?projectId=')) return tasks as never
+      if (url.startsWith('/api/task-conditions?projectId=')) return conditions as never
+      if (url.startsWith('/api/task-obstacles?projectId=')) return obstacles as never
+      throw new Error(`unexpected apiGet: ${url}`)
+    })
+    mockedApiPost.mockImplementation(async (url: string) => {
+      if (url === '/api/monthly-plans/monthly-v3/lock') return { lock: lockRecord } as never
+      throw new Error(`unexpected apiPost: ${url}`)
+    })
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('1.5')
+    const view = mount(
+      <MemoryRouter initialEntries={['/projects/project-1/planning/monthly']}>
+        <Routes>
+          <Route path="/projects/:id/planning/monthly" element={<MonthlyPlanPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    cleanups.push(view.cleanup)
+
+    await waitForSelector(view.container, '[data-testid="monthly-plan-tree-editor"]')
+    await waitForCondition(() => usePlanningStore.getState().selectedItemIds.length === 2)
+    const shiftButton = Array.from(view.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('批量顺延')) as HTMLButtonElement | undefined
+    expect(shiftButton?.textContent).toContain('批量顺延（日历天）')
+    const beforeDates = Array.from(view.container.querySelectorAll('input[type="date"]'))
+      .map((input) => (input as HTMLInputElement).value)
+
+    await clickElement(shiftButton)
+    await flush()
+
+    const afterDates = Array.from(view.container.querySelectorAll('input[type="date"]'))
+      .map((input) => (input as HTMLInputElement).value)
+    expect(afterDates).toEqual(beforeDates)
+    promptSpy.mockRestore()
+  })
+
   it('does not expose manual regeneration on an existing monthly plan', async () => {
     const versions: MonthlyPlanVersion[] = [{ ...monthlyDraft, items: undefined } as never]
 

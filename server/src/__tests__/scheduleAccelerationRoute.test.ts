@@ -132,12 +132,32 @@ describe('schedule acceleration route', () => {
         duration_output_semantic_field_name: 'legacyProjectRemainingForecastDays',
         projectRemainingForecastDays: 42,
         project_remaining_forecast_days: 999,
+        projectRemainingForecast: {
+          value: 42,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: '2027-04-30',
         forecast_finish_date: '2099-04-30',
         targetEndDate: '2027-03-31',
         target_end_date: '2099-03-31',
         targetGapDays: 30,
         target_gap_days: 999,
+        targetGap: {
+          value: 30,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         rowsEvaluated: 2,
         rows_evaluated: 99,
         calculationContext: {
@@ -170,12 +190,32 @@ describe('schedule acceleration route', () => {
         duration_output_semantic_field_name: 'legacyProjectRemainingForecastDays',
         projectRemainingForecastDays: 42,
         project_remaining_forecast_days: 999,
+        projectRemainingForecast: {
+          value: 42,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastFinishDate: '2027-04-30',
         forecast_finish_date: '2099-04-30',
         targetEndDate: '2027-03-31',
         target_end_date: '2099-03-31',
         targetGapDays: 30,
         target_gap_days: 999,
+        targetGap: {
+          value: 30,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         rowsEvaluated: 2,
         rows_evaluated: 99,
         calculationContext: {
@@ -281,6 +321,16 @@ describe('schedule acceleration route', () => {
       durationOutputCode: 'project_remaining_forecast',
       durationOutputSemanticFieldName: 'projectRemainingForecastDays',
       projectRemainingForecastDays: 42,
+      projectRemainingForecast: expect.objectContaining({
+        value: 42,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+      targetGap: expect.objectContaining({
+        value: 30,
+        unit: 'calendar_day',
+        availability: 'available',
+      }),
       calculationContext: expect.objectContaining({
         criticalPath: expect.any(Object),
         monthlyCommitments: expect.any(Object),
@@ -372,6 +422,64 @@ describe('schedule acceleration route', () => {
         rowsEvaluated: null,
         projectRemainingForecast: null,
         constructionOrganizationProductOutcomeCloseoutProgress: null,
+      },
+    })
+    expect(mocks.buildConstructionOrganizationProductOutcomeCloseoutProgressForProject).not.toHaveBeenCalled()
+  })
+
+  it('does not package a fail-closed production-day forecast as ready', async () => {
+    mocks.buildRuntimeProjectRemainingDurationForecast.mockResolvedValueOnce({
+      rowsEvaluated: 2,
+      projectRemainingForecast: {
+        durationOutputCode: 'project_remaining_forecast',
+        durationOutputSemanticFieldName: 'projectRemainingForecastDays',
+        durationOutputContract: null,
+        projectRemainingForecastDays: null,
+        projectRemainingForecast: {
+          value: null,
+          unit: 'construction_production_day',
+          calendarRef: null,
+          calendarVersion: null,
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        forecastFinishDate: null,
+        targetEndDate: '2027-03-31',
+        targetGapDays: null,
+        targetGap: {
+          value: null,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        },
+        rowsEvaluated: 2,
+        calculationContext: {},
+      },
+    })
+
+    const response = await request(buildApp())
+      .post('/api/projects/project-1/schedule-acceleration/remaining-forecast')
+      .send({
+        targetEndDate: '2027-03-31',
+        asOfDate: '2027-02-15',
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body).toMatchObject({
+      success: true,
+      data: {
+        projectId: 'project-1',
+        status: 'degraded',
+        degraded: true,
+        degradationReason: 'runtime_forecast_unavailable',
+        rowsEvaluated: null,
+        projectRemainingForecast: null,
       },
     })
     expect(mocks.buildConstructionOrganizationProductOutcomeCloseoutProgressForProject).not.toHaveBeenCalled()

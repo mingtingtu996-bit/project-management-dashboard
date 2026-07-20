@@ -1,6 +1,7 @@
 import type { Task } from './supabase'
 import { isCompletedTask } from './taskBusinessStatus'
 import { daysUntilLocalDate } from './dateDistance'
+import { normalizeDurationMetricDto, type DurationMetricDto } from './durationMetric'
 
 export type MilestoneLifecycleStatus = 'completed' | 'overdue' | 'soon' | 'upcoming'
 
@@ -36,6 +37,10 @@ export interface MilestoneOverviewItem {
   planned_date: string | null
   current_planned_date: string | null
   actual_date: string | null
+  planDateShift?: DurationMetricDto | null
+  futureDueWindow?: DurationMetricDto | null
+  actualOverdue?: DurationMetricDto | null
+  actualScheduleVariance?: DurationMetricDto | null
   progress: number
   status: MilestoneLifecycleStatus
   statusLabel: string
@@ -139,6 +144,10 @@ export function normalizeMilestoneOverview(value?: Partial<MilestoneOverview> | 
       planned_date: item.planned_date ?? null,
       current_planned_date: item.current_planned_date ?? null,
       actual_date: item.actual_date ?? null,
+      planDateShift: normalizeDurationMetricDto(item.planDateShift),
+      futureDueWindow: normalizeDurationMetricDto(item.futureDueWindow),
+      actualOverdue: normalizeDurationMetricDto(item.actualOverdue),
+      actualScheduleVariance: normalizeDurationMetricDto(item.actualScheduleVariance),
       progress: Number(item.progress ?? 0),
       status: item.status ?? 'upcoming',
       statusLabel: item.statusLabel ?? getStatusLabel(item.status ?? 'upcoming'),

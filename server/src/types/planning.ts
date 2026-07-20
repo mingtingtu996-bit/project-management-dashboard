@@ -1,3 +1,5 @@
+import type { DurationMetricDto } from '../services/durationMetricService.js'
+
 export const PLANNING_STATUSES = ['draft', 'confirmed', 'closed', 'revising', 'pending_realign', 'archived'] as const
 export type PlanningStatus = (typeof PLANNING_STATUSES)[number]
 
@@ -711,6 +713,8 @@ export interface ProgressDeviationAttribution {
     reason_type?: string | null
     source?: string | null
     confidence?: string | null
+    impact_duration?: DurationMetricDto
+    /** @deprecated Use impact_duration. Removed after one compatibility release. */
     impact_days?: number | null
     priority?: number | null
     responsibility_basis?: string | null
@@ -745,6 +749,8 @@ export interface ProgressDeviationCauseChainItem {
   accountable_owner_id?: string | null
   responsibility_basis: 'upstream_dependency' | string
   responsibility_role?: string | null
+  impact_duration?: DurationMetricDto
+  /** @deprecated Use impact_duration. Removed after one compatibility release. */
   impact_days?: number | null
   confidence?: string | null
   evidence_source: string
@@ -755,7 +761,11 @@ export interface ProgressDeviationCauseChainItem {
     weight: number
     basis?: string | null
   } | null
-  evidence?: Record<string, unknown>
+  evidence?: Record<string, unknown> & {
+    wait_duration?: DurationMetricDto
+    /** @deprecated Use wait_duration. Removed after one compatibility release. */
+    wait_days?: number | null
+  }
 }
 
 export interface ProgressDeviationMonthlyBucket {
@@ -779,6 +789,8 @@ export interface ProgressDeviationResponsibilityContribution {
   responsibility_role?: 'accountable_subject' | 'execution_owner' | 'impacted_subject' | string
   adjudication_role?: string | null
   transmission_task_ids?: string[]
+  impact_duration?: DurationMetricDto
+  /** @deprecated Use impact_duration. Removed after one compatibility release. */
   impact_days?: number | null
   critical_path_weight?: number | null
   priority_score?: number | null
@@ -791,15 +803,17 @@ export interface ProgressDeviationCauseSummary {
   reason: string
   count: number
   percentage: number
+  impact_duration?: DurationMetricDto
+  /** @deprecated Use impact_duration. Removed after one compatibility release. */
   impact_days?: number | null
   confidence?: number | null
   score?: number | null
 }
 
 export interface ProgressDeviationChartData {
-  baselineDeviation: ProgressDeviationRow[]
+  baselineDeviation: ProgressDeviationFactRow[]
   monthlyFulfillment: ProgressDeviationMonthlyBucket[]
-  executionDeviation: ProgressDeviationRow[]
+  executionDeviation: ProgressDeviationFactRow[]
   monthly_buckets: ProgressDeviationMonthlyBucket[]
 }
 
@@ -822,7 +836,9 @@ export interface ProgressDeviationRow {
   planned_progress?: number | null
   actual_progress?: number | null
   actual_date?: string | null
-  deviation_days: number
+  deviation_duration?: DurationMetricDto
+  /** @deprecated Use deviation_duration. Removed after one compatibility release. */
+  deviation_days: number | null
   deviation_rate: number
   status: ProgressDeviationRowStatus
   reason?: string | null
@@ -834,6 +850,37 @@ export interface ProgressDeviationRow {
   data_completeness?: ProgressDeviationDataCompleteness | null
 }
 
+export type ProgressDeviationFactDelayReason = ProgressDeviationAttribution['delay_reasons'][number] & {
+  impact_duration: DurationMetricDto
+}
+
+export type ProgressDeviationFactCauseChainItem = Omit<ProgressDeviationCauseChainItem, 'impact_duration' | 'evidence'> & {
+  impact_duration: DurationMetricDto
+  evidence?: Record<string, unknown> & {
+    wait_duration: DurationMetricDto
+    /** @deprecated Use wait_duration. Removed after one compatibility release. */
+    wait_days?: number | null
+  }
+}
+
+export type ProgressDeviationFactAttribution = Omit<ProgressDeviationAttribution, 'delay_reasons' | 'cause_chain'> & {
+  delay_reasons: ProgressDeviationFactDelayReason[]
+  cause_chain?: ProgressDeviationFactCauseChainItem[]
+}
+
+export type ProgressDeviationFactRow = Omit<ProgressDeviationRow, 'deviation_duration' | 'attribution'> & {
+  deviation_duration: DurationMetricDto
+  attribution?: ProgressDeviationFactAttribution | null
+}
+
+export type ProgressDeviationFactResponsibilityContribution = ProgressDeviationResponsibilityContribution & {
+  impact_duration: DurationMetricDto
+}
+
+export type ProgressDeviationFactCauseSummary = ProgressDeviationCauseSummary & {
+  impact_duration: DurationMetricDto
+}
+
 export interface ProgressDeviationMainline {
   key: ProgressDeviationMainlineKey
   label: string
@@ -843,7 +890,7 @@ export interface ProgressDeviationMainline {
     delayed_items: number
     unresolved_items: number
   }
-  rows: ProgressDeviationRow[]
+  rows: ProgressDeviationFactRow[]
 }
 
 export interface ProgressDeviationSummary {
@@ -884,13 +931,13 @@ export interface ProgressDeviationAnalysisResponse {
   monthly_plan_version_id?: string | null
   version_lock?: BaselineVersionLock | null
   summary: ProgressDeviationSummary
-  rows: ProgressDeviationRow[]
+  rows: ProgressDeviationFactRow[]
   mainlines: ProgressDeviationMainline[]
   mapping_monitoring: ProgressDeviationMappingMonitoring
   trend_events: ProgressDeviationTrendEvent[]
   chart_data?: ProgressDeviationChartData | null
-  responsibility_contribution?: ProgressDeviationResponsibilityContribution[]
-  top_deviation_causes?: ProgressDeviationCauseSummary[]
+  responsibility_contribution?: ProgressDeviationFactResponsibilityContribution[]
+  top_deviation_causes?: ProgressDeviationFactCauseSummary[]
   m1_m9_consistency?: MilestoneIntegrityReport
 }
 

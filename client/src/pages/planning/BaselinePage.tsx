@@ -45,6 +45,7 @@ import { usePlanningViewMode } from '@/hooks/usePlanningViewMode'
 import { useStore } from '@/hooks/useStore'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import { inclusiveDurationDays } from '@/lib/durationDays'
+import { formatDurationMetric, type DurationMetricDto } from '@/lib/durationMetric'
 import { buildPlanningConflictFieldGroups, mergePlanningItemsBeforeSave } from '@/lib/planningConflictMerge'
 import { writePlanningTableExport, type PlanningExportCell } from '@/lib/planningExport'
 import {
@@ -53,6 +54,12 @@ import {
   type PlanningFieldConfigExtraColumnKey,
 } from '@/lib/planningFieldConfig'
 import { commitPlanningTable } from '@/services/planningCommitApi'
+import {
+  normalizeBaselineGenerationCandidate,
+  normalizeBaselineValidityDetails,
+  type BaselineGenerationCandidate,
+  type BaselineValidityDetails,
+} from '@/services/baselineGenerationApi'
 import type { PlanningTableOperation } from '@/components/planning/PlanningCommitModel'
 import type { WbsTemplateGeneratePreview } from '@/services/wbsTemplateGenerationApi'
 import { cn } from '@/lib/utils'
@@ -135,37 +142,6 @@ type BaselineDiffResponse = {
   items: BaselineDiffItem[]
 }
 
-type BaselineGenerationCandidateReason = {
-  code: string
-  label: string
-  detail: string
-  severity: 'info' | 'warning'
-}
-
-type BaselineGenerationCandidate = {
-  baselineId: string
-  projectId: string
-  sourceVersionLabel: string
-  candidateVersionLabel: string
-  recommended: boolean
-  summary: string
-  reasons: BaselineGenerationCandidateReason[]
-  metrics: {
-    baselineTaskCount: number
-    candidateTaskCount: number
-    affectedTaskCount: number
-    affectedTaskRatio: number
-    addedItemCount: number
-    removedItemCount: number
-    changedItemCount: number
-    structureChangeRatio: number
-    milestoneMaxShiftDays: number
-    totalFinishShiftDays: number
-  }
-  diffCounts: Record<string, number>
-  diffItems: BaselineDiffItem[]
-}
-
 type BaselineEditorSnapshot = {
   items: BaselineItem[]
   selectedIds: string[]
@@ -230,6 +206,13 @@ function toDateInputValue(value?: string | null) {
 function getDurationDays(start?: string | null, end?: string | null) {
   const duration = inclusiveDurationDays(toDateInputValue(start), toDateInputValue(end))
   return duration == null ? '-' : `${duration}天`
+}
+
+function formatBaselineCalendarDay(metric: DurationMetricDto | null | undefined) {
+  return formatDurationMetric(metric, {
+    expectedUnit: 'calendar_day',
+    unavailableLabel: '日历天口径不可用',
+  })
 }
 
 function getBaselineExportColumns(scope: ExportScope, extraColumns: PlanningFieldConfigExtraColumnKey[] = []) {
@@ -808,6 +791,7 @@ export default function BaselinePage() {
   const [templateGenerateOpen, setTemplateGenerateOpen] = useState(false)
   const [inlineTemplateGenerateItemId, setInlineTemplateGenerateItemId] = useState<string | null>(null)
   const [publishing, setPublishing] = useState(false)
+  const [publishValidity, setPublishValidity] = useState<BaselineValidityDetails | null>(null)
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
   const historyRef = useRef<BaselineEditorSnapshot[]>([])
   const historyCursorRef = useRef(-1)
@@ -1003,12 +987,13 @@ export default function BaselinePage() {
     }
 
     const controller = new AbortController()
-    void apiGet<BaselineGenerationCandidate>(
+    void apiGet<unknown>(
       `/api/task-baselines/${baselineId}/generation-candidate?project_id=${encodeURIComponent(projectId)}`,
       { signal: controller.signal },
     )
-      .then((candidate) => {
-        setGenerationCandidate(candidate.recommended ? candidate : null)
+      .then((rawCandidate) => {
+        const candidate = normalizeBaselineGenerationCandidate(rawCandidate)
+        setGenerationCandidate(candidate?.recommended ? candidate : null)
       })
       .catch((caught) => {
         if (caught instanceof DOMException && caught.name === 'AbortError') return
@@ -1480,6 +1465,7 @@ export default function BaselinePage() {
     if (!projectId || !activeBaseline || publishing || isEditable || !normalizedChangeReason) return
     setPublishing(true)
     setError(null)
+    setPublishValidity(null)
     try {
       const nextDetail = await apiPost<BaselineDetail>(
         `/api/task-baselines/${activeBaseline.id}/publish`,
@@ -1503,8 +1489,19 @@ export default function BaselinePage() {
       setIsEditable(false)
       setPublishOpen(false)
       setPublishChangeReason('')
+      setPublishValidity(null)
       setStatusNotice('已发布新版项目基线。')
     } catch (caught) {
+      const errorRecord = caught && typeof caught === 'object' ? caught as Record<string, unknown> : {}
+      const serverDetails = errorRecord.serverDetails && typeof errorRecord.serverDetails === 'object'
+        ? errorRecord.serverDetails as Record<string, unknown>
+        : {}
+      const validity = normalizeBaselineValidityDetails(serverDetails.validity)
+      setPublishValidity(validity)
+      if (validity) {
+        setError('当前项目基线已达到重新对齐阈值，请先处理以下校核结果。')
+        return
+      }
       const message = caught instanceof Error ? caught.message : '发布项目基线失败'
       setError(message)
     } finally {
@@ -1913,7 +1910,7 @@ export default function BaselinePage() {
               受影响 {Math.round(generationCandidate.metrics.affectedTaskRatio * 100)}%
             </span>
             <span className="rounded-full bg-white px-3 py-1">
-              总完工偏移 {generationCandidate.metrics.totalFinishShiftDays} 天
+              总完工偏移 {formatBaselineCalendarDay(generationCandidate.metrics.totalFinishShift)}
             </span>
           </div>
         </div>
@@ -2092,6 +2089,18 @@ export default function BaselinePage() {
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
+        {publishValidity ? (
+          <Alert data-testid="baseline-publish-validity" className="border-amber-200 bg-amber-50 text-amber-950">
+            <AlertDescription>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm tabular-nums">
+                <span>任务偏差率 {Math.round(publishValidity.deviatedTaskRatio * 100)}%</span>
+                <span>偏移里程碑 {publishValidity.shiftedMilestoneCount} 个</span>
+                <span>平均里程碑偏移 {formatBaselineCalendarDay(publishValidity.averageMilestoneShift)}</span>
+                <span>总工期偏差 {Math.round(publishValidity.totalDurationDeviationRatio * 100)}%</span>
+              </div>
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {statusNotice ? (
           <Alert className="border-blue-100 bg-blue-50/70 text-blue-950">
             <AlertDescription>{statusNotice}</AlertDescription>
@@ -2235,7 +2244,9 @@ export default function BaselinePage() {
                 </div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 px-4 py-3">
                   <div className="text-xs text-slate-500">里程碑最大偏移</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-950">{generationCandidate.metrics.milestoneMaxShiftDays} 天</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-950">
+                    {formatBaselineCalendarDay(generationCandidate.metrics.milestoneMaxShift)}
+                  </div>
                 </div>
               </div>
               <div className="space-y-2">

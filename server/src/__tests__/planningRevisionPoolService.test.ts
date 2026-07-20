@@ -238,6 +238,8 @@ vi.mock('../services/changeLogs.js', () => ({
   writeLog: state.writeLog,
 }))
 
+const planningRevisionPoolService = await import('../services/planningRevisionPoolService.js')
+
 const {
   evaluateBaselinePublishReadiness,
   evaluateBaselineConfirmationGate,
@@ -246,7 +248,7 @@ const {
   PlanningRevisionPoolServiceError,
   startRevisionFromBaseline,
   submitObservationPoolItems,
-} = await import('../services/planningRevisionPoolService.js')
+} = planningRevisionPoolService
 
 describe('planning revision pool service', () => {
   beforeEach(() => {
@@ -381,6 +383,7 @@ describe('planning revision pool service', () => {
         { id: 'milestone-2', baseline_date: '2026-04-12', current_plan_date: '2026-05-23' },
         { id: 'milestone-3', baseline_date: '2026-04-13', current_plan_date: '2026-05-25' },
       ] as any,
+      asOf: '2026-05-25',
     })
 
     expect(validity).toMatchObject({
@@ -389,12 +392,147 @@ describe('planning revision pool service', () => {
       deviatedTaskRatio: 1,
       shiftedMilestoneCount: 3,
       averageMilestoneShiftDays: 41,
+      averageMilestoneShift: {
+        value: 41,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-25',
+        availability: 'available',
+        unavailableReason: null,
+      },
       state: 'needs_realign',
       isValid: false,
     })
     expect(validity.triggeredRules).toEqual(
       expect.arrayContaining(['task_deviation_ratio', 'milestone_shift', 'duration_deviation']),
     )
+  })
+
+  it('accepts a valid leap-day milestone comparison as a Gregorian calendar-day fact', () => {
+    const validity = evaluateProjectBaselineValidity({
+      baselineItems: [
+        {
+          id: 'baseline-leap',
+          source_milestone_id: 'milestone-leap',
+        },
+      ] as any,
+      tasks: [],
+      milestones: [
+        { id: 'milestone-leap', baseline_date: '2024-02-29', current_plan_date: '2024-03-01' },
+      ] as any,
+      asOf: '2024-03-01',
+    })
+
+    expect(validity.shiftedMilestoneCount).toBe(1)
+    expect(validity.averageMilestoneShiftDays).toBe(1)
+    expect(validity.averageMilestoneShift).toEqual({
+      value: 1,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2024-03-01',
+      availability: 'available',
+      unavailableReason: null,
+    })
+  })
+
+  it('keeps a real zero-day milestone shift available instead of treating zero as missing', () => {
+    const validity = evaluateProjectBaselineValidity({
+      baselineItems: [
+        {
+          id: 'baseline-same-day',
+          source_milestone_id: 'milestone-same-day',
+        },
+      ] as any,
+      tasks: [],
+      milestones: [
+        { id: 'milestone-same-day', baseline_date: '2024-02-29', current_plan_date: '2024-02-29' },
+      ] as any,
+      asOf: '2024-02-29',
+    })
+
+    expect(validity.averageMilestoneShift).toMatchObject({
+      value: 0,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(validity.averageMilestoneShiftDays).toBe(0)
+  })
+
+  it.each([
+    ['an impossible date', '2026-02-30'],
+    ['a missing date', null],
+  ])('fails average milestone shift closed for %s', (_label, currentPlanDate) => {
+    const validity = evaluateProjectBaselineValidity({
+      baselineItems: [
+        {
+          id: 'baseline-invalid',
+          source_milestone_id: 'milestone-invalid',
+        },
+      ] as any,
+      tasks: [],
+      milestones: [
+        { id: 'milestone-invalid', baseline_date: '2026-02-28', current_plan_date: currentPlanDate },
+      ] as any,
+      asOf: '2026-03-02',
+    })
+
+    expect(validity.averageMilestoneShift).toMatchObject({
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    })
+    expect(validity.averageMilestoneShiftDays).toBeNull()
+    expect(validity.triggeredRules).not.toContain('milestone_shift')
+  })
+
+  it('builds structured validity details and never formats unavailable shift as zero days', () => {
+    const averageMilestoneShift = {
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-03-02',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    } as const
+    const validity = {
+      comparedTaskCount: 3,
+      deviatedTaskCount: 2,
+      deviatedTaskRatio: 0.67,
+      shiftedMilestoneCount: 0,
+      averageMilestoneShift,
+      averageMilestoneShiftDays: null,
+      totalDurationDeviationRatio: 0.2,
+      triggeredRules: ['task_deviation_ratio', 'duration_deviation'],
+      state: 'needs_realign',
+      isValid: false,
+    } as const
+
+    const details = (planningRevisionPoolService as any).buildProjectBaselineValidityDetails(validity)
+    const message = (planningRevisionPoolService as any).buildProjectBaselineValidityMessage(validity)
+
+    expect(details).toEqual({
+      validity: {
+        deviatedTaskRatio: 0.67,
+        shiftedMilestoneCount: 0,
+        averageMilestoneShift,
+        averageMilestoneShiftDays: null,
+        totalDurationDeviationRatio: 0.2,
+        triggeredRules: ['task_deviation_ratio', 'duration_deviation'],
+      },
+    })
+    expect(message).toContain('calendar-day metric unavailable')
+    expect(message).not.toContain('average 0 days')
   })
 
   it('blocks baseline confirmation on milestone order, resource cap, compression, and mutually exclusive process conflicts', () => {

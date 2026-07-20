@@ -21,7 +21,6 @@ type DeviationRowLike = {
   title: string
   status?: string
   actual_date?: string | null
-  deviation_days: number
 }
 
 type MonthBucketLike = {

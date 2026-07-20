@@ -81,8 +81,13 @@ function readValidatorNumberParam(validator: PlanningFieldValidator, key: string
 
 function isValidDateValue(value: unknown) {
   if (!hasFieldValue(value)) return true
-  const parsed = new Date(String(value))
-  return !Number.isNaN(parsed.getTime())
+  const text = String(value).trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return false
+  const [year, month, day] = text.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day
 }
 
 function isUuidLike(value: string) {

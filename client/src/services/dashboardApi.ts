@@ -1,5 +1,5 @@
 import { apiGet, isAbortError } from '@/lib/apiClient'
-import type { MilestoneOverview } from '@/lib/milestoneOverview'
+import { normalizeMilestoneOverview, type MilestoneOverview } from '@/lib/milestoneOverview'
 import {
   buildCriticalPathSummaryModel,
   fetchCriticalPathSnapshot,
@@ -306,7 +306,9 @@ export class DashboardApiService {
         `/api/projects/${encodeURIComponent(projectId)}/dashboard/project-summary`,
         withFreshSummaryOptions(options),
       )
-      return data ?? null
+      return data
+        ? { ...data, milestoneOverview: normalizeMilestoneOverview(data.milestoneOverview) }
+        : null
     } catch (error) {
       if (isAbortError(error)) {
         throw error

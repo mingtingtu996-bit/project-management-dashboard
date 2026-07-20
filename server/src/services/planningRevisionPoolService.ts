@@ -13,8 +13,18 @@ import type {
   RevisionPoolCandidate,
   RevisionSubmitResponse,
 } from '../types/planning.js'
-import { orderedInclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
+import {
+  normalizeDateOnlyText,
+  orderedInclusiveDurationDays,
+  signedDurationDayDelta,
+} from '../utils/durationDays.js'
 import { buildDurationContextPolicyLearningIdempotencyUuid } from './durationContextPolicyLearningCheckpointService.js'
+import {
+  buildCalendarDayDurationMetric,
+  businessDateKey,
+  DEFAULT_DURATION_TIMEZONE,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 
 export class PlanningRevisionPoolServiceError extends Error {
   code: 'NOT_FOUND' | 'VALIDATION_ERROR' | 'OBSERVATION_POOL_EMPTY' | 'INVALID_STATE'
@@ -65,7 +75,9 @@ export interface ProjectBaselineValiditySnapshot {
   deviatedTaskCount: number
   deviatedTaskRatio: number
   shiftedMilestoneCount: number
-  averageMilestoneShiftDays: number
+  averageMilestoneShift: DurationMetricDto
+  /** @deprecated Consume averageMilestoneShift; removed after one compatibility release. */
+  averageMilestoneShiftDays: number | null
   totalDurationDeviationRatio: number
   triggeredRules: Array<'task_deviation_ratio' | 'milestone_shift' | 'duration_deviation'>
   state: 'valid' | 'needs_realign' | 'insufficient_data'
@@ -92,10 +104,7 @@ function round2(value: number) {
 }
 
 function normalizeDateOnly(value?: string | null) {
-  if (!value) return null
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return null
-  return date.toISOString().slice(0, 10)
+  return normalizeDateOnlyText(value)
 }
 
 function diffDaysAbs(left: string, right: string) {
@@ -432,6 +441,8 @@ export function evaluateProjectBaselineValidity(params: {
   baselineItems: TaskBaselineItem[]
   tasks: Array<Pick<Task, 'id' | 'planned_start_date' | 'planned_end_date' | 'start_date' | 'end_date'>>
   milestones: Array<Pick<Milestone, 'id' | 'baseline_date' | 'current_plan_date'>>
+  asOf?: string
+  timezone?: string | null
 }): ProjectBaselineValiditySnapshot {
   const tasksById = new Map(params.tasks.map((task) => [task.id, task]))
   const milestonesById = new Map(params.milestones.map((milestone) => [milestone.id, milestone]))
@@ -448,14 +459,22 @@ export function evaluateProjectBaselineValidity(params: {
     return [{ itemId: item.id, deviationDays: diffDaysAbs(currentDate, baselineDate) }]
   })
 
-  const milestoneShifts = params.baselineItems.flatMap((item) => {
-    if (!item.source_milestone_id) return []
+  const milestoneComparisons = params.baselineItems.reduce<Array<{
+    available: boolean
+    shiftDays: number | null
+  }>>((comparisons, item) => {
+    if (!item.source_milestone_id) return comparisons
     const milestone = milestonesById.get(item.source_milestone_id)
     const baselineDate = normalizeDateOnly(milestone?.baseline_date ?? null)
     const currentPlanDate = normalizeDateOnly(milestone?.current_plan_date ?? null)
-    if (!baselineDate || !currentPlanDate) return []
-    return [diffDaysAbs(currentPlanDate, baselineDate)]
-  })
+    comparisons.push(!baselineDate || !currentPlanDate
+      ? { available: false, shiftDays: null }
+      : { available: true, shiftDays: diffDaysAbs(currentPlanDate, baselineDate) })
+    return comparisons
+  }, [])
+  const milestoneShifts = milestoneComparisons.flatMap((comparison) => (
+    comparison.available && comparison.shiftDays !== null ? [comparison.shiftDays] : []
+  ))
 
   const baselineSpan = collectDateSpan(
     params.baselineItems.flatMap((item) => [
@@ -479,10 +498,19 @@ export function evaluateProjectBaselineValidity(params: {
   const deviatedTaskRatio = comparedTaskCount > 0 ? round2(deviatedTaskCount / comparedTaskCount) : 0
   const shiftedMilestones = milestoneShifts.filter((days) => days > 0)
   const shiftedMilestoneCount = shiftedMilestones.length
-  const averageMilestoneShiftDays =
-    shiftedMilestoneCount > 0
+  const hasCompleteMilestoneDateMetadata = milestoneComparisons.length > 0
+    && milestoneComparisons.every((comparison) => comparison.available)
+  const averageMilestoneShiftValue = !hasCompleteMilestoneDateMetadata
+    ? null
+    : shiftedMilestoneCount > 0
       ? round2(shiftedMilestones.reduce((sum, days) => sum + days, 0) / shiftedMilestoneCount)
       : 0
+  const timezone = String(params.timezone ?? '').trim() || DEFAULT_DURATION_TIMEZONE
+  const asOf = params.asOf === undefined ? businessDateKey(new Date(), timezone) : params.asOf
+  const averageMilestoneShift = buildCalendarDayDurationMetric(averageMilestoneShiftValue, { asOf, timezone })
+  const averageMilestoneShiftDays = averageMilestoneShift.availability === 'available'
+    ? averageMilestoneShift.value
+    : null
   const totalDurationDeviationRatio =
     baselineSpan.durationDays > 0 && currentSpan.durationDays > 0
       ? round2(Math.abs(currentSpan.durationDays - baselineSpan.durationDays) / baselineSpan.durationDays)
@@ -492,7 +520,11 @@ export function evaluateProjectBaselineValidity(params: {
   if (deviatedTaskRatio >= 0.4) {
     triggeredRules.push('task_deviation_ratio')
   }
-  if (shiftedMilestoneCount >= 3 && averageMilestoneShiftDays >= 30) {
+  if (
+    shiftedMilestoneCount >= 3
+    && averageMilestoneShift.availability === 'available'
+    && (averageMilestoneShift.value ?? 0) >= 30
+  ) {
     triggeredRules.push('milestone_shift')
   }
   if (totalDurationDeviationRatio >= 0.1) {
@@ -500,13 +532,16 @@ export function evaluateProjectBaselineValidity(params: {
   }
 
   const hasComparableData =
-    comparedTaskCount > 0 || shiftedMilestoneCount > 0 || (baselineSpan.durationDays > 0 && currentSpan.durationDays > 0)
+    comparedTaskCount > 0
+    || milestoneComparisons.some((comparison) => comparison.available)
+    || (baselineSpan.durationDays > 0 && currentSpan.durationDays > 0)
 
   return {
     comparedTaskCount,
     deviatedTaskCount,
     deviatedTaskRatio,
     shiftedMilestoneCount,
+    averageMilestoneShift,
     averageMilestoneShiftDays,
     totalDurationDeviationRatio,
     triggeredRules,
@@ -517,6 +552,39 @@ export function evaluateProjectBaselineValidity(params: {
         : 'valid',
     isValid: triggeredRules.length === 0,
   }
+}
+
+export function buildProjectBaselineValidityDetails(validity: ProjectBaselineValiditySnapshot) {
+  return {
+    validity: {
+      deviatedTaskRatio: validity.deviatedTaskRatio,
+      shiftedMilestoneCount: validity.shiftedMilestoneCount,
+      averageMilestoneShift: validity.averageMilestoneShift,
+      averageMilestoneShiftDays: validity.averageMilestoneShiftDays,
+      totalDurationDeviationRatio: validity.totalDurationDeviationRatio,
+      triggeredRules: validity.triggeredRules,
+    },
+  }
+}
+
+export function buildProjectBaselineValidityMessage(validity: ProjectBaselineValiditySnapshot) {
+  const ruleLabels: Record<string, string> = {
+    task_deviation_ratio: 'task deviation ratio reached 40%',
+    milestone_shift: 'at least 3 milestones shifted by an average of 30 calendar days',
+    duration_deviation: 'total duration deviation reached 10%',
+  }
+  const triggeredSummary = validity.triggeredRules
+    .map((rule) => ruleLabels[rule] ?? rule)
+    .join(', ')
+  const averageShiftSummary = validity.averageMilestoneShift.availability === 'available'
+    ? `${Math.round(validity.averageMilestoneShift.value ?? 0)} calendar day(s)`
+    : 'calendar-day metric unavailable'
+
+  return `Baseline validity has crossed the realignment threshold: deviated task ratio ${Math.round(
+    validity.deviatedTaskRatio * 100,
+  )}%, shifted milestones ${validity.shiftedMilestoneCount}, average ${averageShiftSummary}, total duration deviation ${Math.round(
+    validity.totalDurationDeviationRatio * 100,
+  )}%. Triggered rules: ${triggeredSummary}. Please realign or revise before confirming.`
 }
 
 async function loadBaselineItems(client: any, baselineId: string, projectId: string): Promise<TaskBaselineItem[]> {

@@ -30,6 +30,10 @@ type TableName =
 
 type Store = Record<TableName, Array<Record<string, unknown>>>
 
+const calendarMocks = vi.hoisted(() => ({
+  resolveConstructionCalendarContext: vi.fn(),
+}))
+
 const state = vi.hoisted(() => {
   const tables: Store = {
     task_baselines: [],
@@ -422,10 +426,7 @@ vi.mock('../services/constructionCalendar.js', async () => {
   const actual = await vi.importActual<typeof import('../services/constructionCalendar.js')>('../services/constructionCalendar.js')
   return {
     ...actual,
-    resolveConstructionCalendarContext: vi.fn(async () => ({
-      basis: 'calendar_day',
-      windows: [],
-    })),
+    resolveConstructionCalendarContext: calendarMocks.resolveConstructionCalendarContext,
   }
 })
 
@@ -1186,6 +1187,15 @@ beforeEach(() => {
     state.tables[table].splice(0, state.tables[table].length)
   }
   vi.clearAllMocks()
+  calendarMocks.resolveConstructionCalendarContext.mockResolvedValue({
+    basis: 'official_construction_calendar_seed',
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available',
+    unavailableReason: null,
+  })
 })
 
 describe('progress deviation backend contract', () => {
@@ -1346,7 +1356,13 @@ describe('progress deviation backend contract', () => {
           reason: '\u73b0\u573a\u627f\u8f7d\u538b\u529b',
           reason_type: 'site_capacity_pressure',
           source: 'task_duration_forecasts.factor_summary',
-          impact_days: 4,
+          impact_days: null,
+          impact_duration: expect.objectContaining({
+            value: null,
+            unit: 'construction_production_day',
+            availability: 'unavailable',
+            unavailableReason: 'duration_source_metadata_missing',
+          }),
           priority: 90,
           responsibility_basis: 'site_capacity',
         }),
@@ -1399,12 +1415,254 @@ describe('progress deviation backend contract', () => {
     )
     const embeddedCheckRow = report.mainlines[2].rows.find((row) => row.id === 'task-7')
     expect(embeddedCheckRow?.attribution?.delay_reasons ?? []).toEqual([])
-    expect(report.top_deviation_causes).toEqual(
-      expect.arrayContaining([expect.objectContaining({ reason: '\u73b0\u573a\u627f\u8f7d\u538b\u529b', impact_days: expect.any(Number), score: expect.any(Number) })])
+    expect(report.top_deviation_causes).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ reason: '\u73b0\u573a\u627f\u8f7d\u538b\u529b' })]),
     )
+    expect(report.top_deviation_causes?.[0]?.impact_duration).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    }))
     const taskOneContribution = report.responsibility_contribution?.find((entry) => entry.task_ids.includes('task-1'))
     expect(taskOneContribution?.count).toBe(1)
-    expect(taskOneContribution).toMatchObject({ basis: 'site_capacity', confidence: expect.any(Number) })
+    expect(taskOneContribution).toMatchObject({
+      basis: 'owner_scope',
+      confidence: expect.any(Number),
+      impact_duration: expect.objectContaining({ unit: 'construction_production_day' }),
+    })
+  }, 30_000)
+
+  it('fails closed for deviation, impact, wait and responsibility durations when construction calendar identity is missing', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-18T08:00:00.000Z'))
+    try {
+      const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
+      calendarMocks.resolveConstructionCalendarContext.mockResolvedValueOnce({
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      })
+      state.tables.tasks.push({
+        id: 'task-upstream-calendar-missing',
+        project_id: projectId,
+        title: 'Upstream prerequisite',
+        status: 'in_progress',
+        progress: 50,
+        participant_unit_id: 'unit-upstream',
+        participant_unit_name: 'Upstream Owner',
+        planned_end_date: '2026-04-15',
+        updated_at: '2026-04-18T08:00:00.000Z',
+        version: 1,
+      })
+      state.tables.task_dependencies.push({
+        id: 'dependency-calendar-missing',
+        project_id: projectId,
+        task_id: 'task-1',
+        dependency_task_id: 'task-upstream-calendar-missing',
+        dependency_type: 'FS',
+        lag_days: 0,
+        required_for_start: true,
+        status: 'active',
+      })
+      const forecast = state.tables.task_duration_forecasts.find((row) => row.id === 'forecast-1')
+      if (!forecast) throw new Error('forecast-1 fixture missing')
+      forecast.metadata = {
+        forecastSources: {
+          dependencyPropagation: {
+            blockingDependencies: [{
+              dependencyTaskId: 'task-upstream-calendar-missing',
+              waitDays: 4,
+              expectedFinishDate: '2026-04-15',
+              availableStartDate: '2026-04-10',
+            }],
+          },
+        },
+      }
+
+      const report = await getProgressDeviationAnalysis({
+        project_id: projectId,
+        baseline_version_id: baselineVersionId,
+        monthly_plan_version_id: monthlyPlanVersionId,
+      })
+
+      const row = report.mainlines[0].rows.find((item) => item.id === 'baseline-item-1') as any
+      const forecastReason = row.attribution.delay_reasons.find((reason: any) => reason.reason_type === 'site_capacity_pressure')
+      const dependencyCause = row.attribution.cause_chain.find((cause: any) => cause.cause_type === 'dependency_wait')
+      const responsibility = report.responsibility_contribution?.find((item) => item.owner_id === 'unit-upstream') as any
+
+      expect(row.deviation_days).toBeNull()
+      expect(row.deviation_duration).toMatchObject({
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-04-18',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      })
+      expect(forecastReason).toMatchObject({
+        impact_days: null,
+        impact_duration: expect.objectContaining({
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+        }),
+      })
+      expect(dependencyCause).toMatchObject({
+        impact_days: null,
+        impact_duration: expect.objectContaining({
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+        }),
+        evidence: expect.objectContaining({
+          wait_days: null,
+          wait_duration: expect.objectContaining({
+            value: null,
+            unit: 'construction_production_day',
+            availability: 'unavailable',
+          }),
+        }),
+      })
+      expect(responsibility).toMatchObject({
+        impact_days: null,
+        impact_duration: expect.objectContaining({
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+        }),
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
+
+  it('recomputes dependency wait from dates with the identified construction calendar instead of trusting legacy numerics', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-18T08:00:00.000Z'))
+    try {
+      const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
+      calendarMocks.resolveConstructionCalendarContext.mockResolvedValueOnce({
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'site_shutdown',
+          startDate: '2026-04-11',
+          endDate: '2026-04-13',
+          counts_as_construction_shutdown: true,
+        }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v2',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      })
+      state.tables.tasks.push({
+        id: 'task-upstream-calendar-v2',
+        project_id: projectId,
+        title: 'Calendar-aware upstream prerequisite',
+        status: 'in_progress',
+        progress: 50,
+        participant_unit_id: 'unit-calendar-v2',
+        participant_unit_name: 'Calendar Owner',
+        planned_end_date: '2026-04-15',
+        updated_at: '2026-04-18T08:00:00.000Z',
+        version: 1,
+      })
+      state.tables.task_dependencies.push({
+        id: 'dependency-calendar-v2',
+        project_id: projectId,
+        task_id: 'task-1',
+        dependency_task_id: 'task-upstream-calendar-v2',
+        dependency_type: 'FS',
+        lag_days: 0,
+        required_for_start: true,
+        status: 'active',
+      })
+      const forecast = state.tables.task_duration_forecasts.find((row) => row.id === 'forecast-1')
+      if (!forecast) throw new Error('forecast-1 fixture missing')
+      forecast.metadata = {
+        forecastSources: {
+          dependencyPropagation: {
+            blockingDependencies: [{
+              dependencyTaskId: 'task-upstream-calendar-v2',
+              waitDays: 999,
+              expectedFinishDate: '2026-04-15',
+              availableStartDate: '2026-04-10',
+            }],
+          },
+        },
+      }
+
+      const report = await getProgressDeviationAnalysis({
+        project_id: projectId,
+        baseline_version_id: baselineVersionId,
+        monthly_plan_version_id: monthlyPlanVersionId,
+      })
+      const row = report.mainlines[0].rows.find((item) => item.id === 'baseline-item-1') as any
+      const dependencyCause = row.attribution.cause_chain.find((cause: any) => cause.cause_type === 'dependency_wait')
+
+      expect(dependencyCause).toMatchObject({
+        impact_days: 2,
+        impact_duration: {
+          value: 2,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v2',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-04-18',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        evidence: expect.objectContaining({
+          wait_days: 2,
+          wait_duration: expect.objectContaining({
+            value: 2,
+            unit: 'construction_production_day',
+            availability: 'available',
+          }),
+        }),
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
+
+  it('does not attach the current construction calendar identity to historical forecast extraDays without duration lineage', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-18T08:00:00.000Z'))
+    try {
+      const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
+
+      const report = await getProgressDeviationAnalysis({
+        project_id: projectId,
+        baseline_version_id: baselineVersionId,
+        monthly_plan_version_id: monthlyPlanVersionId,
+      })
+      const row = report.mainlines[0].rows.find((item) => item.id === 'baseline-item-1') as any
+      const forecastReason = row.attribution.delay_reasons.find((reason: any) => reason.reason_type === 'site_capacity_pressure')
+
+      expect(forecastReason).toMatchObject({
+        impact_days: null,
+        impact_duration: {
+          value: null,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-04-18',
+          availability: 'unavailable',
+          unavailableReason: 'duration_source_metadata_missing',
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   }, 30_000)
 
   it('does not treat legacy scheduled end_date as a real actual finish date in deviation rows', async () => {
@@ -1425,11 +1683,134 @@ describe('progress deviation backend contract', () => {
       const row = mainline.rows.find((item) => item.source_task_id === 'task-2')
       if (!row) continue
       expect(row.actual_date).toBeNull()
-      expect(row.deviation_days).toBe(0)
+      expect(row.deviation_days).toBeNull()
+      expect(row.deviation_duration).toMatchObject({
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      })
       expect(row.status).not.toBe('delayed')
       expect(row.reason).not.toBe('completion date exceeds plan')
     }
   })
+
+  it('keeps missing deviation, dependency wait and derived impact aggregates unavailable instead of coercing them to zero', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-18T08:00:00.000Z'))
+    try {
+      const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
+      state.tables.tasks.push(
+        {
+          id: 'task-unknown-duration-upstream',
+          project_id: projectId,
+          title: 'Unknown-duration upstream prerequisite',
+          status: 'in_progress',
+          progress: 20,
+          participant_unit_id: 'unit-unknown-duration-upstream',
+          participant_unit_name: 'Unknown Duration Owner',
+          actual_end_date: null,
+          version: 1,
+        },
+        {
+          id: 'task-unknown-duration-downstream',
+          project_id: projectId,
+          title: 'Unknown-duration downstream work',
+          status: 'in_progress',
+          progress: 10,
+          participant_unit_id: 'unit-unknown-duration-downstream',
+          participant_unit_name: 'Downstream Owner',
+          actual_end_date: null,
+          baseline_item_id: 'baseline-unknown-duration',
+          version: 1,
+        },
+      )
+      state.tables.task_baseline_items.push({
+        id: 'baseline-unknown-duration',
+        project_id: projectId,
+        baseline_version_id: baselineVersionId,
+        title: 'Unknown-duration downstream work',
+        target_progress: 80,
+        planned_end_date: null,
+        source_task_id: 'task-unknown-duration-downstream',
+        sort_order: 100,
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-01T00:00:00.000Z',
+      })
+      state.tables.task_dependencies.push({
+        id: 'dependency-unknown-duration',
+        project_id: projectId,
+        task_id: 'task-unknown-duration-downstream',
+        dependency_task_id: 'task-unknown-duration-upstream',
+        dependency_type: 'FS',
+        lag_days: 0,
+        required_for_start: true,
+        status: 'active',
+      })
+
+      const report = await getProgressDeviationAnalysis({
+        project_id: projectId,
+        baseline_version_id: baselineVersionId,
+        monthly_plan_version_id: monthlyPlanVersionId,
+      })
+
+      const row = report.mainlines[0].rows.find((item) => item.id === 'baseline-unknown-duration')
+      const dependencyCause = row?.attribution?.cause_chain?.find((cause) => cause.cause_type === 'dependency_wait')
+      const responsibility = report.responsibility_contribution?.find((entry) => entry.owner_id === 'unit-unknown-duration-upstream')
+      const topCause = report.top_deviation_causes?.find((entry) => entry.reason === dependencyCause?.reason)
+
+      expect.soft(row).toMatchObject({
+        status: 'delayed',
+        planned_date: null,
+        actual_date: null,
+        deviation_days: null,
+        deviation_duration: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        },
+      })
+      expect.soft(dependencyCause).toMatchObject({
+        impact_days: null,
+        impact_duration: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        },
+        evidence: expect.objectContaining({
+          wait_days: null,
+          wait_duration: expect.objectContaining({
+            value: null,
+            unit: 'construction_production_day',
+            availability: 'unavailable',
+            unavailableReason: 'duration_value_missing',
+          }),
+        }),
+      })
+      expect.soft(responsibility).toMatchObject({
+        impact_days: null,
+        impact_duration: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        },
+      })
+      expect.soft(topCause).toMatchObject({
+        impact_days: null,
+        impact_duration: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        },
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
 
   it('routes dependency-caused deviation responsibility to the upstream accountable owner', async () => {
     const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
@@ -1520,7 +1901,7 @@ describe('progress deviation backend contract', () => {
                 waitDays: 4,
                 floorRemainingDays: 9,
                 expectedFinishDate: '2026-04-19',
-                availableStartDate: '2026-04-19',
+                availableStartDate: '2026-04-15',
                 source: 'task_dependencies',
               },
             ],
@@ -1540,7 +1921,7 @@ describe('progress deviation backend contract', () => {
                 waitDays: 4,
                 floorRemainingDays: 9,
                 expectedFinishDate: '2026-04-19',
-                availableStartDate: '2026-04-19',
+                availableStartDate: '2026-04-15',
                 source: 'task_dependencies',
               },
             ],
@@ -1966,6 +2347,8 @@ describe('progress deviation backend contract', () => {
               dependencyType: 'FS',
               waitDays: 6,
               floorRemainingDays: 9,
+              expectedFinishDate: '2026-04-18',
+              availableStartDate: '2026-04-12',
             },
           ],
         },
@@ -2222,7 +2605,12 @@ describe('progress deviation backend contract', () => {
     const workflowReason = row?.attribution?.delay_reasons
       .find((reason) => reason.reason_type === 'workflow_sequence')
     expect(workflowReason).toMatchObject({
-      impact_days: 0,
+      impact_days: null,
+      impact_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_source_metadata_missing',
+      }),
       quantification_basis: 'confidence_only',
       attribution_role: 'confidence_adjustment',
     })
@@ -2237,7 +2625,7 @@ describe('progress deviation backend contract', () => {
     })
   }, 30_000)
 
-  it('keeps quantified delay factors when confidence-only evidence shares the same cause', async () => {
+  it('keeps the cause evidence but fails closed for historical extraDays when confidence-only evidence shares the same cause', async () => {
     const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
 
     state.tables.tasks.push({
@@ -2307,7 +2695,12 @@ describe('progress deviation backend contract', () => {
     const workflowReason = row?.attribution?.delay_reasons
       .find((reason) => reason.reason_type === 'workflow_sequence')
     expect(workflowReason).toMatchObject({
-      impact_days: 3,
+      impact_days: null,
+      impact_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_source_metadata_missing',
+      }),
       quantification_basis: 'factor_extra_days',
       attribution_role: 'quantified_delay_signal',
       evidence: expect.objectContaining({
@@ -2537,7 +2930,12 @@ describe('progress deviation backend contract', () => {
     const forecastOnlyReason = forecastOnlyRow?.attribution?.delay_reasons
       .find((reason) => reason.reason_type === 'external_readiness')
     expect(forecastOnlyReason).toMatchObject({
-      impact_days: 0,
+      impact_days: null,
+      impact_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_source_metadata_missing',
+      }),
       quantification_basis: 'forecast_only_external_readiness',
       attribution_role: 'evidence_candidate',
       review_status: 'needs_fact_anchor',
@@ -2624,7 +3022,12 @@ describe('progress deviation backend contract', () => {
       .find((reason) => reason.reason_type === 'unstarted_overdue_window') as any
     expect(unstartedReason).toMatchObject({
       confidence: 'low',
-      impact_days: 0,
+      impact_days: null,
+      impact_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_source_metadata_missing',
+      }),
       responsibility_basis: 'data_quality',
       quantification_basis: 'unknown_blocker_downweight',
       attribution_role: 'evidence_completion_prompt',
@@ -2722,7 +3125,12 @@ describe('progress deviation backend contract', () => {
       expect(executionRow).toMatchObject({
         planned_date: '2026-04-10',
         actual_date: null,
-        deviation_days: 0,
+        deviation_days: null,
+        deviation_duration: expect.objectContaining({
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'duration_value_missing',
+        }),
         status: 'on_track',
       })
   }, 30_000)
@@ -2794,13 +3202,23 @@ describe('progress deviation backend contract', () => {
 
     expect(baselineRow).toMatchObject({
       actual_date: null,
-      deviation_days: 0,
+      deviation_days: null,
+      deviation_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      }),
       status: 'delayed',
       reason: 'actual progress below planned target',
     })
     expect(monthlyRow).toMatchObject({
       actual_date: null,
-      deviation_days: 0,
+      deviation_days: null,
+      deviation_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      }),
       status: 'delayed',
       reason: 'actual progress below planned target',
     })
@@ -2848,7 +3266,12 @@ describe('progress deviation backend contract', () => {
     expect(updatedOnlyRow).toMatchObject({
       planned_date: '2026-04-10',
       actual_date: null,
-      deviation_days: 0,
+      deviation_days: null,
+      deviation_duration: expect.objectContaining({
+        value: null,
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      }),
     })
 
     const earlyRow = executionRows.find((row) => row.id === 'task-early-with-manual-reason')

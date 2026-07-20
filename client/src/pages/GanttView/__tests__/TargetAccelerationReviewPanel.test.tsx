@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { TargetAccelerationReviewPanel } from '../TargetAccelerationReviewPanel'
 import type { WbsTargetFeasibility } from '@/services/wbsTemplateGenerationApi'
@@ -101,8 +101,11 @@ function buildTargetFeasibility(): WbsTargetFeasibility {
           changedFields: ['planned_end_date'],
           visualDiff: {
             durationDeltaDays: -4,
+            durationDelta: productionMetric(-4),
             startDeltaDays: 0,
+            startDelta: calendarMetric(0),
             endDeltaDays: -4,
+            endDelta: calendarMetric(-4),
             barDeltaKind: 'compressed',
           },
         }],
@@ -302,6 +305,64 @@ function buildTargetFeasibility(): WbsTargetFeasibility {
 }
 
 describe('TargetAccelerationReviewPanel', () => {
+  it('disables draft acceptance when production-day facts are unavailable even if operations are present', () => {
+    const targetFeasibility = buildTargetFeasibility()
+    const proposal = targetFeasibility.accelerationProposal
+    const draft = proposal?.rescheduleDraft
+    if (!proposal || !draft || !proposal.totalRecover) throw new Error('expected actionable proposal fixture')
+    draft.operations = [{
+      type: 'update',
+      clientRowId: 'task-structure',
+      values: { planned_end_date: '2026-11-26' },
+    }]
+    proposal.totalRecover = {
+      ...proposal.totalRecover,
+      value: null,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+    const onAcceptRescheduleDraft = vi.fn()
+
+    render(
+      <TargetAccelerationReviewPanel
+        targetFeasibility={targetFeasibility}
+        tasks={tasks}
+        onAcceptRescheduleDraft={onAcceptRescheduleDraft}
+      />,
+    )
+
+    const acceptButton = screen.getByRole('button', { name: /采纳重排草案/ })
+    expect(acceptButton).toBeDisabled()
+    expect(screen.getAllByText(/生产日口径不可用/).length).toBeGreaterThan(0)
+    fireEvent.click(acceptButton)
+    expect(onAcceptRescheduleDraft).not.toHaveBeenCalled()
+  })
+
+  it('allows draft acceptance only when all required typed facts and operations are available', () => {
+    const targetFeasibility = buildTargetFeasibility()
+    const draft = targetFeasibility.accelerationProposal?.rescheduleDraft
+    if (!draft) throw new Error('expected actionable proposal fixture')
+    draft.operations = [{
+      type: 'update',
+      clientRowId: 'task-structure',
+      values: { planned_end_date: '2026-11-26' },
+    }]
+    const onAcceptRescheduleDraft = vi.fn()
+
+    render(
+      <TargetAccelerationReviewPanel
+        targetFeasibility={targetFeasibility}
+        tasks={tasks}
+        onAcceptRescheduleDraft={onAcceptRescheduleDraft}
+      />,
+    )
+
+    const acceptButton = screen.getByRole('button', { name: /采纳重排草案/ })
+    expect(acceptButton).toBeEnabled()
+    fireEvent.click(acceptButton)
+    expect(onAcceptRescheduleDraft).toHaveBeenCalledTimes(1)
+  })
+
   it('renders calendar shift and production recovery only from typed facts', () => {
     const targetFeasibility = buildTargetFeasibility()
     targetFeasibility.overshootDays = 999

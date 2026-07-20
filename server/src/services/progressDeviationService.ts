@@ -17,6 +17,12 @@ import { isActiveObstacle } from '../utils/obstacleStatus.js'
 import { calculateTaskPlannedProgress } from '../utils/progressCalculation.js'
 import { delayDayDelta } from '../utils/durationDays.js'
 import {
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  hasIdentifiedConstructionCalendar,
+  type DurationMetricDto,
+} from './durationMetricService.js'
+import {
   normalizeDurationContributionMode,
   type DurationContributionMode,
 } from '../seeds/durationContributionMode.js'
@@ -39,6 +45,11 @@ import type {
   ProgressDeviationCauseSummary,
   ProgressDeviationAttribution,
   ProgressDeviationDataCompleteness,
+  ProgressDeviationFactCauseSummary,
+  ProgressDeviationFactAttribution,
+  ProgressDeviationFactCauseChainItem,
+  ProgressDeviationFactResponsibilityContribution,
+  ProgressDeviationFactRow,
   ProgressDeviationMainline,
   ProgressDeviationReadRequest,
   ProgressDeviationMappingMonitoring,
@@ -289,6 +300,8 @@ function toNumber(value: unknown, fallback = 0): number {
 }
 
 function toNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'string' && !value.trim()) return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
 }
@@ -726,7 +739,10 @@ function getNestedRecord(source: Record<string, unknown>, path: string[]) {
   return readJsonRecord(cursor)
 }
 
-function collectForecastDependencyEvidence(forecast?: ProgressDeviationDurationForecastRow | null): DependencyCauseEvidence[] {
+function collectForecastDependencyEvidence(
+  forecast?: ProgressDeviationDurationForecastRow | null,
+  calendar?: ConstructionCalendarContext | null,
+): DependencyCauseEvidence[] {
   if (!forecast) return []
 
   const candidates = [
@@ -751,16 +767,16 @@ function collectForecastDependencyEvidence(forecast?: ProgressDeviationDurationF
       : Array.isArray(candidate.record.blocking_dependencies)
         ? candidate.record.blocking_dependencies
         : []
-    const maxWaitDays = toNullableNumber(candidate.record.maxWaitDays ?? candidate.record.max_wait_days)
-
     for (const item of blockingDependencies) {
       const record = readJsonRecord(item)
       const dependencyTaskId = normalizeText(record.dependencyTaskId ?? record.dependency_task_id)
       if (!dependencyTaskId) continue
 
-      const waitDays = toNullableNumber(record.waitDays ?? record.wait_days)
+      const expectedFinishDate = normalizeText(record.expectedFinishDate ?? record.expected_finish_date) || null
+      const availableStartDate = normalizeText(record.availableStartDate ?? record.available_start_date) || null
+      const waitDays = positiveDateWindowDays(availableStartDate, expectedFinishDate, calendar)
       const floorRemainingDays = toNullableNumber(record.floorRemainingDays ?? record.floor_remaining_days)
-      const impactDays = Math.max(0, waitDays ?? maxWaitDays ?? 0)
+      const impactDays = Math.max(0, waitDays ?? 0)
       if (impactDays <= 0 && (floorRemainingDays ?? 0) <= 0) continue
 
       const previous = byDependency.get(dependencyTaskId)
@@ -770,10 +786,10 @@ function collectForecastDependencyEvidence(forecast?: ProgressDeviationDurationF
         dependencyTaskId,
         dependencyType: normalizeText(record.dependencyType ?? record.dependency_type) || null,
         impactDays: Math.max(previous?.impactDays ?? 0, impactDays) || null,
-        waitDays: Math.max(previous?.waitDays ?? 0, waitDays ?? maxWaitDays ?? 0) || null,
+        waitDays: Math.max(previous?.waitDays ?? 0, waitDays ?? 0) || null,
         floorRemainingDays: Math.max(previous?.floorRemainingDays ?? 0, floorRemainingDays ?? 0) || null,
-        expectedFinishDate: normalizeText(record.expectedFinishDate ?? record.expected_finish_date) || previous?.expectedFinishDate || null,
-        availableStartDate: normalizeText(record.availableStartDate ?? record.available_start_date) || previous?.availableStartDate || null,
+        expectedFinishDate: expectedFinishDate || previous?.expectedFinishDate || null,
+        availableStartDate: availableStartDate || previous?.availableStartDate || null,
         evidenceSource: sourceList.join('; '),
         raw: { ...(previous?.raw ?? {}), ...record },
       }
@@ -949,6 +965,7 @@ function estimateDependencyFactWaitDays(params: {
   downstreamTask?: PlanningTaskRow | null
   upstreamTask?: PlanningTaskRow | null
   relation?: ProgressDeviationTaskDependencyRow | null
+  calendar?: ConstructionCalendarContext | null
 }) {
   const downstreamStart = readTaskDate(params.downstreamTask, [
     'planned_start_date',
@@ -978,9 +995,12 @@ function estimateDependencyFactWaitDays(params: {
     : pickLaterDate(upstreamPlannedEnd, downstreamObservedAt, upstreamObservedAt)
 
   if (!downstreamStart || !upstreamBoundary) return null
+  if (!hasIdentifiedConstructionCalendar(params.calendar)) return null
 
   const lagDays = Math.max(0, toNumber(params.relation?.lag_days, 0))
-  const waitDays = diffDays(downstreamStart, upstreamBoundary) + lagDays
+  const dateWaitDays = delayDayDelta(downstreamStart, upstreamBoundary, params.calendar)
+  if (dateWaitDays === null) return null
+  const waitDays = dateWaitDays + lagDays
   return waitDays > 0 ? waitDays : null
 }
 
@@ -988,6 +1008,7 @@ function buildDependencyFactEvidence(params: {
   task?: PlanningTaskRow | null
   tasksById: Map<string, PlanningTaskRow>
   dependencies: ProgressDeviationTaskDependencyRow[]
+  calendar?: ConstructionCalendarContext | null
 }): DependencyCauseEvidence[] {
   const evidenceByDependency = new Map<string, DependencyCauseEvidence>()
 
@@ -1002,13 +1023,14 @@ function buildDependencyFactEvidence(params: {
       downstreamTask: params.task ?? null,
       upstreamTask,
       relation,
+      calendar: params.calendar,
     })
     if (isCompletedTaskForCausalResponsibility(upstreamTask) && !waitDays) continue
 
     evidenceByDependency.set(dependencyTaskId, {
       dependencyTaskId,
       dependencyType: normalizeText(relation.dependency_type) || null,
-      impactDays: waitDays ?? 1,
+      impactDays: waitDays,
       waitDays,
       floorRemainingDays: null,
       expectedFinishDate: readTaskDate(upstreamTask, ['actual_end_date', 'end_date', 'planned_end_date', 'plan_end', 'planned_end']),
@@ -1028,11 +1050,12 @@ function buildDependencyCauseChain(params: {
   forecast?: ProgressDeviationDurationForecastRow | null
   tasksById: Map<string, PlanningTaskRow>
   dependenciesByTask: Map<string, ProgressDeviationTaskDependencyRow[]>
+  calendar?: ConstructionCalendarContext | null
 }): ProgressDeviationCauseChainItem[] {
   const taskId = normalizeText(params.taskId)
   if (!taskId) return []
 
-  const forecastEvidence = collectForecastDependencyEvidence(params.forecast)
+  const forecastEvidence = collectForecastDependencyEvidence(params.forecast, params.calendar)
   const dependencies = params.dependenciesByTask.get(taskId) ?? []
   const impactedOwner = getTaskResponsibilityLabel(params.task ?? null)
   const forecastDependencyIds = new Set(forecastEvidence.map((evidence) => evidence.dependencyTaskId))
@@ -1040,6 +1063,7 @@ function buildDependencyCauseChain(params: {
     task: params.task ?? null,
     tasksById: params.tasksById,
     dependencies,
+    calendar: params.calendar,
   }).filter((evidence) => !forecastDependencyIds.has(evidence.dependencyTaskId))
   const dependencyEvidence = forecastEvidence.concat(factEvidence)
   if (dependencyEvidence.length === 0) return []
@@ -1150,8 +1174,13 @@ function resolveFactResponsibility(value: unknown, tableName: 'task_conditions' 
   return null
 }
 
-function positiveDateWindowDays(start?: string | null, end?: string | null) {
-  const days = delayDayDelta(start ?? null, end ?? null) ?? 0
+function positiveDateWindowDays(
+  start?: string | null,
+  end?: string | null,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!hasIdentifiedConstructionCalendar(calendar)) return null
+  const days = delayDayDelta(start ?? null, end ?? null, calendar) ?? 0
   return days > 0 ? days : null
 }
 
@@ -1160,6 +1189,7 @@ function buildConditionCauseChain(params: {
   task?: PlanningTaskRow | null
   forecast?: ProgressDeviationDurationForecastRow | null
   conditions: TaskCondition[]
+  calendar?: ConstructionCalendarContext | null
 }): ProgressDeviationCauseChainItem[] {
   const impactedOwner = getTaskResponsibilityLabel(params.task ?? null)
   const impactedOwnerId = getTaskResponsibilityId(params.task ?? null)
@@ -1172,6 +1202,7 @@ function buildConditionCauseChain(params: {
       const impactDays = positiveDateWindowDays(
         condition.due_date ?? condition.created_at ?? null,
         condition.updated_at ?? params.task?.updated_at ?? null,
+        params.calendar,
       )
       return {
         id: `${params.taskId}:condition:${condition.id}`,
@@ -1214,6 +1245,7 @@ function buildObstacleCauseChain(params: {
   task?: PlanningTaskRow | null
   forecast?: ProgressDeviationDurationForecastRow | null
   obstacles: TaskObstacle[]
+  calendar?: ConstructionCalendarContext | null
 }): ProgressDeviationCauseChainItem[] {
   const impactedOwner = getTaskResponsibilityLabel(params.task ?? null)
   const impactedOwnerId = getTaskResponsibilityId(params.task ?? null)
@@ -1227,6 +1259,7 @@ function buildObstacleCauseChain(params: {
       const impactDays = positiveDateWindowDays(
         obstacle.created_at ?? null,
         obstacle.updated_at ?? params.task?.updated_at ?? null,
+        params.calendar,
       )
       return {
         id: `${params.taskId}:obstacle:${obstacle.id}`,
@@ -1323,8 +1356,10 @@ function resolveExecutionActualEndDate(task?: PlanningTaskRow | null): string | 
   return null
 }
 
-function positiveDelayDays(value: unknown): number {
-  return Math.max(0, toNumber(value, 0))
+function positiveDelayDays(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = toNullableNumber(value)
+  return parsed === null ? null : Math.max(0, parsed)
 }
 
 function normalizeDeviationReasonLabel(reason?: string | null) {
@@ -1356,11 +1391,14 @@ function pickTopCauseSignal(row: ProgressDeviationRow) {
     const impactDays = positiveDelayDays(chainCause.impact_days)
     const confidence = confidenceToWeight(chainCause.confidence)
     const fallbackImpactDays = positiveDelayDays(row.deviation_days)
+    const resolvedImpactDays = (impactDays ?? 0) > 0
+      ? impactDays
+      : fallbackImpactDays ?? impactDays
     return {
       reason: chainCause.reason || '\u4e0a\u6e38\u4efb\u52a1\u672a\u5b8c\u6210\u5f71\u54cd\u540e\u7eed\u5f00\u5de5',
-      impactDays: impactDays || fallbackImpactDays,
+      impactDays: resolvedImpactDays,
       confidence,
-      score: (impactDays || fallbackImpactDays || 1) * (1 + confidence) + 6,
+      score: ((resolvedImpactDays ?? 0) || 1) * (1 + confidence) + 6,
     }
   }
   const delayReason = row.attribution?.delay_reasons?.find((reason) => {
@@ -1369,7 +1407,7 @@ function pickTopCauseSignal(row: ProgressDeviationRow) {
     if (attributionRole && attributionRole !== 'quantified_delay_signal') return false
     const quantificationBasis = normalizeText(reason.quantification_basis)
     if (quantificationBasis === 'confidence_only' || quantificationBasis === 'unknown_blocker_downweight') return false
-    return positiveDelayDays(reason.impact_days) > 0
+    return (positiveDelayDays(reason.impact_days) ?? 0) > 0
   })
   if (delayReason) {
     const impactDays = positiveDelayDays(delayReason.impact_days)
@@ -1379,23 +1417,23 @@ function pickTopCauseSignal(row: ProgressDeviationRow) {
       reason: normalizeText(delayReason.reason),
       impactDays,
       confidence,
-      score: (impactDays || 1) * (1 + confidence) + priority / 20,
+      score: ((impactDays ?? 0) || 1) * (1 + confidence) + priority / 20,
     }
   }
   if ((row.attribution?.active_obstacles?.length ?? 0) > 0) {
     const impactDays = positiveDelayDays(row.deviation_days)
-    return { reason: '\u73b0\u573a\u963b\u788d\u672a\u89e3\u9664', impactDays, confidence: 0.68, score: (impactDays || 1) * 1.68 + 3 }
+    return { reason: '\u73b0\u573a\u963b\u788d\u672a\u89e3\u9664', impactDays, confidence: 0.68, score: ((impactDays ?? 0) || 1) * 1.68 + 3 }
   }
   if ((row.attribution?.blocking_conditions?.length ?? 0) > 0) {
     const impactDays = positiveDelayDays(row.deviation_days)
-    return { reason: '\u5916\u90e8\u6761\u4ef6\u672a\u6ee1\u8db3', impactDays, confidence: 0.72, score: (impactDays || 1) * 1.72 + 3 }
+    return { reason: '\u5916\u90e8\u6761\u4ef6\u672a\u6ee1\u8db3', impactDays, confidence: 0.72, score: ((impactDays ?? 0) || 1) * 1.72 + 3 }
   }
   const impactDays = positiveDelayDays(row.deviation_days)
   return {
     reason: normalizeDeviationReasonLabel(row.reason) || '\u5f85\u8bc6\u522b\u539f\u56e0',
     impactDays,
     confidence: 0.5,
-    score: (impactDays || 1) * 1.5,
+    score: ((impactDays ?? 0) || 1) * 1.5,
   }
 }
 
@@ -1407,8 +1445,122 @@ function diffDays(
   planned?: string | null,
   actual?: string | null,
   calendar?: ConstructionCalendarContext | null,
-): number {
-  return delayDayDelta(planned, actual, calendar) ?? 0
+): number | null {
+  return delayDayDelta(planned, actual, calendar)
+}
+
+function buildProgressProductionDuration(
+  value: number | null | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOf: string,
+): DurationMetricDto {
+  return buildConstructionProductionDayDurationMetric(value, {
+    calendar,
+    asOf,
+    timezone: calendar?.timezone,
+  })
+}
+
+function buildUnavailableProgressProductionDuration(
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOf: string,
+  reason: string,
+): DurationMetricDto {
+  const metric = buildProgressProductionDuration(null, calendar, asOf)
+  return hasIdentifiedConstructionCalendar(calendar)
+    ? { ...metric, unavailableReason: reason }
+    : metric
+}
+
+function legacyDurationValue(metric: DurationMetricDto): number | null {
+  return metric.availability === 'available' ? metric.value : null
+}
+
+function decorateProgressDeviationRows(
+  rows: ProgressDeviationRow[],
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOf: string,
+): ProgressDeviationFactRow[] {
+  return rows.map((row) => {
+    const deviationDuration = buildProgressProductionDuration(row.deviation_days, calendar, asOf)
+    const attribution: ProgressDeviationFactAttribution | null | undefined = row.attribution
+      ? {
+          ...row.attribution,
+          delay_reasons: row.attribution.delay_reasons.map((reason) => {
+            const isHistoricalForecastNumeric = normalizeText(reason.source).startsWith('task_duration_forecasts')
+            const impactDuration = isHistoricalForecastNumeric
+              ? buildUnavailableProgressProductionDuration(calendar, asOf, 'duration_source_metadata_missing')
+              : buildProgressProductionDuration(reason.impact_days, calendar, asOf)
+            return {
+              ...reason,
+              impact_days: legacyDurationValue(impactDuration),
+              impact_duration: impactDuration,
+            }
+          }),
+          cause_chain: row.attribution.cause_chain?.map((cause): ProgressDeviationFactCauseChainItem => {
+            const impactDuration = buildProgressProductionDuration(cause.impact_days, calendar, asOf)
+            const evidence: ProgressDeviationFactCauseChainItem['evidence'] = cause.evidence
+              ? (() => {
+                  const rawWaitDays = cause.evidence?.wait_days
+                  const waitDuration = buildProgressProductionDuration(
+                    toNullableNumber(rawWaitDays),
+                    calendar,
+                    asOf,
+                  )
+                  return {
+                    ...cause.evidence,
+                    wait_days: legacyDurationValue(waitDuration),
+                    wait_duration: waitDuration,
+                  }
+                })()
+              : undefined
+            return {
+              ...cause,
+              impact_days: legacyDurationValue(impactDuration),
+              impact_duration: impactDuration,
+              evidence,
+            }
+          }),
+        }
+      : null
+
+    return {
+      ...row,
+      deviation_days: legacyDurationValue(deviationDuration),
+      deviation_duration: deviationDuration,
+      attribution,
+    }
+  })
+}
+
+function decorateResponsibilityDurations(
+  rows: ProgressDeviationResponsibilityContribution[],
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOf: string,
+): ProgressDeviationFactResponsibilityContribution[] {
+  return rows.map((row) => {
+    const impactDuration = buildProgressProductionDuration(row.impact_days, calendar, asOf)
+    return {
+      ...row,
+      impact_days: legacyDurationValue(impactDuration),
+      impact_duration: impactDuration,
+    }
+  })
+}
+
+function decorateCauseSummaryDurations(
+  rows: ProgressDeviationCauseSummary[],
+  calendar: ConstructionCalendarContext | null | undefined,
+  asOf: string,
+): ProgressDeviationFactCauseSummary[] {
+  return rows.map((row) => {
+    const impactDuration = buildProgressProductionDuration(row.impact_days, calendar, asOf)
+    return {
+      ...row,
+      impact_days: legacyDurationValue(impactDuration),
+      impact_duration: impactDuration,
+    }
+  })
 }
 
 function buildMainlineSummary(rows: ProgressDeviationRow[]): ProgressDeviationMainline['summary'] {
@@ -1443,7 +1595,7 @@ function classifyProgressRow(params: {
   }
 
   if (plannedProgress === null) {
-    if (plannedEndDate && actualEndDate && diffDays(plannedEndDate, actualEndDate, params.calendar) > 0) {
+    if (plannedEndDate && actualEndDate && (diffDays(plannedEndDate, actualEndDate, params.calendar) ?? 0) > 0) {
       return { status: 'delayed', reason: 'completion date exceeds plan' }
     }
     return { status: 'on_track', reason: null }
@@ -1804,6 +1956,7 @@ function buildRowAttribution(params: {
   dependenciesByTask: Map<string, ProgressDeviationTaskDependencyRow[]>
   conditionsByTask: Map<string, TaskCondition[]>
   obstaclesByTask: Map<string, TaskObstacle[]>
+  calendar?: ConstructionCalendarContext | null
 }): ProgressDeviationAttribution | null {
   const taskId = normalizeText(params.taskId)
   if (!taskId) return null
@@ -1850,18 +2003,21 @@ function buildRowAttribution(params: {
     forecast,
     tasksById: params.tasksById,
     dependenciesByTask: params.dependenciesByTask,
+    calendar: params.calendar,
   })
     .concat(buildConditionCauseChain({
       taskId,
       task: params.task ?? null,
       forecast,
       conditions: rawBlockingConditions,
+      calendar: params.calendar,
     }))
     .concat(buildObstacleCauseChain({
       taskId,
       task: params.task ?? null,
       forecast,
       obstacles: rawActiveObstacles,
+      calendar: params.calendar,
     }))
 
   if (blockingConditions.length === 0 && activeObstacles.length === 0 && delayReasons.length === 0 && causeChain.length === 0) {
@@ -1972,7 +2128,7 @@ function pickResponsibilityBasis(row: ProgressDeviationRow) {
   const quantifiedReason = row.attribution?.delay_reasons?.find((reason) => {
     const attributionRole = normalizeText(reason.attribution_role)
     if (attributionRole && attributionRole !== 'quantified_delay_signal') return false
-    return positiveDelayDays(reason.impact_days) > 0
+    return (positiveDelayDays(reason.impact_days) ?? 0) > 0
   })
   const reasonBasis = normalizeText(quantifiedReason?.responsibility_basis)
   if (reasonBasis) return reasonBasis
@@ -2010,6 +2166,7 @@ function buildResponsibilityContribution(
     confidenceWeightedSum: number
     weightedCount: number
     impactDays: number
+    hasUnknownImpact: boolean
     criticalPathWeight: number
     priorityScore: number
     evidenceSources: string[]
@@ -2024,7 +2181,7 @@ function buildResponsibilityContribution(
     const contributions = causeChain.length > 0
       ? (() => {
         const weightedCauses = causeChain.map((chain) => {
-          const impactDays = Math.max(0, toNumber(chain.impact_days, 0))
+          const impactDays = positiveDelayDays(chain.impact_days)
           return {
             owner: chain.accountable_owner,
             ownerId: chain.accountable_owner_id ?? null,
@@ -2037,7 +2194,7 @@ function buildResponsibilityContribution(
             impactDays,
             criticalPathWeight: Math.max(1, toNumber(chain.critical_path_impact?.weight, 1)),
             evidenceSource: chain.evidence_source ?? null,
-            weightBase: impactDays > 0 ? impactDays : 1,
+            weightBase: (impactDays ?? 0) > 0 ? impactDays as number : 1,
           }
         })
         const totalWeightBase = weightedCauses.reduce((sum, item) => sum + item.weightBase, 0) || weightedCauses.length || 1
@@ -2078,6 +2235,7 @@ function buildResponsibilityContribution(
         confidenceWeightedSum: 0,
         weightedCount: 0,
         impactDays: 0,
+        hasUnknownImpact: false,
         criticalPathWeight: 1,
         priorityScore: 0,
         evidenceSources: [],
@@ -2095,11 +2253,15 @@ function buildResponsibilityContribution(
       bucket.confidenceSum += confidenceToWeight(contribution.confidence)
       bucket.confidenceWeightedSum += confidenceToWeight(contribution.confidence) * contribution.weightedCount
       bucket.weightedCount += contribution.weightedCount
-      const impactDays = Math.max(0, contribution.impactDays)
+      const impactDays = contribution.impactDays === null ? null : Math.max(0, contribution.impactDays)
       const criticalPathWeight = Math.max(1, contribution.criticalPathWeight)
-      bucket.impactDays += impactDays
+      if (impactDays === null) {
+        bucket.hasUnknownImpact = true
+      } else {
+        bucket.impactDays += impactDays
+      }
       bucket.criticalPathWeight = Math.max(bucket.criticalPathWeight, criticalPathWeight)
-      bucket.priorityScore += (impactDays > 0 ? impactDays : contribution.weightedCount) * criticalPathWeight
+      bucket.priorityScore += ((impactDays ?? 0) > 0 ? impactDays as number : contribution.weightedCount) * criticalPathWeight
       const evidenceSource = normalizeText(contribution.evidenceSource)
       if (evidenceSource) {
         bucket.evidenceSources = uniqueStrings([...bucket.evidenceSources, ...evidenceSource.split('; ')])
@@ -2140,7 +2302,7 @@ function buildResponsibilityContribution(
         responsibility_role: role,
         adjudication_role: adjudicationRole,
         transmission_task_ids: bucket.transmissionTaskIds,
-        impact_days: round1(bucket.impactDays),
+        impact_days: bucket.hasUnknownImpact ? null : round1(bucket.impactDays),
         critical_path_weight: round1(bucket.criticalPathWeight),
         priority_score: round1(bucket.priorityScore),
         weighted_count: round1(bucket.weightedCount),
@@ -2175,11 +2337,15 @@ function buildTopDeviationCauses(rows: ProgressDeviationRow[]): ProgressDeviatio
   }
 
   const total = Math.max(signalByUniqueRow.size, 1)
-  const buckets = new Map<string, { reason: string; count: number; impactDays: number; confidenceSum: number; score: number }>()
+  const buckets = new Map<string, { reason: string; count: number; impactDays: number; hasUnknownImpact: boolean; confidenceSum: number; score: number }>()
   for (const signal of signalByUniqueRow.values()) {
-    const bucket = buckets.get(signal.reason) ?? { reason: signal.reason, count: 0, impactDays: 0, confidenceSum: 0, score: 0 }
+    const bucket = buckets.get(signal.reason) ?? { reason: signal.reason, count: 0, impactDays: 0, hasUnknownImpact: false, confidenceSum: 0, score: 0 }
     bucket.count += 1
-    bucket.impactDays += signal.impactDays
+    if (signal.impactDays === null) {
+      bucket.hasUnknownImpact = true
+    } else {
+      bucket.impactDays += signal.impactDays
+    }
     bucket.confidenceSum += signal.confidence
     bucket.score += signal.score
     buckets.set(signal.reason, bucket)
@@ -2190,7 +2356,7 @@ function buildTopDeviationCauses(rows: ProgressDeviationRow[]): ProgressDeviatio
       reason: bucket.reason,
       count: bucket.count,
       percentage: round1((bucket.count / total) * 100),
-      impact_days: round1(bucket.impactDays),
+      impact_days: bucket.hasUnknownImpact ? null : round1(bucket.impactDays),
       confidence: round1((bucket.confidenceSum / Math.max(bucket.count, 1)) * 100),
       score: round1(bucket.score),
     }))
@@ -2250,6 +2416,7 @@ function enrichDeviationRows(params: {
   dependenciesByTask: Map<string, ProgressDeviationTaskDependencyRow[]>
   conditionsByTask: Map<string, TaskCondition[]>
   obstaclesByTask: Map<string, TaskObstacle[]>
+  calendar?: ConstructionCalendarContext | null
 }) {
   const { byId } = getTaskLookup(params.tasks)
 
@@ -2266,6 +2433,7 @@ function enrichDeviationRows(params: {
       dependenciesByTask: params.dependenciesByTask,
       conditionsByTask: params.conditionsByTask,
       obstaclesByTask: params.obstaclesByTask,
+      calendar: params.calendar,
     })
 
     return {
@@ -2495,11 +2663,11 @@ function buildBaselineBoundaryCompensatedRows(params: {
     })
     const splitDelayDays = diffDays(parent.planned_end_date ?? null, splitActualDate, params.calendar)
     const splitStatus =
-      splitDelayDays > 0 && classification.status === 'on_track'
+      (splitDelayDays ?? 0) > 0 && classification.status === 'on_track'
         ? 'delayed'
         : classification.status
     const splitReason =
-      splitDelayDays > 0 && classification.status === 'on_track'
+      (splitDelayDays ?? 0) > 0 && classification.status === 'on_track'
         ? '拆分后的子里程碑实际完成晚于原计划'
         : classification.reason ?? null
 
@@ -2712,6 +2880,7 @@ export async function getProgressDeviationAnalysis(
       error: error instanceof Error ? error.message : String(error),
     }),
   })
+  const durationAsOf = businessDateKey(new Date(), calendar?.timezone ?? undefined)
   const baselineBoundaryCompensation = buildBaselineBoundaryCompensatedRows({
     projectId,
     baselineVersionId,
@@ -2720,7 +2889,7 @@ export async function getProgressDeviationAnalysis(
     latestSnapshots,
     calendar,
   })
-  const baselineRows = enrichDeviationRows({
+  const baselineRows = decorateProgressDeviationRows(enrichDeviationRows({
     rows: baselineBoundaryCompensation.rows,
     tasks,
     latestSnapshots,
@@ -2728,8 +2897,9 @@ export async function getProgressDeviationAnalysis(
     dependenciesByTask,
     conditionsByTask,
     obstaclesByTask,
-  })
-  const monthlyRows = enrichDeviationRows({
+    calendar,
+  }), calendar, durationAsOf)
+  const monthlyRows = decorateProgressDeviationRows(enrichDeviationRows({
     rows: monthlyPlan
       ? buildMonthlyPlanRows({
         projectId,
@@ -2746,8 +2916,9 @@ export async function getProgressDeviationAnalysis(
     dependenciesByTask,
     conditionsByTask,
     obstaclesByTask,
-  })
-  const executionRows = enrichDeviationRows({
+    calendar,
+  }), calendar, durationAsOf)
+  const executionRows = decorateProgressDeviationRows(enrichDeviationRows({
     rows: buildExecutionRows({
       projectId,
       baselineVersionId,
@@ -2762,7 +2933,8 @@ export async function getProgressDeviationAnalysis(
     dependenciesByTask,
     conditionsByTask,
     obstaclesByTask,
-  })
+    calendar,
+  }), calendar, durationAsOf)
 
   const mainlines: ProgressDeviationMainline[] = [
     {
@@ -2818,13 +2990,17 @@ export async function getProgressDeviationAnalysis(
     executionDeviation: executionRows,
     monthly_buckets: monthlyBuckets,
   }
-  const responsibilityContribution = buildResponsibilityContribution(rows, tasks)
-  const topDeviationCauses = [
+  const responsibilityContribution = decorateResponsibilityDurations(
+    buildResponsibilityContribution(rows, tasks),
+    calendar,
+    durationAsOf,
+  )
+  const topDeviationCauses = decorateCauseSummaryDurations([
     ...buildScheduleStateDeviationCauses(scheduleStates),
     ...buildTopDeviationCauses(rows),
   ]
     .sort((left, right) => (right.score ?? right.count) - (left.score ?? left.count) || right.count - left.count)
-    .slice(0, 3)
+    .slice(0, 3), calendar, durationAsOf)
 
   const persistDataGapNotification = async () => {
     try {

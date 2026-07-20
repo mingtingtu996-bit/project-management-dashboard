@@ -32,6 +32,7 @@ import {
   buildCalendarDayDurationMetric,
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
+  hasIdentifiedConstructionCalendar,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import {
@@ -56,7 +57,7 @@ export type ProjectRemainingDurationForecast = {
   durationOutputSemanticFieldName: 'projectRemainingForecastDays'
   durationOutputContract?: Record<string, unknown> | null
   /** @deprecated Use projectRemainingForecast. */
-  projectRemainingForecastDays: number
+  projectRemainingForecastDays: number | null
   projectRemainingForecast: DurationMetricDto
   forecastFinishDate: string | null
   targetEndDate?: string | null
@@ -1086,6 +1087,7 @@ export function buildProjectRemainingDurationForecast(params: {
   runtimeConsumerErrorHandler?: (error: unknown) => void
 }): ProjectRemainingDurationForecast {
   const constructionCalendar = params.constructionCalendar ?? null
+  const hasTrustedConstructionCalendar = hasIdentifiedConstructionCalendar(constructionCalendar)
   const asOfDate = normalizeDate(params.asOfDate)
     ?? businessDateKey(new Date(), constructionCalendar?.timezone)
   const scheduleRows = applyFreshCriticalPathSnapshotToRows(params.rows.filter(isScheduleRow), params.criticalPathSnapshot)
@@ -1231,9 +1233,10 @@ export function buildProjectRemainingDurationForecast(params: {
     clamp: true,
   })
   durationPlausibilityWarnings.push(...forecastDurationGuard.warnings)
-  const forecastFinishDate = forecastDurationGuard.durationDays
+  const calculatedForecastFinishDate = forecastDurationGuard.durationDays
     ? addProductionDays(asOfDate, forecastDurationGuard.durationDays, constructionCalendar)
     : rawForecastFinishDate
+  const forecastFinishDate = hasTrustedConstructionCalendar ? calculatedForecastFinishDate : null
   const commitmentFinishBeyondForecastDays = Math.max(
     0,
     signedDurationDayDelta(forecastFinishDate, latestCommitmentFinishDate) ?? 0,
@@ -1255,11 +1258,9 @@ export function buildProjectRemainingDurationForecast(params: {
   const upstreamAssetConsumptionReceipts = Array.isArray(durationInputAssembly.assetConsumptionReceipts)
     ? durationInputAssembly.assetConsumptionReceipts as DurationAssetConsumptionReceipt[]
     : []
-  const finalProjectRemainingForecastDays = projectRemainingDurationDays(
-    asOfDate,
-    forecastFinishDate,
-    constructionCalendar,
-  )
+  const finalProjectRemainingForecastDays = hasTrustedConstructionCalendar && forecastFinishDate
+    ? projectRemainingDurationDays(asOfDate, forecastFinishDate, constructionCalendar)
+    : null
   const finalTargetGapDays = projectRemainingGapDays(targetEndDate, forecastFinishDate, constructionCalendar)
   const projectRemainingForecast = buildConstructionProductionDayDurationMetric(
     finalProjectRemainingForecastDays,
@@ -1381,11 +1382,13 @@ export function buildProjectRemainingDurationForecast(params: {
     },
   }
 
-  params.predictionEventRecorder?.(buildProjectRemainingForecastPredictionEvent({
-    forecast,
-    rows: scheduleRows,
-    asOfDate,
-  }))
+  if (forecast.projectRemainingForecast.availability === 'available' && forecast.forecastFinishDate) {
+    params.predictionEventRecorder?.(buildProjectRemainingForecastPredictionEvent({
+      forecast,
+      rows: scheduleRows,
+      asOfDate,
+    }))
+  }
 
   const runtimeArtifactPublications = params.runtimeArtifactPublications ?? []
   if (params.runtimeConsumerObservationQueryExec) {

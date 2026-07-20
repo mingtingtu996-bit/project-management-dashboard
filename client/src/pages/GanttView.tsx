@@ -83,6 +83,10 @@ import { createEmptyParticipantUnitDraft } from './GanttView/participantUnitUtil
 import { shouldShowTaskInMainExecutionList } from './GanttView/taskListProjection'
 import { withTaskScheduleEvidence } from './GanttView/taskScheduleEvidence'
 import { TargetAccelerationReviewPanel } from './GanttView/TargetAccelerationReviewPanel'
+import {
+  hasTargetAccelerationTypedFacts,
+  isAccelerationProposalActionable,
+} from './GanttView/targetAccelerationAvailability'
 import { PlanningModelingWorkbenchDialog, type PlanningModelingWorkbenchMode } from './GanttView/PlanningModelingWorkbenchDialog'
 import type { WbsAccelerationProposal, WbsTargetFeasibility } from '@/services/wbsTemplateGenerationApi'
 import type { PlanningTableOperation } from '@/components/planning/PlanningCommitModel'
@@ -308,7 +312,7 @@ function normalizeTaskId(value: unknown) {
 function buildAccelerationReschedulePreviewMap(targetFeasibility: WbsTargetFeasibility | null | undefined) {
   const draft = targetFeasibility?.accelerationProposal?.rescheduleDraft
   const previewByTaskId = new Map<string, TaskTimelineReschedulePreview>()
-  if (!draft) return previewByTaskId
+  if (!draft || !hasTargetAccelerationTypedFacts(targetFeasibility)) return previewByTaskId
 
   for (const adjustment of draft.taskDateAdjustments) {
     const taskId = normalizeTaskId(adjustment.clientRowId)
@@ -330,6 +334,7 @@ function buildAccelerationRescheduleCommitOperations(
   proposal: WbsAccelerationProposal,
   tasks: Task[],
 ): PlanningTableOperation[] {
+  if (!isAccelerationProposalActionable(proposal)) return []
   const draft = proposal.rescheduleDraft
   if (!draft || draft.writePolicy !== 'requires_user_acceptance') return []
 
@@ -1020,6 +1025,14 @@ function GanttViewContent() {
   const handleAcceptAccelerationRescheduleDraft = React.useCallback(async (proposal: WbsAccelerationProposal) => {
     if (!canEdit) {
       toast({ title: '当前无权调整计划', description: '请联系项目管理员后再采纳重排草案。' })
+      return
+    }
+    if (!isAccelerationProposalActionable(proposal)) {
+      toast({
+        title: '生产日口径不可用',
+        description: '赶工工作量或日期移动事实缺少可信日历身份，当前草案不能提交。',
+        variant: 'destructive',
+      })
       return
     }
     const operations = buildAccelerationRescheduleCommitOperations(proposal, tasks as Task[])

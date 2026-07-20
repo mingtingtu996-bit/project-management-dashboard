@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
+import { readAvailableDurationValue, type DurationMetricDto } from '@/lib/durationMetric'
 import {
   CartesianGrid,
   ReferenceLine,
@@ -18,7 +19,7 @@ import {
 type ScatterRow = {
   id: string
   title: string
-  deviation_days: number
+  deviation_duration: DurationMetricDto | null
   deviation_rate: number
   planned_progress?: number | null
   actual_progress?: number | null
@@ -33,16 +34,22 @@ export function ExecutionScatterChart({
   rows: ScatterRow[]
   mainlineLabel: string
 }) {
-  const points = rows.slice(0, 10)
-  const maxDeviationDays = Math.max(...points.map((row) => Math.abs(row.deviation_days)), 1)
+  const points = rows
+    .map((row) => ({
+      ...row,
+      deviationValue: readAvailableDurationValue(row.deviation_duration, 'construction_production_day'),
+    }))
+    .filter((row): row is ScatterRow & { deviationValue: number } => row.deviationValue !== null)
+    .slice(0, 10)
+  const maxDeviationDays = Math.max(...points.map((row) => Math.abs(row.deviationValue)), 1)
   const maxDeviationRate = Math.max(...points.map((row) => Math.abs(row.deviation_rate)), 1)
   const chartRows = points.map((row, index) => ({
     ...row,
     index: index + 1,
     name: `#${index + 1} ${row.title}`,
   }))
-  const negativeRows = chartRows.filter((row) => row.deviation_days < 0 || row.deviation_rate < 0)
-  const positiveRows = chartRows.filter((row) => row.deviation_days >= 0 && row.deviation_rate >= 0)
+  const negativeRows = chartRows.filter((row) => row.deviationValue < 0 || row.deviation_rate < 0)
+  const positiveRows = chartRows.filter((row) => row.deviationValue >= 0 && row.deviation_rate >= 0)
 
   return (
     <Card data-testid="execution-scatter-chart" variant="surface">
@@ -56,7 +63,7 @@ export function ExecutionScatterChart({
             rows={chartRows.map((row) => [
               row.index,
               row.title,
-              row.deviation_days,
+              row.deviationValue,
               row.deviation_rate,
               row.planned_progress ?? '未设置',
               row.actual_progress ?? '未设置',
@@ -70,7 +77,7 @@ export function ExecutionScatterChart({
                   <CartesianGrid stroke={CHART_AXIS_COLORS.neutralGrid} />
                   <XAxis
                     type="number"
-                    dataKey="deviation_days"
+                    dataKey="deviationValue"
                     name="偏差生产日"
                     domain={[-maxDeviationDays, maxDeviationDays]}
                     tickLine={false}

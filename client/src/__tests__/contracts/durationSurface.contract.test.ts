@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import { inclusiveDurationDays } from '../../lib/durationDays'
@@ -135,9 +135,9 @@ describe('duration surface contract', () => {
     expect(taskSummarySource).not.toContain('延后 ${diffDays} 天')
     expect(deviationDetailTableSource).toContain('DurationBasisBadge')
     expect(deviationDetailTableSource).toContain('偏差生产日')
-    expect(deviationDetailTableSource).toContain('个生产日')
-    expect(baselineDumbbellSource).toContain('偏差生产日')
-    expect(executionScatterSource).toContain('偏差生产日')
+    expect(deviationDetailTableSource).toContain('formatDurationMetric(row.deviation_duration')
+    expect(baselineDumbbellSource).toContain("readAvailableDurationValue(row.deviation_duration, 'construction_production_day')")
+    expect(executionScatterSource).toContain("readAvailableDurationValue(row.deviation_duration, 'construction_production_day')")
     expect(tooltipSource).toContain('DurationBasisBadge')
     expect(tooltipSource).toContain('项目节奏参考 · 参考工期')
     expect(tooltipSource).not.toContain('项目节奏参考工期')
@@ -264,15 +264,21 @@ describe('duration surface contract', () => {
 
   it('locks Reports progress-deviation display to the backend SSOT payload', () => {
     const reportsSource = readSource('pages/Reports.tsx')
+    const progressDeviationApiSource = readSource('services/progressDeviationApi.ts')
+    const detailTableSource = readSource('pages/Reports/components/DeviationDetailTable.tsx')
+    const baselineChartSource = readSource('pages/Reports/components/BaselineDumbbellChart.tsx')
+    const executionChartSource = readSource('pages/Reports/components/ExecutionScatterChart.tsx')
+    const monthlyChartSource = readSource('pages/Reports/components/MonthlyStackedBarChart.tsx')
     const deviationSurfaceStart = reportsSource.indexOf('const loadDeviationAnalysis')
     const deviationSurfaceEnd = reportsSource.indexOf('const loadIssueSummary')
     expect(deviationSurfaceStart).toBeGreaterThanOrEqual(0)
     expect(deviationSurfaceEnd).toBeGreaterThan(deviationSurfaceStart)
 
     const deviationSurface = reportsSource.slice(deviationSurfaceStart, deviationSurfaceEnd)
-    expect(deviationSurface).toContain('/api/progress-deviation?')
-    expect(deviationSurface).toContain('ProgressDeviationAnalysisResponse')
+    expect(deviationSurface).toContain('getProgressDeviationAnalysis(projectId, latestBaseline.id')
     expect(deviationSurface).toContain('setDeviationData(analysis)')
+    expect(progressDeviationApiSource).toContain('normalizeDurationMetricDto')
+    expect(progressDeviationApiSource).toContain("metric?.unit === 'construction_production_day'")
 
     const deviationRenderStart = reportsSource.indexOf('const deviationMainlineKey')
     const deviationRenderEnd = reportsSource.indexOf('const deviationChips')
@@ -280,29 +286,75 @@ describe('duration surface contract', () => {
     expect(deviationRenderEnd).toBeGreaterThan(deviationRenderStart)
 
     const deviationRenderSurface = reportsSource.slice(deviationRenderStart, deviationRenderEnd)
-    for (const backendField of ['deviation_days', 'deviation_rate', 'planned_progress', 'actual_progress']) {
+    for (const backendField of ['deviation_duration', 'deviation_rate', 'planned_progress', 'actual_progress']) {
       expect(deviationRenderSurface).toContain(backendField)
     }
 
+    for (const [file, source] of Object.entries({
+      'pages/Reports.tsx': reportsSource,
+      'pages/Reports/components/DeviationDetailTable.tsx': detailTableSource,
+      'pages/Reports/components/BaselineDumbbellChart.tsx': baselineChartSource,
+      'pages/Reports/components/ExecutionScatterChart.tsx': executionChartSource,
+    })) {
+      expect(source, file).not.toMatch(/\.(?:deviation_days|impact_days|wait_days)\b/)
+    }
+    expect(reportsSource).toContain('formatProductionDuration(entry.impact_duration)')
+    expect(reportsSource).toContain('formatProductionDuration(item.evidence?.wait_duration)')
+    expect(detailTableSource).toContain('生产日口径不可用')
+    expect(monthlyChartSource).not.toMatch(/\bdeviation_days\s*:/)
+
     const forbiddenLocalRecalculationPattern = /(delayDayDelta|inclusiveDurationDays|calculateTaskPlannedProgress|planned_end_date|actual_end_date|task\.progress)/
     expect(deviationRenderSurface).not.toMatch(forbiddenLocalRecalculationPattern)
+  })
+
+  it('locks baseline date movement to typed Gregorian calendar-day facts and structured validity details', () => {
+    const baselinePageSource = readSource('pages/planning/BaselinePage.tsx')
+    const baselineApiSource = readSource('services/baselineGenerationApi.ts')
+
+    expect(baselineApiSource).toContain('normalizeDurationMetricDto')
+    expect(baselineApiSource).toContain("metric.unit !== 'calendar_day'")
+    expect(baselinePageSource).toContain('normalizeBaselineGenerationCandidate')
+    expect(baselinePageSource).toContain('normalizeBaselineValidityDetails')
+    expect(baselinePageSource).toContain('formatDurationMetric')
+    expect(baselinePageSource).toContain('data-testid="baseline-publish-validity"')
+    expect(baselinePageSource).not.toMatch(/\.metrics\.(?:totalFinishShiftDays|milestoneMaxShiftDays)\b/)
+    expect(baselinePageSource).not.toMatch(/\.averageMilestoneShiftDays\b/)
+    expect(existsSync(resolve(repoRoot, 'client/src/pages/planning/components/BaselineConfirmDialog.tsx'))).toBe(false)
+  })
+
+  it('labels monthly-plan shift and confirmation reminder offsets as Gregorian calendar days', () => {
+    const monthlyPlanSource = readSource('pages/planning/MonthlyPlanPage.tsx')
+
+    expect(monthlyPlanSource).toContain('批量顺延（日历天）')
+    expect(monthlyPlanSource).toContain('剩余 ${Math.abs(diffDays)} 个日历天')
+    expect(monthlyPlanSource).toContain('已超 ${diffDays} 个日历天')
+    expect(monthlyPlanSource).not.toMatch(/\$\{(?:Math\.abs\()?diffDays\)?\}\s*天/)
   })
 
   it('locks due-date surfaces to the shared local-calendar distance helper', () => {
     const acceptanceApiSource = readSource('services/acceptanceApi.ts')
     const acceptanceTypesSource = readSource('types/acceptance.ts')
     const ganttDialogsSource = readSource('pages/GanttViewDialogs.tsx')
-    const milestonesSource = readSource('pages/Milestones.tsx')
 
     for (const [file, source] of Object.entries({
       'services/acceptanceApi.ts': acceptanceApiSource,
       'types/acceptance.ts': acceptanceTypesSource,
       'pages/GanttViewDialogs.tsx': ganttDialogsSource,
-      'pages/Milestones.tsx': milestonesSource,
     })) {
       expect(source, file).toContain('daysUntilLocalDate')
       expect(source, file).not.toContain('Date.now()')
     }
+    const milestonesSource = readSource('pages/Milestones.tsx')
+    expect(milestonesSource).toContain('formatDurationMetric')
+    expect(milestonesSource).toContain('planDateShift')
+    expect(milestonesSource).toContain('futureDueWindow')
+    expect(milestonesSource).toContain('actualOverdue')
+    expect(milestonesSource).toContain('actualScheduleVariance')
+    expect(milestonesSource).toContain('if (currentVariance === null)')
+    expect(milestonesSource).toContain('日历天口径不可用')
+    expect(milestonesSource).not.toContain('currentVariance === null || currentVariance === 0')
+    expect(milestonesSource).not.toContain('daysUntilLocalDate')
+    expect(milestonesSource).not.toContain('getVarianceDays')
     expect(ganttDialogsSource).not.toContain('elapsedLocalDaysSince')
   })
 
@@ -328,7 +380,6 @@ describe('duration surface contract', () => {
 
     for (const [file, source] of Object.entries({
       'lib/milestoneOverview.ts': milestoneOverviewSource,
-      'pages/Milestones.tsx': milestonesPageSource,
       'pages/planning/MonthlyPlanPage.tsx': monthlyPlanPageSource,
       'pages/planning/CloseoutPage.tsx': closeoutPageSource,
     })) {
@@ -337,6 +388,9 @@ describe('duration surface contract', () => {
       expect(source, file).not.toContain('/ (1000 * 60 * 60 * 24)')
       expect(source, file).not.toContain('/ (24 * 60 * 60 * 1000)')
     }
+
+    expect(milestonesPageSource).toContain('formatDurationMetric')
+    expect(milestonesPageSource).not.toMatch(/delayDayDelta|daysUntilLocalDate/)
 
     expect(ganttUtilsSource).toContain('formatDurationMetric')
     expect(ganttUtilsSource).not.toContain('daysUntilDue')

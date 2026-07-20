@@ -532,12 +532,33 @@ vi.mock('../services/planningRevisionPoolService.js', () => ({
     deviatedTaskCount: 0,
     deviatedTaskRatio: 0,
     shiftedMilestoneCount: 0,
-    averageMilestoneShiftDays: 0,
+    averageMilestoneShift: {
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-04-01',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    },
+    averageMilestoneShiftDays: null,
     totalDurationDeviationRatio: 0,
     triggeredRules: [],
     state: 'valid',
     isValid: true,
   })),
+  buildProjectBaselineValidityDetails: vi.fn((validity: any) => ({
+    validity: {
+      deviatedTaskRatio: validity.deviatedTaskRatio,
+      shiftedMilestoneCount: validity.shiftedMilestoneCount,
+      averageMilestoneShift: validity.averageMilestoneShift,
+      averageMilestoneShiftDays: validity.averageMilestoneShiftDays,
+      totalDurationDeviationRatio: validity.totalDurationDeviationRatio,
+      triggeredRules: validity.triggeredRules,
+    },
+  })),
+  buildProjectBaselineValidityMessage: vi.fn(() => 'Baseline validity has crossed the realignment threshold.'),
   listRevisionPoolCandidates: vi.fn(async () => ({ items: [], total: 0 })),
   PlanningRevisionPoolServiceError: class extends Error {
     code = 'VALIDATION_ERROR'
@@ -1953,6 +1974,30 @@ describe('planning realignment routes', () => {
       candidateVersionLabel: 'new baseline draft',
       recommended: true,
     })
+    expect(response.body.data.metrics).toMatchObject({
+      totalFinishShift: {
+        value: 15,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      milestoneMaxShift: {
+        value: 15,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      totalFinishShiftDays: 15,
+      milestoneMaxShiftDays: 15,
+    })
+    expect(response.body.data.reasons.find((reason: any) => reason.code === 'milestone_shift')?.detail)
+      .toContain('calendar day')
+    expect(response.body.data.reasons.find((reason: any) => reason.code === 'finish_shift')?.detail)
+      .toContain('calendar day')
     expect(response.body.data.reasons).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ code: 'milestone_shift' }),
@@ -2063,9 +2108,12 @@ describe('planning realignment routes', () => {
     expect(resolved.body.data.status).toBe('confirmed')
   })
 
-  it('rejects baseline confirmation when validity thresholds require realignment', async () => {
+  it.each(['publish', 'confirm'] as const)(
+    'rejects baseline %s with structured validity details when thresholds require realignment',
+    async (endpoint) => {
+    const baselineId = `baseline-invalid-${endpoint}`
     state.tables.task_baselines.push({
-      id: 'baseline-invalid',
+      id: baselineId,
       project_id: 'project-1',
       version: 5,
       status: 'draft',
@@ -2076,7 +2124,7 @@ describe('planning realignment routes', () => {
     state.tables.task_baseline_items.push({
       id: 'baseline-item-1',
       project_id: 'project-1',
-      baseline_version_id: 'baseline-invalid',
+      baseline_version_id: baselineId,
       source_task_id: 'task-1',
       source_milestone_id: 'milestone-1',
       title: '基础施工',
@@ -2119,6 +2167,16 @@ describe('planning realignment routes', () => {
       deviatedTaskCount: 1,
       deviatedTaskRatio: 1,
       shiftedMilestoneCount: 1,
+      averageMilestoneShift: {
+        value: 40,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-20',
+        availability: 'available',
+        unavailableReason: null,
+      },
       averageMilestoneShiftDays: 40,
       totalDurationDeviationRatio: 0.5,
       triggeredRules: ['task_deviation_ratio', 'duration_deviation'],
@@ -2127,7 +2185,7 @@ describe('planning realignment routes', () => {
     })
 
     const response = await supertest(buildApp())
-      .post('/api/task-baselines/baseline-invalid/confirm')
+      .post(`/api/task-baselines/${baselineId}/${endpoint}`)
       .send({
         version: 5,
         cause_code: 'workflow_sequence',
@@ -2138,9 +2196,28 @@ describe('planning realignment routes', () => {
     expect(response.body.success).toBe(false)
     expect(response.body.error.code).toBe('REQUIRES_REALIGNMENT')
     expect(response.body.error.message).toContain('realignment threshold')
+    expect(response.body.error.details).toEqual({
+      validity: expect.objectContaining({
+        deviatedTaskRatio: 1,
+        shiftedMilestoneCount: 1,
+        averageMilestoneShift: {
+          value: 40,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-20',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        totalDurationDeviationRatio: 0.5,
+        triggeredRules: ['task_deviation_ratio', 'duration_deviation'],
+      }),
+    })
     expect(validitySpy).toHaveBeenCalled()
-    expect(state.tables.task_baselines.find((row) => row.id === 'baseline-invalid')?.status).toBe('draft')
-  })
+    expect(state.tables.task_baselines.find((row) => row.id === baselineId)?.status).toBe('draft')
+    },
+  )
 
   it('queues and resolves monthly plan realignment through runtime endpoints', async () => {
     state.tables.monthly_plans.push({

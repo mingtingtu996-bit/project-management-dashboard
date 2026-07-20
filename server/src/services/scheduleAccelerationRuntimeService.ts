@@ -41,6 +41,7 @@ import type {
 import type { Task, TaskDependency } from '../types/db.js'
 import { logger } from '../middleware/logger.js'
 import { normalizeDateOnlyText, signedDurationDayDelta } from '../utils/durationDays.js'
+import { businessDateKey } from './durationMetricService.js'
 import {
   mergeConstructionOrganizationLineageIntoContext,
   readConstructionOrganizationPlanNetworkRuntimeLineage,
@@ -1550,7 +1551,9 @@ async function recordProjectRemainingAccuracySnapshot(params: {
   constructionCalendar?: ConstructionCalendarContext | null
   asOfDate?: string | null
 }) {
-  const asOfDate = normalizeDate(params.asOfDate) ?? new Date().toISOString().slice(0, 10)
+  const asOfDate = normalizeDate(params.asOfDate)
+    ?? normalizeDate(params.forecast.projectRemainingForecast.asOf)
+    ?? businessDateKey(new Date(), params.constructionCalendar?.timezone)
   const dedupeKey = `${params.projectId}:${asOfDate}:project_remaining_forecast`
   const actualCompletion = buildCompletedProjectActualCompletion(params.rows)
   if (actualCompletion) {
@@ -1564,6 +1567,14 @@ async function recordProjectRemainingAccuracySnapshot(params: {
         skippedCurrentDedupeKey: dedupeKey,
       }),
     })
+    return
+  }
+
+  if (
+    params.forecast.projectRemainingForecast.availability !== 'available'
+    || params.forecast.projectRemainingForecastDays === null
+    || !params.forecast.forecastFinishDate
+  ) {
     return
   }
 
@@ -1587,7 +1598,9 @@ async function recordAccelerationAccuracySnapshot(params: {
   constructionCalendar?: ConstructionCalendarContext | null
 }) {
   const proposal = params.targetFeasibility?.accelerationProposal
-  const asOfDate = normalizeDate(params.asOfDate) ?? new Date().toISOString().slice(0, 10)
+  const asOfDate = normalizeDate(params.asOfDate)
+    ?? normalizeDate(params.targetFeasibility?.overshoot.asOf)
+    ?? businessDateKey(new Date(), params.constructionCalendar?.timezone)
   const actualCompletion = buildCompletedProjectActualCompletion(params.rows)
   if (actualCompletion) {
     if (isAccelerationRecommendationAdopted(params.runtimeContext)) {
@@ -1883,10 +1896,12 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     },
     after: {
       taskSelection: affectedRowIds,
-      durationDays: {
-        projectRemainingForecastDays: projectRemainingForecast.projectRemainingForecastDays,
-        totalRecoverDays: targetFeasibility?.accelerationProposal?.totalRecoverDays ?? 0,
-      },
+      durationDays: projectRemainingForecast.projectRemainingForecast.availability === 'available'
+        ? {
+            projectRemainingForecastDays: projectRemainingForecast.projectRemainingForecastDays,
+            totalRecoverDays: targetFeasibility?.accelerationProposal?.totalRecoverDays ?? null,
+          }
+        : null,
       dates: {
         forecastFinishDate: projectRemainingForecast.forecastFinishDate,
         targetEndDate,

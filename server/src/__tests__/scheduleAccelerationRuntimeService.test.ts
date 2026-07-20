@@ -76,6 +76,18 @@ function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableNa
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
 }
 
+function identifiedConstructionCalendar() {
+  return {
+    basis: 'official_construction_calendar_seed' as const,
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 describe('scheduleAccelerationRuntimeService', () => {
   beforeEach(() => {
     delete process.env.SCHEDULE_ACCELERATION_RUNTIME_SUGGESTION_TIMEOUT_MS
@@ -162,7 +174,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     })
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([])
     mocks.getTaskDurationSuggestion.mockResolvedValue(null)
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(identifiedConstructionCalendar())
     mocks.hydrateDurationAlgorithmInput.mockImplementation(async (input) => input)
   })
 
@@ -369,6 +381,64 @@ describe('scheduleAccelerationRuntimeService', () => {
         'runtime_inference_advisory_only',
       ]),
     }))
+  })
+
+  it('does not create runtime target proposals or operations when the production calendar identity is unavailable', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValueOnce({
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+
+    const result = await evaluateRuntimeScheduleAcceleration({
+      projectId: 'project-1',
+      targetEndDate: '2026-06-25',
+      asOfDate: '2026-06-10',
+      context: {
+        projectGenerationFacts: {
+          wizard_generation_duration_asset_consumption_receipts: [{
+            consumer: 'wizard_master_plan',
+            assetType: 'standard_work_duration',
+            stableCode: 'duration.concrete.structure',
+            role: 'stable_runtime',
+            effectiveSource: 'project_stable',
+            versionId: 'project-duration-v3',
+            publicationKey: 'duration-publication-v3',
+            status: 'effective_applied',
+            changedFields: ['duration', 'dates'],
+            targetRowIds: ['task-critical'],
+            reasonCodes: [],
+            rollbackTarget: 'project-duration-v2',
+          }],
+        },
+      },
+    })
+
+    expect(result.projectRemainingForecast).toEqual(expect.objectContaining({
+      projectRemainingForecastDays: null,
+      forecastFinishDate: null,
+      targetGapDays: null,
+      projectRemainingForecast: expect.objectContaining({
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+      }),
+      targetGap: expect.objectContaining({
+        unit: 'calendar_day',
+        availability: 'unavailable',
+      }),
+    }))
+    expect(result.targetFeasibility).toBeUndefined()
+    expect(result.targetFeasibility?.accelerationProposal).toBeUndefined()
+    expect(result.targetFeasibility?.accelerationProposal?.rescheduleDraft?.operations ?? []).toEqual([])
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+    const accelerationReceipt = result.durationAssetConsumptionReceipts.find(
+      (receipt) => receipt.consumer === 'schedule_acceleration_runtime',
+    )
+    expect(accelerationReceipt?.changedFields).not.toContain('duration')
   })
 
   it('uses the same governed duration publication in remaining-forecast and acceleration receipts', async () => {
@@ -701,6 +771,11 @@ describe('scheduleAccelerationRuntimeService', () => {
       context: {
         constructionCalendar: {
           basis: 'official_construction_calendar_seed',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
           windows: [{
             holidayCode: 'spring_festival_2026',
             holidayName: 'Spring Festival construction shutdown',
@@ -727,6 +802,11 @@ describe('scheduleAccelerationRuntimeService', () => {
   it('resolves the construction calendar for production runtime forecasts when no context calendar is passed', async () => {
     mocks.resolveConstructionCalendarContext.mockResolvedValue({
       basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
       windows: [{
         holidayCode: 'spring_festival_2026',
         holidayName: 'Spring Festival construction shutdown',
@@ -953,6 +1033,31 @@ describe('scheduleAccelerationRuntimeService', () => {
     }))
   })
 
+  it('uses the construction-calendar business date for accuracy keys when asOf is omitted', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-06-10T16:30:00.000Z'))
+
+      const result = await evaluateRuntimeScheduleAcceleration({
+        projectId: 'project-1',
+        targetEndDate: '2026-06-25',
+      })
+
+      expect(result.projectRemainingForecast.projectRemainingForecast.asOf).toBe('2026-06-11')
+      expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+        engineCode: 'project_remaining_forecast',
+        dedupeKey: 'project-1:2026-06-11:project_remaining_forecast',
+        predictedStartDate: '2026-06-11',
+      }))
+      expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+        engineCode: 'schedule_acceleration_target',
+        dedupeKey: 'project-1:2026-06-11:acceleration_target:2026-06-25',
+      }))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('records construction organization plan-network publication lineage on E5 acceleration prediction events', async () => {
     const result = await evaluateRuntimeScheduleAcceleration({
       projectId: 'project-1',
@@ -983,7 +1088,11 @@ describe('scheduleAccelerationRuntimeService', () => {
       predictionContext: expect.objectContaining({
         durationDayUnit: 'construction_production_day',
         constructionCalendar: expect.objectContaining({
-          basis: 'calendar_day',
+          basis: 'official_construction_calendar_seed',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
           windows: [],
         }),
         assetKey: 'construction_organization_plan_network',
