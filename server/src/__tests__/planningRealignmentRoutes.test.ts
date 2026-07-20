@@ -92,6 +92,18 @@ const state = vi.hoisted(() => {
       return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
     }
     if (
+      normalizedSql.startsWith('select ')
+      && normalizedSql.includes('from public.task_baseline_items')
+      && normalizedSql.includes('where baseline_version_id = $1')
+      && normalizedSql.includes('and project_id = $2')
+    ) {
+      const [baselineId, projectId] = values
+      const rows = tables.task_baseline_items
+        .filter((row) => row.baseline_version_id === baselineId && row.project_id === projectId)
+        .sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0))
+      return { rows: rows.map((row) => clone(row)), rowCount: rows.length }
+    }
+    if (
       normalizedSql.startsWith('select * from public.task_baselines')
       && normalizedSql.includes('where id = $1')
       && normalizedSql.includes('project_id = $2')
@@ -153,6 +165,21 @@ const state = vi.hoisted(() => {
         Object.assign(baseline, { status: 'archived', updated_at: updatedAt })
       }
       return { rows: archived.map((row) => clone(row)), rowCount: archived.length }
+    }
+    if (
+      normalizedSql.startsWith('update public.task_baselines')
+      && normalizedSql.includes('set updated_at = $3')
+      && normalizedSql.includes("status in ('draft', 'revising')")
+    ) {
+      const [id, projectId, updatedAt] = values
+      const baseline = tables.task_baselines.find(
+        (row) => row.id === id
+          && row.project_id === projectId
+          && (row.status === 'draft' || row.status === 'revising'),
+      )
+      if (!baseline) return { rows: [], rowCount: 0 }
+      baseline.updated_at = updatedAt
+      return { rows: [{ id }], rowCount: 1 }
     }
     if (normalizedSql.startsWith('update public.task_baselines')) {
       const [id, projectId, title, description, effectiveFrom, effectiveTo, updatedAt] = values
@@ -373,6 +400,15 @@ const baselineGovernanceMocks = vi.hoisted(() => ({
 
 const wbsGenerationMocks = vi.hoisted(() => ({
   generateWbsTemplateRows: vi.fn(),
+  recordWbsTemplateGenerationRuntimeConsumption: vi.fn(async () => undefined),
+}))
+
+const durationLearningConsumptionMocks = vi.hoisted(() => ({
+  persistDurationLearningRuntimeConsumptions: vi.fn(async () => ({
+    requestedCount: 0,
+    insertedCount: 0,
+    records: [],
+  })),
 }))
 
 const wbsTemplateCandidateEventMocks = vi.hoisted(() => ({
@@ -590,8 +626,13 @@ vi.mock('../services/wbsTemplateGenerationService.js', async () => {
   return {
     ...actual,
     generateWbsTemplateRows: wbsGenerationMocks.generateWbsTemplateRows,
+    recordWbsTemplateGenerationRuntimeConsumption: wbsGenerationMocks.recordWbsTemplateGenerationRuntimeConsumption,
   }
 })
+
+vi.mock('../services/durationLearningRuntimeConsumptionService.js', () => ({
+  persistDurationLearningRuntimeConsumptions: durationLearningConsumptionMocks.persistDurationLearningRuntimeConsumptions,
+}))
 
 vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
   buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
@@ -640,6 +681,12 @@ describe('planning realignment routes', () => {
       generationDepth: 'item_work',
       scopeCombos: [],
       rows: [],
+    })
+    wbsGenerationMocks.recordWbsTemplateGenerationRuntimeConsumption.mockResolvedValue(undefined)
+    durationLearningConsumptionMocks.persistDurationLearningRuntimeConsumptions.mockResolvedValue({
+      requestedCount: 0,
+      insertedCount: 0,
+      records: [],
     })
     scopeValidationMocks.validateScopeObjectTypes.mockResolvedValue(null)
     scopeValidationMocks.validateTaskScopeConsistency.mockResolvedValue(null)
@@ -1441,6 +1488,85 @@ describe('planning realignment routes', () => {
         }),
       }),
     )
+  })
+
+  it('rolls back baseline materialization when trusted duration lineage persistence fails', async () => {
+    const originalUpdatedAt = '2026-05-02T00:00:00.000Z'
+    state.tables.task_baselines.push({
+      id: 'baseline-draft',
+      project_id: 'project-1',
+      version: null,
+      status: 'revising',
+      title: 'baseline draft',
+      created_at: originalUpdatedAt,
+      updated_at: originalUpdatedAt,
+    })
+    state.tables.task_baseline_items.push({
+      id: 'draft-item-original',
+      project_id: 'project-1',
+      baseline_version_id: 'baseline-draft',
+      title: 'original baseline item',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-12',
+      sort_order: 0,
+      created_at: originalUpdatedAt,
+      updated_at: originalUpdatedAt,
+    })
+    wbsGenerationMocks.generateWbsTemplateRows.mockResolvedValue({
+      generationBatchId: 'batch-lineage-failure',
+      templateId: 'china-gb55032-2022',
+      templateIds: ['china-gb55032-2022'],
+      generationDepth: 'item_work',
+      scopeCombos: [],
+      rows: [{
+        clientRowId: 'batch-lineage-failure:row-1',
+        parentClientRowId: null,
+        parentRowId: null,
+        sortOrder: 0,
+        predecessorClientRowIds: [],
+        predecessorDependencies: [],
+        values: {
+          title: 'replacement generated item',
+          planned_start_date: '2026-06-01',
+          planned_end_date: '2026-06-02',
+          target_progress: 0,
+          mapping_status: 'pending',
+          wbs_node_type: 'item_work',
+          template_node_id: 'ROW-1',
+        },
+      }],
+    })
+    wbsGenerationMocks.recordWbsTemplateGenerationRuntimeConsumption.mockRejectedValueOnce(
+      new Error('trusted duration lineage write failed'),
+    )
+
+    const response = await supertest(buildApp())
+      .post('/api/task-baselines/baseline-draft/commit')
+      .send({
+        projectId: 'project-1',
+        surface: 'baseline',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'template_generate',
+          generationBatchId: 'batch-lineage-failure',
+          templateId: 'china-gb55032-2022',
+          selectedNodeIds: ['ROW-1'],
+        }],
+      })
+
+    expect(response.status).toBe(500)
+    expect(state.tables.task_baseline_items).toEqual([
+      expect.objectContaining({
+        id: 'draft-item-original',
+        title: 'original baseline item',
+      }),
+    ])
+    expect(state.tables.task_baselines[0]?.updated_at).toBe(originalUpdatedAt)
+    expect(state.clientQuery.mock.calls.some(([sql]) => String(sql).trim().toUpperCase() === 'BEGIN')).toBe(true)
+    expect(state.clientQuery.mock.calls.some(([sql]) => String(sql).trim().toUpperCase() === 'ROLLBACK')).toBe(true)
+    expect(state.clientQuery.mock.calls.some(([sql]) => String(sql).trim().toUpperCase() === 'COMMIT')).toBe(false)
+    expect(state.writeLog).not.toHaveBeenCalled()
+    expect(wbsTemplateCandidateEventMocks.recordWbsTemplateCandidateEvent).not.toHaveBeenCalled()
   })
 
   it('commits oversized baseline template generations as a render-budget concern instead of a hard row limit', async () => {

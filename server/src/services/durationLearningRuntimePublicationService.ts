@@ -149,6 +149,10 @@ type RuntimePublicationRow = {
   monitoringStatus?: unknown
   published_at?: unknown
   publishedAt?: unknown
+  restored_publication_key?: unknown
+  restoredPublicationKey?: unknown
+  scope_authorized?: unknown
+  scopeAuthorized?: unknown
 }
 
 function normalizeText(value: unknown) {
@@ -363,23 +367,21 @@ function publicationMatchesInput(
     )
 }
 
-async function findCurrentStablePublication(input: PersistDurationLearningRuntimePublicationInput) {
-  const scope = normalizeScope(input.scope)
+async function isProjectScopeAuthorized(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  scope: DurationLearningRuntimeScope
+}) {
+  if (input.scope.level !== 'project') return true
   const rows = await input.queryExec<RuntimePublicationRow>(
-    `select publication_key
-       from public.duration_learning_runtime_publications
-      where asset_key = $1
-        and artifact_key = $2
-        and scope_level = $3
-        and company_id is not distinct from $4::uuid
-        and project_id is not distinct from $5::uuid
-        and industry_key is not distinct from $6::text
-        and publication_stage = 'stable'
-      order by published_at desc
-      limit 1`,
-    [input.assetKey, input.artifactKey, scope.level, scope.companyId, scope.projectId, scope.industryKey],
+    `select exists (
+       select 1
+         from public.projects project
+        where project.id = $1::uuid
+          and project.company_id = $2::uuid
+     ) as scope_authorized`,
+    [normalizeText(input.scope.projectId), normalizeText(input.scope.companyId)],
   )
-  return nullableText(field(rows[0] ?? {}, 'publication_key', 'publicationKey'))
+  return field(rows[0] ?? {}, 'scope_authorized', 'scopeAuthorized') === true
 }
 
 export async function persistDurationLearningRuntimePublication(
@@ -399,6 +401,10 @@ export async function persistDurationLearningRuntimePublication(
   ]))
   if (reasons.length > 0) return { status: 'blocked', publication: null, reasons }
 
+  if (!await isProjectScopeAuthorized(input)) {
+    return { status: 'blocked', publication: null, reasons: ['project_scope_company_mismatch'] }
+  }
+
   const existingPublication = await findPublicationByKey(input, publicationKey)
   if (existingPublication) {
     return publicationMatchesInput(existingPublication, input)
@@ -408,85 +414,56 @@ export async function persistDurationLearningRuntimePublication(
 
   const scope = normalizeScope(input.scope)
   const publishedAt = input.publishedAt ?? new Date().toISOString()
-  const previousPublicationKey = nullableText(input.previousPublicationKey)
-    ?? await findCurrentStablePublication(input)
-  const stageToReplace = input.stage
   const rows = await input.queryExec<RuntimePublicationRow>(
-    `with replaced_same_stage as (
-       update public.duration_learning_runtime_publications
-          set publication_stage = 'superseded',
-              updated_at = $1::timestamptz
-        where asset_key = $2
-          and artifact_key = $3
-          and scope_level = $4
-          and company_id is not distinct from $5::uuid
-          and project_id is not distinct from $6::uuid
-          and industry_key is not distinct from $7::text
-          and publication_stage = $8
-          and publication_key <> $9
-       returning publication_key
-     ), inserted as (
-       insert into public.duration_learning_runtime_publications (
-         publication_key,
-         asset_key,
-         artifact_key,
-         scope_level,
-         company_id,
-         project_id,
-         industry_key,
-         publication_stage,
-         runtime_payload,
-         source_candidate_refs,
-         source_evidence_refs,
-         automation_decision,
-         previous_publication_key,
-         traffic_percent,
-         monitoring_window_hours,
-         monitoring_status,
-         monitoring_started_at,
-         published_at,
-         created_at,
-         updated_at
-       ) values (
-         $9, $2, $3, $4, $5::uuid, $6::uuid, $7, $8,
-         $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14,
-         $15, $16, 'pending', $1::timestamptz, $1::timestamptz,
-         $1::timestamptz, $1::timestamptz
-       )
-       on conflict (publication_key) do nothing
-       returning *
-     )
-     select * from inserted`,
+    `select *
+       from public.persist_duration_learning_runtime_publication(
+         $1::text,
+         $2::text,
+         $3::text,
+         $4::text,
+         $5::uuid,
+         $6::uuid,
+         $7::text,
+         $8::text,
+         $9::jsonb,
+         $10::jsonb,
+         $11::jsonb,
+         $12::jsonb,
+         $13::text,
+         $14::integer,
+         $15::integer,
+         $16::timestamptz
+       )`,
     [
-      publishedAt,
+      publicationKey,
       input.assetKey,
       artifactKey,
       scope.level,
       scope.companyId,
       scope.projectId,
       scope.industryKey,
-      stageToReplace,
-      publicationKey,
+      input.stage,
       input.runtimePayload,
       sourceCandidateRefs,
       sourceEvidenceRefs,
       input.automationDecision ?? {},
-      previousPublicationKey,
+      nullableText(input.previousPublicationKey),
       clampTrafficPercent(input.trafficPercent, input.stage),
       clampMonitoringWindowHours(input.monitoringWindowHours),
+      publishedAt,
     ],
   )
-  const row = rows[0]
-  if (!row) {
-    const racedPublication = await findPublicationByKey(input, publicationKey)
-    if (racedPublication && publicationMatchesInput(racedPublication, input)) {
-      return { status: 'published', publication: racedPublication, reasons: [] }
-    }
-    return racedPublication
-      ? { status: 'blocked', publication: null, reasons: ['publication_key_contract_mismatch'] }
-      : { status: 'blocked', publication: null, reasons: ['runtime_publication_insert_result_required'] }
+  if (rows[0]) return { status: 'published', publication: rowToRecord(rows[0]), reasons: [] }
+
+  const racedPublication = await findPublicationByKey(input, publicationKey)
+  if (racedPublication && publicationMatchesInput(racedPublication, input)) {
+    return { status: 'published', publication: racedPublication, reasons: [] }
   }
-  return { status: 'published', publication: rowToRecord(row), reasons: [] }
+  return racedPublication
+    ? { status: 'blocked', publication: null, reasons: ['publication_key_contract_mismatch'] }
+    : input.previousPublicationKey
+      ? { status: 'blocked', publication: null, reasons: ['previous_publication_key_mismatch'] }
+      : { status: 'blocked', publication: null, reasons: ['runtime_publication_insert_result_required'] }
 }
 
 function canaryBucket(publicationKey: string, projectId: string) {
@@ -519,7 +496,12 @@ function scopeApplies(record: DurationLearningRuntimePublicationRecord, input: D
 function isRuntimeConsumablePublication(
   record: DurationLearningRuntimePublicationRecord,
 ): record is DurationLearningRuntimeConsumablePublicationRecord {
-  return record.publicationStage === 'canary' || record.publicationStage === 'stable'
+  if (record.publicationStage === 'canary') {
+    return record.monitoringStatus === 'pending'
+      || record.monitoringStatus === 'collecting'
+      || record.monitoringStatus === 'passed'
+  }
+  return record.publicationStage === 'stable' && record.monitoringStatus === 'passed'
 }
 
 function runtimeSelectionBasis(
@@ -565,7 +547,10 @@ export async function resolveDurationLearningRuntimePublication(
        from public.duration_learning_runtime_publications
       where asset_key = $1
         and artifact_key = $2
-        and publication_stage in ('canary', 'stable')
+        and (
+          (publication_stage = 'canary' and monitoring_status in ('pending', 'collecting', 'passed'))
+          or (publication_stage = 'stable' and monitoring_status = 'passed')
+        )
         and (
           scope_level = 'global'
           or (scope_level = 'industry' and industry_key = $3)
@@ -630,7 +615,10 @@ export async function listApplicableDurationLearningRuntimePublications(
             published_at
        from public.duration_learning_runtime_publications
       where asset_key = $1
-        and publication_stage in ('canary', 'stable')
+        and (
+          (publication_stage = 'canary' and monitoring_status in ('pending', 'collecting', 'passed'))
+          or (publication_stage = 'stable' and monitoring_status = 'passed')
+        )
         and (
           scope_level = 'global'
           or (scope_level = 'industry' and industry_key = $2)
@@ -707,169 +695,170 @@ export async function promoteDurationLearningRuntimeCanary(input: {
 }) {
   const publicationKey = normalizeText(input.publicationKey)
   if (!publicationKey) return { status: 'blocked' as const, previousPublicationKey: null, reasons: ['publication_key_required'] }
-  const candidates = await input.queryExec<RuntimePublicationRow>(
+  const promotedAt = input.promotedAt ?? new Date().toISOString()
+  const rows = await input.queryExec<RuntimePublicationRow>(
+    `select *
+       from public.promote_duration_learning_runtime_canary(
+         $1::text,
+         $2::timestamptz
+       )`,
+    [publicationKey, promotedAt],
+  )
+  if (rows[0]) {
+    const previousPublicationKey = nullableText(
+      (rows[0] as Record<string, unknown>).target_previous_publication_key
+        ?? field(rows[0], 'previous_publication_key', 'previousPublicationKey'),
+    )
+    return { status: 'stable_promoted' as const, previousPublicationKey, reasons: [] }
+  }
+
+  const terminalRows = await input.queryExec<RuntimePublicationRow>(
     `select publication_key,
-            asset_key,
-            artifact_key,
-            scope_level,
-            company_id,
-            project_id,
-            industry_key,
             publication_stage,
-            runtime_payload,
-            previous_publication_key,
-            traffic_percent,
-            monitoring_status
+            monitoring_status,
+            previous_publication_key
        from public.duration_learning_runtime_publications
       where publication_key = $1
-        and publication_stage = 'canary'
       limit 1`,
     [publicationKey],
   )
-  const candidate = candidates[0] ? rowToRecord(candidates[0]) : null
-  if (!candidate) {
-    const terminalRows = await input.queryExec<RuntimePublicationRow>(
-      `select publication_key,
-              publication_stage,
-              monitoring_status,
-              previous_publication_key
-         from public.duration_learning_runtime_publications
-        where publication_key = $1
-        limit 1`,
-      [publicationKey],
-    )
-    const terminal = terminalRows[0] ? rowToRecord(terminalRows[0]) : null
-    if (terminal?.publicationStage === 'stable' && terminal.monitoringStatus === 'passed') {
-      return {
-        status: 'stable_already_promoted' as const,
-        previousPublicationKey: terminal.previousPublicationKey,
-        reasons: [],
-      }
+  const terminal = terminalRows[0] ? rowToRecord(terminalRows[0]) : null
+  if (terminal?.publicationStage === 'stable' && terminal.monitoringStatus === 'passed') {
+    return {
+      status: 'stable_already_promoted' as const,
+      previousPublicationKey: terminal.previousPublicationKey,
+      reasons: [],
     }
-    return { status: 'blocked' as const, previousPublicationKey: null, reasons: ['canary_publication_not_found'] }
   }
-  if (candidate.monitoringStatus !== 'passed') {
-    return { status: 'blocked' as const, previousPublicationKey: candidate.previousPublicationKey, reasons: ['canary_monitoring_pass_required'] }
-  }
-  const promotedAt = input.promotedAt ?? new Date().toISOString()
-  const rows = await input.queryExec<RuntimePublicationRow>(
-    `with superseded as (
-       update public.duration_learning_runtime_publications
-          set publication_stage = 'superseded',
-              updated_at = $1::timestamptz
-        where asset_key = $2
-          and artifact_key = $3
-          and scope_level = $4
-          and company_id is not distinct from $5::uuid
-          and project_id is not distinct from $6::uuid
-          and industry_key is not distinct from $7::text
-          and publication_stage = 'stable'
-          and publication_key <> $8
-       returning publication_key
-     ), promoted as (
-       update public.duration_learning_runtime_publications publication
-          set publication_stage = 'stable',
-              traffic_percent = 100,
-              monitoring_status = 'passed',
-              published_at = $1::timestamptz,
-              updated_at = $1::timestamptz
-         from (select count(*) from superseded) guard
-        where publication.publication_key = $8
-          and publication.publication_stage = 'canary'
-       returning publication.publication_key, publication.publication_stage
-     )
-     select * from promoted`,
-    [
-      promotedAt,
-      candidate.assetKey,
-      candidate.artifactKey,
-      candidate.scopeLevel,
-      candidate.companyId,
-      candidate.projectId,
-      candidate.industryKey,
-      publicationKey,
-    ],
-  )
-  return rows[0]
-    ? { status: 'stable_promoted' as const, previousPublicationKey: candidate.previousPublicationKey, reasons: [] }
-    : { status: 'blocked' as const, previousPublicationKey: candidate.previousPublicationKey, reasons: ['canary_promotion_update_failed'] }
+  return terminal?.publicationStage === 'canary'
+    ? {
+        status: 'blocked' as const,
+        previousPublicationKey: terminal.previousPublicationKey,
+        reasons: ['canary_monitoring_pass_required'],
+      }
+    : { status: 'blocked' as const, previousPublicationKey: null, reasons: ['canary_publication_not_found'] }
 }
 
 export async function rollbackDurationLearningRuntimePublication(input: {
   queryExec: DurationLearningRuntimePublicationQueryExec
   publicationKey: string
+  assetKey?: DurationLearningRuntimeAssetKey | null
+  artifactKey?: string | null
+  scope?: DurationLearningRuntimeScope | null
   expectedPreviousPublicationKey?: string | null
   reason: string
   rolledBackAt?: string
 }) {
   const publicationKey = normalizeText(input.publicationKey)
+  const assetKey = normalizeText(input.assetKey) as DurationLearningRuntimeAssetKey
+  const artifactKey = normalizeText(input.artifactKey)
+  const scope = input.scope ? normalizeScope(input.scope) : null
   const expectedPreviousPublicationKey = nullableText(input.expectedPreviousPublicationKey)
   const reason = normalizeText(input.reason)
-  if (!publicationKey || !reason) {
+  if (!publicationKey || !reason || !assetKey || !artifactKey || !scope) {
     return {
       status: 'blocked' as const,
       restoredPublicationKey: null,
       reasons: [
         ...(publicationKey ? [] : ['publication_key_required']),
         ...(reason ? [] : ['rollback_reason_required']),
+        ...(assetKey ? [] : ['rollback_asset_key_required']),
+        ...(artifactKey ? [] : ['rollback_artifact_key_required']),
+        ...(scope ? [] : ['rollback_scope_required']),
       ],
+    }
+  }
+  const rollbackScopeReasons = scopeReasons(input.scope!).map((value) => `rollback_${value}`)
+  if (rollbackScopeReasons.length > 0) {
+    return { status: 'blocked' as const, restoredPublicationKey: null, reasons: rollbackScopeReasons }
+  }
+  if (!await isProjectScopeAuthorized({ queryExec: input.queryExec, scope: input.scope! })) {
+    return {
+      status: 'blocked' as const,
+      restoredPublicationKey: null,
+      reasons: ['rollback_project_scope_company_mismatch'],
     }
   }
   const rolledBackAt = input.rolledBackAt ?? new Date().toISOString()
   const rows = await input.queryExec<RuntimePublicationRow>(
-    `with rolled_back as (
-       update public.duration_learning_runtime_publications publication
-          set publication_stage = 'rolled_back',
-              monitoring_status = 'failed',
-              rollback_execution = jsonb_build_object(
-                'reason', $2::text,
-                'rolledBackAt', $3::timestamptz,
-                'restoredPublicationKey', source.previous_publication_key
-              ),
-              rolled_back_at = $3::timestamptz,
-              updated_at = $3::timestamptz
-         from (
-           select publication_key, previous_publication_key
-             from public.duration_learning_runtime_publications
-            where publication_key = $1
-              and publication_stage in ('canary', 'stable')
-              and ($4::text is null or previous_publication_key is not distinct from $4::text)
-            for update
-         ) source
-        where publication.publication_key = source.publication_key
-       returning publication.publication_key, source.previous_publication_key
-     ), restored as (
-       update public.duration_learning_runtime_publications publication
-          set publication_stage = 'stable',
-              monitoring_status = 'passed',
-              updated_at = $3::timestamptz
-         from rolled_back
-        where publication.publication_key = rolled_back.previous_publication_key
-          and publication.publication_stage = 'superseded'
-       returning publication.publication_key
-     )
-     select rolled_back.publication_key,
-            rolled_back.previous_publication_key
-       from rolled_back
-       left join restored on true`,
-    [publicationKey, reason, rolledBackAt, expectedPreviousPublicationKey],
+    `select *
+       from public.rollback_duration_learning_runtime_publication(
+         $1::text,
+         $2::text,
+         $3::text,
+         $4::text,
+         $5::uuid,
+         $6::uuid,
+         $7::text,
+         $8::text,
+         $9::text,
+         $10::timestamptz
+       )`,
+    [
+      publicationKey,
+      assetKey,
+      artifactKey,
+      scope.level,
+      scope.companyId,
+      scope.projectId,
+      scope.industryKey,
+      expectedPreviousPublicationKey,
+      reason,
+      rolledBackAt,
+    ],
   )
   const row = rows[0]
   if (row) {
+    const previousPublicationKey = nullableText(field(row, 'previous_publication_key', 'previousPublicationKey'))
+    const restoredPublicationKey = nullableText(field(row, 'restored_publication_key', 'restoredPublicationKey'))
+    if (previousPublicationKey && restoredPublicationKey !== previousPublicationKey) {
+      return {
+        status: 'blocked' as const,
+        restoredPublicationKey: null,
+        reasons: ['rollback_target_not_restored'],
+      }
+    }
     return {
       status: 'rollback_executed' as const,
-      restoredPublicationKey: nullableText(field(row, 'previous_publication_key', 'previousPublicationKey')),
+      restoredPublicationKey,
       reasons: [],
     }
   }
   const terminalRows = await input.queryExec<RuntimePublicationRow>(
-    `select publication_key,
-            publication_stage,
-            previous_publication_key
-       from public.duration_learning_runtime_publications
-      where publication_key = $1
+    `select target.publication_key,
+            target.publication_stage,
+            target.previous_publication_key,
+            case
+              when target.previous_publication_key is null then null
+              when predecessor.publication_stage = 'stable' then predecessor.publication_key
+              else null
+            end as restored_publication_key
+       from public.duration_learning_runtime_publications target
+       left join public.duration_learning_runtime_publications predecessor
+         on predecessor.publication_key = target.previous_publication_key
+        and predecessor.asset_key = target.asset_key
+        and predecessor.artifact_key = target.artifact_key
+        and predecessor.scope_level = target.scope_level
+        and predecessor.company_id is not distinct from target.company_id
+        and predecessor.project_id is not distinct from target.project_id
+        and predecessor.industry_key is not distinct from target.industry_key
+      where target.publication_key = $1
+        and target.asset_key = $2
+        and target.artifact_key = $3
+        and target.scope_level = $4
+        and target.company_id is not distinct from $5::uuid
+        and target.project_id is not distinct from $6::uuid
+        and target.industry_key is not distinct from $7::text
       limit 1`,
-    [publicationKey],
+    [
+      publicationKey,
+      assetKey,
+      artifactKey,
+      scope.level,
+      scope.companyId,
+      scope.projectId,
+      scope.industryKey,
+    ],
   )
   const terminal = terminalRows[0] ? rowToRecord(terminalRows[0]) : null
   if (
@@ -883,11 +872,24 @@ export async function rollbackDurationLearningRuntimePublication(input: {
       reasons: ['rollback_target_mismatch'],
     }
   }
-  return terminal?.publicationStage === 'rolled_back'
-    ? {
-        status: 'rollback_already_executed' as const,
-        restoredPublicationKey: terminal.previousPublicationKey,
-        reasons: [],
-      }
-    : { status: 'blocked' as const, restoredPublicationKey: null, reasons: ['runtime_publication_not_found'] }
+  const restoredPublicationKey = nullableText(field(
+    terminalRows[0] ?? {},
+    'restored_publication_key',
+    'restoredPublicationKey',
+  ))
+  if (terminal?.previousPublicationKey && restoredPublicationKey !== terminal.previousPublicationKey) {
+    return {
+      status: 'blocked' as const,
+      restoredPublicationKey: null,
+      reasons: ['rollback_target_not_restored'],
+    }
+  }
+  if (terminal?.publicationStage === 'rolled_back') {
+    return {
+      status: 'rollback_already_executed' as const,
+      restoredPublicationKey,
+      reasons: [],
+    }
+  }
+  return { status: 'blocked' as const, restoredPublicationKey: null, reasons: ['runtime_publication_not_found'] }
 }

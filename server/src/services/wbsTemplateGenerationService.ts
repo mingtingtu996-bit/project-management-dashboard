@@ -6057,6 +6057,7 @@ async function estimateContextualDescendantRollupDuration(params: {
   elementVariant: GeneratedElementVariant | null
   durationSuggestionMode: WbsTemplateDurationSuggestionMode
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
   fastTemplateDurationCache?: FastTemplateDurationCache
   rollupCache?: Map<string, Promise<{
     recommendedDurationDays: number
@@ -6092,6 +6093,7 @@ async function estimateContextualDescendantRollupDurationUncached(params: {
   elementVariant: GeneratedElementVariant | null
   durationSuggestionMode: WbsTemplateDurationSuggestionMode
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
   fastTemplateDurationCache?: FastTemplateDurationCache
   rollupCache?: Map<string, Promise<{
     recommendedDurationDays: number
@@ -6134,6 +6136,7 @@ async function estimateContextualDescendantRollupDurationUncached(params: {
           projectGenerationFacts: buildProjectGenerationFactsSnapshot(params.featureProfile),
           elementVariantCodes: params.elementVariant ? [params.elementVariant.code] : params.featureProfile.elementVariantCodes,
           runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec ?? undefined,
+          runtimeEvidenceMode: params.runtimeEvidenceMode,
         }))
       const promotedChildSuggestion = withPlanReferenceDurationOutput(childSuggestion)
       const childRecommended = readWritablePlanTaskDurationDays(promotedChildSuggestion)
@@ -6244,6 +6247,7 @@ async function applyManagedFrontierDescendantRollupDurationSuggestion(params: {
   suggestion: GeneratedTemplateDurationSuggestion
   durationSuggestionMode: WbsTemplateDurationSuggestionMode
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
   fastTemplateDurationCache?: FastTemplateDurationCache
   rollupCache?: Map<string, Promise<{
     recommendedDurationDays: number
@@ -6470,6 +6474,7 @@ async function preferContextualDescendantRollupDurationSuggestion(params: {
   suggestion: GeneratedTemplateDurationSuggestion
   durationSuggestionMode: WbsTemplateDurationSuggestionMode
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
   fastTemplateDurationCache?: FastTemplateDurationCache
   rollupCache?: Map<string, Promise<{
     recommendedDurationDays: number
@@ -7153,6 +7158,7 @@ async function buildDurationSuggestionMap(params: {
   generationDepth: WbsTemplateGenerationDepth
   durationSuggestionMode: WbsTemplateDurationSuggestionMode
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
   plannedStartDate?: string | null
   scopeStartDateByIndex?: Map<number, string>
   onStageTiming?: (stage: string, details?: Record<string, unknown>) => void
@@ -7227,6 +7233,7 @@ async function buildDurationSuggestionMap(params: {
               suggestion: fastSuggestion,
               durationSuggestionMode: params.durationSuggestionMode,
               runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec,
+              runtimeEvidenceMode: params.runtimeEvidenceMode,
               fastTemplateDurationCache,
               rollupCache,
             }),
@@ -7269,6 +7276,7 @@ async function buildDurationSuggestionMap(params: {
           packageChildRhythmWindowDurationDays: readPositiveNumber(readRecord(target.node.metadata).rhythmWindowDurationDays ?? readRecord(target.node.metadata).rhythm_window_duration_days),
           packageChildRhythmWindowRole: normalizeText(readRecord(target.node.metadata).rhythmWindowRole ?? readRecord(target.node.metadata).rhythm_window_role) || null,
           runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec ?? undefined,
+          runtimeEvidenceMode: params.runtimeEvidenceMode,
         })
         const serializedSuggestion = await preferContextualDescendantRollupDurationSuggestion({
           projectId: params.projectId,
@@ -7280,6 +7288,7 @@ async function buildDurationSuggestionMap(params: {
           suggestion: serializeDurationSuggestion(suggestion),
           durationSuggestionMode: params.durationSuggestionMode,
           runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec,
+          runtimeEvidenceMode: params.runtimeEvidenceMode,
           fastTemplateDurationCache,
           rollupCache,
         })
@@ -7294,6 +7303,7 @@ async function buildDurationSuggestionMap(params: {
           suggestion: serializedSuggestion,
           durationSuggestionMode: params.durationSuggestionMode,
           runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec,
+          runtimeEvidenceMode: params.runtimeEvidenceMode,
           fastTemplateDurationCache,
           rollupCache,
         })
@@ -7427,6 +7437,7 @@ async function buildDurationSuggestionMap(params: {
           packageChildRhythmWindowDurationDays: readPositiveNumber(readRecord(target.node.metadata).rhythmWindowDurationDays ?? readRecord(target.node.metadata).rhythm_window_duration_days),
           packageChildRhythmWindowRole: normalizeText(readRecord(target.node.metadata).rhythmWindowRole ?? readRecord(target.node.metadata).rhythm_window_role) || null,
           runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec ?? undefined,
+          runtimeEvidenceMode: params.runtimeEvidenceMode,
         })
         const serializedSuggestion = await preferContextualDescendantRollupDurationSuggestion({
           projectId: params.projectId,
@@ -7438,6 +7449,7 @@ async function buildDurationSuggestionMap(params: {
           suggestion: serializeDurationSuggestion(suggestion),
           durationSuggestionMode: params.durationSuggestionMode,
           runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec,
+          runtimeEvidenceMode: params.runtimeEvidenceMode,
         })
         suggestions.set(
           getDurationSuggestionKey(scopeIndex, target.node, target.elementVariant),
@@ -19828,6 +19840,7 @@ async function generateWbsTemplateRowsInternal(params: {
   runtimeArtifactPublications?: readonly WbsTemplateGenerationRuntimeArtifactPublication[] | null
   runtimeConsumerObservedAt?: string | null
   runtimeConsumerErrorHandler?: (error: unknown) => void
+  runtimeEvidenceMode?: 'record' | 'no_write'
   algorithmSeedSourcePolicy?: AlgorithmSeedResolveContext['sourcePolicy']
   runtimePublicationResolution?: 'enabled' | 'disabled'
 }): Promise<{
@@ -20092,6 +20105,7 @@ async function generateWbsTemplateRowsInternal(params: {
     generationDepth,
     durationSuggestionMode,
     runtimeConsumerObservationQueryExec: params.runtimeConsumerObservationQueryExec,
+    runtimeEvidenceMode: params.runtimeEvidenceMode,
     plannedStartDate: startDate,
     scopeStartDateByIndex,
     onStageTiming: logDiagnosticStageTiming,
@@ -20608,7 +20622,11 @@ export async function generateWbsTemplateRows(
   params: Parameters<typeof generateWbsTemplateRowsInternal>[0],
 ): Promise<Awaited<ReturnType<typeof generateWbsTemplateRowsInternal>>> {
   const runtimeArtifactPublications = [...(params.runtimeArtifactPublications ?? [])]
-  const effectiveParams = { ...params, runtimeArtifactPublications }
+  const effectiveParams = {
+    ...params,
+    runtimeArtifactPublications,
+    runtimeEvidenceMode: params.runtimeEvidenceMode ?? 'no_write' as const,
+  }
   const generated = await buildTaskPlanRhythmGeneratedResult(effectiveParams)
     ?? await generateWbsTemplateRowsInternal(effectiveParams)
   const publicGenerated = {
@@ -20616,7 +20634,7 @@ export async function generateWbsTemplateRows(
     rows: sanitizeGeneratedTemplateRowsForPublicOutput(generated.rows),
   }
 
-  if (params.runtimeConsumerObservationQueryExec) {
+  if (params.runtimeEvidenceMode === 'record' && params.runtimeConsumerObservationQueryExec) {
     const templateIds = uniqueStringArray([
       normalizeText(generated.templateId),
       ...generated.templateIds.map(normalizeText),
@@ -20672,6 +20690,7 @@ export async function generateWbsTemplatePhaseChainRows(params: {
   detailLevel?: WbsTemplateDetailLevel
   diagnosticDurationSuggestionMode?: WbsTemplateDurationSuggestionMode
   phaseReleasePolicies?: Record<string, unknown> | Array<Record<string, unknown>> | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
 }): Promise<{
   generationBatchId: string
   templateId: string
@@ -20739,6 +20758,7 @@ export async function generateWbsTemplatePhaseChainRows(params: {
       },
       detailLevel: params.detailLevel,
       diagnosticDurationSuggestionMode: params.diagnosticDurationSuggestionMode,
+      runtimeEvidenceMode: params.runtimeEvidenceMode ?? 'no_write',
       scopeAssignmentRules: readScopeAssignmentRulesFromOperation(operation),
     })
     phaseResults.push(generated)

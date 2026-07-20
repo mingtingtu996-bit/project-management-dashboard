@@ -19,6 +19,7 @@ import {
 import {
   evaluateDurationLearningAssetAutomationPolicy,
   type DurationLearningAutomationEvidence,
+  type DurationLearningAutomationQualityModel,
   type DurationLearningExperienceTier,
   type DurationLearningFactSource,
 } from './durationLearningAssetAutomationPolicyService.js'
@@ -27,6 +28,15 @@ const STRUCTURAL_ASSET_KEYS = new Set<DurationLearningRuntimeAssetKey>([
   'dependency_rule_candidate',
   'critical_path_rule_candidate',
 ])
+
+const QUALITY_MODEL_BY_ASSET: Record<DurationLearningRuntimeAssetKey, DurationLearningAutomationQualityModel> = {
+  base_duration_benchmark: 'numeric_holdout',
+  standard_work_duration_seed: 'numeric_holdout',
+  special_work_duration_seed: 'numeric_replay',
+  wbs_reference_days: 'numeric_holdout',
+  dependency_rule_candidate: 'structural_replay',
+  critical_path_rule_candidate: 'structural_replay',
+}
 
 const AGGREGATION_FLOORS = {
   ordinary: {
@@ -60,6 +70,7 @@ export interface DurationLearningRuntimeCandidateProposal {
   productionDaySamples?: number[]
   conflictCount: number
   replayPassed: boolean
+  qualityModel?: DurationLearningAutomationQualityModel | null
   blockingReasons?: string[]
   policyEvaluationRequired?: boolean
   automationEvidence?: DurationLearningAutomationEvidence
@@ -74,8 +85,9 @@ export interface DurationLearningRuntimeCandidateProposal {
 export interface DurationLearningRuntimeMonitoringCandidate {
   publicationKey: string
   assetKey: DurationLearningRuntimeAssetKey
+  artifactKey: string
   publicationStage: 'canary' | 'stable'
-  scopeLevel: DurationLearningRuntimeScope['level']
+  scope: DurationLearningRuntimeScope
   monitoringWindowHours: number
   monitoringElapsedHours: number
   observedCount: number
@@ -470,6 +482,16 @@ function text(value: unknown) {
   return String(value ?? '').trim()
 }
 
+function producerQualityModel(
+  assetKey: DurationLearningRuntimeAssetKey,
+  source: Record<string, unknown>,
+): DurationLearningAutomationQualityModel | null {
+  const model = text(source.qualityModel ?? source.quality_model)
+  return model === QUALITY_MODEL_BY_ASSET[assetKey]
+    ? model as DurationLearningAutomationQualityModel
+    : null
+}
+
 function nullableText(value: unknown) {
   return text(value) || null
 }
@@ -612,16 +634,31 @@ function aggregateProposal(
       .filter((value): value is number => value !== null)),
     conflictCount,
     replayPassed: proposals.every((proposal) => proposal.replayPassed),
+    qualityModel: proposals.every((proposal) => (
+      proposal.qualityModel != null && proposal.qualityModel === first.qualityModel
+    ))
+      ? first.qualityModel
+      : null,
     blockingReasons: uniqueTexts([
       ...proposals.flatMap((proposal) => proposal.blockingReasons ?? []),
       ...aggregateNodeSetBlockingReasons(proposals),
+      ...(proposals.every((proposal) => (
+        proposal.qualityModel != null && proposal.qualityModel === first.qualityModel
+      )) ? [] : ['duration_learning_quality_model_required']),
     ]),
     policyEvaluationRequired: true,
     automationEvidence: {
+      holdoutSampleCount: proposals.reduce(
+        (sum, proposal) => sum + nonNegativeInteger(proposal.automationEvidence?.holdoutSampleCount),
+        0,
+      ),
       maeBefore: weightedAverage(proposals, 'maeBefore'),
       maeAfter: weightedAverage(proposals, 'maeAfter'),
       conflictRate: weightedAverage(proposals, 'conflictRate'),
       overcompensationRate: weightedAverage(proposals, 'overcompensationRate'),
+      replayPassRate: weightedAverage(proposals, 'replayPassRate'),
+      outcomeAcceptanceRate: weightedAverage(proposals, 'outcomeAcceptanceRate'),
+      qualityConsistencyRate: weightedAverage(proposals, 'qualityConsistencyRate'),
       rollbackReady: proposals.every((proposal) => proposal.automationEvidence?.rollbackReady === true),
       tenantScopeValid: proposals.every((proposal) => proposal.automationEvidence?.tenantScopeValid === true),
       structuralMutation: proposals.some((proposal) => proposal.automationEvidence?.structuralMutation === true),
@@ -769,12 +806,19 @@ function aggregateRuntimePayload(proposals: DurationLearningRuntimeCandidateProp
 
 function weightedAverage(
   proposals: DurationLearningRuntimeCandidateProposal[],
-  key: 'maeBefore' | 'maeAfter' | 'conflictRate' | 'overcompensationRate',
+  key:
+    | 'maeBefore'
+    | 'maeAfter'
+    | 'conflictRate'
+    | 'overcompensationRate'
+    | 'replayPassRate'
+    | 'outcomeAcceptanceRate'
+    | 'qualityConsistencyRate',
 ) {
   const measured = proposals.flatMap((proposal) => {
     const value = proposal.automationEvidence?.[key]
-    const parsed = Number(value)
-    return Number.isFinite(parsed)
+    const parsed = optionalNumber(value)
+    return parsed !== null
       ? [{ value: parsed, weight: Math.max(1, proposal.sampleCount) }]
       : []
   })
@@ -786,11 +830,22 @@ function weightedAverage(
 function withAutomationDecision(
   proposal: DurationLearningRuntimeCandidateProposal,
 ): DurationLearningRuntimeCandidateProposal {
-  const decision = evaluateDurationLearningAssetAutomationPolicy({
+  const expectedQualityModel = QUALITY_MODEL_BY_ASSET[proposal.assetKey]
+  const qualityModel = proposal.qualityModel === expectedQualityModel
+    ? proposal.qualityModel
+    : null
+  const qualityModelReasons = qualityModel ? [] : ['duration_learning_quality_model_required']
+  const factSource: DurationLearningFactSource = qualityModel === 'numeric_replay'
+    ? 'replay'
+    : qualityModel === 'structural_replay'
+      ? 'hybrid'
+      : 'actual_outcome'
+  const evaluated = evaluateDurationLearningAssetAutomationPolicy({
     experienceTier: STRUCTURAL_ASSET_KEYS.has(proposal.assetKey) ? 'T3' : 'T2',
     reuseScope: proposal.scope.level,
-    factSource: proposal.assetKey === 'base_duration_benchmark' ? 'actual_outcome' : 'hybrid',
+    factSource,
     targetStage: 'canary',
+    qualityModel: qualityModel ?? expectedQualityModel,
     evidence: {
       ...proposal.automationEvidence,
       validChangeCount: proposal.sampleCount,
@@ -804,8 +859,22 @@ function withAutomationDecision(
         || proposal.automationEvidence?.exceptionalConflict === true,
     },
   })
+  const decision = qualityModel
+    ? evaluated
+    : {
+        ...evaluated,
+        stage: 'collecting' as const,
+        autoPromotionAllowed: false,
+        manualReviewRequired: false,
+        reasonCodes: uniqueTexts([...evaluated.reasonCodes, ...qualityModelReasons]),
+      }
   return {
     ...proposal,
+    qualityModel,
+    blockingReasons: uniqueTexts([
+      ...(proposal.blockingReasons ?? []),
+      ...qualityModelReasons,
+    ]),
     automationDecision: decision,
   }
 }
@@ -972,6 +1041,7 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
       .filter((value): value is number => value !== null),
     conflictCount: nonNegativeInteger(metadata.conflictCount ?? metadata.conflict_count),
     replayPassed: metadata.replayPassed !== false && metadata.replay_passed !== false,
+    qualityModel: producerQualityModel('base_duration_benchmark', metadata),
     blockingReasons: text(row.duration_day_basis) === 'construction_production_day'
       ? []
       : ['benchmark_production_day_basis_required'],
@@ -982,10 +1052,14 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
 
 function automationEvidenceFrom(source: Record<string, unknown>): DurationLearningAutomationEvidence {
   return {
+    holdoutSampleCount: optionalNumber(source.holdoutSampleCount ?? source.holdout_sample_count),
     maeBefore: optionalNumber(source.maeBefore ?? source.mae_before),
     maeAfter: optionalNumber(source.maeAfter ?? source.mae_after),
     conflictRate: optionalNumber(source.conflictRate ?? source.conflict_rate),
     overcompensationRate: optionalNumber(source.overcompensationRate ?? source.overcompensation_rate),
+    replayPassRate: optionalNumber(source.replayPassRate ?? source.replay_pass_rate),
+    outcomeAcceptanceRate: optionalNumber(source.outcomeAcceptanceRate ?? source.outcome_acceptance_rate),
+    qualityConsistencyRate: optionalNumber(source.qualityConsistencyRate ?? source.quality_consistency_rate),
     rollbackReady: typeof (source.rollbackReady ?? source.rollback_ready) === 'boolean'
       ? Boolean(source.rollbackReady ?? source.rollback_ready)
       : null,
@@ -1037,6 +1111,7 @@ function seedProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidatePr
     observationWindowDays: nonNegativeInteger(evidence.observationWindowDays ?? evidence.observation_window_days),
     conflictCount: nonNegativeInteger(evidence.conflictCount ?? evidence.conflict_count),
     replayPassed: evidence.replayPassed !== false && evidence.replay_passed !== false,
+    qualityModel: producerQualityModel(assetKey, { ...evidence, ...payload }),
     blockingReasons: uniqueTexts(list(evidence.blockingReasons ?? evidence.blocking_reasons)),
     policyEvaluationRequired: true,
     automationEvidence: automationEvidenceFrom({ ...evidence, ...payload }),
@@ -1146,15 +1221,27 @@ function networkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidat
     companyIds: uniqueTexts([companyId]),
     industryKeys: uniqueTexts([industryKey]),
     taskIds: uniqueTexts([
+      ...list(metadata.task_ids),
+      ...list(metadata.source_task_ids),
       ...list(metadata.auto_task_ids),
       ...list(metadata.primary_chain_task_ids),
-      ...list(metadata.sample_dependency_ids),
+      ...list(metadata.runtime_publication_input_task_ids),
     ]),
-    realOutcomeCount: outcomeStatus === 'accepted' ? 1 : 0,
-    replayCaseCount: nonNegativeInteger(metadata.sample_count ?? metadata.comparable_actual_date_count),
+    realOutcomeCount: nonNegativeInteger(
+      metadata.real_outcome_count
+        ?? metadata.realOutcomeCount
+        ?? Number(outcomeStatus === 'accepted'),
+    ),
+    replayCaseCount: nonNegativeInteger(
+      metadata.replay_case_count
+        ?? metadata.replayCaseCount
+        ?? metadata.sample_count
+        ?? metadata.comparable_actual_date_count,
+    ),
     observationWindowDays: nonNegativeInteger(metadata.observation_window_days),
     conflictCount: nonNegativeInteger(metadata.conflict_count) + Number(outcomeStatus === 'rejected'),
     replayPassed: outcomeStatus === 'accepted',
+    qualityModel: producerQualityModel(assetKey, metadata),
     blockingReasons,
     policyEvaluationRequired: true,
     automationEvidence: automationEvidenceFrom(metadata),
@@ -1923,11 +2010,25 @@ function optionalNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+function monitoringScopeFromRow(row: SourceRow): DurationLearningRuntimeScope | null {
+  const scopeLevel = text(row.scope_level)
+  const companyId = text(row.company_id)
+  const projectId = text(row.project_id)
+  const industryKey = text(row.industry_key)
+  if (scopeLevel === 'project') {
+    return companyId && projectId ? { level: 'project', companyId, projectId } : null
+  }
+  if (scopeLevel === 'company') return companyId ? { level: 'company', companyId } : null
+  if (scopeLevel === 'industry') return industryKey ? { level: 'industry', industryKey } : null
+  return scopeLevel === 'global' ? { level: 'global' } : null
+}
+
 function monitoringCandidateFromRow(row: SourceRow): DurationLearningRuntimeMonitoringCandidate | null {
   const publicationKey = text(row.publication_key)
   const assetKey = text(row.asset_key) as DurationLearningRuntimeAssetKey
+  const artifactKey = text(row.artifact_key)
   const publicationStage = text(row.publication_stage)
-  const scopeLevel = text(row.scope_level)
+  const scope = monitoringScopeFromRow(row)
   if (!publicationKey || ![
     'base_duration_benchmark',
     'standard_work_duration_seed',
@@ -1935,14 +2036,14 @@ function monitoringCandidateFromRow(row: SourceRow): DurationLearningRuntimeMoni
     'wbs_reference_days',
     'dependency_rule_candidate',
     'critical_path_rule_candidate',
-  ].includes(assetKey)) return null
+  ].includes(assetKey) || !artifactKey || !scope) return null
   if (publicationStage !== 'canary' && publicationStage !== 'stable') return null
-  if (!['project', 'company', 'industry', 'global'].includes(scopeLevel)) return null
   return {
     publicationKey,
     assetKey,
+    artifactKey,
     publicationStage,
-    scopeLevel: scopeLevel as DurationLearningRuntimeScope['level'],
+    scope,
     monitoringWindowHours: Math.max(1, nonNegativeInteger(row.monitoring_window_hours) || 72),
     monitoringElapsedHours: Math.max(0, finiteNumber(row.monitoring_elapsed_hours)),
     observedCount: nonNegativeInteger(row.observed_count),
@@ -1988,8 +2089,12 @@ function durationLearningRuntimeMonitoringCollectorSql() {
     )
     select publication.publication_key,
              publication.asset_key,
+             publication.artifact_key,
              publication.publication_stage,
              publication.scope_level,
+            publication.company_id,
+            publication.project_id,
+            publication.industry_key,
             publication.automation_decision,
             publication.monitoring_window_hours,
             extract(epoch from (now() - publication.monitoring_started_at)) / 3600.0 as monitoring_elapsed_hours,
@@ -2396,6 +2501,10 @@ function stableAutomationDecision(
   const totalPostPublicationOutcomes = candidate.accuracySampleCount
     + candidate.acceptedOutcomeCount
     + candidate.weakOrRejectedOutcomeCount
+  const stableFactSource: DurationLearningFactSource = totalPostPublicationOutcomes > 0
+    && (factSource === 'replay' || factSource === 'behavioral_change')
+    ? 'hybrid'
+    : factSource
   const sourceObservationWindowDays = nonNegativeInteger(
     sourceObserved.observationWindowDays ?? sourceObserved.observation_window_days,
   )
@@ -2403,9 +2512,10 @@ function stableAutomationDecision(
 
   return evaluateDurationLearningAssetAutomationPolicy({
     experienceTier,
-    reuseScope: candidate.scopeLevel,
-    factSource,
+    reuseScope: candidate.scope.level,
+    factSource: stableFactSource,
     targetStage: 'stable',
+    qualityModel: QUALITY_MODEL_BY_ASSET[candidate.assetKey],
     evidence: {
       validChangeCount: nonNegativeInteger(
         sourceObserved.validChangeCount ?? sourceObserved.valid_change_count,
@@ -2426,6 +2536,12 @@ function stableAutomationDecision(
         sourceObserved.replayCaseCount ?? sourceObserved.replay_case_count,
       ),
       observationWindowDays: sourceObservationWindowDays + postPublicationObservationDays,
+      holdoutSampleCount: nonNegativeInteger(
+        sourceObserved.holdoutSampleCount
+          ?? sourceObserved.holdout_sample_count
+          ?? sourceEvidence.holdoutSampleCount
+          ?? sourceEvidence.holdout_sample_count,
+      ) + candidate.accuracySampleCount,
       maeBefore: optionalNumber(monitoringMetrics.maeBefore),
       maeAfter: optionalNumber(monitoringMetrics.maeAfter),
       conflictRate: optionalNumber(monitoringMetrics.runtimeConflictRate),
@@ -2434,6 +2550,24 @@ function stableAutomationDecision(
           ?? sourceObserved.overcompensation_rate
           ?? sourceEvidence.overcompensationRate
           ?? sourceEvidence.overcompensation_rate,
+      ),
+      replayPassRate: optionalNumber(
+        sourceObserved.replayPassRate
+          ?? sourceObserved.replay_pass_rate
+          ?? sourceEvidence.replayPassRate
+          ?? sourceEvidence.replay_pass_rate,
+      ),
+      outcomeAcceptanceRate: optionalNumber(
+        sourceObserved.outcomeAcceptanceRate
+          ?? sourceObserved.outcome_acceptance_rate
+          ?? sourceEvidence.outcomeAcceptanceRate
+          ?? sourceEvidence.outcome_acceptance_rate,
+      ),
+      qualityConsistencyRate: optionalNumber(
+        sourceObserved.qualityConsistencyRate
+          ?? sourceObserved.quality_consistency_rate
+          ?? sourceEvidence.qualityConsistencyRate
+          ?? sourceEvidence.quality_consistency_rate,
       ),
       rollbackReady: typeof (sourceObserved.rollbackReady ?? sourceObserved.rollback_ready) === 'boolean'
         ? Boolean(sourceObserved.rollbackReady ?? sourceObserved.rollback_ready)
@@ -2630,6 +2764,9 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         const rollback = await rollbackPublication({
           queryExec,
           publicationKey: candidate.publicationKey,
+          assetKey: candidate.assetKey,
+          artifactKey: candidate.artifactKey,
+          scope: candidate.scope,
           reason: `duration_learning_runtime_regression:${evaluation.reasons.join(',')}`,
           rolledBackAt: observedAt,
         })
@@ -2661,6 +2798,9 @@ export async function runDurationLearningRuntimeLifecycleSweep(
             const rollback = await rollbackPublication({
               queryExec,
               publicationKey: candidate.publicationKey,
+              assetKey: candidate.assetKey,
+              artifactKey: candidate.artifactKey,
+              scope: candidate.scope,
               reason: `duration_learning_stable_policy_blocked:${stableDecision.reasonCodes.join(',')}`,
               rolledBackAt: observedAt,
             })

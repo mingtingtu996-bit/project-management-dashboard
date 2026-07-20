@@ -134,6 +134,400 @@ CREATE INDEX IF NOT EXISTS idx_duration_learning_runtime_publications_monitoring
   )
   WHERE publication_stage IN ('canary', 'stable');
 
+CREATE OR REPLACE FUNCTION public.persist_duration_learning_runtime_publication(
+  p_publication_key TEXT,
+  p_asset_key TEXT,
+  p_artifact_key TEXT,
+  p_scope_level TEXT,
+  p_company_id UUID,
+  p_project_id UUID,
+  p_industry_key TEXT,
+  p_publication_stage TEXT,
+  p_runtime_payload JSONB,
+  p_source_candidate_refs JSONB,
+  p_source_evidence_refs JSONB,
+  p_automation_decision JSONB,
+  p_expected_previous_publication_key TEXT,
+  p_traffic_percent INTEGER,
+  p_monitoring_window_hours INTEGER,
+  p_published_at TIMESTAMPTZ
+)
+RETURNS SETOF public.duration_learning_runtime_publications
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  current_stable_key TEXT;
+  transition_row_count INTEGER;
+BEGIN
+  IF p_scope_level = 'project' AND NOT EXISTS (
+    SELECT 1
+    FROM public.projects project
+    WHERE project.id = p_project_id
+      AND project.company_id = p_company_id
+  ) THEN
+    RETURN;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(concat_ws(
+    E'\x1f',
+    p_asset_key,
+    p_artifact_key,
+    p_scope_level,
+    COALESCE(p_company_id::TEXT, ''),
+    COALESCE(p_project_id::TEXT, ''),
+    COALESCE(p_industry_key, '')
+  ), 0));
+
+  SELECT publication.publication_key
+    INTO current_stable_key
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.asset_key = p_asset_key
+     AND publication.artifact_key = p_artifact_key
+     AND publication.scope_level = p_scope_level
+     AND publication.company_id IS NOT DISTINCT FROM p_company_id
+     AND publication.project_id IS NOT DISTINCT FROM p_project_id
+     AND publication.industry_key IS NOT DISTINCT FROM p_industry_key
+     AND publication.publication_stage = 'stable'
+   ORDER BY publication.published_at DESC
+   LIMIT 1
+   FOR UPDATE;
+
+  IF p_expected_previous_publication_key IS NOT NULL
+    AND current_stable_key IS DISTINCT FROM p_expected_previous_publication_key
+  THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO public.duration_learning_runtime_publications (
+    publication_key,
+    asset_key,
+    artifact_key,
+    scope_level,
+    company_id,
+    project_id,
+    industry_key,
+    publication_stage,
+    runtime_payload,
+    source_candidate_refs,
+    source_evidence_refs,
+    automation_decision,
+    previous_publication_key,
+    traffic_percent,
+    monitoring_window_hours,
+    monitoring_status,
+    monitoring_started_at,
+    published_at,
+    created_at,
+    updated_at
+  ) VALUES (
+    p_publication_key,
+    p_asset_key,
+    p_artifact_key,
+    p_scope_level,
+    p_company_id,
+    p_project_id,
+    p_industry_key,
+    'superseded',
+    p_runtime_payload,
+    p_source_candidate_refs,
+    p_source_evidence_refs,
+    p_automation_decision,
+    current_stable_key,
+    p_traffic_percent,
+    p_monitoring_window_hours,
+    'pending',
+    p_published_at,
+    p_published_at,
+    p_published_at,
+    p_published_at
+  )
+  ON CONFLICT (publication_key) DO NOTHING;
+
+  GET DIAGNOSTICS transition_row_count = ROW_COUNT;
+  IF transition_row_count = 0 THEN
+    RETURN;
+  END IF;
+
+  UPDATE public.duration_learning_runtime_publications publication
+     SET publication_stage = 'superseded',
+         updated_at = p_published_at
+   WHERE publication.asset_key = p_asset_key
+     AND publication.artifact_key = p_artifact_key
+     AND publication.scope_level = p_scope_level
+     AND publication.company_id IS NOT DISTINCT FROM p_company_id
+     AND publication.project_id IS NOT DISTINCT FROM p_project_id
+     AND publication.industry_key IS NOT DISTINCT FROM p_industry_key
+     AND publication.publication_stage = p_publication_stage
+     AND publication.publication_key <> p_publication_key;
+
+  UPDATE public.duration_learning_runtime_publications publication
+     SET publication_stage = p_publication_stage,
+         updated_at = p_published_at
+   WHERE publication.publication_key = p_publication_key
+     AND publication.asset_key = p_asset_key
+     AND publication.artifact_key = p_artifact_key
+     AND publication.scope_level = p_scope_level
+     AND publication.company_id IS NOT DISTINCT FROM p_company_id
+     AND publication.project_id IS NOT DISTINCT FROM p_project_id
+     AND publication.industry_key IS NOT DISTINCT FROM p_industry_key
+     AND publication.publication_stage = 'superseded';
+
+  GET DIAGNOSTICS transition_row_count = ROW_COUNT;
+  IF transition_row_count <> 1 THEN
+    RAISE EXCEPTION 'duration_learning_runtime_transition_incomplete:persist:%', p_publication_key;
+  END IF;
+
+  RETURN QUERY
+  SELECT publication.*
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.publication_key = p_publication_key;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION public.promote_duration_learning_runtime_canary(
+  p_publication_key TEXT,
+  p_promoted_at TIMESTAMPTZ
+)
+RETURNS SETOF public.duration_learning_runtime_publications
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  target public.duration_learning_runtime_publications%ROWTYPE;
+  current_stable_key TEXT;
+  transition_row_count INTEGER;
+BEGIN
+  SELECT publication.*
+    INTO target
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.publication_key = p_publication_key
+     AND publication.publication_stage = 'canary'
+     AND publication.monitoring_status = 'passed';
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(concat_ws(
+    E'\x1f',
+    target.asset_key,
+    target.artifact_key,
+    target.scope_level,
+    COALESCE(target.company_id::TEXT, ''),
+    COALESCE(target.project_id::TEXT, ''),
+    COALESCE(target.industry_key, '')
+  ), 0));
+
+  SELECT publication.*
+    INTO target
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.publication_key = p_publication_key
+     AND publication.publication_stage = 'canary'
+     AND publication.monitoring_status = 'passed'
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  SELECT publication.publication_key
+    INTO current_stable_key
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.asset_key = target.asset_key
+     AND publication.artifact_key = target.artifact_key
+     AND publication.scope_level = target.scope_level
+     AND publication.company_id IS NOT DISTINCT FROM target.company_id
+     AND publication.project_id IS NOT DISTINCT FROM target.project_id
+     AND publication.industry_key IS NOT DISTINCT FROM target.industry_key
+     AND publication.publication_stage = 'stable'
+     AND publication.publication_key <> target.publication_key
+   LIMIT 1
+   FOR UPDATE;
+
+  IF target.previous_publication_key IS DISTINCT FROM current_stable_key THEN
+    RETURN;
+  END IF;
+
+  IF current_stable_key IS NOT NULL THEN
+    UPDATE public.duration_learning_runtime_publications publication
+       SET publication_stage = 'superseded',
+           updated_at = p_promoted_at
+     WHERE publication.publication_key = current_stable_key
+       AND publication.asset_key = target.asset_key
+       AND publication.artifact_key = target.artifact_key
+       AND publication.scope_level = target.scope_level
+       AND publication.company_id IS NOT DISTINCT FROM target.company_id
+       AND publication.project_id IS NOT DISTINCT FROM target.project_id
+       AND publication.industry_key IS NOT DISTINCT FROM target.industry_key
+       AND publication.publication_stage = 'stable';
+    GET DIAGNOSTICS transition_row_count = ROW_COUNT;
+    IF transition_row_count <> 1 THEN
+      RAISE EXCEPTION 'duration_learning_runtime_transition_incomplete:promote_predecessor:%', p_publication_key;
+    END IF;
+  END IF;
+
+  UPDATE public.duration_learning_runtime_publications publication
+     SET publication_stage = 'stable',
+         traffic_percent = 100,
+         monitoring_status = 'passed',
+         published_at = p_promoted_at,
+         updated_at = p_promoted_at
+   WHERE publication.publication_key = target.publication_key
+     AND publication.asset_key = target.asset_key
+     AND publication.artifact_key = target.artifact_key
+     AND publication.scope_level = target.scope_level
+     AND publication.company_id IS NOT DISTINCT FROM target.company_id
+     AND publication.project_id IS NOT DISTINCT FROM target.project_id
+     AND publication.industry_key IS NOT DISTINCT FROM target.industry_key
+     AND publication.publication_stage = 'canary'
+     AND publication.monitoring_status = 'passed';
+  GET DIAGNOSTICS transition_row_count = ROW_COUNT;
+  IF transition_row_count <> 1 THEN
+    RAISE EXCEPTION 'duration_learning_runtime_transition_incomplete:promote_target:%', p_publication_key;
+  END IF;
+
+  RETURN QUERY
+  SELECT publication.*
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.publication_key = p_publication_key;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION public.rollback_duration_learning_runtime_publication(
+  p_publication_key TEXT,
+  p_asset_key TEXT,
+  p_artifact_key TEXT,
+  p_scope_level TEXT,
+  p_company_id UUID,
+  p_project_id UUID,
+  p_industry_key TEXT,
+  p_expected_previous_publication_key TEXT,
+  p_reason TEXT,
+  p_rolled_back_at TIMESTAMPTZ
+)
+RETURNS TABLE (
+  publication_key TEXT,
+  previous_publication_key TEXT,
+  restored_publication_key TEXT
+)
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+  target public.duration_learning_runtime_publications%ROWTYPE;
+  predecessor public.duration_learning_runtime_publications%ROWTYPE;
+  transition_row_count INTEGER;
+BEGIN
+  IF p_scope_level = 'project' AND NOT EXISTS (
+    SELECT 1
+    FROM public.projects project
+    WHERE project.id = p_project_id
+      AND project.company_id = p_company_id
+  ) THEN
+    RETURN;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended(concat_ws(
+    E'\x1f',
+    p_asset_key,
+    p_artifact_key,
+    p_scope_level,
+    COALESCE(p_company_id::TEXT, ''),
+    COALESCE(p_project_id::TEXT, ''),
+    COALESCE(p_industry_key, '')
+  ), 0));
+
+  SELECT publication.*
+    INTO target
+    FROM public.duration_learning_runtime_publications publication
+   WHERE publication.publication_key = p_publication_key
+     AND publication.asset_key = p_asset_key
+     AND publication.artifact_key = p_artifact_key
+     AND publication.scope_level = p_scope_level
+     AND publication.company_id IS NOT DISTINCT FROM p_company_id
+     AND publication.project_id IS NOT DISTINCT FROM p_project_id
+     AND publication.industry_key IS NOT DISTINCT FROM p_industry_key
+     AND publication.publication_stage IN ('canary', 'stable')
+     AND (
+       p_expected_previous_publication_key IS NULL
+       OR publication.previous_publication_key IS NOT DISTINCT FROM p_expected_previous_publication_key
+     )
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  IF target.previous_publication_key IS NOT NULL THEN
+    SELECT predecessor_row.*
+      INTO predecessor
+      FROM public.duration_learning_runtime_publications predecessor_row
+     WHERE predecessor_row.publication_key = target.previous_publication_key
+       AND predecessor_row.asset_key = target.asset_key
+       AND predecessor_row.artifact_key = target.artifact_key
+       AND predecessor_row.scope_level = target.scope_level
+       AND predecessor_row.company_id IS NOT DISTINCT FROM target.company_id
+       AND predecessor_row.project_id IS NOT DISTINCT FROM target.project_id
+       AND predecessor_row.industry_key IS NOT DISTINCT FROM target.industry_key
+       AND predecessor_row.publication_stage IN ('superseded', 'stable')
+     FOR UPDATE;
+    IF NOT FOUND THEN
+      RETURN;
+    END IF;
+  END IF;
+
+  UPDATE public.duration_learning_runtime_publications publication
+     SET publication_stage = 'rolled_back',
+         monitoring_status = 'failed',
+         rollback_execution = jsonb_build_object(
+           'reason', p_reason,
+           'rolledBackAt', p_rolled_back_at,
+           'restoredPublicationKey', target.previous_publication_key
+         ),
+         rolled_back_at = p_rolled_back_at,
+         updated_at = p_rolled_back_at
+   WHERE publication.publication_key = target.publication_key
+     AND publication.asset_key = target.asset_key
+     AND publication.artifact_key = target.artifact_key
+     AND publication.scope_level = target.scope_level
+     AND publication.company_id IS NOT DISTINCT FROM target.company_id
+     AND publication.project_id IS NOT DISTINCT FROM target.project_id
+     AND publication.industry_key IS NOT DISTINCT FROM target.industry_key
+     AND publication.publication_stage IN ('canary', 'stable');
+  GET DIAGNOSTICS transition_row_count = ROW_COUNT;
+  IF transition_row_count <> 1 THEN
+    RAISE EXCEPTION 'duration_learning_runtime_transition_incomplete:rollback_target:%', p_publication_key;
+  END IF;
+
+  IF target.previous_publication_key IS NOT NULL
+    AND predecessor.publication_stage = 'superseded'
+  THEN
+    UPDATE public.duration_learning_runtime_publications predecessor
+       SET publication_stage = 'stable',
+           monitoring_status = 'passed',
+           updated_at = p_rolled_back_at
+     WHERE predecessor.publication_key = target.previous_publication_key
+       AND predecessor.asset_key = target.asset_key
+       AND predecessor.artifact_key = target.artifact_key
+       AND predecessor.scope_level = target.scope_level
+       AND predecessor.company_id IS NOT DISTINCT FROM target.company_id
+       AND predecessor.project_id IS NOT DISTINCT FROM target.project_id
+       AND predecessor.industry_key IS NOT DISTINCT FROM target.industry_key
+       AND predecessor.publication_stage = 'superseded';
+    GET DIAGNOSTICS transition_row_count = ROW_COUNT;
+    IF transition_row_count <> 1 THEN
+      RAISE EXCEPTION 'duration_learning_runtime_transition_incomplete:rollback_predecessor:%', p_publication_key;
+    END IF;
+  END IF;
+
+  RETURN QUERY SELECT
+    target.publication_key,
+    target.previous_publication_key,
+    target.previous_publication_key;
+END
+$$;
+
 -- This append-only relation is the trusted consumption source. Business-owned
 -- JSON metadata cannot impersonate publication, artifact or applied-day lineage.
 CREATE TABLE IF NOT EXISTS public.duration_learning_runtime_consumptions (
@@ -689,6 +1083,27 @@ GRANT SELECT ON TABLE public.duration_learning_legacy_runtime_row_archive
 GRANT SELECT ON TABLE public.duration_learning_legacy_default_master_plan_mappings
   TO workbuddy_runtime;
 
+REVOKE ALL ON FUNCTION public.persist_duration_learning_runtime_publication(
+  TEXT, TEXT, TEXT, TEXT, UUID, UUID, TEXT, TEXT,
+  JSONB, JSONB, JSONB, JSONB, TEXT, INTEGER, INTEGER, TIMESTAMPTZ
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.persist_duration_learning_runtime_publication(
+  TEXT, TEXT, TEXT, TEXT, UUID, UUID, TEXT, TEXT,
+  JSONB, JSONB, JSONB, JSONB, TEXT, INTEGER, INTEGER, TIMESTAMPTZ
+) TO workbuddy_runtime;
+REVOKE ALL ON FUNCTION public.promote_duration_learning_runtime_canary(
+  TEXT, TIMESTAMPTZ
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.promote_duration_learning_runtime_canary(
+  TEXT, TIMESTAMPTZ
+) TO workbuddy_runtime;
+REVOKE ALL ON FUNCTION public.rollback_duration_learning_runtime_publication(
+  TEXT, TEXT, TEXT, TEXT, UUID, UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.rollback_duration_learning_runtime_publication(
+  TEXT, TEXT, TEXT, TEXT, UUID, UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ
+) TO workbuddy_runtime;
+
 DROP POLICY IF EXISTS duration_learning_runtime_publications_backend_runtime_policy
   ON public.duration_learning_runtime_publications;
 CREATE POLICY duration_learning_runtime_publications_backend_runtime_policy
@@ -696,12 +1111,34 @@ CREATE POLICY duration_learning_runtime_publications_backend_runtime_policy
   FOR ALL
   TO workbuddy_runtime
   USING (
-    current_user = 'workbuddy_runtime'
-    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+    (
+      current_user = 'workbuddy_runtime'
+      OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+    )
+    AND (
+      duration_learning_runtime_publications.scope_level <> 'project'
+      OR EXISTS (
+        SELECT 1
+        FROM public.projects project
+        WHERE project.id = duration_learning_runtime_publications.project_id
+          AND project.company_id = duration_learning_runtime_publications.company_id
+      )
+    )
   )
   WITH CHECK (
-    current_user = 'workbuddy_runtime'
-    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+    (
+      current_user = 'workbuddy_runtime'
+      OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+    )
+    AND (
+      duration_learning_runtime_publications.scope_level <> 'project'
+      OR EXISTS (
+        SELECT 1
+        FROM public.projects project
+        WHERE project.id = duration_learning_runtime_publications.project_id
+          AND project.company_id = duration_learning_runtime_publications.company_id
+      )
+    )
   );
 
 DROP POLICY IF EXISTS duration_learning_runtime_consumptions_backend_runtime_select
@@ -755,7 +1192,16 @@ CREATE POLICY duration_learning_runtime_consumptions_backend_runtime_insert
       WHERE publication.publication_key = duration_learning_runtime_consumptions.publication_key
         AND publication.asset_key = duration_learning_runtime_consumptions.asset_key
         AND publication.artifact_key = duration_learning_runtime_consumptions.artifact_key
-        AND publication.publication_stage IN ('canary', 'stable')
+        AND (
+          (
+            publication.publication_stage = 'canary'
+            AND publication.monitoring_status IN ('pending', 'collecting', 'passed')
+          )
+          OR (
+            publication.publication_stage = 'stable'
+            AND publication.monitoring_status = 'passed'
+          )
+        )
         AND (
           (
             publication.scope_level = 'project'

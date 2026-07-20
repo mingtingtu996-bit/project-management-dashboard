@@ -800,6 +800,12 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
     snapshot,
     actualDurationDays: actualSpan.actualDurationDays,
   })
+  const replayTaskIds = unique(snapshot.tasks.map((task) => task.taskId))
+  const replayCaseCount = replayTaskIds.length
+  const qualityConsistencyRate = replayCaseCount > 0
+    ? Number((projectedFloatTaskCount / replayCaseCount).toFixed(6))
+    : null
+  const replayAccepted = outcomeStatus === 'accepted'
   const metadata: Record<string, unknown> = {
     source: 'project_critical_path_cpm',
     algorithm_version: networkLineage.criticalPathAlgorithmVersion,
@@ -831,6 +837,24 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
     edge_count: snapshot.edges.length,
     critical_task_count: snapshot.autoTaskIds.length,
     projected_float_task_count: projectedFloatTaskCount,
+    sample_count: replayCaseCount,
+    source_evidence_refs: unique([
+      `critical_path_inputs:${networkLineage.criticalPathInputHash}`,
+      ...replayTaskIds.map((taskId) => `tasks:${taskId}:completed_cpm_replay`),
+    ]),
+    task_ids: replayTaskIds,
+    real_outcome_count: replayCaseCount,
+    replay_case_count: replayCaseCount,
+    observation_started_at: actualSpan.actualStartDate,
+    observation_ended_at: actualSpan.actualFinishDate,
+    observation_window_days: actualSpan.actualDurationDays,
+    quality_model: 'structural_replay',
+    replay_pass_rate: replayAccepted ? 1 : 0,
+    outcome_acceptance_rate: replayAccepted ? 1 : 0,
+    quality_consistency_rate: qualityConsistencyRate,
+    conflict_rate: replayAccepted ? 0 : 1,
+    rollback_ready: true,
+    tenant_scope_valid: true,
     writes_runtime_directly: false,
     writes_fact_directly: false,
   }

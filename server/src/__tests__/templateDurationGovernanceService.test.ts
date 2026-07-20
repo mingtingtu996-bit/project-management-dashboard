@@ -244,6 +244,54 @@ describe('templateDurationGovernanceService', () => {
     })
   })
 
+  it('persists leave-one-out numeric holdout evidence instead of in-sample accuracy constants', async () => {
+    const insertedBenchmarks: Array<Record<string, unknown>> = []
+    const governanceSamples = Array.from({ length: 20 }, (_, index): DurationExperienceSampleRow => asProductionSample({
+      id: `holdout-sample-${String(index + 1).padStart(2, '0')}`,
+      company_id: 'company-1',
+      project_id: 'project-1',
+      task_id: `holdout-task-${index + 1}`,
+      completed_at: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+      standard_work_code: 'SW-HOLDOUT',
+      wbs_node_type: 'process',
+      actual_duration: 9 + (index % 3),
+      planned_duration: 20,
+    }))
+    learningAssetMocks.loadGovernanceSamples.mockResolvedValue(governanceSamples)
+    learningAssetMocks.stageBenchmark.mockImplementation(async (payload: Record<string, unknown>) => {
+      insertedBenchmarks.push(payload)
+      return { id: 'benchmark-holdout' }
+    })
+
+    const [candidate] = buildDurationBenchmarkCandidates(governanceSamples)
+    await runTemplateDurationGovernance({ minSampleCount: 1 })
+
+    expect(candidate.automationQualityEvidence).toEqual(expect.objectContaining({
+      qualityModel: 'numeric_holdout',
+      holdoutSampleCount: 20,
+      maeBefore: expect.any(Number),
+      maeAfter: expect.any(Number),
+      conflictRate: 0,
+      overcompensationRate: 0,
+    }))
+    expect(candidate.automationQualityEvidence.maeBefore)
+      .toBeGreaterThan(candidate.automationQualityEvidence.maeAfter ?? Number.POSITIVE_INFINITY)
+    expect(insertedBenchmarks[0]).toMatchObject({
+      metadata: expect.objectContaining({
+        quality_model: 'numeric_holdout',
+        holdout_sample_count: 20,
+        mae_before: candidate.automationQualityEvidence.maeBefore,
+        mae_after: candidate.automationQualityEvidence.maeAfter,
+        conflict_rate: 0,
+        overcompensation_rate: 0,
+        rollback_ready: true,
+        tenant_scope_valid: true,
+        writes_runtime_directly: false,
+        writes_fact_directly: false,
+      }),
+    })
+  })
+
   it('returns a C-19.10 non-live governance contract for sample-to-benchmark promotion without runtime mutation', async () => {
     const templateNodeId = '11111111-1111-4111-8111-111111111111'
     const governanceSamples: DurationExperienceSampleRow[] = [

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   executeSQLOne: vi.fn(),
   rawQuery: vi.fn(),
   resolveConstructionCalendarContext: vi.fn(),
+  trustedConsumptionRows: [] as Record<string, unknown>[],
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -38,7 +39,21 @@ const serviceSourcePath = fileURLToPath(new URL('../services/wbsTemplateFeedback
 describe('wbsTemplateFeedback governance bridge', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.rawQuery.mockResolvedValue({ rows: [{ id: 'wbs-feedback-candidate-event-id' }] })
+    mocks.trustedConsumptionRows = [{
+      task_id: 'task-1',
+      consumption_key: 'trusted-consumption-1',
+      publication_key: 'duration-learning:wbs-reference:stable-1',
+      asset_key: 'wbs_reference_days',
+      artifact_key: 'template-1',
+      generation_batch_id: 'batch-1',
+      template_id: 'template-1',
+      consumed_at: '2026-04-01T00:00:00.000Z',
+    }]
+    mocks.rawQuery.mockImplementation(async (sql: string) => ({
+      rows: sql.toLowerCase().includes('from public.duration_learning_runtime_consumptions')
+        ? mocks.trustedConsumptionRows
+        : [{ id: 'wbs-feedback-candidate-event-id' }],
+    }))
     mocks.resolveConstructionCalendarContext.mockResolvedValue({
       basis: 'official_construction_calendar_seed',
       windows: [{
@@ -78,9 +93,11 @@ describe('wbsTemplateFeedback governance bridge', () => {
             actual_end_date: '2026-05-05',
             planned_start_date: '2026-05-01',
             planned_end_date: '2026-05-06',
+            source_template_id: 'template-1',
+            generation_batch_id: 'batch-1',
             standard_task_metadata: {
               durationLearningAssetKey: 'wbs_reference_days',
-              durationLearningPublicationKey: 'duration-learning:wbs-reference:stable-1',
+              durationLearningPublicationKey: 'duration-learning:wbs-reference:forged-json',
             },
           },
         ]
@@ -159,7 +176,7 @@ describe('wbsTemplateFeedback governance bridge', () => {
     expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('on conflict (id) do update')
     expect(String(outcomeInsert?.[0]).toLowerCase()).toContain('learning_scope_source')
     expect(outcomeInsert?.[1]).toEqual([
-      'wbs-reference-days:template-1:project-1:duration-learning:wbs-reference:stable-1',
+      'wbs-reference-days:template-1:project-1:duration-learning:wbs-reference:stable-1:batch-1',
       'wbs_reference_days',
       'weak',
       'wbs_template_feedback:template-1',
@@ -179,6 +196,8 @@ describe('wbsTemplateFeedback governance bridge', () => {
         runtime_publication_key: 'duration-learning:wbs-reference:stable-1',
         runtime_publication_artifact_key: 'template-1',
         runtime_publication_input_task_ids: ['task-1'],
+        runtime_publication_generation_batch_id: 'batch-1',
+        runtime_publication_consumption_keys: ['trusted-consumption-1'],
         writes_runtime_directly: false,
         writes_fact_directly: false,
       }),
@@ -189,6 +208,111 @@ describe('wbsTemplateFeedback governance bridge', () => {
       candidateEventCount: 1,
       recordedOutcomeCount: 1,
       report: expect.objectContaining({ sample_task_count: 1 }),
+    }))
+
+    const canonicalRead = mocks.rawQuery.mock.calls.find((call) => (
+      String(call[0]).toLowerCase().includes('from public.duration_learning_runtime_consumptions')
+    ))
+    expect(canonicalRead).toBeTruthy()
+    expect(String(canonicalRead?.[0]).toLowerCase()).toContain('join public.tasks')
+    expect(String(canonicalRead?.[0]).toLowerCase()).toContain('generation_batch_id')
+    expect(String(canonicalRead?.[0]).toLowerCase()).toContain('artifact_key')
+  })
+
+  it('keeps forged task JSON unlinked when no canonical trusted consumption exists', async () => {
+    mocks.trustedConsumptionRows = []
+
+    await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    })
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+    expect(outcomeInsert?.[1]?.[8]).toBeNull()
+    expect(metadata).toEqual(expect.objectContaining({
+      publication_lineage_status: 'unlinked_no_trusted_consumption',
+      consumed_runtime_publication_keys: [],
+      runtime_publication_key: null,
+      runtime_publication_artifact_key: null,
+      runtime_publication_input_task_ids: [],
+    }))
+    expect(JSON.stringify(outcomeInsert?.[1])).not.toContain('forged-json')
+  })
+
+  it('ignores stale generation history and links the unique canonical materialization lineage', async () => {
+    mocks.trustedConsumptionRows = [
+      {
+        task_id: 'task-1',
+        consumption_key: 'trusted-consumption-old',
+        publication_key: 'duration-learning:wbs-reference:old',
+        asset_key: 'wbs_reference_days',
+        artifact_key: 'template-1',
+        generation_batch_id: 'batch-old',
+        template_id: 'template-1',
+        consumed_at: '2026-03-01T00:00:00.000Z',
+      },
+      {
+        task_id: 'task-1',
+        consumption_key: 'trusted-consumption-current',
+        publication_key: 'duration-learning:wbs-reference:stable-1',
+        asset_key: 'wbs_reference_days',
+        artifact_key: 'template-1',
+        generation_batch_id: 'batch-1',
+        template_id: 'template-1',
+        consumed_at: '2026-04-01T00:00:00.000Z',
+      },
+    ]
+
+    await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    })
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+    expect(outcomeInsert?.[1]?.[8]).toBe('duration-learning:wbs-reference:stable-1')
+    expect(metadata).toEqual(expect.objectContaining({
+      publication_lineage_status: 'linked',
+      runtime_publication_generation_batch_id: 'batch-1',
+      runtime_publication_consumption_keys: ['trusted-consumption-current'],
+    }))
+    expect(JSON.stringify(metadata)).not.toContain('duration-learning:wbs-reference:old')
+  })
+
+  it('fails closed when one materialization has multiple canonical publication lineages', async () => {
+    mocks.trustedConsumptionRows = [
+      mocks.trustedConsumptionRows[0]!,
+      {
+        ...mocks.trustedConsumptionRows[0],
+        consumption_key: 'trusted-consumption-2',
+        publication_key: 'duration-learning:wbs-reference:stable-2',
+      },
+    ]
+
+    await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    })
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+    expect(outcomeInsert?.[1]?.[8]).toBeNull()
+    expect(metadata).toEqual(expect.objectContaining({
+      publication_lineage_status: 'ambiguous_trusted_consumption',
+      consumed_runtime_publication_keys: [
+        'duration-learning:wbs-reference:stable-1',
+        'duration-learning:wbs-reference:stable-2',
+      ],
+      runtime_publication_key: null,
+      runtime_publication_artifact_key: null,
+      runtime_publication_input_task_ids: [],
     }))
   })
 
@@ -221,6 +345,70 @@ describe('wbsTemplateFeedback governance bridge', () => {
       }),
     ]))
     expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledWith({ projectId: 'project-1' })
+  })
+
+  it('writes real leave-one-out accuracy and task lineage for WBS reference-day candidates', async () => {
+    mocks.executeSQLOne.mockResolvedValue({
+      id: 'template-1',
+      template_name: 'Commercial WBS template',
+      wbs_nodes: [{
+        id: 'source-structure',
+        title: 'Structure',
+        reference_days: 20,
+        children: [],
+      }],
+    })
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+    })
+    const tasks = Array.from({ length: 20 }, (_, index) => ({
+      id: `task-${index + 1}`,
+      project_id: 'project-1',
+      title: 'Structure',
+      status: 'completed',
+      task_source: 'template',
+      baseline_item_id: `baseline-${index + 1}`,
+      actual_start_date: `2026-01-${String(index + 1).padStart(2, '0')}`,
+      actual_end_date: `2026-01-${String(index + 9 + (index % 3)).padStart(2, '0')}`,
+      planned_start_date: '2026-01-01',
+      planned_end_date: '2026-01-20',
+      standard_task_metadata: {},
+    }))
+    mocks.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM projects')) return [{ id: 'project-1', status: 'completed' }]
+      if (sql.includes('FROM tasks')) return tasks
+      if (sql.includes('FROM task_baseline_items')) {
+        return tasks.map((task) => ({
+          id: task.baseline_item_id,
+          project_id: 'project-1',
+          source_task_id: 'source-structure',
+        }))
+      }
+      return []
+    })
+
+    await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    })
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+    expect(metadata).toEqual(expect.objectContaining({
+      source_task_ids: tasks.map((task) => task.id),
+      quality_model: 'numeric_holdout',
+      holdout_sample_count: 20,
+      mae_before: expect.any(Number),
+      mae_after: expect.any(Number),
+      conflict_rate: 0,
+      overcompensation_rate: 0,
+      rollback_ready: true,
+      tenant_scope_valid: true,
+    }))
+    expect(Number(metadata.mae_before)).toBeGreaterThan(Number(metadata.mae_after))
   })
 
   it('runs the scheduled producer by exact company, project, and template scope', async () => {

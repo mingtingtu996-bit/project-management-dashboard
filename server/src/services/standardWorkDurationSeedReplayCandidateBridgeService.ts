@@ -309,6 +309,7 @@ function buildEvidenceSummary(
   queueKind: ReplayQueueKind,
 ) {
   const autoGovernEligible = queueKind === 'p50_review' && Boolean(report.projectId)
+  const quality = item.automationQualityEvidence
   return {
     replayReportCode: report.replay.reportCode,
     governanceReportCode: report.reportCode,
@@ -322,6 +323,23 @@ function buildEvidenceSummary(
     p50Days: normalizeDays(item.medianActualDays),
     sampleCount: item.sampleCount,
     sampleIds: item.sampleIds,
+    taskIds: item.taskIds,
+    sourceEvidenceRefs: buildEvidenceSourceKeys(item),
+    realOutcomeCount: item.sampleCount,
+    replayCaseCount: quality.holdoutSampleCount,
+    observationStartedAt: item.observationStartedAt,
+    observationEndedAt: item.observationEndedAt,
+    observationWindowDays: item.observationWindowDays,
+    qualityModel: quality.qualityModel,
+    holdoutSampleCount: quality.holdoutSampleCount,
+    maeBefore: quality.maeBefore,
+    maeAfter: quality.maeAfter,
+    conflictRate: quality.conflictRate,
+    overcompensationRate: quality.overcompensationRate,
+    rollbackReady: true,
+    tenantScopeValid: Boolean(report.companyId && report.projectId),
+    writesRuntimeDirectly: false,
+    writesFactDirectly: false,
     medianAbsolutePercentageError: item.medianAbsolutePercentageError,
     withinThirtyPercentRatio: item.withinThirtyPercentRatio,
     biasDirection: item.biasDirection,

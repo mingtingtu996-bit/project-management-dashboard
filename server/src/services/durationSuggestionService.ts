@@ -269,10 +269,7 @@ export interface DurationSuggestionRuntimeArtifactPublication {
 }
 
 function shouldRecordDurationRuntimeConsumerEvidence(input: DurationSuggestionInput) {
-  if (input.runtimeEvidenceMode === 'no_write') return false
-  if (input.runtimeEvidenceMode === 'record') return true
-  if (input.runtimeConsumerObservationQueryExec) return true
-  return process.env.NODE_ENV !== 'test'
+  return input.runtimeEvidenceMode === 'record'
 }
 
 export interface RecordDurationSuggestionRuntimeConsumptionInput {
@@ -555,7 +552,6 @@ function buildLearnedBenchmarkRuntimePublication(
 function createDurationLearningRuntimeQueryExec(
   input: DurationSuggestionInput,
 ): DurationLearningRuntimePublicationQueryExec | null {
-  if (process.env.NODE_ENV === 'test' && input.runtimeEvidenceMode === 'no_write') return null
   if (input.runtimeConsumerObservationQueryExec) return input.runtimeConsumerObservationQueryExec
   if (process.env.NODE_ENV === 'test') return null
   return executeDurationLearningRuntimePublicationQuery
@@ -4557,7 +4553,7 @@ async function finalizeSuggestion(
   const calendarAwareSuggestion = withDurationCalendarContext(assembledInputSuggestion, input)
   const governedSuggestion = withDurationOutputContract(calendarAwareSuggestion)
   logDurationSuggestionRun(input, purpose, governedSuggestion)
-  if (input.runtimeEvidenceMode !== 'no_write') {
+  if (input.runtimeEvidenceMode === 'record') {
     await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
   }
   return governedSuggestion

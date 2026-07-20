@@ -2747,6 +2747,7 @@ async function buildWizardProfilePreview(
       const generated = await generateWbsTemplateRows({
         projectId: options.projectId ?? 'wizard-preview',
         surface: 'task_list',
+        runtimeEvidenceMode: 'no_write',
         operation: previewOperation,
         detailLevel: WIZARD_MANAGED_FRONTIER_DETAIL_LEVEL as never,
         onboardingSubstage: body.mode === 'starting_line' ? body.onboardingSubstage ?? null : null,
@@ -7626,6 +7627,7 @@ async function commitWizardGeneration(params: {
   const generated = await generateWbsTemplateRows({
     projectId: params.projectId,
     surface: 'task_list',
+    runtimeEvidenceMode: 'no_write',
     operation: operationWithCalendar,
     detailLevel: WIZARD_MANAGED_FRONTIER_DETAIL_LEVEL as never,
     onboardingSubstage: materializedPayload.onboardingSubstage ?? null,

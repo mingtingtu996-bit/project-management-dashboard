@@ -59,13 +59,25 @@ describe('duration learning runtime consumption writer contracts', () => {
     expect(candidateIndex).toBeGreaterThan(persistIndex)
   })
 
-  it('keeps preview-only generation free from runtime observation writes', () => {
+  it('keeps every WBS preview/replay call no-write and reserves recording for trusted materialization writers', () => {
     const generation = source('../services/wbsTemplateGenerationService.ts')
-    const resolver = generation.indexOf('params.runtimePublicationQueryExec')
-    const observationGuard = generation.indexOf('if (params.runtimeConsumerObservationQueryExec)')
+    const suggestion = source('../services/durationSuggestionService.ts')
+    const previewRoute = source('../routes/wbs-templates.ts')
+    const wizard = source('../routes/projectWizard.ts')
+    const tasks = source('../routes/tasks.ts')
+    const baseline = source('../routes/task-baselines.ts')
+    const suggestionCalls = [...generation.matchAll(/getTaskDurationSuggestion\(\{([\s\S]*?)\}\)/g)]
 
-    expect(resolver).toBeGreaterThan(0)
-    expect(observationGuard).toBeGreaterThan(resolver)
+    expect(suggestion).toContain("return input.runtimeEvidenceMode === 'record'")
+    expect(suggestion).toContain("if (input.runtimeEvidenceMode === 'record') {")
     expect(generation).toContain('runtimePublicationQueryExec?: DurationLearningRuntimePublicationQueryExec | null')
+    expect(generation).toContain("runtimeEvidenceMode?: 'record' | 'no_write'")
+    expect(generation).toContain("if (params.runtimeEvidenceMode === 'record' && params.runtimeConsumerObservationQueryExec) {")
+    expect(suggestionCalls.length).toBeGreaterThan(0)
+    expect(suggestionCalls.every((call) => call[1]?.includes('runtimeEvidenceMode: params.runtimeEvidenceMode'))).toBe(true)
+    expect(previewRoute).toContain("runtimeEvidenceMode: 'no_write'")
+    expect(wizard).toContain("runtimeEvidenceMode: 'no_write'")
+    expect(tasks).toContain("runtimeEvidenceMode: 'no_write'")
+    expect(baseline).toContain("runtimeEvidenceMode: 'no_write'")
   })
 })

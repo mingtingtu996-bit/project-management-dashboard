@@ -1319,6 +1319,7 @@ async function buildDefaultMasterPlanBaselineDraft(params: {
   const generated = await generateWbsTemplateRows({
     projectId: params.projectId,
     surface: 'baseline',
+    runtimeEvidenceMode: 'no_write',
     detailLevel: 'planning_skeleton' as never,
     diagnosticDurationSuggestionMode: 'benchmark_plan_reference',
     operation: operation as never,
@@ -1734,6 +1735,7 @@ router.post(
         ? await generateWbsTemplatePhaseChainRows({
           projectId,
           surface,
+          runtimeEvidenceMode: 'no_write',
           operations: phaseOperationsForGeneration,
           chainMode: body?.phaseChainMode === 'none' || body?.phase_chain_mode === 'none' ? 'none' : 'sequential',
           detailLevel: body?.detailLevel ?? body?.detail_level,
@@ -1742,6 +1744,7 @@ router.post(
         : await generateWbsTemplateRows({
           projectId,
           surface,
+          runtimeEvidenceMode: 'no_write',
           operation: operationForGeneration as any,
         })
       const response: ApiResponse = {

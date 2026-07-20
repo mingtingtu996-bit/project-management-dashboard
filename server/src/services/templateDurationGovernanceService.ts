@@ -64,6 +64,14 @@ export interface DurationBenchmarkCandidate {
   observationWindowDays: number
   productionDaySamples: number[]
   durationDayBasis: 'construction_production_day'
+  automationQualityEvidence: {
+    qualityModel: 'numeric_holdout'
+    holdoutSampleCount: number
+    maeBefore: number | null
+    maeAfter: number | null
+    conflictRate: number | null
+    overcompensationRate: number | null
+  }
 }
 
 export interface TemplateDurationGovernanceOptions {
@@ -203,6 +211,70 @@ function percentile(sortedValues: number[], percentileValue: number) {
   return sortedValues[Math.min(sortedValues.length - 1, index)]
 }
 
+function roundMetric(value: number) {
+  return Number(value.toFixed(6))
+}
+
+function buildNumericHoldoutEvidence(rows: DurationExperienceSampleRow[]) {
+  const ordered = [...rows].sort((left, right) => {
+    const leftKey = `${normalizeTimestamp(left.completed_at ?? left.created_at) ?? ''}:${normalizeText(left.id) ?? ''}`
+    const rightKey = `${normalizeTimestamp(right.completed_at ?? right.created_at) ?? ''}:${normalizeText(right.id) ?? ''}`
+    return leftKey.localeCompare(rightKey)
+  })
+  const observations = ordered.flatMap((sample, index) => {
+    const actualDays = readProductionDurationDays(sample as Record<string, unknown>, 'actual')
+    const plannedDays = readProductionDurationDays(sample as Record<string, unknown>, 'planned')
+    const trainingDays = ordered
+      .filter((_, trainingIndex) => trainingIndex !== index)
+      .map((trainingSample) => readProductionDurationDays(trainingSample as Record<string, unknown>, 'actual'))
+      .filter((value): value is number => value !== null)
+      .sort((left, right) => left - right)
+    if (actualDays == null || plannedDays == null || trainingDays.length < 3) return []
+    return [{
+      actualDays,
+      baselineDays: plannedDays,
+      candidateDays: percentile(trainingDays, 0.5),
+    }]
+  })
+  if (observations.length === 0) {
+    return {
+      qualityModel: 'numeric_holdout' as const,
+      holdoutSampleCount: 0,
+      maeBefore: null,
+      maeAfter: null,
+      conflictRate: null,
+      overcompensationRate: null,
+    }
+  }
+  const maeBefore = observations.reduce(
+    (sum, item) => sum + Math.abs(item.baselineDays - item.actualDays),
+    0,
+  ) / observations.length
+  const maeAfter = observations.reduce(
+    (sum, item) => sum + Math.abs(item.candidateDays - item.actualDays),
+    0,
+  ) / observations.length
+  const conflictCount = observations.filter((item) => (
+    Math.abs(item.candidateDays - item.actualDays) > Math.abs(item.baselineDays - item.actualDays)
+  )).length
+  const overcompensationCount = observations.filter((item) => {
+    const before = item.baselineDays - item.actualDays
+    const after = item.candidateDays - item.actualDays
+    return before !== 0
+      && after !== 0
+      && Math.sign(before) !== Math.sign(after)
+      && Math.abs(after) >= Math.abs(before)
+  }).length
+  return {
+    qualityModel: 'numeric_holdout' as const,
+    holdoutSampleCount: observations.length,
+    maeBefore: roundMetric(maeBefore),
+    maeAfter: roundMetric(maeAfter),
+    conflictRate: roundMetric(conflictCount / observations.length),
+    overcompensationRate: roundMetric(overcompensationCount / observations.length),
+  }
+}
+
 function confidenceForSampleCount(sampleCount: number): { level: ConfidenceLevel; score: number } {
   if (sampleCount >= 10) return { level: 'high', score: 85 }
   if (sampleCount >= 5) return { level: 'medium', score: 70 }
@@ -264,6 +336,7 @@ export function buildDurationBenchmarkCandidates(
       const coefficientOfVariation = roundedCoefficientOfVariation(days, meanDays)
       const confidence = confidenceForSampleCount(days.length)
       const observed = observationWindow(rows)
+      const automationQualityEvidence = buildNumericHoldoutEvidence(rows)
 
       return {
         companyId: readCompanyId(first),
@@ -291,6 +364,7 @@ export function buildDurationBenchmarkCandidates(
         observationWindowDays: observed.windowDays,
         productionDaySamples: days,
         durationDayBasis: 'construction_production_day' as const,
+        automationQualityEvidence,
       }
     })
     .sort((left, right) => [left.companyId, left.projectId, left.benchmarkKey].join(':')
@@ -353,6 +427,16 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
         standard_work_name: candidate.standardWorkName,
         variance: candidate.variance,
         coefficientOfVariation: candidate.coefficientOfVariation,
+        quality_model: candidate.automationQualityEvidence.qualityModel,
+        holdout_sample_count: candidate.automationQualityEvidence.holdoutSampleCount,
+        mae_before: candidate.automationQualityEvidence.maeBefore,
+        mae_after: candidate.automationQualityEvidence.maeAfter,
+        conflict_rate: candidate.automationQualityEvidence.conflictRate,
+        overcompensation_rate: candidate.automationQualityEvidence.overcompensationRate,
+        rollback_ready: true,
+        tenant_scope_valid: Boolean(candidate.companyId && candidate.projectId),
+        writes_runtime_directly: false,
+        writes_fact_directly: false,
       },
       created_at: nowIso,
       updated_at: nowIso,
