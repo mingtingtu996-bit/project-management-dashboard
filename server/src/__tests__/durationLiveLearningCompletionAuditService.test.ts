@@ -31,6 +31,19 @@ import {
   buildWbsReferenceDaysPublicationReadiness,
 } from '../services/wbsTemplateGoldenBenchmarkGateService.js'
 
+function productionDayMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: null,
+    calendarVersion: null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-14',
+    availability: 'unavailable' as const,
+    unavailableReason: 'construction_calendar_identity_missing',
+  }
+}
+
 const fullScopeEvidence: DurationLiveLearningEvidence = {
   assetClassificationRegistered: true,
   predictionEventRecorded: true,
@@ -409,6 +422,7 @@ describe('durationLiveLearningCompletionAuditService', () => {
           source: 'auto',
           taskIds: ['task-b'],
           totalDurationDays: 8,
+          totalDuration: productionDayMetric(null),
           displayLabel: 'A',
         },
         alternateChains: [],
@@ -419,12 +433,16 @@ describe('durationLiveLearningCompletionAuditService', () => {
           taskId: 'task-b',
           title: 'B',
           floatDays: 0,
+          float: productionDayMetric(null),
           durationDays: 8,
+          duration: productionDayMetric(null),
+          freeFloat: productionDayMetric(null),
           isAutoCritical: true,
           isManualAttention: false,
           isManualInserted: false,
         }],
         projectDurationDays: 8,
+        projectDuration: productionDayMetric(null),
         calculatedAt: '2026-06-14T00:00:00.000Z',
         calculationStatus: 'fresh',
         networkLineage: {

@@ -6,6 +6,19 @@ import type { Task } from '@/pages/GanttViewTypes'
 
 import { CriticalPathDialog } from '../GanttView/CriticalPathDialog'
 
+function productionMetric(value: number) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-12',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 function createTask(id: string, title: string): Task {
   return {
     id,
@@ -27,6 +40,7 @@ function createSnapshot(): CriticalPathSnapshot {
       source: 'auto',
       taskIds: ['task-a', 'task-b'],
       totalDurationDays: 5,
+      totalDuration: productionMetric(5),
       displayLabel: '关键路径',
     },
     alternateChains: [],
@@ -38,8 +52,14 @@ function createSnapshot(): CriticalPathSnapshot {
       { taskId: 'task-a', title: '基础施工', floatDays: 0, durationDays: 2, isAutoCritical: true, isManualAttention: false, isManualInserted: false, chainIndex: 0 },
       { taskId: 'task-b', title: '主体结构', floatDays: 0, durationDays: 3, isAutoCritical: true, isManualAttention: false, isManualInserted: false, chainIndex: 1 },
       { taskId: 'task-c', title: '专项协调', floatDays: 4, durationDays: 2, isAutoCritical: false, isManualAttention: true, isManualInserted: false },
-    ],
+    ].map((task) => ({
+      ...task,
+      float: productionMetric(task.floatDays),
+      duration: productionMetric(task.durationDays),
+      freeFloat: productionMetric(0),
+    })),
     projectDurationDays: 5,
+    projectDuration: productionMetric(5),
   }
 }
 
@@ -68,7 +88,7 @@ describe('CriticalPathDialog contract', () => {
     expect(screen.getByTestId('critical-path-dialog').getAttribute('style')).toContain('resize: both')
     expect(screen.getByTestId('critical-path-graph')).toBeTruthy()
     expect(document.body.textContent).toContain('关键路径图谱')
-    expect(document.body.textContent).toContain('工期 5 天')
+    expect(document.body.textContent).toContain('工期 5 个生产日')
     expect(document.body.textContent).toContain('关注 1 项')
   })
 

@@ -22,6 +22,10 @@ describe('durationMetric', () => {
   it('formats only the unit carried by an available DTO', () => {
     expect(formatDurationMetric(productionMetric)).toBe('-4 个生产日')
     expect(formatDurationMetric(productionMetric, { absolute: true })).toBe('4 个生产日')
+    expect(formatDurationMetric(
+      { ...productionMetric, unit: 'calendar_day' },
+      { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' },
+    )).toBe('生产日口径不可用')
     expect(readAvailableDurationValue(productionMetric, 'construction_production_day')).toBe(-4)
     expect(readAvailableDurationValue(productionMetric, 'calendar_day')).toBeNull()
   })

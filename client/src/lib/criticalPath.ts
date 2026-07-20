@@ -1,4 +1,9 @@
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/lib/apiClient'
+import {
+  formatDurationMetric,
+  normalizeDurationMetricDto,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
 
 import { formatCriticalPathCount } from './userFacingTerms'
 
@@ -31,8 +36,15 @@ export interface CriticalPathEdge {
 export interface CriticalTaskSnapshot {
   taskId: string
   title: string
+  /** @deprecated Use float. */
   floatDays: number
+  float: DurationMetricDto | null
+  /** @deprecated Use duration. */
   durationDays: number
+  duration: DurationMetricDto | null
+  /** @deprecated Use freeFloat. */
+  freeFloatDays?: number
+  freeFloat: DurationMetricDto | null
   isAutoCritical: boolean
   isManualAttention: boolean
   isManualInserted: boolean
@@ -43,8 +55,28 @@ export interface CriticalChainSnapshot {
   id: string
   source: CriticalSource
   taskIds: string[]
+  /** @deprecated Use totalDuration. */
   totalDurationDays: number
+  totalDuration: DurationMetricDto | null
   displayLabel: string
+}
+
+export interface CriticalTaskNetworkSchedule {
+  taskId: string
+  earliestStartOffsetDays: number
+  earliestFinishOffsetDays: number
+  latestStartOffsetDays: number
+  latestFinishOffsetDays: number
+  /** @deprecated Use float. */
+  floatDays: number
+  float: DurationMetricDto | null
+  /** @deprecated Use freeFloat. */
+  freeFloatDays: number
+  freeFloat: DurationMetricDto | null
+  /** @deprecated Use duration. */
+  durationDays: number
+  duration: DurationMetricDto | null
+  isAutoCritical: boolean
 }
 
 export interface CriticalPathSnapshot {
@@ -57,7 +89,10 @@ export interface CriticalPathSnapshot {
   displayTaskIds: string[]
   edges: CriticalPathEdge[]
   tasks: CriticalTaskSnapshot[]
+  networkSchedule?: CriticalTaskNetworkSchedule[]
+  /** @deprecated Use projectDuration. */
   projectDurationDays: number
+  projectDuration: DurationMetricDto | null
   calculatedAt?: string
   lastSuccessfulCalculatedAt?: string | null
   calculationStatus?: 'fresh' | 'cached_after_failure' | 'empty_after_failure'
@@ -111,7 +146,132 @@ export interface CriticalPathSummaryModel {
   manualAttentionCount: number
   manualInsertedCount: number
   displayTaskCount: number
-  projectDurationDays: number
+  projectDuration: DurationMetricDto | null
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function readString(value: unknown) {
+  return typeof value === 'string' ? value : ''
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map(readString).map((item) => item.trim()).filter(Boolean)
+    : []
+}
+
+function readLegacyNumber(value: unknown) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+export function normalizeCriticalPathDurationMetric(value: unknown): DurationMetricDto | null {
+  const metric = normalizeDurationMetricDto(value)
+  return metric?.unit === 'construction_production_day' ? metric : null
+}
+
+export function formatCriticalPathDurationMetric(metric: DurationMetricDto | null | undefined) {
+  return formatDurationMetric(metric, {
+    expectedUnit: 'construction_production_day',
+    unavailableLabel: '生产日口径不可用',
+  })
+}
+
+function normalizeCriticalChain(value: unknown): CriticalChainSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = readRecord(value)
+  const source = raw.source === 'manual_attention'
+    || raw.source === 'manual_insert'
+    || raw.source === 'hybrid'
+    ? raw.source
+    : 'auto'
+  return {
+    ...(raw as unknown as CriticalChainSnapshot),
+    id: readString(raw.id),
+    source,
+    taskIds: readStringArray(raw.taskIds),
+    totalDurationDays: readLegacyNumber(raw.totalDurationDays),
+    totalDuration: normalizeCriticalPathDurationMetric(raw.totalDuration),
+    displayLabel: readString(raw.displayLabel),
+  }
+}
+
+function normalizeCriticalTask(value: unknown): CriticalTaskSnapshot | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = readRecord(value)
+  const taskId = readString(raw.taskId).trim()
+  if (!taskId) return null
+  return {
+    ...(raw as unknown as CriticalTaskSnapshot),
+    taskId,
+    title: readString(raw.title),
+    floatDays: readLegacyNumber(raw.floatDays),
+    float: normalizeCriticalPathDurationMetric(raw.float),
+    durationDays: readLegacyNumber(raw.durationDays),
+    duration: normalizeCriticalPathDurationMetric(raw.duration),
+    freeFloatDays: raw.freeFloatDays == null ? undefined : readLegacyNumber(raw.freeFloatDays),
+    freeFloat: normalizeCriticalPathDurationMetric(raw.freeFloat),
+    isAutoCritical: raw.isAutoCritical === true,
+    isManualAttention: raw.isManualAttention === true,
+    isManualInserted: raw.isManualInserted === true,
+  }
+}
+
+function normalizeNetworkScheduleTask(value: unknown): CriticalTaskNetworkSchedule | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = readRecord(value)
+  const taskId = readString(raw.taskId).trim()
+  if (!taskId) return null
+  return {
+    ...(raw as unknown as CriticalTaskNetworkSchedule),
+    taskId,
+    earliestStartOffsetDays: readLegacyNumber(raw.earliestStartOffsetDays),
+    earliestFinishOffsetDays: readLegacyNumber(raw.earliestFinishOffsetDays),
+    latestStartOffsetDays: readLegacyNumber(raw.latestStartOffsetDays),
+    latestFinishOffsetDays: readLegacyNumber(raw.latestFinishOffsetDays),
+    floatDays: readLegacyNumber(raw.floatDays),
+    float: normalizeCriticalPathDurationMetric(raw.float),
+    freeFloatDays: readLegacyNumber(raw.freeFloatDays),
+    freeFloat: normalizeCriticalPathDurationMetric(raw.freeFloat),
+    durationDays: readLegacyNumber(raw.durationDays),
+    duration: normalizeCriticalPathDurationMetric(raw.duration),
+    isAutoCritical: raw.isAutoCritical === true,
+  }
+}
+
+export function normalizeCriticalPathSnapshot(value: unknown): CriticalPathSnapshot {
+  const raw = readRecord(value)
+  const primaryChain = normalizeCriticalChain(raw.primaryChain)
+  const alternateChains = Array.isArray(raw.alternateChains)
+    ? raw.alternateChains.map(normalizeCriticalChain).filter((item): item is CriticalChainSnapshot => item !== null)
+    : []
+  const tasks = Array.isArray(raw.tasks)
+    ? raw.tasks.map(normalizeCriticalTask).filter((item): item is CriticalTaskSnapshot => item !== null)
+    : []
+  const networkSchedule = Array.isArray(raw.networkSchedule)
+    ? raw.networkSchedule.map(normalizeNetworkScheduleTask).filter((item): item is CriticalTaskNetworkSchedule => item !== null)
+    : []
+
+  return {
+    ...(raw as unknown as CriticalPathSnapshot),
+    projectId: readString(raw.projectId),
+    autoTaskIds: readStringArray(raw.autoTaskIds),
+    manualAttentionTaskIds: readStringArray(raw.manualAttentionTaskIds),
+    manualInsertedTaskIds: readStringArray(raw.manualInsertedTaskIds),
+    primaryChain,
+    alternateChains,
+    displayTaskIds: readStringArray(raw.displayTaskIds),
+    edges: Array.isArray(raw.edges) ? raw.edges as unknown as CriticalPathEdge[] : [],
+    tasks,
+    networkSchedule,
+    projectDurationDays: readLegacyNumber(raw.projectDurationDays),
+    projectDuration: normalizeCriticalPathDurationMetric(raw.projectDuration),
+  }
 }
 
 export function summarizeCriticalPathSnapshot(snapshot: CriticalPathSnapshot | null | undefined): string {
@@ -122,7 +282,7 @@ export function summarizeCriticalPathSnapshot(snapshot: CriticalPathSnapshot | n
     return '无关键路径'
   }
 
-  const summaryParts = [formatCriticalPathCount(primaryTaskCount), `工期 ${snapshot.projectDurationDays} 天`]
+  const summaryParts = [formatCriticalPathCount(primaryTaskCount), `工期 ${formatCriticalPathDurationMetric(snapshot.projectDuration)}`]
 
   if (snapshot.alternateChains.length > 0) {
     summaryParts.push(`备选 ${snapshot.alternateChains.length} 条`)
@@ -154,7 +314,7 @@ export function buildCriticalPathSummaryModel(
     manualAttentionCount: snapshot.manualAttentionTaskIds.length,
     manualInsertedCount: snapshot.manualInsertedTaskIds.length,
     displayTaskCount: snapshot.displayTaskIds.length,
-    projectDurationDays: snapshot.projectDurationDays,
+    projectDuration: snapshot.projectDuration,
   }
 }
 
@@ -162,14 +322,14 @@ export async function fetchCriticalPathSnapshot(
   projectId: string,
   options?: RequestInit,
 ): Promise<CriticalPathSnapshot> {
-  return await apiGet<CriticalPathSnapshot>(`/api/projects/${projectId}/critical-path`, options)
+  return normalizeCriticalPathSnapshot(await apiGet<unknown>(`/api/projects/${projectId}/critical-path`, options))
 }
 
 export async function refreshCriticalPathSnapshot(
   projectId: string,
   options?: RequestInit,
 ): Promise<CriticalPathSnapshot> {
-  return await apiPost<CriticalPathSnapshot>(`/api/projects/${projectId}/critical-path/refresh`, undefined, options)
+  return normalizeCriticalPathSnapshot(await apiPost<unknown>(`/api/projects/${projectId}/critical-path/refresh`, undefined, options))
 }
 
 export async function listCriticalPathOverrides(

@@ -5,6 +5,7 @@ import { toast } from '@/hooks/use-toast'
 import { getApiErrorMessage } from '@/lib/apiClient'
 import { readPlanningFieldConfigExtraColumns } from '@/lib/planningFieldConfig'
 import type { EngineeringObject } from '@/services/engineeringObjectsApi'
+import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 import type { Task } from '../GanttViewTypes'
 import {
@@ -21,6 +22,7 @@ type UseGanttTaskExportInput = {
   engineeringObjects: EngineeringObject[]
   rows: Task[]
   criticalPathTaskIds?: Set<string>
+  criticalScheduleByTaskId?: ReadonlyMap<string, CriticalTaskNetworkSchedule>
   taskFieldConfigStorageKey?: string | null
   taskFieldRegistryVersion?: string | null
 }
@@ -30,6 +32,7 @@ export function useGanttTaskExport({
   engineeringObjects,
   rows,
   criticalPathTaskIds = new Set(),
+  criticalScheduleByTaskId = new Map(),
   taskFieldConfigStorageKey,
   taskFieldRegistryVersion,
 }: UseGanttTaskExportInput) {
@@ -44,7 +47,14 @@ export function useGanttTaskExport({
       taskFieldConfigStorageKey,
       taskFieldRegistryVersion,
     )
-    const data = buildTaskExportData(rows, engineeringObjectLabelsById, scope, visibleExtraColumns, criticalPathTaskIds)
+    const data = buildTaskExportData(
+      rows,
+      engineeringObjectLabelsById,
+      scope,
+      visibleExtraColumns,
+      criticalPathTaskIds,
+      criticalScheduleByTaskId,
+    )
     const exportedColumnCount = getTaskExportColumns(scope, visibleExtraColumns).length
     const date = new Date().toISOString().slice(0, 10)
     const baseName = sanitizeExportFileName(`${currentProjectName || '项目'}_任务列表_${date}`)
@@ -73,6 +83,7 @@ export function useGanttTaskExport({
   }, [
     currentProjectName,
     criticalPathTaskIds,
+    criticalScheduleByTaskId,
     engineeringObjectLabelsById,
     rows,
     taskFieldConfigStorageKey,

@@ -21,7 +21,12 @@ import { CardHead } from '@/components/ui/card-head'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-import type { CriticalPathOverrideInput, CriticalPathOverrideRecord, CriticalPathSnapshot } from '@/lib/criticalPath'
+import {
+  formatCriticalPathDurationMetric,
+  type CriticalPathOverrideInput,
+  type CriticalPathOverrideRecord,
+  type CriticalPathSnapshot,
+} from '@/lib/criticalPath'
 import {
   CRITICAL_PATH_NODE_HEIGHT,
   CRITICAL_PATH_NODE_WIDTH,
@@ -856,7 +861,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         const emphasized = !hasActiveFocus || activeFocusGraph.taskIds.has(node.taskId)
                         const nodeTitle = props.onNodeNavigate ? `跳转到任务：${node.title}` : `选中任务：${node.title}`
                         const snapshotTask = snapshotTaskMap.get(node.taskId)
-                        const nodeTooltip = `${node.title}｜计划工期 ${snapshotTask?.durationDays ?? 0} 天｜浮动时间 ${snapshotTask?.floatDays ?? 0} 天`
+                        const nodeTooltip = `${node.title}｜计划工期 ${formatCriticalPathDurationMetric(snapshotTask?.duration)}｜浮动时间 ${formatCriticalPathDurationMetric(snapshotTask?.float)}`
                         return (
                           <g
                             key={node.taskId}
@@ -940,9 +945,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                         <div className="mt-1 flex flex-wrap gap-2">
                           <span className="inline-flex items-center gap-1.5">
                             <DurationBasisBadge basis="plan" compact variant="outline" />
-                            计划工期 {hoveredSnapshotTask?.durationDays ?? 0} 天
+                            计划工期 {formatCriticalPathDurationMetric(hoveredSnapshotTask?.duration)}
                           </span>
-                          <span>浮动时间 {hoveredSnapshotTask?.floatDays ?? 0} 天</span>
+                          <span>浮动时间 {formatCriticalPathDurationMetric(hoveredSnapshotTask?.float)}</span>
                         </div>
                       </div>
                     )}
@@ -1050,7 +1055,7 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                             <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
                               <span>默认折叠 · {formatCriticalPathCount(chain.taskIds.length)}</span>
                               <DurationBasisBadge basis="plan" compact variant="outline" />
-                              <span>计划工期 {chain.totalDurationDays} 天</span>
+                              <span>计划工期 {formatCriticalPathDurationMetric(chain.totalDuration)}</span>
                             </div>
                           </div>
                         </Button>
@@ -1162,9 +1167,9 @@ export function CriticalPathGraph(props: CriticalPathGraphProps) {
                 </div>
                 {selectedSnapshotTask ? (
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-500">
-                    <span>浮动 {selectedSnapshotTask.floatDays} 天</span>
+                    <span>浮动 {formatCriticalPathDurationMetric(selectedSnapshotTask.float)}</span>
                     <DurationBasisBadge basis="plan" compact variant="outline" />
-                    <span>计划工期 {selectedSnapshotTask.durationDays} 天</span>
+                    <span>计划工期 {formatCriticalPathDurationMetric(selectedSnapshotTask.duration)}</span>
                   </div>
                 ) : (
                   <div className="mt-1 text-xs text-slate-500">当前节点尚未在快照中匹配。</div>

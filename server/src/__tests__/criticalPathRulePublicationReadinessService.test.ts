@@ -5,6 +5,19 @@ import {
 } from '../services/criticalPathRulePublicationReadinessService.js'
 import type { CriticalPathSnapshot } from '../services/projectCriticalPathService.js'
 
+function productionDayMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: null,
+    calendarVersion: null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-14',
+    availability: 'unavailable' as const,
+    unavailableReason: 'construction_calendar_identity_missing',
+  }
+}
+
 function buildCriticalPathSnapshot(): CriticalPathSnapshot {
   return {
     projectId: 'project-1',
@@ -16,6 +29,7 @@ function buildCriticalPathSnapshot(): CriticalPathSnapshot {
       source: 'auto' as const,
       taskIds: ['task-b'],
       totalDurationDays: 8,
+      totalDuration: productionDayMetric(null),
       displayLabel: 'A',
     },
     alternateChains: [],
@@ -26,12 +40,16 @@ function buildCriticalPathSnapshot(): CriticalPathSnapshot {
       taskId: 'task-b',
       title: 'B',
       floatDays: 0,
+      float: productionDayMetric(null),
       durationDays: 8,
+      duration: productionDayMetric(null),
+      freeFloat: productionDayMetric(null),
       isAutoCritical: true,
       isManualAttention: false,
       isManualInserted: false,
     }],
     projectDurationDays: 8,
+    projectDuration: productionDayMetric(null),
     calculatedAt: '2026-06-14T00:00:00.000Z',
     calculationStatus: 'fresh' as const,
     networkLineage: {
@@ -290,6 +308,7 @@ describe('criticalPathRulePublicationReadinessService', () => {
         edges: [],
         tasks: [],
         projectDurationDays: 0,
+        projectDuration: productionDayMetric(null),
         calculationStatus: 'empty_after_failure',
       },
       criticalPathOutcomeEventRecorded: false,

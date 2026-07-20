@@ -155,6 +155,16 @@ describe('shared summary dashboards', () => {
           edges: [],
           tasks: [],
           projectDurationDays: 0,
+          projectDuration: {
+            value: 0,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-12',
+            availability: 'available',
+            unavailableReason: null,
+          },
         } as never
       }
 

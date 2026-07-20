@@ -833,6 +833,7 @@ function GanttViewContent() {
     buildingOptions,
     criticalPathOverrideFlags,
     criticalPathDisplayTaskIds,
+    criticalPathNetworkScheduleMap,
     criticalPathSnapshot,
     criticalPathSummaryText,
     criticalPathTaskMap,
@@ -844,6 +845,7 @@ function GanttViewContent() {
     milestoneOptions,
     planningHealthIssues,
     selectedCriticalPathTask,
+    selectedCriticalPathSchedule,
     selectedTaskView,
     specialtyOptions,
     taskMap,
@@ -876,8 +878,8 @@ function GanttViewContent() {
   const mainExecutionRows = useMemo(
     () => filteredFlatList
       .filter(shouldShowTaskInMainExecutionList)
-      .map(withTaskScheduleEvidence),
-    [filteredFlatList],
+      .map((task) => withTaskScheduleEvidence(task, criticalPathNetworkScheduleMap.get(task.id))),
+    [criticalPathNetworkScheduleMap, filteredFlatList],
   )
 
   const {
@@ -888,6 +890,7 @@ function GanttViewContent() {
   } = useGanttTaskExport({
     currentProjectName: currentProject?.name,
     criticalPathTaskIds: criticalPathDisplayTaskIds,
+    criticalScheduleByTaskId: criticalPathNetworkScheduleMap,
     engineeringObjects,
     rows: mainExecutionRows,
     taskFieldConfigStorageKey,
@@ -1799,6 +1802,7 @@ function GanttViewContent() {
                 onRemoveCriticalPathOverride={handleDeleteCriticalPathOverride}
                 getBusinessStatus={getBusinessStatus}
                 getCriticalPathTask={(taskId) => criticalPathTaskMap.get(taskId) ?? null}
+                getCriticalPathSchedule={(taskId) => criticalPathNetworkScheduleMap.get(taskId) ?? null}
                 criticalPathOverrideFlags={criticalPathOverrideFlags}
                 emptyFilterTitle={milestoneFilterId ? '该节点暂无关联任务' : undefined}
                 onAddFirstRow={handleAddFirstTaskRow}
@@ -1825,6 +1829,7 @@ function GanttViewContent() {
           criticalPathError={criticalPathError}
           criticalPathSnapshot={criticalPathSnapshot}
           selectedCriticalPathTask={selectedCriticalPathTask}
+          selectedCriticalPathSchedule={selectedCriticalPathSchedule}
           onOpenCriticalPathDialog={() => {
             if (selectedTaskView?.id) handleOpenCriticalPathDialog(selectedTaskView.id)
           }}
@@ -1860,6 +1865,7 @@ function GanttViewContent() {
 
       <GanttDetailDrawer
         task={detailDrawerTask}
+        criticalSchedule={detailDrawerTask?.id ? criticalPathNetworkScheduleMap.get(detailDrawerTask.id) ?? null : null}
         section={detailDrawerSection}
         onSectionChange={setDetailDrawerSection}
         onClose={closePlanningDetailDrawer}

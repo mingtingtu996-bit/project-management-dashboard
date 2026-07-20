@@ -47,7 +47,7 @@ type TaskDueStatusLike = {
 
 type CriticalPathSummaryLike = {
   primaryTaskCount: number
-  projectDurationDays: number
+  projectDuration: DurationMetricDto | null
   alternateChainCount: number
   manualAttentionCount: number
   manualInsertedCount: number
@@ -230,7 +230,10 @@ export function formatGanttCriticalPathSummary(summary?: CriticalPathSummaryLike
 
   const summaryParts = [
     formatCriticalPathCount(summary.primaryTaskCount),
-    '工期 ' + summary.projectDurationDays + ' 天',
+    '工期 ' + formatDurationMetric(summary.projectDuration, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    }),
   ]
 
   if (summary.alternateChainCount > 0) {

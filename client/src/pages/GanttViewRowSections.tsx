@@ -19,7 +19,8 @@ import {
   SHARED_TREE_LAYOUT,
   TreeDiamondIcon,
 } from '@/components/tree/SharedTreePrimitives'
-import type { CriticalTaskSnapshot } from '@/lib/criticalPath'
+import type { CriticalTaskNetworkSchedule, CriticalTaskSnapshot } from '@/lib/criticalPath'
+import { formatDurationMetric } from '@/lib/durationMetric'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
 import { getTaskLagLevel } from '@/lib/taskBusinessStatus'
@@ -61,6 +62,7 @@ export function TaskRowIdentityCell({
   conditionSummary,
   obstacleCount,
   criticalTask,
+  criticalSchedule,
   inlineTitleTaskId,
   inlineTitleValue,
   expandedConditionTaskId,
@@ -87,6 +89,7 @@ export function TaskRowIdentityCell({
   conditionSummary: TaskConditionSummary | undefined
   obstacleCount: number
   criticalTask: CriticalTaskSnapshot | null
+  criticalSchedule: CriticalTaskNetworkSchedule | null
   inlineTitleTaskId: string | null
   inlineTitleValue: string
   expandedConditionTaskId: string | null
@@ -248,6 +251,7 @@ export function TaskRowIdentityCell({
           conditionSummary={conditionSummary}
           obstacleCount={obstacleCount}
           criticalTask={criticalTask}
+          criticalSchedule={criticalSchedule}
           specialtyType={task.specialty_type}
           expandedConditionTaskId={expandedConditionTaskId}
           onToggleInlineConditions={onToggleInlineConditions}
@@ -265,6 +269,7 @@ export function TaskRowMetaChips({
   conditionSummary,
   obstacleCount,
   criticalTask,
+  criticalSchedule,
   specialtyType,
   expandedConditionTaskId,
   onToggleInlineConditions,
@@ -275,6 +280,7 @@ export function TaskRowMetaChips({
   conditionSummary: TaskConditionSummary | undefined
   obstacleCount: number
   criticalTask: CriticalTaskSnapshot | null
+  criticalSchedule: CriticalTaskNetworkSchedule | null
   specialtyType?: string | null
   expandedConditionTaskId: string | null
   onToggleInlineConditions: (taskId: string, event: MouseEvent) => void
@@ -336,9 +342,9 @@ export function TaskRowMetaChips({
 </Tooltip>
       )}
 
-      {criticalTask && (
+      {(criticalTask || criticalSchedule) && (
         <>
-          {criticalTask.isAutoCritical && (
+          {(criticalTask?.isAutoCritical || criticalSchedule?.isAutoCritical) && (
             <Tooltip>
   <TooltipTrigger asChild>
     <span
@@ -346,13 +352,13 @@ export function TaskRowMetaChips({
               className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200 cursor-help"
               
               >
-                关键 +{criticalTask.floatDays}天
+                关键 · {formatDurationMetric(criticalSchedule?.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}
               </span>
   </TooltipTrigger>
-  <TooltipContent>{'关键任务 浮动时间: ' + criticalTask.floatDays + '天'}</TooltipContent>
+  <TooltipContent>{`关键任务 浮动时间: ${formatDurationMetric(criticalSchedule?.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}`}</TooltipContent>
 </Tooltip>
           )}
-          {criticalTask.isManualAttention && (
+          {criticalTask?.isManualAttention && (
             <Tooltip>
   <TooltipTrigger asChild>
     <span
@@ -366,7 +372,7 @@ export function TaskRowMetaChips({
   <TooltipContent>手动关注任务</TooltipContent>
 </Tooltip>
           )}
-          {criticalTask.isManualInserted && (
+          {criticalTask?.isManualInserted && (
             <Tooltip>
   <TooltipTrigger asChild>
     <span

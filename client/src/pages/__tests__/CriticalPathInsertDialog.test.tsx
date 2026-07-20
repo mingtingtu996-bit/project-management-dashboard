@@ -6,6 +6,19 @@ import type { Task } from '@/pages/GanttViewTypes'
 
 import { CriticalPathInsertDialog } from '../GanttView/CriticalPathInsertDialog'
 
+function productionMetric(value: number) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-12',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 function createTask(id: string, title: string, status?: string): Task {
   return {
     id,
@@ -28,15 +41,29 @@ function createSnapshot(): CriticalPathSnapshot {
       source: 'auto',
       taskIds: ['task-b'],
       totalDurationDays: 5,
+      totalDuration: productionMetric(5),
       displayLabel: '关键路径',
     },
     alternateChains: [],
     displayTaskIds: ['task-b'],
     edges: [],
     tasks: [
-      { taskId: 'task-b', title: '主体结构', floatDays: 0, durationDays: 5, isAutoCritical: true, isManualAttention: false, isManualInserted: false, chainIndex: 0 },
+      {
+        taskId: 'task-b',
+        title: '主体结构',
+        floatDays: 0,
+        float: productionMetric(0),
+        durationDays: 5,
+        duration: productionMetric(5),
+        freeFloat: productionMetric(0),
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+        chainIndex: 0,
+      },
     ],
     projectDurationDays: 5,
+    projectDuration: productionMetric(5),
   }
 }
 

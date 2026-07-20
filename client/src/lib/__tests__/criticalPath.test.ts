@@ -1,10 +1,38 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mocks = vi.hoisted(() => ({
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
+}))
+
+vi.mock('@/lib/apiClient', () => ({
+  apiDelete: vi.fn(),
+  apiGet: mocks.apiGet,
+  apiPatch: vi.fn(),
+  apiPost: mocks.apiPost,
+}))
 
 import {
   buildCriticalPathSummaryModel,
+  fetchCriticalPathSnapshot,
+  normalizeCriticalPathSnapshot,
+  refreshCriticalPathSnapshot,
   summarizeCriticalPathSnapshot,
   type CriticalPathSnapshot,
 } from '../criticalPath'
+
+function productionMetric(value: number | null, availability: 'available' | 'unavailable' = 'available') {
+  return {
+    value: availability === 'available' ? value : null,
+    unit: 'construction_production_day' as const,
+    calendarRef: availability === 'available' ? 'work_calendar' : null,
+    calendarVersion: availability === 'available' ? 'calendar-v1' : null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-12',
+    availability,
+    unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
+  }
+}
 
 function makeSnapshot(): CriticalPathSnapshot {
   return {
@@ -16,14 +44,16 @@ function makeSnapshot(): CriticalPathSnapshot {
       id: 'chain-primary',
       source: 'auto',
       taskIds: ['task-a', 'task-b'],
-      totalDurationDays: 12,
+      totalDurationDays: 999,
+      totalDuration: productionMetric(12),
       displayLabel: '主关键路径',
     },
     alternateChains: [{
       id: 'chain-alt',
       source: 'manual_insert',
       taskIds: ['task-b', 'task-d'],
-      totalDurationDays: 8,
+      totalDurationDays: 998,
+      totalDuration: productionMetric(8),
       displayLabel: '手动插链',
     }],
     displayTaskIds: ['task-a', 'task-b', 'task-c', 'task-d'],
@@ -32,8 +62,12 @@ function makeSnapshot(): CriticalPathSnapshot {
       {
         taskId: 'task-a',
         title: 'A',
-        floatDays: 0,
-        durationDays: 5,
+        floatDays: 999,
+        float: productionMetric(0),
+        durationDays: 999,
+        duration: productionMetric(5),
+        freeFloatDays: 999,
+        freeFloat: productionMetric(1),
         isAutoCritical: true,
         isManualAttention: false,
         isManualInserted: false,
@@ -42,22 +76,48 @@ function makeSnapshot(): CriticalPathSnapshot {
       {
         taskId: 'task-b',
         title: 'B',
-        floatDays: 0,
-        durationDays: 7,
+        floatDays: 999,
+        float: productionMetric(0),
+        durationDays: 999,
+        duration: productionMetric(7),
+        freeFloatDays: 999,
+        freeFloat: productionMetric(0),
         isAutoCritical: true,
         isManualAttention: false,
         isManualInserted: false,
         chainIndex: 1,
       },
     ],
-    projectDurationDays: 12,
+    networkSchedule: [{
+      taskId: 'task-a',
+      earliestStartOffsetDays: 0,
+      earliestFinishOffsetDays: 5,
+      latestStartOffsetDays: 0,
+      latestFinishOffsetDays: 5,
+      floatDays: 999,
+      float: productionMetric(0),
+      freeFloatDays: 999,
+      freeFloat: productionMetric(1),
+      durationDays: 999,
+      duration: productionMetric(5),
+      isAutoCritical: true,
+    }],
+    projectDurationDays: 999,
+    projectDuration: productionMetric(12),
     calculatedAt: '2026-06-12T00:00:00.000Z',
   }
 }
 
 describe('criticalPath snapshot display helpers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('summarizes backend critical path snapshots without running a frontend CPM engine', () => {
-    expect(summarizeCriticalPathSnapshot(makeSnapshot())).toBe('关键路径 2 项，工期 12 天，备选 1 条，关注 1 项，插链 1 项')
+    const summary = summarizeCriticalPathSnapshot(makeSnapshot())
+
+    expect(summary).toBe('关键路径 2 项，工期 12 个生产日，备选 1 条，关注 1 项，插链 1 项')
+    expect(summary).not.toContain('999')
   })
 
   it('builds a display model from the backend snapshot', () => {
@@ -68,7 +128,47 @@ describe('criticalPath snapshot display helpers', () => {
     expect(model?.manualAttentionCount).toBe(1)
     expect(model?.manualInsertedCount).toBe(1)
     expect(model?.displayTaskCount).toBe(4)
-    expect(model?.projectDurationDays).toBe(12)
+    expect(model?.projectDuration).toEqual(productionMetric(12))
+    expect(model).not.toHaveProperty('projectDurationDays')
+  })
+
+  it('fails closed when typed production-day facts are missing or use the wrong unit', () => {
+    const raw = makeSnapshot() as CriticalPathSnapshot & Record<string, unknown>
+    raw.projectDuration = undefined
+    raw.projectDurationDays = 999
+    raw.primaryChain = {
+      ...raw.primaryChain!,
+      totalDuration: {
+        ...productionMetric(12),
+        unit: 'calendar_day',
+      },
+      totalDurationDays: 999,
+    }
+
+    const normalized = normalizeCriticalPathSnapshot(raw)
+    const summary = summarizeCriticalPathSnapshot(normalized)
+
+    expect(normalized.projectDuration).toBeNull()
+    expect(normalized.primaryChain?.totalDuration).toBeNull()
+    expect(summary).toContain('生产日口径不可用')
+    expect(summary).not.toContain('999')
+  })
+
+  it('normalizes GET and refresh responses without synthesizing typed facts from legacy numbers', async () => {
+    const raw = {
+      ...makeSnapshot(),
+      projectDuration: undefined,
+      projectDurationDays: 999,
+    }
+    mocks.apiGet.mockResolvedValueOnce(raw)
+    mocks.apiPost.mockResolvedValueOnce(raw)
+
+    const fetched = await fetchCriticalPathSnapshot('project-1')
+    const refreshed = await refreshCriticalPathSnapshot('project-1')
+
+    expect(fetched.projectDuration).toBeNull()
+    expect(refreshed.projectDuration).toBeNull()
+    expect(summarizeCriticalPathSnapshot(fetched)).not.toContain('999')
   })
 
   it('keeps empty and missing snapshots display-safe', () => {
@@ -82,6 +182,7 @@ describe('criticalPath snapshot display helpers', () => {
       displayTaskIds: [],
       tasks: [],
       projectDurationDays: 0,
+      projectDuration: productionMetric(0),
     } satisfies CriticalPathSnapshot
 
     expect(summarizeCriticalPathSnapshot(null)).toBe('')

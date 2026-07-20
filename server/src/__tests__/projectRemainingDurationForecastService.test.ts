@@ -5,6 +5,19 @@ import {
 } from '../services/projectRemainingDurationForecastService.js'
 import type { ScheduleAccelerationRow } from '../services/scheduleAccelerationService.js'
 
+function productionDayMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: null,
+    calendarVersion: null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-10',
+    availability: 'unavailable' as const,
+    unavailableReason: 'construction_calendar_identity_missing',
+  }
+}
+
 function createRecordingQueryExec() {
   const calls: Array<{ sql: string, params: unknown[] }> = []
   const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
@@ -310,7 +323,10 @@ describe('projectRemainingDurationForecastService', () => {
             taskId: 'fresh-e3-critical',
             title: 'Fresh E3 critical task',
             floatDays: 0,
+            float: productionDayMetric(null),
             durationDays: 9,
+            duration: productionDayMetric(null),
+            freeFloat: productionDayMetric(null),
             isAutoCritical: true,
             isManualAttention: false,
             isManualInserted: false,
@@ -319,6 +335,7 @@ describe('projectRemainingDurationForecastService', () => {
         primaryChain: null,
         alternateChains: [],
         projectDurationDays: 9,
+        projectDuration: productionDayMetric(null),
         calculationStatus: 'fresh',
         calculatedAt: '2026-06-10T00:00:00.000Z',
       },

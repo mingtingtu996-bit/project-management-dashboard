@@ -93,6 +93,10 @@ export function useGanttDerivedViewState({
     () => new Map((criticalPathSnapshot?.tasks ?? []).map((task) => [task.taskId, task])),
     [criticalPathSnapshot],
   )
+  const criticalPathNetworkScheduleMap = useMemo(
+    () => new Map((criticalPathSnapshot?.networkSchedule ?? []).map((task) => [task.taskId, task])),
+    [criticalPathSnapshot],
+  )
   const getCriticalPathSourceType = useCallback((taskId: string) => {
     return getCriticalPathSourceTypeFromTask(criticalPathTaskMap.get(taskId))
   }, [criticalPathTaskMap])
@@ -200,10 +204,14 @@ export function useGanttDerivedViewState({
   ), [criticalPathTaskMap])
 
   const selectedCriticalPathTask = selectedTask?.id ? getCriticalPathTask(selectedTask.id) : null
+  const selectedCriticalPathSchedule = selectedTask?.id
+    ? criticalPathNetworkScheduleMap.get(selectedTask.id) ?? null
+    : null
 
   return {
     buildingOptions,
     criticalPathDisplayTaskIds,
+    criticalPathNetworkScheduleMap,
     criticalPathOverrideFlags,
     criticalPathSnapshot,
     criticalPathSummaryText,
@@ -218,6 +226,7 @@ export function useGanttDerivedViewState({
     planningHealthIssues,
     projectStats,
     selectedCriticalPathTask,
+    selectedCriticalPathSchedule,
     selectedTaskView,
     specialtyOptions,
     taskMap,
