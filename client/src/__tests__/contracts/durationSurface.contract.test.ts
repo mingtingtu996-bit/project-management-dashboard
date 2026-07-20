@@ -222,12 +222,42 @@ describe('duration surface contract', () => {
   it('locks critical-path and report duration surfaces to backend truth fields', () => {
     const criticalPathSource = readSource('lib/criticalPath.ts')
     const ganttCriticalPathSource = readSource('pages/GanttView/ganttViewUtils.ts')
+    const graphSource = readSource('components/CriticalPathGraph.tsx')
+    const layoutSource = readSource('lib/buildCriticalPathLayout.ts')
+    const panelsSource = readSource('pages/GanttViewPanels.tsx')
+    const rowSectionsSource = readSource('pages/GanttViewRowSections.tsx')
+    const rowsSource = readSource('pages/GanttViewRows.tsx')
+    const detailDrawerSource = readSource('pages/GanttView/GanttDetailDrawer.tsx')
+    const scheduleEvidenceSource = readSource('pages/GanttView/taskScheduleEvidence.ts')
+    const taskExportSource = readSource('pages/GanttView/taskExport.ts')
+    const taskExportHookSource = readSource('pages/GanttView/useGanttTaskExport.ts')
+    const ganttViewSource = readSource('pages/GanttView.tsx')
     const reportsSource = readSource('pages/Reports.tsx')
 
-    expect(criticalPathSource).toContain('snapshot.projectDurationDays')
-    expect(ganttCriticalPathSource).toContain('summary.projectDurationDays')
+    expect(criticalPathSource).toContain('normalizeCriticalPathSnapshot')
+    expect(criticalPathSource).toContain('normalizeDurationMetricDto')
+    expect(criticalPathSource).toContain('formatCriticalPathDurationMetric(snapshot.projectDuration)')
+    expect(ganttCriticalPathSource).toContain('summary.projectDuration')
+    expect(ganttCriticalPathSource).toContain('formatDurationMetric')
     expect(criticalPathSource).not.toContain('criticalPathFallback')
     expect(criticalPathSource).not.toContain('calculateCPM')
+    for (const [file, source] of Object.entries({
+      'components/CriticalPathGraph.tsx': graphSource,
+      'lib/buildCriticalPathLayout.ts': layoutSource,
+      'pages/GanttView/ganttViewUtils.ts': ganttCriticalPathSource,
+      'pages/GanttViewPanels.tsx': panelsSource,
+      'pages/GanttViewRowSections.tsx': rowSectionsSource,
+      'pages/GanttViewRows.tsx': rowsSource,
+      'pages/GanttView/GanttDetailDrawer.tsx': detailDrawerSource,
+      'pages/GanttView/taskScheduleEvidence.ts': scheduleEvidenceSource,
+      'pages/GanttView/taskExport.ts': taskExportSource,
+    })) {
+      expect(source, file).not.toMatch(/\.(?:projectDurationDays|totalDurationDays|durationDays|floatDays|freeFloatDays)\b/)
+      expect(source, file).not.toMatch(/task\.(?:total_float_days|free_float_days)\b/)
+    }
+    expect(taskExportHookSource).toContain('criticalScheduleByTaskId')
+    expect(ganttViewSource).toContain('criticalPathNetworkScheduleMap')
+    expect(ganttViewSource).toContain('getCriticalPathSchedule')
     expect(reportsSource).toContain("value: 'delay_days'")
     expect(reportsSource).toContain("value: 'schedule_deviation_days'")
   })

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { GanttDetailDrawer } from '../GanttView/GanttDetailDrawer'
 import type { Task } from '../GanttViewTypes'
+import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 vi.mock('@/services/durationSuggestionsApi', () => ({
   getTaskDurationForecast: vi.fn(async () => null),
@@ -14,7 +15,37 @@ vi.mock('@/hooks/useDurationForecastRefreshKey', () => ({
 
 const noop = () => {}
 
-function renderDrawer(task: Task) {
+function productionMetric(value: number | null, availability: 'available' | 'unavailable' = 'available') {
+  return {
+    value: availability === 'available' ? value : null,
+    unit: 'construction_production_day' as const,
+    calendarRef: availability === 'available' ? 'work_calendar' : null,
+    calendarVersion: availability === 'available' ? 'calendar-v1' : null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-07',
+    availability,
+    unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
+  }
+}
+
+function schedule(availability: 'available' | 'unavailable' = 'available'): CriticalTaskNetworkSchedule {
+  return {
+    taskId: 'task-2',
+    earliestStartOffsetDays: 0,
+    earliestFinishOffsetDays: 10,
+    latestStartOffsetDays: 0,
+    latestFinishOffsetDays: 10,
+    floatDays: 999,
+    float: productionMetric(0, availability),
+    freeFloatDays: 999,
+    freeFloat: productionMetric(3, availability),
+    durationDays: 999,
+    duration: productionMetric(10, availability),
+    isAutoCritical: true,
+  }
+}
+
+function renderDrawer(task: Task, criticalSchedule?: CriticalTaskNetworkSchedule | null) {
   return render(
     <GanttDetailDrawer
       acceptanceItems={[]}
@@ -22,6 +53,7 @@ function renderDrawer(task: Task) {
       canEdit={false}
       conditions={[]}
       conditionRecords={[]}
+      criticalSchedule={criticalSchedule}
       detailScopeDirty={false}
       detailScopeDraftObjectId={null}
       engineeringObjectLookupOptions={[]}
@@ -99,7 +131,7 @@ describe('GanttDetailDrawer duration risk range', () => {
     expect(screen.queryByText(/P20|P50|P80/)).not.toBeInTheDocument()
   })
 
-  it('surfaces CPM float days from task read DTOs in the task detail drawer', () => {
+  it('surfaces typed CPM float facts without consuming task legacy numerics', () => {
     renderDrawer({
       id: 'task-2',
       project_id: 'project-1',
@@ -107,13 +139,31 @@ describe('GanttDetailDrawer duration risk range', () => {
       created_at: '2026-07-07T00:00:00.000Z',
       updated_at: '2026-07-07T00:00:00.000Z',
       is_critical: true,
-      total_float_days: 0,
-      free_float_days: 3,
-    } as Task & { total_float_days: number; free_float_days: number })
+      total_float_days: 999,
+      free_float_days: 999,
+    } as Task & { total_float_days: number; free_float_days: number }, schedule())
 
     expect(screen.getByText('关键路径浮时')).toBeInTheDocument()
-    expect(screen.getByText('总浮时 0 天')).toBeInTheDocument()
-    expect(screen.getByText('自由浮时 3 天')).toBeInTheDocument()
+    expect(screen.getByText('总浮时 0 个生产日')).toBeInTheDocument()
+    expect(screen.getByText('自由浮时 3 个生产日')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('999')
+  })
+
+  it('keeps CPM float values unavailable when calendar identity is missing', () => {
+    renderDrawer({
+      id: 'task-2',
+      project_id: 'project-1',
+      title: '机电联合调试',
+      created_at: '2026-07-07T00:00:00.000Z',
+      updated_at: '2026-07-07T00:00:00.000Z',
+      is_critical: true,
+      total_float_days: 999,
+      free_float_days: 999,
+    } as Task & { total_float_days: number; free_float_days: number }, schedule('unavailable'))
+
+    expect(screen.getByText('总浮时 生产日口径不可用')).toBeInTheDocument()
+    expect(screen.getByText('自由浮时 生产日口径不可用')).toBeInTheDocument()
+    expect(document.body.textContent).not.toContain('999')
   })
 
   it('surfaces calendar, runtime sample, and seasonal duration asset evidence from generated task metadata', () => {

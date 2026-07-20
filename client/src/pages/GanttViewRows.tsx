@@ -30,7 +30,7 @@ import { CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { GroupMode } from '@/hooks/useGroupMode'
-import type { CriticalTaskSnapshot } from '@/lib/criticalPath'
+import type { CriticalTaskNetworkSchedule, CriticalTaskSnapshot } from '@/lib/criticalPath'
 import type { ProjectTaskProgressSnapshot } from '@/lib/taskBusinessStatus'
 import type { WbsTargetFeasibility, WbsTemplateGenerationScope } from '@/services/wbsTemplateGenerationApi'
 import { cn } from '@/lib/utils'
@@ -343,6 +343,7 @@ interface GanttTaskRowsProps {
   onRemoveCriticalPathOverride?: (taskId: string, mode?: 'manual_attention' | 'manual_insert') => void
   getBusinessStatus: (task: Task) => BusinessStatusView
   getCriticalPathTask: (taskId: string) => CriticalTaskSnapshot | null
+  getCriticalPathSchedule: (taskId: string) => CriticalTaskNetworkSchedule | null
   criticalPathOverrideFlags?: Map<string, CriticalOverrideFlags>
   dependencyChainIds?: Set<string>
   onHoverTaskId?: (taskId: string | null) => void
@@ -523,6 +524,7 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
     const obstacleCount = props.taskProgressSnapshot.obstacleCountMap[task.id] ?? 0
     const taskObstacles = obstaclesByTaskId.get(task.id) ?? []
     const criticalTask = props.getCriticalPathTask(task.id)
+    const criticalSchedule = props.getCriticalPathSchedule(task.id)
     const criticalOverrideFlags = props.criticalPathOverrideFlags?.get(task.id)
     const isExecutableLeaf = task.is_executable !== false
     const scopeLabel = getTaskScopeLabel(task, props.engineeringObjectLabelsById)
@@ -571,7 +573,7 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
       isExecutable: task.is_executable,
       rowType: isMilestoneLeaf ? 'milestone' : hasDisplayChildren ? 'structure' : 'leaf',
       isMilestone: Boolean(task.is_milestone),
-      isCritical: Boolean(criticalTask),
+      isCritical: Boolean(criticalTask || criticalSchedule?.isAutoCritical),
       rowProjectionMode: getRowProjectionModeFromMetadata(standardTaskMetadata),
       rowClassName: getAccelerationTaskClassName(task.id, props.targetFeasibility),
       executionPhase: typeof standardTaskMetadata.executionPhase === 'string'
@@ -619,11 +621,10 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
       endDateLabel: plannedEnd ?? '-',
       durationLabel: getTaskDurationLabel(plannedStart, plannedEnd),
       durationRiskRangeLabel: getTaskDurationRiskRangeLabel(task),
-      criticalFloatLabel: getTaskCriticalFloatLabel({
-        is_critical: Boolean(criticalTask),
-        total_float_days: task.total_float_days,
-        free_float_days: task.free_float_days,
-      }),
+      criticalFloatLabel: getTaskCriticalFloatLabel(
+        { is_critical: Boolean(criticalTask || criticalSchedule?.isAutoCritical) },
+        criticalSchedule,
+      ),
       durationAssetEvidenceLabel: getTaskDurationAssetEvidenceLabel(task),
       durationForecast: null,
       durationSuggestionQuery: tableEditAllowed && isScheduleCellActive
@@ -664,7 +665,7 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
       onSmartExpand: tableEditAllowed && props.onGenerateTasks ? () => props.onGenerateTasks?.(task) : undefined,
       onToggleMilestone: tableEditAllowed ? () => props.onOpenMilestoneDialog(task) : undefined,
       onDelete: tableEditAllowed ? () => props.onDeleteTask(task.id) : undefined,
-      onOpenCriticalPath: criticalTask ? () => props.onOpenCriticalPath?.(task.id) : undefined,
+      onOpenCriticalPath: criticalTask || criticalSchedule ? () => props.onOpenCriticalPath?.(task.id) : undefined,
       onChangeNodeType: tableEditAllowed ? (nodeType) => {
         void props.onSaveTaskPatch(task.id, { wbs_node_type: nodeType })
       } : undefined,
@@ -798,11 +799,11 @@ export const GanttTaskRows = memo(function GanttTaskRows(props: GanttTaskRowsPro
                 physicalZoneObjectId: task.physical_zone_object_id ?? null,
                 functionalAreaObjectId: task.functional_area_object_id ?? null,
               }}
-              isCritical={Boolean(criticalTask)}
+              isCritical={Boolean(criticalTask || criticalSchedule?.isAutoCritical)}
               disabled={!tableEditAllowed}
               className={cn(
                 'hidden shrink-0 rounded-md px-1.5 xl:inline-flex',
-                predecessorIds.length === 0 && !criticalTask && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
+                predecessorIds.length === 0 && !criticalTask && !criticalSchedule && 'opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100',
               )}
               onAdd={(taskId) => {
                 if (predecessorIds.includes(taskId)) return

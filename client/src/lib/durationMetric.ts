@@ -67,10 +67,11 @@ export function formatDurationMetric(
   metric: DurationMetricDto | null | undefined,
   options: {
     absolute?: boolean
+    expectedUnit?: DurationMetricUnit
     unavailableLabel?: string
   } = {},
 ) {
-  const value = readAvailableDurationValue(metric)
+  const value = readAvailableDurationValue(metric, options.expectedUnit)
   if (value === null) {
     if (options.unavailableLabel) return options.unavailableLabel
     if (metric?.unit === 'calendar_day') return '日历天口径不可用'

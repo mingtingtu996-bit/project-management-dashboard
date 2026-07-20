@@ -1,5 +1,7 @@
 import type { Task } from '../GanttViewTypes'
 import type { DurationSuggestion } from '@/services/durationSuggestionsApi'
+import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
+import { formatDurationMetric } from '@/lib/durationMetric'
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -90,14 +92,16 @@ export function getTaskDurationRiskRangeLabel(task: Pick<
   return p20 !== null || p50 !== null || p80 !== null ? '工期风险已评估' : ''
 }
 
-export function getTaskCriticalFloatLabel(task: Pick<Task, 'is_critical' | 'total_float_days' | 'free_float_days'>) {
-  const totalFloatDays = readRoundedFiniteNumber(task.total_float_days)
-  const freeFloatDays = readRoundedFiniteNumber(task.free_float_days)
-  const parts = [
-    totalFloatDays !== null ? `总浮时 ${totalFloatDays} 天` : null,
-    freeFloatDays !== null ? `自由浮时 ${freeFloatDays} 天` : null,
-  ].filter(Boolean)
-  if (parts.length > 0) return parts.join(' / ')
+export function getTaskCriticalFloatLabel(
+  task: Pick<Task, 'is_critical'>,
+  criticalSchedule?: CriticalTaskNetworkSchedule | null,
+) {
+  if (criticalSchedule) {
+    return [
+      `总浮时 ${formatDurationMetric(criticalSchedule.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}`,
+      `自由浮时 ${formatDurationMetric(criticalSchedule.freeFloat, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}`,
+    ].join(' / ')
+  }
   return task.is_critical ? '关键路径' : ''
 }
 
@@ -124,7 +128,10 @@ export function getTaskDurationAssetEvidenceLabel(task: Pick<Task, 'standard_tas
   return evidence.join('；')
 }
 
-export function withTaskScheduleEvidence<TTask extends Task>(task: TTask) {
+export function withTaskScheduleEvidence<TTask extends Task>(
+  task: TTask,
+  criticalSchedule?: CriticalTaskNetworkSchedule | null,
+) {
   const durationSuggestion = readTaskDurationSuggestion(task as TTask & Record<string, unknown>)
 
   return {
@@ -132,7 +139,7 @@ export function withTaskScheduleEvidence<TTask extends Task>(task: TTask) {
     ...(durationSuggestion ? { durationSuggestion } : {}),
     sequencingBasis: getTaskSequencingBasis(task),
     durationRiskRangeLabel: getTaskDurationRiskRangeLabel(task),
-    criticalFloatLabel: getTaskCriticalFloatLabel(task),
+    criticalFloatLabel: getTaskCriticalFloatLabel(task, criticalSchedule),
     durationAssetEvidenceLabel: getTaskDurationAssetEvidenceLabel(task),
   }
 }

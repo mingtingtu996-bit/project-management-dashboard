@@ -1,5 +1,7 @@
 import type { ExportScope } from '@/components/planning/PlanningExportDialog'
+import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 import { inclusiveDurationDays } from '@/lib/durationDays'
+import { formatDurationMetric } from '@/lib/durationMetric'
 import type { PlanningFieldConfigExtraColumnKey } from '@/lib/planningFieldConfig'
 import { neutralizeSpreadsheetFormulaText } from '@/lib/spreadsheetSecurity'
 import { getWbsNodeTypeLabel } from '@/lib/wbsLabels'
@@ -9,7 +11,6 @@ import { getTaskWbsNodeType } from '../GanttViewTypes'
 import {
   getTaskDurationAssetEvidenceLabel,
   getTaskDurationRiskRangeLabel,
-  readRoundedFiniteNumber,
 } from './taskScheduleEvidence'
 
 type TaskExportColumn = {
@@ -20,6 +21,7 @@ type TaskExportColumn = {
     task: Task,
     engineeringObjectLabelsById: Record<string, string>,
     criticalPathTaskIds: Set<string>,
+    criticalScheduleByTaskId: ReadonlyMap<string, CriticalTaskNetworkSchedule>,
   ) => string | number | boolean | null | undefined
 }
 
@@ -74,8 +76,22 @@ const TASK_EXPORT_COLUMNS: TaskExportColumn[] = [
   { key: 'nodeType', header: '节点类型', getValue: (task) => getWbsNodeTypeLabel(getTaskWbsNodeType(task), task.is_executable === false ? '结构层级' : '施工任务') },
   { key: 'duration', header: '计划工期(天)', getValue: (task) => getTaskExportDurationDays(task) },
   { key: 'durationRiskRange', header: '工期风险', getValue: (task) => getTaskDurationRiskRangeLabel(task) },
-  { key: 'totalFloat', header: '总浮时(天)', getValue: (task) => readRoundedFiniteNumber(task.total_float_days) },
-  { key: 'freeFloat', header: '自由浮时(天)', getValue: (task) => readRoundedFiniteNumber(task.free_float_days) },
+  {
+    key: 'totalFloat',
+    header: '总浮时（生产日）',
+    getValue: (task, _labels, _criticalPathTaskIds, criticalScheduleByTaskId) => formatDurationMetric(
+      criticalScheduleByTaskId.get(task.id)?.float,
+      { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' },
+    ),
+  },
+  {
+    key: 'freeFloat',
+    header: '自由浮时（生产日）',
+    getValue: (task, _labels, _criticalPathTaskIds, criticalScheduleByTaskId) => formatDurationMetric(
+      criticalScheduleByTaskId.get(task.id)?.freeFloat,
+      { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' },
+    ),
+  },
   { key: 'durationAssetEvidence', header: '工期资产依据', getValue: (task) => getTaskDurationAssetEvidenceLabel(task) },
   { key: 'template', header: '标准工项', getValue: (task) => task.standard_work_name || task.standard_work_code },
   { key: 'specialty', header: '专业', getValue: (task) => task.specialty_type },
@@ -116,11 +132,17 @@ export function buildTaskExportData(
   scope: ExportScope,
   extraColumns: PlanningFieldConfigExtraColumnKey[] = [],
   criticalPathTaskIds: Set<string> = new Set(),
+  criticalScheduleByTaskId: ReadonlyMap<string, CriticalTaskNetworkSchedule> = new Map(),
 ) {
   const columns = getTaskExportColumns(scope, extraColumns)
   return [
     columns.map((column) => column.header),
-    ...rows.map((task) => columns.map((column) => formatTaskExportValue(column.getValue(task, engineeringObjectLabelsById, criticalPathTaskIds)))),
+    ...rows.map((task) => columns.map((column) => formatTaskExportValue(column.getValue(
+      task,
+      engineeringObjectLabelsById,
+      criticalPathTaskIds,
+      criticalScheduleByTaskId,
+    )))),
   ]
 }
 

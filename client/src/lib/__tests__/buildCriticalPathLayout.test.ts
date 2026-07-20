@@ -5,6 +5,19 @@ import type { Task } from '@/pages/GanttViewTypes'
 
 import { buildCriticalPathLayout } from '../buildCriticalPathLayout'
 
+function productionMetric(value: number | null, availability: 'available' | 'unavailable' = 'available') {
+  return {
+    value: availability === 'available' ? value : null,
+    unit: 'construction_production_day' as const,
+    calendarRef: availability === 'available' ? 'work_calendar' : null,
+    calendarVersion: availability === 'available' ? 'calendar-v1' : null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-12',
+    availability,
+    unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
+  }
+}
+
 function createTask(id: string, title: string): Task {
   return {
     id,
@@ -26,6 +39,7 @@ function createSnapshot(): CriticalPathSnapshot {
       source: 'auto',
       taskIds: ['task-a', 'task-b', 'task-c'],
       totalDurationDays: 10,
+      totalDuration: productionMetric(10),
       displayLabel: '关键路径',
     },
     alternateChains: [
@@ -34,6 +48,7 @@ function createSnapshot(): CriticalPathSnapshot {
         source: 'auto',
         taskIds: ['task-d', 'task-e'],
         totalDurationDays: 8,
+        totalDuration: productionMetric(8),
         displayLabel: '零浮时平行链 1',
       },
       {
@@ -41,6 +56,7 @@ function createSnapshot(): CriticalPathSnapshot {
         source: 'manual_insert',
         taskIds: ['task-c', 'task-g'],
         totalDurationDays: 11,
+        totalDuration: productionMetric(11),
         displayLabel: '手动插链 1',
       },
     ],
@@ -57,11 +73,17 @@ function createSnapshot(): CriticalPathSnapshot {
       { taskId: 'task-c', title: '机电安装', floatDays: 0, durationDays: 5, isAutoCritical: true, isManualAttention: false, isManualInserted: false, chainIndex: 2 },
       { taskId: 'task-d', title: '幕墙深化', floatDays: 0, durationDays: 3, isAutoCritical: true, isManualAttention: false, isManualInserted: false, chainIndex: 0 },
       { taskId: 'task-e', title: '幕墙施工', floatDays: 0, durationDays: 5, isAutoCritical: true, isManualAttention: false, isManualInserted: false, chainIndex: 1 },
-      { taskId: 'task-f', title: '专项协调', floatDays: 4, durationDays: 2, isAutoCritical: false, isManualAttention: true, isManualInserted: false },
+      { taskId: 'task-f', title: '专项协调', floatDays: 999, durationDays: 999, isAutoCritical: false, isManualAttention: true, isManualInserted: false },
       { taskId: 'task-g', title: '临建改造', floatDays: 1, durationDays: 1, isAutoCritical: false, isManualAttention: false, isManualInserted: true, chainIndex: 1 },
       { taskId: 'task-h', title: '资料收口', floatDays: 6, durationDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false },
-    ],
+    ].map((task) => ({
+      ...task,
+      float: productionMetric(task.taskId === 'task-f' ? 4 : task.floatDays),
+      duration: productionMetric(task.taskId === 'task-f' ? 2 : task.durationDays),
+      freeFloat: productionMetric(0),
+    })),
     projectDurationDays: 10,
+    projectDuration: productionMetric(10),
   }
 }
 
@@ -112,6 +134,8 @@ describe('buildCriticalPathLayout', () => {
     const edgeById = new Map(layout.edges.map((edge) => [edge.id, edge]))
 
     expect(nodeById.get('task-f')?.isManualAttention).toBe(true)
+    expect(nodeById.get('task-f')?.subtitle).toBe('浮动 4 个生产日 · 工期 2 个生产日')
+    expect(nodeById.get('task-f')?.subtitle).not.toContain('999')
     expect(nodeById.get('task-g')?.isManualInserted).toBe(true)
     expect(nodeById.get('task-a')?.isPrimary).toBe(true)
 
@@ -123,5 +147,27 @@ describe('buildCriticalPathLayout', () => {
     expect(edgeById.get('edge-a-b')?.path).toContain('C')
     expect(edgeById.get('edge-c-g')?.source).toBe('manual_link')
     expect((edgeById.get('edge-c-g')?.endX ?? 0)).toBeGreaterThan(edgeById.get('edge-c-g')?.startX ?? Number.MAX_SAFE_INTEGER)
+  })
+
+  it('shows fail-closed production-day labels without legacy numeric fallback', () => {
+    const snapshot = createSnapshot()
+    snapshot.tasks = snapshot.tasks.map((task) => task.taskId === 'task-f'
+      ? {
+          ...task,
+          floatDays: 999,
+          durationDays: 999,
+          float: productionMetric(null, 'unavailable'),
+          duration: null,
+        }
+      : task)
+
+    const layout = buildCriticalPathLayout({
+      snapshot,
+      tasks: [createTask('task-f', '专项协调')],
+    })
+    const subtitle = layout.nodes.find((node) => node.taskId === 'task-f')?.subtitle
+
+    expect(subtitle).toBe('浮动 生产日口径不可用 · 工期 生产日口径不可用')
+    expect(subtitle).not.toContain('999')
   })
 })

@@ -41,6 +41,11 @@ import {
   type DurationLearningRuntimePublicationQueryExec,
 } from './durationLearningRuntimePublicationService.js'
 import { recordProjectCriticalPathConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 
 const criticalPathSnapshotCache = new Map<string, CachedCriticalPathSnapshot>()
 const criticalPathRecalculationByProject = new Map<string, Promise<ProjectCriticalPathResult>>()
@@ -65,13 +70,19 @@ export interface CriticalTaskSnapshot {
   taskId: string
   title: string
   standardWorkCodes?: string[]
+  /** @deprecated Use float. */
   floatDays: number
+  float: DurationMetricDto
+  /** @deprecated Use duration. */
   durationDays: number
+  duration: DurationMetricDto
   earliestStartOffsetDays?: number
   earliestFinishOffsetDays?: number
   latestStartOffsetDays?: number
   latestFinishOffsetDays?: number
+  /** @deprecated Use freeFloat. */
   freeFloatDays?: number
+  freeFloat: DurationMetricDto
   p50DurationDays?: number
   p80DurationDays?: number
   standardDeviationDays?: number
@@ -91,9 +102,15 @@ export interface CriticalTaskNetworkSchedule {
   earliestFinishOffsetDays: number
   latestStartOffsetDays: number
   latestFinishOffsetDays: number
+  /** @deprecated Use float. */
   floatDays: number
+  float: DurationMetricDto
+  /** @deprecated Use freeFloat. */
   freeFloatDays: number
+  freeFloat: DurationMetricDto
+  /** @deprecated Use duration. */
   durationDays: number
+  duration: DurationMetricDto
   isAutoCritical: boolean
 }
 
@@ -101,13 +118,17 @@ export interface CriticalChainSnapshot {
   id: string
   source: CriticalSource
   taskIds: string[]
+  /** @deprecated Use totalDuration. */
   totalDurationDays: number
+  totalDuration: DurationMetricDto
   p80DurationDays?: number
   standardDeviationDays?: number
   confidenceBandWidthDays?: number
   isHighVarianceNearCritical?: boolean
   displayLabel: string
 }
+
+type CriticalChainFacts = Omit<CriticalChainSnapshot, 'totalDuration'>
 
 export interface CriticalPathNetworkLineage {
   criticalPathAlgorithmVersion: 'critical_path_cpm_v1'
@@ -134,7 +155,9 @@ export interface CriticalPathSnapshot {
   edges: CriticalPathEdge[]
   tasks: CriticalTaskSnapshot[]
   networkSchedule?: CriticalTaskNetworkSchedule[]
+  /** @deprecated Use projectDuration. */
   projectDurationDays: number
+  projectDuration: DurationMetricDto
   calculatedAt?: string
   lastSuccessfulCalculatedAt?: string | null
   calculationStatus?: 'fresh' | 'cached_after_failure' | 'empty_after_failure'
@@ -370,15 +393,18 @@ export function evaluateCriticalPathRuleCandidateLiveLearningEvidence(
 function cloneCriticalPathSnapshot(snapshot: CriticalPathSnapshot): CriticalPathSnapshot {
   return {
     ...snapshot,
+    projectDuration: { ...snapshot.projectDuration },
     primaryChain: snapshot.primaryChain
       ? {
         ...snapshot.primaryChain,
         taskIds: [...snapshot.primaryChain.taskIds],
+        totalDuration: { ...snapshot.primaryChain.totalDuration },
       }
       : null,
     alternateChains: snapshot.alternateChains.map((chain) => ({
       ...chain,
       taskIds: [...chain.taskIds],
+      totalDuration: { ...chain.totalDuration },
     })),
     displayTaskIds: [...snapshot.displayTaskIds],
     watchedTaskIds: [...snapshot.watchedTaskIds],
@@ -395,8 +421,16 @@ function cloneCriticalPathSnapshot(snapshot: CriticalPathSnapshot): CriticalPath
       ...(task.durationLearningPublicationKeys
         ? { durationLearningPublicationKeys: [...task.durationLearningPublicationKeys] }
         : {}),
+      duration: { ...task.duration },
+      float: { ...task.float },
+      freeFloat: { ...task.freeFloat },
     })),
-    networkSchedule: snapshot.networkSchedule?.map((task) => ({ ...task })),
+    networkSchedule: snapshot.networkSchedule?.map((task) => ({
+      ...task,
+      duration: { ...task.duration },
+      float: { ...task.float },
+      freeFloat: { ...task.freeFloat },
+    })),
     cycleTaskIds: snapshot.cycleTaskIds ? [...snapshot.cycleTaskIds] : undefined,
     networkLineage: snapshot.networkLineage
       ? {
@@ -2430,7 +2464,7 @@ function buildAutoCriticalChains(
   taskMap: Map<string, CriticalPathTaskRow>,
   analysis: CPMResult,
   calendar?: ConstructionCalendarContext | null,
-): CriticalChainSnapshot[] {
+): CriticalChainFacts[] {
   const criticalTaskIds = analysis.criticalPath.length > 0
     ? unique(analysis.criticalPath)
     : buildFallbackAutoTaskIds(rows)
@@ -2519,10 +2553,10 @@ function buildAutoCriticalChains(
 
 function sortAutoCriticalChains(
   projectId: string,
-  chains: CriticalChainSnapshot[],
+  chains: CriticalChainFacts[],
   taskMap: Map<string, CriticalPathTaskRow>,
   analysis: CPMResult,
-): { primaryChain: CriticalChainSnapshot | null; alternateChains: CriticalChainSnapshot[]; orderedTaskIds: string[] } {
+): { primaryChain: CriticalChainFacts | null; alternateChains: CriticalChainFacts[]; orderedTaskIds: string[] } {
   const orderIndex = new Map(analysis.orderedTaskIds.map((taskId, index) => [taskId, index]))
   const rankedChains = chains
     .map((chain) => ({
@@ -2588,7 +2622,7 @@ function buildHighVarianceNearCriticalChains(
   projectId: string,
   analysis: CPMResult,
   criticalTaskIds: Set<string>,
-): CriticalChainSnapshot[] {
+): CriticalChainFacts[] {
   return analysis.orderedTaskIds
     .filter((taskId) => isHighVarianceNearCriticalNode(taskId, analysis, criticalTaskIds))
     .map((taskId, index) => {
@@ -2609,7 +2643,7 @@ function buildHighVarianceNearCriticalChains(
         ),
         isHighVarianceNearCritical: true,
         displayLabel: `楂樻柟宸繎鍏抽敭閾?${index + 1}`,
-      } satisfies CriticalChainSnapshot
+      } satisfies CriticalChainFacts
     })
 }
 
@@ -2657,7 +2691,7 @@ function buildManualInsertChains(
   manualInsertOverrides: CriticalPathOverrideRow[],
   taskMap: Map<string, CriticalPathTaskRow>,
   calendar?: ConstructionCalendarContext | null,
-): CriticalChainSnapshot[] {
+): CriticalChainFacts[] {
   return manualInsertOverrides.map((override, index) => {
     const chainTaskIds: string[] = []
     if (override.left_task_id && taskMap.has(override.left_task_id)) {
@@ -2752,8 +2786,8 @@ function buildCriticalPathNetworkLineage(params: {
   manualInsertedTaskIds: string[]
   displayTaskIds: string[]
   edges: CriticalPathEdge[]
-  primaryChain: CriticalChainSnapshot | null
-  alternateChains: CriticalChainSnapshot[]
+  primaryChain: CriticalChainFacts | null
+  alternateChains: CriticalChainFacts[]
 }): CriticalPathNetworkLineage {
   const taskInputs = params.rows
     .map((row) => ({
@@ -2872,7 +2906,7 @@ async function buildCriticalPathDurationInputAssembly(input: {
   projectId: string
   projectGenerationFacts: Record<string, unknown>
   networkLineage: CriticalPathNetworkLineage
-  primaryChain: CriticalChainSnapshot | null
+  primaryChain: CriticalChainFacts | null
   autoTaskIds: string[]
   projectDurationDays: number
   edgeCount: number
@@ -3092,6 +3126,11 @@ async function buildProjectCriticalPathSnapshotWithContext(
         tasks: [],
         networkSchedule: [],
         projectDurationDays: 0,
+        projectDuration: buildConstructionProductionDayDurationMetric(null, {
+          asOf: businessDateKey(new Date(failedAt), constructionCalendar?.timezone),
+          timezone: constructionCalendar?.timezone,
+          calendar: constructionCalendar,
+        }),
         calculationStatus: 'empty_after_failure',
         calculationFailureMessage: errorMessage,
         calculationFailedAt: failedAt,
@@ -3172,6 +3211,23 @@ async function buildProjectCriticalPathSnapshotWithContext(
   }
     // CP14: displayTaskIds 仅包含客观关键路径（CPM 自动计算 + manual_insert），不混入 manual_attention
   const primaryChainIndex = new Map((primaryChain?.taskIds ?? []).map((taskId, index) => [taskId, index]))
+  const calculatedAt = new Date().toISOString()
+  const durationAsOf = businessDateKey(new Date(calculatedAt), constructionCalendar?.timezone)
+  const productionDuration = (value: number | null | undefined) => (
+    buildConstructionProductionDayDurationMetric(value, {
+      asOf: durationAsOf,
+      timezone: constructionCalendar?.timezone,
+      calendar: constructionCalendar,
+    })
+  )
+  // Preserve the raw chain objects above for exact lineage hashing; attach display DTOs only afterwards.
+  const primaryChainWithDuration = primaryChain
+    ? { ...primaryChain, totalDuration: productionDuration(primaryChain.totalDurationDays) }
+    : null
+  const combinedAlternateChainsWithDuration = combinedAlternateChains.map((chain) => ({
+    ...chain,
+    totalDuration: productionDuration(chain.totalDurationDays),
+  }))
 
   const taskSnapshotIds = unique([
     ...displayTaskIds,
@@ -3191,8 +3247,11 @@ async function buildProjectCriticalPathSnapshotWithContext(
         latestStartOffsetDays: Math.max(0, Math.round(analysis.latestStart.get(taskId) ?? 0)),
         latestFinishOffsetDays: Math.max(0, Math.round(analysis.latestFinish.get(taskId) ?? 0)),
         floatDays: Math.max(0, Math.round(analysis.float.get(taskId) ?? 0)),
+        float: productionDuration(Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))),
         freeFloatDays: buildFreeFloatDays(taskId, analysis),
+        freeFloat: productionDuration(buildFreeFloatDays(taskId, analysis)),
         durationDays: node.duration,
+        duration: productionDuration(node.duration),
         isAutoCritical: autoCriticalTaskIdSet.has(taskId),
       }
     })
@@ -3207,12 +3266,18 @@ async function buildProjectCriticalPathSnapshotWithContext(
       const schedule = networkScheduleByTaskId.get(taskId)
       const durationLearningPublicationKeys = learningPublicationKeysByTaskId.get(taskId) ?? []
       const standardWorkCodes = readCriticalPathTaskStableCodes(row)
+      const floatDays = analysis.float.get(taskId) ?? 0
+      const durationDays = node?.duration ?? getTaskDurationDays(row, constructionCalendar)
+      const freeFloatDays = schedule?.freeFloatDays
       return {
         taskId,
         title: row.title || taskId,
         ...(standardWorkCodes.length > 0 ? { standardWorkCodes } : {}),
-        floatDays: analysis.float.get(taskId) ?? 0,
-        durationDays: node?.duration ?? getTaskDurationDays(row, constructionCalendar),
+        floatDays,
+        float: productionDuration(floatDays),
+        durationDays,
+        duration: productionDuration(durationDays),
+        freeFloat: productionDuration(freeFloatDays),
         ...(schedule ? {
           earliestStartOffsetDays: schedule.earliestStartOffsetDays,
           earliestFinishOffsetDays: schedule.earliestFinishOffsetDays,
@@ -3256,14 +3321,13 @@ async function buildProjectCriticalPathSnapshotWithContext(
   } catch (error) {
     logger.warn('[projectCriticalPathService] duration input assembly unavailable for E3 CPM snapshot', { projectId, error })
   }
-  const calculatedAt = new Date().toISOString()
   const snapshot: CriticalPathSnapshot = {
     projectId,
     autoTaskIds,
     manualAttentionTaskIds,
     manualInsertedTaskIds,
-    primaryChain,
-    alternateChains: combinedAlternateChains,
+    primaryChain: primaryChainWithDuration,
+    alternateChains: combinedAlternateChainsWithDuration,
     displayTaskIds,
     watchedTaskIds: unique([...manualAttentionTaskIds, ...learnedCriticalPathWatchTaskIds]),
     ...(criticalPathLearningPublications.length > 0 ? { criticalPathLearningPublications } : {}),
@@ -3271,6 +3335,7 @@ async function buildProjectCriticalPathSnapshotWithContext(
     tasks,
     networkSchedule,
     projectDurationDays,
+    projectDuration: productionDuration(projectDurationDays),
     calculatedAt,
     lastSuccessfulCalculatedAt: calculatedAt,
     calculationStatus: 'fresh',

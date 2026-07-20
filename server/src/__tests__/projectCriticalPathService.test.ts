@@ -4,6 +4,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Row = Record<string, any>
 
+function productionDayMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: null,
+    calendarVersion: null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-14',
+    availability: 'unavailable' as const,
+    unavailableReason: 'construction_calendar_identity_missing',
+  }
+}
+
 const mocks = vi.hoisted(() => {
   const tables: Record<string, Row[]> = {
     tasks: [
@@ -241,6 +254,7 @@ vi.mock('../services/projectGenerationFactsStoreService.js', () => ({
 }))
 
 const {
+  buildProjectCriticalPathSnapshot,
   clearProjectCriticalPathSnapshotCache,
   createCriticalPathOverride,
   deleteCriticalPathOverride,
@@ -317,6 +331,32 @@ describe('project critical path service', () => {
     expect(result.criticalTaskIds).toEqual(['task-b'])
     expect(result.projectDuration).toBe(8)
     expect(result.snapshot.autoTaskIds).toEqual(['task-b'])
+  })
+
+  it('fails closed for project, task, chain and network production-day metrics without calendar identity', async () => {
+    const snapshot = await getProjectCriticalPathSnapshot('project-1')
+
+    expect(snapshot.projectDuration).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }))
+    expect(snapshot.primaryChain?.totalDuration).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    }))
+    expect(snapshot.tasks[0]).toEqual(expect.objectContaining({
+      duration: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
+      float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
+      freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
+    }))
+    expect(snapshot.networkSchedule?.[0]).toEqual(expect.objectContaining({
+      duration: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
+      float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
+      freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
+    }))
   })
 
   it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {
@@ -640,6 +680,7 @@ describe('project critical path service', () => {
           source: 'auto',
           taskIds: ['task-b'],
           totalDurationDays: 8,
+          totalDuration: productionDayMetric(null),
           displayLabel: 'A',
         },
         alternateChains: [],
@@ -650,12 +691,16 @@ describe('project critical path service', () => {
           taskId: 'task-b',
           title: 'B',
           floatDays: 0,
+          float: productionDayMetric(null),
           durationDays: 8,
+          duration: productionDayMetric(null),
+          freeFloat: productionDayMetric(null),
           isAutoCritical: true,
           isManualAttention: false,
           isManualInserted: false,
         }],
         projectDurationDays: 8,
+        projectDuration: productionDayMetric(null),
         calculatedAt: '2026-06-14T00:00:00.000Z',
         calculationStatus: 'fresh',
         networkLineage: {
@@ -721,6 +766,7 @@ describe('project critical path service', () => {
         edges: [],
         tasks: [],
         projectDurationDays: 0,
+        projectDuration: productionDayMetric(null),
         calculationStatus: 'empty_after_failure',
       },
       criticalPathOutcomeEventRecorded: false,
@@ -1255,6 +1301,11 @@ describe('project critical path service', () => {
   it('uses construction production days for planned CPM task durations', async () => {
     mocks.resolveConstructionCalendarContext.mockResolvedValue({
       basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
       windows: [
         {
           startDate: '2026-02-03',
@@ -1282,6 +1333,19 @@ describe('project critical path service', () => {
 
     expect(snapshot.tasks.find((task) => task.taskId === 'task-calendar')?.durationDays).toBe(3)
     expect(snapshot.projectDurationDays).toBe(3)
+    expect(snapshot.projectDuration).toEqual(expect.objectContaining({
+      value: 3,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+    }))
+    expect(snapshot.tasks.find((task) => task.taskId === 'task-calendar')).toEqual(expect.objectContaining({
+      duration: expect.objectContaining({ value: 3, unit: 'construction_production_day', availability: 'available' }),
+      float: expect.objectContaining({ unit: 'construction_production_day', availability: 'available' }),
+      freeFloat: expect.objectContaining({ unit: 'construction_production_day', availability: 'available' }),
+    }))
     expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'project-1',
     }))
@@ -1303,6 +1367,158 @@ describe('project critical path service', () => {
         }),
       }),
     }))
+  })
+
+  it('isolates nested production-day metrics from cached CPM snapshots', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
+    mocks.tables.tasks = [
+      {
+        id: 'cache-primary',
+        project_id: 'project-1',
+        title: 'Cache primary',
+        start_date: '2026-04-01',
+        end_date: '2026-04-08',
+        planned_end_date: '2026-04-08',
+      },
+      {
+        id: 'cache-alternate',
+        project_id: 'project-1',
+        title: 'Cache alternate',
+        start_date: '2026-04-01',
+        end_date: '2026-04-08',
+        planned_end_date: '2026-04-08',
+      },
+    ]
+    mocks.tables.task_dependencies = []
+
+    const first = await getProjectCriticalPathSnapshot('project-1')
+    const expected = {
+      project: first.projectDuration.value,
+      primary: first.primaryChain?.totalDuration?.value,
+      alternate: first.alternateChains[0]?.totalDuration?.value,
+      taskDuration: first.tasks[0]?.duration.value,
+      taskFloat: first.tasks[0]?.float.value,
+      taskFreeFloat: first.tasks[0]?.freeFloat.value,
+      scheduleDuration: first.networkSchedule?.[0]?.duration.value,
+      scheduleFloat: first.networkSchedule?.[0]?.float.value,
+      scheduleFreeFloat: first.networkSchedule?.[0]?.freeFloat.value,
+    }
+
+    first.projectDuration.value = 999
+    first.primaryChain!.totalDuration!.value = 999
+    first.alternateChains[0]!.totalDuration!.value = 999
+    first.tasks[0]!.duration.value = 999
+    first.tasks[0]!.float.value = 999
+    first.tasks[0]!.freeFloat.value = 999
+    first.networkSchedule![0]!.duration.value = 999
+    first.networkSchedule![0]!.float.value = 999
+    first.networkSchedule![0]!.freeFloat.value = 999
+
+    const cached = await getProjectCriticalPathSnapshot('project-1')
+
+    expect(cached.projectDuration.value).toBe(expected.project)
+    expect(cached.primaryChain?.totalDuration?.value).toBe(expected.primary)
+    expect(cached.alternateChains[0]?.totalDuration?.value).toBe(expected.alternate)
+    expect(cached.tasks[0]?.duration.value).toBe(expected.taskDuration)
+    expect(cached.tasks[0]?.float.value).toBe(expected.taskFloat)
+    expect(cached.tasks[0]?.freeFloat.value).toBe(expected.taskFreeFloat)
+    expect(cached.networkSchedule?.[0]?.duration.value).toBe(expected.scheduleDuration)
+    expect(cached.networkSchedule?.[0]?.float.value).toBe(expected.scheduleFloat)
+    expect(cached.networkSchedule?.[0]?.freeFloat.value).toBe(expected.scheduleFreeFloat)
+  })
+
+  it('exposes exact calendar identity on available primary, alternate, and network duration metrics', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-04-10T00:00:00.000Z'))
+    try {
+      mocks.resolveConstructionCalendarContext.mockResolvedValue({
+        basis: 'official_construction_calendar_seed',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+        windows: [],
+      })
+      mocks.tables.tasks = [
+        {
+          id: 'available-primary',
+          project_id: 'project-1',
+          title: 'Available primary',
+          start_date: '2026-04-01',
+          end_date: '2026-04-08',
+          planned_end_date: '2026-04-08',
+        },
+        {
+          id: 'available-alternate',
+          project_id: 'project-1',
+          title: 'Available alternate',
+          start_date: '2026-04-01',
+          end_date: '2026-04-08',
+          planned_end_date: '2026-04-08',
+        },
+      ]
+      mocks.tables.task_dependencies = []
+
+      const snapshot = await getProjectCriticalPathSnapshot('project-1')
+      const identity = {
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-04-10',
+        availability: 'available',
+        unavailableReason: null,
+      }
+
+      expect(snapshot.primaryChain?.totalDuration).toEqual(expect.objectContaining({ ...identity, value: 8 }))
+      expect(snapshot.alternateChains[0]?.totalDuration).toEqual(expect.objectContaining({ ...identity, value: 8 }))
+      for (const scheduledTask of snapshot.networkSchedule ?? []) {
+        expect(scheduledTask.duration).toEqual(expect.objectContaining(identity))
+        expect(scheduledTask.float).toEqual(expect.objectContaining(identity))
+        expect(scheduledTask.freeFloat).toEqual(expect.objectContaining(identity))
+      }
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps CPM lineage hashes stable when typed duration DTOs are decorated', async () => {
+    const withoutCalendarIdentity = await buildProjectCriticalPathSnapshot(
+      'project-1',
+      mocks.tables.tasks as Parameters<typeof buildProjectCriticalPathSnapshot>[1],
+      mocks.tables.task_critical_overrides as Parameters<typeof buildProjectCriticalPathSnapshot>[2],
+    )
+
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
+    const withCalendarIdentity = await buildProjectCriticalPathSnapshot(
+      'project-1',
+      mocks.tables.tasks as Parameters<typeof buildProjectCriticalPathSnapshot>[1],
+      mocks.tables.task_critical_overrides as Parameters<typeof buildProjectCriticalPathSnapshot>[2],
+    )
+
+    expect(withoutCalendarIdentity.projectDuration.availability).toBe('unavailable')
+    expect(withCalendarIdentity.projectDuration.availability).toBe('available')
+    expect(withCalendarIdentity.networkLineage?.criticalSetHash)
+      .toBe(withoutCalendarIdentity.networkLineage?.criticalSetHash)
+    expect(withCalendarIdentity.networkLineage?.criticalPathInputHash)
+      .toBe(withoutCalendarIdentity.networkLineage?.criticalPathInputHash)
   })
 
   it('marks disconnected cold-start CPM networks as low maturity instead of presenting longest-task fallback as authoritative', async () => {

@@ -25,6 +25,8 @@ import {
 } from '@/services/durationSuggestionsApi'
 import { useDurationForecastRefreshKey } from '@/hooks/useDurationForecastRefreshKey'
 import { inclusiveDurationDays } from '@/lib/durationDays'
+import { formatDurationMetric } from '@/lib/durationMetric'
+import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 import type { Task, TaskCondition, TaskObstacle } from '../GanttViewTypes'
 import { getTaskWbsNodeType } from '../GanttViewTypes'
@@ -53,6 +55,7 @@ type GanttDetailDrawerProps = {
   canEdit: boolean
   conditions: TaskCondition[]
   conditionRecords: ConditionRecord[]
+  criticalSchedule?: CriticalTaskNetworkSchedule | null
   detailScopeDirty: boolean
   detailScopeDraftObjectId: string | null
   engineeringObjectLookupOptions: EngineeringObjectLookupOption[]
@@ -211,6 +214,7 @@ export function GanttDetailDrawer({
   canEdit,
   conditions,
   conditionRecords,
+  criticalSchedule,
   detailScopeDirty,
   detailScopeDraftObjectId,
   engineeringObjectLookupOptions,
@@ -251,9 +255,9 @@ export function GanttDetailDrawer({
   const planDurationLabel = planDurationDays == null ? '-' : `${planDurationDays} 天`
   const durationRiskRange = readDurationRiskRange(task)
   const durationRiskSummaryLabel = durationRiskSummary(durationRiskRange)
-  const totalFloatDays = readFloatDays(task?.total_float_days)
-  const freeFloatDays = readFloatDays(task?.free_float_days)
-  const showCriticalPathFloat = Boolean(task?.is_critical) || totalFloatDays !== null || freeFloatDays !== null
+  const showCriticalPathFloat = Boolean(task?.is_critical) || Boolean(criticalSchedule)
+  const totalFloatLabel = formatDurationMetric(criticalSchedule?.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })
+  const freeFloatLabel = formatDurationMetric(criticalSchedule?.freeFloat, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })
   const durationAssetEvidence = buildDurationAssetEvidence(task)
 
   useEffect(() => {
@@ -342,8 +346,8 @@ export function GanttDetailDrawer({
                 {task?.is_critical ? <Badge variant="outline" className="border-rose-200 bg-white text-rose-700">关键</Badge> : null}
               </div>
               <div className="flex flex-wrap gap-2 text-rose-700">
-                {totalFloatDays !== null ? <span className="rounded-lg bg-white px-2 py-1 num-mono">总浮时 {totalFloatDays} 天</span> : null}
-                {freeFloatDays !== null ? <span className="rounded-lg bg-white px-2 py-1 num-mono">自由浮时 {freeFloatDays} 天</span> : null}
+                <span className="rounded-lg bg-white px-2 py-1 num-mono">总浮时 {totalFloatLabel}</span>
+                <span className="rounded-lg bg-white px-2 py-1 num-mono">自由浮时 {freeFloatLabel}</span>
               </div>
             </div>
           ) : null}

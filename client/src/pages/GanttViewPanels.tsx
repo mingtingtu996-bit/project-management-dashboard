@@ -12,7 +12,8 @@ import { ArrowRight, Flag, GitBranch, X } from 'lucide-react'
 import { memo, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import type { CriticalPathSnapshot } from '@/lib/criticalPath'
+import type { CriticalPathSnapshot, CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
+import { formatDurationMetric } from '@/lib/durationMetric'
 import type { TaskConditionSummary } from '@/lib/taskBusinessStatus'
 import { getTaskProgressReadOnlyReason, getTaskWbsNodeType, type Task, MILESTONE_LEVEL_CONFIG } from './GanttViewTypes'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -32,13 +33,8 @@ export interface TaskDetailPanelProps {
   criticalPathSummaryText?: string | null
   criticalPathError?: string | null
   criticalPathSnapshot?: CriticalPathSnapshot | null
-  selectedCriticalPathTask?: {
-    isAutoCritical?: boolean
-    isManualAttention?: boolean
-    isManualInserted?: boolean
-    floatDays?: number
-    durationDays?: number
-  } | null
+  selectedCriticalPathTask?: CriticalPathSnapshot['tasks'][number] | null
+  selectedCriticalPathSchedule?: CriticalTaskNetworkSchedule | null
   onOpenCriticalPathDialog: () => void
   selectedTaskConditionSummary?: TaskConditionSummary | null
   selectedTaskObstacleCount?: number
@@ -67,6 +63,7 @@ export function TaskDetailPanel({
   criticalPathError,
   criticalPathSnapshot,
   selectedCriticalPathTask,
+  selectedCriticalPathSchedule,
   onOpenCriticalPathDialog,
   selectedTaskConditionSummary = null,
   selectedTaskObstacleCount = 0,
@@ -413,27 +410,27 @@ export function TaskDetailPanel({
               </div>
               <span
                 className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                  selectedCriticalPathTask ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'
+                  selectedCriticalPathTask || selectedCriticalPathSchedule ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-600'
                 }`}
               >
-                {selectedCriticalPathTask ? '已纳入快照' : '未纳入快照'}
+                {selectedCriticalPathTask || selectedCriticalPathSchedule ? '已纳入快照' : '未纳入快照'}
               </span>
             </div>
 
-            {selectedCriticalPathTask ? (
+            {selectedCriticalPathTask || selectedCriticalPathSchedule ? (
               <>
                 <div className="flex flex-wrap gap-1.5">
-                  {selectedCriticalPathTask.isAutoCritical && (
+                  {(selectedCriticalPathTask?.isAutoCritical || selectedCriticalPathSchedule?.isAutoCritical) && (
                     <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
                       自动关键
                     </span>
                   )}
-                  {selectedCriticalPathTask.isManualAttention && (
+                  {selectedCriticalPathTask?.isManualAttention && (
                     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
                       手动关注
                     </span>
                   )}
-                  {selectedCriticalPathTask.isManualInserted && (
+                  {selectedCriticalPathTask?.isManualInserted && (
                     <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
                       手动插链
                     </span>
@@ -442,14 +439,24 @@ export function TaskDetailPanel({
                 <div className="grid gap-1 text-xs text-slate-600">
                   <div className="flex items-center justify-between">
                     <span>浮动时间</span>
-                    <span className="font-medium text-slate-700">{selectedCriticalPathTask.floatDays ?? 0} 天</span>
+                    <span className="font-medium text-slate-700">
+                      {formatDurationMetric(selectedCriticalPathSchedule?.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>自由浮时</span>
+                    <span className="font-medium text-slate-700">
+                      {formatDurationMetric(selectedCriticalPathSchedule?.freeFloat, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="inline-flex items-center gap-1.5">
                       <DurationBasisBadge basis="plan" compact variant="outline" />
                       链路工期
                     </span>
-                    <span className="font-medium text-slate-700">{selectedCriticalPathTask.durationDays ?? 0} 天</span>
+                    <span className="font-medium text-slate-700">
+                      {formatDurationMetric(selectedCriticalPathSchedule?.duration, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}
+                    </span>
                   </div>
                 </div>
               </>
