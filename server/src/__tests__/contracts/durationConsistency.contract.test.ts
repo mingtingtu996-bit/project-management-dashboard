@@ -298,14 +298,17 @@ describe('duration consistency contract scaffold', () => {
 
   it('keeps dashboard due KPIs on construction production-day semantics', () => {
     const dashboardSource = readSource('server/src/routes/dashboard.ts')
+    const dashboardFocusTaskSource = readSource('server/src/services/dashboardFocusTaskService.ts')
     const taskStatusSource = readSource('server/src/services/taskStatusDerivationService.ts')
 
     expect(taskStatusSource).toContain('delayDayDelta')
     expect(taskStatusSource).toContain('calendar?: ConstructionCalendarContext')
     expect(taskStatusSource).toContain('delayDayDelta(planned, now, options.calendar)')
     expect(dashboardSource).toContain('resolveConstructionCalendarContext')
-    expect(dashboardSource).toContain('toFocusTaskItem(task, new Date(), todayTodoTaskIds, workCalendar)')
-    expect(dashboardSource).toContain('{ currentDate: now, calendar }')
+    expect(dashboardSource).toContain('buildDashboardFocusTasksResponse({')
+    expect(dashboardSource).toContain('calendar: workCalendar')
+    expect(dashboardFocusTaskSource).toContain('toItem(task, input.now, input.calendar, input.todayTodoTaskIds)')
+    expect(dashboardFocusTaskSource).toContain('{ currentDate: now, calendar }')
   })
 
   it('keeps migrated contract and utility specs inside the server vitest collection', () => {

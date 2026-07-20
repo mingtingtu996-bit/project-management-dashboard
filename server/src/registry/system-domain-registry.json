@@ -4637,6 +4637,14 @@
     },
     {
       "kind": "service",
+      "id": "dashboardFocusTaskService",
+      "architectureUnit": "主执行环：建模",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "service",
       "id": "dataLineageGovernanceService",
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
@@ -5223,6 +5231,14 @@
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "durationMetricService",
+      "architectureUnit": "主执行环：建模",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
     },
     {
       "kind": "service",
@@ -7036,6 +7052,14 @@
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
       "assignmentReason": "C-16/C-19.05 weather impact read-model for duration context; reads project_weather_forecasts and classifies weather signals for duration factors without importing prediction bridge runtime consumers or writing site shutdown events, governance candidates, task facts, dependencies, plan dates, seeds, baselines, or runtime publications"
+    },
+    {
+      "kind": "service",
+      "id": "weeklyDigestReadModelService",
+      "architectureUnit": "主执行环：建模",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
     },
     {
       "kind": "service",

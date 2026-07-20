@@ -78,6 +78,21 @@ describe('taskAttributionSummaryService', () => {
     expect(summary.avg_delay).toEqual(expect.objectContaining({ value: 3.5, unit: 'construction_production_day' }))
   })
 
+  it('uses the cached delay only when physical dates cannot be calculated', () => {
+    const summary = buildTaskSummaryAttributionTotals([
+      buildTask({
+        id: 'legacy-fallback',
+        planned_end_date: null,
+        completed_at: '2026-05-12',
+        status_label: 'delayed',
+        delay_total_days: 4,
+      }),
+    ], CALENDAR, '2026-05-31').division['division-division-main']
+
+    expect(summary.max_delay_days).toBe(4)
+    expect(summary.avg_delay_days).toBe(4)
+  })
+
   it('maps attribution health thresholds by on-time rate boundaries', () => {
     const healthy = buildTaskSummaryAttributionTotals([
       buildTask({ id: 'h-1', completed_at: '2026-05-01', status_label: 'on_time' }),
