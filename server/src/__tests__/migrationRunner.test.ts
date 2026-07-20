@@ -273,6 +273,39 @@ describe('migration runner contract', () => {
     expect(() => resolveMigrationConnectionConfig()).toThrow('MIGRATION_TARGET_MISMATCH')
   })
 
+  it('rejects a matching project suffix on a non-Supabase migration host', () => {
+    process.env.SUPABASE_URL = 'https://aaaaaaaaaaaaaaaaaaaa.supabase.co'
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres.aaaaaaaaaaaaaaaaaaaa:secret@evil.example:5432/postgres'
+
+    expect(() => resolveMigrationConnectionConfig()).toThrow('MIGRATION_TARGET_HOST_UNTRUSTED')
+  })
+
+  it('rejects a host-based migration target outside the authoritative Supabase project', () => {
+    delete process.env.SUPABASE_MIGRATION_URL
+    delete process.env.DIRECT_DATABASE_URL
+    delete process.env.DATABASE_URL
+    delete process.env.DB_CONNECTION_STRING
+    delete process.env.PGHOST
+    process.env.SUPABASE_URL = 'https://aaaaaaaaaaaaaaaaaaaa.supabase.co'
+    process.env.SUPABASE_HOST = 'evil.example'
+    process.env.SUPABASE_PASSWORD = 'secret'
+
+    expect(() => resolveMigrationConnectionConfig()).toThrow('MIGRATION_TARGET_HOST_UNTRUSTED')
+  })
+
+  it('accepts the exact authoritative Supabase direct and pooler targets', () => {
+    process.env.SUPABASE_URL = 'https://aaaaaaaaaaaaaaaaaaaa.supabase.co'
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres:secret@db.aaaaaaaaaaaaaaaaaaaa.supabase.co:5432/postgres'
+    expect(resolveMigrationConnectionConfig()).toMatchObject({
+      connectionString: expect.stringContaining('db.aaaaaaaaaaaaaaaaaaaa.supabase.co'),
+    })
+
+    process.env.SUPABASE_MIGRATION_URL = 'postgresql://postgres.aaaaaaaaaaaaaaaaaaaa:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres'
+    expect(resolveMigrationConnectionConfig()).toMatchObject({
+      connectionString: expect.stringContaining('pooler.supabase.com'),
+    })
+  })
+
   it('resolves host-based migration config to an ipv4 address before connecting', async () => {
     delete process.env.DATABASE_URL
     process.env.SUPABASE_HOST = 'db.example.supabase.co'
