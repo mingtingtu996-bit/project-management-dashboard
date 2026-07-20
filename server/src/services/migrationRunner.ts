@@ -271,17 +271,23 @@ function deriveSupabaseProjectRef(value?: string | null) {
   }
 }
 
-function assertEffectiveMigrationTargetMatchesSupabaseProject(target: {
-  host: string
-  user: string
-}) {
+function resolveConfiguredSupabaseProjectRef() {
   const configuredSupabaseUrl = String(process.env.SUPABASE_URL ?? '').trim()
-  if (!configuredSupabaseUrl) return
+  if (!configuredSupabaseUrl) return null
 
   const expectedRef = deriveSupabaseProjectRef(configuredSupabaseUrl)
   if (!expectedRef) {
     throw new Error('SUPABASE_URL_INVALID: non-empty SUPABASE_URL must be a valid Supabase project URL')
   }
+  return expectedRef
+}
+
+function assertEffectiveMigrationTargetMatchesSupabaseProject(target: {
+  host: string
+  user: string
+}) {
+  const expectedRef = resolveConfiguredSupabaseProjectRef()
+  if (!expectedRef) return
 
   const directRef = deriveSupabaseProjectRef(`postgresql://${target.host}`)
   if (!directRef && !isSupabasePoolerHost(target.host)) {
@@ -297,10 +303,13 @@ function assertEffectiveMigrationTargetMatchesSupabaseProject(target: {
   }
 }
 
-function assertMigrationTargetMatchesSupabaseProject(connectionString?: string | null) {
+function assertMigrationTargetMatchesSupabaseProject(
+  connectionString: string | null | undefined,
+  parseConnectionTarget: typeof parseStrictPostgresConnectionTarget,
+) {
   if (!connectionString) return
   assertEffectiveMigrationTargetMatchesSupabaseProject(
-    parseStrictPostgresConnectionTarget(connectionString),
+    parseConnectionTarget(connectionString),
   )
 }
 
@@ -319,7 +328,14 @@ function normalizeMigrationConnectionString(
   return parsed.toString()
 }
 
-export function resolveMigrationConnectionConfig() {
+export function resolveMigrationConnectionConfig(
+  dependencies: {
+    parseConnectionTarget?: typeof parseStrictPostgresConnectionTarget
+  } = {},
+) {
+  // Validate the authoritative URL before target parsing can construct a pg.Client.
+  resolveConfiguredSupabaseProjectRef()
+  const parseConnectionTarget = dependencies.parseConnectionTarget ?? parseStrictPostgresConnectionTarget
   const target = selectMigrationConnectionTarget(process.env)
   const connectionString = target.mode === 'connection_string' ? target.connectionString : undefined
   const host = target.mode === 'host' ? target.host : undefined
@@ -333,7 +349,7 @@ export function resolveMigrationConnectionConfig() {
     : { rejectUnauthorized: false as const }
 
   if (connectionString) {
-    assertMigrationTargetMatchesSupabaseProject(connectionString)
+    assertMigrationTargetMatchesSupabaseProject(connectionString, parseConnectionTarget)
     return {
       connectionString: normalizeMigrationConnectionString(connectionString, ssl),
       ssl,
