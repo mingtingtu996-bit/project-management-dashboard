@@ -5,6 +5,7 @@ import type {
 } from '../types/planning.js'
 import { query as rawQuery, withDatabaseTransaction } from '../database.js'
 import { logger } from '../middleware/logger.js'
+import { inclusiveDurationDays } from '../utils/durationDays.js'
 import {
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
@@ -43,8 +44,36 @@ interface TaskRow {
   actual_end_date?: string | null
   planned_start_date?: string | null
   planned_end_date?: string | null
-  standard_task_metadata?: unknown
-  duration_suggestion?: unknown
+  source_template_id?: string | null
+  template_id?: string | null
+  generation_batch_id?: string | null
+}
+
+interface TrustedWbsRuntimeConsumptionRow {
+  task_id?: string | null
+  consumption_key?: string | null
+  publication_key?: string | null
+  asset_key?: string | null
+  artifact_key?: string | null
+  generation_batch_id?: string | null
+  template_id?: string | null
+  consumed_at?: string | null
+}
+
+interface WbsReferenceRuntimeLineage {
+  status:
+    | 'linked'
+    | 'unlinked_no_trusted_consumption'
+    | 'unlinked_incomplete_task_coverage'
+    | 'ambiguous_trusted_consumption'
+  publicationKeys: string[]
+  publicationKey: string | null
+  artifactKey: string | null
+  generationBatchId: string | null
+  inputTaskIds: string[]
+  consumptionKeys: string[]
+  consumedAtStart: string | null
+  consumedAtEnd: string | null
 }
 
 interface TemplateTreeNode {
@@ -73,8 +102,11 @@ export interface CollectWbsTemplateFeedbackOptions {
   governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
   constructionCalendarResolver?: typeof resolveConstructionCalendarContext
   constructionCalendarsByProjectId?: Record<string, ConstructionCalendarContext>
-  runtimePublicationKeysByAsset?: Record<string, string[]>
-  runtimePublicationInputTaskIdsByAsset?: Record<string, Record<string, string[]>>
+  runtimePublicationLineage?: WbsReferenceRuntimeLineage
+  sourceTaskIds?: string[]
+  observationStartedAt?: string | null
+  observationEndedAt?: string | null
+  observationWindowDays?: number
 }
 
 export type WbsTemplateFeedbackTargetQueryExec = (
@@ -101,19 +133,6 @@ function normalizeText(value?: string | null): string {
 
 function normalizeCompactText(value?: string | null): string {
   return normalizeText(value).replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '')
-}
-
-function readObject(value: unknown): Record<string, unknown> {
-  if (typeof value === 'string') {
-    try {
-      return readObject(JSON.parse(value))
-    } catch {
-      return {}
-    }
-  }
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
 }
 
 const COMPLETED_PROJECT_STATUSES = new Set([
@@ -335,36 +354,6 @@ function collectSamplesByStructuredSource(params: {
   return { bySourceId, matchedTaskCount, matchedAdHocTaskCount, matchedProjectIds, matchedTasks }
 }
 
-function collectRuntimePublicationKeysByAsset(tasks: readonly TaskRow[]) {
-  const byAsset = new Map<string, Set<string>>()
-  for (const task of tasks) {
-    const metadata = readObject(task.standard_task_metadata)
-    const suggestion = readObject(task.duration_suggestion)
-    const reasonParams = readObject(suggestion.businessReasonParams ?? suggestion.business_reason_params)
-    const assetKey = String(
-      metadata.durationLearningAssetKey
-        ?? metadata.duration_learning_asset_key
-        ?? reasonParams.durationLearningAssetKey
-        ?? reasonParams.duration_learning_asset_key
-        ?? '',
-    ).trim()
-    const publicationKey = String(
-      metadata.durationLearningPublicationKey
-        ?? metadata.duration_learning_publication_key
-        ?? reasonParams.durationLearningPublicationKey
-        ?? reasonParams.duration_learning_publication_key
-        ?? '',
-    ).trim()
-    if (!assetKey || !publicationKey) continue
-    const keys = byAsset.get(assetKey) ?? new Set<string>()
-    keys.add(publicationKey)
-    byAsset.set(assetKey, keys)
-  }
-  return Object.fromEntries(
-    [...byAsset.entries()].map(([assetKey, keys]) => [assetKey, [...keys].sort()]),
-  )
-}
-
 function aggregateTreeFeedback(
   nodes: TemplateTreeNode[],
   sampleMaps: {
@@ -529,6 +518,62 @@ function getActionableReferenceDayFeedbackNodes(report: WbsTemplateFeedbackRepor
   )
 }
 
+function roundQualityMetric(value: number) {
+  return Number(value.toFixed(6))
+}
+
+function buildWbsReferenceDaysHoldoutEvidence(report: WbsTemplateFeedbackReport) {
+  const observations = getActionableReferenceDayFeedbackNodes(report).flatMap((node) => {
+    const baselineDays = Number(node.current_reference_days)
+    const samples = node.sample_values
+      .map(Number)
+      .filter((value) => Number.isFinite(value) && value > 0)
+    if (!Number.isFinite(baselineDays) || baselineDays <= 0 || samples.length < 4) return []
+    return samples.map((actualDays, index) => ({
+      actualDays,
+      baselineDays,
+      candidateDays: median(samples.filter((_, trainingIndex) => trainingIndex !== index)),
+    }))
+  })
+  if (observations.length === 0) {
+    return {
+      qualityModel: 'numeric_holdout' as const,
+      holdoutSampleCount: 0,
+      maeBefore: null,
+      maeAfter: null,
+      conflictRate: null,
+      overcompensationRate: null,
+    }
+  }
+  const maeBefore = observations.reduce(
+    (sum, item) => sum + Math.abs(item.baselineDays - item.actualDays),
+    0,
+  ) / observations.length
+  const maeAfter = observations.reduce(
+    (sum, item) => sum + Math.abs(item.candidateDays - item.actualDays),
+    0,
+  ) / observations.length
+  const conflictCount = observations.filter((item) => (
+    Math.abs(item.candidateDays - item.actualDays) > Math.abs(item.baselineDays - item.actualDays)
+  )).length
+  const overcompensationCount = observations.filter((item) => {
+    const before = item.baselineDays - item.actualDays
+    const after = item.candidateDays - item.actualDays
+    return before !== 0
+      && after !== 0
+      && Math.sign(before) !== Math.sign(after)
+      && Math.abs(after) >= Math.abs(before)
+  }).length
+  return {
+    qualityModel: 'numeric_holdout' as const,
+    holdoutSampleCount: observations.length,
+    maeBefore: roundQualityMetric(maeBefore),
+    maeAfter: roundQualityMetric(maeAfter),
+    conflictRate: roundQualityMetric(conflictCount / observations.length),
+    overcompensationRate: roundQualityMetric(overcompensationCount / observations.length),
+  }
+}
+
 function wbsReferenceDaysOutcomeStatus(report: WbsTemplateFeedbackReport): 'accepted' | 'weak' | null {
   if (report.sample_task_count <= 0 || report.completed_project_count <= 0) return null
   const actionableNodes = getActionableReferenceDayFeedbackNodes(report)
@@ -549,21 +594,22 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
   const projectId = getScopedProjectId(options.projectIds)
   if (!projectId) return 0
   const actionableNodes = getActionableReferenceDayFeedbackNodes(report)
-  const consumedPublicationKeys = options.runtimePublicationKeysByAsset?.[WBS_REFERENCE_DAYS_ASSET_KEY] ?? []
-  const runtimePublicationKey = consumedPublicationKeys.length === 1 ? consumedPublicationKeys[0]! : null
-  const runtimePublicationInputTaskIds = runtimePublicationKey
-    ? options.runtimePublicationInputTaskIdsByAsset?.[WBS_REFERENCE_DAYS_ASSET_KEY]?.[runtimePublicationKey] ?? []
+  const quality = buildWbsReferenceDaysHoldoutEvidence(report)
+  const sourceTaskIds = Array.from(new Set((options.sourceTaskIds ?? [])
+    .map(normalizeId)
+    .filter((value): value is string => Boolean(value))))
+  const runtimeLineage = options.runtimePublicationLineage ?? emptyWbsReferenceRuntimeLineage()
+  const consumedPublicationKeys = runtimeLineage.publicationKeys
+  const runtimePublicationKey = runtimeLineage.status === 'linked'
+    ? runtimeLineage.publicationKey
+    : null
+  const runtimePublicationInputTaskIds = runtimeLineage.status === 'linked'
+    ? runtimeLineage.inputTaskIds
     : []
-  const publicationLineageStatus = runtimePublicationKey
-    ? 'linked'
-    : consumedPublicationKeys.length > 1
-      ? 'ambiguous'
-      : 'cold_start_unpublished'
+  const publicationLineageStatus = runtimeLineage.status
   const lineageIdentity = runtimePublicationKey
-    ? `:${runtimePublicationKey}`
-    : consumedPublicationKeys.length > 1
-      ? `:mixed:${consumedPublicationKeys.join('+')}`
-      : ''
+    ? `:${runtimePublicationKey}:${runtimeLineage.generationBatchId}`
+    : `:${publicationLineageStatus}`
   const outcomeId = `wbs-reference-days:${report.template_id}:${projectId ?? 'multi-project'}${lineageIdentity}`
   const metadata = {
     source: 'wbs_template_feedback',
@@ -585,8 +631,27 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
     consumed_runtime_publication_keys: consumedPublicationKeys,
     publication_lineage_status: publicationLineageStatus,
     runtime_publication_key: runtimePublicationKey,
-    runtime_publication_artifact_key: runtimePublicationKey ? report.template_id : null,
+    runtime_publication_artifact_key: runtimePublicationKey ? runtimeLineage.artifactKey : null,
     runtime_publication_input_task_ids: runtimePublicationInputTaskIds,
+    runtime_publication_generation_batch_id: runtimePublicationKey ? runtimeLineage.generationBatchId : null,
+    runtime_publication_consumption_keys: runtimePublicationKey ? runtimeLineage.consumptionKeys : [],
+    runtime_publication_consumed_at_start: runtimePublicationKey ? runtimeLineage.consumedAtStart : null,
+    runtime_publication_consumed_at_end: runtimePublicationKey ? runtimeLineage.consumedAtEnd : null,
+    source_task_ids: sourceTaskIds,
+    source_evidence_refs: sourceTaskIds.map((taskId) => `tasks:${taskId}:actual_duration`),
+    real_outcome_count: report.sample_task_count,
+    replay_case_count: quality.holdoutSampleCount,
+    observation_started_at: options.observationStartedAt ?? null,
+    observation_ended_at: options.observationEndedAt ?? null,
+    observation_window_days: options.observationWindowDays ?? 0,
+    quality_model: quality.qualityModel,
+    holdout_sample_count: quality.holdoutSampleCount,
+    mae_before: quality.maeBefore,
+    mae_after: quality.maeAfter,
+    conflict_rate: quality.conflictRate,
+    overcompensation_rate: quality.overcompensationRate,
+    rollback_ready: true,
+    tenant_scope_valid: Boolean(normalizeId(options.companyId) && projectId),
     writes_runtime_directly: false,
     writes_fact_directly: false,
   }
@@ -670,41 +735,170 @@ async function recordWbsReferenceDaysPlanNetworkOutcome(
   return 1
 }
 
-function collectRuntimePublicationInputTaskIdsByAsset(tasks: readonly TaskRow[]) {
-  const byAsset = new Map<string, Map<string, Set<string>>>()
-  for (const task of tasks) {
-    const metadata = readObject(task.standard_task_metadata)
-    const suggestion = readObject(task.duration_suggestion)
-    const reasonParams = readObject(suggestion.businessReasonParams ?? suggestion.business_reason_params)
-    const assetKey = String(
-      metadata.durationLearningAssetKey
-        ?? metadata.duration_learning_asset_key
-        ?? reasonParams.durationLearningAssetKey
-        ?? reasonParams.duration_learning_asset_key
-        ?? '',
-    ).trim()
-    const publicationKey = String(
-      metadata.durationLearningPublicationKey
-        ?? metadata.duration_learning_publication_key
-        ?? reasonParams.durationLearningPublicationKey
-        ?? reasonParams.duration_learning_publication_key
-        ?? '',
-    ).trim()
-    const taskId = String(task.id ?? '').trim()
-    if (!assetKey || !publicationKey || !taskId) continue
-    const byPublication = byAsset.get(assetKey) ?? new Map<string, Set<string>>()
-    const taskIds = byPublication.get(publicationKey) ?? new Set<string>()
-    taskIds.add(taskId)
-    byPublication.set(publicationKey, taskIds)
-    byAsset.set(assetKey, byPublication)
+const TRUSTED_WBS_REFERENCE_RUNTIME_CONSUMPTIONS_SQL = `SELECT
+    consumption.task_id::text AS task_id,
+    consumption.consumption_key,
+    consumption.publication_key,
+    consumption.asset_key,
+    consumption.artifact_key,
+    consumption.generation_batch_id,
+    consumption.template_id,
+    consumption.consumed_at
+  FROM public.duration_learning_runtime_consumptions consumption
+  JOIN public.projects project
+    ON project.id = consumption.project_id
+   AND project.company_id = consumption.company_id
+  JOIN public.tasks materialized_task
+    ON materialized_task.id = consumption.task_id
+   AND materialized_task.project_id = consumption.project_id
+   AND materialized_task.generation_batch_id IS NOT NULL
+   AND materialized_task.generation_batch_id::text = consumption.generation_batch_id
+   AND COALESCE(materialized_task.source_template_id, materialized_task.template_id)::text = consumption.artifact_key
+  WHERE consumption.company_id = $1::uuid
+    AND consumption.project_id = $2::uuid
+    AND consumption.task_id = ANY($3::uuid[])
+    AND consumption.asset_key = $4
+    AND consumption.artifact_key = $5
+    AND consumption.template_id = $5
+  ORDER BY consumption.task_id, consumption.consumed_at, consumption.consumption_key`
+
+function emptyWbsReferenceRuntimeLineage(
+  status: WbsReferenceRuntimeLineage['status'] = 'unlinked_no_trusted_consumption',
+  publicationKeys: string[] = [],
+): WbsReferenceRuntimeLineage {
+  return {
+    status,
+    publicationKeys,
+    publicationKey: null,
+    artifactKey: null,
+    generationBatchId: null,
+    inputTaskIds: [],
+    consumptionKeys: [],
+    consumedAtStart: null,
+    consumedAtEnd: null,
   }
-  return Object.fromEntries([...byAsset.entries()].map(([assetKey, byPublication]) => [
-    assetKey,
-    Object.fromEntries([...byPublication.entries()].map(([publicationKey, taskIds]) => [
+}
+
+function resolveWbsReferenceRuntimeLineage(params: {
+  tasks: readonly TaskRow[]
+  rows: readonly TrustedWbsRuntimeConsumptionRow[]
+  templateId: string
+}) {
+  const tasksById = new Map(params.tasks.map((task) => [normalizeId(task.id), task]))
+  const inputTaskIds = [...tasksById.keys()]
+    .filter((taskId): taskId is string => Boolean(taskId))
+    .sort()
+  const eligibleRows = params.rows.filter((row) => {
+    const taskId = normalizeId(row.task_id)
+    const task = taskId ? tasksById.get(taskId) : null
+    const generationBatchId = normalizeId(row.generation_batch_id)
+    const taskGenerationBatchId = normalizeId(task?.generation_batch_id)
+    const taskTemplateId = normalizeId(task?.source_template_id ?? task?.template_id)
+    return Boolean(
+      task
+      && normalizeId(row.asset_key) === WBS_REFERENCE_DAYS_ASSET_KEY
+      && normalizeId(row.artifact_key) === params.templateId
+      && normalizeId(row.template_id) === params.templateId
+      && generationBatchId
+      && generationBatchId === taskGenerationBatchId
+      && taskTemplateId === params.templateId,
+    )
+  })
+  const publicationKeys = Array.from(new Set(eligibleRows
+    .map((row) => normalizeId(row.publication_key))
+    .filter((value): value is string => Boolean(value))))
+    .sort()
+  if (eligibleRows.length === 0) {
+    return emptyWbsReferenceRuntimeLineage('unlinked_no_trusted_consumption')
+  }
+
+  const coveredTaskIds = new Set(eligibleRows
+    .map((row) => normalizeId(row.task_id))
+    .filter((value): value is string => Boolean(value)))
+  if (coveredTaskIds.size !== inputTaskIds.length) {
+    return emptyWbsReferenceRuntimeLineage('unlinked_incomplete_task_coverage', publicationKeys)
+  }
+
+  const identityByKey = new Map<string, {
+    publicationKey: string
+    artifactKey: string
+    generationBatchId: string
+  }>()
+  for (const row of eligibleRows) {
+    const publicationKey = normalizeId(row.publication_key)
+    const artifactKey = normalizeId(row.artifact_key)
+    const generationBatchId = normalizeId(row.generation_batch_id)
+    if (!publicationKey || !artifactKey || !generationBatchId) continue
+    identityByKey.set(`${publicationKey}\u0000${artifactKey}\u0000${generationBatchId}`, {
       publicationKey,
-      [...taskIds].sort(),
-    ])),
-  ]))
+      artifactKey,
+      generationBatchId,
+    })
+  }
+  if (identityByKey.size !== 1) {
+    return emptyWbsReferenceRuntimeLineage('ambiguous_trusted_consumption', publicationKeys)
+  }
+
+  const identity = [...identityByKey.values()][0]!
+  const consumptionKeys = Array.from(new Set(eligibleRows
+    .map((row) => normalizeId(row.consumption_key))
+    .filter((value): value is string => Boolean(value))))
+    .sort()
+  const consumedAt = eligibleRows
+    .map((row) => normalizeId(row.consumed_at))
+    .filter((value): value is string => Boolean(value))
+    .sort()
+  return {
+    status: 'linked' as const,
+    publicationKeys,
+    publicationKey: identity.publicationKey,
+    artifactKey: identity.artifactKey,
+    generationBatchId: identity.generationBatchId,
+    inputTaskIds,
+    consumptionKeys,
+    consumedAtStart: consumedAt[0] ?? null,
+    consumedAtEnd: consumedAt[consumedAt.length - 1] ?? null,
+  }
+}
+
+async function loadWbsReferenceRuntimeLineage(params: {
+  companyId: string | null
+  projectId: string | null
+  templateId: string
+  tasks: readonly TaskRow[]
+  queryExec?: AlgorithmAssetGovernanceQueryExec
+}) {
+  const taskIds = Array.from(new Set(params.tasks
+    .map((task) => normalizeId(task.id))
+    .filter((value): value is string => Boolean(value))))
+  if (!params.companyId || !params.projectId || taskIds.length === 0) {
+    return emptyWbsReferenceRuntimeLineage()
+  }
+  const queryParams = [
+    params.companyId,
+    params.projectId,
+    taskIds,
+    WBS_REFERENCE_DAYS_ASSET_KEY,
+    params.templateId,
+  ]
+  let rows: TrustedWbsRuntimeConsumptionRow[]
+  if (params.queryExec) {
+    rows = await params.queryExec<TrustedWbsRuntimeConsumptionRow>(
+      TRUSTED_WBS_REFERENCE_RUNTIME_CONSUMPTIONS_SQL,
+      queryParams,
+    )
+  } else {
+    // database-query-dynamic-approved: this module owns the fixed trusted-consumption SELECT; company/project/task/artifact values remain parameter-bound.
+    rows = (await rawQuery(
+      TRUSTED_WBS_REFERENCE_RUNTIME_CONSUMPTIONS_SQL,
+      queryParams as any[],
+    )).rows as TrustedWbsRuntimeConsumptionRow[]
+  }
+  return resolveWbsReferenceRuntimeLineage({
+    tasks: params.tasks,
+    rows,
+    templateId: params.templateId,
+  })
 }
 
 async function persistWbsTemplateFeedbackCandidateEvent(
@@ -817,8 +1011,23 @@ async function collectWbsTemplateFeedbackWithContext(
     templateSourceCandidates,
     constructionCalendarsByProjectId,
   })
-  effectiveOptions.runtimePublicationKeysByAsset = collectRuntimePublicationKeysByAsset(sampleMaps.matchedTasks)
-  effectiveOptions.runtimePublicationInputTaskIdsByAsset = collectRuntimePublicationInputTaskIdsByAsset(sampleMaps.matchedTasks)
+  effectiveOptions.runtimePublicationLineage = await loadWbsReferenceRuntimeLineage({
+    companyId,
+    projectId: getScopedProjectId(normalizedProjectScope),
+    templateId: String(template.id),
+    tasks: sampleMaps.matchedTasks,
+    queryExec: options.governanceQueryExec,
+  })
+  effectiveOptions.sourceTaskIds = sampleMaps.matchedTasks.map((task) => task.id)
+  const observationDates = sampleMaps.matchedTasks
+    .map((task) => String(task.actual_end_date ?? '').trim())
+    .filter(Boolean)
+    .sort()
+  effectiveOptions.observationStartedAt = observationDates[0] ?? null
+  effectiveOptions.observationEndedAt = observationDates[observationDates.length - 1] ?? null
+  effectiveOptions.observationWindowDays = effectiveOptions.observationStartedAt && effectiveOptions.observationEndedAt
+    ? inclusiveDurationDays(effectiveOptions.observationStartedAt, effectiveOptions.observationEndedAt) ?? 0
+    : 0
   const flattenedRows = aggregateTreeFeedback(templateNodes, sampleMaps)
   const nodeCount = flattenTree(templateNodes).length
 

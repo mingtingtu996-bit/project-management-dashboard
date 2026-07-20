@@ -586,6 +586,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         },
       },
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
       runtimeConsumerObservedAt: '2026-06-15T12:00:00.000Z',
       runtimeArtifactPublications: [
         {
@@ -670,6 +671,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         scope: { building_object_id: 'building-1' },
       },
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(generated.rows.length).toBeGreaterThan(0)
@@ -705,6 +707,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         scope: { building_object_id: 'building-1' },
       },
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(calls).toContainEqual(expect.objectContaining({
@@ -802,6 +805,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         scope: { building_object_id: 'building-1' },
       },
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     const target = generated.rows.find((row) => (
@@ -1047,6 +1051,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         },
       },
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     const rowsByStableCode = new Map<string, typeof generated.rows>()
@@ -1456,6 +1461,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         },
       },
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
       runtimeConsumerObservedAt: '2026-06-15T12:00:00.000Z',
       runtimeArtifactPublications: [],
     })
@@ -2209,6 +2215,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
       detailLevel: 'overview',
       diagnosticDurationSuggestionMode: 'full',
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
       runtimeArtifactPublications: [],
       operation: {
         type: 'template_generate',

@@ -159,6 +159,96 @@ describe('durationLearningAssetAutomationPolicyService', () => {
     expect(regressed.reasonCodes).toContain('mae_regression_detected')
   })
 
+  it('evaluates structural replay quality without requiring fabricated numeric MAE', () => {
+    const result = evaluateDurationLearningAssetAutomationPolicy({
+      experienceTier: 'T3',
+      reuseScope: 'project',
+      factSource: 'hybrid',
+      targetStage: 'canary',
+      qualityModel: 'structural_replay',
+      evidence: projectEvidence({
+        maeBefore: null,
+        maeAfter: null,
+        overcompensationRate: null,
+        replayPassRate: 0.98,
+        outcomeAcceptanceRate: 0.97,
+        qualityConsistencyRate: 1,
+      }),
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      qualityModel: 'structural_replay',
+      stage: 'auto_canary',
+      autoPromotionAllowed: true,
+      reasonCodes: [],
+    }))
+    expect(result.reasonCodes).not.toContain('mae_evidence_required')
+    expect(result.reasonCodes).not.toContain('overcompensation_evidence_required')
+  })
+
+  it('keeps replay-only numeric quality at canary until real post-publication accuracy exists', () => {
+    const canary = evaluateDurationLearningAssetAutomationPolicy({
+      experienceTier: 'T2',
+      reuseScope: 'project',
+      factSource: 'replay',
+      targetStage: 'canary',
+      qualityModel: 'numeric_replay',
+      evidence: projectEvidence({
+        realOutcomeCount: 0,
+        observationWindowDays: 0,
+        maeBefore: null,
+        maeAfter: null,
+        overcompensationRate: null,
+        replayPassRate: 0.98,
+        outcomeAcceptanceRate: 0.97,
+        qualityConsistencyRate: 1,
+      }),
+    })
+    const stable = evaluateDurationLearningAssetAutomationPolicy({
+      experienceTier: 'T2',
+      reuseScope: 'project',
+      factSource: 'replay',
+      targetStage: 'stable',
+      qualityModel: 'numeric_replay',
+      evidence: projectEvidence({
+        maeBefore: null,
+        maeAfter: null,
+        overcompensationRate: null,
+        replayPassRate: 0.98,
+        outcomeAcceptanceRate: 0.97,
+        qualityConsistencyRate: 1,
+      }),
+    })
+
+    expect(canary).toEqual(expect.objectContaining({
+      stage: 'auto_canary',
+      autoPromotionAllowed: true,
+      reasonCodes: [],
+    }))
+    expect(stable).toEqual(expect.objectContaining({
+      autoPromotionAllowed: false,
+      retainPreviousStable: true,
+    }))
+    expect(stable.reasonCodes).toEqual(expect.arrayContaining([
+      'actual_outcome_required_for_stable',
+      'mae_evidence_required',
+    ]))
+  })
+
+  it('requires real holdout coverage for numeric holdout promotion', () => {
+    const result = evaluateDurationLearningAssetAutomationPolicy({
+      experienceTier: 'T2',
+      reuseScope: 'project',
+      factSource: 'actual_outcome',
+      targetStage: 'canary',
+      qualityModel: 'numeric_holdout',
+      evidence: projectEvidence({ holdoutSampleCount: 0 }),
+    })
+
+    expect(result.stage).toBe('collecting')
+    expect(result.reasonCodes).toContain('holdout_sample_count_below_project_canary_floor')
+  })
+
   it('sends only exceptional conditions to human review', () => {
     const structural = evaluateDurationLearningAssetAutomationPolicy({
       experienceTier: 'T2',

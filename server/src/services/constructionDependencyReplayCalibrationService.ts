@@ -7,7 +7,7 @@ import {
   V1475_EXPLICIT_BUSINESS_GATE_SOURCE_ID,
   V1475_EXPLICIT_BUSINESS_GATE_TEMPLATES,
 } from '../seeds/v1475DependencyIntentTemplates.js'
-import { delayDayDelta } from '../utils/durationDays.js'
+import { delayDayDelta, inclusiveDurationDays } from '../utils/durationDays.js'
 import { logger } from '../middleware/logger.js'
 import type { ConstructionCalendarContext } from './constructionCalendar.js'
 import { createAndPersistAlgorithmAssetCandidateEvent } from './algorithmAssetCandidateEventAdapterService.js'
@@ -128,6 +128,11 @@ export interface ConstructionDependencyReplayQueueItem {
   sampleDependencyIds: string[]
   inputTaskIds?: string[]
   projectIds: string[]
+  replayPassCount?: number
+  qualityConsistentCount?: number
+  observationStartedAt?: string | null
+  observationEndedAt?: string | null
+  observationWindowDays?: number
 }
 
 export interface ConstructionDependencyReplayCalibrationReport {
@@ -642,6 +647,18 @@ function groupQueueItems(
     const medianObservedWaitDays = median(observedWaits)
     const conflictCount = groupItems.filter((item) => item.replayStatus === 'actual_order_conflict').length
     const status = buildStatus(groupItems)
+    const observationDates = groupItems.flatMap((item) => [
+      item.predecessor.actualEndDate,
+      item.successor.actualStartDate,
+    ])
+      .map((value) => {
+        const parsed = new Date(normalizeText(value))
+        return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null
+      })
+      .filter((value): value is string => Boolean(value))
+      .sort()
+    const observationStartedAt = observationDates[0] ?? null
+    const observationEndedAt = observationDates[observationDates.length - 1] ?? null
 
     return {
       matchedLayer: first.matchedLayer as Exclude<ConstructionDependencyReplayLayer, 'unmatched'>,
@@ -668,6 +685,20 @@ function groupQueueItems(
         item.successor.taskId ?? '',
       ])).sort(),
       projectIds: Array.from(new Set(groupItems.map((item) => item.projectId).filter(Boolean))).slice(0, 20),
+      replayPassCount: groupItems.filter((item) => (
+        item.observedWaitDays != null && item.replayStatus !== 'actual_order_conflict'
+      )).length,
+      qualityConsistentCount: groupItems.filter((item) => Boolean(
+        item.predecessor.taskId
+          && item.successor.taskId
+          && item.predecessor.taskCode
+          && item.successor.taskCode,
+      )).length,
+      observationStartedAt,
+      observationEndedAt,
+      observationWindowDays: observationStartedAt && observationEndedAt
+        ? inclusiveDurationDays(observationStartedAt, observationEndedAt) ?? 0
+        : 0,
     }
   }).sort((left, right) => {
     if (right.sampleCount !== left.sampleCount) return right.sampleCount - left.sampleCount
@@ -725,6 +756,18 @@ function buildDependencyRuleGapCandidates(items: ConstructionDependencyReplayIte
     const observedWaits = groupItems
       .map((item) => item.observedWaitDays)
       .filter((value): value is number => value != null)
+    const observationDates = groupItems.flatMap((item) => [
+      item.predecessor.actualEndDate,
+      item.successor.actualStartDate,
+    ])
+      .map((value) => {
+        const parsed = new Date(normalizeText(value))
+        return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null
+      })
+      .filter((value): value is string => Boolean(value))
+      .sort()
+    const observationStartedAt = observationDates[0] ?? null
+    const observationEndedAt = observationDates[observationDates.length - 1] ?? null
     return {
       matchedLayer: 'unmatched' as const,
       matchedSeedCode: candidateKey,
@@ -750,6 +793,18 @@ function buildDependencyRuleGapCandidates(items: ConstructionDependencyReplayIte
         item.successor.taskId ?? '',
       ])).sort(),
       projectIds: Array.from(new Set(groupItems.map((item) => item.projectId).filter(Boolean))).slice(0, 20),
+      replayPassCount: groupItems.filter((item) => item.observedWaitDays != null).length,
+      qualityConsistentCount: groupItems.filter((item) => Boolean(
+        item.predecessor.taskId
+          && item.successor.taskId
+          && item.predecessor.taskCode
+          && item.successor.taskCode,
+      )).length,
+      observationStartedAt,
+      observationEndedAt,
+      observationWindowDays: observationStartedAt && observationEndedAt
+        ? inclusiveDurationDays(observationStartedAt, observationEndedAt) ?? 0
+        : 0,
     }
   }).sort((left, right) => (
     right.sampleCount - left.sampleCount
@@ -1018,6 +1073,16 @@ async function recordDependencyRulePlanNetworkOutcomes(
     if (!outcomeStatus) continue
 
     const projectId = scopedProjectId(queueItem.projectIds)
+    const replayPassRate = queueItem.sampleCount > 0
+      ? Number(((queueItem.replayPassCount ?? 0) / queueItem.sampleCount).toFixed(6))
+      : null
+    const outcomeAcceptanceRate = outcomeStatus === 'accepted' ? 1 : 0
+    const qualityConsistencyRate = queueItem.sampleCount > 0
+      ? Number(((queueItem.qualityConsistentCount ?? 0) / queueItem.sampleCount).toFixed(6))
+      : null
+    const conflictRate = queueItem.sampleCount > 0
+      ? Number((queueItem.conflictCount / queueItem.sampleCount).toFixed(6))
+      : null
     const metadata = {
       source: 'construction_dependency_replay_calibration',
       report_code: report.reportCode,
@@ -1046,6 +1111,22 @@ async function recordDependencyRulePlanNetworkOutcomes(
       runtime_publication_input_task_ids: queueItem.inputTaskIds ?? [],
       runtime_publication_stage: queueItem.runtimePublicationStage ?? null,
       runtime_publication_selection_basis: queueItem.runtimePublicationSelectionBasis ?? null,
+      source_evidence_refs: queueItem.sampleDependencyIds.map((dependencyId) => (
+        `task_dependencies:${dependencyId}:replay`
+      )),
+      task_ids: queueItem.inputTaskIds ?? [],
+      real_outcome_count: queueItem.replayPassCount ?? 0,
+      replay_case_count: queueItem.sampleCount,
+      observation_started_at: queueItem.observationStartedAt ?? null,
+      observation_ended_at: queueItem.observationEndedAt ?? null,
+      observation_window_days: queueItem.observationWindowDays ?? 0,
+      quality_model: 'structural_replay',
+      replay_pass_rate: replayPassRate,
+      outcome_acceptance_rate: outcomeAcceptanceRate,
+      quality_consistency_rate: qualityConsistencyRate,
+      conflict_rate: conflictRate,
+      rollback_ready: true,
+      tenant_scope_valid: Boolean(companyId && projectId),
       writes_runtime_directly: false,
       writes_fact_directly: false,
     }

@@ -612,6 +612,25 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
           : 'cold_start_unpublished'
     const generationBatchId = normalizeString(input.generationBatchId)
     const outcomeId = buildWbsTemplateCandidateOutcomeId(input)
+    const replayPassRate = counts.generatedRowCount > 0
+      ? roundRatio(counts.retainedRowCount / counts.generatedRowCount)
+      : null
+    const resolvedRowCount = counts.retainedRowCount + counts.rejectedRowCount
+    const outcomeAcceptanceRate = resolvedRowCount > 0
+      ? roundRatio(counts.retainedRowCount / resolvedRowCount)
+      : null
+    const qualityConsistencyRate = durationCandidateNodes.length > 0
+      ? roundRatio(durationCandidateNodes.filter((node) => (
+        node.p50Days > 0 && (node.p80Days == null || node.p80Days >= node.p50Days)
+      )).length / durationCandidateNodes.length)
+      : null
+    const conflictRate = counts.generatedRowCount > 0
+      ? roundRatio(counts.rejectedRowCount / counts.generatedRowCount)
+      : null
+    const sourceEvidenceRefs = uniqueValues([
+      generationBatchId ? `wbs_template_candidate_events:${generationBatchId}` : `wbs_template_candidate_events:${outcomeId}`,
+      ...generatedEntityIds.map((taskId) => `tasks:${taskId}:materialized`),
+    ])
     const { error } = await table.upsert({
       id: outcomeId,
       asset_key: SPECIAL_WORK_DURATION_SEED_ASSET_KEY,
@@ -642,6 +661,18 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
         runtime_publication_input_task_ids: runtimePublicationKey
           ? uniqueValues(generatedEntityIds)
           : [],
+        source_evidence_refs: sourceEvidenceRefs,
+        task_ids: uniqueValues(generatedEntityIds),
+        real_outcome_count: 0,
+        replay_case_count: counts.generatedRowCount,
+        observation_window_days: 0,
+        quality_model: 'numeric_replay',
+        replay_pass_rate: replayPassRate,
+        outcome_acceptance_rate: outcomeAcceptanceRate,
+        quality_consistency_rate: qualityConsistencyRate,
+        conflict_rate: conflictRate,
+        rollback_ready: true,
+        tenant_scope_valid: Boolean(normalizeString(input.companyId) && normalizeString(input.projectId)),
         generated_row_count: counts.generatedRowCount,
         retained_row_count: counts.retainedRowCount,
         rejected_row_count: counts.rejectedRowCount,

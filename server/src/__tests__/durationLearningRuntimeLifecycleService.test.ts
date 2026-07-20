@@ -39,6 +39,7 @@ function benchmarkProposal(input: {
     industryKeys: [input.industryKey],
     conflictCount: 0,
     replayPassed: true,
+    qualityModel: 'numeric_holdout',
     policyEvaluationRequired: true,
     automationDecision: {
       stage: 'auto_canary',
@@ -328,6 +329,249 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(new Set(scopeLimits.map((limits) => limits.join(':')))).toEqual(new Set(['40:150:250']))
     expect(batch.candidates.length).toBeLessThanOrEqual(budgets.candidateProposalsTotal)
     expect(expanded.length).toBeLessThanOrEqual(budgets.expandedProposalsTotal)
+  })
+
+  it('maps each real six-family producer evidence model into a reachable project canary decision', async () => {
+    const taskIds = Array.from({ length: 20 }, (_, index) => `task-${index + 1}`)
+    const numericHoldoutEvidence = {
+      task_ids: taskIds,
+      source_evidence_refs: taskIds.map((taskId) => `tasks:${taskId}:actual_duration`),
+      real_outcome_count: 20,
+      replay_case_count: 20,
+      observation_window_days: 90,
+      quality_model: 'numeric_holdout',
+      holdout_sample_count: 20,
+      mae_before: 8,
+      mae_after: 6,
+      conflict_rate: 0,
+      overcompensation_rate: 0,
+      rollback_ready: true,
+      tenant_scope_valid: true,
+    }
+    const structuralReplayEvidence = {
+      task_ids: taskIds,
+      source_evidence_refs: taskIds.map((taskId) => `tasks:${taskId}:replay`),
+      real_outcome_count: 20,
+      replay_case_count: 20,
+      observation_window_days: 90,
+      quality_model: 'structural_replay',
+      replay_pass_rate: 1,
+      outcome_acceptance_rate: 1,
+      quality_consistency_rate: 1,
+      conflict_rate: 0,
+      rollback_ready: true,
+      tenant_scope_valid: true,
+    }
+    const common = {
+      collector_scope_target: 'project',
+      collector_scope_page_rank: 1,
+      collector_scope_wrapped: false,
+      company_id: 'company-1',
+      project_id: 'project-1',
+      source_company_id: 'company-1',
+      project_company_id: 'company-1',
+      business_type: 'general_civil',
+    }
+    const rowsByStream = new Map<string, Record<string, unknown>>([
+      ['benchmark:base_duration_benchmark', {
+        ...common,
+        id: 'benchmark-1',
+        collector_group_key: 'benchmark-artifact',
+        benchmark_key: 'benchmark-artifact',
+        sample_count: 20,
+        p50_days: 8,
+        p80_days: 11,
+        duration_day_basis: 'construction_production_day',
+        metadata: numericHoldoutEvidence,
+      }],
+      ['seed:standard_work_duration_seed', {
+        ...common,
+        id: 'standard-seed-1',
+        collector_group_key: 'SW-STANDARD',
+        seed_type: 'standard_work_duration',
+        stable_code: 'SW-STANDARD',
+        sample_count: 20,
+        candidate_payload: {
+          p50Days: 8,
+          p80Days: 11,
+          durationDayBasis: 'construction_production_day',
+        },
+        evidence_summary: {
+          taskIds,
+          sourceEvidenceRefs: taskIds.map((taskId) => `tasks:${taskId}:actual_duration`),
+          realOutcomeCount: 20,
+          replayCaseCount: 20,
+          observationWindowDays: 90,
+          qualityModel: 'numeric_holdout',
+          holdoutSampleCount: 20,
+          maeBefore: 8,
+          maeAfter: 6,
+          conflictRate: 0,
+          overcompensationRate: 0,
+          rollbackReady: true,
+          tenantScopeValid: true,
+        },
+      }],
+      ['network:special_work_duration_seed', {
+        ...common,
+        id: 'special-seed-1',
+        collector_group_key: 'template-special',
+        asset_key: 'special_work_duration_seed',
+        outcome_status: 'accepted',
+        learning_scope: 'project',
+        metadata: {
+          template_id: 'template-special',
+          duration_candidate_nodes: [{ sourceId: 'special-node', p50Days: 8, p80Days: 11 }],
+          duration_day_unit: 'construction_production_day',
+          sample_count: 20,
+          task_ids: taskIds,
+          source_evidence_refs: taskIds.map((taskId) => `tasks:${taskId}:materialized`),
+          real_outcome_count: 0,
+          replay_case_count: 20,
+          observation_window_days: 0,
+          quality_model: 'numeric_replay',
+          replay_pass_rate: 1,
+          outcome_acceptance_rate: 1,
+          quality_consistency_rate: 1,
+          conflict_rate: 0,
+          rollback_ready: true,
+          tenant_scope_valid: true,
+        },
+      }],
+      ['network:wbs_reference_days', {
+        ...common,
+        id: 'wbs-reference-1',
+        collector_group_key: 'template-wbs',
+        asset_key: 'wbs_reference_days',
+        outcome_status: 'accepted',
+        learning_scope: 'project',
+        metadata: {
+          ...numericHoldoutEvidence,
+          template_id: 'template-wbs',
+          nodes: [{ sourceId: 'wbs-node', suggestedReferenceDays: 8 }],
+          day_count_basis: 'construction_production_day',
+          production_day_conversion_applied: true,
+          sample_task_count: 20,
+          source_task_ids: taskIds,
+        },
+      }],
+      ['network:dependency_rule_candidate', {
+        ...common,
+        id: 'dependency-1',
+        collector_group_key: 'SW-A->SW-B:FS',
+        asset_key: 'dependency_rule_candidate',
+        outcome_status: 'accepted',
+        learning_scope: 'project',
+        metadata: {
+          ...structuralReplayEvidence,
+          predecessor_stable_code: 'SW-A',
+          successor_stable_code: 'SW-B',
+          dependency_type: 'FS',
+          suggested_lag_days: 0,
+          duration_day_unit: 'construction_production_day',
+          construction_calendar: 'official_construction_calendar',
+          sample_count: 20,
+          sample_dependency_ids: taskIds,
+        },
+      }],
+      ['network:critical_path_rule_candidate', {
+        ...common,
+        id: 'critical-path-1',
+        collector_group_key: 'critical-path-artifact',
+        asset_key: 'critical_path_rule_candidate',
+        outcome_status: 'accepted',
+        learning_scope: 'project',
+        metadata: {
+          ...structuralReplayEvidence,
+          auto_task_stable_codes: ['SW-A', 'SW-B'],
+          primary_chain_stable_codes: ['SW-A', 'SW-B'],
+          critical_task_count: 20,
+          sample_count: 20,
+        },
+      }],
+    ])
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      const marker = sql.match(/duration-learning-collector:(discover|history|scope-buckets|scope-batches):([^*\s]+)/)
+      if (!marker) return [] as T[]
+      const [, operation, streamKey] = marker
+      const row = rowsByStream.get(streamKey)
+      if (!row || operation === 'scope-buckets' || operation === 'scope-batches') return [] as T[]
+      if (operation === 'discover') {
+        return [{ collector_group_key: row.collector_group_key }] as T[]
+      }
+      return [row] as T[]
+    }
+
+    const proposals = await collectDurationLearningRuntimeCandidateProposals(queryExec)
+    const projectProposals = proposals.filter((proposal) => proposal.scope.level === 'project')
+
+    expect(projectProposals).toHaveLength(6)
+    expect(Object.fromEntries(projectProposals.map((proposal) => [
+      proposal.assetKey,
+      {
+        qualityModel: proposal.qualityModel,
+        stage: proposal.automationDecision?.stage,
+        allowed: proposal.automationDecision?.autoPromotionAllowed,
+        reasons: proposal.automationDecision?.reasonCodes,
+      },
+    ]))).toEqual({
+      base_duration_benchmark: { qualityModel: 'numeric_holdout', stage: 'auto_canary', allowed: true, reasons: [] },
+      standard_work_duration_seed: { qualityModel: 'numeric_holdout', stage: 'auto_canary', allowed: true, reasons: [] },
+      special_work_duration_seed: { qualityModel: 'numeric_replay', stage: 'auto_canary', allowed: true, reasons: [] },
+      wbs_reference_days: { qualityModel: 'numeric_holdout', stage: 'auto_canary', allowed: true, reasons: [] },
+      dependency_rule_candidate: { qualityModel: 'structural_replay', stage: 'auto_canary', allowed: true, reasons: [] },
+      critical_path_rule_candidate: { qualityModel: 'structural_replay', stage: 'auto_canary', allowed: true, reasons: [] },
+    })
+  })
+
+  it('keeps producer rows collecting when the explicit quality model is absent', async () => {
+    const taskIds = Array.from({ length: 20 }, (_, index) => `task-${index + 1}`)
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      const marker = sql.match(/duration-learning-collector:(discover|history|scope-buckets|scope-batches):([^*\s]+)/)
+      if (!marker || marker[2] !== 'benchmark:base_duration_benchmark') return [] as T[]
+      if (marker[1] === 'discover') return [{ collector_group_key: 'benchmark-without-model' }] as T[]
+      if (marker[1] !== 'history') return [] as T[]
+      return [{
+        id: 'benchmark-without-model',
+        collector_group_key: 'benchmark-without-model',
+        benchmark_key: 'benchmark-without-model',
+        collector_scope_target: 'project',
+        company_id: 'company-1',
+        project_id: 'project-1',
+        source_company_id: 'company-1',
+        project_company_id: 'company-1',
+        business_type: 'general_civil',
+        sample_count: 20,
+        p50_days: 8,
+        p80_days: 11,
+        duration_day_basis: 'construction_production_day',
+        metadata: {
+          task_ids: taskIds,
+          real_outcome_count: 20,
+          replay_case_count: 20,
+          observation_window_days: 90,
+          holdout_sample_count: 20,
+          mae_before: 8,
+          mae_after: 6,
+          conflict_rate: 0,
+          overcompensation_rate: 0,
+          rollback_ready: true,
+          tenant_scope_valid: true,
+        },
+      }] as T[]
+    }
+
+    const proposals = await collectDurationLearningRuntimeCandidateProposals(queryExec)
+
+    expect(proposals).toHaveLength(1)
+    expect(proposals[0]).toEqual(expect.objectContaining({
+      qualityModel: null,
+      blockingReasons: expect.arrayContaining(['duration_learning_quality_model_required']),
+      automationDecision: expect.objectContaining({
+        stage: 'collecting',
+        autoPromotionAllowed: false,
+      }),
+    }))
   })
 
   it('uses independent project/company/industry/global scope buckets so 20x40 evidence is both globally diverse and company-complete across restarts', async () => {
@@ -665,8 +909,12 @@ describe('durationLearningRuntimeLifecycleService', () => {
     const active = [{
       publication_key: 'canary-new',
       asset_key: 'base_duration_benchmark',
+      artifact_key: 'SW-CONCRETE:process:all',
       publication_stage: 'canary',
       scope_level: 'project',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      industry_key: null,
       monitoring_window_hours: 72,
       monitoring_elapsed_hours: 80,
       observed_count: 10,
@@ -773,11 +1021,31 @@ describe('durationLearningRuntimeLifecycleService', () => {
     let capturedSql = ''
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
       capturedSql = sql
-      return [] as T[]
+      return [{
+        publication_key: 'duration-learning:benchmark:canary-1',
+        asset_key: 'base_duration_benchmark',
+        artifact_key: 'SW-CONCRETE:process:all',
+        publication_stage: 'canary',
+        scope_level: 'project',
+        company_id: 'company-1',
+        project_id: 'project-1',
+        industry_key: null,
+        monitoring_window_hours: 72,
+      }] as T[]
     }
 
-    await collectDurationLearningRuntimeMonitoringCandidates(queryExec)
+    const candidates = await collectDurationLearningRuntimeMonitoringCandidates(queryExec)
 
+    expect(candidates).toEqual([expect.objectContaining({
+      publicationKey: 'duration-learning:benchmark:canary-1',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'SW-CONCRETE:process:all',
+      scope: { level: 'project', companyId: 'company-1', projectId: 'project-1' },
+    })])
+    expect(capturedSql).toContain('publication.artifact_key')
+    expect(capturedSql).toContain('publication.company_id')
+    expect(capturedSql).toContain('publication.project_id')
+    expect(capturedSql).toContain('publication.industry_key')
     expect(capturedSql).toContain("source.prediction_context ->> 'runtimePublicationKey'")
     expect(capturedSql).toContain("source.prediction_context ->> 'runtime_publication_key'")
     expect(capturedSql).toContain("source.prediction_context ->> 'publicationKey'")
@@ -1029,6 +1297,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       proposal.observationWindowDays = 90
       proposal.policyEvaluationRequired = true
       proposal.automationEvidence = {
+        holdoutSampleCount: 5,
         maeBefore: 8,
         maeAfter: 6,
         conflictRate: 0,
@@ -1253,6 +1522,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
           reference_day_basis: 'wbs_template_reference_days',
           production_day_conversion_applied: true,
           sample_task_count: 30,
+          quality_model: 'numeric_holdout',
           nodes: [{ sourceId: 'node-1', suggestedReferenceDays: 8 }],
         },
       }] as T[]
@@ -1503,6 +1773,8 @@ describe('durationLearningRuntimeLifecycleService', () => {
             real_outcome_count: 110,
             replay_case_count: 220,
             observation_window_days: 60,
+            quality_model: 'numeric_holdout',
+            holdout_sample_count: 120,
             mae_before: 8,
             mae_after: 6,
             conflict_rate: 0,
@@ -1613,15 +1885,16 @@ describe('durationLearningRuntimeLifecycleService', () => {
       monitoringProvider: async () => [{
         publicationKey: 'duration_learning_runtime:base_duration_benchmark:canary-1',
         assetKey: 'base_duration_benchmark',
+        artifactKey: 'SW-CONCRETE:process:all',
         publicationStage: 'canary',
-        scopeLevel: 'company',
+        scope: { level: 'company', companyId: 'company-1' },
         monitoringWindowHours: 72,
         monitoringElapsedHours: 80,
-        observedCount: 12,
+        observedCount: 20,
         rejectedObservationCount: 0,
         acceptedOutcomeCount: 0,
         weakOrRejectedOutcomeCount: 0,
-        accuracySampleCount: 8,
+        accuracySampleCount: 20,
         maeBefore: 8,
         maeAfter: 6,
         regressionRate: 0,
@@ -1652,10 +1925,105 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(result.stablePromoted).toBe(1)
     expect(recordImpact).toHaveBeenCalledWith(expect.objectContaining({
       monitoringStatus: 'passed',
-      metrics: expect.objectContaining({ accuracySampleCount: 8, maeBefore: 8, maeAfter: 6 }),
+      metrics: expect.objectContaining({ accuracySampleCount: 20, maeBefore: 8, maeAfter: 6 }),
     }))
     expect(promoteCanary).toHaveBeenCalledOnce()
     expect(rollbackPublication).not.toHaveBeenCalled()
+  })
+
+  it('promotes structural replay and numeric replay canaries after real post-publication outcomes satisfy stable policy', async () => {
+    const recordImpact = vi.fn(async () => ({ status: 'impact_recorded', reasons: [] }))
+    const promoteCanary = vi.fn(async () => ({
+      status: 'stable_promoted',
+      previousPublicationKey: 'stable-0',
+      reasons: [],
+    }))
+
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => [],
+      monitoringProvider: async () => [{
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:canary-1',
+        assetKey: 'dependency_rule_candidate',
+        artifactKey: 'A->B:FS',
+        publicationStage: 'canary',
+        scope: { level: 'company', companyId: 'company-1' },
+        monitoringWindowHours: 168,
+        monitoringElapsedHours: 24 * 90,
+        observedCount: 0,
+        rejectedObservationCount: 0,
+        acceptedOutcomeCount: 100,
+        weakOrRejectedOutcomeCount: 0,
+        accuracySampleCount: 0,
+        maeBefore: null,
+        maeAfter: null,
+        regressionRate: 0,
+        sourceAutomationDecision: {
+          experienceTier: 'T3',
+          factSource: 'hybrid',
+          qualityModel: 'structural_replay',
+          observed: {
+            validChangeCount: 500,
+            distinctTaskCount: 300,
+            distinctProjectCount: 100,
+            distinctCompanyCount: 1,
+            realOutcomeCount: 300,
+            replayCaseCount: 500,
+            observationWindowDays: 120,
+            replayPassRate: 1,
+            outcomeAcceptanceRate: 1,
+            qualityConsistencyRate: 1,
+            conflictRate: 0,
+            rollbackReady: true,
+            tenantScopeValid: true,
+          },
+        },
+      }, {
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:canary-1',
+        assetKey: 'special_work_duration_seed',
+        artifactKey: 'template-a',
+        publicationStage: 'canary',
+        scope: { level: 'company', companyId: 'company-1' },
+        monitoringWindowHours: 72,
+        monitoringElapsedHours: 24 * 90,
+        observedCount: 100,
+        rejectedObservationCount: 0,
+        acceptedOutcomeCount: 0,
+        weakOrRejectedOutcomeCount: 0,
+        accuracySampleCount: 100,
+        maeBefore: 8,
+        maeAfter: 6,
+        regressionRate: 0,
+        sourceAutomationDecision: {
+          experienceTier: 'T2',
+          factSource: 'replay',
+          qualityModel: 'numeric_replay',
+          observed: {
+            validChangeCount: 500,
+            distinctTaskCount: 300,
+            distinctProjectCount: 100,
+            distinctCompanyCount: 1,
+            realOutcomeCount: 0,
+            replayCaseCount: 500,
+            observationWindowDays: 0,
+            replayPassRate: 1,
+            outcomeAcceptanceRate: 1,
+            qualityConsistencyRate: 1,
+            conflictRate: 0,
+            overcompensationRate: 0,
+            rollbackReady: true,
+            tenantScopeValid: true,
+          },
+        },
+      }],
+      recordImpact: recordImpact as any,
+      promoteCanary: promoteCanary as any,
+      observedAt: '2026-07-20T00:00:00.000Z',
+    })
+
+    expect(result.failed).toBe(0)
+    expect(result.monitoringPassed).toBe(2)
+    expect(result.stablePromoted).toBe(2)
+    expect(promoteCanary).toHaveBeenCalledTimes(2)
   })
 
   it('treats a terminal promotion replay as idempotent after an ambiguous first-attempt failure', async () => {
@@ -1675,15 +2043,16 @@ describe('durationLearningRuntimeLifecycleService', () => {
     const monitoringCandidate = {
       publicationKey: 'duration_learning_runtime:base_duration_benchmark:ambiguous-promotion',
       assetKey: 'base_duration_benchmark' as const,
+      artifactKey: 'SW-CONCRETE:process:all',
       publicationStage: 'canary' as const,
-      scopeLevel: 'company' as const,
+      scope: { level: 'company' as const, companyId: 'company-1' },
       monitoringWindowHours: 72,
       monitoringElapsedHours: 80,
-      observedCount: 12,
+      observedCount: 20,
       rejectedObservationCount: 0,
       acceptedOutcomeCount: 0,
       weakOrRejectedOutcomeCount: 0,
-      accuracySampleCount: 8,
+      accuracySampleCount: 20,
       maeBefore: 8,
       maeAfter: 6,
       regressionRate: 0,
@@ -1734,8 +2103,9 @@ describe('durationLearningRuntimeLifecycleService', () => {
       monitoringProvider: async () => [{
         publicationKey: 'duration_learning_runtime:base_duration_benchmark:underpowered-1',
         assetKey: 'base_duration_benchmark',
+        artifactKey: 'SW-CONCRETE:process:all',
         publicationStage: 'canary',
-        scopeLevel: 'company',
+        scope: { level: 'company', companyId: 'company-1' },
         monitoringWindowHours: 72,
         monitoringElapsedHours: 80,
         observedCount: 12,
@@ -1814,8 +2184,9 @@ describe('durationLearningRuntimeLifecycleService', () => {
       monitoringProvider: async () => [{
         publicationKey: 'duration_learning_runtime:base_duration_benchmark:bad-1',
         assetKey: 'base_duration_benchmark',
+        artifactKey: 'SW-CONCRETE:process:all',
         publicationStage: 'stable',
-        scopeLevel: 'company',
+        scope: { level: 'company', companyId: 'company-1' },
         monitoringWindowHours: 72,
         monitoringElapsedHours: 90,
         observedCount: 10,
@@ -1839,6 +2210,9 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(persistPublication).not.toHaveBeenCalled()
     expect(rollbackPublication).toHaveBeenCalledWith(expect.objectContaining({
       publicationKey: 'duration_learning_runtime:base_duration_benchmark:bad-1',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'SW-CONCRETE:process:all',
+      scope: { level: 'company', companyId: 'company-1' },
       reason: expect.stringContaining('regression'),
     }))
   })
@@ -1860,8 +2234,9 @@ describe('durationLearningRuntimeLifecycleService', () => {
     const monitoringCandidate = {
       publicationKey: 'duration_learning_runtime:base_duration_benchmark:ambiguous-rollback',
       assetKey: 'base_duration_benchmark' as const,
+      artifactKey: 'SW-CONCRETE:process:all',
       publicationStage: 'stable' as const,
-      scopeLevel: 'company' as const,
+      scope: { level: 'company' as const, companyId: 'company-1' },
       monitoringWindowHours: 72,
       monitoringElapsedHours: 90,
       observedCount: 10,
@@ -1892,5 +2267,10 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(retry.rollbackExecuted).toBe(0)
     expect(retry.rollbackReused).toBe(1)
     expect(rollbackPublication).toHaveBeenCalledTimes(2)
+    expect(rollbackPublication).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'SW-CONCRETE:process:all',
+      scope: { level: 'company', companyId: 'company-1' },
+    }))
   })
 })

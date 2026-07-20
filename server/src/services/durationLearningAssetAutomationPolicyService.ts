@@ -2,6 +2,10 @@ export type DurationLearningExperienceTier = 'T1' | 'T2' | 'T3'
 export type DurationLearningReuseScope = 'project' | 'company' | 'industry' | 'global'
 export type DurationLearningFactSource = 'actual_outcome' | 'behavioral_change' | 'replay' | 'hybrid'
 export type DurationLearningAutomationTargetStage = 'canary' | 'stable'
+export type DurationLearningAutomationQualityModel =
+  | 'numeric_holdout'
+  | 'numeric_replay'
+  | 'structural_replay'
 
 export type DurationLearningAutomationStage =
   | 'collecting'
@@ -34,10 +38,14 @@ export interface DurationLearningAutomationEvidence {
   realOutcomeCount?: number | null
   replayCaseCount?: number | null
   observationWindowDays?: number | null
+  holdoutSampleCount?: number | null
   maeBefore?: number | null
   maeAfter?: number | null
   conflictRate?: number | null
   overcompensationRate?: number | null
+  replayPassRate?: number | null
+  outcomeAcceptanceRate?: number | null
+  qualityConsistencyRate?: number | null
   rollbackReady?: boolean | null
   tenantScopeValid?: boolean | null
   structuralMutation?: boolean | null
@@ -50,6 +58,7 @@ export interface EvaluateDurationLearningAssetAutomationPolicyInput {
   reuseScope: DurationLearningReuseScope
   factSource: DurationLearningFactSource
   targetStage: DurationLearningAutomationTargetStage
+  qualityModel?: DurationLearningAutomationQualityModel
   evidence: DurationLearningAutomationEvidence
   thresholdOverrides?: Partial<DurationLearningAutomationThresholds> | null
 }
@@ -62,10 +71,14 @@ export interface DurationLearningAutomationObservedEvidence {
   realOutcomeCount: number
   replayCaseCount: number
   observationWindowDays: number
+  holdoutSampleCount: number
   maeBefore: number | null
   maeAfter: number | null
   conflictRate: number | null
   overcompensationRate: number | null
+  replayPassRate: number | null
+  outcomeAcceptanceRate: number | null
+  qualityConsistencyRate: number | null
   rollbackReady: boolean | null
   tenantScopeValid: boolean | null
 }
@@ -76,6 +89,7 @@ export interface DurationLearningAssetAutomationPolicyDecision {
   reuseScope: DurationLearningReuseScope
   factSource: DurationLearningFactSource
   targetStage: DurationLearningAutomationTargetStage
+  qualityModel: DurationLearningAutomationQualityModel
   stage: DurationLearningAutomationStage
   autoPromotionAllowed: boolean
   manualReviewRequired: boolean
@@ -212,8 +226,14 @@ export function getDurationLearningAutomationHardFloors(): DurationLearningAutom
 }
 
 function finiteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+function boundedRate(value: unknown): number | null {
+  const parsed = finiteNumber(value)
+  return parsed == null ? null : Math.max(0, Math.min(1, parsed))
 }
 
 function nonNegativeInteger(value: unknown): number {
@@ -269,10 +289,14 @@ function buildObserved(evidence: DurationLearningAutomationEvidence): DurationLe
     realOutcomeCount: nonNegativeInteger(evidence.realOutcomeCount),
     replayCaseCount: nonNegativeInteger(evidence.replayCaseCount),
     observationWindowDays: nonNegativeInteger(evidence.observationWindowDays),
+    holdoutSampleCount: nonNegativeInteger(evidence.holdoutSampleCount),
     maeBefore: finiteNumber(evidence.maeBefore),
     maeAfter: finiteNumber(evidence.maeAfter),
-    conflictRate: finiteNumber(evidence.conflictRate),
-    overcompensationRate: finiteNumber(evidence.overcompensationRate),
+    conflictRate: boundedRate(evidence.conflictRate),
+    overcompensationRate: boundedRate(evidence.overcompensationRate),
+    replayPassRate: boundedRate(evidence.replayPassRate),
+    outcomeAcceptanceRate: boundedRate(evidence.outcomeAcceptanceRate),
+    qualityConsistencyRate: boundedRate(evidence.qualityConsistencyRate),
     rollbackReady: typeof evidence.rollbackReady === 'boolean' ? evidence.rollbackReady : null,
     tenantScopeValid: typeof evidence.tenantScopeValid === 'boolean' ? evidence.tenantScopeValid : null,
   }
@@ -285,6 +309,7 @@ function floorReason(metric: string, scope: DurationLearningReuseScope, stage: D
 export function evaluateDurationLearningAssetAutomationPolicy(
   input: EvaluateDurationLearningAssetAutomationPolicyInput,
 ): DurationLearningAssetAutomationPolicyDecision {
+  const qualityModel = input.qualityModel ?? 'numeric_holdout'
   const floor = HARD_FLOORS[input.reuseScope][input.targetStage]
   const thresholds = tightenThresholds(floor, input.thresholdOverrides)
   const observed = buildObserved(input.evidence)
@@ -304,36 +329,63 @@ export function evaluateDurationLearningAssetAutomationPolicy(
   if (observed.distinctCompanyCount < thresholds.minDistinctCompanies) {
     evidenceReasons.push(floorReason('distinct_company_count', input.reuseScope, input.targetStage))
   }
-  const behavioralCanary = input.factSource === 'behavioral_change' && input.targetStage === 'canary'
-  if (!behavioralCanary && observed.realOutcomeCount < thresholds.minRealOutcomes) {
+  const replayOnlyCanary = input.targetStage === 'canary'
+    && (input.factSource === 'behavioral_change' || qualityModel === 'numeric_replay')
+  if (!replayOnlyCanary && observed.realOutcomeCount < thresholds.minRealOutcomes) {
     evidenceReasons.push(floorReason('real_outcome_count', input.reuseScope, input.targetStage))
   }
   if (observed.replayCaseCount < thresholds.minReplayCases) {
     evidenceReasons.push(floorReason('replay_case_count', input.reuseScope, input.targetStage))
   }
-  if (observed.observationWindowDays < thresholds.minObservationDays) {
+  if (!replayOnlyCanary && observed.observationWindowDays < thresholds.minObservationDays) {
     evidenceReasons.push(floorReason('observation_window_days', input.reuseScope, input.targetStage))
   }
 
   if (input.targetStage === 'stable' && !['actual_outcome', 'hybrid'].includes(input.factSource)) {
     evidenceReasons.push('actual_outcome_required_for_stable')
   }
-  if (observed.maeBefore == null || observed.maeAfter == null) {
-    evidenceReasons.push('mae_evidence_required')
-  } else if (observed.maeAfter > observed.maeBefore) {
-    qualityBlockReasons.push('mae_regression_detected')
-  } else if (observed.maeAfter === observed.maeBefore) {
-    qualityBlockReasons.push('mae_strict_improvement_required')
+  const numericAccuracyRequired = qualityModel === 'numeric_holdout'
+    || (qualityModel === 'numeric_replay' && input.targetStage === 'stable')
+  if (numericAccuracyRequired) {
+    const minimumHoldoutSamples = Math.max(3, Math.ceil(thresholds.minRealOutcomes * 0.2))
+    if (input.qualityModel && observed.holdoutSampleCount < minimumHoldoutSamples) {
+      evidenceReasons.push(floorReason('holdout_sample_count', input.reuseScope, input.targetStage))
+    }
+    if (observed.maeBefore == null || observed.maeAfter == null) {
+      evidenceReasons.push('mae_evidence_required')
+    } else if (observed.maeAfter > observed.maeBefore) {
+      qualityBlockReasons.push('mae_regression_detected')
+    } else if (observed.maeAfter === observed.maeBefore) {
+      qualityBlockReasons.push('mae_strict_improvement_required')
+    }
+  } else {
+    if (observed.replayPassRate == null) {
+      evidenceReasons.push('replay_pass_rate_evidence_required')
+    } else if (observed.replayPassRate < 0.95) {
+      qualityBlockReasons.push('replay_pass_rate_below_limit')
+    }
+    if (observed.outcomeAcceptanceRate == null) {
+      evidenceReasons.push('outcome_acceptance_rate_evidence_required')
+    } else if (observed.outcomeAcceptanceRate < 0.95) {
+      qualityBlockReasons.push('outcome_acceptance_rate_below_limit')
+    }
+    if (observed.qualityConsistencyRate == null) {
+      evidenceReasons.push('quality_consistency_rate_evidence_required')
+    } else if (observed.qualityConsistencyRate < 0.95) {
+      qualityBlockReasons.push('quality_consistency_rate_below_limit')
+    }
   }
   if (observed.conflictRate == null) {
     evidenceReasons.push('conflict_rate_evidence_required')
   } else if (observed.conflictRate > thresholds.maxConflictRate) {
     qualityBlockReasons.push('conflict_rate_exceeds_limit')
   }
-  if (observed.overcompensationRate == null) {
-    evidenceReasons.push('overcompensation_evidence_required')
-  } else if (observed.overcompensationRate > thresholds.maxOvercompensationRate) {
-    qualityBlockReasons.push('overcompensation_rate_exceeds_limit')
+  if (numericAccuracyRequired) {
+    if (observed.overcompensationRate == null) {
+      evidenceReasons.push('overcompensation_evidence_required')
+    } else if (observed.overcompensationRate > thresholds.maxOvercompensationRate) {
+      qualityBlockReasons.push('overcompensation_rate_exceeds_limit')
+    }
   }
   if (observed.rollbackReady == null) {
     evidenceReasons.push('rollback_readiness_evidence_required')
@@ -376,10 +428,13 @@ export function evaluateDurationLearningAssetAutomationPolicy(
     reuseScope: input.reuseScope,
     factSource: input.factSource,
     targetStage: input.targetStage,
+    qualityModel,
     stage,
     autoPromotionAllowed: stage === 'auto_canary' || stage === 'auto_stable',
     manualReviewRequired: stage === 'exception_review',
-    retainPreviousStable: stage === 'exception_review' || stage === 'blocked_retain_previous',
+    retainPreviousStable: input.targetStage === 'stable' && stage !== 'auto_stable'
+      ? true
+      : stage === 'exception_review' || stage === 'blocked_retain_previous',
     reasonCodes,
     thresholds,
     observed,

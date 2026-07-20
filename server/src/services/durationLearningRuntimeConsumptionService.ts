@@ -316,7 +316,16 @@ export async function persistDurationLearningRuntimeConsumptions(input: {
            on publication.publication_key = requested.publication_key
           and publication.asset_key = requested.asset_key
           and publication.artifact_key = requested.artifact_key
-          and publication.publication_stage in ('canary', 'stable')
+           and (
+             (
+               publication.publication_stage = 'canary'
+               and publication.monitoring_status in ('pending', 'collecting', 'passed')
+             )
+             or (
+               publication.publication_stage = 'stable'
+               and publication.monitoring_status = 'passed'
+             )
+           )
         where requested.duration_day_basis = 'construction_production_day'
           and ((requested.task_id is not null)::integer + (requested.baseline_item_id is not null)::integer) = 1
           and (

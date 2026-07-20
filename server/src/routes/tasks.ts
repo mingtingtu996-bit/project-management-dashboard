@@ -2289,6 +2289,7 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
         const generated = await generateWbsTemplateRows({
           projectId,
           surface: 'task_list',
+          runtimeEvidenceMode: 'no_write',
           operation: generationOperation,
           runtimePublicationQueryExec: durationLearningRuntimeQueryExec,
           runtimeArtifactPublications,

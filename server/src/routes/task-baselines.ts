@@ -655,6 +655,7 @@ async function expandBaselineTemplateGenerateOperations(
     const generated = await generateWbsTemplateRows({
       projectId,
       surface: 'baseline',
+      runtimeEvidenceMode: 'no_write',
       operation,
       runtimePublicationQueryExec,
       runtimeArtifactPublications,
@@ -776,6 +777,22 @@ async function getBaselineItems(baselineId: string, projectId?: string | null): 
   const { data, error } = await query
   if (error) throw error
   return attachBaselineEngineeringCategoryInfo(((data ?? []) as unknown) as TaskBaselineItem[])
+}
+
+async function getBaselineItemsWithClient(
+  client: { query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> },
+  baselineId: string,
+  projectId: string,
+): Promise<TaskBaselineItem[]> {
+  const result = await client.query(
+    `SELECT ${BASELINE_ITEM_SELECT}
+       FROM public.task_baseline_items
+      WHERE baseline_version_id = $1
+        AND project_id = $2
+      ORDER BY sort_order ASC`,
+    [baselineId, projectId],
+  )
+  return attachBaselineEngineeringCategoryInfo(result.rows as TaskBaselineItem[])
 }
 
 async function attachBaselineEngineeringCategoryInfo(items: TaskBaselineItem[]): Promise<TaskBaselineItem[]> {
@@ -1709,7 +1726,6 @@ async function replaceBaselineDraftItems(
       [baselineId, projectId],
     )
     const persisted = await persistBaselineItems(baselineId, projectId, snapshotItems, client)
-    clearBaselineDetailCache(baselineId)
     return persisted
   }
 
@@ -2540,15 +2556,107 @@ router.post(
       return res.json(response)
     }
 
-    const currentItems = await getBaselineItems(id)
-    const { items: nextItems, tempIdMap } = applyBaselineCommitOperations(currentItems, operations)
-    const rows = await replaceBaselineDraftItems(id, baseline.project_id, nextItems)
     const updatedAt = new Date().toISOString()
-    await supabase
-      .from('task_baselines')
-      .update({ updated_at: updatedAt })
-      .eq('id', id)
-      .eq('project_id', baseline.project_id)
+    const companyId = expandedTemplateOperations.generationContexts.length > 0
+      ? await getProjectCompanyId(projectId)
+      : null
+    if (expandedTemplateOperations.generationContexts.length > 0 && !companyId) {
+      throw Object.assign(new Error('Baseline template generation requires project company scope for duration learning lineage.'), {
+        code: 'BASELINE_TEMPLATE_DURATION_LEARNING_COMPANY_SCOPE_REQUIRED',
+      })
+    }
+
+    let currentItems: TaskBaselineItem[] = []
+    let rows: TaskBaselineItem[] = []
+    let tempIdMap = new Map<string, string>()
+    const client = await getClient()
+    try {
+      await client.query('BEGIN')
+      const lockedBaseline = await client.query(
+        `SELECT *
+           FROM public.task_baselines
+          WHERE id = $1
+            AND project_id = $2
+            AND status IN ('draft', 'revising')
+          FOR UPDATE`,
+        [id, baseline.project_id],
+      )
+      if (lockedBaseline.rows.length !== 1) {
+        throw Object.assign(new Error('Baseline draft state changed before commit.'), {
+          statusCode: 409,
+          code: 'INVALID_STATE',
+        })
+      }
+
+      currentItems = await getBaselineItemsWithClient(client, id, baseline.project_id)
+      const applied = applyBaselineCommitOperations(currentItems, operations)
+      tempIdMap = applied.tempIdMap
+      rows = await replaceBaselineDraftItems(
+        id,
+        baseline.project_id,
+        applied.items,
+        client,
+        currentItems,
+      )
+      const baselineUpdate = await client.query(
+        `UPDATE public.task_baselines
+            SET updated_at = $3
+          WHERE id = $1
+            AND project_id = $2
+            AND status IN ('draft', 'revising')
+          RETURNING id`,
+        [id, baseline.project_id, updatedAt],
+      )
+      if (baselineUpdate.rows.length !== 1) {
+        throw Object.assign(new Error('Baseline draft state changed before commit.'), {
+          statusCode: 409,
+          code: 'INVALID_STATE',
+        })
+      }
+
+      const transactionDurationLearningRuntimeQueryExec: DurationLearningRuntimePublicationQueryExec = async <T = Record<string, unknown>>(
+        sql: string,
+        params: unknown[] = [],
+      ) => {
+        // database-query-dynamic-approved: canonical 315 trusted-consumption writers own fixed parameterized SQL; this adapter binds them to the baseline materialization transaction.
+        const result = await client.query(sql, params as any[])
+        return (result.rows ?? []) as T[]
+      }
+      for (const generationContext of expandedTemplateOperations.generationContexts) {
+        const generated = generationContext.generated
+        const runtimeArtifactPublications = generationContext.runtimeArtifactPublications
+        await recordWbsTemplateGenerationRuntimeConsumption({
+          queryExec: transactionDurationLearningRuntimeQueryExec,
+          projectId,
+          generation: generated,
+          runtimeArtifactPublications,
+          inputTaskIds: generated.rows
+            .map((row) => tempIdMap.get(row.clientRowId))
+            .filter((itemId): itemId is string => Boolean(itemId)),
+        })
+        await persistDurationLearningRuntimeConsumptions({
+          queryExec: transactionDurationLearningRuntimeQueryExec,
+          build: {
+            companyId: companyId!,
+            projectId,
+            consumerKey: 'wbsTemplateGenerationService',
+            consumerSurface: 'baseline_commit',
+            generationBatchId: generated.generationBatchId,
+            templateIds: generated.templateIds,
+            rows: generated.rows,
+            runtimeArtifactPublications,
+            subjectType: 'baseline_item',
+            subjectIdByClientRowId: tempIdMap,
+          },
+        })
+      }
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      throw error
+    } finally {
+      client.release()
+    }
     clearBaselineDetailCache(id)
 
     // eslint-disable-next-line -- route-level-aggregation-approved
@@ -2596,64 +2704,42 @@ router.post(
       const operation = generationContext.operation
       const operationRecord = operation as Record<string, unknown>
       const generated = generationContext.generated
-      const runtimeArtifactPublications = generationContext.runtimeArtifactPublications
-      const companyId = await getProjectCompanyId(projectId)
-      if (!companyId) {
-        throw Object.assign(new Error('Baseline template generation requires project company scope for duration learning lineage.'), {
-          code: 'BASELINE_TEMPLATE_DURATION_LEARNING_COMPANY_SCOPE_REQUIRED',
+      try {
+        await recordWbsTemplateCandidateEvent({
+          companyId: companyId!,
+          projectId,
+          surface: 'baseline',
+          generationBatchId: String(operationRecord.generationBatchId ?? ''),
+          templateId: String(operationRecord.templateId ?? ''),
+          selectedNodeIds: Array.isArray(operationRecord.selectedNodeIds) ? operationRecord.selectedNodeIds : [],
+          scope: operationRecord.scope && typeof operationRecord.scope === 'object'
+            ? operationRecord.scope as Record<string, unknown>
+            : {},
+          attachUnderRowId: String(operationRecord.attachUnderRowId ?? ''),
+          generatedRowCount: generated.rows.length,
+          retainedRowCount: generated.rows.length,
+          rejectedRowCount: 0,
+          durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generated.rows),
+          actorId: req.user?.id ?? null,
+          metadata: {
+            baselineId: id,
+            generationDepth: generated.generationDepth,
+            retainedRowCount: generated.rows.length,
+            source: 'baseline_commit',
+            ...(generated.durationAssetUtilizationSummary
+              ? { durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary }
+              : {}),
+          },
+          scheduleTrustGate: generated.scheduleTrustGate,
+        })
+      } catch (error) {
+        logger.warn('[task-baselines] post-commit WBS candidate reporting failed', {
+          baselineId: id,
+          projectId,
+          generationBatchId: generated.generationBatchId,
+          error: error instanceof Error ? error.message : String(error),
         })
       }
-      await recordWbsTemplateGenerationRuntimeConsumption({
-        queryExec: durationLearningRuntimeQueryExec,
-        projectId,
-        generation: generated,
-        runtimeArtifactPublications,
-        inputTaskIds: generated.rows
-          .map((row) => tempIdMap.get(row.clientRowId))
-          .filter((id): id is string => Boolean(id)),
-      })
-      await persistDurationLearningRuntimeConsumptions({
-        queryExec: durationLearningRuntimeQueryExec,
-        build: {
-          companyId,
-          projectId,
-          consumerKey: 'wbsTemplateGenerationService',
-          consumerSurface: 'baseline_commit',
-          generationBatchId: generated.generationBatchId,
-          templateIds: generated.templateIds,
-          rows: generated.rows,
-          runtimeArtifactPublications,
-          subjectType: 'baseline_item',
-          subjectIdByClientRowId: tempIdMap,
-        },
-      })
-      await recordWbsTemplateCandidateEvent({
-        companyId,
-        projectId,
-        surface: 'baseline',
-        generationBatchId: String(operationRecord.generationBatchId ?? ''),
-        templateId: String(operationRecord.templateId ?? ''),
-        selectedNodeIds: Array.isArray(operationRecord.selectedNodeIds) ? operationRecord.selectedNodeIds : [],
-        scope: operationRecord.scope && typeof operationRecord.scope === 'object'
-          ? operationRecord.scope as Record<string, unknown>
-          : {},
-        attachUnderRowId: String(operationRecord.attachUnderRowId ?? ''),
-        generatedRowCount: generated.rows.length,
-        retainedRowCount: generated.rows.length,
-        rejectedRowCount: 0,
-        durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generated.rows),
-        actorId: req.user?.id ?? null,
-        metadata: {
-          baselineId: id,
-          generationDepth: generated.generationDepth,
-          retainedRowCount: generated.rows.length,
-          source: 'baseline_commit',
-          ...(generated.durationAssetUtilizationSummary
-            ? { durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary }
-            : {}),
-        },
-        scheduleTrustGate: generated.scheduleTrustGate,
-      })
     }
 
     broadcastPlanningTableChanged({

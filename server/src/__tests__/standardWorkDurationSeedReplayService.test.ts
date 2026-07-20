@@ -219,6 +219,39 @@ describe('standardWorkDurationSeedReplayService', () => {
     ]))
   })
 
+  it('derives out-of-fold seed quality and task/window lineage from real replay samples', async () => {
+    const replaySamples = Array.from({ length: 20 }, (_, index) => ({
+      ...sample(`holdout-${index + 1}`, 'holdout-code', 9 + (index % 3)),
+      completed_at: new Date(Date.UTC(2026, 0, index + 1)).toISOString(),
+    }))
+    const report = await replayStandardWorkDurationSeedAgainstSamples(replaySamples, {
+      minSamplesPerCode: 5,
+      resolver: vi.fn(async () => ({
+        stableCode: 'process_duration:holdout_code',
+        defaultDaysP50: 5,
+        confidence: 'high',
+      })),
+    })
+
+    const candidate = report.calibrationQueues.p50ReviewCandidates[0]
+    expect(candidate).toEqual(expect.objectContaining({
+      taskIds: replaySamples.map((row) => row.task_id),
+      observationStartedAt: '2026-01-01T00:00:00.000Z',
+      observationEndedAt: '2026-01-20T00:00:00.000Z',
+      observationWindowDays: 20,
+      automationQualityEvidence: expect.objectContaining({
+        qualityModel: 'numeric_holdout',
+        holdoutSampleCount: 20,
+        maeBefore: expect.any(Number),
+        maeAfter: expect.any(Number),
+        conflictRate: 0,
+        overcompensationRate: 0,
+      }),
+    }))
+    expect(candidate.automationQualityEvidence.maeBefore)
+      .toBeGreaterThan(candidate.automationQualityEvidence.maeAfter ?? Number.POSITIVE_INFINITY)
+  })
+
   it('requires an approved replay candidate, dedicated writer, lineage, and release gates before standard seed live learning is ready', async () => {
     const resolver: StandardWorkDurationSeedReplayResolver = vi.fn(async () => ({
       stableCode: 'process_duration:cast_in_place_concrete',

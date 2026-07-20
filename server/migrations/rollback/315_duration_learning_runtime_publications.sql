@@ -18,6 +18,14 @@ END
 $$;
 
 DROP VIEW IF EXISTS public.duration_learning_legacy_runtime_retirement_readback;
+DROP FUNCTION IF EXISTS public.rollback_duration_learning_runtime_publication(
+  TEXT, TEXT, TEXT, TEXT, UUID, UUID, TEXT, TEXT, TEXT, TIMESTAMPTZ
+);
+DROP FUNCTION IF EXISTS public.promote_duration_learning_runtime_canary(TEXT, TIMESTAMPTZ);
+DROP FUNCTION IF EXISTS public.persist_duration_learning_runtime_publication(
+  TEXT, TEXT, TEXT, TEXT, UUID, UUID, TEXT, TEXT,
+  JSONB, JSONB, JSONB, JSONB, TEXT, INTEGER, INTEGER, TIMESTAMPTZ
+);
 DROP TABLE IF EXISTS public.duration_learning_runtime_consumptions;
 DROP TABLE IF EXISTS public.duration_learning_legacy_default_master_plan_mappings;
 DROP TABLE IF EXISTS public.duration_learning_legacy_runtime_row_archive;

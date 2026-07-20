@@ -491,6 +491,7 @@ describe('durationSuggestionService', () => {
       taskTitle: '外墙抹灰',
       wbsNodeType: 'process',
       templateNodeId: 'template-node-1',
+      runtimeEvidenceMode: 'record',
     })
 
     expect(suggestion.recommendedDurationDays).toBe(10)
@@ -603,7 +604,7 @@ describe('durationSuggestionService', () => {
 
     expect(suggestion.recommendedDurationDays).toBe(10)
     expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
-    expect(calls).toHaveLength(0)
+    expect(calls.some((call) => /\b(insert|update|delete)\b/i.test(call.sql))).toBe(false)
   })
 
   it('records construction organization plan-network publication lineage on E1 reference prediction events', async () => {
@@ -628,6 +629,7 @@ describe('durationSuggestionService', () => {
       taskTitle: '外墙抹灰',
       wbsNodeType: 'process',
       templateNodeId: 'template-node-1',
+      runtimeEvidenceMode: 'record',
       projectGenerationFacts: {
         businessType: 'residential',
         constructionOrganizationScenario: {
@@ -696,6 +698,7 @@ describe('durationSuggestionService', () => {
       taskTitle: '外墙抹灰',
       wbsNodeType: 'process',
       templateNodeId: 'template-node-1',
+      runtimeEvidenceMode: 'record',
     })
 
     expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
@@ -2412,6 +2415,7 @@ describe('durationSuggestionService', () => {
       projectTypeCode: 'residential',
       structureTypeCode: 'cast_in_place',
       wbsNodeType: 'process',
+      runtimeEvidenceMode: 'record',
     })
 
     expect(suggestion.recommendedDurationDays).toBe(10)
@@ -2476,6 +2480,7 @@ describe('durationSuggestionService', () => {
       projectTypeCode: 'residential',
       structureTypeCode: 'cast_in_place',
       wbsNodeType: 'process',
+      runtimeEvidenceMode: 'record',
     })
 
     expect(suggestion.recommendedDurationDays).not.toBe(10)
@@ -4784,6 +4789,7 @@ describe('durationSuggestionService', () => {
       projectTypeCode: 'residential',
       wbsNodeType: 'process',
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+company_history_sample')
@@ -4855,6 +4861,7 @@ describe('durationSuggestionService', () => {
       projectTypeCode: 'residential',
       wbsNodeType: 'process',
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(suggestion.recommendedDurationDays).toBe(8)
@@ -4922,6 +4929,7 @@ describe('durationSuggestionService', () => {
       projectTypeCode: 'residential',
       wbsNodeType: 'process',
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(suggestion.recommendedDurationDays).toBeLessThan(12)
@@ -4960,6 +4968,35 @@ describe('durationSuggestionService', () => {
     } as any)
 
     expect(mocks.rawQuery).not.toHaveBeenCalled()
+  })
+
+  it('defaults to no-write even when a runtime resolver query executor is injected', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __resolverSource: 'company_override',
+      __seedVersion: 'company-override-v1',
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 1,
+      variableDays: 9,
+      confidence: 'medium',
+      benchmarkBasis: 'Company override reference.',
+    })
+
+    await getTaskDurationSuggestion({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    } as any)
+
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(0)
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
   it('allows an explicit record mode to exercise the default runtime evidence writer in tests', async () => {
@@ -5029,6 +5066,7 @@ describe('durationSuggestionService', () => {
       projectTypeCode: 'residential',
       wbsNodeType: 'process',
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(suggestion.durationCalibrationSource).toBe('cold_start_baseline')
@@ -5071,6 +5109,7 @@ describe('durationSuggestionService', () => {
       taskTitle: 'rebar installation',
       wbsNodeType: 'process',
       runtimeConsumerObservationQueryExec: queryExec,
+      runtimeEvidenceMode: 'record',
     } as any)
 
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')

@@ -105,13 +105,55 @@ describe('duration learning runtime publication migration', () => {
     expect(sql).toContain('REVOKE UPDATE, DELETE ON TABLE public.duration_learning_runtime_consumptions')
     expect(sql).toContain('duration_learning_runtime_consumptions_backend_runtime_select')
     expect(sql).toContain('duration_learning_runtime_consumptions_backend_runtime_insert')
-    expect(sql).toContain('publication.publication_stage IN (\'canary\', \'stable\')')
+    expect(sql).toContain("publication.publication_stage = 'canary'")
+    expect(sql).toContain("publication.monitoring_status IN ('pending', 'collecting', 'passed')")
+    expect(sql).toContain("publication.publication_stage = 'stable'")
+    expect(sql).toContain("publication.monitoring_status = 'passed'")
     expect(sql).toContain('task.project_id = duration_learning_runtime_consumptions.project_id')
     expect(sql).toContain('baseline_item.project_id = duration_learning_runtime_consumptions.project_id')
   })
 
+  it('owns atomic publication transitions and project-company authority inside migration 315', () => {
+    const sql = readSql(migrationPath)
+    const rollback = readSql(rollbackPath)
+
+    for (const functionName of [
+      'persist_duration_learning_runtime_publication',
+      'promote_duration_learning_runtime_canary',
+      'rollback_duration_learning_runtime_publication',
+    ]) {
+      expect(sql).toContain(`CREATE OR REPLACE FUNCTION public.${functionName}`)
+      expect(sql).toContain(`REVOKE ALL ON FUNCTION public.${functionName}`)
+      expect(sql).toContain(`GRANT EXECUTE ON FUNCTION public.${functionName}`)
+      expect(rollback).toContain(`DROP FUNCTION IF EXISTS public.${functionName}`)
+    }
+
+    expect(sql).toContain('pg_advisory_xact_lock')
+    expect(sql).toContain('GET DIAGNOSTICS transition_row_count = ROW_COUNT')
+    expect(sql).toContain('duration_learning_runtime_transition_incomplete')
+    expect(sql).toMatch(/project\.id\s*=\s*duration_learning_runtime_publications\.project_id/i)
+    expect(sql).toMatch(/project\.company_id\s*=\s*duration_learning_runtime_publications\.company_id/i)
+    expect(sql).toMatch(/predecessor\.asset_key\s*=\s*target\.asset_key/i)
+    expect(sql).toMatch(/predecessor\.artifact_key\s*=\s*target\.artifact_key/i)
+    expect(sql).toMatch(/predecessor\.scope_level\s*=\s*target\.scope_level/i)
+    expect(sql).toMatch(/predecessor\.company_id\s+is\s+not\s+distinct\s+from\s+target\.company_id/i)
+    expect(sql).toMatch(/predecessor\.project_id\s+is\s+not\s+distinct\s+from\s+target\.project_id/i)
+    expect(sql).toMatch(/predecessor\.industry_key\s+is\s+not\s+distinct\s+from\s+target\.industry_key/i)
+  })
+
   it('archives legacy default-master-plan rows without inventing six-family publications', () => {
     const sql = readSql(migrationPath)
+    const archiveStart = sql.indexOf(
+      'CREATE TABLE IF NOT EXISTS public.duration_learning_legacy_runtime_row_archive',
+    )
+    const archiveEnd = sql.indexOf(
+      'ALTER TABLE public.duration_learning_runtime_publications ENABLE ROW LEVEL SECURITY',
+      archiveStart,
+    )
+    const archiveSql = sql.slice(archiveStart, archiveEnd)
+
+    expect(archiveStart).toBeGreaterThan(-1)
+    expect(archiveEnd).toBeGreaterThan(archiveStart)
 
     for (const relation of [
       'wbs_template_runtime_publications',
@@ -135,8 +177,8 @@ describe('duration learning runtime publication migration', () => {
     expect(sql).toContain('manifest_fingerprint')
     expect(sql).toContain("'archived_ready_for_explicit_322_authorization'")
     expect(sql).toContain("'archived_blocked'")
-    expect(sql).not.toMatch(/INSERT\s+INTO\s+public\.duration_learning_runtime_publications/i)
-    expect(sql).not.toMatch(/legacy_default_master_plan[\s\S]{0,200}'(?:base_duration_benchmark|standard_work_duration_seed|special_work_duration_seed|wbs_reference_days|dependency_rule_candidate|critical_path_rule_candidate)'/i)
+    expect(archiveSql).not.toMatch(/INSERT\s+INTO\s+public\.duration_learning_runtime_publications/i)
+    expect(archiveSql).not.toMatch(/legacy_default_master_plan[\s\S]{0,200}'(?:base_duration_benchmark|standard_work_duration_seed|special_work_duration_seed|wbs_reference_days|dependency_rule_candidate|critical_path_rule_candidate)'/i)
   })
 
   it('keeps publication, consumption, archive and mapping boundaries backend-only', () => {
