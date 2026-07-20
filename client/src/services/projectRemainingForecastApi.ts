@@ -130,14 +130,19 @@ function normalizeForecast(raw: any): ProjectRemainingDurationForecast | null {
         availability: 'unavailable' as const,
         unavailableReason: 'production_fact_unavailable',
       }
+  const targetGapAvailable = failClosedTargetGap?.availability === 'available'
+    && failClosedTargetGap.unit === 'calendar_day'
+    && failClosedTargetGap.value !== null
   return {
     durationOutputCode: raw.durationOutputCode ?? null,
     durationOutputSemanticFieldName: raw.durationOutputSemanticFieldName ?? null,
-    projectRemainingForecastDays: normalizeNumber(raw.projectRemainingForecastDays),
+    projectRemainingForecastDays: productionFactAvailable
+      ? normalizeNumber(raw.projectRemainingForecastDays)
+      : null,
     projectRemainingForecast,
     forecastFinishDate: productionFactAvailable ? raw.forecastFinishDate ?? null : null,
     targetEndDate: raw.targetEndDate ?? null,
-    targetGapDays: normalizeNumber(raw.targetGapDays),
+    targetGapDays: targetGapAvailable ? normalizeNumber(raw.targetGapDays) : null,
     targetGap: failClosedTargetGap,
     rowsEvaluated: normalizeNumber(raw.rowsEvaluated),
     calculationContext: raw.calculationContext ?? null,
