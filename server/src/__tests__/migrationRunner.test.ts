@@ -26,6 +26,30 @@ const serverRoot = process.cwd().endsWith(`${sep}server`)
 
 const originalEnv = { ...process.env }
 
+function buildHardenedCommercialTriggerAclRows() {
+  const functionIdentities = [
+    'public.workbuddy_initialize_company_commercial()',
+    'public.workbuddy_meter_company_projects()',
+  ]
+  const roleNames = [
+    'anon',
+    'authenticated',
+    'service_role',
+    'workbuddy_runtime',
+    'workbuddy_runtime_login',
+  ]
+  return functionIdentities.flatMap((functionIdentity) => (
+    roleNames.map((roleName) => ({
+      function_identity: functionIdentity,
+      function_exists: true,
+      public_can_execute: false,
+      role_name: roleName,
+      role_exists: true,
+      role_can_execute: !['anon', 'authenticated'].includes(roleName),
+    }))
+  ))
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
   process.env = { ...originalEnv }
@@ -392,6 +416,115 @@ describe('migration runner contract', () => {
     expect(ledgerSql).not.toMatch(/ON\s+CONFLICT/i)
     expect(ledgerSql).not.toMatch(/DO\s+UPDATE/i)
     expect(queries.at(-1)?.sql).toBe('COMMIT')
+  })
+
+  it('runs the exact migration 308 ACL postcondition before writing its ledger row', async () => {
+    const tempDir = await mkdtemp(resolve(tmpdir(), 'workbuddy-migration-'))
+    const migrationPath = resolve(tempDir, '308_commercial_trigger_rpc_acl_closeout.sql')
+    const managedSql = 'SELECT \'managed migration 308 sql\';\n'
+    await writeFile(migrationPath, managedSql, 'utf8')
+    const postconditionRows = buildHardenedCommercialTriggerAclRows()
+    const queries: Array<{ sql: string; params?: unknown[] }> = []
+    const fakeClient = {
+      query: async function (sql: string, params?: unknown[]) {
+        expect(this).toBe(fakeClient)
+        queries.push({ sql, params })
+        return sql.includes('commercial_trigger_rpc_acl_postcondition')
+          ? { rows: postconditionRows }
+          : { rows: [] }
+      },
+    } as any
+
+    try {
+      await applyMigration(fakeClient, {
+        filename: '308_commercial_trigger_rpc_acl_closeout.sql',
+        version: '308',
+        name: 'commercial_trigger_rpc_acl_closeout',
+        fullPath: migrationPath,
+      })
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+
+    const beginIndex = queries.findIndex(({ sql }) => sql === 'BEGIN')
+    const migrationIndex = queries.findIndex(({ sql }) => sql.includes('managed migration 308 sql'))
+    const postconditionIndex = queries.findIndex(({ sql }) => sql.includes('commercial_trigger_rpc_acl_postcondition'))
+    const ledgerIndex = queries.findIndex(({ sql }) => sql.includes('INSERT INTO public.schema_migrations'))
+    const commitIndex = queries.findIndex(({ sql }) => sql === 'COMMIT')
+    expect(beginIndex).toBe(0)
+    expect(migrationIndex).toBeGreaterThan(beginIndex)
+    expect(postconditionIndex).toBeGreaterThan(migrationIndex)
+    expect(ledgerIndex).toBeGreaterThan(postconditionIndex)
+    expect(commitIndex).toBeGreaterThan(ledgerIndex)
+  })
+
+  it('rolls back migration 308 when the ACL postcondition fails without writing the ledger', async () => {
+    const tempDir = await mkdtemp(resolve(tmpdir(), 'workbuddy-migration-'))
+    const migrationPath = resolve(tempDir, '308_commercial_trigger_rpc_acl_closeout.sql')
+    await writeFile(migrationPath, 'SELECT \'managed migration 308 sql\';\n', 'utf8')
+    const queries: string[] = []
+    const invalidPostconditionRows = buildHardenedCommercialTriggerAclRows()
+    const residualApiGrant = invalidPostconditionRows.find((row) => row.role_name === 'authenticated')
+    if (residualApiGrant) residualApiGrant.role_can_execute = true
+    const fakeClient = {
+      query: async (sql: string) => {
+        queries.push(sql)
+        return sql.includes('commercial_trigger_rpc_acl_postcondition')
+          ? { rows: invalidPostconditionRows }
+          : { rows: [] }
+      },
+    } as any
+
+    try {
+      await expect(applyMigration(fakeClient, {
+        filename: '308_commercial_trigger_rpc_acl_closeout.sql',
+        version: '308',
+        name: 'commercial_trigger_rpc_acl_closeout',
+        fullPath: migrationPath,
+      })).rejects.toThrow(/ACL postcondition failed/i)
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+
+    expect(queries).toContain('ROLLBACK')
+    expect(queries).not.toContain('COMMIT')
+    expect(queries.some((sql) => sql.includes('INSERT INTO public.schema_migrations'))).toBe(false)
+  })
+
+  it('selects the ACL postcondition only for the exact migration 308 filename', async () => {
+    const tempDir = await mkdtemp(resolve(tmpdir(), 'workbuddy-migration-'))
+    const filenames = [
+      '308_commercial_trigger_rpc_acl_closeout.sql',
+      '308_commercial_trigger_rpc_acl_closeout_copy.sql',
+      '1308_commercial_trigger_rpc_acl_closeout.sql',
+      '999_test_migration.sql',
+    ]
+    let postconditionCount = 0
+    const fakeClient = {
+      query: async (sql: string) => {
+        if (sql.includes('commercial_trigger_rpc_acl_postcondition')) postconditionCount += 1
+        return sql.includes('commercial_trigger_rpc_acl_postcondition')
+          ? { rows: buildHardenedCommercialTriggerAclRows() }
+          : { rows: [] }
+      },
+    } as any
+
+    try {
+      for (const filename of filenames) {
+        const migrationPath = resolve(tempDir, filename)
+        await writeFile(migrationPath, 'SELECT 1;\n', 'utf8')
+        await applyMigration(fakeClient, {
+          filename,
+          version: filename.slice(0, filename.indexOf('_')),
+          name: 'test_migration',
+          fullPath: migrationPath,
+        })
+      }
+    } finally {
+      await rm(tempDir, { recursive: true, force: true })
+    }
+
+    expect(postconditionCount).toBe(1)
   })
 
   it('fails before the first database query when the SQL no longer matches the expected checksum', async () => {

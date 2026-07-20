@@ -1,3 +1,7 @@
+import type { Client } from 'pg'
+
+import { parseStrictPostgresConnectionTarget } from '../utils/postgresConnectionTargetIdentity.js'
+
 export const COMMERCIAL_TRIGGER_RPC_IDENTITIES = [
   'public.workbuddy_initialize_company_commercial()',
   'public.workbuddy_meter_company_projects()',
@@ -36,6 +40,44 @@ export type CommercialTriggerRpcAclVerification = {
   runtimeGrantCount: number
 }
 
+export type CommercialTriggerRpcAclQueryRow = {
+  function_identity: string
+  function_exists: boolean
+  public_can_execute: boolean
+  role_name: string
+  role_exists: boolean
+  role_can_execute: boolean
+}
+
+export const COMMERCIAL_TRIGGER_RPC_ACL_READBACK_SQL = `
+  /* commercial_trigger_rpc_acl_postcondition */
+  WITH expected_functions(function_identity) AS (
+    SELECT unnest($1::text[])
+  ),
+  expected_roles(role_name) AS (
+    SELECT unnest($2::text[])
+  )
+  SELECT functions.function_identity,
+         procedures.oid IS NOT NULL AS function_exists,
+         CASE WHEN procedures.oid IS NULL THEN FALSE ELSE EXISTS (
+           SELECT 1
+             FROM aclexplode(COALESCE(procedures.proacl, acldefault('f', procedures.proowner))) acl
+            WHERE acl.grantee = 0
+              AND acl.privilege_type = 'EXECUTE'
+         ) END AS public_can_execute,
+         roles.role_name,
+         database_roles.oid IS NOT NULL AS role_exists,
+         CASE
+           WHEN procedures.oid IS NULL OR database_roles.oid IS NULL THEN FALSE
+           ELSE has_function_privilege(database_roles.oid, procedures.oid, 'EXECUTE')
+         END AS role_can_execute
+    FROM expected_functions functions
+    CROSS JOIN expected_roles roles
+    LEFT JOIN pg_proc procedures ON procedures.oid = to_regprocedure(functions.function_identity)
+    LEFT JOIN pg_roles database_roles ON database_roles.rolname::text = roles.role_name
+   ORDER BY functions.function_identity, roles.role_name
+`
+
 function parseUrl(value: string | undefined) {
   const text = String(value ?? '').trim()
   if (!text) return null
@@ -53,19 +95,15 @@ function projectRefFromSupabaseUrl(value: string | undefined) {
 }
 
 function projectRefFromMigrationUrl(value: string | undefined) {
-  const parsed = parseUrl(value)
-  if (!parsed || !['postgres:', 'postgresql:'].includes(parsed.protocol)) return null
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  const target = parseStrictPostgresConnectionTarget(text)
 
-  const directRef = /^db\.([a-z0-9]{20})\.supabase\.co$/i.exec(parsed.hostname)?.[1]
+  const directRef = /^db\.([a-z0-9]{20})\.supabase\.co$/i.exec(target.host)?.[1]
   if (directRef) return directRef.toLowerCase()
 
-  if (!/(?:^|\.)pooler\.supabase\.(?:com|co)$/i.test(parsed.hostname)) return null
-  let username = ''
-  try {
-    username = decodeURIComponent(parsed.username).trim().toLowerCase()
-  } catch {
-    return null
-  }
+  if (!/(?:^|\.)pooler\.supabase\.(?:com|co)$/i.test(target.host)) return null
+  const username = target.user.trim().toLowerCase()
   const separator = username.lastIndexOf('.')
   if (separator <= 0) return null
   const projectRef = username.slice(separator + 1)
@@ -87,6 +125,39 @@ export function verifyCommercialTriggerRpcRemediationTargetIdentity(
     throw new Error('Commercial trigger remediation target project mismatch')
   }
   return { projectRef: expectedProjectRef }
+}
+
+export function buildCommercialTriggerRpcAclReadbacks(
+  rows: readonly CommercialTriggerRpcAclQueryRow[],
+): CommercialTriggerRpcAclReadback[] {
+  const byIdentity = new Map<string, CommercialTriggerRpcAclReadback>()
+  for (const row of rows) {
+    const readback = byIdentity.get(row.function_identity) ?? {
+      functionIdentity: row.function_identity,
+      functionExists: row.function_exists,
+      publicCanExecute: row.public_can_execute,
+      roles: {},
+    }
+    readback.roles[row.role_name] = {
+      exists: row.role_exists,
+      canExecute: row.role_can_execute,
+    }
+    byIdentity.set(row.function_identity, readback)
+  }
+  return [...byIdentity.values()]
+}
+
+export async function readCommercialTriggerRpcAclState(
+  client: Pick<Client, 'query'>,
+): Promise<CommercialTriggerRpcAclReadback[]> {
+  const result = await client.query<CommercialTriggerRpcAclQueryRow>(
+    COMMERCIAL_TRIGGER_RPC_ACL_READBACK_SQL,
+    [
+      [...COMMERCIAL_TRIGGER_RPC_IDENTITIES],
+      [...COMMERCIAL_TRIGGER_API_ROLES, ...COMMERCIAL_TRIGGER_RUNTIME_ROLES],
+    ],
+  )
+  return buildCommercialTriggerRpcAclReadbacks(result.rows)
 }
 
 function roleReadback(

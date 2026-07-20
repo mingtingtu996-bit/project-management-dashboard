@@ -5,6 +5,11 @@ import { createHash } from 'node:crypto'
 
 import pg from 'pg'
 
+import {
+  readCommercialTriggerRpcAclState,
+  verifyCommercialTriggerRpcAclState,
+} from './commercialTriggerRpcAclRemediationService.js'
+
 const { Client } = pg
 
 const MIGRATION_FILE_PATTERN = /^(?<version>\d{3}[a-z]?)_(?<name>[a-z0-9_]+)\.sql$/i
@@ -17,6 +22,7 @@ const NON_CANONICAL_MIGRATION_FILENAMES = new Set([
 const MIGRATION_ADVISORY_LOCK_KEY = 1_424_231
 const MIGRATION_LOCK_TIMEOUT_MS = 10_000
 const MIGRATION_STATEMENT_TIMEOUT_MS = 15 * 60 * 1_000
+const COMMERCIAL_TRIGGER_RPC_ACL_CLOSEOUT_FILENAME = '308_commercial_trigger_rpc_acl_closeout.sql'
 export const APPLY_MIGRATION_CHECKSUM_CONTRACT_VERSION = 1 as const
 export const BASELINE_SENTINEL_TABLES = ['projects', 'tasks', 'users', 'notifications'] as const
 
@@ -465,6 +471,21 @@ function prepareMigrationSqlForManagedTransaction(sql: string) {
   return lines.join('\n')
 }
 
+async function assertManagedMigrationPostcondition(
+  client: InstanceType<typeof Client>,
+  migration: MigrationFile,
+): Promise<void> {
+  if (migration.filename !== COMMERCIAL_TRIGGER_RPC_ACL_CLOSEOUT_FILENAME) return
+
+  try {
+    const readbacks = await readCommercialTriggerRpcAclState(client)
+    verifyCommercialTriggerRpcAclState(readbacks, 'hardened')
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`Commercial trigger RPC ACL postcondition failed: ${message}`, { cause: error })
+  }
+}
+
 export async function applyMigration(
   client: InstanceType<typeof Client>,
   migration: MigrationFile,
@@ -489,6 +510,7 @@ export async function applyMigration(
     await client.query(`SELECT set_config('lock_timeout', $1, TRUE)`, [`${MIGRATION_LOCK_TIMEOUT_MS}ms`])
     await client.query(`SELECT set_config('statement_timeout', $1, TRUE)`, [`${MIGRATION_STATEMENT_TIMEOUT_MS}ms`])
     await client.query(managedSql)
+    await assertManagedMigrationPostcondition(client, migration)
     await client.query(
       `
         INSERT INTO public.schema_migrations (filename, version, checksum)
