@@ -1082,6 +1082,18 @@ describe('project critical path service', () => {
       runtime_publication_input_task_ids: ['task-b'],
       critical_path_input_hash: expect.stringMatching(/^sha256:/),
     }))
+    const observationInsert = mocks.executeSQL.mock.calls.find((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.runtime_consumer_observations')
+      && call[1]?.[1] === 'duration_learning_runtime:critical_path_rule_candidate:exact-v1'
+    ))
+    expect(observationInsert).toBeTruthy()
+    expect(observationInsert?.[1]?.[5]).toEqual(expect.objectContaining({
+      criticalPathInputHash: expect.stringMatching(/^sha256:/),
+      taskNetworkInputHash: expect.stringMatching(/^sha256:/),
+    }))
+    expect(observationInsert?.[1]?.[6]).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^critical_path_inputs:sha256:/),
+    ]))
   })
 
   it('projects live CPM criticality and float fields back to task rows after recalculation', async () => {

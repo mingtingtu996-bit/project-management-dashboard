@@ -2661,7 +2661,7 @@ router.post(
                   companyId: companyId!,
                   projectId,
                   surface: 'baseline',
-                  generationBatchId: String(operationRecord.generationBatchId ?? ''),
+                  generationBatchId: generated.generationBatchId,
                   templateId: String(operationRecord.templateId ?? ''),
                   selectedNodeIds: Array.isArray(operationRecord.selectedNodeIds) ? operationRecord.selectedNodeIds : [],
                   scope: operationRecord.scope && typeof operationRecord.scope === 'object'

@@ -150,6 +150,9 @@ describe('durationExperienceService', () => {
       if (sql.includes('FROM public.structured_cause_attributions')) return { rows: [] }
       if (sql.includes('from public.duration_learning_runtime_consumptions')) {
         return { rows: [{
+          company_id: 'company-1',
+          project_id: 'project-1',
+          task_id: 'task-cause-snapshot',
           consumption_key: 'trusted-consumption-1',
           publication_key: 'duration_learning_runtime:wbs_reference_days:trusted-v3',
           asset_key: 'wbs_reference_days',
@@ -160,6 +163,21 @@ describe('durationExperienceService', () => {
           applied_duration_days: 99,
           generation_batch_id: 'batch-trusted',
           template_id: 'china-facade-curtain-wall',
+          source_evidence_refs: [
+            'duration_learning_runtime_publications:duration_learning_runtime:wbs_reference_days:trusted-v3',
+          ],
+          consumption_context: {
+            authoritySource: 'runtime_resolver_publication_set',
+            scopeLevel: 'project',
+            generationBatchId: 'batch-trusted',
+            inputTaskIds: ['task-cause-snapshot'],
+          },
+          publication_stage: 'canary',
+          monitoring_status: 'passed',
+          publication_scope_level: 'project',
+          publication_company_id: 'company-1',
+          publication_project_id: 'project-1',
+          publication_industry_key: null,
           consumed_at: '2026-05-01T00:00:00.000Z',
         }] }
       }

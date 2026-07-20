@@ -9,6 +9,8 @@ import type {
 } from './durationLearningRuntimePublicationService.js'
 
 type GeneratedDurationLearningAssetKey =
+  | 'base_duration_benchmark'
+  | 'standard_work_duration_seed'
   | 'special_work_duration_seed'
   | 'wbs_reference_days'
   | 'dependency_rule_candidate'
@@ -49,6 +51,9 @@ export interface BuildGeneratedTemplateRuntimeConsumptionsInput {
 }
 
 type TrustedConsumptionRow = {
+  company_id?: unknown
+  project_id?: unknown
+  task_id?: unknown
   consumption_key?: unknown
   publication_key?: unknown
   asset_key?: unknown
@@ -59,6 +64,14 @@ type TrustedConsumptionRow = {
   applied_duration_days?: unknown
   generation_batch_id?: unknown
   template_id?: unknown
+  source_evidence_refs?: unknown
+  consumption_context?: unknown
+  publication_stage?: unknown
+  monitoring_status?: unknown
+  publication_scope_level?: unknown
+  publication_company_id?: unknown
+  publication_project_id?: unknown
+  publication_industry_key?: unknown
   consumed_at?: unknown
 }
 
@@ -87,7 +100,9 @@ function positiveDays(value: unknown) {
 
 function generatedAssetKey(value: unknown): GeneratedDurationLearningAssetKey | null {
   const assetKey = normalizeText(value)
-  return assetKey === 'special_work_duration_seed'
+  return assetKey === 'base_duration_benchmark'
+    || assetKey === 'standard_work_duration_seed'
+    || assetKey === 'special_work_duration_seed'
     || assetKey === 'wbs_reference_days'
     || assetKey === 'dependency_rule_candidate'
     ? assetKey
@@ -260,8 +275,14 @@ export function buildGeneratedTemplateRuntimeConsumptions(
 }
 
 function persistenceRow(record: DurationLearningRuntimeConsumptionRecord) {
+  const {
+    authoritySource: _authoritySource,
+    scopeLevel: _scopeLevel,
+    generationBatchId: _generationBatchId,
+    inputTaskIds: _inputTaskIds,
+    ...callerContext
+  } = record.consumptionContext
   return {
-    consumption_key: record.consumptionKey,
     company_id: record.companyId,
     project_id: record.projectId,
     publication_key: record.publicationKey,
@@ -272,12 +293,9 @@ function persistenceRow(record: DurationLearningRuntimeConsumptionRecord) {
     task_id: record.taskId,
     baseline_item_id: record.baselineItemId,
     generation_batch_id: record.generationBatchId,
-    template_id: record.templateId,
     duration_day_basis: record.durationDayBasis,
     applied_duration_days: record.appliedDurationDays,
-    source_evidence_refs: record.sourceEvidenceRefs,
-    consumption_context: record.consumptionContext,
-    consumed_at: record.consumedAt,
+    consumption_context: callerContext,
   }
 }
 
@@ -288,121 +306,25 @@ export async function persistDurationLearningRuntimeConsumptions(input: {
   const records = buildGeneratedTemplateRuntimeConsumptions(input.build)
   if (records.length === 0) return { requestedCount: 0, insertedCount: 0, records: [] }
   const rows = await input.queryExec<{ consumption_key?: unknown }>(
-    `with requested as materialized (
-       select *
-         from jsonb_to_recordset($1::jsonb) as row(
-           consumption_key text,
-           company_id uuid,
-           project_id uuid,
-           publication_key text,
-           asset_key text,
-           artifact_key text,
-           consumer_key text,
-           consumer_surface text,
-           task_id uuid,
-           baseline_item_id uuid,
-           generation_batch_id text,
-           template_id text,
-           duration_day_basis text,
-           applied_duration_days numeric,
-           source_evidence_refs jsonb,
-           consumption_context jsonb,
-           consumed_at timestamptz
-         )
-     ), validated as materialized (
-       select requested.*
-         from requested
-         join public.duration_learning_runtime_publications publication
-           on publication.publication_key = requested.publication_key
-          and publication.asset_key = requested.asset_key
-          and publication.artifact_key = requested.artifact_key
-           and (
-             (
-               publication.publication_stage = 'canary'
-               and publication.monitoring_status in ('pending', 'collecting', 'passed')
-             )
-             or (
-               publication.publication_stage = 'stable'
-               and publication.monitoring_status = 'passed'
-             )
-           )
-        where requested.duration_day_basis = 'construction_production_day'
-          and ((requested.task_id is not null)::integer + (requested.baseline_item_id is not null)::integer) = 1
-          and (
-            publication.scope_level = 'global'
-            or (
-              publication.scope_level = 'industry'
-              and publication.industry_key = requested.consumption_context ->> 'industryKey'
-            )
-            or (publication.scope_level = 'company' and publication.company_id = requested.company_id)
-            or (
-              publication.scope_level = 'project'
-              and publication.company_id = requested.company_id
-              and publication.project_id = requested.project_id
-            )
-          )
-     ), validation as materialized (
-       select count(*) = jsonb_array_length($1::jsonb) as valid
-         from validated
-     ), inserted as (
-       insert into public.duration_learning_runtime_consumptions (
-         consumption_key,
-         company_id,
-         project_id,
-         publication_key,
-         asset_key,
-         artifact_key,
-         consumer_key,
-         consumer_surface,
-         task_id,
-         baseline_item_id,
-         generation_batch_id,
-         template_id,
-         duration_day_basis,
-         applied_duration_days,
-         source_evidence_refs,
-         consumption_context,
-         consumed_at
-       )
-       select validated.consumption_key,
-              validated.company_id,
-              validated.project_id,
-              validated.publication_key,
-              validated.asset_key,
-              validated.artifact_key,
-              validated.consumer_key,
-              validated.consumer_surface,
-              validated.task_id,
-              validated.baseline_item_id,
-              validated.generation_batch_id,
-              validated.template_id,
-              validated.duration_day_basis,
-              validated.applied_duration_days,
-              validated.source_evidence_refs,
-              validated.consumption_context,
-              validated.consumed_at
-         from validated
-         cross join validation
-        where validation.valid
-       on conflict (consumption_key) do nothing
-       returning consumption_key
-     )
-     select consumption_key from inserted
-     union all
-     select '__duration_learning_runtime_consumption_validation_failed__'
-       from validation
-      where not validation.valid`,
+    `/* duration-learning-runtime-consumption:authoritative-rpc
+        insert into public.duration_learning_runtime_consumptions is owned by
+        public.persist_duration_learning_runtime_consumptions */
+     select consumption_key
+       from public.persist_duration_learning_runtime_consumptions($1::jsonb) as writer(consumption_key)`,
     [JSON.stringify(records.map(persistenceRow))],
   )
-  if (rows.some((row) => normalizeText(row.consumption_key) === '__duration_learning_runtime_consumption_validation_failed__')) {
-    throw Object.assign(new Error('duration learning runtime consumption failed database authority validation'), {
+  const consumptionKeys = uniqueText(rows.map((row) => row.consumption_key))
+  if (consumptionKeys.length !== records.length) {
+    throw Object.assign(new Error('duration learning runtime consumption RPC did not resolve every requested row'), {
       code: 'DURATION_LEARNING_RUNTIME_CONSUMPTION_DATABASE_VALIDATION_FAILED',
+      requestedCount: records.length,
+      resolvedCount: consumptionKeys.length,
     })
   }
   return {
     requestedCount: records.length,
-    insertedCount: rows.length,
-    records,
+    insertedCount: consumptionKeys.length,
+    consumptionKeys,
   }
 }
 
@@ -422,6 +344,50 @@ function trustedConsumptionFromRow(row: TrustedConsumptionRow) {
   }
 }
 
+function trustedTaskConsumptionMatchesAuthority(
+  row: TrustedConsumptionRow,
+  input: { companyId: string; projectId: string; taskId: string },
+) {
+  const companyId = normalizeText(input.companyId)
+  const projectId = normalizeText(input.projectId)
+  const taskId = normalizeText(input.taskId)
+  const publicationKey = normalizeText(row.publication_key)
+  const assetKey = normalizeText(row.asset_key)
+  const artifactKey = normalizeText(row.artifact_key)
+  const publicationStage = normalizeText(row.publication_stage)
+  const monitoringStatus = normalizeText(row.monitoring_status)
+  const context = readRecord(row.consumption_context)
+  const sourceEvidenceRefs = uniqueText(readArray(row.source_evidence_refs))
+  const scopeLevel = normalizeText(row.publication_scope_level)
+  const scopeMatches = scopeLevel === 'project'
+    ? normalizeText(row.publication_company_id) === companyId
+      && normalizeText(row.publication_project_id) === projectId
+      && !normalizeText(row.publication_industry_key)
+    : scopeLevel === 'company'
+      ? normalizeText(row.publication_company_id) === companyId
+        && !normalizeText(row.publication_project_id)
+        && !normalizeText(row.publication_industry_key)
+      : scopeLevel === 'industry'
+        ? !normalizeText(row.publication_company_id)
+          && !normalizeText(row.publication_project_id)
+          && Boolean(normalizeText(row.publication_industry_key))
+          && normalizeText(row.publication_industry_key) === normalizeText(context.industryKey)
+        : scopeLevel === 'global'
+          ? !normalizeText(row.publication_company_id)
+            && !normalizeText(row.publication_project_id)
+            && !normalizeText(row.publication_industry_key)
+          : false
+  return normalizeText(row.company_id) === companyId
+    && normalizeText(row.project_id) === projectId
+    && normalizeText(row.task_id) === taskId
+    && Boolean(publicationKey && assetKey && artifactKey && normalizeText(row.consumption_key))
+    && ((publicationStage === 'canary' && ['pending', 'collecting', 'passed'].includes(monitoringStatus))
+      || (publicationStage === 'stable' && monitoringStatus === 'passed'))
+    && sourceEvidenceRefs.includes(`duration_learning_runtime_publications:${publicationKey}`)
+    && normalizeText(context.authoritySource) === 'runtime_resolver_publication_set'
+    && scopeMatches
+}
+
 export async function readTrustedDurationLearningRuntimeConsumptionsForTask(input: {
   queryExec: DurationLearningRuntimePublicationQueryExec
   companyId: string
@@ -429,23 +395,84 @@ export async function readTrustedDurationLearningRuntimeConsumptionsForTask(inpu
   taskId: string
 }) {
   const rows = await input.queryExec<TrustedConsumptionRow>(
-    `select consumption_key,
-            publication_key,
-            asset_key,
-            artifact_key,
-            consumer_key,
-            consumer_surface,
-            duration_day_basis,
-            applied_duration_days,
-            generation_batch_id,
-            template_id,
-            consumed_at
-       from public.duration_learning_runtime_consumptions
-      where company_id = $1::uuid
-        and project_id = $2::uuid
-        and task_id = $3::uuid
-      order by consumed_at asc, consumption_key asc`,
+    `select consumption.company_id,
+            consumption.project_id,
+            consumption.task_id,
+            consumption.consumption_key,
+            consumption.publication_key,
+            consumption.asset_key,
+            consumption.artifact_key,
+            consumption.consumer_key,
+            consumption.consumer_surface,
+            consumption.duration_day_basis,
+            consumption.applied_duration_days,
+            consumption.generation_batch_id,
+            consumption.template_id,
+            consumption.source_evidence_refs,
+            consumption.consumption_context,
+            publication.publication_stage,
+            publication.monitoring_status,
+            publication.scope_level as publication_scope_level,
+            publication.company_id as publication_company_id,
+            publication.project_id as publication_project_id,
+            publication.industry_key as publication_industry_key,
+            consumption.consumed_at
+       from public.duration_learning_runtime_consumptions consumption
+       join public.duration_learning_runtime_publications publication
+         on publication.publication_key = consumption.publication_key
+        and publication.asset_key = consumption.asset_key
+        and publication.artifact_key = consumption.artifact_key
+      where consumption.company_id = $1::uuid
+        and consumption.project_id = $2::uuid
+        and consumption.task_id = $3::uuid
+        and (
+          (
+            publication.publication_stage = 'canary'
+            and publication.monitoring_status in ('pending', 'collecting', 'passed')
+          )
+          or (
+            publication.publication_stage = 'stable'
+            and publication.monitoring_status = 'passed'
+          )
+        )
+        and consumption.source_evidence_refs ? (
+          'duration_learning_runtime_publications:' || consumption.publication_key
+        )
+        and consumption.consumption_context ->> 'authoritySource'
+              = 'runtime_resolver_publication_set'
+        and (
+          (
+            publication.scope_level = 'project'
+            and publication.company_id = consumption.company_id
+            and publication.project_id = consumption.project_id
+            and publication.industry_key is null
+          )
+          or (
+            publication.scope_level = 'company'
+            and publication.company_id = consumption.company_id
+            and publication.project_id is null
+            and publication.industry_key is null
+          )
+          or (
+            publication.scope_level = 'industry'
+            and publication.company_id is null
+            and publication.project_id is null
+            and publication.industry_key = nullif(
+              consumption.consumption_context ->> 'industryKey',
+              ''
+            )
+          )
+          or (
+            publication.scope_level = 'global'
+            and publication.company_id is null
+            and publication.project_id is null
+            and publication.industry_key is null
+          )
+        )
+      order by consumption.consumed_at asc, consumption.consumption_key asc`,
     [normalizeText(input.companyId), normalizeText(input.projectId), normalizeText(input.taskId)],
   )
-  return rows.map(trustedConsumptionFromRow)
+  return rows
+    .filter((row) => trustedTaskConsumptionMatchesAuthority(row, input))
+    .map(trustedConsumptionFromRow)
 }

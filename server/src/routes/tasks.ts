@@ -2412,6 +2412,8 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
           generation: generated,
           runtimeArtifactPublications,
           inputTaskIds: [...generatedIdByClientRowId.values()],
+          inputSubjectIdByClientRowId: generatedIdByClientRowId,
+          subjectType: 'task',
         })
         await persistDurationLearningRuntimeConsumptions({
           queryExec: durationLearningRuntimeQueryExec,
@@ -2450,7 +2452,7 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
               companyId,
               projectId,
               surface: 'task_list',
-              generationBatchId: String((generationOperation as Record<string, unknown>).generationBatchId ?? ''),
+              generationBatchId: generated.generationBatchId,
               templateId: String((generationOperation as Record<string, unknown>).templateId ?? ''),
               selectedNodeIds: Array.isArray((generationOperation as Record<string, unknown>).selectedNodeIds)
                 ? (generationOperation as Record<string, unknown>).selectedNodeIds as unknown[]

@@ -40,6 +40,8 @@ describe('wbsTemplateFeedback governance bridge', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.trustedConsumptionRows = [{
+      company_id: '10000000-0000-4000-8000-000000000001',
+      project_id: 'project-1',
       task_id: 'task-1',
       consumption_key: 'trusted-consumption-1',
       publication_key: 'duration-learning:wbs-reference:stable-1',
@@ -47,6 +49,18 @@ describe('wbsTemplateFeedback governance bridge', () => {
       artifact_key: 'template-1',
       generation_batch_id: 'batch-1',
       template_id: 'template-1',
+      source_evidence_refs: [
+        'duration_learning_runtime_publications:duration-learning:wbs-reference:stable-1',
+      ],
+      consumption_context: {
+        authoritySource: 'runtime_resolver_publication_set',
+      },
+      publication_stage: 'stable',
+      monitoring_status: 'passed',
+      publication_scope_level: 'project',
+      publication_company_id: '10000000-0000-4000-8000-000000000001',
+      publication_project_id: 'project-1',
+      publication_industry_key: null,
       consumed_at: '2026-04-01T00:00:00.000Z',
     }]
     mocks.rawQuery.mockImplementation(async (sql: string) => ({
@@ -197,7 +211,12 @@ describe('wbsTemplateFeedback governance bridge', () => {
         runtime_publication_artifact_key: 'template-1',
         runtime_publication_input_task_ids: ['task-1'],
         runtime_publication_generation_batch_id: 'batch-1',
+        generation_batch_id: 'batch-1',
         runtime_publication_consumption_keys: ['trusted-consumption-1'],
+        source_evidence_refs: expect.arrayContaining([
+          'duration_learning_runtime_publications:duration-learning:wbs-reference:stable-1',
+          'duration_learning_runtime_consumptions:trusted-consumption-1',
+        ]),
         writes_runtime_directly: false,
         writes_fact_directly: false,
       }),
@@ -215,8 +234,10 @@ describe('wbsTemplateFeedback governance bridge', () => {
     ))
     expect(canonicalRead).toBeTruthy()
     expect(String(canonicalRead?.[0]).toLowerCase()).toContain('join public.tasks')
+    expect(String(canonicalRead?.[0]).toLowerCase()).toContain('join public.duration_learning_runtime_publications')
     expect(String(canonicalRead?.[0]).toLowerCase()).toContain('generation_batch_id')
     expect(String(canonicalRead?.[0]).toLowerCase()).toContain('artifact_key')
+    expect(String(canonicalRead?.[0])).toContain("consumption.consumption_context ->> 'authoritySource'")
   })
 
   it('keeps forged task JSON unlinked when no canonical trusted consumption exists', async () => {
@@ -242,9 +263,36 @@ describe('wbsTemplateFeedback governance bridge', () => {
     expect(JSON.stringify(outcomeInsert?.[1])).not.toContain('forged-json')
   })
 
+  it('keeps a physical-looking row unlinked when its canonical authority marker is missing', async () => {
+    mocks.trustedConsumptionRows = [{
+      ...mocks.trustedConsumptionRows[0],
+      source_evidence_refs: ['tasks:task-1:materialized'],
+      consumption_context: { authoritySource: 'user_metadata' },
+    }]
+
+    await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    })
+
+    const outcomeInsert = mocks.rawQuery.mock.calls.find((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    const metadata = outcomeInsert?.[1]?.[9] as Record<string, unknown>
+    expect(outcomeInsert?.[1]?.[8]).toBeNull()
+    expect(metadata).toEqual(expect.objectContaining({
+      publication_lineage_status: 'unlinked_no_trusted_consumption',
+      generation_batch_id: null,
+      runtime_publication_key: null,
+      runtime_publication_consumption_keys: [],
+    }))
+  })
+
   it('ignores stale generation history and links the unique canonical materialization lineage', async () => {
     mocks.trustedConsumptionRows = [
       {
+        company_id: '10000000-0000-4000-8000-000000000001',
+        project_id: 'project-1',
         task_id: 'task-1',
         consumption_key: 'trusted-consumption-old',
         publication_key: 'duration-learning:wbs-reference:old',
@@ -252,9 +300,20 @@ describe('wbsTemplateFeedback governance bridge', () => {
         artifact_key: 'template-1',
         generation_batch_id: 'batch-old',
         template_id: 'template-1',
+        source_evidence_refs: [
+          'duration_learning_runtime_publications:duration-learning:wbs-reference:old',
+        ],
+        consumption_context: { authoritySource: 'runtime_resolver_publication_set' },
+        publication_stage: 'stable',
+        monitoring_status: 'passed',
+        publication_scope_level: 'project',
+        publication_company_id: '10000000-0000-4000-8000-000000000001',
+        publication_project_id: 'project-1',
         consumed_at: '2026-03-01T00:00:00.000Z',
       },
       {
+        company_id: '10000000-0000-4000-8000-000000000001',
+        project_id: 'project-1',
         task_id: 'task-1',
         consumption_key: 'trusted-consumption-current',
         publication_key: 'duration-learning:wbs-reference:stable-1',
@@ -262,6 +321,15 @@ describe('wbsTemplateFeedback governance bridge', () => {
         artifact_key: 'template-1',
         generation_batch_id: 'batch-1',
         template_id: 'template-1',
+        source_evidence_refs: [
+          'duration_learning_runtime_publications:duration-learning:wbs-reference:stable-1',
+        ],
+        consumption_context: { authoritySource: 'runtime_resolver_publication_set' },
+        publication_stage: 'stable',
+        monitoring_status: 'passed',
+        publication_scope_level: 'project',
+        publication_company_id: '10000000-0000-4000-8000-000000000001',
+        publication_project_id: 'project-1',
         consumed_at: '2026-04-01T00:00:00.000Z',
       },
     ]
@@ -291,6 +359,9 @@ describe('wbsTemplateFeedback governance bridge', () => {
         ...mocks.trustedConsumptionRows[0],
         consumption_key: 'trusted-consumption-2',
         publication_key: 'duration-learning:wbs-reference:stable-2',
+        source_evidence_refs: [
+          'duration_learning_runtime_publications:duration-learning:wbs-reference:stable-2',
+        ],
       },
     ]
 
@@ -314,6 +385,97 @@ describe('wbsTemplateFeedback governance bridge', () => {
       runtime_publication_artifact_key: null,
       runtime_publication_input_task_ids: [],
     }))
+  })
+
+  it('splits disjoint physical task subsets into distinct publication outcomes without duplicating the candidate aggregate', async () => {
+    mocks.trustedConsumptionRows = [
+      mocks.trustedConsumptionRows[0]!,
+      {
+        ...mocks.trustedConsumptionRows[0],
+        task_id: 'task-2',
+        consumption_key: 'trusted-consumption-2',
+        publication_key: 'duration-learning:wbs-reference:stable-2',
+        source_evidence_refs: [
+          'duration_learning_runtime_publications:duration-learning:wbs-reference:stable-2',
+        ],
+      },
+    ]
+    mocks.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM projects')) {
+        return [{ id: 'project-1', name: 'Done project', status: 'completed' }]
+      }
+      if (sql.includes('FROM tasks')) {
+        return [
+          {
+            id: 'task-1',
+            project_id: 'project-1',
+            title: '涓讳綋缁撴瀯',
+            status: 'completed',
+            task_source: 'template',
+            baseline_item_id: 'baseline-1',
+            actual_start_date: '2026-05-01',
+            actual_end_date: '2026-05-05',
+            source_template_id: 'template-1',
+            generation_batch_id: 'batch-1',
+          },
+          {
+            id: 'task-2',
+            project_id: 'project-1',
+            title: '涓讳綋缁撴瀯',
+            status: 'completed',
+            task_source: 'template',
+            baseline_item_id: 'baseline-2',
+            actual_start_date: '2026-05-01',
+            actual_end_date: '2026-05-11',
+            source_template_id: 'template-1',
+            generation_batch_id: 'batch-1',
+          },
+        ]
+      }
+      if (sql.includes('FROM task_baseline_items')) {
+        return [
+          { id: 'baseline-1', project_id: 'project-1', source_task_id: 'source-structure' },
+          { id: 'baseline-2', project_id: 'project-1', source_task_id: 'source-structure' },
+        ]
+      }
+      return []
+    })
+
+    const result = await produceWbsTemplateFeedback('template-1', {
+      projectIds: ['project-1'],
+      companyId: '10000000-0000-4000-8000-000000000001',
+    })
+
+    expect(result.report).toEqual(expect.objectContaining({ sample_task_count: 2 }))
+    expect(result.report.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ current_reference_days: 6, sample_count: 2, suggested_reference_days: 7, is_leaf: true }),
+    ]))
+    const outcomeInserts = mocks.rawQuery.mock.calls.filter((call) =>
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
+    )
+    expect(result.recordedOutcomeCount).toBe(2)
+    expect(outcomeInserts).toHaveLength(2)
+    expect(new Set(outcomeInserts.map((call) => call[1]?.[0]))).toEqual(new Set([
+      'wbs-reference-days:template-1:project-1:duration-learning:wbs-reference:stable-1:batch-1',
+      'wbs-reference-days:template-1:project-1:duration-learning:wbs-reference:stable-2:batch-1',
+    ]))
+    const metadataByPublication = new Map(outcomeInserts.map((call) => [
+      call[1]?.[8],
+      call[1]?.[9] as Record<string, unknown>,
+    ]))
+    expect(metadataByPublication.get('duration-learning:wbs-reference:stable-1')).toEqual(expect.objectContaining({
+      sample_task_count: 1,
+      generation_batch_id: 'batch-1',
+      runtime_publication_input_task_ids: ['task-1'],
+      runtime_publication_consumption_keys: ['trusted-consumption-1'],
+    }))
+    expect(metadataByPublication.get('duration-learning:wbs-reference:stable-2')).toEqual(expect.objectContaining({
+      sample_task_count: 1,
+      generation_batch_id: 'batch-1',
+      runtime_publication_input_task_ids: ['task-2'],
+      runtime_publication_consumption_keys: ['trusted-consumption-2'],
+    }))
+    expect(result.candidateEventCount).toBe(1)
   })
 
   it('stores WBS reference-day outcomes in construction production days with calendar lineage', async () => {

@@ -24,7 +24,8 @@ import {
   type DurationLearningFactSource,
 } from './durationLearningAssetAutomationPolicyService.js'
 import {
-  processDurationLearningRuntimeEvidenceOutbox,
+  drainDurationLearningRuntimeEvidenceOutbox,
+  type DrainDurationLearningRuntimeEvidenceOutboxResult,
   type ProcessDurationLearningRuntimeEvidenceOutboxResult,
 } from './durationLearningRuntimeEvidenceOutboxService.js'
 
@@ -59,6 +60,7 @@ export interface DurationLearningRuntimeCandidateProposal {
   proposalKey: string
   assetKey: DurationLearningRuntimeAssetKey
   artifactKey: string
+  publicationKey?: string | null
   scope: DurationLearningRuntimeScope
   runtimePayload: Record<string, unknown>
   sourceCandidateRefs: string[]
@@ -110,6 +112,15 @@ export interface DurationLearningRuntimeLifecycleSweepResult {
   evidenceOutboxClaimed: number
   evidenceOutboxCompleted: number
   evidenceOutboxFailed: number
+  evidenceOutboxBatches?: number
+  evidenceOutboxMaxBatches?: number
+  evidenceOutboxBacklogCount?: number
+  evidenceOutboxReadyBacklogCount?: number
+  evidenceOutboxFailedBacklogCount?: number
+  evidenceOutboxExpiredProcessingCount?: number
+  evidenceOutboxOldestPendingAt?: string | null
+  evidenceOutboxOldestPendingAgeSeconds?: number | null
+  evidenceOutboxBacklogAgeExceeded?: boolean
   candidateCount: number
   expandedCandidateCount: number
   canaryPublished: number
@@ -172,7 +183,7 @@ export interface RunDurationLearningRuntimeLifecycleSweepInput {
     ownerId: string
     now?: string
     limit?: number
-  }) => Promise<ProcessDurationLearningRuntimeEvidenceOutboxResult>) | null
+  }) => Promise<ProcessDurationLearningRuntimeEvidenceOutboxResult | DrainDurationLearningRuntimeEvidenceOutboxResult>) | null
   evidenceOutboxOwnerId?: string
   evidenceOutboxLimit?: number
   observedAt?: string
@@ -555,11 +566,11 @@ function payloadFingerprint(value: Record<string, unknown>) {
 }
 
 function proposalIdentity(proposal: DurationLearningRuntimeCandidateProposal) {
-  return [proposal.assetKey, proposal.artifactKey, payloadFingerprint(proposal.runtimePayload)].join(':')
+  return [proposal.assetKey, proposal.publicationKey ?? '', proposal.artifactKey, payloadFingerprint(proposal.runtimePayload)].join(':')
 }
 
 function proposalGroupingIdentity(proposal: DurationLearningRuntimeCandidateProposal) {
-  return `${proposal.assetKey}:${proposal.artifactKey}`
+  return `${proposal.assetKey}:${proposal.publicationKey ?? ''}:${proposal.artifactKey}`
 }
 
 function scopeIdentity(scope: DurationLearningRuntimeScope) {
@@ -633,6 +644,7 @@ function aggregateProposal(
     proposalKey,
     assetKey: first.assetKey,
     artifactKey: first.artifactKey,
+    publicationKey: first.publicationKey ?? null,
     scope,
     runtimePayload,
     sourceCandidateRefs,
@@ -1192,6 +1204,26 @@ function networkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidat
   ].includes(assetKey)) return null
   const id = text(row.id)
   const metadata = record(row.metadata)
+  const publicationKey = text(row.publication_key)
+  const runtimePublicationKey = text(
+    metadata.runtime_publication_key
+      ?? metadata.runtimePublicationKey
+      ?? metadata.publication_key
+      ?? metadata.publicationKey,
+  )
+  const runtimeArtifactKey = text(
+    metadata.runtime_publication_artifact_key
+      ?? metadata.runtimePublicationArtifactKey
+      ?? metadata.artifact_key
+      ?? metadata.artifactKey,
+  )
+  const sourceEvidenceRefs = list(metadata.source_evidence_refs ?? metadata.sourceEvidenceRefs).map(text)
+  if (
+    !publicationKey
+    || publicationKey !== runtimePublicationKey
+    || !runtimeArtifactKey
+    || !sourceEvidenceRefs.includes(`duration_learning_runtime_publications:${publicationKey}`)
+  ) return null
   const industryKey = rowIndustryKey(row, metadata)
   const scope = scopeFromRow(row, industryKey)
   const { artifactKey, payload } = networkArtifactAndPayload(row)
@@ -1223,6 +1255,7 @@ function networkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandidat
     proposalKey: `duration_plan_network_outcomes:${id}`,
     assetKey,
     artifactKey,
+    publicationKey,
     scope,
     runtimePayload: payload,
     sourceCandidateRefs: [`duration_plan_network_outcomes:${id}`],
@@ -1410,7 +1443,8 @@ function seedGroupKey(row: SourceRow) {
 }
 
 function networkGroupKey(row: SourceRow) {
-  return text(row.collector_group_key) || networkArtifactAndPayload(row).artifactKey
+  return text(row.collector_group_key)
+    || `${text(row.publication_key)}:${networkArtifactAndPayload(row).artifactKey}`
 }
 
 function projectScopeHistorySql(streamKey: string, eligibleCte: string) {
@@ -1701,10 +1735,19 @@ function seedHistorySql(streamKey: string, seedType: string) {
 
 function networkCollectorGroupExpression(assetKey: DurationLearningRuntimeAssetKey) {
   if (assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days') {
-    return `coalesce(nullif(outcome.metadata ->> 'template_id', ''), nullif(outcome.metadata ->> 'templateId', ''), '')`
+    return `concat(
+      coalesce(outcome.publication_key, ''),
+      ':',
+      coalesce(nullif(outcome.metadata ->> 'runtime_publication_artifact_key', ''),
+               nullif(outcome.metadata ->> 'template_id', ''),
+               nullif(outcome.metadata ->> 'templateId', ''),
+               '')
+    )`
   }
   if (assetKey === 'dependency_rule_candidate') {
     return `concat(
+      coalesce(outcome.publication_key, ''),
+      ':',
       coalesce(outcome.metadata ->> 'predecessor_stable_code', outcome.metadata ->> 'predecessorStableCode', ''),
       '->',
       coalesce(outcome.metadata ->> 'successor_stable_code', outcome.metadata ->> 'successorStableCode', ''),
@@ -1723,12 +1766,123 @@ function networkCollectorGroupExpression(assetKey: DurationLearningRuntimeAssetK
           ) source_codes
          where btrim(stable_code) <> ''
       ) canonical_codes
-  ), '[]')`
+  ), '[]') || ':' || coalesce(outcome.publication_key, '')`
 }
 
 function networkEligibleCte(assetKey: DurationLearningRuntimeAssetKey) {
   const groupExpression = networkCollectorGroupExpression(assetKey)
   const projectIndustrySql = durationLearningProjectIndustrySqlExpression('project')
+  const authorityEvidencePredicate = assetKey === 'critical_path_rule_candidate'
+    ? `and exists (
+         select 1
+           from public.runtime_consumer_observations exact_observation
+          where exact_observation.publication_key = outcome.publication_key
+            and exact_observation.asset_key = outcome.asset_key
+            and exact_observation.observation_status = 'observed'
+            and exact_observation.observation_context ->> 'artifactKey'
+                  = outcome.metadata ->> 'runtime_publication_artifact_key'
+            and exact_observation.observation_context ->> 'projectId' = outcome.project_id::text
+            and exact_observation.observation_context ->> 'companyId' = outcome.company_id::text
+            and exact_observation.observation_context -> 'inputTaskIds'
+                  = outcome.metadata -> 'runtime_publication_input_task_ids'
+            and exact_observation.observation_context ->> 'criticalPathInputHash'
+                  = outcome.metadata ->> 'critical_path_input_hash'
+            and exact_observation.observation_context ->> 'taskNetworkInputHash'
+                  = outcome.metadata ->> 'task_network_input_hash'
+            and exact_observation.source_evidence_refs ? (
+              'duration_learning_runtime_publications:' || outcome.publication_key
+            )
+            and exact_observation.source_evidence_refs ? (
+              'critical_path_inputs:' || outcome.metadata ->> 'critical_path_input_hash'
+            )
+       )`
+    : assetKey === 'dependency_rule_candidate'
+      ? `and nullif(outcome.metadata ->> 'generation_batch_id', '') is not null
+         and jsonb_typeof(outcome.metadata -> 'runtime_publication_input_task_ids') = 'array'
+         and jsonb_array_length(outcome.metadata -> 'runtime_publication_input_task_ids') > 0
+         and exists (
+           select 1
+             from (
+               select coalesce(
+                        jsonb_agg(distinct input_value.task_id order by input_value.task_id),
+                        '[]'::jsonb
+                      ) as input_task_ids
+                 from public.duration_learning_runtime_consumptions consumption
+                 cross join lateral jsonb_array_elements_text(
+                   coalesce(
+                     consumption.consumption_context -> 'inputTaskIds',
+                     jsonb_build_array(consumption.task_id::text)
+                   )
+                 ) as input_value(task_id)
+                where consumption.publication_key = outcome.publication_key
+                  and consumption.asset_key = outcome.asset_key
+                  and consumption.artifact_key = outcome.metadata ->> 'runtime_publication_artifact_key'
+                  and consumption.company_id = outcome.company_id
+                  and consumption.project_id = outcome.project_id
+                  and consumption.generation_batch_id = outcome.metadata ->> 'generation_batch_id'
+                  and consumption.task_id is not null
+                  and consumption.baseline_item_id is null
+                  and consumption.source_evidence_refs ? (
+                    'duration_learning_runtime_publications:' || outcome.publication_key
+                  )
+                  and consumption.consumption_context ->> 'authoritySource'
+                        = 'runtime_resolver_publication_set'
+                  and input_value.task_id is not null
+                  and input_value.task_id <> ''
+             ) consumed_lineage
+            where consumed_lineage.input_task_ids
+                    = outcome.metadata -> 'runtime_publication_input_task_ids'
+       )`
+      : `and nullif(outcome.metadata ->> 'generation_batch_id', '') is not null
+         and jsonb_typeof(coalesce(
+               outcome.metadata -> 'runtime_publication_input_subject_ids',
+               outcome.metadata -> 'runtime_publication_input_task_ids'
+             )) = 'array'
+         and jsonb_array_length(coalesce(
+               outcome.metadata -> 'runtime_publication_input_subject_ids',
+               outcome.metadata -> 'runtime_publication_input_task_ids'
+             )) > 0
+         and exists (
+           select 1
+             from (
+               select coalesce(
+                        jsonb_agg(distinct consumed_subject.subject_id order by consumed_subject.subject_id),
+                        '[]'::jsonb
+                      ) as subject_ids
+                 from (
+                   select case
+                            when outcome.metadata ->> 'runtime_publication_subject_type' = 'baseline_item'
+                            then consumption.baseline_item_id::text
+                            else consumption.task_id::text
+                          end as subject_id
+                     from public.duration_learning_runtime_consumptions consumption
+                    where consumption.publication_key = outcome.publication_key
+                      and consumption.asset_key = outcome.asset_key
+                      and consumption.artifact_key = outcome.metadata ->> 'runtime_publication_artifact_key'
+                      and consumption.company_id = outcome.company_id
+                      and consumption.project_id = outcome.project_id
+                      and consumption.generation_batch_id = outcome.metadata ->> 'generation_batch_id'
+                      and (
+                        (outcome.metadata ->> 'runtime_publication_subject_type' = 'baseline_item'
+                         and consumption.task_id is null
+                         and consumption.baseline_item_id is not null)
+                        or (coalesce(outcome.metadata ->> 'runtime_publication_subject_type', 'task') = 'task'
+                         and consumption.task_id is not null
+                         and consumption.baseline_item_id is null)
+                      )
+                      and consumption.source_evidence_refs ? (
+                        'duration_learning_runtime_publications:' || outcome.publication_key
+                      )
+                      and consumption.consumption_context ->> 'authoritySource'
+                            = 'runtime_resolver_publication_set'
+                 ) consumed_subject
+                where consumed_subject.subject_id is not null
+             ) consumed_lineage
+            where consumed_lineage.subject_ids = coalesce(
+              outcome.metadata -> 'runtime_publication_input_subject_ids',
+              outcome.metadata -> 'runtime_publication_input_task_ids'
+            )
+       )`
   return `eligible as (
     select outcome.*,
            ${groupExpression} as collector_group_key,
@@ -1746,9 +1900,47 @@ function networkEligibleCte(assetKey: DurationLearningRuntimeAssetKey) {
         select ${projectIndustrySql} as business_type
       ) project_classification
      where outcome.asset_key = '${assetKey}'
+       and outcome.publication_key is not null
        and outcome.outcome_status in ('accepted', 'weak', 'rejected')
        and project.company_id is not null
        and (outcome.company_id is null or outcome.company_id = project.company_id)
+       and outcome.metadata ->> 'runtime_publication_key' = outcome.publication_key
+       and nullif(outcome.metadata ->> 'runtime_publication_artifact_key', '') is not null
+       and outcome.metadata -> 'source_evidence_refs' ? (
+         'duration_learning_runtime_publications:' || outcome.publication_key
+       )
+       and exists (
+         select 1
+           from public.duration_learning_runtime_publications publication
+          where publication.publication_key = outcome.publication_key
+            and publication.asset_key = outcome.asset_key
+            and publication.artifact_key = outcome.metadata ->> 'runtime_publication_artifact_key'
+            and (
+              (publication.publication_stage = 'canary'
+               and publication.monitoring_status in ('pending', 'collecting', 'passed'))
+              or (publication.publication_stage = 'stable'
+               and publication.monitoring_status = 'passed')
+            )
+            and (
+              (publication.scope_level = 'project'
+               and publication.company_id = outcome.company_id
+               and publication.project_id = outcome.project_id
+               and publication.industry_key is null)
+              or (publication.scope_level = 'company'
+               and publication.company_id = outcome.company_id
+               and publication.project_id is null
+               and publication.industry_key is null)
+              or (publication.scope_level = 'industry'
+               and publication.company_id is null
+               and publication.project_id is null
+               and publication.industry_key = project_classification.business_type)
+              or (publication.scope_level = 'global'
+               and publication.company_id is null
+               and publication.project_id is null
+               and publication.industry_key is null)
+            )
+       )
+       ${authorityEvidencePredicate}
   )`
 }
 
@@ -2138,9 +2330,10 @@ function durationLearningRuntimeMonitoringCollectorSql() {
            from (
              select source.observation_status,
                     source.observed_at
-               from public.runtime_consumer_observations source
-              where source.publication_key = publication.publication_key
-                and source.asset_key = publication.asset_key
+              from public.runtime_consumer_observations source
+             where source.publication_key = publication.publication_key
+               and source.asset_key = publication.asset_key
+                and publication.asset_key = 'critical_path_rule_candidate'
                 and source.observation_context ->> 'artifactKey' = publication.artifact_key
                 and source.source_evidence_refs ? (
                   'duration_learning_runtime_publications:' || publication.publication_key
@@ -2151,11 +2344,32 @@ function durationLearningRuntimeMonitoringCollectorSql() {
                from public.duration_learning_runtime_consumptions source
               where source.publication_key = publication.publication_key
                 and source.asset_key = publication.asset_key
+                and publication.asset_key <> 'critical_path_rule_candidate'
                 and source.artifact_key = publication.artifact_key
-                and source.source_evidence_refs ? (
-                  'duration_learning_runtime_publications:' || publication.publication_key
+               and source.source_evidence_refs ? (
+                 'duration_learning_runtime_publications:' || publication.publication_key
+               )
+                and source.consumption_context ->> 'authoritySource'
+                      = 'runtime_resolver_publication_set'
+                and (
+                  (publication.scope_level = 'project'
+                   and publication.company_id = source.company_id
+                   and publication.project_id = source.project_id
+                   and publication.industry_key is null)
+                  or (publication.scope_level = 'company'
+                   and publication.company_id = source.company_id
+                   and publication.project_id is null
+                   and publication.industry_key is null)
+                  or (publication.scope_level = 'industry'
+                   and publication.company_id is null
+                   and publication.project_id is null
+                   and publication.industry_key = source.consumption_context ->> 'industryKey')
+                  or (publication.scope_level = 'global'
+                   and publication.company_id is null
+                   and publication.project_id is null
+                   and publication.industry_key is null)
                 )
-           ) source
+            ) source
           where source.observed_at >= publication.monitoring_started_at
        ) observation on true
        left join lateral (
@@ -2165,94 +2379,205 @@ function durationLearningRuntimeMonitoringCollectorSql() {
           where source.publication_key = publication.publication_key
             and source.asset_key = publication.asset_key
             and source.observed_at >= publication.monitoring_started_at
-            and (
-              publication.asset_key not in (
-                'special_work_duration_seed',
-                'wbs_reference_days',
-                'dependency_rule_candidate',
-                'critical_path_rule_candidate'
-              )
-              or (
-                source.metadata ->> 'runtime_publication_key' = publication.publication_key
-                and source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key
-                and jsonb_typeof(source.metadata -> 'runtime_publication_input_task_ids') = 'array'
-                and jsonb_array_length(source.metadata -> 'runtime_publication_input_task_ids') > 0
-                and (
-                  (
-                    (
-                      publication.asset_key = 'special_work_duration_seed'
-                      or publication.asset_key = 'critical_path_rule_candidate'
-                    )
-                    and exists (
-                      select 1
-                        from public.runtime_consumer_observations exact_observation
-                       where exact_observation.publication_key = publication.publication_key
-                         and exact_observation.asset_key = publication.asset_key
-                         and exact_observation.observation_status = 'observed'
-                         and exact_observation.observed_at >= publication.monitoring_started_at
-                         and exact_observation.observation_context ->> 'artifactKey' = publication.artifact_key
-                         and exact_observation.observation_context ->> 'projectId' = source.project_id::text
-                         and exact_observation.observation_context -> 'inputTaskIds'
-                           = source.metadata -> 'runtime_publication_input_task_ids'
-                         and exact_observation.source_evidence_refs ? (
-                           'duration_learning_runtime_publications:' || publication.publication_key
-                         )
-                    )
-                  )
-                  or (
-                    publication.asset_key in ('wbs_reference_days', 'dependency_rule_candidate')
-                    and exists (
-                      select 1
-                        from (
-                          select coalesce(
-                                   jsonb_agg(consumed_input.task_id order by consumed_input.task_id),
-                                   '[]'::jsonb
-                                 ) as input_task_ids
-                            from (
-                              select distinct consumption_input.task_id
-                                from public.duration_learning_runtime_consumptions exact_consumption
-                                cross join lateral jsonb_array_elements_text(
-                                  case
-                                    when publication.asset_key = 'dependency_rule_candidate'
-                                    then coalesce(
-                                      exact_consumption.consumption_context -> 'inputTaskIds',
-                                      jsonb_build_array(exact_consumption.task_id::text)
-                                    )
-                                    else jsonb_build_array(exact_consumption.task_id::text)
-                                  end
-                                ) as consumption_input(task_id)
-                               where exact_consumption.publication_key = publication.publication_key
-                                 and exact_consumption.asset_key = publication.asset_key
-                                 and exact_consumption.artifact_key = publication.artifact_key
-                                 and exact_consumption.company_id = source.company_id
-                                 and exact_consumption.project_id = source.project_id
-                                 and exact_consumption.consumed_at >= publication.monitoring_started_at
-                                 and exact_consumption.source_evidence_refs ? (
-                                   'duration_learning_runtime_publications:' || publication.publication_key
-                                 )
-                                 and consumption_input.task_id is not null
-                                 and consumption_input.task_id <> ''
-                            ) consumed_input
-                        ) exact_consumed
-                        cross join lateral (
-                          select coalesce(
-                                   jsonb_agg(outcome_input.task_id order by outcome_input.task_id),
-                                   '[]'::jsonb
-                                 ) as input_task_ids
-                            from (
-                              select distinct metadata_input.task_id
-                                from jsonb_array_elements_text(
-                                  source.metadata -> 'runtime_publication_input_task_ids'
-                                ) as metadata_input(task_id)
-                            ) outcome_input
-                        ) exact_outcome
-                       where exact_consumed.input_task_ids = exact_outcome.input_task_ids
-                         and jsonb_array_length(exact_consumed.input_task_ids) > 0
-                    )
-                  )
-                )
-              )
-            )
+             and (
+               publication.asset_key not in (
+                 'special_work_duration_seed',
+                 'wbs_reference_days',
+                 'dependency_rule_candidate',
+                 'critical_path_rule_candidate'
+               )
+               or (
+                 (
+                   publication.asset_key = 'special_work_duration_seed'
+                   and source.metadata ->> 'runtime_publication_key' = publication.publication_key
+                   and source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key
+                   and source.metadata ->> 'runtime_publication_subject_type' in ('task', 'baseline_item')
+                   and nullif(source.metadata ->> 'generation_batch_id', '') is not null
+                   and jsonb_typeof(source.metadata -> 'runtime_publication_input_subject_ids') = 'array'
+                   and jsonb_array_length(source.metadata -> 'runtime_publication_input_subject_ids') > 0
+                   and (
+                     (publication.scope_level = 'project'
+                      and publication.company_id = source.company_id
+                      and publication.project_id = source.project_id
+                      and publication.industry_key is null)
+                     or (publication.scope_level = 'company'
+                      and publication.company_id = source.company_id
+                      and publication.project_id is null
+                      and publication.industry_key is null)
+                     or (publication.scope_level = 'industry'
+                      and publication.company_id is null
+                      and publication.project_id is null
+                      and publication.industry_key = source.metadata ->> 'runtime_publication_industry_key')
+                     or (publication.scope_level = 'global'
+                      and publication.company_id is null
+                      and publication.project_id is null
+                      and publication.industry_key is null)
+                   )
+                   and (
+                     (
+                       source.metadata ->> 'runtime_publication_subject_type' = 'task'
+                       and jsonb_typeof(source.metadata -> 'runtime_publication_input_task_ids') = 'array'
+                       and jsonb_array_length(source.metadata -> 'runtime_publication_input_task_ids') > 0
+                       and exists (
+                         select 1
+                           from (
+                             select coalesce(
+                                      jsonb_agg(distinct exact_consumption.task_id::text order by exact_consumption.task_id::text),
+                                      '[]'::jsonb
+                                    ) as input_task_ids,
+                                    coalesce(
+                                      jsonb_agg(distinct exact_consumption.task_id::text order by exact_consumption.task_id::text),
+                                      '[]'::jsonb
+                                    ) as input_subject_ids
+                               from public.duration_learning_runtime_consumptions exact_consumption
+                              where exact_consumption.publication_key = publication.publication_key
+                                and exact_consumption.asset_key = publication.asset_key
+                                and exact_consumption.artifact_key = publication.artifact_key
+                                and exact_consumption.company_id = source.company_id
+                                and exact_consumption.project_id = source.project_id
+                                and exact_consumption.task_id is not null
+                                and exact_consumption.baseline_item_id is null
+                                and exact_consumption.generation_batch_id = source.metadata ->> 'generation_batch_id'
+                                and exact_consumption.consumed_at >= publication.monitoring_started_at
+                                and exact_consumption.source_evidence_refs ? (
+                                  'duration_learning_runtime_publications:' || publication.publication_key
+                                )
+                                and exact_consumption.consumption_context ->> 'authoritySource'
+                                  = 'runtime_resolver_publication_set'
+                           ) exact_consumption
+                          where exact_consumption.input_task_ids
+                                  = source.metadata -> 'runtime_publication_input_task_ids'
+                            and exact_consumption.input_subject_ids
+                                  = source.metadata -> 'runtime_publication_input_subject_ids'
+                            and jsonb_array_length(exact_consumption.input_task_ids) > 0
+                       )
+                     )
+                     or (
+                       source.metadata ->> 'runtime_publication_subject_type' = 'baseline_item'
+                       and jsonb_typeof(source.metadata -> 'runtime_publication_input_baseline_item_ids') = 'array'
+                       and jsonb_array_length(source.metadata -> 'runtime_publication_input_baseline_item_ids') > 0
+                       and exists (
+                         select 1
+                           from (
+                             select coalesce(
+                                      jsonb_agg(distinct exact_consumption.baseline_item_id::text order by exact_consumption.baseline_item_id::text),
+                                      '[]'::jsonb
+                                    ) as input_baseline_item_ids,
+                                    coalesce(
+                                      jsonb_agg(distinct exact_consumption.baseline_item_id::text order by exact_consumption.baseline_item_id::text),
+                                      '[]'::jsonb
+                                    ) as input_subject_ids
+                               from public.duration_learning_runtime_consumptions exact_consumption
+                              where exact_consumption.publication_key = publication.publication_key
+                                and exact_consumption.asset_key = publication.asset_key
+                                and exact_consumption.artifact_key = publication.artifact_key
+                                and exact_consumption.company_id = source.company_id
+                                and exact_consumption.project_id = source.project_id
+                                and exact_consumption.task_id is null
+                                and exact_consumption.baseline_item_id is not null
+                                and exact_consumption.generation_batch_id = source.metadata ->> 'generation_batch_id'
+                                and exact_consumption.consumed_at >= publication.monitoring_started_at
+                                and exact_consumption.source_evidence_refs ? (
+                                  'duration_learning_runtime_publications:' || publication.publication_key
+                                )
+                                and exact_consumption.consumption_context ->> 'authoritySource'
+                                  = 'runtime_resolver_publication_set'
+                           ) exact_consumption
+                          where exact_consumption.input_baseline_item_ids
+                                  = source.metadata -> 'runtime_publication_input_baseline_item_ids'
+                            and exact_consumption.input_subject_ids
+                                  = source.metadata -> 'runtime_publication_input_subject_ids'
+                            and jsonb_array_length(exact_consumption.input_baseline_item_ids) > 0
+                       )
+                     )
+                   )
+                 )
+                 or (
+                   publication.asset_key = 'critical_path_rule_candidate'
+                   and source.metadata ->> 'runtime_publication_key' = publication.publication_key
+                   and source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key
+                   and jsonb_typeof(source.metadata -> 'runtime_publication_input_task_ids') = 'array'
+                   and jsonb_array_length(source.metadata -> 'runtime_publication_input_task_ids') > 0
+                   and exists (
+                     select 1
+                       from public.runtime_consumer_observations exact_observation
+                      where exact_observation.publication_key = publication.publication_key
+                        and exact_observation.asset_key = publication.asset_key
+                        and exact_observation.observation_status = 'observed'
+                        and exact_observation.observed_at >= publication.monitoring_started_at
+                        and exact_observation.observation_context ->> 'artifactKey' = publication.artifact_key
+                        and exact_observation.observation_context ->> 'projectId' = source.project_id::text
+                        and exact_observation.observation_context -> 'inputTaskIds'
+                          = source.metadata -> 'runtime_publication_input_task_ids'
+                        and exact_observation.source_evidence_refs ? (
+                          'duration_learning_runtime_publications:' || publication.publication_key
+                        )
+                        and exact_observation.source_evidence_refs ? (
+                          'critical_path_inputs:' || source.metadata ->> 'critical_path_input_hash'
+                        )
+                        and exact_observation.observation_context ->> 'companyId' = source.company_id::text
+                        and exact_observation.observation_context ->> 'criticalPathInputHash'
+                          = source.metadata ->> 'critical_path_input_hash'
+                        and exact_observation.observation_context ->> 'taskNetworkInputHash'
+                          = source.metadata ->> 'task_network_input_hash'
+                        and (
+                          nullif(source.metadata ->> 'generation_batch_id', '') is null
+                          or exact_observation.observation_context ->> 'generationBatchId'
+                               = source.metadata ->> 'generation_batch_id'
+                        )
+                   )
+                 )
+                 or (
+                   publication.asset_key in ('wbs_reference_days', 'dependency_rule_candidate')
+                   and source.metadata ->> 'runtime_publication_key' = publication.publication_key
+                   and source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key
+                   and jsonb_typeof(source.metadata -> 'runtime_publication_input_task_ids') = 'array'
+                   and jsonb_array_length(source.metadata -> 'runtime_publication_input_task_ids') > 0
+                   and exists (
+                     select 1
+                       from (
+                         select coalesce(
+                                  jsonb_agg(distinct consumed_input.task_id order by consumed_input.task_id),
+                                  '[]'::jsonb
+                                ) as input_task_ids
+                           from (
+                             select distinct consumption_input.task_id
+                               from public.duration_learning_runtime_consumptions exact_consumption
+                               cross join lateral jsonb_array_elements_text(
+                                 case
+                                   when publication.asset_key = 'dependency_rule_candidate'
+                                   then coalesce(
+                                     exact_consumption.consumption_context -> 'inputTaskIds',
+                                     jsonb_build_array(exact_consumption.task_id::text)
+                                   )
+                                   else jsonb_build_array(exact_consumption.task_id::text)
+                                 end
+                               ) as consumption_input(task_id)
+                              where exact_consumption.publication_key = publication.publication_key
+                                and exact_consumption.asset_key = publication.asset_key
+                                and exact_consumption.artifact_key = publication.artifact_key
+                                and exact_consumption.company_id = source.company_id
+                               and exact_consumption.project_id = source.project_id
+                                and exact_consumption.generation_batch_id = source.metadata ->> 'generation_batch_id'
+                                and exact_consumption.task_id is not null
+                                and exact_consumption.baseline_item_id is null
+                                and exact_consumption.consumed_at >= publication.monitoring_started_at
+                                and exact_consumption.source_evidence_refs ? (
+                                  'duration_learning_runtime_publications:' || publication.publication_key
+                                )
+                                and exact_consumption.consumption_context ->> 'authoritySource'
+                                  = 'runtime_resolver_publication_set'
+                                and consumption_input.task_id is not null
+                                and consumption_input.task_id <> ''
+                           ) consumed_input
+                       ) exact_consumed
+                      where exact_consumed.input_task_ids
+                              = source.metadata -> 'runtime_publication_input_task_ids'
+                        and jsonb_array_length(exact_consumed.input_task_ids) > 0
+                   )
+                 )
+               )
+             )
        ) network on true
        left join lateral (
          select count(*) as accuracy_sample_count,
@@ -2273,19 +2598,64 @@ function durationLearningRuntimeMonitoringCollectorSql() {
                 source.prediction_context ->> 'publication_key'
               )
               or source.prediction_context -> 'runtimePublicationKeys' ? publication.publication_key
-              or exists (
-                select 1
-                  from jsonb_array_elements(
-                    coalesce(
-                      source.actual_context -> 'durationLearningRuntimeConsumptions',
-                      source.actual_context -> 'duration_learning_runtime_consumptions',
-                      '[]'::jsonb
-                    )
-                  ) consumption
-                 where consumption ->> 'publicationKey' = publication.publication_key
-                   and consumption ->> 'assetKey' = publication.asset_key
-                   and consumption ->> 'artifactKey' = publication.artifact_key
-              )
+            )
+            and exists (
+              select 1
+                from jsonb_array_elements(
+                  coalesce(
+                    source.actual_context -> 'durationLearningRuntimeConsumptions',
+                    source.actual_context -> 'duration_learning_runtime_consumptions',
+                    '[]'::jsonb
+                  )
+                ) consumption
+                join public.duration_learning_runtime_consumptions exact_accuracy_consumption
+                  on exact_accuracy_consumption.consumption_key = coalesce(
+                    consumption ->> 'consumptionKey',
+                    consumption ->> 'consumption_key'
+                  )
+                 and exact_accuracy_consumption.publication_key = publication.publication_key
+                 and exact_accuracy_consumption.asset_key = publication.asset_key
+                 and exact_accuracy_consumption.artifact_key = publication.artifact_key
+                 and exact_accuracy_consumption.project_id = source.project_id
+                 and exact_accuracy_consumption.task_id = source.task_id
+                 and exact_accuracy_consumption.baseline_item_id is null
+                 and exact_accuracy_consumption.generation_batch_id = coalesce(
+                   source.prediction_context ->> 'generationBatchId',
+                   source.prediction_context ->> 'generation_batch_id'
+                 )
+                 and exact_accuracy_consumption.generation_batch_id = coalesce(
+                   consumption ->> 'generationBatchId',
+                   consumption ->> 'generation_batch_id'
+                 )
+                 and exact_accuracy_consumption.source_evidence_refs ? (
+                   'duration_learning_runtime_publications:' || publication.publication_key
+                 )
+                 and exact_accuracy_consumption.consumption_context ->> 'authoritySource'
+                       = 'runtime_resolver_publication_set'
+               where coalesce(consumption ->> 'publicationKey', consumption ->> 'publication_key')
+                       = publication.publication_key
+                 and coalesce(consumption ->> 'assetKey', consumption ->> 'asset_key')
+                       = publication.asset_key
+                 and coalesce(consumption ->> 'artifactKey', consumption ->> 'artifact_key')
+                       = publication.artifact_key
+                 and (
+                   (publication.scope_level = 'project'
+                    and publication.company_id = exact_accuracy_consumption.company_id
+                    and publication.project_id = exact_accuracy_consumption.project_id
+                    and publication.industry_key is null)
+                   or (publication.scope_level = 'company'
+                    and publication.company_id = exact_accuracy_consumption.company_id
+                    and publication.project_id is null
+                    and publication.industry_key is null)
+                   or (publication.scope_level = 'industry'
+                    and publication.company_id is null
+                    and publication.project_id is null
+                    and publication.industry_key = exact_accuracy_consumption.consumption_context ->> 'industryKey')
+                   or (publication.scope_level = 'global'
+                    and publication.company_id is null
+                    and publication.project_id is null
+                    and publication.industry_key is null)
+                 )
             )
        ) accuracy on true
       order by selected.collector_priority, publication.publication_key`
@@ -2373,6 +2743,15 @@ function emptySweepResult(): DurationLearningRuntimeLifecycleSweepResult {
     evidenceOutboxClaimed: 0,
     evidenceOutboxCompleted: 0,
     evidenceOutboxFailed: 0,
+    evidenceOutboxBatches: 0,
+    evidenceOutboxMaxBatches: 0,
+    evidenceOutboxBacklogCount: 0,
+    evidenceOutboxReadyBacklogCount: 0,
+    evidenceOutboxFailedBacklogCount: 0,
+    evidenceOutboxExpiredProcessingCount: 0,
+    evidenceOutboxOldestPendingAt: null,
+    evidenceOutboxOldestPendingAgeSeconds: null,
+    evidenceOutboxBacklogAgeExceeded: false,
     candidateCount: 0,
     expandedCandidateCount: 0,
     canaryPublished: 0,
@@ -2633,7 +3012,7 @@ export async function runDurationLearningRuntimeLifecycleSweep(
   const evidenceOutboxProcessor = input.evidenceOutboxProcessor === undefined
     ? input.candidateProvider || input.monitoringProvider
       ? null
-      : processDurationLearningRuntimeEvidenceOutbox
+      : drainDurationLearningRuntimeEvidenceOutbox
     : input.evidenceOutboxProcessor
   const collectionCursorStore = input.collectionCursorStore === undefined
     ? input.candidateProvider || input.monitoringProvider
@@ -2667,8 +3046,41 @@ export async function runDurationLearningRuntimeLifecycleSweep(
       result.evidenceOutboxClaimed = evidence.claimed
       result.evidenceOutboxCompleted = evidence.completed
       result.evidenceOutboxFailed = evidence.failed
+      result.evidenceOutboxBatches = Number('batches' in evidence ? evidence.batches : 0)
+      result.evidenceOutboxMaxBatches = Number('maxBatches' in evidence ? evidence.maxBatches : 0)
+      result.evidenceOutboxBacklogCount = Number('backlogCount' in evidence ? evidence.backlogCount : 0)
+      result.evidenceOutboxReadyBacklogCount = Number('readyBacklogCount' in evidence ? evidence.readyBacklogCount : 0)
+      result.evidenceOutboxFailedBacklogCount = Number('failedBacklogCount' in evidence ? evidence.failedBacklogCount : 0)
+      result.evidenceOutboxExpiredProcessingCount = Number('expiredProcessingCount' in evidence ? evidence.expiredProcessingCount : 0)
+      result.evidenceOutboxOldestPendingAt = 'oldestPendingAt' in evidence
+        ? evidence.oldestPendingAt ?? null
+        : null
+      result.evidenceOutboxOldestPendingAgeSeconds = 'oldestPendingAgeSeconds' in evidence
+        ? evidence.oldestPendingAgeSeconds ?? null
+        : null
+      result.evidenceOutboxBacklogAgeExceeded = 'backlogAgeExceeded' in evidence
+        ? evidence.backlogAgeExceeded === true
+        : false
       for (const eventKey of evidence.failureKeys) {
         addFailure('evidence_outbox', eventKey, new Error('duration_learning_runtime_evidence_outbox_event_failed'))
+      }
+      if (
+        'maxBatches' in evidence
+        && evidence.readyBacklogCount > 0
+        && evidence.batches >= evidence.maxBatches
+      ) {
+        addFailure(
+          'evidence_outbox',
+          'duration-learning-runtime-evidence-outbox-backlog',
+          new Error(`duration_learning_runtime_evidence_outbox_backlog:${evidence.readyBacklogCount}`),
+        )
+      }
+      if ('backlogAgeExceeded' in evidence && evidence.backlogAgeExceeded === true) {
+        addFailure(
+          'evidence_outbox',
+          'duration-learning-runtime-evidence-outbox-backlog-age',
+          new Error(`duration_learning_runtime_evidence_outbox_backlog_age:${evidence.oldestPendingAgeSeconds ?? 'unknown'}`),
+        )
       }
     } catch (error) {
       addFailure('evidence_outbox', 'duration-learning-runtime-evidence-outbox', error)

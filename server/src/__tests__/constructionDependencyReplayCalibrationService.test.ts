@@ -223,7 +223,7 @@ describe('construction dependency replay calibration service', () => {
     ])
   })
 
-  it('records dependency-rule replay candidates as plan-network outcomes without mutating task dependencies', async () => {
+  it('keeps cold-start dependency replay as candidate-only evidence without an unlinked network outcome', async () => {
     const rows = [
       {
         id: 'dep-l3-zero-lag',
@@ -272,59 +272,12 @@ describe('construction dependency replay calibration service', () => {
     })
 
     expect(result.report.summary.comparableActualDateCount).toBe(1)
-    const outcomeInsert = queryExecCalls.find((call) =>
+    expect(result.recordedOutcomeCount).toBe(0)
+    expect(queryExecCalls.some((call) =>
       call.sql.toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
-    )
-
-    expect(outcomeInsert).toBeTruthy()
-    expect(outcomeInsert?.sql.toLowerCase()).toContain('on conflict (id) do update')
-    expect(outcomeInsert?.sql.toLowerCase()).toContain('learning_scope_source')
-    expect(outcomeInsert?.sql.toLowerCase()).not.toContain('insert into public.task_dependencies')
-    expect(outcomeInsert?.sql.toLowerCase()).not.toContain('update public.task_dependencies')
-    expect(outcomeInsert?.params).toEqual([
-      'dependency-rule-candidate:cross_item_workflow:prefab_factory_to_site_hoist_handoff:10000000-0000-4000-8000-000000000001:project-1',
-      'dependency_rule_candidate',
-      'weak',
-      'construction_dependency_replay_calibration:cross_item_workflow:prefab_factory_to_site_hoist_handoff',
-      'project',
-      'project_business_outcome_writer',
-      '10000000-0000-4000-8000-000000000001',
-      'project-1',
-      null,
-      expect.objectContaining({
-        source: 'construction_dependency_replay_calibration',
-        matched_layer: 'cross_item_workflow',
-        matched_seed_code: 'prefab_factory_to_site_hoist_handoff',
-        predecessor_stable_code: 'PFB-00-01-02-P01',
-        successor_stable_code: 'PFB-01-01-03-P01',
-        dependency_type: 'FS',
-        sample_count: 1,
-        project_count: 1,
-        conflict_count: 0,
-        duration_day_unit: 'calendar_day_no_construction_calendar_context',
-        durationDayUnit: 'calendar_day_no_construction_calendar_context',
-        construction_calendar: null,
-        constructionCalendar: null,
-        source_evidence_refs: ['task_dependencies:dep-l3-zero-lag:replay'],
-        task_ids: ['task-prefab-factory-release', 'task-prefab-site-hoist'],
-        real_outcome_count: 1,
-        replay_case_count: 1,
-        observation_started_at: '2026-06-01T00:00:00.000Z',
-        observation_ended_at: '2026-06-04T00:00:00.000Z',
-        observation_window_days: 4,
-        quality_model: 'structural_replay',
-        replay_pass_rate: 1,
-        outcome_acceptance_rate: 0,
-        quality_consistency_rate: 1,
-        conflict_rate: 0,
-        rollback_ready: true,
-        tenant_scope_valid: true,
-        writes_runtime_directly: false,
-        writes_fact_directly: false,
-      }),
-      false,
-      false,
-    ])
+    )).toBe(false)
+    expect(queryExecCalls.map((call) => call.sql.toLowerCase()).join('\n')).not.toContain('insert into public.task_dependencies')
+    expect(queryExecCalls.map((call) => call.sql.toLowerCase()).join('\n')).not.toContain('update public.task_dependencies')
   })
 
   it('rejects a cross-project replay report before candidate or outcome mutation', async () => {
@@ -429,17 +382,9 @@ describe('construction dependency replay calibration service', () => {
       replayStatus: 'needs_lag_calibration',
     })])
 
-    const outcomeInsert = queryExecCalls.find((call) =>
+    expect(queryExecCalls.some((call) =>
       call.sql.toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
-    )
-    expect(outcomeInsert?.params[9]).toEqual(expect.objectContaining({
-      duration_day_unit: 'construction_production_day',
-      durationDayUnit: 'construction_production_day',
-      construction_calendar: constructionCalendar,
-      constructionCalendar,
-      median_observed_wait_days: 2,
-      suggested_lag_days: 2,
-    }))
+    )).toBe(false)
   })
 
   it('binds learned dependency replay outcomes to the runtime publication that created the edges', async () => {
@@ -473,12 +418,38 @@ describe('construction dependency replay calibration service', () => {
       queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => rows as T[],
       queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
         calls.push({ sql, params })
+        if (sql.toLowerCase().includes('from public.duration_learning_runtime_consumptions')) {
+          return rows.map((row, index) => ({
+            consumption_key: `dependency-consumption-${index}`,
+            company_id: '10000000-0000-4000-8000-000000000001',
+            project_id: 'project-1',
+            publication_key: publicationKey,
+            asset_key: 'dependency_rule_candidate',
+            artifact_key: 'dependency-rule-artifact-v2',
+            task_id: row.successor_task_id,
+            baseline_item_id: null,
+            generation_batch_id: 'batch-dependency-1',
+            source_evidence_refs: [
+              `duration_learning_runtime_publications:${publicationKey}`,
+            ],
+            consumption_context: {
+              authoritySource: 'runtime_resolver_publication_set',
+              inputTaskIds: [row.predecessor_task_id, row.successor_task_id],
+            },
+            publication_stage: 'canary',
+            monitoring_status: 'pending',
+            publication_scope_level: 'project',
+            publication_company_id: '10000000-0000-4000-8000-000000000001',
+            publication_project_id: 'project-1',
+            publication_industry_key: null,
+          })) as T[]
+        }
         return [] as T[]
       },
     })
 
     const outcome = calls.find((call) => call.sql.includes('INSERT INTO public.duration_plan_network_outcomes'))
-    expect(outcome?.params[0]).toContain(publicationKey)
+    expect(outcome?.params[0]).toContain(`${publicationKey}:batch-dependency-1`)
     expect(outcome?.params[8]).toBe(publicationKey)
     expect(outcome?.params[9]).toEqual(expect.objectContaining({
       runtime_publication_key: publicationKey,
@@ -493,7 +464,61 @@ describe('construction dependency replay calibration service', () => {
       ],
       runtime_publication_stage: 'canary',
       runtime_publication_selection_basis: 'project_canary',
+      generation_batch_id: 'batch-dependency-1',
+      runtime_publication_consumption_keys: [
+        'dependency-consumption-0',
+        'dependency-consumption-1',
+        'dependency-consumption-2',
+      ],
+      runtime_publication_authority_source: 'runtime_resolver_publication_set',
+      source_evidence_refs: expect.arrayContaining([
+        `duration_learning_runtime_publications:${publicationKey}`,
+      ]),
     }))
+  })
+
+  it('fails before candidate or outcome mutation when a learned dependency has no exact physical consumption batch', async () => {
+    const publicationKey = 'duration_learning_runtime:dependency_rule_candidate:canary-missing-consumption'
+    const calls: Array<{ sql: string, params: unknown[] }> = []
+
+    await expect(collectAndPersistConstructionDependencyReplayCalibrationCandidates({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectIds: ['project-1'],
+      queryRows: async <T = Record<string, unknown>>(): Promise<T[]> => ([{
+        id: 'dep-missing-consumption',
+        project_id: 'project-1',
+        dependency_type: 'FS',
+        lag_days: 0,
+        source_type: 'duration_learning_runtime_publication',
+        metadata: {
+          seedRuleId: 'prefab_factory_to_site_hoist_handoff',
+          publicationKey,
+          artifactKey: 'dependency-rule-artifact-v2',
+          publicationStage: 'canary',
+          selectionBasis: 'project_canary',
+        },
+        predecessor_task_id: 'predecessor-1',
+        predecessor_task_code: 'PFB-00-01-02-P01',
+        predecessor_actual_end_date: '2026-06-01',
+        successor_task_id: 'successor-1',
+        successor_task_code: 'PFB-01-01-03-P01',
+        successor_actual_start_date: '2026-06-04',
+      }] as T[]),
+      queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+        calls.push({ sql, params })
+        return [] as T[]
+      },
+    })).rejects.toMatchObject({
+      code: 'DEPENDENCY_REPLAY_RUNTIME_CONSUMPTION_LINEAGE_REQUIRED',
+      publicationKey,
+      artifactKey: 'dependency-rule-artifact-v2',
+      projectId: 'project-1',
+    })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.sql.toLowerCase()).toContain('from public.duration_learning_runtime_consumptions')
+    expect(calls.some((call) => call.sql.toLowerCase().includes('insert into public.algorithm_asset_candidate_events'))).toBe(false)
+    expect(calls.some((call) => call.sql.toLowerCase().includes('insert into public.duration_plan_network_outcomes'))).toBe(false)
   })
 
   it('requires replay outcome, candidate approval, dedicated writer, lineage, and release gates before dependency rules are live-learning ready', () => {

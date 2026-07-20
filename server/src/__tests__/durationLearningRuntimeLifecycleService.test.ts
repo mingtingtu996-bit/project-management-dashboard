@@ -156,6 +156,32 @@ describe('durationLearningRuntimeLifecycleService', () => {
         ...(row.metadata.primary_chain_stable_codes ?? []),
       ])].sort())
     }
+    for (const [streamKey, rows] of sourceRowsByStream) {
+      if (!streamKey.startsWith('network:')) continue
+      const assetKey = streamKey.slice('network:'.length)
+      for (const row of rows) {
+        const artifactKey = groupKeyForRow(streamKey, row)
+        const publicationKey = `duration_learning_runtime:${assetKey}:fixture-${row.id}`
+        const subjectIds = Array.from({ length: 20 }, (_, index) => `task-${index + 1}`)
+        row.publication_key = publicationKey
+        row.metadata = {
+          ...(row.metadata as Record<string, unknown>),
+          runtime_publication_key: publicationKey,
+          runtime_publication_artifact_key: artifactKey,
+          generation_batch_id: 'fixture-batch-1',
+          runtime_publication_subject_type: 'task',
+          runtime_publication_input_subject_ids: subjectIds,
+          runtime_publication_input_task_ids: subjectIds,
+          source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+          ...(assetKey === 'critical_path_rule_candidate'
+            ? {
+                critical_path_input_hash: 'sha256:fixture-critical-path',
+                task_network_input_hash: 'sha256:fixture-task-network',
+              }
+            : {}),
+        }
+      }
+    }
     const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
       const marker = sql.match(/duration-learning-collector:(discover|history):([^*\s]+)/)
       if (!marker) return [] as T[]
@@ -490,6 +516,30 @@ describe('durationLearningRuntimeLifecycleService', () => {
         },
       }],
     ])
+    for (const [streamKey, row] of rowsByStream) {
+      if (!streamKey.startsWith('network:')) continue
+      const assetKey = streamKey.slice('network:'.length)
+      const artifactKey = row.collector_group_key as string
+      const publicationKey = `duration_learning_runtime:${assetKey}:fixture-${row.id}`
+      const subjectIds = taskIds
+      row.publication_key = publicationKey
+      row.metadata = {
+        ...(row.metadata as Record<string, unknown>),
+        runtime_publication_key: publicationKey,
+        runtime_publication_artifact_key: artifactKey,
+        generation_batch_id: 'fixture-batch-1',
+        runtime_publication_subject_type: 'task',
+        runtime_publication_input_subject_ids: subjectIds,
+        runtime_publication_input_task_ids: subjectIds,
+        source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+        ...(assetKey === 'critical_path_rule_candidate'
+          ? {
+              critical_path_input_hash: 'sha256:fixture-critical-path',
+              task_network_input_hash: 'sha256:fixture-task-network',
+            }
+          : {}),
+      }
+    }
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
       const marker = sql.match(/duration-learning-collector:(discover|history|scope-buckets|scope-batches):([^*\s]+)/)
       if (!marker) return [] as T[]
@@ -687,6 +737,24 @@ describe('durationLearningRuntimeLifecycleService', () => {
         })),
       }],
     ])
+    for (const fixture of streamFixtures.values()) {
+      if (!fixture.assetKey.includes('wbs_reference_days')) continue
+      for (const row of fixture.rows) {
+        const publicationKey = `duration_learning_runtime:${fixture.assetKey}:fixture-${row.id}`
+        const subjectIds = [`${row.project_id}-task-a`, `${row.project_id}-task-b`]
+        row.publication_key = publicationKey
+        row.metadata = {
+          ...(row.metadata ?? {}),
+          runtime_publication_key: publicationKey,
+          runtime_publication_artifact_key: fixture.artifactKey,
+          generation_batch_id: 'fixture-batch-1',
+          runtime_publication_subject_type: 'task',
+          runtime_publication_input_subject_ids: subjectIds,
+          runtime_publication_input_task_ids: subjectIds,
+          source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+        }
+      }
+    }
     const projectSqlByStream = new Map<string, string>()
     const scopeSqlByStream = new Map<string, string>()
 
@@ -1121,18 +1189,48 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(capturedSql).toContain("source.observation_context ->> 'artifactKey' = publication.artifact_key")
     expect(capturedSql).toContain('source.publication_key = publication.publication_key')
     expect(capturedSql).toContain("source.actual_context -> 'durationLearningRuntimeConsumptions'")
-    expect(capturedSql).toContain("consumption ->> 'artifactKey' = publication.artifact_key")
+    expect(capturedSql).toContain("coalesce(consumption ->> 'artifactKey', consumption ->> 'artifact_key')")
+    expect(capturedSql).toContain('join public.duration_learning_runtime_consumptions exact_accuracy_consumption')
+    expect(capturedSql).toMatch(/exact_accuracy_consumption\.consumption_key\s*=\s*coalesce\(\s*consumption ->> 'consumptionKey'/)
+    expect(capturedSql).toContain('exact_accuracy_consumption.project_id = source.project_id')
+    expect(capturedSql).toContain('exact_accuracy_consumption.task_id = source.task_id')
+    expect(capturedSql).toContain("exact_accuracy_consumption.consumption_context ->> 'authoritySource'")
+    expect(capturedSql).not.toMatch(/\bor\s+exists\s*\(\s*select 1\s+from jsonb_array_elements\(\s*coalesce\(\s*source\.actual_context/is)
     expect(capturedSql).toContain("source.metadata ->> 'runtime_publication_key' = publication.publication_key")
     expect(capturedSql).toContain("source.metadata ->> 'runtime_publication_artifact_key' = publication.artifact_key")
-    expect(capturedSql).toContain('from public.runtime_consumer_observations exact_observation')
-    expect(capturedSql).toContain("exact_observation.observation_context -> 'inputTaskIds'")
     expect(capturedSql).toContain("source.metadata -> 'runtime_publication_input_task_ids'")
+    expect(capturedSql).toContain("source.metadata ->> 'runtime_publication_subject_type'")
+    expect(capturedSql).toContain("source.metadata -> 'runtime_publication_input_subject_ids'")
+    expect(capturedSql).toContain("source.metadata -> 'runtime_publication_input_baseline_item_ids'")
+    expect(capturedSql).toContain('exact_consumption.baseline_item_id')
+    expect(capturedSql).toContain('exact_consumption.task_id')
     expect(capturedSql).toContain("publication.asset_key = 'special_work_duration_seed'")
-    expect(capturedSql).toContain("publication.asset_key in ('wbs_reference_days', 'dependency_rule_candidate')")
+    expect(capturedSql).toContain("publication.asset_key = 'dependency_rule_candidate'")
     expect(capturedSql).toContain('from public.duration_learning_runtime_consumptions exact_consumption')
-    expect(capturedSql).not.toContain("publication.asset_key <> 'critical_path_rule_candidate'")
+    const observationSql = capturedSql.slice(
+      capturedSql.indexOf("select count(*) filter (where source.observation_status = 'observed')"),
+      capturedSql.indexOf(') observation on true'),
+    )
+    expect(observationSql).toContain("publication.asset_key = 'critical_path_rule_candidate'")
+    expect(observationSql).not.toContain('publication.asset_key not in (')
+    expect(observationSql).toContain("source.consumption_context ->> 'authoritySource'")
+    expect(observationSql).toContain('publication.company_id = source.company_id')
+    expect(observationSql).toContain('publication.project_id = source.project_id')
+    expect(observationSql).toContain("publication.industry_key = source.consumption_context ->> 'industryKey'")
+    expect(capturedSql).toContain("publication.asset_key <> 'critical_path_rule_candidate'")
+    expect(capturedSql).toContain("exact_consumption.generation_batch_id = source.metadata ->> 'generation_batch_id'")
+    expect(capturedSql).toContain("exact_consumption.baseline_item_id is null")
+    expect(capturedSql).toContain("publication.asset_key <> 'critical_path_rule_candidate'")
     expect(capturedSql).not.toContain('outcome.publication_key is null')
     expect(capturedSql).not.toContain("observation.observation_context -> 'appliedTaskIds'")
+
+    const candidateSqls: string[] = []
+    await collectDurationLearningRuntimeCandidateProposals(async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      if (sql.includes('duration-learning-collector')) candidateSqls.push(sql)
+      return [] as T[]
+    })
+    expect(candidateSqls.some((sql) => sql.includes('outcome.publication_key is not null'))).toBe(true)
+    expect(candidateSqls.some((sql) => sql.includes('duration_learning_runtime_publications'))).toBe(true)
   })
 
   it('uses schema-real wizard business classification and project-owned company authority in every collector CTE', async () => {
@@ -1506,17 +1604,24 @@ describe('durationLearningRuntimeLifecycleService', () => {
   })
 
   it('uses stable work codes rather than project-specific outcome refs to aggregate critical-path learning', async () => {
-    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
-      if (!sql.includes('from public.duration_plan_network_outcomes')) return [] as T[]
-      return ['p1', 'p2', 'p3', 'p4'].map((projectId) => ({
+    const publicationKey = 'duration_learning_runtime:critical_path_rule_candidate:company-c1'
+    const collectorGroupKey = `[\"SW-A\", \"SW-B\"]:${publicationKey}`
+    const rows = ['p1', 'p2', 'p3', 'p4'].map((projectId, index) => ({
         id: `critical-${projectId}`,
         asset_key: 'critical_path_rule_candidate',
+        publication_key: publicationKey,
         outcome_status: 'accepted',
         outcome_ref: `critical_path_cpm:${projectId}:project-specific-hash`,
         learning_scope: 'project',
         company_id: 'c1',
         project_id: projectId,
         business_type: 'residential',
+        collector_group_key: collectorGroupKey,
+        collector_scope_target: 'project',
+        collector_scope_id: projectId,
+        collector_scope_cursor_value: projectId,
+        collector_scope_page_rank: index + 1,
+        collector_scope_wrapped: false,
         metadata: {
           auto_task_stable_codes: ['SW-A', 'SW-B'],
           primary_chain_stable_codes: ['SW-A', 'SW-B'],
@@ -1529,8 +1634,23 @@ describe('durationLearningRuntimeLifecycleService', () => {
           overcompensation_rate: 0,
           rollback_ready: true,
           tenant_scope_valid: true,
+          runtime_publication_key: publicationKey,
+          runtime_publication_artifact_key: 'critical-path:["SW-A","SW-B"]',
+          generation_batch_id: 'critical-batch-1',
+          runtime_publication_input_task_ids: [`${projectId}-task-a`, `${projectId}-task-b`],
+          runtime_publication_input_subject_ids: [`${projectId}-task-a`, `${projectId}-task-b`],
+          source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+          critical_path_input_hash: 'sha256:critical-fixture',
+          task_network_input_hash: 'sha256:task-fixture',
         },
-      })) as T[]
+      }))
+    const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      const marker = sql.match(/duration-learning-collector:(discover|history|scope-buckets|scope-batches):([^*\s]+)/)
+      if (!marker || marker[2] !== 'network:critical_path_rule_candidate') return [] as T[]
+      if (marker[1] === 'discover') return [{ collector_group_key: collectorGroupKey }] as T[]
+      if (marker[1] !== 'history') return [] as T[]
+      const selectedGroups = new Set((params[0] as string[] | undefined) ?? [])
+      return (selectedGroups.has(collectorGroupKey) ? rows : []) as T[]
     }
 
     const projectProposals = await collectDurationLearningRuntimeCandidateProposals(queryExec)
@@ -1538,6 +1658,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       .filter((proposal) => proposal.scope.level === 'company')
 
     expect(new Set(projectProposals.map((proposal) => proposal.artifactKey)).size).toBe(1)
+    expect(new Set(projectProposals.map((proposal) => proposal.publicationKey))).toEqual(new Set([publicationKey]))
     expect(companyProposals).toHaveLength(1)
     expect(companyProposals[0]?.runtimePayload).toEqual({ criticalStableCodes: ['SW-A', 'SW-B'] })
   })
@@ -1548,6 +1669,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       return [{
         id: 'dependency-1',
         asset_key: 'dependency_rule_candidate',
+        publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-1',
         outcome_status: 'accepted',
         learning_scope: 'project',
         company_id: 'c1',
@@ -1560,6 +1682,11 @@ describe('durationLearningRuntimeLifecycleService', () => {
           suggested_lag_days: 2,
           duration_day_unit: 'construction_production_day',
           sample_count: 50,
+          runtime_publication_key: 'duration_learning_runtime:dependency_rule_candidate:dependency-1',
+          runtime_publication_artifact_key: 'SW-A->SW-B:FS',
+          generation_batch_id: 'dependency-batch-1',
+          runtime_publication_input_task_ids: ['task-a', 'task-b'],
+          source_evidence_refs: ['duration_learning_runtime_publications:duration_learning_runtime:dependency_rule_candidate:dependency-1'],
         },
       }] as T[]
     }
@@ -1575,6 +1702,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       return [{
         id: 'wbs-reference-1',
         asset_key: 'wbs_reference_days',
+        publication_key: 'duration_learning_runtime:wbs_reference_days:wbs-reference-1',
         outcome_status: 'accepted',
         learning_scope: 'project',
         company_id: 'c1',
@@ -1588,6 +1716,13 @@ describe('durationLearningRuntimeLifecycleService', () => {
           sample_task_count: 30,
           quality_model: 'numeric_holdout',
           nodes: [{ sourceId: 'node-1', suggestedReferenceDays: 8 }],
+          runtime_publication_key: 'duration_learning_runtime:wbs_reference_days:wbs-reference-1',
+          runtime_publication_artifact_key: 'template-1',
+          generation_batch_id: 'wbs-batch-1',
+          runtime_publication_subject_type: 'task',
+          runtime_publication_input_subject_ids: ['task-a'],
+          runtime_publication_input_task_ids: ['task-a'],
+          source_evidence_refs: ['duration_learning_runtime_publications:duration_learning_runtime:wbs_reference_days:wbs-reference-1'],
         },
       }] as T[]
     }
