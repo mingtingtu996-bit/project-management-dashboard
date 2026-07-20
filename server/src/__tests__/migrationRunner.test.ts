@@ -292,6 +292,17 @@ describe('migration runner contract', () => {
     expect(() => resolveMigrationConnectionConfig()).toThrow('SUPABASE_URL_INVALID')
   })
 
+  it('rejects malformed non-empty SUPABASE_URL before parsing the migration connection string', () => {
+    process.env.SUPABASE_URL = 'not-a-url'
+    process.env.SUPABASE_MIGRATION_URL = 'not-a-postgres-connection'
+    const parseConnectionTarget = vi.fn(() => {
+      throw new Error('connection parser must not run')
+    })
+
+    expect(() => resolveMigrationConnectionConfig({ parseConnectionTarget })).toThrow('SUPABASE_URL_INVALID')
+    expect(parseConnectionTarget).not.toHaveBeenCalled()
+  })
+
   it('rejects a host-based migration target outside the authoritative Supabase project', () => {
     delete process.env.SUPABASE_MIGRATION_URL
     delete process.env.DIRECT_DATABASE_URL
