@@ -1635,9 +1635,17 @@ function readConstructionCalendarContext(value: unknown): ConstructionCalendarCo
   const basis = normalizeText(record.basis) === 'official_construction_calendar_seed'
     ? 'official_construction_calendar_seed'
     : 'calendar_day'
+  const availability = normalizeText(record.availability) === 'available'
+    ? 'available'
+    : 'unavailable'
   return {
     basis,
     windows: windows.map((window) => readRecord(window)),
+    calendarRef: normalizeText(record.calendarRef ?? record.calendar_ref) || null,
+    calendarVersion: normalizeText(record.calendarVersion ?? record.calendar_version) || null,
+    timezone: normalizeText(record.timezone) || null,
+    availability,
+    unavailableReason: normalizeText(record.unavailableReason ?? record.unavailable_reason) || null,
   }
 }
 
@@ -1654,6 +1662,11 @@ function sanitizeGeneratedConstructionCalendarContext(constructionCalendar?: Con
   if (!constructionCalendar) return null
   return {
     basis: constructionCalendar.basis,
+    calendarRef: constructionCalendar.calendarRef ?? null,
+    calendarVersion: constructionCalendar.calendarVersion ?? null,
+    timezone: constructionCalendar.timezone ?? null,
+    availability: constructionCalendar.availability ?? 'unavailable',
+    unavailableReason: constructionCalendar.unavailableReason ?? null,
     windows: constructionCalendar.windows.map((window) => ({
       stableCode: normalizeText(window.stableCode ?? window.holidayCode ?? window.holiday_code),
       holidayName: normalizeText(window.holidayName ?? window.holiday_name),
@@ -12615,12 +12628,14 @@ function readTargetConstraintContext(operation: PlanningTableOperation) {
 function evaluateTargetEndFeasibility(
   rows: GeneratedTemplateRow[],
   operation: PlanningTableOperation,
+  constructionCalendar?: ConstructionCalendarContext | null,
 ): GeneratedTargetFeasibility | undefined {
   const context = readTargetConstraintContext(operation)
   return evaluateBaselineTargetAlignment({
     rows,
     targetEndDate: context.targetEndDate,
     mode: context.mode as ScheduleAccelerationMode,
+    context: { constructionCalendar: constructionCalendar ?? null },
   })
 }
 
@@ -20319,7 +20334,7 @@ async function generateWbsTemplateRowsInternal(params: {
   logDiagnosticStageTiming('post_profile_dependency_schedule_applied')
   applyGeneratedRowPlanRollups(rows)
   logDiagnosticStageTiming('post_profile_plan_rollups_applied')
-  const targetFeasibility = evaluateTargetEndFeasibility(rows, operation)
+  const targetFeasibility = evaluateTargetEndFeasibility(rows, operation, constructionCalendar)
   const targetEndWarning = buildTargetEndGovernanceWarning(targetFeasibility)
   let governanceWarnings = [
     ...collectGeneratedTemplateGovernanceWarnings(rows),
@@ -20622,7 +20637,7 @@ async function buildTaskPlanRhythmGeneratedResult(
   normalizeGeneratedPlanDurationFields(rows)
   const scheduleTrustGate = buildGenerationDepthScheduleTrustGate(rows, generated.generationDepth)
   const trustWarning = buildGenerationDepthTrustGovernanceWarning(scheduleTrustGate)
-  const targetFeasibility = evaluateTargetEndFeasibility(rows, operation)
+  const targetFeasibility = evaluateTargetEndFeasibility(rows, operation, generated.constructionCalendar)
   const phaseIds = uniqueStringArray(
     scopeCombos.map((scope) => normalizeText(scope.phase_object_id)).filter(Boolean),
   )
@@ -20845,7 +20860,7 @@ export async function generateWbsTemplatePhaseChainRows(params: {
       && !operations.some((phaseOperation) => readOperationGeneratedMasterPlanProfile(phaseOperation)),
   })
   const targetFeasibility = targetOperation
-    ? evaluateTargetEndFeasibility(rows, targetOperation)
+    ? evaluateTargetEndFeasibility(rows, targetOperation, chainConstructionCalendar)
     : undefined
   const targetEndWarning = buildTargetEndGovernanceWarning(targetFeasibility)
   let governanceWarnings = [

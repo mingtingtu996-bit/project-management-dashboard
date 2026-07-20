@@ -156,6 +156,16 @@ function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableNa
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))
 }
 
+const IDENTIFIED_TEST_CONSTRUCTION_CALENDAR = {
+  basis: 'official_construction_calendar_seed' as const,
+  calendarRef: 'work_calendar',
+  calendarVersion: 'test-calendar-v1',
+  timezone: 'Asia/Shanghai',
+  availability: 'available' as const,
+  unavailableReason: null,
+  windows: [],
+}
+
 function generateWbsTemplateRows(
   params: Parameters<typeof generateWbsTemplateRowsRaw>[0],
 ) {
@@ -1404,6 +1414,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         templateId: CHINA_GB55032_TEMPLATE_ID,
         selectedNodeIds: ['02-01-01', '02-01-02', '02-01-03'],
         plannedStartDate: '2026-06-01',
+        constructionCalendar: IDENTIFIED_TEST_CONSTRUCTION_CALENDAR,
         clientContext: {
           projectPlannedEndDate: targetEndDate,
           targetConstraintMode: 'compare_only',
@@ -1575,6 +1586,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
           templateId: CHINA_GB55032_TEMPLATE_ID,
           selectedNodeIds: ['02-01-01', '02-01-02', '02-01-03'],
         plannedStartDate: '2026-06-01',
+        constructionCalendar: IDENTIFIED_TEST_CONSTRUCTION_CALENDAR,
         clientContext: {
           projectPlannedEndDate: '2026-06-01',
           targetConstraintMode: 'compression_preview',
@@ -1652,6 +1664,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         templateId: CHINA_GB55032_TEMPLATE_ID,
         selectedNodeIds: ['01-01-01'],
         plannedStartDate: '2026-06-01',
+        constructionCalendar: IDENTIFIED_TEST_CONSTRUCTION_CALENDAR,
         clientContext: {
           projectPlannedEndDate: '2026-06-01',
           targetConstraintMode: 'compression_preview',
@@ -1696,6 +1709,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         templateId: CHINA_GB55032_TEMPLATE_ID,
         selectedNodeIds: ['01-01-01', '02-01-01', '02-01-02', '02-01-03', '06-01-01', '07-01-01'],
         plannedStartDate: '2026-06-01',
+        constructionCalendar: IDENTIFIED_TEST_CONSTRUCTION_CALENDAR,
         clientContext: {
           projectPlannedEndDate: '2026-06-01',
           targetConstraintMode: 'compression_preview',
@@ -1766,6 +1780,7 @@ describe('v1.4.7.2 WBS template generation service', () => {
         templateId: CHINA_GB55032_TEMPLATE_ID,
         selectedNodeIds: ['01-01-01', '02-01-01', '02-01-02', '02-01-03', '06-01-01', '07-01-01'],
         plannedStartDate: '2026-06-01',
+        constructionCalendar: IDENTIFIED_TEST_CONSTRUCTION_CALENDAR,
         clientContext: {
           projectPlannedEndDate: '2026-06-01',
           targetConstraintMode: 'compression_preview',
