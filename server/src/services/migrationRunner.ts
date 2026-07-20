@@ -9,6 +9,10 @@ import {
   readCommercialTriggerRpcAclState,
   verifyCommercialTriggerRpcAclState,
 } from './commercialTriggerRpcAclRemediationService.js'
+import {
+  isSupabasePoolerHost,
+  parseStrictPostgresConnectionTarget,
+} from '../utils/postgresConnectionTargetIdentity.js'
 
 const { Client } = pg
 
@@ -267,28 +271,32 @@ function deriveSupabaseProjectRef(value?: string | null) {
   }
 }
 
-function deriveMigrationConnectionProjectRef(value?: string | null) {
-  const text = String(value ?? '').trim()
-  if (!text) return null
-  try {
-    const url = new URL(text)
-    const directRef = deriveSupabaseProjectRef(`${url.protocol}//${url.hostname}`)
-    if (directRef) return directRef
+function assertEffectiveMigrationTargetMatchesSupabaseProject(target: {
+  host: string
+  user: string
+}) {
+  const expectedRef = deriveSupabaseProjectRef(process.env.SUPABASE_URL)
+  if (!expectedRef) return
 
-    const username = decodeURIComponent(url.username).toLowerCase()
-    const poolerRef = /(?:^|\.)([a-z0-9]{20})$/.exec(username)
-    return poolerRef?.[1] ?? null
-  } catch {
-    return null
+  const directRef = deriveSupabaseProjectRef(`postgresql://${target.host}`)
+  if (!directRef && !isSupabasePoolerHost(target.host)) {
+    throw new Error(`MIGRATION_TARGET_HOST_UNTRUSTED: ${target.host} is not a Supabase direct or pooler host`)
+  }
+
+  const poolerRef = isSupabasePoolerHost(target.host)
+    ? /(?:^|\.)([a-z0-9]{20})$/u.exec(target.user.toLowerCase())?.[1] ?? null
+    : null
+  const actualRef = directRef ?? poolerRef
+  if (!actualRef || expectedRef !== actualRef) {
+    throw new Error(`MIGRATION_TARGET_MISMATCH: SUPABASE_URL project ${expectedRef} does not match migration connection project ${actualRef}`)
   }
 }
 
 function assertMigrationTargetMatchesSupabaseProject(connectionString?: string | null) {
-  const expectedRef = deriveSupabaseProjectRef(process.env.SUPABASE_URL)
-  const actualRef = deriveMigrationConnectionProjectRef(connectionString)
-  if (expectedRef && actualRef && expectedRef !== actualRef) {
-    throw new Error(`MIGRATION_TARGET_MISMATCH: SUPABASE_URL project ${expectedRef} does not match migration connection project ${actualRef}`)
-  }
+  if (!connectionString) return
+  assertEffectiveMigrationTargetMatchesSupabaseProject(
+    parseStrictPostgresConnectionTarget(connectionString),
+  )
 }
 
 function normalizeMigrationConnectionString(
@@ -333,6 +341,8 @@ export function resolveMigrationConnectionConfig() {
       '缺少迁移数据库连接信息，请提供 SUPABASE_MIGRATION_URL、DIRECT_DATABASE_URL、DATABASE_URL、DB_CONNECTION_STRING，或 PGHOST/PGPASSWORD。',
     )
   }
+
+  assertEffectiveMigrationTargetMatchesSupabaseProject({ host, user })
 
   return {
     host,

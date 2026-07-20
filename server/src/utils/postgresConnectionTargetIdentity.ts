@@ -11,6 +11,11 @@ type EffectiveConnectionParameters = {
 
 export type PostgresConnectionTargetIdentity = EffectiveConnectionParameters
 
+export function isSupabasePoolerHost(value: string | undefined): boolean {
+  const host = String(value ?? '').trim().toLowerCase().replace(/\.$/u, '')
+  return /(?:^|\.)pooler\.supabase\.(?:com|co)$/u.test(host)
+}
+
 function decodeUrlComponent(value: string, label: string): string {
   try {
     return decodeURIComponent(value)
