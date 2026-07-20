@@ -143,6 +143,58 @@ describe('auth runtime configuration', () => {
     )
   })
 
+  it('keeps auth cookies HttpOnly in every runtime despite environment override attempts', () => {
+    for (const target of ['production', 'staging'] as const) {
+      setProductionEnvironment(target)
+      process.env.AUTH_COOKIE_HTTP_ONLY = 'false'
+      process.env.JWT_COOKIE_HTTP_ONLY = 'false'
+      process.env.COOKIE_HTTP_ONLY = 'false'
+
+      const response = {
+        clearCookie: vi.fn(),
+        cookie: vi.fn(),
+      } as unknown as Response
+
+      setAuthTokenCookie(response, 'token')
+      clearAuthTokenCookie(response)
+
+      expect(JWT_CONFIG.cookie.httpOnly).toBe(true)
+      expect(response.cookie).toHaveBeenCalledWith(
+        `workbuddy_${target}_auth_token`,
+        'token',
+        expect.objectContaining({ httpOnly: true }),
+      )
+      expect(response.clearCookie).toHaveBeenCalledWith(
+        `workbuddy_${target}_auth_token`,
+        expect.objectContaining({ httpOnly: true }),
+      )
+    }
+
+    process.env.NODE_ENV = 'test'
+    delete process.env.AUTH_COOKIE_NAME
+    process.env.AUTH_COOKIE_HTTP_ONLY = 'false'
+    process.env.JWT_COOKIE_HTTP_ONLY = 'false'
+    process.env.COOKIE_HTTP_ONLY = 'false'
+    const response = {
+      clearCookie: vi.fn(),
+      cookie: vi.fn(),
+    } as unknown as Response
+
+    setAuthTokenCookie(response, 'token')
+    clearAuthTokenCookie(response)
+
+    expect(JWT_CONFIG.cookie.httpOnly).toBe(true)
+    expect(response.cookie).toHaveBeenCalledWith(
+      'auth_token',
+      'token',
+      expect.objectContaining({ httpOnly: true }),
+    )
+    expect(response.clearCookie).toHaveBeenCalledWith(
+      'auth_token',
+      expect.objectContaining({ httpOnly: true }),
+    )
+  })
+
   it('retains the existing auth_token default in test mode', () => {
     process.env.NODE_ENV = 'test'
     delete process.env.AUTH_COOKIE_NAME
