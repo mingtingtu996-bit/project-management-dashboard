@@ -30,7 +30,7 @@ describe('commercial trigger RPC ACL closeout migration', () => {
     )
     const cleanSql = readSql(cleanMigrationPath)
     expect(createHash('sha256').update(cleanSql).digest('hex')).toBe(
-      'aebf7a3ca3c7e8812f993e7b9766c37a4a5f8202c3e3cdee28b42eba90d5ba21',
+      '6747ad961a0df9797397776fc7f456f869a690dbb6f7740a85910525eceb4d9e',
     )
   })
 

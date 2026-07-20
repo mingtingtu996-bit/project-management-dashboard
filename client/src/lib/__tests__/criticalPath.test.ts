@@ -133,8 +133,10 @@ describe('criticalPath snapshot display helpers', () => {
   })
 
   it('fails closed when typed production-day facts are missing or use the wrong unit', () => {
-    const raw = makeSnapshot() as CriticalPathSnapshot & Record<string, unknown>
-    raw.projectDuration = undefined
+    const raw = {
+      ...makeSnapshot(),
+      projectDuration: undefined,
+    } as unknown as CriticalPathSnapshot & Record<string, unknown>
     raw.projectDurationDays = 999
     raw.primaryChain = {
       ...raw.primaryChain!,
