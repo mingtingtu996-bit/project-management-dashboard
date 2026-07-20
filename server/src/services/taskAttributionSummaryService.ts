@@ -196,15 +196,25 @@ export function isDelayedAttributionTask(
     || isCompletedTaskDelayedAgainstPlan(task, calendar)
 }
 
-function getAttributionDelayDays(
+function getRawAttributionDelayDays(
   task: TaskSummaryAttributionTask,
   calendar?: ConstructionCalendarContext | null,
 ) {
   const plannedEnd = toDateOnly(task.planned_end_date)
   const completedAt = toDateOnly(task.completed_at)
   const computedDelay = delayDayDelta(plannedEnd, completedAt, calendar)
+  if (computedDelay !== null) return Math.max(computedDelay, 0)
+  return Math.max(Number(task.delay_total_days ?? 0), 0)
+}
+
+function getAttributionDelayDays(
+  task: TaskSummaryAttributionTask,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const plannedEnd = toDateOnly(task.planned_end_date)
+  const completedAt = toDateOnly(task.completed_at)
   const metric = buildConstructionProductionDayDurationMetric(
-    computedDelay === null ? null : Math.max(computedDelay, 0),
+    getRawAttributionDelayDays(task, calendar),
     {
       asOf: completedAt || plannedEnd || businessDateKey(new Date(), calendar?.timezone || 'Asia/Shanghai'),
       timezone: calendar?.timezone,

@@ -40,6 +40,7 @@ import {
 } from '../middleware/auth.js'
 import { validate, validateIdParam } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
+import { delayDayDelta } from '../utils/durationDays.js'
 import { isCompletedMilestone, isCompletedTask } from '../utils/taskStatus.js'
 import type { ApiResponse } from '../types/index.js'
 import type { TaskCompletionReport } from '../types/db.js'
@@ -677,10 +678,11 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
       status: t.status,
       progress: t.progress,
     }, workCalendar, asOf)
+    const computedDelay = taskCompleted
+      ? delayDayDelta(plannedEndDate, completedAt, workCalendar)
+      : null
     const delayTotal = taskCompleted ? completionDelay.totalDelayDays : 0
-    const isDelayed = taskCompleted && ((delayTotal ?? 0) > 0 || (
-      plannedEndDate && completedAt && completedAt.slice(0, 10) > plannedEndDate
-    ))
+    const isDelayed = taskCompleted && (computedDelay ?? delayTotal ?? 0) > 0
     const durationStats = calculateTaskSummaryDurationStats(t, workCalendar, asOf)
 
     return {
