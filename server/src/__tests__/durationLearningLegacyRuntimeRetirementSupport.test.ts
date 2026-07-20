@@ -196,11 +196,16 @@ describe('duration learning legacy runtime retirement support', () => {
           `postgresql://postgres.${expectedProjectRef}:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres`
           + `?user=postgres.${otherProjectRef}`,
       },
+      {
+        ...targetEnv,
+        DATABASE_URL:
+          `postgresql://postgres.${expectedProjectRef}:secret@evil.example:5432/postgres`,
+      },
     ]
 
     for (const env of overrideEnvironments) {
       expect(() => resolveDurationLearningLegacyRuntimeRetirementTargetIdentity(env))
-        .toThrow(/connection query parameter|effective target/i)
+        .toThrow(/connection query parameter|effective target|project[_ ]unresolved/i)
 
       const query = vi.fn(async () => ({ rows: [] }))
       const readTextFile = vi.fn(async () => '')
@@ -208,7 +213,7 @@ describe('duration learning legacy runtime retirement support', () => {
         query,
         env,
         readTextFile,
-      )).rejects.toThrow(/connection query parameter|effective target/i)
+      )).rejects.toThrow(/connection query parameter|effective target|project[_ ]unresolved/i)
       expect(readTextFile).not.toHaveBeenCalled()
       expect(query).not.toHaveBeenCalled()
     }
