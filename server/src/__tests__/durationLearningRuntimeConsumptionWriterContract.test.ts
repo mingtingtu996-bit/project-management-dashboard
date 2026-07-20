@@ -11,6 +11,7 @@ describe('duration learning runtime consumption writer contracts', () => {
     const wizard = source('../routes/projectWizard.ts')
     const persistIndex = wizard.indexOf('await persistDurationLearningRuntimeConsumptions({')
     const observationIndex = wizard.indexOf('await recordWbsTemplateGenerationRuntimeConsumption({')
+    const dependencyWriteIndex = wizard.indexOf('await replaceWizardGeneratedTaskDependenciesBatch({')
     const durableEvidenceIndex = wizard.indexOf('await enqueueDurationLearningRuntimeEvidenceBatch({', persistIndex)
     const commitIndex = wizard.indexOf("await transactionClient.query('COMMIT')", persistIndex)
 
@@ -21,6 +22,8 @@ describe('duration learning runtime consumption writer contracts', () => {
     expect(wizard).toContain("subjectType: 'task'")
     expect(wizard).toContain('inputTaskIds: [...idByClientRowId.values()]')
     expect(observationIndex).toBeGreaterThan(0)
+    expect(dependencyWriteIndex).toBeGreaterThan(0)
+    expect(observationIndex).toBeGreaterThan(dependencyWriteIndex)
     expect(persistIndex).toBeGreaterThan(observationIndex)
     expect(durableEvidenceIndex).toBeGreaterThan(persistIndex)
     expect(commitIndex).toBeGreaterThan(durableEvidenceIndex)

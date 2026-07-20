@@ -7742,12 +7742,31 @@ async function commitWizardGeneration(params: {
       isHistorical: row.values?.is_historical === true || row.values?.is_historical === 'true',
     })
   }
+  const generatedDependencies = generatedRows.flatMap((row) => buildDependencyWrites(row, idByClientRowId))
+  if (generatedDependencies.length > 0) {
+    await replaceWizardGeneratedTaskDependenciesBatch({
+      projectId: params.projectId,
+      dependencies: generatedDependencies,
+      actorId: params.actorId,
+      transactionClient,
+    })
+  }
+  previousStageAt = logWizardGenerationStageTiming({
+    projectId: params.projectId,
+    generationBatchId,
+    stage: 'dependencies_written',
+    startedAt: generationStartedAt,
+    previousAt: previousStageAt,
+    extra: { dependencyCount: generatedDependencies.length },
+  })
   await recordWbsTemplateGenerationRuntimeConsumption({
     queryExec: durationLearningRuntimeQueryExec,
     projectId: params.projectId,
     generation: generated,
     runtimeArtifactPublications,
     inputTaskIds: [...idByClientRowId.values()],
+    inputSubjectIdByClientRowId: idByClientRowId,
+    subjectType: 'task',
   })
   await persistDurationLearningRuntimeConsumptions({
     queryExec: durationLearningRuntimeQueryExec,
@@ -7812,24 +7831,6 @@ async function commitWizardGeneration(params: {
   injectWizardDiagnosticFailureIfRequested({
     injection: params.diagnosticFailureInjection,
     stage: 'after_tasks',
-  })
-
-  const generatedDependencies = generatedRows.flatMap((row) => buildDependencyWrites(row, idByClientRowId))
-  if (generatedDependencies.length > 0) {
-    await replaceWizardGeneratedTaskDependenciesBatch({
-      projectId: params.projectId,
-      dependencies: generatedDependencies,
-      actorId: params.actorId,
-      transactionClient,
-    })
-  }
-  previousStageAt = logWizardGenerationStageTiming({
-    projectId: params.projectId,
-    generationBatchId,
-    stage: 'dependencies_written',
-    startedAt: generationStartedAt,
-    previousAt: previousStageAt,
-    extra: { dependencyCount: generatedDependencies.length },
   })
 
   generatedAcceptancePlanResult = await writeWizardGeneratedAcceptancePlans({

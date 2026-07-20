@@ -625,6 +625,8 @@ export interface RecordWbsTemplateGenerationRuntimeConsumptionInput {
   runtimeArtifactPublications: readonly WbsTemplateGenerationRuntimeArtifactPublication[]
   projectId?: string | null
   inputTaskIds?: readonly string[] | null
+  inputSubjectIdByClientRowId?: ReadonlyMap<string, string>
+  subjectType?: 'task' | 'baseline_item'
   observedAt?: string
 }
 
@@ -1479,6 +1481,8 @@ export function buildWbsTemplateGenerationConsumedArtifacts(input: {
   runtimeArtifactPublications: readonly WbsTemplateGenerationRuntimeArtifactPublication[]
   projectId?: string | null
   inputTaskIds?: readonly string[] | null
+  inputSubjectIdByClientRowId?: ReadonlyMap<string, string>
+  subjectType?: 'task' | 'baseline_item'
 }): DurationRuntimeConsumerObservedArtifact[] {
   const projectId = normalizeText(input.projectId)
   const templateIds = uniqueStringArray([
@@ -1488,11 +1492,44 @@ export function buildWbsTemplateGenerationConsumedArtifacts(input: {
   const generationBatchId = normalizeText(input.generation.generationBatchId)
   const rowCount = Array.isArray(input.generation.rows) ? input.generation.rows.length : 0
   const inputTaskIds = uniqueStringArray((input.inputTaskIds ?? []).map(normalizeText).filter(Boolean))
+  const subjectType = input.subjectType ?? 'task'
+  const subjectIdByClientRowId = input.inputSubjectIdByClientRowId
+  const publicationSubjectIds = (publication: WbsTemplateGenerationRuntimeArtifactPublication) => {
+    if (!subjectIdByClientRowId) return []
+    const publicationKey = normalizeText(publication.publicationKey)
+    const publicationArtifactKey = normalizeText(
+      readRecord(publication.observationContext).artifactKey
+        ?? readRecord(publication.observationContext).artifact_key
+        ?? readRecord(publication.observationContext).templateId
+        ?? readRecord(publication.observationContext).template_id,
+    )
+    return uniqueStringArray((input.generation.rows ?? []).flatMap((row) => {
+      const values = readRecord(row.values)
+      const metadata = readRecord(values.standard_task_metadata)
+      const durationMatches = readArray(metadata.durationLearningConsumptions)
+        .map(readRecord)
+        .some((consumption) => (
+          normalizeText(consumption.assetKey) === normalizeText(publication.assetKey)
+          && normalizeText(consumption.publicationKey) === publicationKey
+          && normalizeText(consumption.artifactKey) === publicationArtifactKey
+        ))
+      const dependencyMatches = normalizeText(publication.assetKey) === 'dependency_rule_candidate'
+        && row.predecessorDependencies.some((dependency) => (
+          dependency.source === 'duration_learning_runtime_publication'
+          && normalizeText(dependency.publicationKey) === publicationKey
+          && normalizeText(dependency.artifactKey) === publicationArtifactKey
+        ))
+      if (!durationMatches && !dependencyMatches) return []
+      const subjectId = normalizeText(subjectIdByClientRowId.get(row.clientRowId))
+      return subjectId ? [subjectId] : []
+    }))
+  }
   return input.runtimeArtifactPublications
     .filter((publication) => WBS_TEMPLATE_GENERATION_CONSUMER_ASSET_KEYS.has(publication.assetKey))
     .filter((publication) => normalizeText(publication.publicationKey))
     .map((publication) => {
       const publicationKey = normalizeText(publication.publicationKey)
+      const physicalSubjectIds = publicationSubjectIds(publication)
       const sourceEvidenceRefs = uniqueStringArray([
         ...(publication.sourceEvidenceRefs ?? []).map(normalizeText),
         [
@@ -1514,7 +1551,13 @@ export function buildWbsTemplateGenerationConsumedArtifacts(input: {
           templateIds,
           generationDepth: input.generation.generationDepth ?? null,
           rowCount,
-          inputTaskIds,
+          inputTaskIds: subjectType === 'task' ? physicalSubjectIds : [],
+          inputSubjectIds: physicalSubjectIds,
+          inputBaselineItemIds: subjectType === 'baseline_item' ? physicalSubjectIds : [],
+          subjectType,
+          lineageResolution: physicalSubjectIds.length > 0
+            ? 'physical_generated_subject_subset'
+            : 'no_physical_subject_lineage',
         },
       }
     })
@@ -1556,6 +1599,8 @@ export function recordWbsTemplateGenerationRuntimeConsumption(
       runtimeArtifactPublications: input.runtimeArtifactPublications,
       projectId,
       inputTaskIds,
+      inputSubjectIdByClientRowId: input.inputSubjectIdByClientRowId,
+      subjectType: input.subjectType,
     }),
   })
 }

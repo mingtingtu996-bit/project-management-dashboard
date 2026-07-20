@@ -135,6 +135,36 @@ export interface ConstructionDependencyReplayQueueItem {
   observationWindowDays?: number
 }
 
+type DependencyTrustedRuntimeConsumptionRow = {
+  consumption_key?: unknown
+  company_id?: unknown
+  project_id?: unknown
+  publication_key?: unknown
+  asset_key?: unknown
+  artifact_key?: unknown
+  task_id?: unknown
+  baseline_item_id?: unknown
+  generation_batch_id?: unknown
+  source_evidence_refs?: unknown
+  consumption_context?: unknown
+  publication_stage?: unknown
+  monitoring_status?: unknown
+  publication_scope_level?: unknown
+  publication_company_id?: unknown
+  publication_project_id?: unknown
+  publication_industry_key?: unknown
+}
+
+type DependencyRuntimeConsumptionLineage = {
+  publicationKey: string
+  artifactKey: string
+  generationBatchId: string
+  inputTaskIds: string[]
+  consumptionKeys: string[]
+  sourceEvidenceRefs: string[]
+  publicationStage: string
+}
+
 export interface ConstructionDependencyReplayCalibrationReport {
   reportCode: 'construction_dependency_replay_calibration'
   generatedAt: string
@@ -1046,6 +1076,7 @@ function buildDependencyRuleOutcomeId(
   queueItem: ConstructionDependencyReplayQueueItem,
   companyId: string | null,
   projectId: string | null,
+  generationBatchId?: string | null,
 ) {
   return [
     'dependency-rule-candidate',
@@ -1054,12 +1085,243 @@ function buildDependencyRuleOutcomeId(
     companyId ?? 'no-company',
     projectId ?? 'multi-project',
     ...(queueItem.runtimePublicationKey ? [queueItem.runtimePublicationKey] : []),
+    ...(generationBatchId ? [generationBatchId] : []),
   ].join(':')
+}
+
+const TRUSTED_DEPENDENCY_RUNTIME_CONSUMPTIONS_SQL = `
+    SELECT
+      consumption.consumption_key,
+      consumption.company_id,
+      consumption.project_id,
+      consumption.publication_key,
+      consumption.asset_key,
+      consumption.artifact_key,
+      consumption.task_id,
+      consumption.baseline_item_id,
+      consumption.generation_batch_id,
+      consumption.source_evidence_refs,
+      consumption.consumption_context,
+      publication.publication_stage,
+      publication.monitoring_status,
+      publication.scope_level AS publication_scope_level,
+      publication.company_id AS publication_company_id,
+      publication.project_id AS publication_project_id,
+      publication.industry_key AS publication_industry_key
+    FROM public.duration_learning_runtime_consumptions consumption
+    JOIN public.projects project
+      ON project.id = consumption.project_id
+     AND project.company_id = consumption.company_id
+    JOIN public.duration_learning_runtime_publications publication
+      ON publication.publication_key = consumption.publication_key
+     AND publication.asset_key = consumption.asset_key
+     AND publication.artifact_key = consumption.artifact_key
+    WHERE consumption.company_id = $1::uuid
+      AND consumption.project_id = $2::uuid
+      AND consumption.publication_key = $3::text
+      AND consumption.asset_key = 'dependency_rule_candidate'
+      AND consumption.artifact_key = $4::text
+      AND consumption.task_id IS NOT NULL
+      AND consumption.baseline_item_id IS NULL
+      AND NULLIF(consumption.generation_batch_id, '') IS NOT NULL
+      AND (
+        (
+          publication.publication_stage = 'canary'
+          AND publication.monitoring_status IN ('pending', 'collecting', 'passed')
+        )
+        OR (
+          publication.publication_stage = 'stable'
+          AND publication.monitoring_status = 'passed'
+        )
+      )
+      AND consumption.source_evidence_refs ? (
+        'duration_learning_runtime_publications:' || consumption.publication_key
+      )
+      AND consumption.consumption_context ->> 'authoritySource'
+            = 'runtime_resolver_publication_set'
+      AND (
+        (
+          publication.scope_level = 'project'
+          AND publication.company_id = consumption.company_id
+          AND publication.project_id = consumption.project_id
+          AND publication.industry_key IS NULL
+        )
+        OR (
+          publication.scope_level = 'company'
+          AND publication.company_id = consumption.company_id
+          AND publication.project_id IS NULL
+          AND publication.industry_key IS NULL
+        )
+        OR (
+          publication.scope_level = 'industry'
+          AND publication.company_id IS NULL
+          AND publication.project_id IS NULL
+          AND publication.industry_key = NULLIF(
+            consumption.consumption_context ->> 'industryKey',
+            ''
+          )
+        )
+        OR (
+          publication.scope_level = 'global'
+          AND publication.company_id IS NULL
+          AND publication.project_id IS NULL
+          AND publication.industry_key IS NULL
+        )
+      )
+    ORDER BY consumption.generation_batch_id,
+             consumption.consumed_at,
+             consumption.consumption_key`
+
+function sortedUniqueText(values: readonly unknown[]) {
+  return uniqueValues(values.map(normalizeText).filter(Boolean)).sort()
+}
+
+function dependencyRuntimeConsumptionRowIsTrusted(
+  row: DependencyTrustedRuntimeConsumptionRow,
+  companyId: string,
+  projectId: string,
+  publicationKey: string,
+  artifactKey: string,
+) {
+  const sourceEvidenceRefs = readStringArray(row.source_evidence_refs)
+  const context = readRecord(row.consumption_context)
+  const publicationStage = normalizeText(row.publication_stage)
+  const monitoringStatus = normalizeText(row.monitoring_status)
+  const scopeLevel = normalizeText(row.publication_scope_level)
+  const scopeMatches = scopeLevel === 'project'
+    ? normalizeText(row.publication_company_id) === companyId
+      && normalizeText(row.publication_project_id) === projectId
+      && !normalizeText(row.publication_industry_key)
+    : scopeLevel === 'company'
+      ? normalizeText(row.publication_company_id) === companyId
+        && !normalizeText(row.publication_project_id)
+        && !normalizeText(row.publication_industry_key)
+      : scopeLevel === 'industry'
+        ? !normalizeText(row.publication_company_id)
+          && !normalizeText(row.publication_project_id)
+          && Boolean(normalizeText(row.publication_industry_key))
+          && normalizeText(row.publication_industry_key) === normalizeText(context.industryKey)
+        : scopeLevel === 'global'
+          ? !normalizeText(row.publication_company_id)
+            && !normalizeText(row.publication_project_id)
+            && !normalizeText(row.publication_industry_key)
+          : false
+  return normalizeText(row.company_id) === companyId
+    && normalizeText(row.project_id) === projectId
+    && normalizeText(row.publication_key) === publicationKey
+    && normalizeText(row.asset_key) === DEPENDENCY_RULE_CANDIDATE_ASSET_KEY
+    && normalizeText(row.artifact_key) === artifactKey
+    && Boolean(normalizeText(row.task_id))
+    && !normalizeText(row.baseline_item_id)
+    && Boolean(normalizeText(row.generation_batch_id))
+    && ((publicationStage === 'canary' && ['pending', 'collecting', 'passed'].includes(monitoringStatus))
+      || (publicationStage === 'stable' && monitoringStatus === 'passed'))
+    && sourceEvidenceRefs.includes(`duration_learning_runtime_publications:${publicationKey}`)
+    && normalizeText(context.authoritySource) === 'runtime_resolver_publication_set'
+    && scopeMatches
+}
+
+async function readDependencyRuntimeConsumptionLineage(input: {
+  queueItem: ConstructionDependencyReplayQueueItem
+  companyId: string | null
+  projectId: string | null
+  queryExec?: AlgorithmAssetGovernanceQueryExec
+}): Promise<DependencyRuntimeConsumptionLineage | null> {
+  const publicationKey = normalizeNullableText(input.queueItem.runtimePublicationKey)
+  const artifactKey = normalizeNullableText(input.queueItem.runtimePublicationArtifactKey)
+  const companyId = normalizeNullableText(input.companyId)
+  const projectId = normalizeNullableText(input.projectId)
+  const expectedTaskIds = sortedUniqueText(input.queueItem.inputTaskIds ?? [])
+  if (!publicationKey || !artifactKey || !companyId || !projectId || expectedTaskIds.length === 0) return null
+
+  const rows = input.queryExec
+    ? await input.queryExec<DependencyTrustedRuntimeConsumptionRow>(
+      TRUSTED_DEPENDENCY_RUNTIME_CONSUMPTIONS_SQL,
+      [companyId, projectId, publicationKey, artifactKey],
+    )
+    // database-query-dynamic-approved: dependency replay owns this fixed, parameterized trusted-consumption SELECT; callers only supply bound scope values.
+    : (await rawQuery(
+      TRUSTED_DEPENDENCY_RUNTIME_CONSUMPTIONS_SQL,
+      [companyId, projectId, publicationKey, artifactKey] as any[],
+    )).rows as DependencyTrustedRuntimeConsumptionRow[]
+
+  const groupedByBatch = new Map<string, DependencyTrustedRuntimeConsumptionRow[]>()
+  for (const row of rows) {
+    if (!dependencyRuntimeConsumptionRowIsTrusted(row, companyId, projectId, publicationKey, artifactKey)) continue
+    const context = readRecord(row.consumption_context)
+    const inputTaskIds = sortedUniqueText(readStringArray(context.inputTaskIds ?? context.input_task_ids))
+    if (inputTaskIds.length === 0 || inputTaskIds.some((taskId) => !expectedTaskIds.includes(taskId))) continue
+    const batchId = normalizeText(row.generation_batch_id)
+    const batchRows = groupedByBatch.get(batchId) ?? []
+    batchRows.push(row)
+    groupedByBatch.set(batchId, batchRows)
+  }
+
+  const candidates: DependencyRuntimeConsumptionLineage[] = []
+  for (const [generationBatchId, batchRows] of groupedByBatch) {
+    const inputTaskIds = sortedUniqueText(batchRows.flatMap((row) => {
+      const context = readRecord(row.consumption_context)
+      return readStringArray(context.inputTaskIds ?? context.input_task_ids)
+    }))
+    if (inputTaskIds.length !== expectedTaskIds.length
+      || inputTaskIds.some((taskId, index) => taskId !== expectedTaskIds[index])) continue
+    const consumptionKeys = sortedUniqueText(batchRows.map((row) => row.consumption_key))
+    if (consumptionKeys.length === 0) continue
+    const sourceEvidenceRefs = sortedUniqueText(batchRows.flatMap((row) => readStringArray(row.source_evidence_refs)))
+    candidates.push({
+      publicationKey,
+      artifactKey,
+      generationBatchId,
+      inputTaskIds,
+      consumptionKeys,
+      sourceEvidenceRefs,
+      publicationStage: normalizeText(batchRows[0]?.publication_stage),
+    })
+  }
+
+  return candidates.length === 1 ? candidates[0]! : null
+}
+
+async function resolveDependencyRuntimeLineages(input: {
+  queueItems: readonly ConstructionDependencyReplayQueueItem[]
+  companyId: string | null
+  queryExec?: AlgorithmAssetGovernanceQueryExec
+}) {
+  const runtimeLineageByQueueItem = new Map<
+    ConstructionDependencyReplayQueueItem,
+    DependencyRuntimeConsumptionLineage
+  >()
+  for (const queueItem of input.queueItems) {
+    if (!dependencyRuleOutcomeStatus(queueItem)) continue
+    if (!queueItem.runtimePublicationKey || !queueItem.runtimePublicationArtifactKey) continue
+    const lineage = await readDependencyRuntimeConsumptionLineage({
+      queueItem,
+      companyId: input.companyId,
+      projectId: scopedProjectId(queueItem.projectIds),
+      queryExec: input.queryExec,
+    })
+    if (!lineage) {
+      throw Object.assign(new Error('dependency replay outcome requires one exact trusted runtime consumption batch'), {
+        code: 'DEPENDENCY_REPLAY_RUNTIME_CONSUMPTION_LINEAGE_REQUIRED',
+        publicationKey: queueItem.runtimePublicationKey,
+        artifactKey: queueItem.runtimePublicationArtifactKey,
+        projectId: scopedProjectId(queueItem.projectIds),
+        inputTaskIds: queueItem.inputTaskIds ?? [],
+      })
+    }
+    runtimeLineageByQueueItem.set(queueItem, lineage)
+  }
+  return runtimeLineageByQueueItem
 }
 
 async function recordDependencyRulePlanNetworkOutcomes(
   report: ConstructionDependencyReplayCalibrationReport,
-  options: Pick<CollectAndPersistConstructionDependencyReplayCalibrationCandidatesOptions, 'companyId' | 'queryExec' | 'constructionCalendar'>,
+  options: Pick<CollectAndPersistConstructionDependencyReplayCalibrationCandidatesOptions, 'companyId' | 'queryExec' | 'constructionCalendar'> & {
+    runtimeLineageByQueueItem?: ReadonlyMap<
+      ConstructionDependencyReplayQueueItem,
+      DependencyRuntimeConsumptionLineage
+    >
+  },
 ) {
   const companyId = normalizeNullableText(options.companyId)
   const queueItems = flattenCalibrationQueueCandidates(report)
@@ -1067,10 +1329,23 @@ async function recordDependencyRulePlanNetworkOutcomes(
     ? 'construction_production_day'
     : 'calendar_day_no_construction_calendar_context'
 
+  const runtimeLineageByQueueItem = options.runtimeLineageByQueueItem
+    ?? await resolveDependencyRuntimeLineages({
+      queueItems,
+      companyId,
+      queryExec: options.queryExec,
+    })
+
   let recordedOutcomeCount = 0
   for (const queueItem of queueItems) {
     const outcomeStatus = dependencyRuleOutcomeStatus(queueItem)
     if (!outcomeStatus) continue
+
+    const runtimeLineage = runtimeLineageByQueueItem.get(queueItem)
+    // Manual/cold-start dependency evidence remains a candidate event only.
+    // It must not create an unlinked network outcome that can later be treated
+    // as a publication-backed runtime fact.
+    if (!runtimeLineage) continue
 
     const projectId = scopedProjectId(queueItem.projectIds)
     const replayPassRate = queueItem.sampleCount > 0
@@ -1106,15 +1381,24 @@ async function recordDependencyRulePlanNetworkOutcomes(
       sample_dependency_ids: queueItem.sampleDependencyIds,
       project_ids: queueItem.projectIds,
       comparable_actual_date_count: report.summary.comparableActualDateCount,
-      runtime_publication_key: queueItem.runtimePublicationKey ?? null,
-      runtime_publication_artifact_key: queueItem.runtimePublicationArtifactKey ?? null,
-      runtime_publication_input_task_ids: queueItem.inputTaskIds ?? [],
-      runtime_publication_stage: queueItem.runtimePublicationStage ?? null,
+      generation_batch_id: runtimeLineage.generationBatchId,
+      runtime_publication_key: runtimeLineage.publicationKey,
+      runtime_publication_artifact_key: runtimeLineage.artifactKey,
+      runtime_publication_input_task_ids: runtimeLineage.inputTaskIds,
+      runtime_publication_input_subject_ids: runtimeLineage.inputTaskIds,
+      runtime_publication_stage: runtimeLineage.publicationStage,
       runtime_publication_selection_basis: queueItem.runtimePublicationSelectionBasis ?? null,
-      source_evidence_refs: queueItem.sampleDependencyIds.map((dependencyId) => (
-        `task_dependencies:${dependencyId}:replay`
-      )),
-      task_ids: queueItem.inputTaskIds ?? [],
+      runtime_publication_consumption_keys: runtimeLineage.consumptionKeys,
+      runtime_publication_source_evidence_refs: runtimeLineage.sourceEvidenceRefs,
+      runtime_publication_authority_source: 'runtime_resolver_publication_set',
+      source_evidence_refs: sortedUniqueText([
+        ...queueItem.sampleDependencyIds.map((dependencyId) => (
+          `task_dependencies:${dependencyId}:replay`
+        )),
+        ...runtimeLineage.sourceEvidenceRefs,
+        `duration_learning_runtime_publications:${runtimeLineage.publicationKey}`,
+      ]),
+      task_ids: runtimeLineage.inputTaskIds,
       real_outcome_count: queueItem.replayPassCount ?? 0,
       replay_case_count: queueItem.sampleCount,
       observation_started_at: queueItem.observationStartedAt ?? null,
@@ -1132,15 +1416,15 @@ async function recordDependencyRulePlanNetworkOutcomes(
     }
 
     const params = [
-        buildDependencyRuleOutcomeId(queueItem, companyId, projectId),
+        buildDependencyRuleOutcomeId(queueItem, companyId, projectId, runtimeLineage.generationBatchId),
         DEPENDENCY_RULE_CANDIDATE_ASSET_KEY,
         outcomeStatus,
-        `${report.reportCode}:${queueItem.matchedLayer}:${queueItem.matchedSeedCode}`,
+        `${report.reportCode}:${queueItem.matchedLayer}:${queueItem.matchedSeedCode}:${runtimeLineage.generationBatchId}`,
         'project',
         'project_business_outcome_writer',
         companyId,
         projectId,
-        queueItem.runtimePublicationKey ?? null,
+        runtimeLineage.publicationKey,
         metadata,
         false,
         false,
@@ -1245,6 +1529,11 @@ export async function persistConstructionDependencyReplayCalibrationCandidatesFr
   const report = options.report
   const maxCandidateEvents = Math.max(1, Math.floor(options.maxCandidateEvents ?? 20))
   const queueItems = reportQueueItems.slice(0, maxCandidateEvents)
+  const runtimeLineageByQueueItem = await resolveDependencyRuntimeLineages({
+    queueItems,
+    companyId,
+    queryExec: options.queryExec,
+  })
 
   const persistedEvents = []
   for (const queueItem of queueItems) {
@@ -1301,6 +1590,7 @@ export async function persistConstructionDependencyReplayCalibrationCandidatesFr
     companyId,
     queryExec: options.queryExec,
     constructionCalendar: options.constructionCalendar,
+    runtimeLineageByQueueItem,
   })
 
   return {

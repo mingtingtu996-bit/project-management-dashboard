@@ -116,6 +116,61 @@ describe('durationLearningRuntimeConsumptionService', () => {
     expect(new Set(records.map((record) => record.consumptionKey)).size).toBe(2)
   })
 
+  it('persists physical lineage for base and standard duration applications used by prediction evidence', () => {
+    const basePublication = {
+      assetKey: 'base_duration_benchmark' as const,
+      publicationKey: 'duration_learning_runtime:base_duration_benchmark:concrete-v1',
+      publicationStatus: 'published',
+      sourceEvidenceRefs: ['duration_benchmarks:concrete-v1'],
+      observationContext: {
+        artifactKey: 'SW-CONCRETE:process:all',
+        scopeLevel: 'project',
+      },
+    }
+    const standardPublication = {
+      assetKey: 'standard_work_duration_seed' as const,
+      publicationKey: 'duration_learning_runtime:standard_work_duration_seed:concrete-v1',
+      publicationStatus: 'published',
+      sourceEvidenceRefs: ['standard_work_duration_seed:concrete-v1'],
+      observationContext: {
+        artifactKey: 'SW-CONCRETE',
+        scopeLevel: 'project',
+      },
+    }
+    const records = buildGeneratedTemplateRuntimeConsumptions({
+      companyId,
+      projectId,
+      consumerKey: 'projectWizard',
+      consumerSurface: 'project_wizard_commit',
+      generationBatchId: 'batch-prediction-lineage',
+      rows: [generatedRow([
+        {
+          assetKey: basePublication.assetKey,
+          publicationKey: basePublication.publicationKey,
+          artifactKey: 'SW-CONCRETE:process:all',
+          durationDayBasis: 'construction_production_day',
+          appliedDurationDays: 8,
+        },
+        {
+          assetKey: standardPublication.assetKey,
+          publicationKey: standardPublication.publicationKey,
+          artifactKey: 'SW-CONCRETE',
+          durationDayBasis: 'construction_production_day',
+          appliedDurationDays: 8,
+        },
+      ])],
+      runtimeArtifactPublications: [basePublication, standardPublication],
+      subjectType: 'task',
+      subjectIdByClientRowId: new Map([['generated-row-1', taskId]]),
+    })
+
+    expect(records.map((record) => record.assetKey)).toEqual([
+      'base_duration_benchmark',
+      'standard_work_duration_seed',
+    ])
+    expect(records.every((record) => record.generationBatchId === 'batch-prediction-lineage')).toBe(true)
+  })
+
   it('persists dependency publication consumption with exact predecessor and successor task lineage', () => {
     const predecessorTaskId = '44444444-4444-4444-8444-444444444444'
     const records = buildGeneratedTemplateRuntimeConsumptions({
@@ -153,11 +208,60 @@ describe('durationLearningRuntimeConsumptionService', () => {
       publicationKey: 'duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
       artifactKey: 'facade-p04-p05',
       taskId,
+      generationBatchId: 'batch-dependency',
       appliedDurationDays: null,
+      sourceEvidenceRefs: expect.arrayContaining([
+        'duration_learning_runtime_publications:duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
+      ]),
       consumptionContext: expect.objectContaining({
         inputTaskIds: [predecessorTaskId, taskId],
+        authoritySource: 'runtime_resolver_publication_set',
       }),
     })])
+  })
+
+  it('does not send caller-asserted dependency input tasks to the authoritative RPC', async () => {
+    const predecessorTaskId = '44444444-4444-4444-8444-444444444444'
+    const queryExec = vi.fn(async (_sql: string, params: unknown[]) => {
+      const rows = JSON.parse(String(params[0])) as Array<Record<string, unknown>>
+      return rows.map((_, index) => ({ consumption_key: `database-derived-dependency-${index + 1}` }))
+    })
+
+    await persistDurationLearningRuntimeConsumptions({
+      queryExec: queryExec as any,
+      build: {
+        companyId,
+        projectId,
+        consumerKey: 'projectWizard',
+        consumerSurface: 'project_wizard_commit',
+        generationBatchId: 'batch-dependency',
+        rows: [
+          generatedRow([], { clientRowId: 'predecessor-row' }),
+          generatedRow([], {
+            clientRowId: 'successor-row',
+            predecessorDependencies: [{
+              clientRowId: 'predecessor-row',
+              dependencyType: 'FS',
+              lagDays: 0,
+              source: 'duration_learning_runtime_publication',
+              publicationKey: 'duration_learning_runtime:dependency_rule_candidate:facade-p04-p05',
+              artifactKey: 'facade-p04-p05',
+              publicationStage: 'stable',
+              selectionBasis: 'project_stable',
+            }],
+          }),
+        ],
+        runtimeArtifactPublications,
+        subjectType: 'task',
+        subjectIdByClientRowId: new Map([
+          ['predecessor-row', predecessorTaskId],
+          ['successor-row', taskId],
+        ]),
+      },
+    })
+
+    const requestedRows = JSON.parse(String(queryExec.mock.calls[0]?.[1]?.[0])) as Array<Record<string, any>>
+    expect(requestedRows[0]?.consumption_context).not.toHaveProperty('inputTaskIds')
   })
 
   it('rejects user-editable metadata that is not backed by the resolver publication set before SQL', async () => {
@@ -193,8 +297,8 @@ describe('durationLearningRuntimeConsumptionService', () => {
 
   it('persists validated consumptions with publication/artifact scope checks in one statement', async () => {
     const queryExec = vi.fn(async (_sql: string, params: unknown[]) => {
-      const rows = JSON.parse(String(params[0])) as Array<{ consumption_key: string }>
-      return rows.map((row) => ({ consumption_key: row.consumption_key }))
+      const rows = JSON.parse(String(params[0])) as Array<Record<string, unknown>>
+      return rows.map((_, index) => ({ consumption_key: `database-derived-consumption-${index + 1}` }))
     })
 
     const result = await persistDurationLearningRuntimeConsumptions({
@@ -222,20 +326,18 @@ describe('durationLearningRuntimeConsumptionService', () => {
     })
 
     expect(result).toMatchObject({ requestedCount: 1, insertedCount: 1 })
+    expect(result.consumptionKeys).toEqual(['database-derived-consumption-1'])
     expect(queryExec).toHaveBeenCalledOnce()
     const sql = String(queryExec.mock.calls[0]?.[0]).toLowerCase()
-    expect(sql).toContain('insert into public.duration_learning_runtime_consumptions')
-    expect(sql).toContain('join public.duration_learning_runtime_publications')
-    expect(sql).toContain('publication.publication_key = requested.publication_key')
-    expect(sql).toContain('publication.asset_key = requested.asset_key')
-    expect(sql).toContain('publication.artifact_key = requested.artifact_key')
-    expect(sql).toContain("publication.publication_stage = 'canary'")
-    expect(sql).toContain("publication.monitoring_status in ('pending', 'collecting', 'passed')")
-    expect(sql).toContain("publication.publication_stage = 'stable'")
-    expect(sql).toContain("publication.monitoring_status = 'passed'")
-    expect(sql).toContain("requested.duration_day_basis = 'construction_production_day'")
-    expect(sql).toContain('jsonb_array_length($1::jsonb)')
-    expect(sql).toContain('on conflict (consumption_key) do nothing')
+    expect(sql).toContain('public.persist_duration_learning_runtime_consumptions($1::jsonb)')
+    expect(sql).not.toContain('insert into public.duration_learning_runtime_consumptions (')
+    const requestedRows = JSON.parse(String(queryExec.mock.calls[0]?.[1]?.[0])) as Array<Record<string, unknown>>
+    expect(requestedRows[0]).not.toHaveProperty('source_evidence_refs')
+    expect(requestedRows[0]).not.toHaveProperty('consumed_at')
+    expect(requestedRows[0]).not.toHaveProperty('consumption_key')
+    expect(requestedRows[0]).not.toHaveProperty('template_id')
+    expect(requestedRows[0]?.consumption_context).not.toHaveProperty('authoritySource')
+    expect(requestedRows[0]?.consumption_context).not.toHaveProperty('scopeLevel')
   })
 
   it('binds industry publications to the resolver industry identity used by migration 315 RLS', async () => {
@@ -252,6 +354,7 @@ describe('durationLearningRuntimeConsumptionService', () => {
       projectId,
       consumerKey: 'projectWizard',
       consumerSurface: 'project_wizard_commit',
+      generationBatchId: 'batch-industry',
       rows: [generatedRow([{
         assetKey: 'wbs_reference_days',
         publicationKey: 'duration_learning_runtime:wbs_reference_days:facade-v3',
@@ -269,7 +372,7 @@ describe('durationLearningRuntimeConsumptionService', () => {
       industryKey: 'curtain_wall',
     }))
 
-    const queryExec = vi.fn(async (_sql: string, _params: unknown[]) => [])
+    const queryExec = vi.fn(async (_sql: string, _params: unknown[]) => [{ consumption_key: 'database-derived-industry-consumption' }])
     await persistDurationLearningRuntimeConsumptions({
       queryExec: queryExec as any,
       build: {
@@ -277,6 +380,7 @@ describe('durationLearningRuntimeConsumptionService', () => {
         projectId,
         consumerKey: 'projectWizard',
         consumerSurface: 'project_wizard_commit',
+        generationBatchId: 'batch-industry',
         rows: [generatedRow([{
           assetKey: 'wbs_reference_days',
           publicationKey: 'duration_learning_runtime:wbs_reference_days:facade-v3',
@@ -289,13 +393,16 @@ describe('durationLearningRuntimeConsumptionService', () => {
         subjectIdByClientRowId: new Map([['generated-row-1', taskId]]),
       },
     })
-    expect(String(queryExec.mock.calls[0]?.[0])).toContain(
-      "publication.industry_key = requested.consumption_context ->> 'industryKey'",
-    )
+    expect(String(queryExec.mock.calls[0]?.[0])).toContain('public.persist_duration_learning_runtime_consumptions')
+    const requestedRows = JSON.parse(String(queryExec.mock.calls[0]?.[1]?.[0])) as Array<Record<string, any>>
+    expect(requestedRows[0]?.consumption_context?.industryKey).toBe('curtain_wall')
   })
 
   it('reads task completion lineage only from the trusted consumption table with tenant and project predicates', async () => {
     const queryExec = vi.fn(async (_sql: string, _params: unknown[]) => [{
+      company_id: companyId,
+      project_id: projectId,
+      task_id: taskId,
       consumption_key: 'consumption-1',
       publication_key: 'duration_learning_runtime:wbs_reference_days:facade-v3',
       asset_key: 'wbs_reference_days',
@@ -306,6 +413,16 @@ describe('durationLearningRuntimeConsumptionService', () => {
       applied_duration_days: 99,
       generation_batch_id: 'batch-1',
       template_id: 'china-facade-curtain-wall',
+      source_evidence_refs: [
+        'duration_learning_runtime_publications:duration_learning_runtime:wbs_reference_days:facade-v3',
+      ],
+      consumption_context: { authoritySource: 'runtime_resolver_publication_set' },
+      publication_stage: 'stable',
+      monitoring_status: 'passed',
+      publication_scope_level: 'project',
+      publication_company_id: companyId,
+      publication_project_id: projectId,
+      publication_industry_key: null,
       consumed_at: '2026-07-19T00:00:00.000Z',
     }])
 
@@ -325,9 +442,59 @@ describe('durationLearningRuntimeConsumptionService', () => {
     })])
     const sql = String(queryExec.mock.calls[0]?.[0]).toLowerCase()
     expect(sql).toContain('from public.duration_learning_runtime_consumptions')
-    expect(sql).toContain('company_id = $1::uuid')
-    expect(sql).toContain('project_id = $2::uuid')
-    expect(sql).toContain('task_id = $3::uuid')
+    expect(sql).toContain('join public.duration_learning_runtime_publications')
+    expect(sql).toContain('consumption.company_id = $1::uuid')
+    expect(sql).toContain('consumption.project_id = $2::uuid')
+    expect(sql).toContain('consumption.task_id = $3::uuid')
+    expect(sql).toContain("publication.monitoring_status in ('pending', 'collecting', 'passed')")
+    expect(sql).toContain("publication.monitoring_status = 'passed'")
+    expect(sql).toContain("consumption.consumption_context ->> 'authoritysource'")
+    expect(sql).toContain("'duration_learning_runtime_publications:' || consumption.publication_key")
     expect(sql).not.toContain('standard_task_metadata')
+  })
+
+  it('filters failed, rollback-pending, superseded, and forged consumption rows at readback', async () => {
+    const publicationKey = 'duration_learning_runtime:wbs_reference_days:facade-v3'
+    const trusted = {
+      company_id: companyId,
+      project_id: projectId,
+      task_id: taskId,
+      consumption_key: 'trusted-consumption',
+      publication_key: publicationKey,
+      asset_key: 'wbs_reference_days',
+      artifact_key: 'china-facade-curtain-wall',
+      consumer_key: 'projectWizard',
+      consumer_surface: 'project_wizard_commit',
+      duration_day_basis: 'construction_production_day',
+      applied_duration_days: 99,
+      generation_batch_id: 'batch-1',
+      template_id: 'china-facade-curtain-wall',
+      source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+      consumption_context: { authoritySource: 'runtime_resolver_publication_set' },
+      publication_stage: 'stable',
+      monitoring_status: 'passed',
+      publication_scope_level: 'project',
+      publication_company_id: companyId,
+      publication_project_id: projectId,
+      publication_industry_key: null,
+      consumed_at: '2026-07-19T00:00:00.000Z',
+    }
+    const queryExec = vi.fn(async () => [
+      trusted,
+      { ...trusted, consumption_key: 'failed', publication_stage: 'canary', monitoring_status: 'failed' },
+      { ...trusted, consumption_key: 'rollback-pending', publication_stage: 'canary', monitoring_status: 'rollback_pending' },
+      { ...trusted, consumption_key: 'superseded', publication_stage: 'superseded', monitoring_status: 'passed' },
+      { ...trusted, consumption_key: 'forged-ref', source_evidence_refs: ['tasks:forged'] },
+      { ...trusted, consumption_key: 'forged-authority', consumption_context: { authoritySource: 'task_json' } },
+    ])
+
+    const rows = await readTrustedDurationLearningRuntimeConsumptionsForTask({
+      queryExec: queryExec as any,
+      companyId,
+      projectId,
+      taskId,
+    })
+
+    expect(rows.map((row) => row.consumptionKey)).toEqual(['trusted-consumption'])
   })
 })

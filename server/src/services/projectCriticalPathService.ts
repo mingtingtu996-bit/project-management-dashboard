@@ -942,6 +942,10 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
         publicationKey: application.publicationKey,
         metadata: {
           ...metadata,
+          source_evidence_refs: unique([
+            ...((metadata.source_evidence_refs as string[] | undefined) ?? []),
+            `duration_learning_runtime_publications:${application.publicationKey}`,
+          ]),
           runtime_publication_key: application.publicationKey,
           runtime_publication_artifact_key: application.artifactKey,
           runtime_publication_input_task_ids: inputTaskIds,
@@ -2249,6 +2253,8 @@ async function resolveCriticalPathLearningPublications(input: {
   rows: CriticalPathTaskRow[]
   projectGenerationFacts: Record<string, unknown>
   autoTaskIds: readonly string[]
+  criticalPathInputHash?: string | null
+  taskNetworkInputHash?: string | null
 }) {
   const queryExec = criticalPathDurationLearningQueryExec()
   try {
@@ -2302,8 +2308,20 @@ async function resolveCriticalPathLearningPublications(input: {
         appliedTaskIds: application.appliedTaskIds,
         role: application.role,
         selectionBasis: application.selectionBasis,
+        criticalPathInputHash: input.criticalPathInputHash ?? null,
+        taskNetworkInputHash: input.taskNetworkInputHash ?? null,
       },
     }))
+    const hashEvidenceRefs = [
+      input.criticalPathInputHash ? `critical_path_inputs:${input.criticalPathInputHash}` : null,
+      input.taskNetworkInputHash ? `critical_path_task_network:${input.taskNetworkInputHash}` : null,
+    ].filter((value): value is string => Boolean(value))
+    for (const artifact of artifacts) {
+      artifact.sourceEvidenceRefs = [
+        ...artifact.sourceEvidenceRefs,
+        ...hashEvidenceRefs,
+      ]
+    }
     await recordProjectCriticalPathConsumedArtifacts({
       queryExec,
       artifacts,
@@ -3108,11 +3126,34 @@ async function buildProjectCriticalPathSnapshotWithContext(
   )
   const manualInsertOverrides = overrides.filter((override) => override.mode === 'manual_insert')
   const manualInsertedTaskIds = unique(manualInsertOverrides.map((override) => override.task_id))
+
+  // Bind learned-publication observations to the exact CPM network replay.
+  const displayTaskIds = unique([
+    ...orderDisplayTaskIds(autoTaskIds, new Set(rows.map((row) => row.id)), manualInsertOverrides),
+  ])
+  const manualInsertChains = buildManualInsertChains(projectId, manualInsertOverrides, taskMap, constructionCalendar)
+  const combinedAlternateChains = [...autoAlternateChains, ...highVarianceNearCriticalChains, ...manualInsertChains]
+  const edges = buildSnapshotEdges(primaryChain?.taskIds ?? autoTaskIds, analysis.dependencyEdges, manualInsertOverrides)
+  const networkLineage = buildCriticalPathNetworkLineage({
+    rows,
+    dependencyRows,
+    overrides,
+    autoTaskIds,
+    manualAttentionTaskIds,
+    manualInsertedTaskIds,
+    displayTaskIds,
+    edges,
+    primaryChain,
+    alternateChains: combinedAlternateChains,
+  })
+
   const criticalPathLearningPublications = await resolveCriticalPathLearningPublications({
     projectId,
     rows,
     projectGenerationFacts,
     autoTaskIds,
+    criticalPathInputHash: networkLineage.criticalPathInputHash,
+    taskNetworkInputHash: networkLineage.taskNetworkInputHash,
   })
   const learnedCriticalPathWatchTaskIds = unique(
     criticalPathLearningPublications.flatMap((publication) => publication.appliedTaskIds),
@@ -3130,25 +3171,7 @@ async function buildProjectCriticalPathSnapshotWithContext(
     }
   }
     // CP14: displayTaskIds 仅包含客观关键路径（CPM 自动计算 + manual_insert），不混入 manual_attention
-  const displayTaskIds = unique([
-    ...orderDisplayTaskIds(autoTaskIds, new Set(rows.map((row) => row.id)), manualInsertOverrides),
-  ])
-  const manualInsertChains = buildManualInsertChains(projectId, manualInsertOverrides, taskMap, constructionCalendar)
-  const combinedAlternateChains = [...autoAlternateChains, ...highVarianceNearCriticalChains, ...manualInsertChains]
-  const edges = buildSnapshotEdges(primaryChain?.taskIds ?? autoTaskIds, analysis.dependencyEdges, manualInsertOverrides)
   const primaryChainIndex = new Map((primaryChain?.taskIds ?? []).map((taskId, index) => [taskId, index]))
-  const networkLineage = buildCriticalPathNetworkLineage({
-    rows,
-    dependencyRows,
-    overrides,
-    autoTaskIds,
-    manualAttentionTaskIds,
-    manualInsertedTaskIds,
-    displayTaskIds,
-    edges,
-    primaryChain,
-    alternateChains: combinedAlternateChains,
-  })
 
   const taskSnapshotIds = unique([
     ...displayTaskIds,

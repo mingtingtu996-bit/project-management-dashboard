@@ -26,7 +26,20 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
       scopeLevel: 'project',
       inputSubjectIds: ['20000000-0000-4000-8000-000000000001'],
       inputTaskIds: ['20000000-0000-4000-8000-000000000001'],
-      payload: { recommendedDurationDays: 8 },
+       payload: {
+         companyId: '10000000-0000-4000-8000-000000000001',
+         projectId: '00000000-0000-4000-8000-000000000001',
+         taskId: '20000000-0000-4000-8000-000000000001',
+         generationBatchId: 'batch-1',
+         recommendedDurationDays: 8,
+         runtimeApplications: [{
+           assetKey: 'base_duration_benchmark',
+           publicationKey: 'duration_learning_runtime:base_duration_benchmark:project-1',
+           artifactKey: 'SW-CONCRETE:process:all',
+           scopeLevel: 'project',
+           inputTaskIds: ['20000000-0000-4000-8000-000000000001'],
+         }],
+       },
     }]
 
     const result = await enqueue({ queryExec, events })
@@ -36,6 +49,8 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
     expect(calls[0].sql).toContain('duration_learning_runtime_evidence_outbox')
     expect(calls[0].sql.toLowerCase()).toContain('on conflict')
     expect(calls[0].sql).toContain("jsonb_array_elements(requested.payload->'runtimeApplications')")
+    expect(calls[0].sql).toContain('duration_learning_runtime_evidence_outbox_row_is_authorized')
+    expect(calls[0].sql).not.toContain("or requested.event_type = 'wbs_candidate'")
     expect(calls[0].params).toEqual(expect.arrayContaining([
       expect.arrayContaining([expect.objectContaining({
         company_id: events[0].companyId,
@@ -66,10 +81,12 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
         subject_id: eventType === 'duration_prediction'
           ? '20000000-0000-4000-8000-000000000001'
           : '30000000-0000-4000-8000-000000000001',
-        asset_key: 'special_work_duration_seed',
-        publication_key: 'duration_learning_runtime:special_work_duration_seed:project-1',
-        artifact_key: 'china-gb55032-2022',
-        scope_level: 'project',
+        asset_key: eventType === 'duration_prediction' ? 'special_work_duration_seed' : null,
+        publication_key: eventType === 'duration_prediction'
+          ? 'duration_learning_runtime:special_work_duration_seed:project-1'
+          : null,
+        artifact_key: eventType === 'duration_prediction' ? 'china-gb55032-2022' : null,
+        scope_level: eventType === 'duration_prediction' ? 'project' : null,
         input_subject_ids: eventType === 'duration_prediction'
           ? ['20000000-0000-4000-8000-000000000001']
           : ['30000000-0000-4000-8000-000000000001'],
@@ -79,9 +96,10 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
         payload: eventType === 'duration_prediction'
           ? {
               companyId: '10000000-0000-4000-8000-000000000001',
-              projectId: '00000000-0000-4000-8000-000000000001',
-              taskId: '20000000-0000-4000-8000-000000000001',
-              recommendedDurationDays: 8,
+               projectId: '00000000-0000-4000-8000-000000000001',
+               taskId: '20000000-0000-4000-8000-000000000001',
+               generationBatchId: 'batch-1',
+               recommendedDurationDays: 8,
               runtimeApplications: [{
                 assetKey: 'special_work_duration_seed',
                 publicationKey: 'duration_learning_runtime:special_work_duration_seed:project-1',
@@ -97,14 +115,21 @@ describe('durationLearningRuntimeEvidenceOutboxService', () => {
               generationBatchId: 'batch-1',
               templateId: 'china-gb55032-2022',
               generatedRowCount: 1,
-              retainedRowCount: 1,
-              generatedEntityIds: ['30000000-0000-4000-8000-000000000001'],
-            },
+               retainedRowCount: 1,
+               generatedEntityIds: ['30000000-0000-4000-8000-000000000001'],
+               authoritativeRuntimeLineage: null,
+               authoritativeRuntimeLineages: [],
+               lineageResolution: 'no_trusted_consumption',
+             },
       }
       const sqlCalls: string[] = []
       const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
         sqlCalls.push(sql)
+        if (sql.includes('duration-learning-runtime-evidence-outbox:quarantine-unsafe')) return [] as T[]
         if (sql.includes('duration-learning-runtime-evidence-outbox:claim')) return [row] as T[]
+        if (sql.includes('duration-learning-runtime-evidence-outbox:authority')) {
+          return [{ authorized: true }] as T[]
+        }
         if (sql.includes('duration-learning-runtime-evidence-outbox:complete')) {
           return [{ event_key: row.event_key }] as T[]
         }
