@@ -18,6 +18,14 @@ const mocks = vi.hoisted(() => ({
   persistDurationLearningRuntimeConsumptions: vi.fn(),
   buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
   recordWbsTemplateCandidateEvent: vi.fn(),
+  buildGeneratedDurationPredictionOutboxEvents: vi.fn(() => []),
+  buildWbsCandidateOutboxEvent: vi.fn((input: any) => ({
+    eventType: 'wbs_candidate',
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+    payload: input.candidate,
+  })),
+  enqueueDurationLearningRuntimeEvidenceBatch: vi.fn(),
   externalFetch: vi.fn(async () => {
     throw new Error('EXTERNAL_NETWORK_FORBIDDEN_IN_WIZARD_SIDE_EFFECT_TEST')
   }),
@@ -75,6 +83,12 @@ vi.mock('../services/durationLearningRuntimeConsumptionService.js', () => ({
 vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
   buildSpecialWorkDurationCandidateNodes: mocks.buildSpecialWorkDurationCandidateNodes,
   recordWbsTemplateCandidateEvent: mocks.recordWbsTemplateCandidateEvent,
+}))
+
+vi.mock('../services/durationLearningRuntimeEvidenceOutboxService.js', () => ({
+  buildGeneratedDurationPredictionOutboxEvents: mocks.buildGeneratedDurationPredictionOutboxEvents,
+  buildWbsCandidateOutboxEvent: mocks.buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch: mocks.enqueueDurationLearningRuntimeEvidenceBatch,
 }))
 
 vi.mock('../services/projectFactsToTemplateService.js', () => ({
@@ -1069,6 +1083,7 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     mocks.recordWbsTemplateGenerationRuntimeConsumption.mockResolvedValue(undefined)
     mocks.persistDurationLearningRuntimeConsumptions.mockResolvedValue({ requestedCount: 0, insertedCount: 0 })
     mocks.recordWbsTemplateCandidateEvent.mockResolvedValue(undefined)
+    mocks.enqueueDurationLearningRuntimeEvidenceBatch.mockResolvedValue({ requestedCount: 1, persistedCount: 1 })
     mocks.buildCandidateNetworkEvaluationFromGeneratedDependencies.mockReset()
     mocks.buildCandidateNetworkEvaluationFromGeneratedDependencies.mockReturnValue(null)
     mocks.createTaskInMainChain.mockReset()

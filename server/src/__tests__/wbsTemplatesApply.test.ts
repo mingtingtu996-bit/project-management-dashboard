@@ -1,5 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const learningMocks = vi.hoisted(() => ({
+  callOrder: [] as string[],
+  runtimePublicationFixtures: [] as Array<Record<string, unknown>>,
+  persistRuntimeConsumptions: vi.fn(async (_input: unknown) => ({ requestedCount: 0, insertedCount: 0, records: [] })),
+  enqueueEvidence: vi.fn(async ({ events }: { events: unknown[] }) => ({
+    requestedCount: events.length,
+    persistedCount: events.length,
+    eventKeys: events.map((_, index) => `outbox-event-${index + 1}`),
+  })),
+  buildWbsCandidateEvent: vi.fn((input: any) => ({
+    eventType: 'wbs_candidate',
+    companyId: input.companyId,
+    projectId: input.projectId,
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+    publicationKey: null,
+    artifactKey: input.candidate?.templateId ?? null,
+    inputTaskIds: [],
+    payload: input.candidate,
+  })),
+  buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
+}))
+
 const mocks = vi.hoisted(() => {
   const insertedTasks: any[][] = []
   const insertedSupabaseRows: Record<string, any[]> = {
@@ -46,17 +69,20 @@ const mocks = vi.hoisted(() => {
         if (normalized === 'BEGIN') {
           snapshot = cloneTableLengths()
           transactionEvents.push('BEGIN')
+          learningMocks.callOrder.push('BEGIN')
           return { rows: [], rowCount: null }
         }
         if (normalized === 'COMMIT') {
           snapshot = null
           transactionEvents.push('COMMIT')
+          learningMocks.callOrder.push('COMMIT')
           return { rows: [], rowCount: null }
         }
         if (normalized === 'ROLLBACK') {
           if (snapshot) restoreTableLengths(snapshot)
           snapshot = null
           transactionEvents.push('ROLLBACK')
+          learningMocks.callOrder.push('ROLLBACK')
           return { rows: [], rowCount: null }
         }
 
@@ -532,6 +558,7 @@ const mocks = vi.hoisted(() => {
         if (params[0] === 'project-hospital') {
           return {
             id: params[0],
+            company_id: '10000000-0000-4000-8000-000000000001',
             name: '三栋医院综合楼测试项目',
             status: 'planning',
             project_type: '医院建设',
@@ -568,6 +595,7 @@ const mocks = vi.hoisted(() => {
         if (params[0] === 'project-school-wizard') {
           return {
             id: params[0],
+            company_id: '10000000-0000-4000-8000-000000000001',
             name: '向导学校测试项目',
             status: 'planning',
             project_type: null,
@@ -613,6 +641,7 @@ const mocks = vi.hoisted(() => {
 
         return {
           id: params[0],
+          company_id: '10000000-0000-4000-8000-000000000001',
           name: '三栋高层住宅测试项目',
           status: 'planning',
           project_type: '住宅开发',
@@ -681,6 +710,19 @@ vi.mock('../services/dbService.js', () => ({
 vi.mock('../database.js', () => ({
   getClient: vi.fn(async () => mocks.createTransactionClient()),
   query: vi.fn(async () => ({ rows: [], rowCount: 0 })),
+}))
+
+vi.mock('../services/durationLearningRuntimeConsumptionService.js', () => ({
+  persistDurationLearningRuntimeConsumptions: learningMocks.persistRuntimeConsumptions,
+}))
+
+vi.mock('../services/durationLearningRuntimeEvidenceOutboxService.js', () => ({
+  buildWbsCandidateOutboxEvent: learningMocks.buildWbsCandidateEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch: learningMocks.enqueueEvidence,
+}))
+
+vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
+  buildSpecialWorkDurationCandidateNodes: learningMocks.buildSpecialWorkDurationCandidateNodes,
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -1000,6 +1042,9 @@ vi.mock('../services/wbsTemplateGenerationService.js', () => {
 
   const generateWbsTemplateRows = vi.fn(async (params: any) => {
     mocks.generatedRowCalls.push(params)
+    if (Array.isArray(params.runtimeArtifactPublications)) {
+      params.runtimeArtifactPublications.push(...learningMocks.runtimePublicationFixtures)
+    }
     const operation = params.operation
     const generationMode = operation?.clientContext?.generationMode
     const rows = generationMode === 'residential_master_plan_v2'
@@ -1063,6 +1108,23 @@ import { request } from './testSetup.js'
 describe('wbs template apply route governance', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    learningMocks.callOrder.length = 0
+    learningMocks.runtimePublicationFixtures.length = 0
+    learningMocks.persistRuntimeConsumptions.mockImplementation(async ({ build }: any) => {
+      learningMocks.callOrder.push('TRUSTED_CONSUMPTION')
+      const count = Array.isArray(build?.runtimeArtifactPublications)
+        ? build.runtimeArtifactPublications.length
+        : 0
+      return { requestedCount: count, insertedCount: count, records: [] }
+    })
+    learningMocks.enqueueEvidence.mockImplementation(async ({ events }: { events: unknown[] }) => {
+      learningMocks.callOrder.push('OUTBOX')
+      return {
+        requestedCount: events.length,
+        persistedCount: events.length,
+        eventKeys: events.map((_, index) => `outbox-event-${index + 1}`),
+      }
+    })
     mocks.insertedTasks.length = 0
     Object.values(mocks.insertedSupabaseRows).forEach((rows) => {
       rows.length = 0
@@ -1219,7 +1281,11 @@ describe('wbs template apply route governance', () => {
       template_id: 'template-residential',
     })
 
-    expect(response.status).toBe(201)
+    expect(response.status, JSON.stringify({
+      body: response.body,
+      warnings: mocks.logger.warn.mock.calls,
+      errors: mocks.logger.error.mock.calls,
+    })).toBe(201)
     expect(response.body.success).toBe(true)
 
     const [insertedBaseline] = mocks.insertedSupabaseRows.task_baselines
@@ -1602,6 +1668,101 @@ describe('wbs template apply route governance', () => {
       'business_type_master_plan_profile_v1',
     ]))
     expect(insertedItems.some((item) => item.generation_metadata?.source === 'template')).toBe(false)
+  })
+
+  it('commits builtin cold-start baseline assets with zero trusted consumptions and a durable candidate event', async () => {
+    const response = await request.post('/api/planning/wbs-templates/bootstrap/from-template').send({
+      project_id: 'project-school-wizard',
+      template_id: 'template-school',
+    })
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201)
+    expect(learningMocks.runtimePublicationFixtures).toHaveLength(0)
+    expect(learningMocks.persistRuntimeConsumptions).toHaveBeenCalledWith(expect.objectContaining({
+      build: expect.objectContaining({
+        consumerSurface: 'default_master_plan_baseline_draft',
+        subjectType: 'baseline_item',
+        runtimeArtifactPublications: [],
+      }),
+    }))
+    expect(learningMocks.enqueueEvidence).toHaveBeenCalledWith(expect.objectContaining({
+      events: [expect.objectContaining({
+        eventType: 'wbs_candidate',
+        subjectType: 'baseline_item',
+        publicationKey: null,
+        payload: expect.objectContaining({
+          metadata: expect.objectContaining({
+            sourceAssetLineage: expect.objectContaining({
+              assetKind: 'builtin_default_master_plan',
+              canonicalPublicationCount: 0,
+            }),
+          }),
+        }),
+      })],
+    }))
+    expect(learningMocks.callOrder).toEqual([
+      'BEGIN',
+      'TRUSTED_CONSUMPTION',
+      'OUTBOX',
+      'COMMIT',
+    ])
+  })
+
+  it('persists exact canonical publication lineage and outbox evidence before the same baseline commit', async () => {
+    learningMocks.runtimePublicationFixtures.push({
+      assetKey: 'special_work_duration_seed',
+      publicationKey: 'duration_learning_runtime:special_work_duration_seed:project-school',
+      publicationStatus: 'published',
+      sourceEvidenceRefs: [
+        'duration_learning_runtime_publications:duration_learning_runtime:special_work_duration_seed:project-school',
+      ],
+      observationContext: { artifactKey: 'template-school', scopeLevel: 'project' },
+    })
+
+    const response = await request.post('/api/planning/wbs-templates/bootstrap/from-template').send({
+      project_id: 'project-school-wizard',
+      template_id: 'template-school',
+    })
+
+    expect(response.status, JSON.stringify(response.body)).toBe(201)
+    expect(learningMocks.persistRuntimeConsumptions).toHaveBeenCalledWith(expect.objectContaining({
+      build: expect.objectContaining({
+        companyId: '10000000-0000-4000-8000-000000000001',
+        projectId: 'project-school-wizard',
+        runtimeArtifactPublications: [expect.objectContaining({
+          publicationKey: 'duration_learning_runtime:special_work_duration_seed:project-school',
+          observationContext: expect.objectContaining({ artifactKey: 'template-school' }),
+        })],
+      }),
+    }))
+    expect(learningMocks.callOrder.indexOf('TRUSTED_CONSUMPTION')).toBeLessThan(
+      learningMocks.callOrder.indexOf('OUTBOX'),
+    )
+    expect(learningMocks.callOrder.indexOf('OUTBOX')).toBeLessThan(
+      learningMocks.callOrder.indexOf('COMMIT'),
+    )
+  })
+
+  it('rolls back baseline rows when durable evidence enqueue fails', async () => {
+    learningMocks.enqueueEvidence.mockImplementationOnce(async () => {
+      learningMocks.callOrder.push('OUTBOX')
+      throw new Error('simulated duration learning outbox failure')
+    })
+
+    const response = await request.post('/api/planning/wbs-templates/bootstrap/from-template').send({
+      project_id: 'project-school-wizard',
+      template_id: 'template-school',
+    })
+
+    expect(response.status).toBe(500)
+    expect(mocks.insertedSupabaseRows.task_baselines).toHaveLength(0)
+    expect(mocks.insertedSupabaseRows.task_baseline_items).toHaveLength(0)
+    expect(learningMocks.callOrder).toEqual([
+      'BEGIN',
+      'TRUSTED_CONSUMPTION',
+      'OUTBOX',
+      'ROLLBACK',
+    ])
   })
 
   it('rolls back the default master-plan draft when baseline item persistence fails', async () => {

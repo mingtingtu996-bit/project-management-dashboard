@@ -169,6 +169,7 @@ vi.mock('../services/planningReplayCalibrationService.js', () => ({
 
 const {
   getTaskDurationSuggestion,
+  recordCommittedDurationSuggestionPredictionEvidence,
   recordDurationSuggestionRuntimeConsumption,
 } = await import('../services/durationSuggestionService.js')
 
@@ -180,6 +181,70 @@ function createRecordingQueryExec() {
   }
   return { calls, queryExec }
 }
+
+describe('committed duration suggestion prediction evidence', () => {
+  it('records exact task and runtime publication lineage and fails closed when persistence does not return a row', async () => {
+    expect(recordCommittedDurationSuggestionPredictionEvidence).toBeTypeOf('function')
+    if (typeof recordCommittedDurationSuggestionPredictionEvidence !== 'function') return
+
+    const input = {
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      taskId: '20000000-0000-4000-8000-000000000001',
+      generationBatchId: 'generation-batch-1',
+      standardWorkCode: 'SW-CONCRETE',
+      plannedStartDate: '2026-07-01',
+      plannedEndDate: '2026-07-08',
+      recommendedDurationDays: 8,
+      forecastSource: 'duration_learning_project',
+      confidenceLevel: 'high',
+      confidenceScore: 88,
+      runtimeApplications: [{
+        assetKey: 'base_duration_benchmark',
+        publicationKey: 'duration_learning_runtime:base_duration_benchmark:project-1',
+        artifactKey: 'SW-CONCRETE:process:all',
+        scopeLevel: 'project',
+        industryKey: null,
+        inputTaskIds: ['20000000-0000-4000-8000-000000000001'],
+      }],
+    } as const
+    mocks.recordDurationAccuracyPrediction.mockResolvedValueOnce({ id: 'prediction-1' })
+
+    await expect(recordCommittedDurationSuggestionPredictionEvidence(input)).resolves.toEqual(
+      expect.objectContaining({ id: 'prediction-1' }),
+    )
+    expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      engineCode: 'standard_duration_reference',
+      projectId: input.projectId,
+      taskId: input.taskId,
+      predictedDurationDays: 8,
+      predictionContext: expect.objectContaining({
+        companyId: input.companyId,
+        generationBatchId: input.generationBatchId,
+        runtimePublicationKeys: ['duration_learning_runtime:base_duration_benchmark:project-1'],
+        runtimeApplications: input.runtimeApplications,
+      }),
+    }))
+
+    await expect(recordCommittedDurationSuggestionPredictionEvidence({
+      ...input,
+      runtimeApplications: input.runtimeApplications.map(({ scopeLevel: _scopeLevel, ...application }) => application),
+    } as never)).rejects.toThrow('committed_duration_prediction_lineage_invalid')
+
+    await expect(recordCommittedDurationSuggestionPredictionEvidence({
+      ...input,
+      runtimeApplications: [
+        ...input.runtimeApplications,
+        { ...input.runtimeApplications[0], scopeLevel: 'industry', industryKey: null },
+      ],
+    })).rejects.toThrow('committed_duration_prediction_lineage_invalid')
+
+    mocks.recordDurationAccuracyPrediction.mockResolvedValueOnce(null)
+    await expect(recordCommittedDurationSuggestionPredictionEvidence(input)).rejects.toThrow(
+      'duration_accuracy_prediction_not_persisted',
+    )
+  })
+})
 
 function callsForTable(calls: Array<{ sql: string, params: unknown[] }>, tableName: string) {
   return calls.filter((call) => call.sql.toLowerCase().includes(tableName))

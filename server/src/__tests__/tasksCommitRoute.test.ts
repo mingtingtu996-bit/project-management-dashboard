@@ -45,6 +45,14 @@ const mocks = vi.hoisted(() => ({
   listWbsTemplateCatalog: vi.fn(),
   buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
   recordWbsTemplateCandidateEvent: vi.fn(async () => undefined),
+  buildGeneratedDurationPredictionOutboxEvents: vi.fn(() => []),
+  buildWbsCandidateOutboxEvent: vi.fn((input: any) => ({
+    eventType: 'wbs_candidate',
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+    payload: input.candidate,
+  })),
+  enqueueDurationLearningRuntimeEvidenceBatch: vi.fn(async () => ({ requestedCount: 1, persistedCount: 1 })),
   buildTaskCommitReplaySummary: vi.fn((input: {
     changedTaskIds: Set<string>
     deletedTaskIds: Set<string>
@@ -173,6 +181,12 @@ vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
   recordWbsTemplateCandidateEvent: mocks.recordWbsTemplateCandidateEvent,
 }))
 
+vi.mock('../services/durationLearningRuntimeEvidenceOutboxService.js', () => ({
+  buildGeneratedDurationPredictionOutboxEvents: mocks.buildGeneratedDurationPredictionOutboxEvents,
+  buildWbsCandidateOutboxEvent: mocks.buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch: mocks.enqueueDurationLearningRuntimeEvidenceBatch,
+}))
+
 vi.mock('../services/taskCommitIdempotencyService.js', () => ({
   buildTaskCommitReplaySummary: mocks.buildTaskCommitReplaySummary,
   buildTaskCommitRequestHash: mocks.buildTaskCommitRequestHash,
@@ -269,6 +283,7 @@ describe('tasks commit route', () => {
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
     mocks.recordWbsTemplateGenerationRuntimeConsumption.mockResolvedValue(undefined)
     mocks.persistDurationLearningRuntimeConsumptions.mockResolvedValue({ requestedCount: 0, insertedCount: 0 })
+    mocks.enqueueDurationLearningRuntimeEvidenceBatch.mockResolvedValue({ requestedCount: 1, persistedCount: 1 })
     mocks.executeSQL.mockResolvedValue([])
     mocks.writeChangeLog.mockResolvedValue('change-log-1')
     mocks.reserveTaskCommitRequest.mockResolvedValue({
@@ -980,7 +995,7 @@ describe('tasks commit route', () => {
     expect(response.status).toBe(500)
     expect(response.body.error.code).toBe('TASK_DEPENDENCY_WRITE_FAILED')
     expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
-    expect(mocks.recordWbsTemplateCandidateEvent).not.toHaveBeenCalled()
+    expect(mocks.enqueueDurationLearningRuntimeEvidenceBatch).not.toHaveBeenCalled()
   })
 
   it('rolls back selected-task drilldown tasks when template link materialization fails', async () => {
@@ -1040,7 +1055,7 @@ describe('tasks commit route', () => {
     expect(response.body.error.code).toBe('TASK_CONDITION_WRITE_FAILED')
     expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
     expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
-    expect(mocks.recordWbsTemplateCandidateEvent).not.toHaveBeenCalled()
+    expect(mocks.enqueueDurationLearningRuntimeEvidenceBatch).not.toHaveBeenCalled()
   })
 
   it('carries default master-plan duration asset utilization summary into task candidate event metadata', async () => {
@@ -1112,16 +1127,19 @@ describe('tasks commit route', () => {
       })
 
     expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(mocks.recordWbsTemplateCandidateEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        projectId: PROJECT_ID,
-        surface: 'task_list',
-        metadata: expect.objectContaining({
-          source: 'task_list_commit',
-          durationAssetUtilizationSummary,
+    expect(mocks.enqueueDurationLearningRuntimeEvidenceBatch).toHaveBeenCalledWith(expect.objectContaining({
+      events: [expect.objectContaining({
+        eventType: 'wbs_candidate',
+        payload: expect.objectContaining({
+          projectId: PROJECT_ID,
+          surface: 'task_list',
+          metadata: expect.objectContaining({
+            source: 'task_list_commit',
+            durationAssetUtilizationSummary,
+          }),
         }),
-      }),
-    )
+      })],
+    }))
   })
 
   it('commits oversized template generations as a render-budget concern instead of a hard row limit', async () => {

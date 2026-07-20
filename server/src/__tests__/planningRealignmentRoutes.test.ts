@@ -400,7 +400,6 @@ const baselineGovernanceMocks = vi.hoisted(() => ({
 
 const wbsGenerationMocks = vi.hoisted(() => ({
   generateWbsTemplateRows: vi.fn(),
-  recordWbsTemplateGenerationRuntimeConsumption: vi.fn(async () => undefined),
 }))
 
 const durationLearningConsumptionMocks = vi.hoisted(() => ({
@@ -411,8 +410,14 @@ const durationLearningConsumptionMocks = vi.hoisted(() => ({
   })),
 }))
 
-const wbsTemplateCandidateEventMocks = vi.hoisted(() => ({
-  recordWbsTemplateCandidateEvent: vi.fn(async () => undefined),
+const durationLearningOutboxMocks = vi.hoisted(() => ({
+  buildWbsCandidateOutboxEvent: vi.fn((input: any) => ({
+    eventType: 'wbs_candidate',
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+    payload: input.candidate,
+  })),
+  enqueueDurationLearningRuntimeEvidenceBatch: vi.fn(async () => ({ requestedCount: 1, persistedCount: 1 })),
 }))
 
 const scopeValidationMocks = vi.hoisted(() => ({
@@ -626,7 +631,6 @@ vi.mock('../services/wbsTemplateGenerationService.js', async () => {
   return {
     ...actual,
     generateWbsTemplateRows: wbsGenerationMocks.generateWbsTemplateRows,
-    recordWbsTemplateGenerationRuntimeConsumption: wbsGenerationMocks.recordWbsTemplateGenerationRuntimeConsumption,
   }
 })
 
@@ -636,7 +640,11 @@ vi.mock('../services/durationLearningRuntimeConsumptionService.js', () => ({
 
 vi.mock('../services/wbsTemplateCandidateEventService.js', () => ({
   buildSpecialWorkDurationCandidateNodes: vi.fn(() => []),
-  recordWbsTemplateCandidateEvent: wbsTemplateCandidateEventMocks.recordWbsTemplateCandidateEvent,
+}))
+
+vi.mock('../services/durationLearningRuntimeEvidenceOutboxService.js', () => ({
+  buildWbsCandidateOutboxEvent: durationLearningOutboxMocks.buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch: durationLearningOutboxMocks.enqueueDurationLearningRuntimeEvidenceBatch,
 }))
 
 vi.mock('../services/engineeringObjectService.js', () => ({
@@ -682,7 +690,6 @@ describe('planning realignment routes', () => {
       scopeCombos: [],
       rows: [],
     })
-    wbsGenerationMocks.recordWbsTemplateGenerationRuntimeConsumption.mockResolvedValue(undefined)
     durationLearningConsumptionMocks.persistDurationLearningRuntimeConsumptions.mockResolvedValue({
       requestedCount: 0,
       insertedCount: 0,
@@ -1536,7 +1543,7 @@ describe('planning realignment routes', () => {
         },
       }],
     })
-    wbsGenerationMocks.recordWbsTemplateGenerationRuntimeConsumption.mockRejectedValueOnce(
+    durationLearningConsumptionMocks.persistDurationLearningRuntimeConsumptions.mockRejectedValueOnce(
       new Error('trusted duration lineage write failed'),
     )
 
@@ -1566,7 +1573,7 @@ describe('planning realignment routes', () => {
     expect(state.clientQuery.mock.calls.some(([sql]) => String(sql).trim().toUpperCase() === 'ROLLBACK')).toBe(true)
     expect(state.clientQuery.mock.calls.some(([sql]) => String(sql).trim().toUpperCase() === 'COMMIT')).toBe(false)
     expect(state.writeLog).not.toHaveBeenCalled()
-    expect(wbsTemplateCandidateEventMocks.recordWbsTemplateCandidateEvent).not.toHaveBeenCalled()
+    expect(durationLearningOutboxMocks.enqueueDurationLearningRuntimeEvidenceBatch).not.toHaveBeenCalled()
   })
 
   it('commits oversized baseline template generations as a render-budget concern instead of a hard row limit', async () => {
@@ -1721,14 +1728,19 @@ describe('planning realignment routes', () => {
       })
 
     expect(response.status, JSON.stringify(response.body)).toBe(200)
-    expect(wbsTemplateCandidateEventMocks.recordWbsTemplateCandidateEvent).toHaveBeenCalledWith(
+    expect(durationLearningOutboxMocks.enqueueDurationLearningRuntimeEvidenceBatch).toHaveBeenCalledWith(
       expect.objectContaining({
-        projectId: 'project-1',
-        surface: 'baseline',
-        metadata: expect.objectContaining({
-          source: 'baseline_commit',
-          durationAssetUtilizationSummary,
-        }),
+        events: [expect.objectContaining({
+          eventType: 'wbs_candidate',
+          payload: expect.objectContaining({
+            projectId: 'project-1',
+            surface: 'baseline',
+            metadata: expect.objectContaining({
+              source: 'baseline_commit',
+              durationAssetUtilizationSummary,
+            }),
+          }),
+        })],
       }),
     )
   })

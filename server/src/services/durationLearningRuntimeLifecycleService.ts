@@ -23,6 +23,10 @@ import {
   type DurationLearningExperienceTier,
   type DurationLearningFactSource,
 } from './durationLearningAssetAutomationPolicyService.js'
+import {
+  processDurationLearningRuntimeEvidenceOutbox,
+  type ProcessDurationLearningRuntimeEvidenceOutboxResult,
+} from './durationLearningRuntimeEvidenceOutboxService.js'
 
 const STRUCTURAL_ASSET_KEYS = new Set<DurationLearningRuntimeAssetKey>([
   'dependency_rule_candidate',
@@ -87,6 +91,7 @@ export interface DurationLearningRuntimeMonitoringCandidate {
   assetKey: DurationLearningRuntimeAssetKey
   artifactKey: string
   publicationStage: 'canary' | 'stable'
+  monitoringStatus?: 'pending' | 'collecting' | 'passed' | 'failed' | 'rollback_pending'
   scope: DurationLearningRuntimeScope
   monitoringWindowHours: number
   monitoringElapsedHours: number
@@ -102,6 +107,9 @@ export interface DurationLearningRuntimeMonitoringCandidate {
 }
 
 export interface DurationLearningRuntimeLifecycleSweepResult {
+  evidenceOutboxClaimed: number
+  evidenceOutboxCompleted: number
+  evidenceOutboxFailed: number
   candidateCount: number
   expandedCandidateCount: number
   canaryPublished: number
@@ -121,7 +129,7 @@ export interface DurationLearningRuntimeLifecycleSweepResult {
 }
 
 export interface DurationLearningRuntimeLifecycleFailureRef {
-  phase: 'candidate_collection' | 'candidate_publication' | 'monitoring_collection' | 'monitoring' | 'collection_cursor'
+  phase: 'evidence_outbox' | 'candidate_collection' | 'candidate_publication' | 'monitoring_collection' | 'monitoring' | 'collection_cursor'
   reference: string
   message: string
 }
@@ -159,6 +167,14 @@ export interface RunDurationLearningRuntimeLifecycleSweepInput {
   recordImpact?: typeof recordDurationLearningRuntimeImpact
   promoteCanary?: typeof promoteDurationLearningRuntimeCanary
   rollbackPublication?: typeof rollbackDurationLearningRuntimePublication
+  evidenceOutboxProcessor?: ((input: {
+    queryExec: DurationLearningRuntimePublicationQueryExec
+    ownerId: string
+    now?: string
+    limit?: number
+  }) => Promise<ProcessDurationLearningRuntimeEvidenceOutboxResult>) | null
+  evidenceOutboxOwnerId?: string
+  evidenceOutboxLimit?: number
   observedAt?: string
 }
 
@@ -2043,6 +2059,7 @@ function monitoringCandidateFromRow(row: SourceRow): DurationLearningRuntimeMoni
     assetKey,
     artifactKey,
     publicationStage,
+    monitoringStatus: text(row.monitoring_status) as DurationLearningRuntimeMonitoringCandidate['monitoringStatus'],
     scope,
     monitoringWindowHours: Math.max(1, nonNegativeInteger(row.monitoring_window_hours) || 72),
     monitoringElapsedHours: Math.max(0, finiteNumber(row.monitoring_elapsed_hours)),
@@ -2066,10 +2083,13 @@ function durationLearningRuntimeMonitoringCollectorSql() {
              0 as collector_priority
         from public.duration_learning_runtime_publications publication
        where (
-         (publication.publication_stage = 'canary' and publication.monitoring_status in ('pending', 'collecting', 'passed'))
-         or (publication.publication_stage = 'stable' and publication.monitoring_status in ('pending', 'collecting'))
+         (publication.publication_stage = 'canary' and publication.monitoring_status in ('pending', 'collecting', 'passed', 'failed', 'rollback_pending'))
+         or (publication.publication_stage = 'stable' and publication.monitoring_status in ('pending', 'collecting', 'failed', 'rollback_pending'))
        )
-         and publication.publication_key > $1
+         and (
+           publication.publication_key > $1
+           or publication.monitoring_status in ('failed', 'rollback_pending')
+         )
        order by publication.publication_key
        limit $3
     ), stable_publications as (
@@ -2091,6 +2111,7 @@ function durationLearningRuntimeMonitoringCollectorSql() {
              publication.asset_key,
              publication.artifact_key,
              publication.publication_stage,
+             publication.monitoring_status,
              publication.scope_level,
             publication.company_id,
             publication.project_id,
@@ -2349,6 +2370,9 @@ export async function collectDurationLearningRuntimeMonitoringCandidates(
 
 function emptySweepResult(): DurationLearningRuntimeLifecycleSweepResult {
   return {
+    evidenceOutboxClaimed: 0,
+    evidenceOutboxCompleted: 0,
+    evidenceOutboxFailed: 0,
     candidateCount: 0,
     expandedCandidateCount: 0,
     canaryPublished: 0,
@@ -2606,6 +2630,11 @@ export async function runDurationLearningRuntimeLifecycleSweep(
   const rollbackPublication = input.rollbackPublication ?? rollbackDurationLearningRuntimePublication
   const observedAt = input.observedAt ?? new Date().toISOString()
   const result = emptySweepResult()
+  const evidenceOutboxProcessor = input.evidenceOutboxProcessor === undefined
+    ? input.candidateProvider || input.monitoringProvider
+      ? null
+      : processDurationLearningRuntimeEvidenceOutbox
+    : input.evidenceOutboxProcessor
   const collectionCursorStore = input.collectionCursorStore === undefined
     ? input.candidateProvider || input.monitoringProvider
       ? null
@@ -2626,6 +2655,25 @@ export async function runDurationLearningRuntimeLifecycleSweep(
   const operationBlockedError = (operation: string, response: { reasons?: readonly string[] }) => new Error(
     `${operation}_blocked:${(response.reasons ?? []).join(',') || 'unknown'}`,
   )
+
+  if (evidenceOutboxProcessor) {
+    try {
+      const evidence = await evidenceOutboxProcessor({
+        queryExec,
+        ownerId: text(input.evidenceOutboxOwnerId) || `${checkpointOwnerId}:evidence-outbox`,
+        now: observedAt,
+        limit: input.evidenceOutboxLimit,
+      })
+      result.evidenceOutboxClaimed = evidence.claimed
+      result.evidenceOutboxCompleted = evidence.completed
+      result.evidenceOutboxFailed = evidence.failed
+      for (const eventKey of evidence.failureKeys) {
+        addFailure('evidence_outbox', eventKey, new Error('duration_learning_runtime_evidence_outbox_event_failed'))
+      }
+    } catch (error) {
+      addFailure('evidence_outbox', 'duration-learning-runtime-evidence-outbox', error)
+    }
+  }
 
   let cursorState = emptyCollectionCursorState()
   if (collectionCursorStore) {
@@ -2740,6 +2788,22 @@ export async function runDurationLearningRuntimeLifecycleSweep(
 
   for (const candidate of monitoringCandidates) {
     try {
+      if (candidate.monitoringStatus === 'failed' || candidate.monitoringStatus === 'rollback_pending') {
+        const rollback = await rollbackPublication({
+          queryExec,
+          publicationKey: candidate.publicationKey,
+          assetKey: candidate.assetKey,
+          artifactKey: candidate.artifactKey,
+          scope: candidate.scope,
+          reason: `duration_learning_runtime_pending_rollback_retry:${candidate.monitoringStatus}`,
+          rolledBackAt: observedAt,
+        })
+        if (rollback.status === 'rollback_executed') result.rollbackExecuted += 1
+        else if (rollback.status === 'rollback_already_executed') result.rollbackReused += 1
+        else throw operationBlockedError('duration_learning_runtime_rollback', rollback)
+        result.monitoringFailed += 1
+        continue
+      }
       const evaluation = evaluateMonitoring(candidate)
       if (evaluation.status === 'pending') {
         const impact = await recordImpact({

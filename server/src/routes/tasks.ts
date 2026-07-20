@@ -78,9 +78,13 @@ import {
 } from '../services/taskPlanDrilldownPolicyService.js'
 import {
   buildSpecialWorkDurationCandidateNodes,
-  recordWbsTemplateCandidateEvent,
 } from '../services/wbsTemplateCandidateEventService.js'
 import { persistDurationLearningRuntimeConsumptions } from '../services/durationLearningRuntimeConsumptionService.js'
+import {
+  buildGeneratedDurationPredictionOutboxEvents,
+  buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch,
+} from '../services/durationLearningRuntimeEvidenceOutboxService.js'
 import {
   buildDefaultMasterPlanVisibilityFeedback,
   buildDefaultMasterPlanVisibilityTaskAdjustmentFeedback,
@@ -2424,37 +2428,59 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
             subjectIdByClientRowId: generatedIdByClientRowId,
           },
         })
-        await registerDatabasePostCommitEffect('record_wbs_template_candidate_event', async () => {
-          await recordWbsTemplateCandidateEvent({
+        const generatedTaskIds = Array.from(generatedIdByClientRowId.values())
+        const durationLearningEvidenceEvents = buildGeneratedDurationPredictionOutboxEvents({
+          companyId,
+          projectId,
+          generationBatchId: generated.generationBatchId,
+          rows: generatedRows,
+          runtimeArtifactPublications,
+          subjectType: 'task',
+          subjectIdByClientRowId: generatedIdByClientRowId,
+        })
+        const wbsCandidateAnchorTaskId = generatedTaskIds[0]
+        if (wbsCandidateAnchorTaskId) {
+          durationLearningEvidenceEvents.push(buildWbsCandidateOutboxEvent({
             companyId,
             projectId,
-            surface: 'task_list',
-            generationBatchId: String((generationOperation as Record<string, unknown>).generationBatchId ?? ''),
-            templateId: String((generationOperation as Record<string, unknown>).templateId ?? ''),
-            selectedNodeIds: Array.isArray((generationOperation as Record<string, unknown>).selectedNodeIds)
-              ? (generationOperation as Record<string, unknown>).selectedNodeIds as unknown[]
-              : [],
-            scope: ((generationOperation as Record<string, unknown>).scope && typeof (generationOperation as Record<string, unknown>).scope === 'object')
-              ? (generationOperation as Record<string, unknown>).scope as Record<string, unknown>
-              : {},
-            attachUnderRowId: String((generationOperation as Record<string, unknown>).attachUnderRowId ?? ''),
-            generatedRowCount: generated.rows.length,
-            retainedRowCount: generatedRows.length,
-            rejectedRowCount: Math.max(0, generated.rows.length - generatedRows.length),
-            generatedEntityIds: Array.from(generatedIdByClientRowId.values()),
-            durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows),
-            actorId,
-            metadata: {
-              generationDepth: generated.generationDepth,
+            subjectType: 'task',
+            subjectId: wbsCandidateAnchorTaskId,
+            runtimeArtifactPublications,
+            candidate: {
+              companyId,
+              projectId,
+              surface: 'task_list',
+              generationBatchId: String((generationOperation as Record<string, unknown>).generationBatchId ?? ''),
+              templateId: String((generationOperation as Record<string, unknown>).templateId ?? ''),
+              selectedNodeIds: Array.isArray((generationOperation as Record<string, unknown>).selectedNodeIds)
+                ? (generationOperation as Record<string, unknown>).selectedNodeIds as unknown[]
+                : [],
+              scope: ((generationOperation as Record<string, unknown>).scope && typeof (generationOperation as Record<string, unknown>).scope === 'object')
+                ? (generationOperation as Record<string, unknown>).scope as Record<string, unknown>
+                : {},
+              attachUnderRowId: String((generationOperation as Record<string, unknown>).attachUnderRowId ?? ''),
               generatedRowCount: generated.rows.length,
               retainedRowCount: generatedRows.length,
-              source: 'task_list_commit',
-              ...(generated.durationAssetUtilizationSummary
-                ? { durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary }
-                : {}),
+              rejectedRowCount: Math.max(0, generated.rows.length - generatedRows.length),
+              generatedEntityIds: generatedTaskIds,
+              durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows),
+              actorId,
+              metadata: {
+                generationDepth: generated.generationDepth,
+                generatedRowCount: generated.rows.length,
+                retainedRowCount: generatedRows.length,
+                source: 'task_list_commit',
+                ...(generated.durationAssetUtilizationSummary
+                  ? { durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary }
+                  : {}),
+              },
+              scheduleTrustGate: generated.scheduleTrustGate,
             },
-            scheduleTrustGate: generated.scheduleTrustGate,
-          })
+          }))
+        }
+        await enqueueDurationLearningRuntimeEvidenceBatch({
+          queryExec: durationLearningRuntimeQueryExec,
+          events: durationLearningEvidenceEvents,
         })
         if (generated.masterPlanVisibilitySummary) {
           const visibilityFeedback = buildDefaultMasterPlanVisibilityFeedback({

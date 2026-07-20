@@ -249,6 +249,37 @@ describe('durationLearningAssetAutomationPolicyService', () => {
     expect(result.reasonCodes).toContain('holdout_sample_count_below_project_canary_floor')
   })
 
+  it.each([
+    ['conflictRate', -0.01, 'numeric_holdout', 'conflict_rate_out_of_range'],
+    ['overcompensationRate', -0.01, 'numeric_holdout', 'overcompensation_rate_out_of_range'],
+    ['replayPassRate', 1.01, 'structural_replay', 'replay_pass_rate_out_of_range'],
+    ['outcomeAcceptanceRate', 1.01, 'structural_replay', 'outcome_acceptance_rate_out_of_range'],
+  ] as const)('fails closed when %s is outside the probability domain', (
+    field,
+    value,
+    qualityModel,
+    reason,
+  ) => {
+    const result = evaluateDurationLearningAssetAutomationPolicy({
+      experienceTier: 'T3',
+      reuseScope: 'project',
+      factSource: qualityModel === 'structural_replay' ? 'hybrid' : 'actual_outcome',
+      targetStage: qualityModel === 'structural_replay' ? 'canary' : 'stable',
+      qualityModel,
+      evidence: projectEvidence({
+        replayPassRate: 1,
+        outcomeAcceptanceRate: 1,
+        qualityConsistencyRate: 1,
+        [field]: value,
+      }),
+    })
+
+    expect(result.autoPromotionAllowed).toBe(false)
+    expect(result.stage).toBe('collecting')
+    expect(result.observed[field]).toBeNull()
+    expect(result.reasonCodes).toContain(reason)
+  })
+
   it('sends only exceptional conditions to human review', () => {
     const structural = evaluateDurationLearningAssetAutomationPolicy({
       experienceTier: 'T2',

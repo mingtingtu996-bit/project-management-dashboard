@@ -28,8 +28,12 @@ import {
 } from '../services/durationLearningRuntimeConsumptionService.js'
 import {
   buildSpecialWorkDurationCandidateNodes,
-  recordWbsTemplateCandidateEvent,
 } from '../services/wbsTemplateCandidateEventService.js'
+import {
+  buildGeneratedDurationPredictionOutboxEvents,
+  buildWbsCandidateOutboxEvent,
+  enqueueDurationLearningRuntimeEvidenceBatch,
+} from '../services/durationLearningRuntimeEvidenceOutboxService.js'
 import {
   analyzeExecutableDefaultMasterPlanNetwork,
   analyzeExecutableDefaultMasterPlanSchedulePropagation,
@@ -7760,6 +7764,51 @@ async function commitWizardGeneration(params: {
       subjectIdByClientRowId: idByClientRowId,
     },
   })
+  const generatedTaskIds = Array.from(idByClientRowId.values())
+  const durationLearningEvidenceEvents = buildGeneratedDurationPredictionOutboxEvents({
+    companyId: durationLearningProjectCompanyId,
+    projectId: params.projectId,
+    generationBatchId,
+    rows: generatedRows,
+    runtimeArtifactPublications,
+    subjectType: 'task',
+    subjectIdByClientRowId: idByClientRowId,
+  })
+  const wbsCandidateAnchorTaskId = generatedTaskIds[0]
+  if (wbsCandidateAnchorTaskId) {
+    durationLearningEvidenceEvents.push(buildWbsCandidateOutboxEvent({
+      companyId: durationLearningProjectCompanyId,
+      projectId: params.projectId,
+      subjectType: 'task',
+      subjectId: wbsCandidateAnchorTaskId,
+      runtimeArtifactPublications,
+      candidate: {
+        companyId: durationLearningProjectCompanyId,
+        projectId: params.projectId,
+        surface: 'task_list',
+        generationBatchId,
+        templateId: generated.templateId,
+        selectedNodeIds: readStringArray(operation.selectedNodeIds),
+        scope: readRecord(operation.scope),
+        generatedRowCount: generated.rows.length,
+        retainedRowCount: generatedRows.length,
+        rejectedRowCount: Math.max(0, generated.rows.length - generatedRows.length),
+        generatedEntityIds: generatedTaskIds,
+        durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows),
+        actorId: params.actorId,
+        metadata: {
+          generationDepth: generated.generationDepth,
+          source: 'project_wizard_commit',
+          durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary ?? null,
+        },
+        scheduleTrustGate: generated.scheduleTrustGate,
+      },
+    }))
+  }
+  await enqueueDurationLearningRuntimeEvidenceBatch({
+    queryExec: durationLearningRuntimeQueryExec,
+    events: durationLearningEvidenceEvents,
+  })
   injectWizardDiagnosticFailureIfRequested({
     injection: params.diagnosticFailureInjection,
     stage: 'after_tasks',
@@ -8033,27 +8082,6 @@ async function commitWizardGeneration(params: {
   })
   await transactionClient.query('COMMIT')
   transactionCommitted = true
-  await recordWbsTemplateCandidateEvent({
-    companyId: durationLearningProjectCompanyId,
-    projectId: params.projectId,
-    surface: 'task_list',
-    generationBatchId,
-    templateId: generated.templateId,
-    selectedNodeIds: readStringArray(operation.selectedNodeIds),
-    scope: readRecord(operation.scope),
-    generatedRowCount: generated.rows.length,
-    retainedRowCount: generatedRows.length,
-    rejectedRowCount: Math.max(0, generated.rows.length - generatedRows.length),
-    generatedEntityIds: Array.from(idByClientRowId.values()),
-    durationCandidateNodes: buildSpecialWorkDurationCandidateNodes(generatedRows),
-    actorId: params.actorId,
-    metadata: {
-      generationDepth: generated.generationDepth,
-      source: 'project_wizard_commit',
-      durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary ?? null,
-    },
-    scheduleTrustGate: generated.scheduleTrustGate,
-  })
   let criticalPathRefresh: ReturnType<typeof buildWizardCriticalPathRefreshSummary> | null = null
   let postCommitDerivations: WizardPostCommitDerivationState = pendingPostCommitDerivations
   try {

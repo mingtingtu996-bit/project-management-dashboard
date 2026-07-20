@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 import { supabase } from './dbService.js'
 import { logger } from '../middleware/logger.js'
 import {
@@ -34,6 +36,17 @@ export interface RecordWbsTemplateCandidateEventInput {
   actorId?: string | null
   metadata?: Record<string, unknown>
   scheduleTrustGate?: GenerationDepthPolicyScheduleTrustGate | null
+  materializationSubjectType?: 'task' | 'baseline_item'
+  materializationSubjectId?: string | null
+  authoritativeRuntimeLineage?: {
+    assetKey: string | null
+    publicationKey: string | null
+    artifactKey: string | null
+    scopeLevel: string | null
+    industryKey?: string | null
+    inputTaskIds: string[]
+  } | null
+  idempotencyKey?: string | null
   governanceQueryExec?: AlgorithmAssetGovernanceQueryExec
 }
 
@@ -438,6 +451,14 @@ function buildWbsTemplateCandidateOutcomeId(input: RecordWbsTemplateCandidateEve
   return `wbs-template-candidate:${input.projectId}:${input.surface}:${identity}`
 }
 
+function deterministicCandidateEventId(idempotencyKey: string) {
+  const hex = createHash('sha256').update(idempotencyKey).digest('hex').slice(0, 32).split('')
+  hex[12] = '5'
+  hex[16] = ['8', '9', 'a', 'b'][Number.parseInt(hex[16] ?? '0', 16) % 4]
+  const value = hex.join('')
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`
+}
+
 function readRuntimePublicationKeyFromMetadata(metadata: Record<string, unknown>) {
   return normalizeString(metadata.runtimePublicationKey)
     ?? normalizeString(metadata.runtime_publication_key)
@@ -576,115 +597,176 @@ async function persistGenerationDepthPolicyCandidateEvent(
   }
 }
 
-// workspace-isolation-capability-write-approved: the exported boundary validates projectId and every outcome row stores that exact project scope.
-async function recordSpecialWorkDurationPlanNetworkOutcome(
+function buildSpecialWorkDurationPlanNetworkOutcomeRow(
   input: RecordWbsTemplateCandidateEventInput,
   counts: WbsTemplateCandidateCounts,
   selectedNodeIds: string[],
   generatedEntityIds: string[],
 ) {
   const outcomeStatus = specialWorkDurationNetworkOutcomeStatus(counts)
-  if (!outcomeStatus) return
-
-  try {
-    const table = supabase.from('duration_plan_network_outcomes')
-    if (typeof table?.upsert !== 'function') return
-
-    const metadata = normalizeObject(input.metadata)
-    const durationCandidateNodes = normalizeDurationCandidateNodes(input.durationCandidateNodes)
-    const explicitPublicationKey = readRuntimePublicationKeyFromMetadata(metadata)
-    const nodePublicationKeys = uniqueValues(durationCandidateNodes
-      .map((node) => normalizeString(node.runtimePublicationKey) ?? '')
-      .filter(Boolean))
-    const publicationLineageMismatch = Boolean(
-      explicitPublicationKey
-        && nodePublicationKeys.some((publicationKey) => publicationKey !== explicitPublicationKey),
-    )
-    const runtimePublicationKey = publicationLineageMismatch
+  if (!outcomeStatus) return null
+  const metadata = normalizeObject(input.metadata)
+  const durationCandidateNodes = normalizeDurationCandidateNodes(input.durationCandidateNodes)
+  const materializationSubjectType = input.materializationSubjectType
+    ?? (input.surface === 'baseline' ? 'baseline_item' : 'task')
+  const materializationSubjectId = normalizeString(input.materializationSubjectId)
+    ?? generatedEntityIds[0]
+    ?? null
+  const taskIds = materializationSubjectType === 'task' ? uniqueValues(generatedEntityIds) : []
+  const baselineItemIds = materializationSubjectType === 'baseline_item' ? uniqueValues(generatedEntityIds) : []
+  const explicitPublicationKey = readRuntimePublicationKeyFromMetadata(metadata)
+  const nodePublicationKeys = uniqueValues(durationCandidateNodes
+    .map((node) => normalizeString(node.runtimePublicationKey) ?? '')
+    .filter(Boolean))
+  const publicationLineageMismatch = Boolean(
+    explicitPublicationKey
+      && nodePublicationKeys.some((publicationKey) => publicationKey !== explicitPublicationKey),
+  )
+  const hasAuthoritativeBoundary = Object.prototype.hasOwnProperty.call(input, 'authoritativeRuntimeLineage')
+  const authoritativeRuntimeLineage = normalizeObject(input.authoritativeRuntimeLineage)
+  const authoritativePublicationKey = normalizeString(authoritativeRuntimeLineage.publicationKey)
+  const authoritativeArtifactKey = normalizeString(authoritativeRuntimeLineage.artifactKey)
+  const authoritativeAssetKey = normalizeString(authoritativeRuntimeLineage.assetKey)
+  const authoritativeScopeLevel = normalizeString(authoritativeRuntimeLineage.scopeLevel)
+  const authoritativeIndustryKey = normalizeString(authoritativeRuntimeLineage.industryKey)
+  const authoritativeInputTaskIds = materializationSubjectType === 'task'
+    ? uniqueValues(normalizeStringList(
+        Array.isArray(authoritativeRuntimeLineage.inputTaskIds)
+          ? authoritativeRuntimeLineage.inputTaskIds
+          : [],
+      ))
+    : []
+  const authoritativeLineageValid = Boolean(
+    authoritativePublicationKey
+      && authoritativeArtifactKey
+      && authoritativeAssetKey === SPECIAL_WORK_DURATION_SEED_ASSET_KEY
+      && ['project', 'company', 'industry', 'global'].includes(authoritativeScopeLevel ?? '')
+      && (authoritativeScopeLevel !== 'industry' || authoritativeIndustryKey),
+  )
+  const runtimePublicationKey = hasAuthoritativeBoundary
+    ? authoritativeLineageValid ? authoritativePublicationKey : null
+    : publicationLineageMismatch
       ? null
       : explicitPublicationKey ?? (nodePublicationKeys.length === 1 ? nodePublicationKeys[0]! : null)
-    const publicationLineageStatus = publicationLineageMismatch
+  const runtimePublicationArtifactKey = hasAuthoritativeBoundary
+    ? authoritativeLineageValid ? authoritativeArtifactKey : null
+    : runtimePublicationKey ? normalizeString(input.templateId) : null
+  const runtimePublicationInputTaskIds = hasAuthoritativeBoundary
+    ? authoritativeLineageValid ? authoritativeInputTaskIds : []
+    : runtimePublicationKey ? taskIds : []
+  const publicationLineageStatus = hasAuthoritativeBoundary
+    ? authoritativeLineageValid
+      ? 'linked'
+      : nodePublicationKeys.length > 1
+        ? 'ambiguous'
+        : nodePublicationKeys.length === 1
+          ? 'unlinked_unverified'
+          : 'cold_start_unpublished'
+    : publicationLineageMismatch
       ? 'mismatched'
       : runtimePublicationKey
         ? 'linked'
         : nodePublicationKeys.length > 1
           ? 'ambiguous'
           : 'cold_start_unpublished'
-    const generationBatchId = normalizeString(input.generationBatchId)
-    const outcomeId = buildWbsTemplateCandidateOutcomeId(input)
-    const replayPassRate = counts.generatedRowCount > 0
-      ? roundRatio(counts.retainedRowCount / counts.generatedRowCount)
-      : null
-    const resolvedRowCount = counts.retainedRowCount + counts.rejectedRowCount
-    const outcomeAcceptanceRate = resolvedRowCount > 0
-      ? roundRatio(counts.retainedRowCount / resolvedRowCount)
-      : null
-    const qualityConsistencyRate = durationCandidateNodes.length > 0
-      ? roundRatio(durationCandidateNodes.filter((node) => (
-        node.p50Days > 0 && (node.p80Days == null || node.p80Days >= node.p50Days)
-      )).length / durationCandidateNodes.length)
-      : null
-    const conflictRate = counts.generatedRowCount > 0
-      ? roundRatio(counts.rejectedRowCount / counts.generatedRowCount)
-      : null
-    const sourceEvidenceRefs = uniqueValues([
-      generationBatchId ? `wbs_template_candidate_events:${generationBatchId}` : `wbs_template_candidate_events:${outcomeId}`,
-      ...generatedEntityIds.map((taskId) => `tasks:${taskId}:materialized`),
-    ])
-    const { error } = await table.upsert({
-      id: outcomeId,
-      asset_key: SPECIAL_WORK_DURATION_SEED_ASSET_KEY,
-      outcome_status: outcomeStatus,
-      outcome_ref: generationBatchId
-        ? `wbs_template_candidate_event:${generationBatchId}`
-        : `wbs_template_candidate_event:${outcomeId}`,
-      learning_scope: 'project',
-      learning_scope_source: 'project_business_outcome_writer',
-      company_id: normalizeString(input.companyId),
-      project_id: input.projectId,
-      publication_key: runtimePublicationKey,
-      metadata: {
-        ...metadata,
-        source: 'wbs_template_candidate_event',
-        surface: input.surface,
-        template_id: normalizeString(input.templateId),
-        generation_batch_id: generationBatchId,
-        selected_node_ids: selectedNodeIds,
-        generated_entity_ids: generatedEntityIds,
-        duration_candidate_nodes: durationCandidateNodes,
-        consumed_runtime_publication_keys: nodePublicationKeys,
-        publication_lineage_status: publicationLineageStatus,
-        runtime_publication_key: runtimePublicationKey,
-        runtime_publication_artifact_key: runtimePublicationKey
-          ? normalizeString(input.templateId)
-          : null,
-        runtime_publication_input_task_ids: runtimePublicationKey
-          ? uniqueValues(generatedEntityIds)
-          : [],
-        source_evidence_refs: sourceEvidenceRefs,
-        task_ids: uniqueValues(generatedEntityIds),
-        real_outcome_count: 0,
-        replay_case_count: counts.generatedRowCount,
-        observation_window_days: 0,
-        quality_model: 'numeric_replay',
-        replay_pass_rate: replayPassRate,
-        outcome_acceptance_rate: outcomeAcceptanceRate,
-        quality_consistency_rate: qualityConsistencyRate,
-        conflict_rate: conflictRate,
-        rollback_ready: true,
-        tenant_scope_valid: Boolean(normalizeString(input.companyId) && normalizeString(input.projectId)),
-        generated_row_count: counts.generatedRowCount,
-        retained_row_count: counts.retainedRowCount,
-        rejected_row_count: counts.rejectedRowCount,
-        pending_row_count: counts.pendingRowCount,
-        resolved_row_count: counts.retainedRowCount + counts.rejectedRowCount,
-        acceptance_rate_basis: 'retained_rows_divided_by_generated_rows',
-      },
-      writes_runtime_directly: false,
-      writes_fact_directly: false,
-    }, { onConflict: 'id', ignoreDuplicates: false })
+  const generationBatchId = normalizeString(input.generationBatchId)
+  const outcomeId = buildWbsTemplateCandidateOutcomeId(input)
+  const replayPassRate = counts.generatedRowCount > 0
+    ? roundRatio(counts.retainedRowCount / counts.generatedRowCount)
+    : null
+  const resolvedRowCount = counts.retainedRowCount + counts.rejectedRowCount
+  const outcomeAcceptanceRate = resolvedRowCount > 0
+    ? roundRatio(counts.retainedRowCount / resolvedRowCount)
+    : null
+  const qualityConsistencyRate = durationCandidateNodes.length > 0
+    ? roundRatio(durationCandidateNodes.filter((node) => (
+      node.p50Days > 0 && (node.p80Days == null || node.p80Days >= node.p50Days)
+    )).length / durationCandidateNodes.length)
+    : null
+  const conflictRate = counts.generatedRowCount > 0
+    ? roundRatio(counts.rejectedRowCount / counts.generatedRowCount)
+    : null
+  const sourceEvidenceRefs = uniqueValues([
+    generationBatchId ? `wbs_template_candidate_events:${generationBatchId}` : `wbs_template_candidate_events:${outcomeId}`,
+    ...taskIds.map((taskId) => `tasks:${taskId}:materialized`),
+    ...baselineItemIds.map((itemId) => `task_baseline_items:${itemId}:materialized`),
+  ])
+  return {
+    id: outcomeId,
+    asset_key: SPECIAL_WORK_DURATION_SEED_ASSET_KEY,
+    outcome_status: outcomeStatus,
+    outcome_ref: generationBatchId
+      ? `wbs_template_candidate_event:${generationBatchId}`
+      : `wbs_template_candidate_event:${outcomeId}`,
+    learning_scope: 'project',
+    learning_scope_source: 'project_business_outcome_writer',
+    company_id: normalizeString(input.companyId),
+    project_id: input.projectId,
+    publication_key: runtimePublicationKey,
+    metadata: {
+      ...metadata,
+      source: 'wbs_template_candidate_event',
+      surface: input.surface,
+      template_id: normalizeString(input.templateId),
+      generation_batch_id: generationBatchId,
+      selected_node_ids: selectedNodeIds,
+      generated_entity_ids: generatedEntityIds,
+      duration_candidate_nodes: durationCandidateNodes,
+      consumed_runtime_publication_keys: nodePublicationKeys,
+      publication_lineage_status: publicationLineageStatus,
+      runtime_publication_key: runtimePublicationKey,
+      runtime_publication_artifact_key: runtimePublicationArtifactKey,
+      runtime_publication_scope_level: authoritativeLineageValid ? authoritativeScopeLevel : null,
+      runtime_publication_industry_key: authoritativeLineageValid ? authoritativeIndustryKey : null,
+      runtime_publication_input_task_ids: runtimePublicationInputTaskIds,
+      source_evidence_refs: sourceEvidenceRefs,
+      materialization_subject_type: materializationSubjectType,
+      materialization_subject_id: materializationSubjectId,
+      task_ids: taskIds,
+      baseline_item_ids: baselineItemIds,
+      real_outcome_count: 0,
+      replay_case_count: counts.generatedRowCount > 0 ? 1 : 0,
+      observation_window_days: 0,
+      quality_model: 'numeric_replay',
+      replay_pass_rate: replayPassRate,
+      outcome_acceptance_rate: outcomeAcceptanceRate,
+      quality_consistency_rate: qualityConsistencyRate,
+      conflict_rate: conflictRate,
+      rollback_ready: true,
+      tenant_scope_valid: Boolean(normalizeString(input.companyId) && normalizeString(input.projectId)),
+      generated_row_count: counts.generatedRowCount,
+      retained_row_count: counts.retainedRowCount,
+      rejected_row_count: counts.rejectedRowCount,
+      pending_row_count: counts.pendingRowCount,
+      resolved_row_count: resolvedRowCount,
+      acceptance_rate_basis: 'retained_rows_divided_by_generated_rows',
+    },
+    writes_runtime_directly: false,
+    writes_fact_directly: false,
+  }
+}
+
+// workspace-isolation-capability-write-approved: the exported boundary validates projectId and every outcome row stores that exact project scope.
+async function recordSpecialWorkDurationPlanNetworkOutcome(
+  input: RecordWbsTemplateCandidateEventInput,
+  counts: WbsTemplateCandidateCounts,
+  selectedNodeIds: string[],
+  generatedEntityIds: string[],
+  strict = false,
+) {
+  const outcomeRow = buildSpecialWorkDurationPlanNetworkOutcomeRow(input, counts, selectedNodeIds, generatedEntityIds)
+  if (!outcomeRow) return
+
+  try {
+    const table = supabase.from('duration_plan_network_outcomes')
+    if (typeof table?.upsert !== 'function') {
+      if (strict) throw new Error('duration_plan_network_outcome_writer_unavailable')
+      return
+    }
+    const { error } = await table.upsert(outcomeRow, { onConflict: 'id', ignoreDuplicates: false })
 
     if (error) {
+      if (strict) throw new Error(error.message)
       logger.warn('[wbs-template-candidate] failed to record special work duration network outcome', {
         projectId: input.projectId,
         surface: input.surface,
@@ -693,6 +775,7 @@ async function recordSpecialWorkDurationPlanNetworkOutcome(
       })
     }
   } catch (error) {
+    if (strict) throw error
     logger.warn('[wbs-template-candidate] skipped special work duration network outcome', {
       projectId: input.projectId,
       surface: input.surface,
@@ -712,6 +795,221 @@ async function insertCandidateEventWithSchemaFallback(row: Record<string, unknow
     delete workingRow[missingColumn]
   }
   return null
+}
+
+async function recordWbsTemplateCandidateEventAtomically(
+  input: RecordWbsTemplateCandidateEventInput,
+  counts: WbsTemplateCandidateCounts,
+  selectedNodeIds: string[],
+  generatedEntityIds: string[],
+) {
+  const queryExec = input.governanceQueryExec
+  const idempotencyKey = normalizeString(input.idempotencyKey)
+  const companyId = normalizeString(input.companyId)
+  const materializationSubjectType = input.materializationSubjectType
+  const materializationSubjectId = normalizeString(input.materializationSubjectId)
+  if (
+    !queryExec
+    || !idempotencyKey
+    || !companyId
+    || !['task', 'baseline_item'].includes(materializationSubjectType ?? '')
+    || !materializationSubjectId
+    || !generatedEntityIds.includes(materializationSubjectId)
+  ) {
+    throw new Error('wbs_template_candidate_atomic_writer_context_required')
+  }
+  if (input.authoritativeRuntimeLineage) {
+    const lineage = input.authoritativeRuntimeLineage
+    const lineageInputTaskIds = uniqueValues(lineage.inputTaskIds)
+    const expectedInputTaskIds = materializationSubjectType === 'task' ? uniqueValues(generatedEntityIds) : []
+    if (
+      lineage.assetKey !== SPECIAL_WORK_DURATION_SEED_ASSET_KEY
+      || !normalizeString(lineage.publicationKey)
+      || !normalizeString(lineage.artifactKey)
+      || !['project', 'company', 'industry', 'global'].includes(normalizeString(lineage.scopeLevel) ?? '')
+      || (normalizeString(lineage.scopeLevel) === 'industry' && !normalizeString(lineage.industryKey))
+      || lineageInputTaskIds.length !== expectedInputTaskIds.length
+      || lineageInputTaskIds.some((taskId, index) => taskId !== expectedInputTaskIds[index])
+    ) {
+      throw new Error('wbs_template_candidate_atomic_lineage_invalid')
+    }
+  }
+  const templateId = normalizeString(input.templateId) ?? 'unknown'
+  const eventId = deterministicCandidateEventId(idempotencyKey)
+  const candidateMetadata = {
+    ...normalizeObject(input.metadata),
+    retained_row_count: counts.retainedRowCount,
+    rejected_row_count: counts.rejectedRowCount,
+    pending_row_count: counts.pendingRowCount,
+    acceptance_rate_basis: 'retained_rows_divided_by_generated_rows',
+    duration_learning_outbox_event_key: idempotencyKey,
+    materialization_subject_type: materializationSubjectType,
+    materialization_subject_id: materializationSubjectId,
+  }
+  const outcomeRow = buildSpecialWorkDurationPlanNetworkOutcomeRow(
+    input,
+    counts,
+    selectedNodeIds,
+    generatedEntityIds,
+  )
+  const [result] = await queryExec<{
+    authority_count?: unknown
+    inserted_event_id?: unknown
+    aggregation_id?: unknown
+    outcome_id?: unknown
+  }>(
+    `/* wbs-template-candidate:atomic-outbox-effect */
+     with authority as materialized (
+       select project.id
+         from public.projects project
+        where project.id = $2::uuid
+          and project.company_id = $3::uuid
+          and $20::text in ('task', 'baseline_item')
+          and $14::jsonb ? $21::text
+          and not exists (
+            select 1
+              from jsonb_array_elements_text($14::jsonb) input_subject(subject_id)
+             where (
+               $20::text = 'task'
+               and not exists (
+                 select 1 from public.tasks task
+                  where task.id = input_subject.subject_id::uuid
+                    and task.project_id = project.id
+               )
+             ) or (
+               $20::text = 'baseline_item'
+               and not exists (
+                 select 1 from public.task_baseline_items baseline_item
+                  where baseline_item.id = input_subject.subject_id::uuid
+                    and baseline_item.project_id = project.id
+               )
+             )
+          )
+     ), inserted_event as (
+       insert into public.wbs_template_candidate_events (
+         id, project_id, surface, event_type, generation_batch_id, template_id,
+         selected_node_ids, scope, attach_under_row_id, generated_row_count,
+         retained_row_count, rejected_row_count, pending_row_count,
+         generated_entity_ids, created_by, metadata
+       )
+       select $1::uuid, authority.id, $4, 'template_generate_commit', $5, $6,
+              $7::jsonb, $8::jsonb, $9, $10, $11, $12, $13,
+              $14::jsonb, $15::uuid, $16::jsonb
+         from authority
+       on conflict (id) do nothing
+       returning id
+     ), aggregation as (
+       insert into public.wbs_template_candidate_aggregations (
+         project_id, template_id, period_month, total_candidates,
+         accepted_candidates, rejected_candidates, pending_candidates,
+         acceptance_rate, metadata, created_at, updated_at
+       )
+       select $2::uuid, $6, $17, $10, $11, $12, $13,
+              case when $10::integer > 0 then $11::real / $10::real else null end,
+              jsonb_build_object(
+                'last_generation_batch_id', $5,
+                'last_generated_row_count', $10,
+                'last_retained_row_count', $11,
+                'last_rejected_row_count', $12,
+                'last_pending_row_count', $13,
+                'last_surface', $4,
+                'updated_from', 'duration_learning_runtime_evidence_outbox',
+                'duration_learning_outbox_event_key', $18
+              ),
+              now(), now()
+         from inserted_event
+       on conflict (project_id, template_id, period_month) do update
+         set total_candidates = public.wbs_template_candidate_aggregations.total_candidates + excluded.total_candidates,
+             accepted_candidates = public.wbs_template_candidate_aggregations.accepted_candidates + excluded.accepted_candidates,
+             rejected_candidates = public.wbs_template_candidate_aggregations.rejected_candidates + excluded.rejected_candidates,
+             pending_candidates = public.wbs_template_candidate_aggregations.pending_candidates + excluded.pending_candidates,
+             acceptance_rate = case
+               when public.wbs_template_candidate_aggregations.total_candidates + excluded.total_candidates > 0
+                 then (public.wbs_template_candidate_aggregations.accepted_candidates + excluded.accepted_candidates)::real
+                   / (public.wbs_template_candidate_aggregations.total_candidates + excluded.total_candidates)::real
+               else null
+             end,
+             metadata = public.wbs_template_candidate_aggregations.metadata || excluded.metadata,
+             updated_at = now()
+       returning id
+     ), requested_outcome as materialized (
+       select * from jsonb_to_record(coalesce($19::jsonb, '{}'::jsonb)) as outcome(
+         id text,
+         asset_key text,
+         outcome_status text,
+         outcome_ref text,
+         learning_scope text,
+         learning_scope_source text,
+         company_id uuid,
+         project_id uuid,
+         publication_key text,
+         metadata jsonb,
+         writes_runtime_directly boolean,
+         writes_fact_directly boolean
+       )
+     ), persisted_outcome as (
+       insert into public.duration_plan_network_outcomes (
+         id, asset_key, outcome_status, outcome_ref, learning_scope,
+         learning_scope_source, company_id, project_id, publication_key,
+         metadata, writes_runtime_directly, writes_fact_directly
+       )
+       select outcome.id, outcome.asset_key, outcome.outcome_status, outcome.outcome_ref,
+              outcome.learning_scope, outcome.learning_scope_source, outcome.company_id,
+              outcome.project_id, outcome.publication_key, outcome.metadata,
+              outcome.writes_runtime_directly, outcome.writes_fact_directly
+         from requested_outcome outcome
+         join inserted_event on true
+        where outcome.id is not null
+       on conflict (id) do update
+         set outcome_status = excluded.outcome_status,
+             outcome_ref = excluded.outcome_ref,
+             learning_scope = excluded.learning_scope,
+             learning_scope_source = excluded.learning_scope_source,
+             company_id = excluded.company_id,
+             project_id = excluded.project_id,
+             publication_key = excluded.publication_key,
+             metadata = excluded.metadata,
+             writes_runtime_directly = false,
+             writes_fact_directly = false,
+             observed_at = now()
+       returning id
+     )
+     select (select count(*) from authority) as authority_count,
+            (select id from inserted_event limit 1) as inserted_event_id,
+            (select id from aggregation limit 1) as aggregation_id,
+            (select id from persisted_outcome limit 1) as outcome_id`,
+    [
+      eventId,
+      input.projectId,
+      companyId,
+      input.surface,
+      normalizeString(input.generationBatchId),
+      templateId,
+      selectedNodeIds,
+      normalizeObject(input.scope),
+      normalizeString(input.attachUnderRowId),
+      counts.generatedRowCount,
+      counts.retainedRowCount,
+      counts.rejectedRowCount,
+      counts.pendingRowCount,
+      generatedEntityIds,
+      normalizeString(input.actorId),
+      candidateMetadata,
+      getCurrentPeriodMonth(),
+      idempotencyKey,
+      outcomeRow,
+      materializationSubjectType,
+      materializationSubjectId,
+    ],
+  )
+  if (Number(result?.authority_count ?? 0) !== 1) {
+    throw new Error('wbs_template_candidate_atomic_writer_scope_mismatch')
+  }
+  if (!result?.inserted_event_id) return { disposition: 'reused' as const, eventId }
+  if (!result.aggregation_id || (outcomeRow && !result.outcome_id)) {
+    throw new Error('wbs_template_candidate_atomic_writer_incomplete')
+  }
+  return { disposition: 'recorded' as const, eventId }
 }
 
 // workspace-isolation-capability-write-approved: the exported boundary validates projectId; both aggregation lookup and upsert bind that project id.
@@ -844,17 +1142,17 @@ async function persistUnifiedAlgorithmAssetCandidateEvent(
 }
 
 // workspace-isolation-capability-write-approved: authenticated task/baseline commits provide projectId and every candidate write below persists that exact scope.
-export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCandidateEventInput): Promise<void> {
-  try {
+async function recordWbsTemplateCandidateEventInternal(
+  input: RecordWbsTemplateCandidateEventInput,
+  strict: boolean,
+): Promise<void> {
     const projectId = normalizeString(input.projectId)
     if (!projectId) {
+      if (strict) throw new Error('wbs_template_candidate_project_scope_required')
       logger.warn('[wbs-template-candidate] skipped candidate event without project scope')
       return
     }
     const scopedInput = { ...input, projectId }
-    const insert = supabase.from('wbs_template_candidate_events')?.insert
-    if (typeof insert !== 'function') return
-
     const selectedNodeIds = Array.isArray(scopedInput.selectedNodeIds)
       ? scopedInput.selectedNodeIds.map((item) => String(item ?? '').trim()).filter(Boolean)
       : []
@@ -870,6 +1168,25 @@ export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCa
       : Math.max(0, generatedRowCount - retainedRowCount)
     const pendingRowCount = readBoundedInteger(scopedInput.pendingRowCount, 0, Math.max(0, generatedRowCount - retainedRowCount - explicitRejected))
     const rejectedRowCount = Math.min(explicitRejected, Math.max(0, generatedRowCount - retainedRowCount - pendingRowCount))
+    const counts = {
+      generatedRowCount,
+      retainedRowCount,
+      rejectedRowCount,
+      pendingRowCount,
+    }
+
+    if (strict && normalizeString(scopedInput.idempotencyKey) && scopedInput.governanceQueryExec) {
+      await recordWbsTemplateCandidateEventAtomically(scopedInput, counts, selectedNodeIds, generatedEntityIds)
+      await persistUnifiedAlgorithmAssetCandidateEvent(scopedInput, counts, selectedNodeIds, generatedEntityIds)
+      await persistGenerationDepthPolicyCandidateEvent(scopedInput, scopedInput.scheduleTrustGate)
+      return
+    }
+
+    const insert = supabase.from('wbs_template_candidate_events')?.insert
+    if (typeof insert !== 'function') {
+      if (strict) throw new Error('wbs_template_candidate_writer_unavailable')
+      return
+    }
 
     const error = await insertCandidateEventWithSchemaFallback({
       project_id: scopedInput.projectId,
@@ -896,6 +1213,7 @@ export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCa
     })
 
     if (error) {
+      if (strict) throw new Error(error.message)
       logger.warn('[wbs-template-candidate] failed to record template candidate event', {
         projectId: input.projectId,
         surface: input.surface,
@@ -905,25 +1223,22 @@ export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCa
       return
     }
 
-    await updateWbsTemplateCandidateAggregation(scopedInput, {
-      generatedRowCount,
-      retainedRowCount,
-      rejectedRowCount,
-      pendingRowCount,
-    })
-    await recordSpecialWorkDurationPlanNetworkOutcome(scopedInput, {
-      generatedRowCount,
-      retainedRowCount,
-      rejectedRowCount,
-      pendingRowCount,
-    }, selectedNodeIds, generatedEntityIds)
-    await persistUnifiedAlgorithmAssetCandidateEvent(scopedInput, {
-      generatedRowCount,
-      retainedRowCount,
-      rejectedRowCount,
-      pendingRowCount,
-    }, selectedNodeIds, generatedEntityIds)
+    await updateWbsTemplateCandidateAggregation(scopedInput, counts)
+    await recordSpecialWorkDurationPlanNetworkOutcome(scopedInput, counts, selectedNodeIds, generatedEntityIds, strict)
+    await persistUnifiedAlgorithmAssetCandidateEvent(scopedInput, counts, selectedNodeIds, generatedEntityIds)
     await persistGenerationDepthPolicyCandidateEvent(scopedInput, scopedInput.scheduleTrustGate)
+}
+
+export async function recordWbsTemplateCandidateEventStrict(
+  input: RecordWbsTemplateCandidateEventInput,
+): Promise<void> {
+  await recordWbsTemplateCandidateEventInternal(input, true)
+}
+
+// workspace-isolation-capability-write-approved: authenticated task/baseline commits provide projectId and every candidate write below persists that exact scope.
+export async function recordWbsTemplateCandidateEvent(input: RecordWbsTemplateCandidateEventInput): Promise<void> {
+  try {
+    await recordWbsTemplateCandidateEventInternal(input, false)
   } catch (error) {
     logger.warn('[wbs-template-candidate] skipped template candidate event', {
       projectId: input.projectId,

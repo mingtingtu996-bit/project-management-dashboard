@@ -961,6 +961,70 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(seenStable).toContain('stable-0599')
   })
 
+  it.each(['failed', 'rollback_pending'] as const)(
+    'retries a %s publication through the default production monitoring collector',
+    async (monitoringStatus) => {
+      let capturedCollectorSql = ''
+      const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+        if (!sql.includes('duration-learning-monitor-collector')) return [] as T[]
+        capturedCollectorSql = sql
+        if (!sql.includes("'failed'") || !sql.includes("'rollback_pending'")) return [] as T[]
+        return [{
+          publication_key: `publication-${monitoringStatus}`,
+          asset_key: 'base_duration_benchmark',
+          artifact_key: 'SW-CONCRETE:process:all',
+          publication_stage: 'stable',
+          monitoring_status: monitoringStatus,
+          scope_level: 'company',
+          company_id: 'company-1',
+          project_id: null,
+          industry_key: null,
+          monitoring_window_hours: 72,
+          monitoring_elapsed_hours: 90,
+          observed_count: 10,
+          rejected_observation_count: 0,
+          accepted_outcome_count: 0,
+          weak_or_rejected_outcome_count: 0,
+          accuracy_sample_count: 10,
+          mae_before: 5,
+          mae_after: 4,
+          regression_rate: 0,
+          collector_stream_key: 'monitor:active',
+          collector_group_key: `publication-${monitoringStatus}`,
+        }] as T[]
+      }
+      const recordImpact = vi.fn(async () => ({ status: 'impact_recorded', reasons: [] }))
+      const rollbackPublication = vi.fn(async () => ({
+        status: 'rollback_executed',
+        restoredPublicationKey: 'previous-stable',
+        reasons: [],
+      }))
+
+      const result = await runDurationLearningRuntimeLifecycleSweep({
+        queryExec,
+        candidateProvider: async () => [],
+        recordImpact: recordImpact as any,
+        rollbackPublication: rollbackPublication as any,
+      })
+
+      expect(capturedCollectorSql).toContain("'failed'")
+      expect(capturedCollectorSql).toContain("'rollback_pending'")
+      expect(capturedCollectorSql).toMatch(/publication\.publication_key > \$1\s+or publication\.monitoring_status in \('failed', 'rollback_pending'\)/)
+      expect(recordImpact).not.toHaveBeenCalled()
+      expect(rollbackPublication).toHaveBeenCalledWith(expect.objectContaining({
+        publicationKey: `publication-${monitoringStatus}`,
+        assetKey: 'base_duration_benchmark',
+        artifactKey: 'SW-CONCRETE:process:all',
+        scope: { level: 'company', companyId: 'company-1' },
+      }))
+      expect(result).toEqual(expect.objectContaining({
+        failed: 0,
+        monitoringFailed: 1,
+        rollbackExecuted: 1,
+      }))
+    },
+  )
+
   it('persists collection cursor state in the protected learning checkpoint ledger across store recreation', async () => {
     const lifecycleModule = await import('../services/durationLearningRuntimeLifecycleService.js') as Record<string, any>
     const createStore = lifecycleModule.createDatabaseDurationLearningRuntimeCollectionCursorStore
@@ -2271,6 +2335,51 @@ describe('durationLearningRuntimeLifecycleService', () => {
       assetKey: 'base_duration_benchmark',
       artifactKey: 'SW-CONCRETE:process:all',
       scope: { level: 'company', companyId: 'company-1' },
+    }))
+  })
+
+  it('processes durable evidence before collection and exposes retryable event failures', async () => {
+    const callOrder: string[] = []
+    const evidenceOutboxProcessor = vi.fn(async () => {
+      callOrder.push('evidence')
+      return {
+        claimed: 2,
+        completed: 1,
+        failed: 1,
+        failureKeys: ['duration-learning-runtime-evidence:failed'],
+      }
+    })
+
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => {
+        callOrder.push('candidate')
+        return []
+      },
+      monitoringProvider: async () => {
+        callOrder.push('monitoring')
+        return []
+      },
+      evidenceOutboxProcessor,
+      evidenceOutboxOwnerId: 'lifecycle-worker-1',
+      evidenceOutboxLimit: 25,
+      observedAt: '2026-07-20T00:00:00.000Z',
+    })
+
+    expect(callOrder).toEqual(['evidence', 'candidate', 'monitoring'])
+    expect(evidenceOutboxProcessor).toHaveBeenCalledWith(expect.objectContaining({
+      ownerId: 'lifecycle-worker-1',
+      now: '2026-07-20T00:00:00.000Z',
+      limit: 25,
+    }))
+    expect(result).toEqual(expect.objectContaining({
+      evidenceOutboxClaimed: 2,
+      evidenceOutboxCompleted: 1,
+      evidenceOutboxFailed: 1,
+      failed: 1,
+      failureRefs: [expect.objectContaining({
+        phase: 'evidence_outbox',
+        reference: 'duration-learning-runtime-evidence:failed',
+      })],
     }))
   })
 })

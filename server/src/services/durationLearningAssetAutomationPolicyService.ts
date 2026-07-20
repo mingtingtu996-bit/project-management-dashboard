@@ -233,7 +233,12 @@ function finiteNumber(value: unknown): number | null {
 
 function boundedRate(value: unknown): number | null {
   const parsed = finiteNumber(value)
-  return parsed == null ? null : Math.max(0, Math.min(1, parsed))
+  return parsed == null || parsed < 0 || parsed > 1 ? null : parsed
+}
+
+function rateOutOfRange(value: unknown) {
+  const parsed = finiteNumber(value)
+  return parsed != null && (parsed < 0 || parsed > 1)
 }
 
 function nonNegativeInteger(value: unknown): number {
@@ -316,6 +321,12 @@ export function evaluateDurationLearningAssetAutomationPolicy(
   const evidenceReasons: string[] = []
   const qualityBlockReasons: string[] = []
   const exceptionReasons: string[] = []
+
+  if (rateOutOfRange(input.evidence.conflictRate)) evidenceReasons.push('conflict_rate_out_of_range')
+  if (rateOutOfRange(input.evidence.overcompensationRate)) evidenceReasons.push('overcompensation_rate_out_of_range')
+  if (rateOutOfRange(input.evidence.replayPassRate)) evidenceReasons.push('replay_pass_rate_out_of_range')
+  if (rateOutOfRange(input.evidence.outcomeAcceptanceRate)) evidenceReasons.push('outcome_acceptance_rate_out_of_range')
+  if (rateOutOfRange(input.evidence.qualityConsistencyRate)) evidenceReasons.push('quality_consistency_rate_out_of_range')
 
   if (observed.validChangeCount < thresholds.minValidChanges) {
     evidenceReasons.push(floorReason('valid_change_count', input.reuseScope, input.targetStage))

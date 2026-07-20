@@ -62,6 +62,9 @@ const defaultStopConditionViolationCandidate: AlgorithmAssetLearnableParameterMo
 describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
   it('runs the duration learning runtime lifecycle from the production monitoring job while injected jobs opt in explicitly', async () => {
     const durationLearningRuntimeLifecycleSweep = vi.fn(async () => ({
+      evidenceOutboxClaimed: 0,
+      evidenceOutboxCompleted: 0,
+      evidenceOutboxFailed: 0,
       candidateCount: 3,
       expandedCandidateCount: 5,
       canaryPublished: 2,
@@ -98,6 +101,9 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
 
   it('retries a structured duration lifecycle partial failure before logging the parent job as completed', async () => {
     const partial = {
+      evidenceOutboxClaimed: 1,
+      evidenceOutboxCompleted: 0,
+      evidenceOutboxFailed: 1,
       candidateCount: 2,
       expandedCandidateCount: 2,
       canaryPublished: 1,
@@ -117,6 +123,7 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
         reference: 'benchmark:p2',
         message: 'transient publication failure',
       }],
+      collectionCursorAdvanced: false,
     }
     const recovered = {
       ...partial,

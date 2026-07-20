@@ -46,6 +46,7 @@ const {
   buildSpecialWorkDurationSeedPublicationReadiness,
   evaluateSpecialWorkDurationSeedLiveLearningEvidence,
   recordWbsTemplateCandidateEvent,
+  recordWbsTemplateCandidateEventStrict,
 } = await import('../services/wbsTemplateCandidateEventService.js')
 
 describe('wbsTemplateCandidateEventService', () => {
@@ -377,7 +378,7 @@ describe('wbsTemplateCandidateEventService', () => {
             'tasks:task-1:materialized',
           ]),
           task_ids: ['task-1', 'task-2', 'task-3'],
-          replay_case_count: 4,
+          replay_case_count: 1,
           quality_model: 'numeric_replay',
           replay_pass_rate: 0.75,
           outcome_acceptance_rate: 0.75,
@@ -405,6 +406,197 @@ describe('wbsTemplateCandidateEventService', () => {
       '[wbs-template-candidate] failed to update template candidate aggregation',
       expect.objectContaining({ error: 'upsert failed' }),
     )
+  })
+
+  it('propagates critical candidate and outcome write failures for durable retry', async () => {
+    expect(recordWbsTemplateCandidateEventStrict).toBeTypeOf('function')
+    if (typeof recordWbsTemplateCandidateEventStrict !== 'function') return
+
+    mocks.eventInsert.mockResolvedValueOnce({ error: { message: 'candidate insert failed' } })
+    await expect(recordWbsTemplateCandidateEventStrict({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      generationBatchId: 'batch-strict-candidate-failure',
+      templateId: 'china-gb55032-2022',
+      generatedRowCount: 1,
+      retainedRowCount: 1,
+      generatedEntityIds: ['task-1'],
+      durationCandidateNodes: [{
+        sourceId: 'node-1',
+        p50Days: 8,
+        durationDayBasis: 'construction_production_day',
+      }],
+    })).rejects.toThrow('candidate insert failed')
+
+    mocks.eventInsert.mockResolvedValueOnce({ error: null })
+    mocks.planNetworkOutcomeUpsert.mockResolvedValueOnce({ error: { message: 'outcome upsert failed' } })
+    await expect(recordWbsTemplateCandidateEventStrict({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      generationBatchId: 'batch-strict-outcome-failure',
+      templateId: 'china-gb55032-2022',
+      generatedRowCount: 1,
+      retainedRowCount: 1,
+      generatedEntityIds: ['task-1'],
+      durationCandidateNodes: [{
+        sourceId: 'node-1',
+        p50Days: 8,
+        durationDayBasis: 'construction_production_day',
+      }],
+    })).rejects.toThrow('outcome upsert failed')
+  })
+
+  it('uses one atomic deterministic effect for an outbox retry instead of incrementing candidates twice', async () => {
+    const atomicExec = vi.fn(async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      if (sql.includes('wbs-template-candidate:atomic-outbox-effect')) {
+        return [{
+          authority_count: 1,
+          inserted_event_id: params[0],
+          aggregation_id: 'aggregation-1',
+          outcome_id: 'outcome-1',
+        }] as T[]
+      }
+      return [{ id: 'algorithm-candidate-event-id' }] as T[]
+    })
+    const input = {
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list' as const,
+      generationBatchId: 'batch-atomic-outbox',
+      templateId: 'china-gb55032-2022',
+      generatedRowCount: 1,
+      retainedRowCount: 1,
+      generatedEntityIds: ['20000000-0000-4000-8000-000000000001'],
+      materializationSubjectType: 'task' as const,
+      materializationSubjectId: '20000000-0000-4000-8000-000000000001',
+      durationCandidateNodes: [{
+        sourceId: 'node-1',
+        p50Days: 8,
+        durationDayBasis: 'construction_production_day' as const,
+      }],
+      idempotencyKey: 'duration-learning-runtime-evidence:wbs_candidate:stable-key',
+      governanceQueryExec: atomicExec as any,
+    }
+
+    await recordWbsTemplateCandidateEventStrict(input)
+    await recordWbsTemplateCandidateEventStrict(input)
+
+    const effects = atomicExec.mock.calls.filter(([sql]) => String(sql).includes('wbs-template-candidate:atomic-outbox-effect'))
+    expect(effects).toHaveLength(2)
+    expect(effects[0]?.[1]?.[0]).toBe(effects[1]?.[1]?.[0])
+    expect(String(effects[0]?.[0])).toContain('on conflict (id) do nothing')
+    expect(String(effects[0]?.[0])).toContain('from inserted_event')
+    expect(String(effects[0]?.[0])).toContain('public.wbs_template_candidate_aggregations')
+    expect(String(effects[0]?.[0])).toContain('public.duration_plan_network_outcomes')
+    expect(mocks.eventInsert).not.toHaveBeenCalled()
+    expect(mocks.aggregationUpsert).not.toHaveBeenCalled()
+    expect(mocks.planNetworkOutcomeUpsert).not.toHaveBeenCalled()
+  })
+
+  it('keeps baseline-item lineage out of task and replay floors in the atomic outbox effect', async () => {
+    const atomicExec = vi.fn(async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
+      if (sql.includes('wbs-template-candidate:atomic-outbox-effect')) {
+        return [{
+          authority_count: 1,
+          input_subject_count: 2,
+          authorized_input_subject_count: 2,
+          subject_present: true,
+          inserted_event_id: params[0],
+          aggregation_id: 'aggregation-1',
+          outcome_id: 'outcome-1',
+        }] as T[]
+      }
+      return [{ id: 'algorithm-candidate-event-id' }] as T[]
+    })
+
+    await recordWbsTemplateCandidateEventStrict({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'baseline',
+      generationBatchId: 'batch-baseline-outbox',
+      templateId: 'china-gb55032-2022',
+      generatedRowCount: 2,
+      retainedRowCount: 2,
+      generatedEntityIds: [
+        '30000000-0000-4000-8000-000000000001',
+        '30000000-0000-4000-8000-000000000002',
+      ],
+      durationCandidateNodes: [{
+        sourceId: 'node-1',
+        p50Days: 8,
+        durationDayBasis: 'construction_production_day',
+        runtimePublicationKey: 'duration_learning_runtime:special_work_duration_seed:project-1',
+      }],
+      materializationSubjectType: 'baseline_item',
+      materializationSubjectId: '30000000-0000-4000-8000-000000000001',
+      authoritativeRuntimeLineage: {
+        assetKey: 'special_work_duration_seed',
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:project-1',
+        artifactKey: 'SPECIAL-WORK:concrete',
+        scopeLevel: 'project',
+        industryKey: null,
+        inputTaskIds: [],
+      },
+      idempotencyKey: 'duration-learning-runtime-evidence:wbs_candidate:baseline-key',
+      governanceQueryExec: atomicExec as any,
+    } as any)
+
+    const effect = atomicExec.mock.calls.find(([sql]) => String(sql).includes('wbs-template-candidate:atomic-outbox-effect'))
+    const outcome = effect?.[1]?.[18] as Record<string, any>
+    expect(String(effect?.[0])).toContain('public.task_baseline_items')
+    expect(outcome.metadata).toEqual(expect.objectContaining({
+      task_ids: [],
+      baseline_item_ids: [
+        '30000000-0000-4000-8000-000000000001',
+        '30000000-0000-4000-8000-000000000002',
+      ],
+      runtime_publication_artifact_key: 'SPECIAL-WORK:concrete',
+      runtime_publication_input_task_ids: [],
+      replay_case_count: 1,
+    }))
+    expect(outcome.metadata.source_evidence_refs).toEqual(expect.arrayContaining([
+      'task_baseline_items:30000000-0000-4000-8000-000000000001:materialized',
+    ]))
+    expect(outcome.metadata.source_evidence_refs).not.toEqual(expect.arrayContaining([
+      'tasks:30000000-0000-4000-8000-000000000001:materialized',
+    ]))
+  })
+
+  it('rejects an authoritative task publication whose input set differs from materialized tasks', async () => {
+    const atomicExec = vi.fn(async <T = Record<string, unknown>>(): Promise<T[]> => [{
+      authority_count: 1,
+      inserted_event_id: 'event-1',
+      aggregation_id: 'aggregation-1',
+      outcome_id: 'outcome-1',
+    }] as T[])
+
+    await expect(recordWbsTemplateCandidateEventStrict({
+      companyId: '10000000-0000-4000-8000-000000000001',
+      projectId: '00000000-0000-4000-8000-000000000001',
+      surface: 'task_list',
+      generatedEntityIds: ['20000000-0000-4000-8000-000000000001'],
+      generatedRowCount: 1,
+      retainedRowCount: 1,
+      durationCandidateNodes: [{
+        sourceId: 'node-1',
+        p50Days: 8,
+        durationDayBasis: 'construction_production_day',
+      }],
+      materializationSubjectType: 'task',
+      materializationSubjectId: '20000000-0000-4000-8000-000000000001',
+      authoritativeRuntimeLineage: {
+        assetKey: 'special_work_duration_seed',
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:project-1',
+        artifactKey: 'SPECIAL-WORK:concrete',
+        scopeLevel: 'project',
+        inputTaskIds: ['20000000-0000-4000-8000-000000000099'],
+      },
+      idempotencyKey: 'duration-learning-runtime-evidence:wbs_candidate:mismatch',
+      governanceQueryExec: atomicExec as any,
+    })).rejects.toThrow('wbs_template_candidate_atomic_lineage_invalid')
+    expect(atomicExec).not.toHaveBeenCalled()
   })
 
   it('requires resolved user outcome, dedicated writer, lineage, and release gates before special seed live learning is ready', () => {
