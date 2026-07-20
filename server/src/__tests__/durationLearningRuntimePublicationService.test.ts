@@ -6,6 +6,7 @@ import {
   promoteDurationLearningRuntimeCanary,
   recordDurationLearningRuntimeImpact,
   resolveDurationLearningRuntimePublication,
+  resolveDurationLearningRuntimePublicationIdentity,
   rollbackDurationLearningRuntimePublication,
   type DurationLearningRuntimePublicationQueryExec,
 } from '../services/durationLearningRuntimePublicationService.js'
@@ -25,6 +26,41 @@ function queryCalls(queryMock: ReturnType<typeof vi.fn>): Array<[string, unknown
 }
 
 describe('durationLearningRuntimePublicationService', () => {
+  it('resolves the complete publication identity without trusting caller metadata', async () => {
+    const queryMock = vi.fn(async () => ([{
+      publication_key: 'duration_learning_runtime:dependency_rule_candidate:source',
+      asset_key: 'dependency_rule_candidate',
+      artifact_key: 'artifact-dependency-rule-v2',
+      scope_level: 'project',
+      company_id: companyId,
+      project_id: projectId,
+      industry_key: null,
+      publication_stage: 'stable',
+      runtime_payload: {},
+      source_candidate_refs: ['candidate:dependency-rule'],
+      source_evidence_refs: ['evidence:dependency-rule'],
+      automation_decision: {},
+      previous_publication_key: 'duration_learning_runtime:dependency_rule_candidate:previous',
+      traffic_percent: 100,
+      monitoring_window_hours: 72,
+      monitoring_status: 'passed',
+      published_at: '2026-07-17T00:00:00.000Z',
+    }]))
+
+    const identity = await resolveDurationLearningRuntimePublicationIdentity({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration_learning_runtime:dependency_rule_candidate:source',
+    })
+
+    expect(identity).toEqual({
+      publicationKey: 'duration_learning_runtime:dependency_rule_candidate:source',
+      assetKey: 'dependency_rule_candidate',
+      artifactKey: 'artifact-dependency-rule-v2',
+      scope: { level: 'project', companyId, projectId },
+    })
+    expect(queryMock).toHaveBeenCalledOnce()
+  })
+
   it('returns the existing publication for an identical publication key without replacing active rows', async () => {
     const queryMock = vi.fn(async (sql: string) => {
       if (sql.includes('where publication_key = $1')) {

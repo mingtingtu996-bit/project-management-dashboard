@@ -67,6 +67,39 @@ export interface DurationLearningRuntimePublicationRecord {
   publishedAt: string | null
 }
 
+export type DurationLearningRuntimePublicationIdentity = {
+  publicationKey: string
+  assetKey: DurationLearningRuntimeAssetKey
+  artifactKey: string
+  scope: DurationLearningRuntimeScope
+}
+
+export function durationLearningRuntimePublicationScopesMatch(
+  left: DurationLearningRuntimeScope,
+  right: DurationLearningRuntimeScope,
+) {
+  if (left.level !== right.level) return false
+  if (left.level === 'project' && right.level === 'project') {
+    return left.companyId === right.companyId && left.projectId === right.projectId
+  }
+  if (left.level === 'company' && right.level === 'company') {
+    return left.companyId === right.companyId
+  }
+  if (left.level === 'industry' && right.level === 'industry') {
+    return left.industryKey === right.industryKey
+  }
+  return left.level === 'global' && right.level === 'global'
+}
+
+export function durationLearningRuntimePublicationIdentitiesMatch(
+  left: DurationLearningRuntimePublicationIdentity,
+  right: DurationLearningRuntimePublicationIdentity,
+) {
+  return left.assetKey === right.assetKey
+    && left.artifactKey === right.artifactKey
+    && durationLearningRuntimePublicationScopesMatch(left.scope, right.scope)
+}
+
 export type PersistDurationLearningRuntimePublicationResult =
   | {
       status: 'published'
@@ -301,6 +334,41 @@ function rowToRecord(row: RuntimePublicationRow): DurationLearningRuntimePublica
   }
 }
 
+const DURATION_LEARNING_RUNTIME_ASSET_KEYS = new Set<DurationLearningRuntimeAssetKey>([
+  'base_duration_benchmark',
+  'standard_work_duration_seed',
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+])
+
+function publicationIdentityScope(
+  publication: DurationLearningRuntimePublicationRecord,
+): DurationLearningRuntimeScope | null {
+  if (publication.scopeLevel === 'project') {
+    return publication.companyId && publication.projectId && !publication.industryKey
+      ? { level: 'project', companyId: publication.companyId, projectId: publication.projectId }
+      : null
+  }
+  if (publication.scopeLevel === 'company') {
+    return publication.companyId && !publication.projectId && !publication.industryKey
+      ? { level: 'company', companyId: publication.companyId }
+      : null
+  }
+  if (publication.scopeLevel === 'industry') {
+    return publication.industryKey && !publication.companyId && !publication.projectId
+      ? { level: 'industry', industryKey: publication.industryKey }
+      : null
+  }
+  if (publication.scopeLevel === 'global') {
+    return !publication.companyId && !publication.projectId && !publication.industryKey
+      ? { level: 'global' }
+      : null
+  }
+  return null
+}
+
 function clampTrafficPercent(value: unknown, stage: DurationLearningRuntimePublicationStage) {
   if (stage === 'stable') return 100
   const number = Number(value ?? 5)
@@ -340,6 +408,30 @@ async function findPublicationByKey(
     [publicationKey],
   )
   return rows[0] ? rowToRecord(rows[0]) : null
+}
+
+export async function resolveDurationLearningRuntimePublicationIdentity(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  publicationKey: string
+}): Promise<DurationLearningRuntimePublicationIdentity | null> {
+  const publicationKey = normalizeText(input.publicationKey)
+  if (!publicationKey) return null
+  const publication = await findPublicationByKey(input, publicationKey)
+  if (
+    !publication
+    || publication.publicationKey !== publicationKey
+    || !DURATION_LEARNING_RUNTIME_ASSET_KEYS.has(publication.assetKey)
+    || !publication.artifactKey
+  ) return null
+  const scope = publicationIdentityScope(publication)
+  return scope
+    ? {
+        publicationKey,
+        assetKey: publication.assetKey,
+        artifactKey: publication.artifactKey,
+        scope,
+      }
+    : null
 }
 
 function publicationMatchesInput(

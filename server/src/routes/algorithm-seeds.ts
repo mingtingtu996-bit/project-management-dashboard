@@ -31,6 +31,11 @@ import {
 import { collectAlgorithmAssetGovernanceDashboardEvidence } from '../services/algorithmAssetGovernanceDashboardEvidenceService.js'
 import { buildAlgorithmAssetGovernanceWorkbenchReadiness } from '../services/algorithmAssetGovernanceWorkbenchReadinessService.js'
 import { executeAlgorithmAssetGovernanceWorkbenchOperation } from '../services/algorithmAssetGovernanceWorkbenchOperationService.js'
+import {
+  durationLearningRuntimePublicationIdentitiesMatch,
+  resolveDurationLearningRuntimePublicationIdentity,
+  type DurationLearningRuntimeAssetKey,
+} from '../services/durationLearningRuntimePublicationService.js'
 import { buildV14223RuntimeAssetIsolationMatrix } from '../services/algorithmAssetIsolationMatrixService.js'
 import {
   buildConstructionOrganizationProductOutcomeCloseoutMatrixFromPlanNetworkReport,
@@ -78,6 +83,54 @@ const HIGH_RISK_RULE_ASSET_ACTIONS = new Set([
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function durationLearningRuntimeRollbackAssetMatches(
+  assetType: string,
+  assetKey: DurationLearningRuntimeAssetKey,
+) {
+  return assetType === 'template_seed'
+    ? assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days'
+    : assetType === 'dependency_rule'
+      && (assetKey === 'dependency_rule_candidate' || assetKey === 'critical_path_rule_candidate')
+}
+
+async function isDurationLearningRuntimeRollbackAuthorized(input: {
+  body: Record<string, unknown>
+  companyId: string
+  projectId: string | null
+}) {
+  const assetType = normalizeText(input.body.assetType)
+  if (
+    normalizeText(input.body.action) !== 'runtime_rollback'
+    || (assetType !== 'template_seed' && assetType !== 'dependency_rule')
+  ) return true
+
+  const sourcePublicationKey = normalizeText(input.body.sourcePublicationKey)
+  const targetPublicationKey = normalizeText(input.body.rollbackTarget)
+  if (!sourcePublicationKey || !targetPublicationKey) return true
+
+  const source = await resolveDurationLearningRuntimePublicationIdentity({
+    queryExec: executeSQL,
+    publicationKey: sourcePublicationKey,
+  })
+  const target = await resolveDurationLearningRuntimePublicationIdentity({
+    queryExec: executeSQL,
+    publicationKey: targetPublicationKey,
+  })
+  if (
+    !source
+    || !target
+    || !durationLearningRuntimeRollbackAssetMatches(assetType, source.assetKey)
+    || !durationLearningRuntimePublicationIdentitiesMatch(source, target)
+  ) return false
+
+  if (source.scope.level !== 'project' && source.scope.level !== 'company') return false
+  if (source.scope.companyId !== input.companyId) return false
+  if (source.scope.level === 'project') {
+    return Boolean(input.projectId && source.scope.projectId === input.projectId)
+  }
+  return input.projectId === null
 }
 
 function normalizeSeedType(value: unknown): AlgorithmSeedType | null {
@@ -452,6 +505,12 @@ router.post('/rule-assets/governance-workbench/operations', requireCurrentCompan
       timestamp: new Date().toISOString(),
     } satisfies ApiResponse)
   }
+  const durationRuntimeRollbackAuthorized = await isDurationLearningRuntimeRollbackAuthorized({
+    body: req.body ?? {},
+    companyId: normalizeText(companyId),
+    projectId,
+  })
+  if (!durationRuntimeRollbackAuthorized) return forbiddenCompanyResponse(res)
   const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
     ...req.body,
     companyId,
