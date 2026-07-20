@@ -362,7 +362,7 @@ test('server Vitest slice runner avoids shell-args deprecation on Windows child 
   )
 })
 
-test('testing center governs default master-plan staging and real-outcome evidence tools', async () => {
+test('testing center governs canonical default master-plan evidence tools and retires the legacy staging writer', async () => {
   const packageJson = await readJson('package.json')
   const matrix = await readJson('project-testing/matrix/release-test-matrix.json')
   const readinessChecker = await readFile(
@@ -371,7 +371,6 @@ test('testing center governs default master-plan staging and real-outcome eviden
   )
 
   for (const relativePath of [
-    'project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs',
     'project-testing/tools/build-default-master-plan-real-production-outcome-package.mjs',
     'project-testing/tools/build-default-master-plan-completed-task-export.mjs',
     'project-testing/tools/build-default-master-plan-real-duration-sample-material-template.mjs',
@@ -391,7 +390,6 @@ test('testing center governs default master-plan staging and real-outcome eviden
   }
 
   for (const scriptName of [
-    'evidence:default-master-plan:staging-runtime',
     'evidence:default-master-plan:real-outcome-package',
     'evidence:default-master-plan:completed-task-export',
     'evidence:default-master-plan:real-duration-sample-template',
@@ -628,6 +626,16 @@ test('testing center governs default master-plan staging and real-outcome eviden
     /durationLearningRuntimeConsumptionService\.test\.ts/,
     'concurrent default-master-plan regression should include canonical trusted consumption checks',
   )
+  assert.match(
+    packageJson.scripts['evidence:default-master-plan:test-concurrent'],
+    /project-testing\/tools\/build-default-master-plan-runtime-publication-evidence\.test\.mjs/,
+    'concurrent default-master-plan regression should include canonical publication and trusted consumption evidence checks',
+  )
+  assert.match(
+    packageJson.scripts['evidence:default-master-plan:test-concurrent'],
+    /project-testing\/tools\/default-master-plan-real-outcome-evidence\.test\.mjs/,
+    'concurrent default-master-plan regression should include canonical real-outcome publication and consumption reference checks',
+  )
   assert.doesNotMatch(
     readinessChecker,
     /wbsTemplateRuntimePublicationService(?:\.test)?\.ts/,
@@ -650,13 +658,9 @@ test('testing center governs default master-plan staging and real-outcome eviden
   )
 
   const stagingGroup = matrix.gateGroups.find((group) => group.id === 'default-master-plan-staging-runtime-evidence')
-  assert.ok(stagingGroup, 'default-master-plan staging runtime evidence group should exist')
-  assert.equal(stagingGroup.tier, 'live_only')
-  assert.equal(stagingGroup.status, 'deferred_live')
-  assert.equal(stagingGroup.unlockPolicy?.operationMode, 'staging_controlled_write_publish_rollback')
-  assert.ok(stagingGroup.commands.includes('npm run evidence:default-master-plan:staging-runtime'))
-  assert.match(stagingGroup.mutationBoundary, /staging/i)
-  assert.match(stagingGroup.mutationBoundary, /production-ready/i)
+  assert.equal(stagingGroup, undefined, 'retired legacy staging writer must not remain an executable gate group')
+  assert.equal(packageJson.scripts['evidence:default-master-plan:staging-runtime'], undefined)
+  assert.equal(existsSync(join(repoRoot, 'project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs')), false)
 })
 
 test('authoritative v1.4 plans identify the canonical duration-learning runtime after legacy retirement', async () => {

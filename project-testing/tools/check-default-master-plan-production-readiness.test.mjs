@@ -15,6 +15,9 @@ const REVIEW_BLOCKERS = [
   'RUNTIME_PUBLICATION_EVIDENCE_MISSING',
   'POST_PUBLISH_SMOKE_ROLLBACK_EVIDENCE_MISSING',
 ]
+const CANONICAL_RUNTIME_PUBLICATION_KEY = 'duration-learning-runtime:wbs-reference-days:facade-v3'
+const CANONICAL_RUNTIME_PUBLICATION_REF = `duration_learning_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/runtime-publications.json#sha256=${'a'.repeat(64)}`
+const CANONICAL_RUNTIME_CONSUMPTION_REF = `duration_learning_runtime_consumptions_export:project-testing/reports/default-master-plan-production-readiness/runtime-consumptions.json#sha256=${'6'.repeat(64)}`
 
 async function execFileAllowReadinessBlocked(file, args, options) {
   try {
@@ -2282,7 +2285,8 @@ test('complete-looking runtime evidence is blocked when real outcome evidence re
 test('complete-looking runtime evidence is blocked when real outcome downstream refs do not match runtime evidence records', async () => {
   const realOutcome = {
     ...realProductionOutcomeEvidenceFixture(),
-    runtimePublicationEvidenceRef: 'wbs_template_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/other-runtime-publications.json#sha256=1111111111111111111111111111111111111111111111111111111111111111',
+    runtimePublicationEvidenceRef: 'duration_learning_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/other-runtime-publications.json#sha256=1111111111111111111111111111111111111111111111111111111111111111',
+    runtimeConsumptionEvidenceRef: 'duration_learning_runtime_consumptions_export:project-testing/reports/default-master-plan-production-readiness/other-runtime-consumptions.json#sha256=6666666666666666666666666666666666666666666666666666666666666666',
     apiReadSmokeEvidenceRef: 'api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/other-api-read-smoke.json#sha256=2222222222222222222222222222222222222222222222222222222222222222',
     uiConsumptionSmokeEvidenceRef: 'ui_consumption_smoke_export:project-testing/reports/default-master-plan-production-readiness/other-ui-smoke.json#sha256=3333333333333333333333333333333333333333333333333333333333333333',
     criticalPathReadbackEvidenceRef: 'critical_path_readback_export:project-testing/reports/default-master-plan-production-readiness/other-critical-path-readback.json#sha256=4444444444444444444444444444444444444444444444444444444444444444',
@@ -2341,6 +2345,7 @@ test('complete-looking runtime evidence is blocked when real outcome downstream 
     assert.equal(report.productionReady, false)
     assert.equal(provenanceGate.status, 'blocked')
     assert.match(provenanceGate.blockers.join('\n'), /real_production_outcome_runtime_publication_evidence_ref_mismatch/)
+    assert.match(provenanceGate.blockers.join('\n'), /real_production_outcome_runtime_consumption_evidence_ref_mismatch/)
     assert.match(provenanceGate.blockers.join('\n'), /real_production_outcome_api_read_smoke_evidence_ref_mismatch/)
     assert.match(provenanceGate.blockers.join('\n'), /real_production_outcome_ui_consumption_smoke_evidence_ref_mismatch/)
     assert.match(provenanceGate.blockers.join('\n'), /real_production_outcome_critical_path_readback_evidence_ref_mismatch/)
@@ -2350,7 +2355,7 @@ test('complete-looking runtime evidence is blocked when real outcome downstream 
   }
 })
 
-test('complete-looking evidence is blocked when baseline, project, publication, or rollback lineage does not match', async () => {
+test('complete-looking evidence is blocked when baseline, project, or publication lineage does not match', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-readiness-'))
   const outputRoot = path.join(root, 'out')
   const profileReport = path.join(root, 'profiles.json')
@@ -2438,8 +2443,6 @@ test('complete-looking evidence is blocked when baseline, project, publication, 
     assert.match(lineageGate.blockers.join('\n'), /project_id_mismatch/)
     assert.match(lineageGate.blockers.join('\n'), /baseline_id_mismatch/)
     assert.match(lineageGate.blockers.join('\n'), /publication_key_mismatch/)
-    assert.match(lineageGate.blockers.join('\n'), /dependency_writer_release_target_mismatch/)
-    assert.match(lineageGate.blockers.join('\n'), /rollback_target_mismatch/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -2506,7 +2509,7 @@ test('complete-looking evidence is blocked when it lacks evidence-builder no-wri
   }
 })
 
-test('runtime publication evidence is blocked when it lacks export hash lineage or accepted baseline does not match root baseline', async () => {
+test('runtime publication evidence is blocked when export hashes or trusted consumption baseline identity do not match', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-readiness-'))
   const outputRoot = path.join(root, 'out')
   const profileReport = path.join(root, 'profiles.json')
@@ -2521,30 +2524,11 @@ test('runtime publication evidence is blocked when it lacks export hash lineage 
     '- boundary: candidate only, no writes to tasks, task_dependencies, or runtime publication',
     '- duration evidence: L1',
   ].join('\n'), 'utf8')
-  await writeJson(runtimePublicationEvidence, {
-    schemaVersion: 'workbuddy-default-master-plan-runtime-publication-evidence/v1',
-    baselineId: 'baseline-reviewed',
-    projectId: 'project-1',
-    sourceEvidenceRef: 'manual-runtime-publication-note',
-    publication: {
-      source: 'default_master_plan_runtime_publication',
-      status: 'runtime_published',
-      publicationKey: 'default-master-plan-runtime-publication-1',
-      assetKind: 'default_master_plan',
-      generationMode: 'residential_master_plan_v2',
-      acceptedBaselineId: 'baseline-from-other-chain',
-      dependencyWriterReleaseRecordTarget: 'default-master-plan-runtime-publication-1',
-      runtimeAssetKey: 'runtime.default_master_plan.project-1',
-      rollbackTarget: 'rollback:default-master-plan-runtime-publication-1',
-      publishedBy: 'release-user-1',
-      publishedAt: '2026-07-01T08:00:00.000Z',
-    },
-    releaseLineage: {
-      projectManagerReviewEvidenceRef: 'pm-review.json',
-      durationCalibrationEvidenceRef: 'duration-calibration.json',
-      dependencyWriterEvidenceRef: 'dependency-writer.json',
-    },
-  })
+  const evidence = runtimePublicationEvidenceFixture()
+  evidence.publicationEvidenceRef = 'manual-runtime-publication-note'
+  evidence.consumptionEvidenceRef = 'manual-runtime-consumption-note'
+  evidence.consumptions[0].baselineId = 'baseline-from-other-chain'
+  await writeJson(runtimePublicationEvidence, evidence)
 
   try {
     await execFileAsync(process.execPath, [
@@ -2566,7 +2550,56 @@ test('runtime publication evidence is blocked when it lacks export hash lineage 
     assert.equal(report.productionReady, false)
     assert.equal(publicationGate.status, 'blocked')
     assert.match(publicationGate.blockers.join('\n'), /runtime_publication_export_hash_required/)
-    assert.match(publicationGate.blockers.join('\n'), /accepted_baseline_id_must_match_root_baseline_id/)
+    assert.match(publicationGate.blockers.join('\n'), /runtime_consumption_export_hash_required/)
+    assert.match(publicationGate.blockers.join('\n'), /runtime_consumption_baseline_id_mismatch/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('runtime publication evidence rejects cross-scope consumption and user metadata authority', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-readiness-'))
+  const outputRoot = path.join(root, 'out')
+  const profileReport = path.join(root, 'profiles.json')
+  const residentialReport = path.join(root, 'residential.md')
+  const runtimePublicationEvidence = path.join(root, 'runtime-publication.json')
+
+  await writeJson(profileReport, profileReportFixture())
+  await writeFile(residentialReport, [
+    '# Residential default master plan',
+    '- schedule_row: 60 条',
+    '- mode: residential_master_plan_v2',
+    '- boundary: candidate only, no writes to tasks, task_dependencies, or runtime publication',
+    '- duration evidence: L1',
+  ].join('\n'), 'utf8')
+  const evidence = runtimePublicationEvidenceFixture()
+  evidence.publication.companyId = 'company-from-other-scope'
+  evidence.publication.projectId = 'project-from-other-scope'
+  evidence.consumptions[0].sourceEvidenceRefs = ['task_metadata:forged-publication-lineage']
+  evidence.consumptions[0].consumptionContext = { authoritySource: 'task_metadata' }
+  await writeJson(runtimePublicationEvidence, evidence)
+
+  try {
+    await execFileAsync(process.execPath, [
+      SCRIPT_PATH,
+      '--profile-report',
+      profileReport,
+      '--residential-report',
+      residentialReport,
+      '--runtime-publication-evidence',
+      runtimePublicationEvidence,
+      '--output-root',
+      outputRoot,
+    ], { cwd: path.resolve('.') })
+
+    const report = JSON.parse(await readFile(path.join(outputRoot, 'readiness.json'), 'utf8'))
+    const publicationGate = report.gates.find((gate) => gate.id === 'runtime_publication_evidence')
+
+    assert.equal(publicationGate.status, 'blocked')
+    assert.match(publicationGate.blockers.join('\n'), /runtime_publication_project_scope_mismatch/)
+    assert.match(publicationGate.blockers.join('\n'), /runtime_consumption_company_scope_mismatch/)
+    assert.match(publicationGate.blockers.join('\n'), /runtime_consumption_resolver_authority_required/)
+    assert.match(publicationGate.blockers.join('\n'), /runtime_consumption_publication_source_ref_required/)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -2832,13 +2865,13 @@ test('legacy serial removal gate covers active server materializer paths', async
       dependencyWriterEvidenceRootPayloadGovernanceFieldCoverage: true,
       sourceExportMetadataScansPayloadRowsForNestedSourceLineage: true,
       sourceExportMetadataGovernanceFieldCoverage: true,
-      sourceExportMetadataStagingRuntimeWriterBoundary: true,
+      sourceExportMetadataRetiredRuntimeWriterBoundary: true,
       productionPipelineRootPayloadGovernanceFieldCoverage: true,
       productionSourceExporterRootPayloadGovernanceFieldCoverage: true,
       canonicalDurationLearningPublicationConsumptionBoundaryCoverage: true,
-      sourceExportMetadataScansRuntimePublicationAliases: true,
-      sourceExportMetadataIgnoresExportMetadataSourceNames: true,
-      runtimePublicationEvidenceAssetKindGuardCoverage: true,
+      sourceExportMetadataSeparatesCanonicalAndLegacyRuntimeAliases: true,
+      sourceExportMetadataCanonicalSourceIdentityCoverage: true,
+      runtimePublicationEvidenceCanonicalPairGuardCoverage: true,
       durationSampleGapPlannerCandidateBaselineSourceGuardCoverage: true,
       durationSampleCollectionGapPlanSourceGuardCoverage: true,
       durationSampleCollectionProfileReportSourceGuardCoverage: true,
@@ -3048,23 +3081,50 @@ function dependencyWriterEvidenceFixture() {
 
 function runtimePublicationEvidenceFixture() {
   return {
-    schemaVersion: 'workbuddy-default-master-plan-runtime-publication-evidence/v1',
+    schemaVersion: 'workbuddy-default-master-plan-runtime-publication-evidence/v2',
     baselineId: 'baseline-reviewed',
     projectId: 'project-1',
-    sourceEvidenceRef: 'wbs_template_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/runtime-publications.json#sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
+    status: 'runtime_consumed',
+    source: 'canonical_duration_learning_runtime_evidence_builder',
+    sourceEvidenceRef: CANONICAL_RUNTIME_PUBLICATION_REF,
+    sourceEvidenceRefs: [CANONICAL_RUNTIME_PUBLICATION_REF, CANONICAL_RUNTIME_CONSUMPTION_REF],
+    publicationEvidenceRef: CANONICAL_RUNTIME_PUBLICATION_REF,
+    consumptionEvidenceRef: CANONICAL_RUNTIME_CONSUMPTION_REF,
     publication: {
-      source: 'default_master_plan_runtime_publication',
-      status: 'runtime_published',
-      publicationKey: 'default-master-plan-runtime-publication-1',
-      assetKind: 'default_master_plan',
-      generationMode: 'residential_master_plan_v2',
-      acceptedBaselineId: 'baseline-reviewed',
-      dependencyWriterReleaseRecordTarget: 'default-master-plan-runtime-publication-1',
-      runtimeAssetKey: 'runtime.default_master_plan.project-1',
-      rollbackTarget: 'rollback:default-master-plan-runtime-publication-1',
-      publishedBy: 'release-user-1',
+      source: 'duration_learning_runtime_publications',
+      publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
+      assetKey: 'wbs_reference_days',
+      artifactKey: 'facade-v3',
+      scopeLevel: 'project',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      publicationStage: 'stable',
+      monitoringStatus: 'passed',
       publishedAt: '2026-07-01T08:00:00.000Z',
     },
+    consumptions: [{
+      source: 'duration_learning_runtime_consumptions',
+      consumptionKey: 'duration-learning-consumption:task-1',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
+      assetKey: 'wbs_reference_days',
+      artifactKey: 'facade-v3',
+      consumerKey: 'wbsTemplateGenerationService',
+      consumerSurface: 'project_wizard_commit',
+      taskId: 'task-1',
+      baselineItemId: null,
+      baselineId: 'baseline-reviewed',
+      baselineProjectId: 'project-1',
+      baselineCompanyId: 'company-1',
+      baselineAuthority: 'task_baseline_items_physical_join',
+      durationDayBasis: 'construction_production_day',
+      sourceEvidenceRefs: [`duration_learning_runtime_publications:${CANONICAL_RUNTIME_PUBLICATION_KEY}`],
+      consumptionContext: { authoritySource: 'runtime_resolver_publication_set' },
+      consumedAt: '2026-07-01T08:05:00.000Z',
+    }],
+    trustedConsumptionCount: 1,
     releaseLineage: {
       projectManagerReviewEvidenceRef: 'pm-review.json',
       durationCalibrationEvidenceRef: 'duration-calibration.json',
@@ -3072,6 +3132,7 @@ function runtimePublicationEvidenceFixture() {
     },
     mutationBoundary: {
       readsRuntimePublicationExport: true,
+      readsRuntimeConsumptionExport: true,
       writesProductionTables: false,
       writesTaskDependencies: false,
       writesRuntimePublication: false,
@@ -3086,36 +3147,36 @@ function smokeRollbackEvidenceFixture() {
     schemaVersion: 'workbuddy-default-master-plan-post-publish-smoke-rollback-evidence/v1',
     baselineId: 'baseline-reviewed',
     projectId: 'project-1',
-    publicationKey: 'default-master-plan-runtime-publication-1',
+    publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
     environment: 'staging',
     testedAt: '2026-07-01T08:30:00.000Z',
     apiReadSmoke: {
       status: 'pass',
       baselineId: 'baseline-reviewed',
       projectId: 'project-1',
-      publicationKey: 'default-master-plan-runtime-publication-1',
+      publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
       evidenceRef: 'api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json#sha256=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     },
     uiConsumptionSmoke: {
       status: 'pass',
       baselineId: 'baseline-reviewed',
       projectId: 'project-1',
-      publicationKey: 'default-master-plan-runtime-publication-1',
+      publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
       evidenceRef: 'ui_consumption_smoke_export:project-testing/reports/default-master-plan-production-readiness/ui-smoke.json#sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
     },
     criticalPathReadback: {
       status: 'pass',
       baselineId: 'baseline-reviewed',
       projectId: 'project-1',
-      publicationKey: 'default-master-plan-runtime-publication-1',
+      publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
       evidenceRef: 'critical_path_readback_export:project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json#sha256=9999999999999999999999999999999999999999999999999999999999999999',
     },
     rollbackVerification: {
       status: 'pass',
       baselineId: 'baseline-reviewed',
       projectId: 'project-1',
-      publicationKey: 'default-master-plan-runtime-publication-1',
-      rollbackTarget: 'rollback:default-master-plan-runtime-publication-1',
+      publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
+      rollbackTarget: `rollback:${CANONICAL_RUNTIME_PUBLICATION_KEY}`,
       evidenceRef: 'rollback_verification_export:project-testing/reports/default-master-plan-production-readiness/rollback-smoke.json#sha256=8888888888888888888888888888888888888888888888888888888888888888',
     },
     mutationBoundary: {
@@ -3222,11 +3283,12 @@ function realProductionOutcomeEvidenceFixture() {
     evidenceRef: 'project-testing/reports/default-master-plan-production-readiness/real-production-outcome.json#sha256=7777777777777777777777777777777777777777777777777777777777777777',
     baselineId: 'baseline-reviewed',
     projectId: 'project-1',
-    publicationKey: 'default-master-plan-runtime-publication-1',
+    publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
     acceptedBy: 'production-owner:9e4a5570-0032-43bd-8f17-0bc415a1eb70',
     acceptedAt: '2026-07-01T09:00:00.000Z',
     approvalRef: 'approval:production-release-window-1',
-    runtimePublicationEvidenceRef: 'wbs_template_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/runtime-publications.json#sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    runtimePublicationEvidenceRef: CANONICAL_RUNTIME_PUBLICATION_REF,
+    runtimeConsumptionEvidenceRef: CANONICAL_RUNTIME_CONSUMPTION_REF,
     apiReadSmokeEvidenceRef: 'api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json#sha256=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
     uiConsumptionSmokeEvidenceRef: 'ui_consumption_smoke_export:project-testing/reports/default-master-plan-production-readiness/ui-smoke.json#sha256=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
     criticalPathReadbackEvidenceRef: 'critical_path_readback_export:project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json#sha256=9999999999999999999999999999999999999999999999999999999999999999',
@@ -3256,7 +3318,7 @@ function sourceManifestFixture(overrides = {}) {
     exportSessionId: 'default-master-plan-source-export:2026-07-01T08:00:00.000Z:session',
     baselineId: 'baseline-reviewed',
     projectId: 'project-1',
-    publicationKey: 'default-master-plan-runtime-publication-1',
+    publicationKey: CANONICAL_RUNTIME_PUBLICATION_KEY,
     phase: 'all',
     environment: 'staging',
     exportedBy: 'release-user-1',
@@ -3265,7 +3327,8 @@ function sourceManifestFixture(overrides = {}) {
       reviewExport: dbSourceExportRecord('candidate_default_master_plan_review', 'public.change_logs', 'project-testing/reports/default-master-plan-production-readiness/pm-review.json', 'd'.repeat(64)),
       durationSamples: dbSourceExportRecord('duration_experience_samples', 'public.duration_experience_samples', 'project-testing/reports/default-master-plan-production-readiness/duration-experience-samples.json', 'b'.repeat(64)),
       taskDependencies: dbSourceExportRecord('task_dependencies', 'public.task_dependencies', 'project-testing/reports/default-master-plan-production-readiness/task-dependencies.json', 'c'.repeat(64)),
-      runtimePublications: dbSourceExportRecord('wbs_template_runtime_publications', 'public.wbs_template_runtime_publications', 'project-testing/reports/default-master-plan-production-readiness/runtime-publications.json', 'a'.repeat(64)),
+      runtimePublications: dbSourceExportRecord('duration_learning_runtime_publications', 'public.duration_learning_runtime_publications', 'project-testing/reports/default-master-plan-production-readiness/runtime-publications.json', 'a'.repeat(64)),
+      runtimeConsumptions: dbSourceExportRecord('duration_learning_runtime_consumptions', 'public.duration_learning_runtime_consumptions', 'project-testing/reports/default-master-plan-production-readiness/runtime-consumptions.json', '6'.repeat(64)),
       apiReadSmoke: sourceExportRecord('api_read_smoke', 'project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json', 'e'.repeat(64)),
       uiConsumptionSmoke: sourceExportRecord('ui_consumption_smoke', 'project-testing/reports/default-master-plan-production-readiness/ui-smoke.json', 'f'.repeat(64)),
       criticalPathReadback: sourceExportRecord('critical_path_readback', 'project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json', '9'.repeat(64)),
@@ -3364,6 +3427,7 @@ function sourceManifestPipelineArgs(manifest, sourceManifestPath = null) {
     ['--duration-samples', manifest.sourceExports.durationSamples],
     ['--task-dependencies', manifest.sourceExports.taskDependencies],
     ['--runtime-publications', manifest.sourceExports.runtimePublications],
+    ['--runtime-consumptions', manifest.sourceExports.runtimeConsumptions],
     ['--api-read-smoke', manifest.sourceExports.apiReadSmoke],
     ['--ui-consumption-smoke', manifest.sourceExports.uiConsumptionSmoke],
     ['--critical-path-readback', manifest.sourceExports.criticalPathReadback],

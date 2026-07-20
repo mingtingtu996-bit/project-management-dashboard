@@ -5,6 +5,15 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildProductionReadinessQualification } from './default-master-plan-evidence-boundary.mjs'
 import { validateRealProductionOutcomeEvidence } from './default-master-plan-real-outcome-evidence.mjs'
+import {
+  CANONICAL_RUNTIME_CONSUMPTION_SOURCE,
+  CANONICAL_RUNTIME_PUBLICATION_SOURCE,
+  CONSUMABLE_MONITORING_STATUSES,
+  CONSUMABLE_PUBLICATION_STAGES,
+  DURATION_LEARNING_ASSET_KEYS,
+  TRUSTED_COMMIT_CONSUMER_SURFACES,
+  isCanonicalRuntimeSourceRef,
+} from './default-master-plan-runtime-evidence-contract.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..', '..')
@@ -43,7 +52,8 @@ const SOURCE_EXPORT_REF_KEY_BY_TYPE = {
   candidate_default_master_plan_review_export: 'reviewExport',
   duration_experience_samples_export: 'durationSamples',
   task_dependencies_export: 'taskDependencies',
-  wbs_template_runtime_publications_export: 'runtimePublications',
+  duration_learning_runtime_publications_export: 'runtimePublications',
+  duration_learning_runtime_consumptions_export: 'runtimeConsumptions',
   api_read_smoke_export: 'apiReadSmoke',
   ui_consumption_smoke_export: 'uiConsumptionSmoke',
   critical_path_readback_export: 'criticalPathReadback',
@@ -68,10 +78,16 @@ const SOURCE_EXPORT_RECORD_CONTRACTS = {
     pipelineFlag: '--task-dependencies',
   },
   runtimePublications: {
-    source: 'wbs_template_runtime_publications',
+    source: 'duration_learning_runtime_publications',
     kind: 'database_table',
-    table: 'public.wbs_template_runtime_publications',
+    table: 'public.duration_learning_runtime_publications',
     pipelineFlag: '--runtime-publications',
+  },
+  runtimeConsumptions: {
+    source: 'duration_learning_runtime_consumptions',
+    kind: 'database_table',
+    table: 'public.duration_learning_runtime_consumptions',
+    pipelineFlag: '--runtime-consumptions',
   },
   apiReadSmoke: {
     source: 'api_read_smoke',
@@ -1170,7 +1186,7 @@ function evaluateRuntimePublicationEvidence(rawEvidence, sourcePath) {
   if (!rawEvidence) {
     return {
       status: 'blocked',
-      blockers: ['Missing real runtime publication record for the accepted master-plan asset.'],
+      blockers: ['Missing canonical runtime publication and trusted consumption evidence.'],
     }
   }
   if (rawEvidence.__readError) {
@@ -1181,44 +1197,132 @@ function evaluateRuntimePublicationEvidence(rawEvidence, sourcePath) {
   }
 
   const root = readObject(rawEvidence)
-  const publication = readObject(root.publication ?? root.runtime_publication ?? root.runtimePublication ?? root)
+  const publication = readObject(root.publication)
   const lineage = readObject(root.releaseLineage ?? root.release_lineage)
+  const consumptions = Array.isArray(root.consumptions) ? root.consumptions.map(readObject) : []
   const upstreamBlockers = normalizeStringArray(root.blockers)
   const upstreamStatus = String(root.status ?? '').trim()
-  const publicationStatus = String(publication.status ?? publication.runtimePublicationStatus ?? publication.runtime_publication_status ?? '').trim()
   const publicationKey = String(publication.publicationKey ?? publication.publication_key ?? '').trim()
-  const assetKind = String(publication.assetKind ?? publication.asset_kind ?? '').trim()
-  const generationMode = String(publication.generationMode ?? publication.generation_mode ?? '').trim()
-  const acceptedBaselineId = String(publication.acceptedBaselineId ?? publication.accepted_baseline_id ?? '').trim()
-  const dependencyWriterReleaseRecordTarget = String(publication.dependencyWriterReleaseRecordTarget ?? publication.dependency_writer_release_record_target ?? '').trim()
-  const runtimeAssetKey = String(publication.runtimeAssetKey ?? publication.runtime_asset_key ?? '').trim()
-  const rollbackTarget = String(publication.rollbackTarget ?? publication.rollback_target ?? '').trim()
+  const assetKey = String(publication.assetKey ?? publication.asset_key ?? '').trim()
+  const artifactKey = String(publication.artifactKey ?? publication.artifact_key ?? '').trim()
+  const publicationScopeLevel = String(publication.scopeLevel ?? publication.scope_level ?? '').trim()
+  const publicationCompanyId = String(publication.companyId ?? publication.company_id ?? '').trim()
+  const publicationProjectId = String(publication.projectId ?? publication.project_id ?? '').trim()
+  const publicationIndustryKey = String(publication.industryKey ?? publication.industry_key ?? '').trim()
+  const publicationStage = String(publication.publicationStage ?? publication.publication_stage ?? '').trim()
+  const monitoringStatus = String(publication.monitoringStatus ?? publication.monitoring_status ?? '').trim()
   const baselineId = String(root.baselineId ?? root.baseline_id ?? '').trim()
   const projectId = String(root.projectId ?? root.project_id ?? '').trim()
-  const sourceEvidenceRef = String(root.sourceEvidenceRef ?? root.source_evidence_ref ?? '').trim()
+  const publicationEvidenceRef = String(root.publicationEvidenceRef ?? root.publication_evidence_ref ?? '').trim()
+  const consumptionEvidenceRef = String(root.consumptionEvidenceRef ?? root.consumption_evidence_ref ?? '').trim()
+  const trustedConsumptionCount = Number(root.trustedConsumptionCount ?? root.trusted_consumption_count ?? 0)
+  const consumptionBlockers = consumptions.flatMap((consumption) => {
+    const consumerSurface = String(consumption.consumerSurface ?? consumption.consumer_surface ?? '').trim()
+    const consumptionCompanyId = String(consumption.companyId ?? consumption.company_id ?? '').trim()
+    const taskId = String(consumption.taskId ?? consumption.task_id ?? '').trim()
+    const baselineItemId = String(consumption.baselineItemId ?? consumption.baseline_item_id ?? '').trim()
+    const consumptionContext = readObject(consumption.consumptionContext ?? consumption.consumption_context)
+    const authoritySource = String(consumptionContext.authoritySource ?? consumptionContext.authority_source ?? '').trim()
+    const consumptionIndustryKey = String(consumptionContext.industryKey ?? consumptionContext.industry_key ?? '').trim()
+    const sourceEvidenceRefs = normalizeStringArray(consumption.sourceEvidenceRefs ?? consumption.source_evidence_refs)
+    return [
+      String(consumption.source ?? '').trim() === CANONICAL_RUNTIME_CONSUMPTION_SOURCE
+        ? null
+        : 'runtime_consumption_canonical_source_required',
+      String(consumption.publicationKey ?? consumption.publication_key ?? '').trim() === publicationKey
+        ? null
+        : 'runtime_consumption_publication_key_mismatch',
+      String(consumption.assetKey ?? consumption.asset_key ?? '').trim() === assetKey
+        ? null
+        : 'runtime_consumption_asset_key_mismatch',
+      String(consumption.artifactKey ?? consumption.artifact_key ?? '').trim() === artifactKey
+        ? null
+        : 'runtime_consumption_artifact_key_mismatch',
+      String(consumption.projectId ?? consumption.project_id ?? '').trim() === projectId
+        ? null
+        : 'runtime_consumption_project_id_mismatch',
+      String(consumption.baselineId ?? consumption.baseline_id ?? '').trim() === baselineId
+        ? null
+        : 'runtime_consumption_baseline_id_mismatch',
+      String(consumption.baselineProjectId ?? consumption.baseline_project_id ?? '').trim() === projectId
+        ? null
+        : 'runtime_consumption_baseline_project_id_mismatch',
+      String(consumption.baselineCompanyId ?? consumption.baseline_company_id ?? '').trim()
+        ? null
+        : 'runtime_consumption_baseline_company_id_required',
+      String(consumption.companyId ?? consumption.company_id ?? '').trim()
+        === String(consumption.baselineCompanyId ?? consumption.baseline_company_id ?? '').trim()
+        ? null
+        : 'runtime_consumption_baseline_company_mismatch',
+      ['project', 'company'].includes(publicationScopeLevel) && consumptionCompanyId !== publicationCompanyId
+        ? 'runtime_consumption_company_scope_mismatch'
+        : null,
+      publicationScopeLevel === 'industry' && consumptionIndustryKey !== publicationIndustryKey
+        ? 'runtime_consumption_industry_scope_mismatch'
+        : null,
+      String(consumption.baselineAuthority ?? consumption.baseline_authority ?? '').trim() === 'task_baseline_items_physical_join'
+        ? null
+        : 'runtime_consumption_physical_baseline_authority_required',
+      Number(Boolean(taskId)) + Number(Boolean(baselineItemId)) === 1
+        ? null
+        : 'runtime_consumption_subject_identity_invalid',
+      TRUSTED_COMMIT_CONSUMER_SURFACES.has(consumerSurface)
+        ? null
+        : 'runtime_consumption_commit_surface_required',
+      String(consumption.durationDayBasis ?? consumption.duration_day_basis ?? '').trim() === 'construction_production_day'
+        ? null
+        : 'runtime_consumption_production_day_basis_required',
+      strictIsoTimestamp(consumption.consumedAt ?? consumption.consumed_at)
+        ? null
+        : 'runtime_consumption_consumed_at_required',
+      authoritySource === 'runtime_resolver_publication_set'
+        ? null
+        : 'runtime_consumption_resolver_authority_required',
+      sourceEvidenceRefs.includes(`duration_learning_runtime_publications:${publicationKey}`)
+        ? null
+        : 'runtime_consumption_publication_source_ref_required',
+    ].filter(Boolean)
+  })
   const missing = [
-    upstreamStatus && upstreamStatus !== 'runtime_published' ? `runtime_publication_evidence_status_${upstreamStatus}` : null,
+    root.schemaVersion === 'workbuddy-default-master-plan-runtime-publication-evidence/v2'
+      ? null
+      : 'runtime_publication_evidence_schema_v2_required',
+    upstreamStatus === 'runtime_consumed' ? null : `runtime_publication_evidence_status_${upstreamStatus || 'required'}`,
     ...upstreamBlockers,
     baselineId ? null : 'baseline_id_required',
     projectId ? null : 'project_id_required',
-    sourceEvidenceRef.startsWith('wbs_template_runtime_publications_export:') && sourceEvidenceRef.includes('#sha256=')
+    isCanonicalRuntimeSourceRef('publication', publicationEvidenceRef) ? null : 'runtime_publication_export_hash_required',
+    isCanonicalRuntimeSourceRef('consumption', consumptionEvidenceRef) ? null : 'runtime_consumption_export_hash_required',
+    String(publication.source ?? '').trim() === CANONICAL_RUNTIME_PUBLICATION_SOURCE
       ? null
-      : 'runtime_publication_export_hash_required',
-    publication.source === 'default_master_plan_runtime_publication' ? null : 'default_master_plan_runtime_publication_source_required',
-    publicationStatus === 'runtime_published' ? null : 'runtime_publication_status_required',
+      : 'runtime_publication_canonical_source_required',
     publicationKey ? null : 'publication_key_required',
-    assetKind === 'default_master_plan' ? null : 'runtime_publication_asset_kind_default_master_plan_required',
-    ...defaultMasterPlanGenerationModeBlockers(generationMode),
-    acceptedBaselineId ? null : 'accepted_baseline_id_required',
-    acceptedBaselineId && baselineId && acceptedBaselineId === baselineId ? null : 'accepted_baseline_id_must_match_root_baseline_id',
-    dependencyWriterReleaseRecordTarget ? null : 'dependency_writer_release_record_target_required',
-    runtimeAssetKey ? null : 'runtime_asset_key_required',
-    rollbackTarget ? null : 'rollback_target_required',
-    String(publication.publishedBy ?? publication.published_by ?? '').trim() ? null : 'published_by_required',
-    String(publication.publishedAt ?? publication.published_at ?? '').trim() ? null : 'published_at_required',
+    DURATION_LEARNING_ASSET_KEYS.has(assetKey) ? null : 'duration_learning_asset_key_required',
+    artifactKey ? null : 'runtime_publication_artifact_key_required',
+    ['project', 'company', 'industry', 'global'].includes(publicationScopeLevel)
+      ? null
+      : 'runtime_publication_scope_level_invalid',
+    publicationScopeLevel === 'project' && publicationProjectId !== projectId
+      ? 'runtime_publication_project_scope_mismatch'
+      : null,
+    ['project', 'company'].includes(publicationScopeLevel) && !publicationCompanyId
+      ? 'runtime_publication_company_scope_required'
+      : null,
+    publicationScopeLevel === 'industry' && !publicationIndustryKey
+      ? 'runtime_publication_industry_scope_required'
+      : null,
+    CONSUMABLE_PUBLICATION_STAGES.has(publicationStage) ? null : 'runtime_publication_stage_not_consumable',
+    CONSUMABLE_MONITORING_STATUSES.has(monitoringStatus) ? null : 'runtime_publication_monitoring_status_not_consumable',
+    trustedConsumptionCount > 0 && trustedConsumptionCount === consumptions.length
+      ? null
+      : 'trusted_runtime_consumption_required',
+    ...consumptionBlockers,
     String(lineage.durationCalibrationEvidenceRef ?? lineage.duration_calibration_evidence_ref ?? '').trim() ? null : 'duration_calibration_lineage_required',
     String(lineage.dependencyWriterEvidenceRef ?? lineage.dependency_writer_evidence_ref ?? '').trim() ? null : 'dependency_writer_lineage_required',
-    ...mutationBoundaryBlockers('runtime_publication_evidence', rawEvidence, ['readsRuntimePublicationExport']),
+    ...mutationBoundaryBlockers('runtime_publication_evidence', rawEvidence, [
+      'readsRuntimePublicationExport',
+      'readsRuntimeConsumptionExport',
+    ]),
   ].filter(Boolean)
 
   if (missing.length > 0) {
@@ -1232,22 +1336,31 @@ function evaluateRuntimePublicationEvidence(rawEvidence, sourcePath) {
     status: 'pass',
     evidence: {
       sourceEvidencePath: repoRelative(sourcePath),
-      baselineId: root.baselineId ?? root.baseline_id,
-      projectId: root.projectId ?? root.project_id,
-      sourceEvidenceRef,
-      runtimePublicationEvidenceRef: sourceEvidenceRef,
+      baselineId,
+      projectId,
+      publicationEvidenceRef,
+      consumptionEvidenceRef,
+      runtimePublicationEvidenceRef: publicationEvidenceRef,
+      runtimeConsumptionEvidenceRef: consumptionEvidenceRef,
       publicationKey,
-      assetKind,
-      generationMode,
-      acceptedBaselineId,
-      dependencyWriterReleaseRecordTarget,
-      runtimeAssetKey,
-      rollbackTarget,
-      publishedBy: publication.publishedBy ?? publication.published_by,
-      publishedAt: publication.publishedAt ?? publication.published_at,
+      assetKey,
+      artifactKey,
+      publicationStage,
+      monitoringStatus,
+      acceptedBaselineId: baselineId,
+      trustedConsumptionCount,
+      consumerSurfaces: [...new Set(consumptions.map((item) => String(item.consumerSurface ?? item.consumer_surface ?? '').trim()))],
       productionReady: false,
     },
   }
+}
+
+function strictIsoTimestamp(value) {
+  const normalized = String(value ?? '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(normalized)) return false
+  const parsed = new Date(normalized)
+  if (!Number.isFinite(parsed.getTime())) return false
+  return parsed.toISOString() === (normalized.includes('.') ? normalized : normalized.replace('Z', '.000Z'))
 }
 
 function evaluatePostPublishSmokeRollbackEvidence(rawEvidence, sourcePath) {
@@ -1361,8 +1474,6 @@ function evaluateRuntimeEvidenceLineageConsistency({
   const dependency = readObject(dependencyWriterEvidence.evidence)
   const publication = readObject(runtimePublicationEvidence.evidence)
   const smoke = readObject(postPublishSmokeRollbackEvidence.evidence)
-  const dependencyDomainWriter = readObject(dependency.domainWriter)
-
   const blockers = [
     identityMismatchBlocker('baseline_id_mismatch', [
       duration.baselineId,
@@ -1381,15 +1492,6 @@ function evaluateRuntimeEvidenceLineageConsistency({
       publication.publicationKey,
       smoke.publicationKey,
     ]),
-    identityMismatchBlocker('dependency_writer_release_target_mismatch', [
-      dependencyDomainWriter.releaseRecordTarget,
-      publication.dependencyWriterReleaseRecordTarget,
-    ]),
-    identityMismatchBlocker('rollback_target_mismatch', [
-      dependencyDomainWriter.rollbackTarget,
-      publication.rollbackTarget,
-      smoke.rollbackTarget,
-    ]),
   ].filter(Boolean)
 
   if (blockers.length > 0) {
@@ -1406,8 +1508,9 @@ function evaluateRuntimeEvidenceLineageConsistency({
       projectId: publication.projectId,
       publicationKey: publication.publicationKey,
       environment: smoke.environment,
-      dependencyWriterReleaseRecordTarget: publication.dependencyWriterReleaseRecordTarget,
-      rollbackTarget: publication.rollbackTarget,
+      assetKey: publication.assetKey,
+      artifactKey: publication.artifactKey,
+      trustedConsumptionCount: publication.trustedConsumptionCount,
       productionReady: false,
     },
   }
@@ -1508,7 +1611,12 @@ function realProductionOutcomeMaterialRefBlockers(evidence, evidenceResults = {}
     [
       'runtime_publication',
       String(evidence.runtimePublicationEvidenceRef ?? evidence.runtime_publication_evidence_ref ?? '').trim(),
-      String(runtimePublication.sourceEvidenceRef ?? runtimePublication.source_evidence_ref ?? '').trim(),
+      String(runtimePublication.publicationEvidenceRef ?? runtimePublication.publication_evidence_ref ?? '').trim(),
+    ],
+    [
+      'runtime_consumption',
+      String(evidence.runtimeConsumptionEvidenceRef ?? evidence.runtime_consumption_evidence_ref ?? '').trim(),
+      String(runtimePublication.consumptionEvidenceRef ?? runtimePublication.consumption_evidence_ref ?? '').trim(),
     ],
     [
       'api_read_smoke',
@@ -2583,13 +2691,13 @@ function buildManualComparisonGuardEvidence({
         'reviewProof',
         'handoffEvidence',
       ),
-      sourceExportMetadataStagingRuntimeWriterBoundary: containsAll(
+      sourceExportMetadataRetiredRuntimeWriterBoundary: containsAll(
         sourceExportMetadata,
-        'default_master_plan_staging_runtime_writer',
-        'sourceExportSourceGuardBlockers',
+        'legacy_runtime_source_cannot_satisfy_current_evidence',
+        'hasLegacyRuntimeSource',
       ) && containsAll(
         sourceExportMetadataTest,
-        'allows staging runtime writer markers as supporting source export evidence',
+        'blocks retired staging runtime writer markers as current source evidence',
         'default_master_plan_staging_runtime_writer',
         'duration_samples_unsupported_default_master_plan_source_label',
       ),
@@ -2642,34 +2750,40 @@ function buildManualComparisonGuardEvidence({
         'persists validated consumptions with publication/artifact scope checks in one statement',
         'reads task completion lineage only from the trusted consumption table with tenant and project predicates',
       ),
-      sourceExportMetadataScansRuntimePublicationAliases: containsAll(
+      sourceExportMetadataSeparatesCanonicalAndLegacyRuntimeAliases: containsAll(
         sourceExportMetadata,
+        'CURRENT_RUNTIME_SOURCE_ROW_ARRAY_KEYS',
+        'LEGACY_RUNTIME_SOURCE_ROW_ARRAY_KEYS',
         'SOURCE_EXPORT_ROW_ARRAY_KEYS',
-        "'runtime_publications'",
-        "'runtimePublications'",
-      ) && containsAll(
-        runtimePublicationBuilderTest,
-        'blocks runtime publication evidence when camelCase runtimePublications rows hide retired source lineage',
-        'runtime_publications_retired_or_low_information_default_master_plan_source',
-      ),
-      sourceExportMetadataIgnoresExportMetadataSourceNames: containsAll(
-        sourceExportMetadata,
-        'sourceExportPayloadRootSourceSignals',
-        'delete payloadRoot.export_metadata',
-        'delete payloadRoot.exportMetadata',
+        'legacy_runtime_source_cannot_satisfy_current_evidence',
       ) && containsAll(
         sourceExportMetadataTest,
-        'allows source export metadata source names without treating them as generation sources',
-        'wbs_template_runtime_publications',
+        'blocks legacy runtime table aliases from satisfying current evidence',
+        'allows canonical runtime source names without treating asset keys as generation sources',
       ),
-      runtimePublicationEvidenceAssetKindGuardCoverage: containsAll(
+      sourceExportMetadataCanonicalSourceIdentityCoverage: containsAll(
+        sourceExportMetadata,
+        "source === 'wbs_template_runtime_publications'",
+        "source === 'duration_learning_legacy_default_master_plan_mappings'",
+        "source === 'duration_learning_legacy_runtime_row_archive'",
+      ) && containsAll(
+        sourceExportMetadataTest,
+        'blocks legacy runtime table aliases from satisfying current evidence',
+        'allows canonical runtime source names without treating asset keys as generation sources',
+      ),
+      runtimePublicationEvidenceCanonicalPairGuardCoverage: containsAll(
         runtimePublicationBuilder,
-        'function rowAssetKind',
-        'runtime_publication_asset_kind_default_master_plan_required',
+        'DURATION_LEARNING_ASSET_KEYS.has(publication.assetKey)',
+        'runtime_consumption_publication_key_mismatch',
+        'runtime_consumption_artifact_key_mismatch',
+        'runtime_consumption_physical_baseline_authority_required',
+        'trusted_runtime_consumption_required',
       ) && containsAll(
         runtimePublicationBuilderTest,
-        'blocks runtime publication evidence when the exported row asset kind is not default master-plan',
-        'runtime_publication_asset_kind_default_master_plan_required',
+        'blocks a retired WBS runtime publication even when its legacy row is otherwise complete',
+        'builds canonical runtime evidence only from an exact publication and baseline consumption pair',
+        'blocks canonical consumption whose artifact, project, or baseline identity does not match',
+        'does not accept user metadata or legacy archive mapping as trusted runtime consumption',
       ),
       durationSampleGapPlannerCandidateBaselineSourceGuardCoverage: containsAll(
         durationSampleGapPlanner,

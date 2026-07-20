@@ -53,7 +53,7 @@ test('writes a blocked pipeline report when source exports are missing and does 
     assert.equal(report.productionReady, false)
     assert.equal(report.builderRuns.length, 0)
     assert.equal(report.bundle.productionReady, false)
-    assert.equal(report.missingSourceExports.length, 11)
+    assert.equal(report.missingSourceExports.length, 12)
     assert.equal(report.missingSourceExports.some((item) => item.evidenceType === 'reviewEvidence'), false)
     assert.equal(report.sourceExportManifestBlockers.includes('source_export_manifest_required'), true)
     assert.equal(report.realEvidenceGapSummary.jsonPath.endsWith('real-evidence-gap-summary.json'), true)
@@ -413,6 +413,7 @@ test('blocks complete-looking source exports that lack auditable export metadata
   const writerResult = path.join(root, 'writer-result.json')
   const taskDependencies = path.join(root, 'task-dependencies.json')
   const runtimePublications = path.join(root, 'runtime-publications.json')
+  const runtimeConsumptions = path.join(root, 'runtime-consumptions.json')
   const apiReadSmoke = path.join(root, 'api-read-smoke.json')
   const uiConsumptionSmoke = path.join(root, 'ui-consumption-smoke.json')
   const criticalPathReadback = path.join(root, 'critical-path-readback.json')
@@ -425,6 +426,7 @@ test('blocks complete-looking source exports that lack auditable export metadata
   await writeJson(writerResult, writerResultFixture())
   await writeJson(taskDependencies, taskDependenciesExportFixture())
   await writeJson(runtimePublications, runtimePublicationsFixture())
+  await writeJson(runtimeConsumptions, runtimeConsumptionsFixture())
   await writeJson(apiReadSmoke, smokeFixture('api-read-smoke'))
   await writeJson(uiConsumptionSmoke, smokeFixture('ui-consumption-smoke'))
   await writeJson(criticalPathReadback, smokeFixture('critical-path-readback', 'readback_passed'))
@@ -458,6 +460,8 @@ test('blocks complete-looking source exports that lack auditable export metadata
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -496,6 +500,7 @@ test('blocks complete-looking source exports when they are not linked to a sourc
   const writerResult = path.join(root, 'writer-result.json')
   const taskDependencies = path.join(root, 'task-dependencies.json')
   const runtimePublications = path.join(root, 'runtime-publications.json')
+  const runtimeConsumptions = path.join(root, 'runtime-consumptions.json')
   const apiReadSmoke = path.join(root, 'api-read-smoke.json')
   const uiConsumptionSmoke = path.join(root, 'ui-consumption-smoke.json')
   const criticalPathReadback = path.join(root, 'critical-path-readback.json')
@@ -507,7 +512,8 @@ test('blocks complete-looking source exports when they are not linked to a sourc
   await writeJson(durationSamples, withExportMetadata(durationSamplesFixture(), 'duration_experience_samples'))
   await writeJson(writerResult, withExportMetadata(writerResultFixture(), 'construction_organization_plan_network_domain_writer'))
   await writeJson(taskDependencies, withExportMetadata(taskDependenciesExportFixture(), 'task_dependencies'))
-  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'wbs_template_runtime_publications'))
+  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'duration_learning_runtime_publications'))
+  await writeJson(runtimeConsumptions, withExportMetadata(runtimeConsumptionsFixture(), 'duration_learning_runtime_consumptions'))
   await writeJson(apiReadSmoke, withExportMetadata(smokeFixture('api-read-smoke'), 'api_read_smoke'))
   await writeJson(uiConsumptionSmoke, withExportMetadata(smokeFixture('ui-consumption-smoke'), 'ui_consumption_smoke'))
   await writeJson(criticalPathReadback, withExportMetadata(smokeFixture('critical-path-readback', 'readback_passed'), 'critical_path_readback'))
@@ -541,6 +547,8 @@ test('blocks complete-looking source exports when they are not linked to a sourc
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -1090,7 +1098,8 @@ test('builds complete production evidence without runtime PM review export', asy
   const durationSampleCoverageEvidence = path.join(root, 'duration-sample-coverage-evidence.json')
   const writerResult = path.join(sourceExportRoot, 'dependency-writer-result-export.json')
   const taskDependencies = path.join(sourceExportRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(sourceExportRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(sourceExportRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(sourceExportRoot, 'duration-learning-runtime-consumptions-export.json')
   const apiReadSmoke = path.join(sourceExportRoot, 'api-read-smoke-export.json')
   const uiConsumptionSmoke = path.join(sourceExportRoot, 'ui-consumption-smoke-export.json')
   const criticalPathReadback = path.join(sourceExportRoot, 'critical-path-readback-export.json')
@@ -1105,7 +1114,8 @@ test('builds complete production evidence without runtime PM review export', asy
   await writeJson(durationSampleCoverageEvidence, durationSampleCoverageEvidenceFixture())
   await writeJson(writerResult, withExportMetadata(writerResultFixture(), 'construction_organization_plan_network_domain_writer', { environment: 'production' }))
   await writeJson(taskDependencies, withExportMetadata(taskDependenciesExportFixture(), 'task_dependencies', { environment: 'production' }))
-  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'wbs_template_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'duration_learning_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimeConsumptions, withExportMetadata(runtimeConsumptionsFixture(), 'duration_learning_runtime_consumptions', { environment: 'production' }))
   await writeJson(apiReadSmoke, withExportMetadata(smokeFixture('api-read-smoke'), 'api_read_smoke', { environment: 'production' }))
   await writeJson(uiConsumptionSmoke, withExportMetadata(smokeFixture('ui-consumption-smoke'), 'ui_consumption_smoke', { environment: 'production' }))
   await writeJson(criticalPathReadback, withExportMetadata(smokeFixture('critical-path-readback', 'readback_passed'), 'critical_path_readback', { environment: 'production' }))
@@ -1115,6 +1125,7 @@ test('builds complete production evidence without runtime PM review export', asy
   }, 'rollback_verification', { environment: 'production' }))
   await writeRealProductionOutcomeJson(realProductionOutcome, {
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1127,6 +1138,7 @@ test('builds complete production evidence without runtime PM review export', asy
     writerResult,
     taskDependencies,
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1161,6 +1173,8 @@ test('builds complete production evidence without runtime PM review export', asy
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -1223,7 +1237,8 @@ test('blocks a production manifest with real outcome record when CLI omits the r
   const durationSampleCoverageEvidence = path.join(root, 'duration-sample-coverage-evidence.json')
   const writerResult = path.join(sourceExportRoot, 'dependency-writer-result-export.json')
   const taskDependencies = path.join(sourceExportRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(sourceExportRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(sourceExportRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(sourceExportRoot, 'duration-learning-runtime-consumptions-export.json')
   const apiReadSmoke = path.join(sourceExportRoot, 'api-read-smoke-export.json')
   const uiConsumptionSmoke = path.join(sourceExportRoot, 'ui-consumption-smoke-export.json')
   const criticalPathReadback = path.join(sourceExportRoot, 'critical-path-readback-export.json')
@@ -1236,7 +1251,8 @@ test('blocks a production manifest with real outcome record when CLI omits the r
   await writeJson(durationSamples, withExportMetadata(durationSamplesFixture(), 'duration_experience_samples', { environment: 'production' }))
   await writeJson(writerResult, withExportMetadata(writerResultFixture(), 'construction_organization_plan_network_domain_writer', { environment: 'production' }))
   await writeJson(taskDependencies, withExportMetadata(taskDependenciesExportFixture(), 'task_dependencies', { environment: 'production' }))
-  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'wbs_template_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'duration_learning_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimeConsumptions, withExportMetadata(runtimeConsumptionsFixture(), 'duration_learning_runtime_consumptions', { environment: 'production' }))
   await writeJson(apiReadSmoke, withExportMetadata(smokeFixture('api-read-smoke'), 'api_read_smoke', { environment: 'production' }))
   await writeJson(uiConsumptionSmoke, withExportMetadata(smokeFixture('ui-consumption-smoke'), 'ui_consumption_smoke', { environment: 'production' }))
   await writeJson(criticalPathReadback, withExportMetadata(smokeFixture('critical-path-readback', 'readback_passed'), 'critical_path_readback', { environment: 'production' }))
@@ -1246,6 +1262,7 @@ test('blocks a production manifest with real outcome record when CLI omits the r
   }, 'rollback_verification', { environment: 'production' }))
   await writeRealProductionOutcomeJson(realProductionOutcome, {
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1259,6 +1276,7 @@ test('blocks a production manifest with real outcome record when CLI omits the r
     writerResult,
     taskDependencies,
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1291,6 +1309,8 @@ test('blocks a production manifest with real outcome record when CLI omits the r
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -1336,7 +1356,8 @@ test('blocks source exports whose metadata environment differs from the manifest
   const durationSampleCoverageEvidence = path.join(root, 'duration-sample-coverage-evidence.json')
   const writerResult = path.join(sourceExportRoot, 'dependency-writer-result-export.json')
   const taskDependencies = path.join(sourceExportRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(sourceExportRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(sourceExportRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(sourceExportRoot, 'duration-learning-runtime-consumptions-export.json')
   const apiReadSmoke = path.join(sourceExportRoot, 'api-read-smoke-export.json')
   const uiConsumptionSmoke = path.join(sourceExportRoot, 'ui-consumption-smoke-export.json')
   const criticalPathReadback = path.join(sourceExportRoot, 'critical-path-readback-export.json')
@@ -1349,7 +1370,8 @@ test('blocks source exports whose metadata environment differs from the manifest
   await writeJson(durationSamples, withExportMetadata(durationSamplesFixture(), 'duration_experience_samples', { environment: 'production' }))
   await writeJson(writerResult, withExportMetadata(writerResultFixture(), 'construction_organization_plan_network_domain_writer', { environment: 'production' }))
   await writeJson(taskDependencies, withExportMetadata(taskDependenciesExportFixture(), 'task_dependencies', { environment: 'production' }))
-  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'wbs_template_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'duration_learning_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimeConsumptions, withExportMetadata(runtimeConsumptionsFixture(), 'duration_learning_runtime_consumptions', { environment: 'production' }))
   await writeJson(apiReadSmoke, withExportMetadata(smokeFixture('api-read-smoke'), 'api_read_smoke', { environment: 'production' }))
   await writeJson(uiConsumptionSmoke, withExportMetadata(smokeFixture('ui-consumption-smoke'), 'ui_consumption_smoke', { environment: 'staging' }))
   await writeJson(criticalPathReadback, withExportMetadata(smokeFixture('critical-path-readback', 'readback_passed'), 'critical_path_readback', { environment: 'production' }))
@@ -1359,6 +1381,7 @@ test('blocks source exports whose metadata environment differs from the manifest
   }, 'rollback_verification', { environment: 'production' }))
   await writeRealProductionOutcomeJson(realProductionOutcome, {
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1372,6 +1395,7 @@ test('blocks source exports whose metadata environment differs from the manifest
     writerResult,
     taskDependencies,
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1404,6 +1428,8 @@ test('blocks source exports whose metadata environment differs from the manifest
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -1448,7 +1474,8 @@ test('blocks source exports whose metadata identity differs from the requested b
   const durationSampleCoverageEvidence = path.join(root, 'duration-sample-coverage-evidence.json')
   const writerResult = path.join(sourceExportRoot, 'dependency-writer-result-export.json')
   const taskDependencies = path.join(sourceExportRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(sourceExportRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(sourceExportRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(sourceExportRoot, 'duration-learning-runtime-consumptions-export.json')
   const apiReadSmoke = path.join(sourceExportRoot, 'api-read-smoke-export.json')
   const uiConsumptionSmoke = path.join(sourceExportRoot, 'ui-consumption-smoke-export.json')
   const criticalPathReadback = path.join(sourceExportRoot, 'critical-path-readback-export.json')
@@ -1464,7 +1491,8 @@ test('blocks source exports whose metadata identity differs from the requested b
     baselineId: 'wrong-baseline',
   }))
   await writeJson(taskDependencies, withExportMetadata(taskDependenciesExportFixture(), 'task_dependencies', { environment: 'production' }))
-  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'wbs_template_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'duration_learning_runtime_publications', { environment: 'production' }))
+  await writeJson(runtimeConsumptions, withExportMetadata(runtimeConsumptionsFixture(), 'duration_learning_runtime_consumptions', { environment: 'production' }))
   await writeJson(apiReadSmoke, withExportMetadata(smokeFixture('api-read-smoke'), 'api_read_smoke', {
     environment: 'production',
     projectId: 'wrong-project',
@@ -1480,6 +1508,7 @@ test('blocks source exports whose metadata identity differs from the requested b
   }, 'rollback_verification', { environment: 'production' }))
   await writeRealProductionOutcomeJson(realProductionOutcome, {
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1493,6 +1522,7 @@ test('blocks source exports whose metadata identity differs from the requested b
     writerResult,
     taskDependencies,
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1525,6 +1555,8 @@ test('blocks source exports whose metadata identity differs from the requested b
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -1571,7 +1603,8 @@ test('blocks a staging controlled replay pipeline when duration calibration uses
   const durationSampleCoverageEvidence = path.join(root, 'duration-sample-coverage-evidence.json')
   const writerResult = path.join(sourceExportRoot, 'dependency-writer-result-export.json')
   const taskDependencies = path.join(sourceExportRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(sourceExportRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(sourceExportRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(sourceExportRoot, 'duration-learning-runtime-consumptions-export.json')
   const apiReadSmoke = path.join(sourceExportRoot, 'api-read-smoke-export.json')
   const uiConsumptionSmoke = path.join(sourceExportRoot, 'ui-consumption-smoke-export.json')
   const criticalPathReadback = path.join(sourceExportRoot, 'critical-path-readback-export.json')
@@ -1607,7 +1640,8 @@ test('blocks a staging controlled replay pipeline when duration calibration uses
   await writeJson(durationSampleCoverageEvidence, durationSampleCoverageEvidenceFixture())
   await writeJson(writerResult, withExportMetadata(controlledWriterResult, 'construction_organization_plan_network_domain_writer'))
   await writeJson(taskDependencies, withExportMetadata(controlledTaskDependencies, 'task_dependencies'))
-  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'wbs_template_runtime_publications'))
+  await writeJson(runtimePublications, withExportMetadata(runtimePublicationsFixture(), 'duration_learning_runtime_publications'))
+  await writeJson(runtimeConsumptions, withExportMetadata(runtimeConsumptionsFixture(), 'duration_learning_runtime_consumptions'))
   await writeJson(apiReadSmoke, withExportMetadata(smokeFixture('api-read-smoke'), 'api_read_smoke'))
   await writeJson(uiConsumptionSmoke, withExportMetadata(smokeFixture('ui-consumption-smoke'), 'ui_consumption_smoke'))
   await writeJson(criticalPathReadback, withExportMetadata(smokeFixture('critical-path-readback', 'readback_passed'), 'critical_path_readback'))
@@ -1622,6 +1656,7 @@ test('blocks a staging controlled replay pipeline when duration calibration uses
     writerResult,
     taskDependencies,
     runtimePublications,
+    runtimeConsumptions,
     apiReadSmoke,
     uiConsumptionSmoke,
     criticalPathReadback,
@@ -1655,6 +1690,8 @@ test('blocks a staging controlled replay pipeline when duration calibration uses
       taskDependencies,
       '--runtime-publications',
       runtimePublications,
+      '--runtime-consumptions',
+      runtimeConsumptions,
       '--published-by',
       'release-user-1',
       '--environment',
@@ -1720,7 +1757,8 @@ async function writeRealProductionOutcomeJson(filePath, evidenceSourcePaths = {}
   await writeJson(filePath, withExportMetadata({
     ...realProductionOutcomeFixture(),
     evidenceRef: `real_production_outcome_export:${sourcePath}#sha256=${sourceSha256}`,
-    runtimePublicationEvidenceRef: sourceExportRef('wbs_template_runtime_publications_export', evidenceSourcePaths.runtimePublications),
+    runtimePublicationEvidenceRef: sourceExportRef('duration_learning_runtime_publications_export', evidenceSourcePaths.runtimePublications),
+    runtimeConsumptionEvidenceRef: sourceExportRef('duration_learning_runtime_consumptions_export', evidenceSourcePaths.runtimeConsumptions),
     apiReadSmokeEvidenceRef: sourceExportRef('api_read_smoke_export', evidenceSourcePaths.apiReadSmoke),
     uiConsumptionSmokeEvidenceRef: sourceExportRef('ui_consumption_smoke_export', evidenceSourcePaths.uiConsumptionSmoke),
     criticalPathReadbackEvidenceRef: sourceExportRef('critical_path_readback_export', evidenceSourcePaths.criticalPathReadback),
@@ -1739,7 +1777,8 @@ function withExportMetadata(payload, sourceTable, overrides = {}) {
     ['candidate_default_master_plan_review', 'public.change_logs'],
     ['duration_experience_samples', 'public.duration_experience_samples'],
     ['task_dependencies', 'public.task_dependencies'],
-    ['wbs_template_runtime_publications', 'public.wbs_template_runtime_publications'],
+    ['duration_learning_runtime_publications', 'public.duration_learning_runtime_publications'],
+    ['duration_learning_runtime_consumptions', 'public.duration_learning_runtime_consumptions'],
   ])
   return {
     export_metadata: {
@@ -1794,9 +1833,14 @@ function sourceManifestFixture(paths) {
         table: 'public.task_dependencies',
       }),
       runtimePublications: sourceExportRecord(paths.runtimePublications, {
-        source: 'wbs_template_runtime_publications',
+        source: 'duration_learning_runtime_publications',
         kind: 'database_table',
-        table: 'public.wbs_template_runtime_publications',
+        table: 'public.duration_learning_runtime_publications',
+      }),
+      runtimeConsumptions: sourceExportRecord(paths.runtimeConsumptions, {
+        source: 'duration_learning_runtime_consumptions',
+        kind: 'database_table',
+        table: 'public.duration_learning_runtime_consumptions',
       }),
       apiReadSmoke: sourceExportRecord(paths.apiReadSmoke, {
         source: 'api_read_smoke',
@@ -1909,6 +1953,7 @@ function sourceManifestPipelineArgs(manifest, sourceManifestPath = null) {
     ['--writer-result', manifest.sourceExports.writerResult],
     ['--task-dependencies', manifest.sourceExports.taskDependencies],
     ['--runtime-publications', manifest.sourceExports.runtimePublications],
+    ['--runtime-consumptions', manifest.sourceExports.runtimeConsumptions],
     ['--api-read-smoke', manifest.sourceExports.apiReadSmoke],
     ['--ui-consumption-smoke', manifest.sourceExports.uiConsumptionSmoke],
     ['--critical-path-readback', manifest.sourceExports.criticalPathReadback],
@@ -2187,29 +2232,46 @@ function taskDependenciesExportFixture() {
 
 function runtimePublicationsFixture() {
   return {
-    rows: [{
-      project_id: 'project-1',
-      status: 'runtime_published',
-      runtime_publication_status: 'runtime_published',
+    duration_learning_runtime_publications: [{
       publication_key: 'default-master-plan-runtime-publication-1',
-      asset_kind: 'default_master_plan',
-      generation_mode: 'residential_master_plan_v2',
-      accepted_baseline_id: 'baseline-reviewed',
-      rollback_target: 'rollback:default-master-plan-runtime-publication-1',
-      published_by: 'release-user-1',
+      asset_key: 'wbs_reference_days',
+      artifact_key: 'facade-v3',
+      scope_level: 'project',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      publication_stage: 'stable',
+      monitoring_status: 'passed',
+      source_evidence_refs: ['duration-learning-candidate:facade-v3'],
       published_at: '2026-07-01T08:00:00.000Z',
-      runtime_lineage: {
-        projectId: 'project-1',
-        acceptedBaselineId: 'baseline-reviewed',
-        assetKind: 'default_master_plan',
-        generationMode: 'residential_master_plan_v2',
-        runtimeAssetKey: 'runtime.default_master_plan.project-1',
-        dependencyWriterReleaseRecordTarget: 'default-master-plan-runtime-publication-1',
-        rollbackTarget: 'rollback:default-master-plan-runtime-publication-1',
-        projectManagerReviewEvidenceRef: 'pm-review-evidence.json',
-        durationCalibrationEvidenceRef: 'duration-calibration-evidence.json',
-        dependencyWriterEvidenceRef: 'dependency-writer-evidence.json',
+    }],
+  }
+}
+
+function runtimeConsumptionsFixture() {
+  return {
+    duration_learning_runtime_consumptions: [{
+      consumption_key: 'duration-learning-consumption:task-site',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      publication_key: 'default-master-plan-runtime-publication-1',
+      asset_key: 'wbs_reference_days',
+      artifact_key: 'facade-v3',
+      consumer_key: 'wbsTemplateGenerationService',
+      consumer_surface: 'project_wizard_commit',
+      task_id: 'task-site',
+      baseline_item_id: null,
+      baseline_id: 'baseline-reviewed',
+      baseline_project_id: 'project-1',
+      baseline_company_id: 'company-1',
+      baseline_authority: 'task_baseline_items_physical_join',
+      generation_batch_id: 'generation-batch-1',
+      duration_day_basis: 'construction_production_day',
+      applied_duration_days: 10,
+      source_evidence_refs: ['duration_learning_runtime_publications:default-master-plan-runtime-publication-1'],
+      consumption_context: {
+        authoritySource: 'runtime_resolver_publication_set',
       },
+      consumed_at: '2026-07-01T08:05:00.000Z',
     }],
   }
 }
@@ -2235,7 +2297,8 @@ function realProductionOutcomeFixture() {
     acceptedBy: 'production-owner:9e4a5570-0032-43bd-8f17-0bc415a1eb70',
     acceptedAt: '2026-07-01T10:00:00.000Z',
     approvalRef: 'approval:default-master-plan-production-release-1',
-    runtimePublicationEvidenceRef: 'project-testing/reports/default-master-plan-production-readiness/runtime-publication-evidence.json#sha256=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+    runtimePublicationEvidenceRef: `duration_learning_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/runtime-publication-evidence.json#sha256=${'1'.repeat(64)}`,
+    runtimeConsumptionEvidenceRef: `duration_learning_runtime_consumptions_export:project-testing/reports/default-master-plan-production-readiness/runtime-consumption-evidence.json#sha256=${'6'.repeat(64)}`,
     apiReadSmokeEvidenceRef: 'project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json#sha256=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     uiConsumptionSmokeEvidenceRef: 'project-testing/reports/default-master-plan-production-readiness/ui-consumption-smoke.json#sha256=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
     criticalPathReadbackEvidenceRef: 'project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json#sha256=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',

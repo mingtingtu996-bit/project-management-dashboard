@@ -661,6 +661,7 @@ test('blocks production evidence pipeline when production pipeline command omits
     assert.equal(report.mayRunProductionEvidencePipeline, false)
     assert.equal(report.productionEvidencePipelineBlockers.includes('production_pipeline_command_review_export_missing'), true)
     assert.equal(report.productionEvidencePipelineBlockers.includes('production_pipeline_command_runtime_publications_missing'), true)
+    assert.equal(report.productionEvidencePipelineBlockers.includes('production_pipeline_command_runtime_consumptions_missing'), true)
     assert.equal(report.productionEvidencePipelineBlockers.includes('production_pipeline_command_real_production_outcome_missing'), true)
   } finally {
     await rm(root, { recursive: true, force: true })
@@ -3759,7 +3760,8 @@ function productionPipelineCommand({
     '--duration-samples project-testing/reports/default-master-plan-production-readiness/source-exports/duration-experience-samples-export.json',
     '--writer-result project-testing/reports/default-master-plan-production-readiness/source-exports/dependency-writer-result-export.json',
     '--task-dependencies project-testing/reports/default-master-plan-production-readiness/source-exports/task-dependencies-export.json',
-    '--runtime-publications project-testing/reports/default-master-plan-production-readiness/source-exports/wbs-template-runtime-publications-export.json',
+    '--runtime-publications project-testing/reports/default-master-plan-production-readiness/source-exports/duration-learning-runtime-publications-export.json',
+    '--runtime-consumptions project-testing/reports/default-master-plan-production-readiness/source-exports/duration-learning-runtime-consumptions-export.json',
     '--api-read-smoke project-testing/reports/default-master-plan-production-readiness/source-exports/api-read-smoke-export.json',
     '--ui-consumption-smoke project-testing/reports/default-master-plan-production-readiness/source-exports/ui-consumption-smoke-export.json',
     '--critical-path-readback project-testing/reports/default-master-plan-production-readiness/source-exports/critical-path-readback-export.json',
@@ -3786,7 +3788,8 @@ async function writeQualifiedRealProductionOutcome(filePath) {
       databaseHost: 'db.abcd1234.supabase.co',
       connectionSource: 'SUPABASE_MIGRATION_URL',
     },
-    runtimePublicationEvidenceRef: 'wbs_template_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/dependency-writer-result.json#sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    runtimePublicationEvidenceRef: 'duration_learning_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/duration-learning-runtime-publications-export.json#sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+    runtimeConsumptionEvidenceRef: 'duration_learning_runtime_consumptions_export:project-testing/reports/default-master-plan-production-readiness/duration-learning-runtime-consumptions-export.json#sha256=abababababababababababababababababababababababababababababababab',
     apiReadSmokeEvidenceRef: 'api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json#sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
     uiConsumptionSmokeEvidenceRef: 'ui_consumption_smoke_export:project-testing/reports/default-master-plan-production-readiness/ui-consumption-smoke.json#sha256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
     criticalPathReadbackEvidenceRef: 'critical_path_readback_export:project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json#sha256=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',

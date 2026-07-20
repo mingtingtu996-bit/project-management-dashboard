@@ -25,6 +25,7 @@ const REQUIRED_PRODUCTION_PIPELINE_SOURCE_FLAGS = [
   ['--writer-result', 'writer_result'],
   ['--task-dependencies', 'task_dependencies'],
   ['--runtime-publications', 'runtime_publications'],
+  ['--runtime-consumptions', 'runtime_consumptions'],
   ['--api-read-smoke', 'api_read_smoke'],
   ['--ui-consumption-smoke', 'ui_consumption_smoke'],
   ['--critical-path-readback', 'critical_path_readback'],

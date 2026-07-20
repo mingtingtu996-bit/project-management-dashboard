@@ -21,7 +21,8 @@ const COMPLETE_REAL_OUTCOME_EVIDENCE = {
   acceptedBy: 'project-manager://zheng-junhong',
   acceptedAt: '2026-07-02T10:00:00.000Z',
   approvalRef: 'approval:default-master-plan-production-outcome',
-  runtimePublicationEvidenceRef: `wbs_template_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/runtime-publication-evidence.json#sha256=${'b'.repeat(64)}`,
+  runtimePublicationEvidenceRef: `duration_learning_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/runtime-publication-evidence.json#sha256=${'b'.repeat(64)}`,
+  runtimeConsumptionEvidenceRef: `duration_learning_runtime_consumptions_export:project-testing/reports/default-master-plan-production-readiness/runtime-consumption-evidence.json#sha256=${'6'.repeat(64)}`,
   apiReadSmokeEvidenceRef: `api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json#sha256=${'c'.repeat(64)}`,
   uiConsumptionSmokeEvidenceRef: `ui_consumption_smoke_export:project-testing/reports/default-master-plan-production-readiness/ui-consumption-smoke.json#sha256=${'d'.repeat(64)}`,
   criticalPathReadbackEvidenceRef: `critical_path_readback_export:project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json#sha256=${'e'.repeat(64)}`,
@@ -92,6 +93,7 @@ test('production readiness boundary rejects real outcome marker with weak materi
         realProductionOutcomeEvidence: {
           ...COMPLETE_REAL_OUTCOME_EVIDENCE,
           runtimePublicationEvidenceRef: 'manual-note-runtime-publication',
+          runtimeConsumptionEvidenceRef: 'manual-note-runtime-consumption',
           apiReadSmokeEvidenceRef: 'manual-note-api-smoke',
           uiConsumptionSmokeEvidenceRef: 'manual-note-ui-smoke',
           criticalPathReadbackEvidenceRef: 'manual-note-critical-path',

@@ -207,22 +207,6 @@
       "defaultMode": "candidate_sql_generation_only_no_db_connection"
     },
     {
-      "id": "default_master_plan_staging_runtime_evidence",
-      "path": "project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs",
-      "ownerCenter": "project-testing",
-      "environmentBoundary": "staging only unless a separate production handoff exists",
-      "allowedTables": [
-        "tasks",
-        "task_baseline_items",
-        "task_dependencies",
-        "duration_experience_samples",
-        "runtime_publication_tables"
-      ],
-      "forbiddenTables": [],
-      "requiresUnlock": true,
-      "defaultMode": "staging_controlled_replay"
-    },
-    {
       "id": "v14241_uat05_api_task_update_diagnostic",
       "path": "project-testing/tools/diagnose-v14241-uat05-api-task-update.mjs",
       "ownerCenter": "project-testing",

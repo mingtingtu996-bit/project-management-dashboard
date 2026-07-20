@@ -123,16 +123,25 @@ const DB_EXPORTS = [
   {
     key: 'runtimePublications',
     option: 'runtimePublications',
-    fileName: 'wbs-template-runtime-publications-export.json',
-    table: 'wbs_template_runtime_publications',
-    sourceName: 'wbs_template_runtime_publications',
-    rowArrayKey: 'wbs_template_runtime_publications',
+    fileName: 'duration-learning-runtime-publications-export.json',
+    table: 'duration_learning_runtime_publications',
+    sourceName: 'duration_learning_runtime_publications',
+    rowArrayKey: 'duration_learning_runtime_publications',
     filters: [
-      { column: 'project_id', option: 'projectId' },
       { column: 'publication_key', option: 'publicationKey' },
-      { column: 'accepted_baseline_id', option: 'baselineId', optionalColumn: true },
     ],
     orderCandidates: ['published_at', 'created_at', 'updated_at'],
+  },
+  {
+    key: 'runtimeConsumptions',
+    option: 'runtimeConsumptions',
+    fileName: 'duration-learning-runtime-consumptions-export.json',
+    table: 'duration_learning_runtime_consumptions',
+    sourceName: 'duration_learning_runtime_consumptions',
+    rowArrayKey: 'duration_learning_runtime_consumptions',
+    physicalBaselineJoin: true,
+    filters: [],
+    orderCandidates: ['consumed_at', 'created_at'],
   },
 ]
 
@@ -189,6 +198,7 @@ export function parseArgs(argv = process.argv.slice(2)) {
     rawCompletedTasks: '',
     taskDependencies: '',
     runtimePublications: '',
+    runtimeConsumptions: '',
     writerResult: '',
     criticalPathReadback: '',
     apiReadSmoke: '',
@@ -233,6 +243,8 @@ export function parseArgs(argv = process.argv.slice(2)) {
       options.taskDependencies = path.resolve(nextValue())
     } else if (arg === '--runtime-publications') {
       options.runtimePublications = path.resolve(nextValue())
+    } else if (arg === '--runtime-consumptions') {
+      options.runtimeConsumptions = path.resolve(nextValue())
     } else if (arg === '--writer-result') {
       options.writerResult = path.resolve(nextValue())
     } else if (arg === '--critical-path-readback') {
@@ -268,6 +280,7 @@ export async function exportDefaultMasterPlanProductionSources({
   rawCompletedTasks = '',
   taskDependencies = '',
   runtimePublications = '',
+  runtimeConsumptions = '',
   writerResult = '',
   criticalPathReadback = '',
   apiReadSmoke = '',
@@ -290,6 +303,7 @@ export async function exportDefaultMasterPlanProductionSources({
     rawCompletedTasks: text(rawCompletedTasks),
     taskDependencies: text(taskDependencies),
     runtimePublications: text(runtimePublications),
+    runtimeConsumptions: text(runtimeConsumptions),
     writerResult: text(writerResult),
     criticalPathReadback: text(criticalPathReadback),
     apiReadSmoke: text(apiReadSmoke),
@@ -496,12 +510,27 @@ function realProductionOutcomeRuntimePublicationRefBlockers(environment, sourceE
   const evidence = readObject(sourceExports.realProductionOutcome?.realProductionOutcomeEvidence)
   if (Object.keys(evidence).length === 0) return []
   const runtimePublications = readObject(sourceExports.runtimePublications)
-  const actual = text(evidence.runtimePublicationEvidenceRef ?? evidence.runtime_publication_evidence_ref)
-  const expected = runtimePublications.path && runtimePublications.sha256
-    ? `wbs_template_runtime_publications_export:${runtimePublications.path}#sha256=${runtimePublications.sha256}`
-    : ''
-  if (!expected) return ['real_production_outcome_runtime_publication_evidence_ref_source_required']
-  return actual === expected ? [] : ['real_production_outcome_runtime_publication_evidence_ref_mismatch']
+  const runtimeConsumptions = readObject(sourceExports.runtimeConsumptions)
+  const references = [
+    [
+      'runtime_publication',
+      text(evidence.runtimePublicationEvidenceRef ?? evidence.runtime_publication_evidence_ref),
+      runtimePublications.path && runtimePublications.sha256
+        ? `duration_learning_runtime_publications_export:${runtimePublications.path}#sha256=${runtimePublications.sha256}`
+        : '',
+    ],
+    [
+      'runtime_consumption',
+      text(evidence.runtimeConsumptionEvidenceRef ?? evidence.runtime_consumption_evidence_ref),
+      runtimeConsumptions.path && runtimeConsumptions.sha256
+        ? `duration_learning_runtime_consumptions_export:${runtimeConsumptions.path}#sha256=${runtimeConsumptions.sha256}`
+        : '',
+    ],
+  ]
+  return references.flatMap(([kind, actual, expected]) => {
+    if (!expected) return [`real_production_outcome_${kind}_evidence_ref_source_required`]
+    return actual === expected ? [] : [`real_production_outcome_${kind}_evidence_ref_mismatch`]
+  })
 }
 
 async function sourceExportEvidenceRefFor(prefix, filePath) {
@@ -685,7 +714,15 @@ async function exportDbSource({ queryExec, config, options, now }) {
     if (!table.exists) {
       blockers.push(`table_missing:public.${config.table}`)
     } else {
-      const query = buildSelectQuery(config, table.columns, options)
+      const baselineItems = config.physicalBaselineJoin
+        ? await readTableColumns(queryExec, 'public', 'task_baseline_items')
+        : null
+      const projects = config.physicalBaselineJoin
+        ? await readTableColumns(queryExec, 'public', 'projects')
+        : null
+      const query = config.physicalBaselineJoin
+        ? buildRuntimeConsumptionSelectQuery(table.columns, baselineItems, projects, options)
+        : buildSelectQuery(config, table.columns, options)
       if (query.blockers.length > 0) {
         blockers.push(...query.blockers)
       } else {
@@ -719,6 +756,72 @@ async function exportDbSource({ queryExec, config, options, now }) {
     sha256,
     rowCount: rows.length,
     blockers,
+  }
+}
+
+function buildRuntimeConsumptionSelectQuery(consumptionColumns, baselineItems, projects, options) {
+  const requiredConsumptionColumns = [
+    'consumption_key',
+    'company_id',
+    'project_id',
+    'publication_key',
+    'asset_key',
+    'artifact_key',
+    'consumer_key',
+    'consumer_surface',
+    'task_id',
+    'baseline_item_id',
+    'duration_day_basis',
+    'source_evidence_refs',
+    'consumption_context',
+    'consumed_at',
+  ]
+  const requiredBaselineColumns = [
+    'id',
+    'project_id',
+    'baseline_version_id',
+    'source_task_id',
+  ]
+  const requiredProjectColumns = ['id', 'company_id']
+  const blockers = [
+    ...requiredConsumptionColumns
+      .filter((column) => !consumptionColumns.has(column))
+      .map((column) => `column_missing:duration_learning_runtime_consumptions.${column}`),
+    baselineItems?.exists ? null : 'table_missing:public.task_baseline_items',
+    ...requiredBaselineColumns
+      .filter((column) => !baselineItems?.columns?.has(column))
+      .map((column) => `column_missing:task_baseline_items.${column}`),
+    projects?.exists ? null : 'table_missing:public.projects',
+    ...requiredProjectColumns
+      .filter((column) => !projects?.columns?.has(column))
+      .map((column) => `column_missing:projects.${column}`),
+    options.projectId ? null : 'filter_value_missing:project_id',
+    options.publicationKey ? null : 'filter_value_missing:publication_key',
+    options.baselineId ? null : 'filter_value_missing:baseline_id',
+  ].filter(Boolean)
+  return {
+    blockers,
+    sql: [
+      'SELECT DISTINCT ON (consumption.consumption_key)',
+      "       consumption.*, baseline_item.baseline_version_id AS baseline_id, baseline_item.project_id AS baseline_project_id, project.company_id AS baseline_company_id, 'task_baseline_items_physical_join'::text AS baseline_authority",
+      '  FROM public.duration_learning_runtime_consumptions consumption',
+      '  JOIN public.task_baseline_items baseline_item',
+      '    ON (',
+      "         (consumption.consumer_surface = 'baseline_commit' AND consumption.baseline_item_id = baseline_item.id)",
+      "         OR (consumption.consumer_surface IN ('project_wizard_commit', 'task_list_commit') AND consumption.task_id = baseline_item.source_task_id)",
+      '       )',
+      '  JOIN public.projects project',
+      '    ON project.id = baseline_item.project_id',
+      '   AND project.company_id = consumption.company_id',
+      ' WHERE consumption.project_id = $1',
+      '   AND consumption.publication_key = $2',
+      '   AND baseline_item.project_id = $1',
+      '   AND baseline_item.baseline_version_id = $3',
+      '   AND ((consumption.task_id IS NOT NULL)::int + (consumption.baseline_item_id IS NOT NULL)::int) = 1',
+      ' ORDER BY consumption.consumption_key, consumption.consumed_at DESC',
+      ' LIMIT 500',
+    ].join('\n'),
+    params: [options.projectId, options.publicationKey, options.baselineId],
   }
 }
 
@@ -863,6 +966,7 @@ function buildPipelineArgs(manifest) {
     ['--writer-result', sourceExports.writerResult],
     ['--task-dependencies', sourceExports.taskDependencies],
     ['--runtime-publications', sourceExports.runtimePublications],
+    ['--runtime-consumptions', sourceExports.runtimeConsumptions],
     ['--api-read-smoke', sourceExports.apiReadSmoke],
     ['--ui-consumption-smoke', sourceExports.uiConsumptionSmoke],
     ['--critical-path-readback', sourceExports.criticalPathReadback],

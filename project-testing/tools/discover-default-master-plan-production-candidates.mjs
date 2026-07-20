@@ -172,7 +172,9 @@ async function readRelevantSchema(queryExec) {
     'task_baseline_items',
     'duration_experience_samples',
     'task_dependencies',
-    'wbs_template_runtime_publications',
+    'projects',
+    'duration_learning_runtime_publications',
+    'duration_learning_runtime_consumptions',
   ]
   const entries = []
   for (const table of tables) {
@@ -267,13 +269,16 @@ async function enrichCandidate(queryExec, schema, baseline, options, candidateHy
     candidateBaselineItems: itemCount.count > 0 ? 'pass' : 'blocked',
     durationSamples: duration.acceptedCount > 0 ? 'pass' : 'blocked',
     productionDependencies: dependencies.constructionOrganizationCount > 0 ? 'pass' : 'blocked',
-    runtimePublication: publication.publishedCount > 0 ? 'pass' : 'blocked',
+    runtimePublication: publication.publishedCount > 0 && publication.trustedConsumptionCount > 0 ? 'pass' : 'blocked',
   }
   const blockers = [
     gateStatus.candidateBaselineItems === 'pass' ? null : 'candidate_baseline_items_missing',
     gateStatus.durationSamples === 'pass' ? null : 'accepted_duration_experience_samples_missing',
     gateStatus.productionDependencies === 'pass' ? null : 'construction_organization_task_dependencies_missing',
-    gateStatus.runtimePublication === 'pass' ? null : 'runtime_publication_missing',
+    publication.publishedCount > 0 ? null : 'runtime_publication_missing',
+    publication.publishedCount > 0 && publication.trustedConsumptionCount === 0
+      ? 'trusted_runtime_consumption_missing'
+      : null,
     ...candidateHygieneBlockersForBaseline(candidateHygieneSummary, baseline),
   ].filter(Boolean)
 
@@ -301,6 +306,7 @@ async function enrichCandidate(queryExec, schema, baseline, options, candidateHy
       constructionOrganizationDependencyCount: dependencies.constructionOrganizationCount,
       runtimePublicationCount: publication.totalCount,
       runtimePublishedCount: publication.publishedCount,
+      trustedRuntimeConsumptionCount: publication.trustedConsumptionCount,
       latestPublicationKey: publication.latestPublicationKey,
       candidateHygiene: candidateHygieneForBaseline(candidateHygieneSummary, baseline),
     },
@@ -390,28 +396,136 @@ async function readDependencyReadiness(queryExec, schema, baseline) {
 }
 
 async function readPublicationReadiness(queryExec, schema, baseline) {
-  const table = schema.wbs_template_runtime_publications
-  if (!table.exists || !table.columns.has('project_id')) return { totalCount: 0, publishedCount: 0, latestPublicationKey: '' }
-  const where = ['project_id = $1']
-  const params = [baseline.projectId]
-  if (table.columns.has('accepted_baseline_id')) {
-    params.push(baseline.baselineId)
-    where.push(`accepted_baseline_id = $${params.length}`)
+  const publications = schema.duration_learning_runtime_publications
+  const consumptions = schema.duration_learning_runtime_consumptions
+  const baselineItems = schema.task_baseline_items
+  const projects = schema.projects
+  const requiredPublicationColumns = [
+    'publication_key', 'asset_key', 'artifact_key', 'scope_level', 'company_id',
+    'project_id', 'industry_key', 'publication_stage', 'monitoring_status', 'published_at',
+  ]
+  const requiredConsumptionColumns = [
+    'consumption_key', 'publication_key', 'asset_key', 'artifact_key', 'company_id', 'project_id',
+    'consumer_surface', 'task_id', 'baseline_item_id', 'consumption_context',
+    'duration_day_basis', 'consumed_at',
+  ]
+  const requiredBaselineColumns = ['id', 'project_id', 'baseline_version_id', 'source_task_id']
+  const requiredProjectColumns = ['id', 'company_id']
+  if (!publications.exists || requiredPublicationColumns.some((column) => !publications.columns.has(column))) {
+    return { totalCount: 0, publishedCount: 0, trustedConsumptionCount: 0, latestPublicationKey: '' }
   }
-  const rows = await queryExec(
-    [
-      'SELECT * FROM public.wbs_template_runtime_publications',
-      `WHERE ${where.join(' AND ')}`,
-      table.columns.has('published_at') ? 'ORDER BY published_at DESC' : '',
-      'LIMIT 50',
-    ].filter(Boolean).join(' '),
-    params,
+  if (!baselineItems.exists || requiredBaselineColumns.some((column) => !baselineItems.columns.has(column))) {
+    return { totalCount: 0, publishedCount: 0, trustedConsumptionCount: 0, latestPublicationKey: '' }
+  }
+  if (!projects.exists || requiredProjectColumns.some((column) => !projects.columns.has(column))) {
+    return { totalCount: 0, publishedCount: 0, trustedConsumptionCount: 0, latestPublicationKey: '' }
+  }
+  const consumptionSchemaReady = consumptions.exists
+    && requiredConsumptionColumns.every((column) => consumptions.columns.has(column))
+  const industryApplicability = consumptionSchemaReady
+    ? `OR (
+            publication.scope_level = 'industry'
+            AND EXISTS (
+              SELECT 1
+                FROM public.duration_learning_runtime_consumptions industry_consumption
+               WHERE industry_consumption.project_id = $1
+                 AND industry_consumption.company_id = project.company_id
+                 AND industry_consumption.publication_key = publication.publication_key
+                 AND industry_consumption.asset_key = publication.asset_key
+                 AND industry_consumption.artifact_key = publication.artifact_key
+                 AND publication.industry_key = industry_consumption.consumption_context ->> 'industryKey'
+            )
+          )`
+    : ''
+  const publicationRows = await queryExec(
+    `SELECT publication.publication_key,
+            publication.asset_key,
+            publication.artifact_key,
+            publication.publication_stage,
+            publication.monitoring_status,
+            publication.published_at
+       FROM public.duration_learning_runtime_publications publication
+       JOIN public.projects project
+         ON project.id = $1
+      WHERE publication.publication_stage IN ('canary', 'stable')
+        AND publication.monitoring_status NOT IN ('failed', 'rollback_pending')
+        AND (
+          publication.scope_level = 'global'
+          OR (publication.scope_level = 'company' AND publication.company_id = project.company_id)
+          OR (
+            publication.scope_level = 'project'
+            AND publication.company_id = project.company_id
+            AND publication.project_id = project.id
+          )
+          ${industryApplicability}
+        )
+      ORDER BY publication.published_at DESC NULLS LAST, publication.publication_key
+      LIMIT 50`,
+    [baseline.projectId],
   )
-  const publishedRows = rows.filter((row) => text(row.runtime_publication_status ?? row.status) === 'runtime_published')
+  const publicationKeys = unique(publicationRows.map((row) => text(row.publication_key)).filter(Boolean))
+  if (!consumptionSchemaReady) {
+    return {
+      totalCount: publicationKeys.length,
+      publishedCount: publicationKeys.length,
+      trustedConsumptionCount: 0,
+      latestPublicationKey: publicationKeys[0] ?? '',
+    }
+  }
+  const consumptionRows = await queryExec(
+    `SELECT publication.publication_key,
+            publication.asset_key,
+            publication.artifact_key,
+            publication.publication_stage,
+            publication.monitoring_status,
+            consumption.consumption_key,
+            consumption.consumer_surface,
+            consumption.consumed_at
+       FROM public.duration_learning_runtime_consumptions consumption
+       JOIN public.duration_learning_runtime_publications publication
+         ON publication.publication_key = consumption.publication_key
+        AND publication.asset_key = consumption.asset_key
+        AND publication.artifact_key = consumption.artifact_key
+       JOIN public.task_baseline_items baseline_item
+         ON (
+              (consumption.consumer_surface = 'baseline_commit' AND consumption.baseline_item_id = baseline_item.id)
+              OR (
+                consumption.consumer_surface IN ('project_wizard_commit', 'task_list_commit')
+                AND consumption.task_id = baseline_item.source_task_id
+              )
+            )
+       JOIN public.projects project
+         ON project.id = baseline_item.project_id
+        AND project.company_id = consumption.company_id
+      WHERE consumption.project_id = $1
+        AND baseline_item.project_id = $1
+        AND baseline_item.baseline_version_id = $2
+        AND publication.publication_stage IN ('canary', 'stable')
+        AND publication.monitoring_status NOT IN ('failed', 'rollback_pending')
+        AND ((consumption.task_id IS NOT NULL)::int + (consumption.baseline_item_id IS NOT NULL)::int) = 1
+        AND consumption.duration_day_basis = 'construction_production_day'
+        AND (
+          publication.scope_level = 'global'
+          OR (
+            publication.scope_level = 'industry'
+            AND publication.industry_key = consumption.consumption_context ->> 'industryKey'
+          )
+          OR (publication.scope_level = 'company' AND publication.company_id = consumption.company_id)
+          OR (
+            publication.scope_level = 'project'
+            AND publication.company_id = consumption.company_id
+            AND publication.project_id = consumption.project_id
+          )
+        )
+      ORDER BY consumption.consumed_at DESC
+      LIMIT 500`,
+    [baseline.projectId, baseline.baselineId],
+  )
   return {
-    totalCount: rows.length,
-    publishedCount: publishedRows.length,
-    latestPublicationKey: text((publishedRows[0] ?? rows[0] ?? {}).publication_key ?? (publishedRows[0] ?? rows[0] ?? {}).publicationKey),
+    totalCount: publicationKeys.length,
+    publishedCount: publicationKeys.length,
+    trustedConsumptionCount: consumptionRows.length,
+    latestPublicationKey: publicationKeys[0] ?? '',
   }
 }
 

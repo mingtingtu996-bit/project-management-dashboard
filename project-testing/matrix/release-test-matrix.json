@@ -320,51 +320,6 @@
       "mutationBoundary": "read-only source export, no-write material preflight, and no-write readiness seal inspection; no runtime seed import, no duration sample writes, no runtime writers, no publication, no smoke"
     },
     {
-      "id": "default-master-plan-staging-runtime-evidence",
-      "tier": "live_only",
-      "status": "deferred_live",
-      "purpose": "Controlled staging write, dependency materialization, runtime publication, readback smoke, and rollback drill for an explicitly authorized default master-plan test project.",
-      "commands": [
-        "npm run evidence:default-master-plan:staging-runtime"
-      ],
-      "unlockPolicy": {
-        "profile": "live",
-        "requiredFlags": [
-          "--include-staging",
-          "--confirm-staging-handoff",
-          "--allow-write"
-        ],
-        "liveHandoffRequired": true,
-        "dbReadyRequired": true,
-        "writeApprovalRequired": true,
-        "manualApprovalRequired": true,
-        "operationMode": "staging_controlled_write_publish_rollback"
-      },
-      "artifactRoot": "project-testing/reports/default-master-plan-production-readiness/staging-runtime",
-      "expectedArtifacts": [
-        "staging-authorization.json",
-        "dependency-writer-result.json",
-        "critical-path-readback.json",
-        "api-read-smoke.json",
-        "ui-consumption-smoke.json",
-        "rollback-verification.json",
-        "staging-runtime-evidence-summary.json"
-      ],
-      "blockingPrerequisites": [
-        "Explicit staging authorization file matching baseline/project/company/environment is required.",
-        "The selected env-file must point at the database containing the authorized test baseline.",
-        "The staging report must record env-file fingerprint, Supabase project ref, database host, and connection source without secrets.",
-        "This gate may write staging task carriers, duration samples, task dependencies, runtime publication rows, and rollback events.",
-        "This gate cannot claim production-ready or replace production/live real outcome evidence."
-      ],
-      "passCriteria": [
-        "The staging runtime evidence runner exits with status staging_runtime_evidence_written and no blockers.",
-        "The summary records taskCarrierCount, durationSampleCount, appliedDependencyCount, source manifest export, and rollback verification.",
-        "Readiness may reach staging_runtime_chain_passed, but productionReady must remain false until real production/live outcome evidence exists."
-      ],
-      "mutationBoundary": "authorized staging controlled write/publish/rollback only; no production-ready claim, no production seed write, no confirmed production baseline write"
-    },
-    {
       "id": "solo-live-personal-real-environment",
       "tier": "solo_live",
       "status": "deferred_live",
