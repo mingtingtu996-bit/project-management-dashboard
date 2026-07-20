@@ -509,12 +509,12 @@ export interface WbsTargetFeasibility {
   overshootDays: number
   overshoot?: DurationMetricDto | null
   /** @deprecated Use recoverable. */
-  recoverableDays: number
+  recoverableDays: number | null
   recoverable?: DurationMetricDto | null
   /** @deprecated Use unrecoverable. */
-  unrecoverableDays: number
+  unrecoverableDays: number | null
   unrecoverable?: DurationMetricDto | null
-  verdict: 'fit' | 'tight' | 'compressible' | 'requires_scope_change' | 'infeasible'
+  verdict: 'fit' | 'tight' | 'compressible' | 'requires_scope_change' | 'infeasible' | 'unavailable'
   strategies: Array<{
     type: 'fast_track' | 'crashing' | 'scope_reduction'
     affectedRowIds: string[]
@@ -774,8 +774,11 @@ export interface WbsAccelerationRescheduleDraft {
     changedFields: string[]
     visualDiff: {
       durationDeltaDays: number
+      durationDelta?: DurationMetricDto | null
       startDeltaDays: number
+      startDelta?: DurationMetricDto | null
       endDeltaDays: number
+      endDelta?: DurationMetricDto | null
       barDeltaKind: 'compressed' | 'shifted' | 'unchanged'
     }
   }>
@@ -906,12 +909,25 @@ export interface WbsTemplateGeneratePreviewPayload {
 }
 
 function normalizeAccelerationDurationAdjustment<T extends Record<string, unknown>>(adjustment: T) {
+  const visualDiff = adjustment.visualDiff && typeof adjustment.visualDiff === 'object' && !Array.isArray(adjustment.visualDiff)
+    ? adjustment.visualDiff as Record<string, unknown>
+    : null
   return {
     ...adjustment,
     currentDuration: normalizeDurationMetricDto(adjustment.currentDuration),
     proposedDuration: normalizeDurationMetricDto(adjustment.proposedDuration),
     minDuration: normalizeDurationMetricDto(adjustment.minDuration),
     recoverDuration: normalizeDurationMetricDto(adjustment.recoverDuration),
+    ...(visualDiff
+      ? {
+          visualDiff: {
+            ...visualDiff,
+            durationDelta: normalizeDurationMetricDto(visualDiff.durationDelta),
+            startDelta: normalizeDurationMetricDto(visualDiff.startDelta),
+            endDelta: normalizeDurationMetricDto(visualDiff.endDelta),
+          },
+        }
+      : {}),
   }
 }
 

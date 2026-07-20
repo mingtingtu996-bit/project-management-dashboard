@@ -365,7 +365,6 @@ describe('duration consistency contract scaffold', () => {
       'server/src/services/projectRemainingDurationForecastService.ts',
       'server/src/services/planningRevisionPoolService.ts',
       'server/src/services/baselineGenerationService.ts',
-      'server/src/routes/task-baselines.ts',
       'server/src/services/wbsTemplateGenerationService.ts',
       'server/src/services/durationContextService.ts',
     ]
@@ -375,6 +374,11 @@ describe('duration consistency contract scaffold', () => {
       expect(source, file).toContain('signedDurationDayDelta')
       expect(source, file).not.toMatch(/Math\.(?:round|floor|ceil)\(\s*\([^)]*?(?:afterTime|beforeTime|toTime|fromTime|leftTime|rightTime|getTime\(\)|expected)[^)]*?-[^)]*?(?:afterTime|beforeTime|toTime|fromTime|leftTime|rightTime|getTime\(\)|plannedStart)[^)]*?\)\s*\/\s*(?:86_?400_?000|DAY_MS|24\s*\*\s*60\s*\*\s*60\s*\*\s*1000)\s*\)/)
     }
+
+    const baselineRouteSource = readSource('server/src/routes/task-baselines.ts')
+    expect(baselineRouteSource).not.toContain('signedDurationDayDelta')
+    expect(baselineRouteSource).toContain('prepareBaselineGenerationForBaseline')
+    expect(baselineRouteSource).toContain('buildProjectBaselineValidityDetails')
   })
 
   it('persists project generation facts once at project level while keeping task snapshots frozen by purpose', () => {

@@ -90,6 +90,41 @@ describe('planning table backend contract', () => {
 
     expect(monthlyTargetProgress.ok).toBe(true)
 
+    const invalidNormalizedDate = validatePlanningTableCommitRequest(
+      {
+        projectId: 'project-1',
+        surface: 'monthly_plan',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_cell',
+          rowId: 'item-1',
+          field: 'planned_end_date',
+          value: '2026-02-30',
+        }],
+      },
+      { expectedSurface: 'monthly_plan', validateFieldAccess: true },
+    )
+    const validLeapDate = validatePlanningTableCommitRequest(
+      {
+        projectId: 'project-1',
+        surface: 'monthly_plan',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_cell',
+          rowId: 'item-1',
+          field: 'planned_end_date',
+          value: '2024-02-29',
+        }],
+      },
+      { expectedSurface: 'monthly_plan', validateFieldAccess: true },
+    )
+
+    expect(invalidNormalizedDate.ok).toBe(false)
+    expect(invalidNormalizedDate.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'PLANNING_FIELD_VALUE_DATE_INVALID', field: 'planned_end_date' }),
+    ]))
+    expect(validLeapDate.ok).toBe(true)
+
     const invalid = validatePlanningTableCommitRequest(
       {
         projectId: 'project-1',

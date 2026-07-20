@@ -88,6 +88,19 @@ function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+function productionDurationMetric(value: number) {
+  return {
+    value,
+    unit: 'construction_production_day',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-20',
+    availability: 'available',
+    unavailableReason: null,
+  }
+}
+
 async function waitForText(container: HTMLElement, expected: string[]) {
   const deadline = Date.now() + 2500
 
@@ -256,6 +269,7 @@ describe('Reports story coverage', () => {
               actual_progress: 52,
               actual_date: '2026-04-13',
               deviation_days: 3,
+              deviation_duration: productionDurationMetric(3),
               deviation_rate: 12,
               status: 'delayed',
               reason: 'baseline switch requires review',
@@ -269,6 +283,7 @@ describe('Reports story coverage', () => {
               actual_progress: 74,
               actual_date: '2026-04-14',
               deviation_days: -2,
+              deviation_duration: productionDurationMetric(-2),
               deviation_rate: -8,
               status: 'in_progress',
               reason: 'progress rollback after version switch',
@@ -288,6 +303,7 @@ describe('Reports story coverage', () => {
               actual_progress: 88,
               actual_date: '2026-04-15',
               deviation_days: 1,
+              deviation_duration: productionDurationMetric(1),
               deviation_rate: 2,
               status: 'in_progress',
               source_task_id: 'task-1',
@@ -304,9 +320,11 @@ describe('Reports story coverage', () => {
                     evidence_source: 'task_duration_forecasts.metadata.forecastSources.dependencyPropagation',
                     evidence_id: 'forecast-row-1',
                     impact_days: 4,
+                    impact_duration: productionDurationMetric(4),
                     confidence: 'high',
                     evidence: {
                       wait_days: 4,
+                      wait_duration: productionDurationMetric(4),
                     },
                   },
                 ],
@@ -338,6 +356,7 @@ describe('Reports story coverage', () => {
                   actual_progress: 52,
                   actual_date: '2026-04-13',
                   deviation_days: 3,
+                  deviation_duration: productionDurationMetric(3),
                   deviation_rate: 12,
                   status: 'delayed',
                   reason: 'baseline switch requires review',
@@ -358,6 +377,7 @@ describe('Reports story coverage', () => {
                   actual_progress: 74,
                   actual_date: '2026-04-14',
                   deviation_days: -2,
+                  deviation_duration: productionDurationMetric(-2),
                   deviation_rate: -8,
                   status: 'in_progress',
                   reason: 'progress rollback after version switch',
@@ -384,6 +404,7 @@ describe('Reports story coverage', () => {
                   actual_progress: 88,
                   actual_date: '2026-04-15',
                   deviation_days: 1,
+                  deviation_duration: productionDurationMetric(1),
                   deviation_rate: 2,
                   status: 'in_progress',
                   reason: 'execution node',
@@ -399,9 +420,11 @@ describe('Reports story coverage', () => {
                         evidence_source: 'task_duration_forecasts.metadata.forecastSources.dependencyPropagation',
                         evidence_id: 'forecast-row-1',
                         impact_days: 4,
+                        impact_duration: productionDurationMetric(4),
                         confidence: 'high',
                         evidence: {
                           wait_days: 4,
+                          wait_duration: productionDurationMetric(4),
                         },
                       },
                     ],
@@ -442,6 +465,7 @@ describe('Reports story coverage', () => {
               responsibility_role: 'accountable_subject',
               basis: 'upstream_dependency',
               impact_days: 4,
+              impact_duration: productionDurationMetric(4),
               weighted_count: 1,
               weighted_percentage: 100,
               evidence_sources: ['task_duration_forecasts.metadata.forecastSources.dependencyPropagation'],
@@ -841,7 +865,7 @@ describe('Reports story coverage', () => {
     expect(responsibilityPanel?.textContent).toContain('受影响任务 task-1')
     expect(responsibilityPanel?.textContent).toContain('上游致因任务 task-upstream-a')
     expect(responsibilityPanel?.textContent).toContain('主体ID unit-owner-a')
-    expect(responsibilityPanel?.textContent).toContain('影响生产日 4')
+    expect(responsibilityPanel?.textContent).toContain('影响 4 个生产日')
     expect(responsibilityPanel?.textContent).toContain('权重贡献 1')
     expect(responsibilityPanel?.textContent).toContain('证据来源 task_duration_forecasts.metadata.forecastSources.dependencyPropagation')
     expect(responsibilityPanel?.textContent).not.toContain('upstream_dependency')
@@ -858,6 +882,92 @@ describe('Reports story coverage', () => {
     expect(document.body.textContent).toContain('受影响主体 Owner B')
     expect(document.body.textContent).toContain('等待 4 个生产日')
     expect(document.body.textContent).toContain('证据来源 task_duration_forecasts.metadata.forecastSources.dependencyPropagation')
+  })
+
+  it('renders typed production-day facts and keeps unavailable rows out of deviation charts', async () => {
+    const defaultApiGet = apiClientMock.apiGet.getMockImplementation()
+    const productionDuration = (value: number) => ({
+      value,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    const unavailableProductionDuration = {
+      value: null,
+      unit: 'construction_production_day',
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'unavailable',
+      unavailableReason: 'calendar_identity_missing',
+    }
+
+    apiClientMock.apiGet.mockImplementation(async (url: string) => {
+      const response = await defaultApiGet?.(url)
+      if (!url.startsWith('/api/progress-deviation?')) return response
+
+      const payload = JSON.parse(JSON.stringify(response))
+      const detailRow = payload.rows.find((row: { id: string }) => row.id === 'row-3')
+      detailRow.deviation_days = 99
+      detailRow.deviation_duration = productionDuration(1)
+      detailRow.attribution.cause_chain[0].impact_days = 99
+      detailRow.attribution.cause_chain[0].impact_duration = productionDuration(4)
+      detailRow.attribution.cause_chain[0].evidence.wait_days = 99
+      detailRow.attribution.cause_chain[0].evidence.wait_duration = productionDuration(3)
+
+      const executionMainline = payload.mainlines.find((line: { key: string }) => line.key === 'execution')
+      const mainlineRow = executionMainline.rows.find((row: { id: string }) => row.id === 'row-3')
+      mainlineRow.deviation_days = 99
+      mainlineRow.deviation_duration = productionDuration(1)
+      mainlineRow.attribution = detailRow.attribution
+
+      const unavailableRow = {
+        id: 'row-no-calendar',
+        title: '无日历身份任务',
+        mainline: 'execution',
+        planned_progress: 60,
+        actual_progress: 50,
+        actual_date: '2026-04-16',
+        deviation_days: 777,
+        deviation_duration: unavailableProductionDuration,
+        deviation_rate: 10,
+        status: 'delayed',
+      }
+      payload.rows.push(unavailableRow)
+      executionMainline.rows.push(unavailableRow)
+
+      payload.responsibility_contribution[0].impact_days = 99
+      payload.responsibility_contribution[0].impact_duration = productionDuration(4)
+      return payload
+    })
+
+    await renderReports(root, `/projects/${projectId}/reports?view=execution`)
+    await waitForText(container, ['无日历身份任务', 'Owner A'])
+
+    const detailTable = container.querySelector('[data-testid="deviation-detail-table"]')
+    const scatterChart = container.querySelector('[data-testid="execution-scatter-chart"]')
+    const responsibilityPanel = container.querySelector('[data-testid="reports-responsibility-analysis"]')
+    expect(detailTable?.textContent).toContain('生产日口径不可用')
+    expect(detailTable?.textContent).not.toContain('777 个生产日')
+    expect(scatterChart?.textContent).not.toContain('无日历身份任务')
+    expect(scatterChart?.textContent).not.toContain('99')
+    expect(responsibilityPanel?.textContent).toContain('影响 4 个生产日')
+    expect(responsibilityPanel?.textContent).not.toContain('影响生产日 99')
+
+    const detailRowElement = detailTable?.querySelector('tr[role="button"]') as HTMLTableRowElement | null
+    expect(detailRowElement).toBeTruthy()
+    act(() => {
+      detailRowElement?.click()
+    })
+    await waitForText(document.body, ['责任证据链'])
+    expect(document.body.textContent).toContain('影响 4 个生产日')
+    expect(document.body.textContent).toContain('等待 3 个生产日')
+    expect(document.body.textContent).not.toContain('等待 99 个生产日')
   })
 
   it('shows the current view markers directly from the chosen route', async () => {

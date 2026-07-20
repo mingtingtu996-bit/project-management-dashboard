@@ -274,7 +274,7 @@ describe('Milestones page story coverage', () => {
     expect(container.querySelector('[data-testid="milestone-card-m2"]')).toBeTruthy()
     expect(findTab(container, '全部')).toBeTruthy()
     expect(findTab(container, '待完成')).toBeTruthy()
-    expect(findTab(container, '7天内')).toBeTruthy()
+    expect(findTab(container, '7 个日历天内')).toBeTruthy()
     expect(findTab(container, '已逾期')).toBeTruthy()
     expect(findTab(container, '已完成')).toBeTruthy()
     expect(container.querySelector('[data-testid="milestone-level-group-1"]')?.textContent).toContain('一级里程碑')
@@ -381,5 +381,118 @@ describe('Milestones page story coverage', () => {
 
     expect(container.textContent).toContain('主体结构封顶')
     expect(container.textContent).not.toContain('暂无匹配的节点')
+  })
+
+  it('renders calendar-day plan shifts and fails closed production-day overdue facts from typed milestone metrics', async () => {
+    const calendarMetric = (value: number) => ({
+      value,
+      unit: 'calendar_day' as const,
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'available' as const,
+      unavailableReason: null,
+    })
+    const unavailableProductionMetric = {
+      value: null,
+      unit: 'construction_production_day' as const,
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'unavailable' as const,
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+    const unavailableCalendarMetric = {
+      value: null,
+      unit: 'calendar_day' as const,
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'unavailable' as const,
+      unavailableReason: 'duration_value_missing',
+    }
+    mockedGetProjectSummary.mockResolvedValueOnce({
+      id: projectId,
+      name: 'typed milestone project',
+      milestoneOverview: {
+        stats: { total: 3, pending: 3, completed: 0, overdue: 1, upcomingSoon: 0, completionRate: 0 },
+        summaryStats: { shiftedCount: 1, baselineOnTimeCount: 0, dueSoon30dCount: 0, highRiskCount: 1 },
+        items: [
+          {
+            id: 'typed-shift',
+            name: 'Typed plan shift',
+            description: 'typed calendar fact wins',
+            targetDate: '2026-08-10',
+            planned_date: '2026-04-01',
+            current_planned_date: '2026-04-10',
+            actual_date: null,
+            progress: 0,
+            status: 'upcoming',
+            statusLabel: '待完成',
+            updatedAt: '2026-07-20T00:00:00.000Z',
+            milestone_level: 1,
+            planDateShift: calendarMetric(-2),
+            futureDueWindow: calendarMetric(21),
+            actualOverdue: unavailableProductionMetric,
+            actualScheduleVariance: unavailableProductionMetric,
+          },
+          {
+            id: 'typed-overdue',
+            name: 'Typed overdue',
+            description: 'missing production calendar',
+            targetDate: '2026-04-01',
+            planned_date: '2026-03-01',
+            current_planned_date: '2026-04-01',
+            actual_date: null,
+            progress: 30,
+            status: 'overdue',
+            statusLabel: '已逾期',
+            updatedAt: '2026-07-20T00:00:00.000Z',
+            milestone_level: 1,
+            planDateShift: calendarMetric(31),
+            futureDueWindow: calendarMetric(-110),
+            actualOverdue: unavailableProductionMetric,
+            actualScheduleVariance: unavailableProductionMetric,
+          },
+          {
+            id: 'typed-unavailable-shift',
+            name: 'Unavailable plan shift',
+            description: 'missing calendar-day value',
+            targetDate: '2026-08-20',
+            planned_date: '2026-04-01',
+            current_planned_date: '2026-04-10',
+            actual_date: null,
+            progress: 0,
+            status: 'upcoming',
+            statusLabel: '待完成',
+            updatedAt: '2026-07-20T00:00:00.000Z',
+            milestone_level: 1,
+            planDateShift: unavailableCalendarMetric,
+            futureDueWindow: calendarMetric(31),
+            actualOverdue: unavailableProductionMetric,
+            actualScheduleVariance: unavailableProductionMetric,
+          },
+        ],
+      },
+    } as never)
+
+    await act(async () => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/milestones`]}>
+          <Routes>
+            <Route path="/projects/:id/milestones" element={<Milestones />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      await flush()
+    })
+
+    await waitForText(container, ['较基线提前 2 个日历天', '生产日口径不可用', '日历天口径不可用'])
+    expect(container.querySelector('[data-testid="milestone-card-typed-shift"]')?.textContent).not.toContain('较基线延后 9 天')
+    expect(container.querySelector('[data-testid="milestone-card-typed-overdue"]')?.textContent).not.toMatch(/已逾期\s*\d+\s*天/)
+    expect(container.querySelector('[data-testid="milestone-card-typed-unavailable-shift"]')?.textContent).not.toContain('按基线推进')
   })
 })

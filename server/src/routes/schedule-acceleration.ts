@@ -257,7 +257,12 @@ function normalizeRemainingForecastDegradationReason(error: unknown, fallback?: 
 }
 
 function isUsableRemainingForecastResult(result: RemainingForecastRouteResult | null | undefined) {
-  return Boolean(result?.projectRemainingForecast && Number(result.rowsEvaluated) > 0)
+  const forecast = result?.projectRemainingForecast
+  if (!forecast || Number(result.rowsEvaluated) <= 0) return false
+  if (forecast.projectRemainingForecast?.availability !== 'available') return false
+  if (!forecast.forecastFinishDate) return false
+  if (forecast.targetEndDate && forecast.targetGap?.availability !== 'available') return false
+  return true
 }
 
 function buildRuntimeForecastUnavailableError() {

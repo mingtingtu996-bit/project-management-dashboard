@@ -12,7 +12,12 @@ import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { DashboardApiService } from '@/services/dashboardApi'
 import { toast } from '@/hooks/use-toast'
 import { formatDate } from '@/lib/utils'
-import { daysUntilLocalDate } from '@/lib/dateDistance'
+import {
+  formatDurationMetric,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+  type DurationMetricUnit,
+} from '@/lib/durationMetric'
 import { MilestonesSkeleton } from '@/components/ui/page-skeleton'
 import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import {
@@ -55,6 +60,10 @@ interface MilestoneItem {
   planned_date?: string | null
   current_planned_date?: string | null
   actual_date?: string | null
+  planDateShift?: DurationMetricDto | null
+  futureDueWindow?: DurationMetricDto | null
+  actualOverdue?: DurationMetricDto | null
+  actualScheduleVariance?: DurationMetricDto | null
   progress: number
   status: MilestoneStatus
   statusLabel: string
@@ -100,11 +109,6 @@ function getMilestoneTimeline(milestone: MilestoneItem) {
     currentPlanDate: milestone.current_planned_date ?? null,
     actualDate: milestone.actual_date ?? null,
   }
-}
-
-function getVarianceDays(left?: string | null, right?: string | null) {
-  if (!left || !right) return null
-  return daysUntilLocalDate(right, left)
 }
 
 type MilestoneLevel = 1 | 2 | 3
@@ -176,10 +180,20 @@ function getVarianceTextTone(value: number | null) {
   return value > 0 ? 'text-red-600' : 'text-emerald-600'
 }
 
-function formatVarianceConclusionPart(value: number | null, label: '计划' | '实际') {
-  if (value === null) return ''
+function formatVarianceConclusionPart(
+  metric: DurationMetricDto | null | undefined,
+  label: '计划' | '实际',
+  expectedUnit: DurationMetricUnit,
+) {
+  const value = readAvailableDurationValue(metric, expectedUnit)
+  if (value === null) {
+    return `${label}${formatDurationMetric(metric, {
+      expectedUnit,
+      unavailableLabel: expectedUnit === 'calendar_day' ? '日历天口径不可用' : '生产日口径不可用',
+    })}`
+  }
   if (value === 0) return `${label}无偏差`
-  return `${label}偏差 ${Math.abs(value)} 天`
+  return `${label}偏差 ${formatDurationMetric(metric, { absolute: true, expectedUnit })}`
 }
 
 type NarrativeSegment = { text: string; className?: string }
@@ -187,9 +201,9 @@ type NarrativeSegment = { text: string; className?: string }
 function getMilestoneNarrative(milestone: MilestoneItem): NarrativeSegment[] {
   const { baselineDate, currentPlanDate, actualDate } = getMilestoneTimeline(milestone)
   const progress = Math.max(0, Math.min(100, Number(milestone.progress ?? 0)))
-  const actualVariance = getVarianceDays(currentPlanDate, actualDate)
-  const currentVariance = getVarianceDays(baselineDate, currentPlanDate)
-  const daysToCurrent = daysUntilLocalDate(currentPlanDate)
+  const actualVariance = readAvailableDurationValue(milestone.actualScheduleVariance, 'construction_production_day')
+  const currentVariance = readAvailableDurationValue(milestone.planDateShift, 'calendar_day')
+  const daysToCurrent = readAvailableDurationValue(milestone.futureDueWindow, 'calendar_day')
 
   if (milestone.merged_into) {
     return [{ text: `已合并到 ${milestone.merged_into_name || milestone.merged_into}`, className: 'text-slate-400' }]
@@ -198,15 +212,28 @@ function getMilestoneNarrative(milestone: MilestoneItem): NarrativeSegment[] {
   if (milestone.status === 'completed') {
     if (!actualDate) return [{ text: '完成时间缺失', className: 'text-red-500 font-medium' }]
     const datePart = { text: `实际 ${formatMilestoneDate(actualDate)}`, className: 'num-mono text-slate-500' }
-    if (actualVariance === null) return [datePart]
+    if (actualVariance === null) {
+      return [datePart, { text: ' · ' }, {
+        text: formatDurationMetric(milestone.actualScheduleVariance, {
+          expectedUnit: 'construction_production_day',
+          unavailableLabel: '生产日口径不可用',
+        }),
+        className: 'text-slate-400',
+      }]
+    }
     if (actualVariance === 0) return [datePart, { text: ' · ' }, { text: '按期完成', className: 'text-emerald-600' }]
-    if (actualVariance > 0) return [datePart, { text: ' · ' }, { text: `延后 ${actualVariance} 天`, className: 'text-amber-600' }]
-    return [datePart, { text: ' · ' }, { text: `提前 ${Math.abs(actualVariance)} 天`, className: 'text-emerald-600' }]
+    if (actualVariance > 0) return [datePart, { text: ' · ' }, { text: `延后 ${formatDurationMetric(milestone.actualScheduleVariance, { absolute: true })}`, className: 'text-amber-600' }]
+    return [datePart, { text: ' · ' }, { text: `提前 ${formatDurationMetric(milestone.actualScheduleVariance, { absolute: true })}`, className: 'text-emerald-600' }]
   }
 
   if (milestone.status === 'overdue') {
-    const overdueDays = daysToCurrent !== null ? Math.abs(daysToCurrent) : null
-    const overdueLabel = overdueDays !== null ? `已逾期 ${overdueDays} 天` : '已逾期'
+    const overdueDays = readAvailableDurationValue(milestone.actualOverdue, 'construction_production_day')
+    const overdueLabel = overdueDays !== null
+      ? `已逾期 ${formatDurationMetric(milestone.actualOverdue, { absolute: true })}`
+      : formatDurationMetric(milestone.actualOverdue, {
+          expectedUnit: 'construction_production_day',
+          unavailableLabel: '生产日口径不可用',
+        })
     const overdueSeg: NarrativeSegment = { text: overdueLabel, className: 'text-red-500 font-medium' }
     if (progress === 0) return [overdueSeg, { text: ' · 尚未开始' }]
     return [overdueSeg, { text: ` · 进度 ${progress}%`, className: 'num-mono text-slate-500' }]
@@ -244,13 +271,21 @@ function getMilestoneNarrative(milestone: MilestoneItem): NarrativeSegment[] {
     }
     const leftTone = daysToCurrent <= 3 ? 'text-amber-600 font-medium' : 'text-slate-500'
     return [
-      { text: `还剩 ${daysToCurrent} 天`, className: leftTone },
+      { text: `还剩 ${formatDurationMetric(milestone.futureDueWindow, { absolute: true })}`, className: leftTone },
       { text: ` · 进度 ${progress}%`, className: 'num-mono text-slate-500' },
     ]
   }
 
+  if (currentVariance === null) {
+    return [
+      { text: '日历天口径不可用', className: 'text-amber-600 font-medium' },
+      { text: ' · 当前 ' },
+      { text: formatMilestoneDate(currentPlanDate), className: 'num-mono text-slate-500' },
+    ]
+  }
+
   if (progress === 0) {
-    if (currentVariance === null || currentVariance === 0) {
+    if (currentVariance === 0) {
       return [
         { text: '按基线推进 · 当前 ' },
         { text: formatMilestoneDate(currentPlanDate), className: 'num-mono text-slate-500' },
@@ -258,13 +293,13 @@ function getMilestoneNarrative(milestone: MilestoneItem): NarrativeSegment[] {
     }
     if (currentVariance > 0) {
       return [
-        { text: `较基线延后 ${currentVariance} 天`, className: 'text-red-500 font-medium' },
+        { text: `较基线延后 ${formatDurationMetric(milestone.planDateShift, { absolute: true })}`, className: 'text-red-500 font-medium' },
         { text: ' · 当前 ' },
         { text: formatMilestoneDate(currentPlanDate), className: 'num-mono text-slate-500' },
       ]
     }
     return [
-      { text: `较基线提前 ${Math.abs(currentVariance)} 天`, className: 'text-emerald-600' },
+      { text: `较基线提前 ${formatDurationMetric(milestone.planDateShift, { absolute: true })}`, className: 'text-emerald-600' },
       { text: ' · 当前 ' },
       { text: formatMilestoneDate(currentPlanDate), className: 'num-mono text-slate-500' },
     ]
@@ -274,7 +309,7 @@ function getMilestoneNarrative(milestone: MilestoneItem): NarrativeSegment[] {
     return [
       { text: `进度 ${progress}%`, className: 'num-mono text-slate-500' },
       { text: ' · ' },
-      { text: `较基线延后 ${currentVariance} 天`, className: 'text-red-500 font-medium' },
+      { text: `较基线延后 ${formatDurationMetric(milestone.planDateShift, { absolute: true })}`, className: 'text-red-500 font-medium' },
     ]
   }
 
@@ -478,8 +513,8 @@ function MilestoneNodeCard({
           : 'ring-slate-200 bg-slate-50 text-slate-700'
 
   const { baselineDate, currentPlanDate, actualDate } = getMilestoneTimeline(milestone)
-  const planVariance = getVarianceDays(baselineDate, currentPlanDate)
-  const actualVariance = getVarianceDays(currentPlanDate, actualDate)
+  const planVariance = readAvailableDurationValue(milestone.planDateShift, 'calendar_day')
+  const actualVariance = readAvailableDurationValue(milestone.actualScheduleVariance, 'construction_production_day')
   const progressValue = Math.max(0, Math.min(100, Number(milestone.progress ?? 0)))
   const timelineRows = [
     { key: 'baseline', label: '基线', date: baselineDate },
@@ -488,10 +523,12 @@ function MilestoneNodeCard({
   ]
   const deviationRows = [
     { key: 'baseline', text: '', variance: null },
-    { key: 'current', text: formatVarianceConclusionPart(planVariance, '计划'), variance: planVariance },
+    { key: 'current', text: formatVarianceConclusionPart(milestone.planDateShift, '计划', 'calendar_day'), variance: planVariance },
     {
       key: 'actual',
-      text: actualDate ? formatVarianceConclusionPart(actualVariance, '实际') : '实际尚未完成',
+      text: actualDate
+        ? formatVarianceConclusionPart(milestone.actualScheduleVariance, '实际', 'construction_production_day')
+        : '实际尚未完成',
       variance: actualVariance,
     },
   ]
@@ -750,7 +787,7 @@ export default function Milestones() {
         ? [
             { key: 'shifted', eyebrow: 'SHIFTED', title: '当前已偏移数', value: milestoneSummaryStats.shiftedCount, tone: 'warning' as const, invertTrend: true, icon: <Clock className="h-3.5 w-3.5" strokeWidth={1.5} /> },
             { key: 'baselineOnTime', eyebrow: 'ONTIME', title: '按基线准时完成数', value: milestoneSummaryStats.baselineOnTimeCount, tone: 'success' as const, invertTrend: false, icon: <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.5} /> },
-            { key: 'dueSoon30d', eyebrow: 'DUE', title: '近 30 天到期数', value: milestoneSummaryStats.dueSoon30dCount, tone: 'primary' as const, invertTrend: true, icon: <Calendar className="h-3.5 w-3.5" strokeWidth={1.5} /> },
+            { key: 'dueSoon30d', eyebrow: 'DUE', title: '近 30 个日历天到期数', value: milestoneSummaryStats.dueSoon30dCount, tone: 'primary' as const, invertTrend: true, icon: <Calendar className="h-3.5 w-3.5" strokeWidth={1.5} /> },
             { key: 'highRisk', eyebrow: 'RISK', title: '高风险里程碑数', value: milestoneSummaryStats.highRiskCount, tone: 'danger' as const, invertTrend: true, icon: <AlertCircle className="h-3.5 w-3.5" strokeWidth={1.5} /> },
           ]
         : [],
@@ -907,7 +944,7 @@ export default function Milestones() {
               <TabsList className="mt-3 flex h-auto w-full flex-wrap justify-start gap-4 rounded-none border-b border-slate-100 bg-transparent p-0 text-slate-500">
                 <TabsTrigger value="all" className="relative rounded-none bg-transparent px-0 pb-2 pt-0 text-xs text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">全部</TabsTrigger>
                 <TabsTrigger value="pending" className="relative rounded-none bg-transparent px-0 pb-2 pt-0 text-xs text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">待完成</TabsTrigger>
-                <TabsTrigger value="soon" className="relative rounded-none bg-transparent px-0 pb-2 pt-0 text-xs text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">7天内</TabsTrigger>
+                <TabsTrigger value="soon" className="relative rounded-none bg-transparent px-0 pb-2 pt-0 text-xs text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">7 个日历天内</TabsTrigger>
                 <TabsTrigger value="overdue" className="relative rounded-none bg-transparent px-0 pb-2 pt-0 text-xs text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">已逾期</TabsTrigger>
                 <TabsTrigger value="completed" className="relative rounded-none bg-transparent px-0 pb-2 pt-0 text-xs text-slate-500 shadow-none transition-colors after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-blue-600 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">已完成</TabsTrigger>
               </TabsList>

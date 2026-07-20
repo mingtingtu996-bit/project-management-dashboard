@@ -6,7 +6,7 @@ import { logger } from '../middleware/logger.js'
 import { validateIdParam } from '../middleware/validation.js'
 import { getClient, query as rawQuery } from '../database.js'
 import { supabase } from '../services/dbService.js'
-import { inclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
+import { inclusiveDurationDays } from '../utils/durationDays.js'
 import { planningStateMachine, PlanningStateTransitionError } from '../services/planningStateMachine.js'
 import {
   PlanningDraftLockService,
@@ -20,6 +20,8 @@ import {
   evaluateBaselineConfirmationGate,
   evaluateBaselinePublishReadiness,
   evaluateProjectBaselineValidity,
+  buildProjectBaselineValidityDetails,
+  buildProjectBaselineValidityMessage,
   listRevisionPoolCandidates,
   PlanningRevisionPoolServiceError,
   startRevisionFromBaseline,
@@ -31,6 +33,7 @@ import { annotateBaselineCriticalItems } from '../services/baselineGovernanceSer
 import {
   prepareBaselineGenerationForBaseline,
   prepareBaselineGenerationForProject,
+  type BaselineGenerationCandidate,
 } from '../services/baselineGenerationService.js'
 import {
   buildPlanningTableCommitResponse,
@@ -139,51 +142,6 @@ function clearBaselineDetailCache(id?: string | null) {
 
 type PlanningCommitOperation = PlanningTableOperation
 
-type TaskBaselineTaskRow = Pick<
-  Task,
-  | 'id'
-  | 'parent_id'
-  | 'title'
-  | 'description'
-  | 'project_id'
-  | 'planned_start_date'
-  | 'planned_end_date'
-  | 'start_date'
-  | 'end_date'
-  | 'progress'
-  | 'sort_order'
-  | 'is_milestone'
-  | 'baseline_item_id'
-  | 'participant_unit_id'
-  | 'assignee_user_id'
-  | 'assignee_name'
-  | 'engineering_object_id'
-  | 'phase_object_id'
-  | 'section_object_id'
-  | 'building_object_id'
-  | 'basement_object_id'
-  | 'floor_object_id'
-  | 'physical_zone_object_id'
-  | 'functional_area_object_id'
-  | 'template_id'
-  | 'template_node_id'
-  | 'wbs_code'
-  | 'wbs_level'
-  | 'engineering_category_id'
-  | 'wbs_node_type'
-  | 'wbs_path'
-  | 'is_wbs_summary'
-  | 'is_executable'
-  | 'standard_work_code'
-  | 'standard_work_name'
-  | 'duration_calibration_source'
-  | 'duration_provenance'
-  | 'task_code'
-  | 'task_code_version'
-  | 'task_code_rule_id'
-  | 'status'
->
-
 type BaselineConditionRow = {
   is_satisfied?: boolean | number | string | null
   status?: string | null
@@ -271,10 +229,10 @@ type BaselineApiRow = TaskBaseline & {
 
 router.use(authenticate)
 
-function badRequest(message: string, code = 'VALIDATION_ERROR') {
+function badRequest(message: string, code = 'VALIDATION_ERROR', details?: Record<string, unknown>) {
   return {
     success: false,
-    error: { code, message },
+    error: { code, message, ...(details ? { details } : {}) },
     timestamp: new Date().toISOString(),
   }
 }
@@ -850,77 +808,6 @@ async function attachBaselineEngineeringCategoryInfo(items: TaskBaselineItem[]):
   })
 }
 
-function isClosedExecutionTask(task: Pick<Task, 'status'>) {
-  const status = String(task.status ?? '').trim().toLowerCase()
-  return ['closed', 'cancelled', 'canceled', 'deleted', 'removed'].includes(status)
-}
-
-function resolveTaskPlanDate(
-  task: Pick<Task, 'planned_start_date' | 'planned_end_date' | 'start_date' | 'end_date'>,
-  side: 'start' | 'end',
-) {
-  return side === 'start'
-    ? task.planned_start_date ?? task.start_date ?? null
-    : task.planned_end_date ?? task.end_date ?? null
-}
-
-function buildGeneratedBaselineItemsFromTasks(
-  tasks: TaskBaselineTaskRow[],
-  currentBaselineItems: TaskBaselineItem[],
-): TaskBaselineItemInput[] {
-  const activeTasks = tasks.filter((task) => !isClosedExecutionTask(task))
-  const currentByTaskId = new Map(
-    currentBaselineItems
-      .filter((item) => item.source_task_id)
-      .map((item) => [item.source_task_id as string, item]),
-  )
-  const generatedItemIdByTaskId = new Map(activeTasks.map((task) => [task.id, uuidv4()]))
-
-  return activeTasks.map((task, index) => {
-    const currentItem = currentByTaskId.get(task.id)
-    const plannedStartDate = resolveTaskPlanDate(task, 'start')
-    const plannedEndDate = resolveTaskPlanDate(task, 'end')
-    const parentItemId = task.parent_id ? generatedItemIdByTaskId.get(task.parent_id) ?? null : null
-    const isNewTask = !currentItem
-    const dateChanged = Boolean(
-      currentItem &&
-      (currentItem.planned_start_date !== plannedStartDate || currentItem.planned_end_date !== plannedEndDate),
-    )
-
-    return {
-      id: generatedItemIdByTaskId.get(task.id),
-      parent_item_id: parentItemId,
-      source_task_id: task.id,
-      source_milestone_id: null,
-      template_id: task.template_id ?? currentItem?.template_id ?? null,
-      template_node_id: task.template_node_id ?? currentItem?.template_node_id ?? null,
-      engineering_category_id: task.engineering_category_id ?? currentItem?.engineering_category_id ?? null,
-      wbs_node_type: task.wbs_node_type ?? currentItem?.wbs_node_type ?? null,
-      wbs_path: task.wbs_path ?? currentItem?.wbs_path ?? null,
-      is_wbs_summary: task.is_wbs_summary ?? currentItem?.is_wbs_summary ?? null,
-      is_executable: task.is_executable ?? currentItem?.is_executable ?? null,
-      standard_work_code: task.standard_work_code ?? currentItem?.standard_work_code ?? null,
-      standard_work_name: task.standard_work_name ?? currentItem?.standard_work_name ?? null,
-      duration_calibration_source: task.duration_calibration_source ?? currentItem?.duration_calibration_source ?? null,
-      duration_provenance: task.duration_provenance ?? currentItem?.duration_provenance ?? null,
-      title: task.title || currentItem?.title || `施工任务 ${index + 1}`,
-      planned_start_date: plannedStartDate,
-      planned_end_date: plannedEndDate,
-      target_progress: null,
-      sort_order: Number.isFinite(Number(task.sort_order)) ? Number(task.sort_order) : index,
-      is_milestone: Boolean(task.is_milestone ?? currentItem?.is_milestone),
-      is_critical: Boolean(currentItem?.is_critical),
-      is_baseline_critical: Boolean(currentItem?.is_baseline_critical),
-      mapping_status: isNewTask ? 'pending' : 'mapped',
-      notes: isNewTask
-        ? 'System suggestion: current task list has new construction tasks and they were added to the new baseline draft.'
-        : dateChanged
-          ? 'System suggestion: planned dates were updated from the current task schedule.'
-          : currentItem?.notes ?? null,
-    }
-  })
-}
-
 function getBaselineCompareKey(item: Pick<TaskBaselineItem, 'source_task_id' | 'source_milestone_id' | 'title'>) {
   return item.source_task_id?.trim() || item.source_milestone_id?.trim() || item.title.trim()
 }
@@ -1016,37 +903,6 @@ type BaselineDiffItem = {
   rowId?: string
   sourceRowId?: string
   field?: BaselineDiffCellKey
-}
-
-type BaselineGenerationCandidateReason = {
-  code: 'milestone_shift' | 'finish_shift' | 'affected_tasks' | 'structure_change'
-  label: string
-  detail: string
-  severity: 'info' | 'warning'
-}
-
-type BaselineGenerationCandidate = {
-  baselineId: string
-  projectId: string
-  sourceVersionLabel: string
-  candidateVersionLabel: string
-  recommended: boolean
-  summary: string
-  reasons: BaselineGenerationCandidateReason[]
-  metrics: {
-    baselineTaskCount: number
-    candidateTaskCount: number
-    affectedTaskCount: number
-    affectedTaskRatio: number
-    addedItemCount: number
-    removedItemCount: number
-    changedItemCount: number
-    structureChangeRatio: number
-    milestoneMaxShiftDays: number
-    totalFinishShiftDays: number
-  }
-  diffCounts: Record<BaselineDiffKind | 'total', number>
-  diffItems: BaselineDiffItem[]
 }
 
 type BaselineDiffField = {
@@ -1288,201 +1144,6 @@ function buildBaselineDiffCounts(items: BaselineDiffItem[]) {
   )
 }
 
-const BASELINE_GENERATION_TASK_SELECT = [
-  'id',
-  'project_id',
-  'parent_id',
-  'title',
-  'description',
-  'planned_start_date',
-  'planned_end_date',
-  'start_date',
-  'end_date',
-  'progress',
-  'sort_order',
-  'is_milestone',
-  'baseline_item_id',
-  'participant_unit_id',
-  'assignee_user_id',
-  'assignee_name',
-  'engineering_object_id',
-  'phase_object_id',
-  'section_object_id',
-  'building_object_id',
-  'basement_object_id',
-  'floor_object_id',
-  'physical_zone_object_id',
-  'functional_area_object_id',
-  'template_id',
-  'template_node_id',
-  'wbs_code',
-  'wbs_level',
-  'engineering_category_id',
-  'wbs_node_type',
-  'wbs_path',
-  'is_wbs_summary',
-  'is_executable',
-  'standard_work_code',
-  'standard_work_name',
-  'duration_calibration_source',
-  'duration_provenance',
-  'task_code',
-  'task_code_version',
-  'task_code_rule_id',
-  'status',
-].join(',')
-
-function sortBaselineGenerationTasks(tasks: TaskBaselineTaskRow[]) {
-  return tasks
-    .filter((task) => task.id && task.title)
-    .sort((left, right) => {
-      const leftSort = Number.isFinite(Number(left.sort_order)) ? Number(left.sort_order) : Number.MAX_SAFE_INTEGER
-      const rightSort = Number.isFinite(Number(right.sort_order)) ? Number(right.sort_order) : Number.MAX_SAFE_INTEGER
-      if (leftSort !== rightSort) return leftSort - rightSort
-      return String(resolveTaskPlanDate(left, 'start') ?? '').localeCompare(String(resolveTaskPlanDate(right, 'start') ?? ''))
-    })
-}
-
-async function getBaselineGenerationTaskRows(projectId: string) {
-  const taskResult = await supabase
-    .from('tasks')
-    .select(BASELINE_GENERATION_TASK_SELECT)
-    .eq('project_id', projectId)
-    .order('sort_order', { ascending: true })
-
-  if (taskResult.error) throw taskResult.error
-  return sortBaselineGenerationTasks((taskResult.data ?? []) as unknown as TaskBaselineTaskRow[])
-}
-
-function hydrateGeneratedBaselineCandidateItems(
-  projectId: string,
-  baselineId: string,
-  items: TaskBaselineItemInput[],
-): TaskBaselineItem[] {
-  return items.map((item, index) => ({
-    project_id: projectId,
-    baseline_version_id: `${baselineId}:candidate`,
-    sort_order: index,
-    mapping_status: 'pending',
-    ...item,
-    id: item.id ?? `candidate-${index + 1}`,
-    title: item.title ?? `候选计划行 ${index + 1}`,
-  })) as TaskBaselineItem[]
-}
-
-function getLatestBaselineEndDate(items: TaskBaselineItem[]) {
-  return items
-    .map((item) => item.planned_end_date ?? null)
-    .filter((value): value is string => Boolean(value))
-    .sort((left, right) => String(right).localeCompare(String(left)))[0] ?? null
-}
-
-function isBaselineWorkItem(item: TaskBaselineItem) {
-  return item.is_executable !== false && item.is_wbs_summary !== true
-}
-
-function getBaselineMilestoneMaxShiftDays(sourceItems: TaskBaselineItem[], candidateItems: TaskBaselineItem[]) {
-  const sourceByKey = new Map(
-    sourceItems
-      .filter((item) => item.is_milestone)
-      .map((item) => [getBaselineCompareKey(item), item]),
-  )
-
-  return candidateItems
-    .filter((item) => item.is_milestone)
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    .reduce((maxShift, item) => {
-      const source = sourceByKey.get(getBaselineCompareKey(item))
-      if (!source) return maxShift
-      return Math.max(maxShift, Math.abs(signedDurationDayDelta(source.planned_end_date, item.planned_end_date) ?? 0))
-    }, 0)
-}
-
-function buildBaselineGenerationCandidate(
-  baseline: TaskBaseline,
-  sourceItems: TaskBaselineItem[],
-  candidateItems: TaskBaselineItem[],
-): BaselineGenerationCandidate {
-  const diffItems = buildBaselineDiffItems(sourceItems, candidateItems)
-  const diffCounts = buildBaselineDiffCounts(diffItems)
-  // eslint-disable-next-line -- route-level-aggregation-approved
-  const baselineTaskCount = Math.max(sourceItems.filter(isBaselineWorkItem).length, 1)
-  // eslint-disable-next-line -- route-level-aggregation-approved
-  const candidateTaskCount = candidateItems.filter(isBaselineWorkItem).length
-  const affectedTaskCount = diffItems.length
-  const affectedTaskRatio = affectedTaskCount / baselineTaskCount
-  const addedItemCount = diffCounts.added
-  const removedItemCount = diffCounts.removed
-  const changedItemCount = diffCounts.modified + diffCounts.milestone_changed
-  const structureChangeRatio = (addedItemCount + removedItemCount) / baselineTaskCount
-  const totalFinishShiftDays = Math.abs(signedDurationDayDelta(
-    getLatestBaselineEndDate(sourceItems),
-    getLatestBaselineEndDate(candidateItems),
-  ) ?? 0)
-  const milestoneMaxShiftDays = getBaselineMilestoneMaxShiftDays(sourceItems, candidateItems)
-
-  const reasons: BaselineGenerationCandidateReason[] = []
-  if (milestoneMaxShiftDays > 3) {
-    reasons.push({
-      code: 'milestone_shift',
-      label: 'Key milestone shifted',
-      detail: `Key milestone max shift is ${milestoneMaxShiftDays} days, exceeding the 3 day threshold.`,
-      severity: 'warning',
-    })
-  }
-  if (totalFinishShiftDays > 7) {
-    reasons.push({
-      code: 'finish_shift',
-      label: 'Total finish date shifted',
-      detail: `Total finish date shifted by ${totalFinishShiftDays} days, exceeding the 7 day threshold.`,
-      severity: 'warning',
-    })
-  }
-  if (affectedTaskRatio > 0.15) {
-    reasons.push({
-      code: 'affected_tasks',
-      label: 'Affected task ratio is high',
-      detail: `Affected planning rows account for ${Math.round(affectedTaskRatio * 100)}%, exceeding the 15% threshold.`,
-      severity: 'warning',
-    })
-  }
-  if (structureChangeRatio > 0.1) {
-    reasons.push({
-      code: 'structure_change',
-      label: 'Task structure changed significantly',
-      detail: `Added or removed rows account for ${Math.round(structureChangeRatio * 100)}%, exceeding the 10% threshold.`,
-      severity: 'warning',
-    })
-  }
-
-  const recommended = reasons.length > 0
-  return {
-    baselineId: baseline.id,
-    projectId: baseline.project_id,
-    sourceVersionLabel: formatBaselineBusinessVersionLabel(baseline),
-    candidateVersionLabel: 'new baseline draft',
-    recommended,
-    summary: recommended
-      ? `Detected ${diffCounts.total} planning differences. Generate a new baseline draft for review.`
-      : 'Current task list is close to the project baseline. No new baseline version is required.',
-    reasons,
-    metrics: {
-      baselineTaskCount,
-      candidateTaskCount,
-      affectedTaskCount,
-      affectedTaskRatio,
-      addedItemCount,
-      removedItemCount,
-      changedItemCount,
-      structureChangeRatio,
-      milestoneMaxShiftDays,
-      totalFinishShiftDays,
-    },
-    diffCounts,
-    diffItems: diffItems.slice(0, 20),
-  }
-}
-
 async function getComparisonBaseline(projectId: string, currentBaselineId: string) {
   const baselines = await listProjectBaselines(projectId)
   return (
@@ -1533,29 +1194,6 @@ async function evaluateRuntimeBaselineValidity(projectId: string, items: TaskBas
       current_plan_date?: string | null
     }>,
   })
-}
-
-function buildBaselineValidityMessage(validity: {
-  deviatedTaskRatio: number
-  shiftedMilestoneCount: number
-  averageMilestoneShiftDays: number
-  totalDurationDeviationRatio: number
-  triggeredRules: string[]
-}) {
-  const ruleLabels: Record<string, string> = {
-    task_deviation_ratio: '任务偏差率超过 40%',
-    milestone_shift: '里程碑偏移达到 3 个且平均偏移超过 30 天',
-    duration_deviation: '总工期偏差超过 10%',
-  }
-  const triggeredSummary = validity.triggeredRules
-    .map((rule) => ruleLabels[rule] ?? rule)
-    .join('；')
-
-  return `Baseline validity has crossed the realignment threshold: deviated task ratio ${Math.round(
-    validity.deviatedTaskRatio * 100,
-  )}%, shifted milestones ${validity.shiftedMilestoneCount}, average ${Math.round(
-    validity.averageMilestoneShiftDays,
-  )} days, total duration deviation ${Math.round(validity.totalDurationDeviationRatio * 100)}%. Triggered rules: ${triggeredSummary}. Please realign or revise before confirming.`
 }
 
 async function persistBaselineItems(
@@ -2203,9 +1841,17 @@ router.get(
       return res.status(422).json(badRequest('当前任务列表为空，无法生成项目基线候选', 'EMPTY_TASK_LIST'))
     }
 
+    const candidate = generation.candidate
+    if (!candidate) {
+      return res.status(422).json(badRequest(
+        'No authoritative baseline generation candidate is available.',
+        'BASELINE_GENERATION_CANDIDATE_UNAVAILABLE',
+      ))
+    }
+
     const response: ApiResponse<BaselineGenerationCandidate> = {
       success: true,
-      data: generation.candidate as unknown as BaselineGenerationCandidate,
+      data: candidate,
       timestamp: new Date().toISOString(),
     }
     res.json(response)
@@ -2852,7 +2498,11 @@ router.post(
       if (validity.state === 'needs_realign') {
         return res
           .status(422)
-          .json(badRequest(buildBaselineValidityMessage(validity), 'REQUIRES_REALIGNMENT'))
+          .json(badRequest(
+            buildProjectBaselineValidityMessage(validity),
+            'REQUIRES_REALIGNMENT',
+            buildProjectBaselineValidityDetails(validity),
+          ))
       }
       const transitionContext = await buildTransitionContext(baseline.project_id, expectedVersion ?? 0)
       const transitionEvent = baseline.status === 'revising' ? 'SUBMIT_REVISION' : 'CONFIRM'
@@ -2993,7 +2643,11 @@ router.post(
       if (validity.state === 'needs_realign') {
         return res
           .status(422)
-          .json(badRequest(buildBaselineValidityMessage(validity), 'REQUIRES_REALIGNMENT'))
+          .json(badRequest(
+            buildProjectBaselineValidityMessage(validity),
+            'REQUIRES_REALIGNMENT',
+            buildProjectBaselineValidityDetails(validity),
+          ))
       }
       const transitionContext = await buildTransitionContext(baseline.project_id, expectedVersion ?? 0)
       const transitionEvent = baseline.status === 'revising' ? 'SUBMIT_REVISION' : 'CONFIRM'

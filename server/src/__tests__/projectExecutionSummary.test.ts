@@ -163,6 +163,137 @@ describe('buildMilestoneOverview', () => {
     expect(result.items[1]?.status).toBe('completed')
   })
 
+  it('keeps plan shifts and future windows as Gregorian calendar days while production variances fail closed without calendar identity', () => {
+    const tasks = [
+      {
+        id: 'm-overdue',
+        title: 'Overdue milestone',
+        is_milestone: true,
+        status: 'in_progress',
+        progress: 30,
+        baseline_item_id: 'baseline-item-1',
+        baseline_end: '2026-04-05',
+        planned_end_date: '2026-04-10',
+      },
+      {
+        id: 'm-completed',
+        title: 'Completed milestone',
+        is_milestone: true,
+        status: 'completed',
+        progress: 100,
+        baseline_item_id: 'baseline-item-2',
+        baseline_end: '2026-04-05',
+        planned_end_date: '2026-04-10',
+        actual_end_date: '2026-04-15',
+      },
+    ] as any
+    const asOf = new Date('2026-04-15T08:00:00.000Z')
+    const identifiedCalendar: ConstructionCalendarContext = {
+      basis: 'official_construction_calendar_seed',
+      windows: [{
+        holidayCode: 'site_shutdown',
+        startDate: '2026-04-11',
+        endDate: '2026-04-13',
+        counts_as_construction_shutdown: true,
+      }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v2',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    }
+    const missingCalendar: ConstructionCalendarContext = {
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+
+    const available = buildMilestoneOverview(tasks, asOf, identifiedCalendar)
+    const unavailable = buildMilestoneOverview(tasks, asOf, missingCalendar)
+    const availableOverdue = available.items.find((item) => item.id === 'm-overdue')
+    const unavailableOverdue = unavailable.items.find((item) => item.id === 'm-overdue')
+    const availableCompleted = available.items.find((item) => item.id === 'm-completed')
+    const unavailableCompleted = unavailable.items.find((item) => item.id === 'm-completed')
+
+    expect(availableOverdue?.planDateShift).toMatchObject({
+      value: 5,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(unavailableOverdue?.planDateShift).toEqual(availableOverdue?.planDateShift)
+    expect(availableOverdue?.futureDueWindow).toMatchObject({ value: -5, unit: 'calendar_day', availability: 'available' })
+    expect(unavailableOverdue?.futureDueWindow).toEqual(availableOverdue?.futureDueWindow)
+    expect(availableOverdue?.actualOverdue).toMatchObject({
+      value: 2,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v2',
+      availability: 'available',
+    })
+    expect(unavailableOverdue?.actualOverdue).toMatchObject({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+    expect(availableCompleted?.actualScheduleVariance).toMatchObject({
+      value: 2,
+      unit: 'construction_production_day',
+      availability: 'available',
+    })
+    expect(unavailableCompleted?.actualScheduleVariance).toMatchObject({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    })
+  })
+
+  it('uses the construction-calendar business date for lifecycle and the 30-day due window', () => {
+    const asOf = new Date('2026-04-09T16:30:00.000Z')
+    const calendar: ConstructionCalendarContext = {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v2',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    }
+
+    const overdue = buildMilestoneOverview([{
+      id: 'm-business-overdue',
+      title: 'Business-day overdue milestone',
+      is_milestone: true,
+      status: 'in_progress',
+      progress: 20,
+      planned_end_date: '2026-04-09',
+    }] as any, asOf, calendar)
+    const dueWindow = buildMilestoneOverview([{
+      id: 'm-business-window',
+      title: 'Business-day 30-day milestone',
+      is_milestone: true,
+      status: 'in_progress',
+      progress: 20,
+      planned_end_date: '2026-05-10',
+    }] as any, asOf, calendar)
+
+    expect(overdue.items[0]).toEqual(expect.objectContaining({
+      status: 'overdue',
+      futureDueWindow: expect.objectContaining({ value: -1, asOf: '2026-04-10' }),
+    }))
+    expect(dueWindow.items[0]?.futureDueWindow).toEqual(expect.objectContaining({
+      value: 30,
+      asOf: '2026-04-10',
+    }))
+    expect(dueWindow.summaryStats?.dueSoon30dCount).toBe(1)
+  })
+
   it('publishes milestone baseline relation labels without health chip counts', () => {
     const result = buildMilestoneOverview([
       {

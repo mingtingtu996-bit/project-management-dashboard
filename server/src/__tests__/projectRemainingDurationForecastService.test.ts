@@ -59,6 +59,23 @@ function row(overrides: Partial<ScheduleAccelerationRow> = {}): ScheduleAccelera
   }
 }
 
+function buildAvailableProjectRemainingDurationForecast(
+  params: Parameters<typeof buildProjectRemainingDurationForecast>[0],
+) {
+  return buildProjectRemainingDurationForecast({
+    constructionCalendar: {
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    },
+    ...params,
+  })
+}
+
 afterEach(() => {
   vi.useRealTimers()
 })
@@ -68,7 +85,7 @@ describe('projectRemainingDurationForecastService', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-19T16:30:00.000Z'))
 
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [row()],
       targetEndDate: '2026-07-25',
       constructionCalendar: {
@@ -92,7 +109,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('builds a governed project-level remaining forecast from critical path, monthly commitments and external gates', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-structure',
@@ -140,10 +157,12 @@ describe('projectRemainingDurationForecastService', () => {
       rowsEvaluated: 2,
     }))
     expect(forecast.projectRemainingForecast).toEqual(expect.objectContaining({
-      value: null,
+      value: 19,
       unit: 'construction_production_day',
-      availability: 'unavailable',
-      unavailableReason: 'construction_calendar_identity_missing',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      availability: 'available',
+      unavailableReason: null,
     }))
     expect(forecast.targetGap).toEqual(expect.objectContaining({
       value: 3,
@@ -174,7 +193,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('keeps confirmed monthly commitments as soft pressure instead of pushing the project finish boundary', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-structure',
@@ -205,7 +224,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('excludes WBS summary rollups from the remaining-work forecast boundary', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'project-summary',
@@ -247,7 +266,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('does not treat frozen baseline critical flags as the live remaining critical set', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'frozen-baseline-critical-only',
@@ -283,7 +302,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('uses a fresh E3 critical-path snapshot instead of stale row-level critical flags', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'stale-row-critical',
@@ -348,7 +367,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('does not use row-level is_critical as direct critical-path fallback without a fresh E3 snapshot', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'stale-critical-flag',
@@ -384,7 +403,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('uses E2 task forecast finish dates as row governing finish when present', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'forecasted-critical',
@@ -409,7 +428,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('separates parallel external waits from finish gates when deriving project remaining duration', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical',
@@ -476,7 +495,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('widens the project remaining finish with E2 confidence bands, CP span and runtime pressure', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-with-band',
@@ -567,7 +586,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('orders inverted E2 confidence-band dates before choosing the governing project finish', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-inverted-band',
@@ -600,7 +619,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('caps implausible project remaining forecasts instead of allowing unlimited finish expansion', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-impossible-tail',
@@ -624,7 +643,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('adds merge bias when several near-critical chains carry similar P80 spread', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: ['chain-a', 'chain-b', 'chain-c'].map((clientRowId) => row({
         clientRowId,
         values: {
@@ -685,7 +704,7 @@ describe('projectRemainingDurationForecastService', () => {
       },
     })
 
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       projectId: 'project-1',
       rows: [
         networkRow('chain-a-1'),
@@ -715,7 +734,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('lets the confidence band govern when it is later than merge bias', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: ['chain-a', 'chain-b', 'chain-c'].map((clientRowId) => row({
         clientRowId,
         values: {
@@ -746,7 +765,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('marks merge-bias confidence evidence as unavailable when critical rows have no confidence bands', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: ['chain-a', 'chain-b'].map((clientRowId) => row({
         clientRowId,
         values: {
@@ -774,7 +793,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('uses E2 remaining days as catch-up work for overdue unfinished tasks', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'overdue-critical',
@@ -799,7 +818,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('projects remaining finish dates on construction production days when a shutdown calendar is supplied', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'shutdown-critical',
@@ -852,8 +871,62 @@ describe('projectRemainingDurationForecastService', () => {
     expect(forecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-02-18')
   })
 
+  it('fails the derived finish and target gap closed when production calendar identity is missing', () => {
+    const predictionEventRecorder = vi.fn()
+
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'unidentified-calendar-critical',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-02-15',
+            remaining_duration_days: 2,
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+      ],
+      asOfDate: '2026-02-14',
+      targetEndDate: '2026-02-15',
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'spring_festival_2026',
+          holidayName: 'Spring Festival construction shutdown',
+          startDate: '2026-02-15',
+          endDate: '2026-02-17',
+          counts_as_construction_shutdown: true,
+        }],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+      predictionEventRecorder,
+    })
+
+    expect(forecast.projectRemainingForecast).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }))
+    expect(forecast.projectRemainingForecastDays).toBeNull()
+    expect(forecast.forecastFinishDate).toBeNull()
+    expect(forecast.targetGapDays).toBeNull()
+    expect(forecast.targetGap).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'calendar_day',
+      availability: 'unavailable',
+    }))
+    expect(predictionEventRecorder).not.toHaveBeenCalled()
+  })
+
   it('uses the construction calendar when deriving external gate remaining days from its planned window', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical-before-shutdown',
@@ -893,6 +966,11 @@ describe('projectRemainingDurationForecastService', () => {
           endDate: '2026-02-17',
           counts_as_construction_shutdown: true,
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
@@ -909,7 +987,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('overlaps external hard-gate remaining windows with internal work', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical',
@@ -961,7 +1039,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('derives external gate treatment from acceptance gate taxonomy even when the row is not marked external_wait', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical',
@@ -1015,7 +1093,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('overlaps an external hard-gate window with internal work instead of appending the full gate after it', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical',
@@ -1066,7 +1144,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('overlaps multiple external hard-gate windows instead of summing them serially', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical',
@@ -1134,7 +1212,7 @@ describe('projectRemainingDurationForecastService', () => {
   })
 
   it('derives five gateRelation kinds and uses them as distinct E4 finish drivers', () => {
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-critical',
@@ -1257,7 +1335,7 @@ describe('projectRemainingDurationForecastService', () => {
   it('records a v1.4.22.4 prediction event for project remaining forecasts when a recorder is provided', () => {
     const recordedEvents: unknown[] = []
 
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-structure',
@@ -1359,7 +1437,7 @@ describe('projectRemainingDurationForecastService', () => {
       },
     }
 
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-with-t2-evidence',
@@ -1443,7 +1521,7 @@ describe('projectRemainingDurationForecastService', () => {
   it('records runtime consumer evidence from buildProjectRemainingDurationForecast when published artifacts are consumed', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
 
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-structure',
@@ -1518,7 +1596,7 @@ describe('projectRemainingDurationForecastService', () => {
   it('records the runtime call without fabricating artifact observations when no publication is consumed', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
 
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-structure',
@@ -1547,7 +1625,7 @@ describe('projectRemainingDurationForecastService', () => {
 
   it('records v1.4.22.5 runtime consumer evidence for project remaining forecast artifacts', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
-    const forecast = buildProjectRemainingDurationForecast({
+    const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'critical-structure',

@@ -11,10 +11,10 @@ vi.mock('../services/projectCriticalPathService.js', () => ({
 import {
   SCHEDULE_ACCELERATION_PROFILE_SOURCE,
   buildAlgorithmFactContext,
-  evaluateBaselineTargetAlignment,
-  evaluateRuntimeDelayRecovery,
-  evaluateRuntimeDelayRecoveryWithCriticalPath,
-  evaluateScheduleTargetFeasibility,
+  evaluateBaselineTargetAlignment as evaluateBaselineTargetAlignmentRaw,
+  evaluateRuntimeDelayRecovery as evaluateRuntimeDelayRecoveryRaw,
+  evaluateRuntimeDelayRecoveryWithCriticalPath as evaluateRuntimeDelayRecoveryWithCriticalPathRaw,
+  evaluateScheduleTargetFeasibility as evaluateScheduleTargetFeasibilityRaw,
   recordScheduleAccelerationRuntimeConsumption,
   type ScheduleAccelerationRow,
 } from '../services/scheduleAccelerationService.js'
@@ -74,6 +74,64 @@ function buildRow(overrides: Partial<ScheduleAccelerationRow> = {}): ScheduleAcc
     predecessorDependencies: [],
     ...overrides,
   }
+}
+
+function identifiedConstructionCalendar() {
+  return {
+    basis: 'official_construction_calendar_seed' as const,
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
+function shiftGregorianDateOnly(date: string, days: number) {
+  const parsed = new Date(`${date}T00:00:00.000Z`)
+  parsed.setUTCDate(parsed.getUTCDate() + days)
+  return parsed.toISOString().slice(0, 10)
+}
+
+function withIdentifiedConstructionCalendar<T extends { context?: unknown }>(params: T): T {
+  const context = params.context && typeof params.context === 'object' && !Array.isArray(params.context)
+    ? params.context as Record<string, unknown>
+    : {}
+  const hasExplicitCalendar = Object.prototype.hasOwnProperty.call(context, 'constructionCalendar')
+    || Object.prototype.hasOwnProperty.call(context, 'workCalendar')
+  if (hasExplicitCalendar) return params
+  return {
+    ...params,
+    context: {
+      ...context,
+      constructionCalendar: identifiedConstructionCalendar(),
+    },
+  }
+}
+
+function evaluateScheduleTargetFeasibility(
+  params: Parameters<typeof evaluateScheduleTargetFeasibilityRaw>[0],
+) {
+  return evaluateScheduleTargetFeasibilityRaw(withIdentifiedConstructionCalendar(params))
+}
+
+function evaluateBaselineTargetAlignment(
+  params: Parameters<typeof evaluateBaselineTargetAlignmentRaw>[0],
+) {
+  return evaluateBaselineTargetAlignmentRaw(withIdentifiedConstructionCalendar(params))
+}
+
+function evaluateRuntimeDelayRecovery(
+  params: Parameters<typeof evaluateRuntimeDelayRecoveryRaw>[0],
+) {
+  return evaluateRuntimeDelayRecoveryRaw(withIdentifiedConstructionCalendar(params))
+}
+
+function evaluateRuntimeDelayRecoveryWithCriticalPath(
+  params: Parameters<typeof evaluateRuntimeDelayRecoveryWithCriticalPathRaw>[0],
+) {
+  return evaluateRuntimeDelayRecoveryWithCriticalPathRaw(withIdentifiedConstructionCalendar(params))
 }
 
 describe('scheduleAccelerationService', () => {
@@ -230,6 +288,7 @@ describe('scheduleAccelerationService', () => {
       context: {
         runtime: {
           progressCompletionRatio: 0.5,
+          projectRemainingForecastFinishDate: '2026-06-30',
         },
       },
     })
@@ -390,6 +449,31 @@ describe('scheduleAccelerationService', () => {
     expect(feasibility?.overshootDays).toBe(5)
   })
 
+  it('does not fall back to row dates when the runtime E4 forecast finish is unavailable', () => {
+    const feasibility = evaluateRuntimeDelayRecovery({
+      rows: [
+        buildRow({
+          clientRowId: 'runtime-row-with-legacy-finish',
+          values: {
+            ...buildRow().values,
+            planned_start_date: '2026-06-01',
+            planned_end_date: '2026-06-30',
+          },
+        }),
+      ],
+      targetEndDate: '2026-06-20',
+      mode: 'compression_preview',
+      context: {
+        constructionCalendar: identifiedConstructionCalendar(),
+        runtime: {
+          projectRemainingForecastFinishDate: null,
+        },
+      },
+    })
+
+    expect(feasibility).toBeUndefined()
+  })
+
   it('keeps target overshoot as a Gregorian date shift while production recovery fails closed without calendar identity', () => {
     const rows: ScheduleAccelerationRow[] = [
       buildRow({
@@ -439,6 +523,10 @@ describe('scheduleAccelerationService', () => {
       unit: 'construction_production_day',
       availability: 'unavailable',
     }))
+    expect(feasibility?.recoverableDays).toBeNull()
+    expect(feasibility?.unrecoverableDays).toBeNull()
+    expect(feasibility?.strategies).toEqual([])
+    expect(feasibility?.accelerationProposal).toBeUndefined()
   })
 
   it('can re-evaluate an existing task schedule without WBS template generation', () => {
@@ -1691,6 +1779,7 @@ describe('scheduleAccelerationService', () => {
       mode: 'compression_preview',
       context: {
         runtime: {
+          projectRemainingForecastFinishDate: '2026-12-31',
           resourcePressureScore: 15,
           hardBlockerCount: 1,
           parallelDensityRatio: 1.9,
@@ -1755,7 +1844,13 @@ describe('scheduleAccelerationService', () => {
       rows,
       targetEndDate: '2026-10-31',
       mode: 'compression_preview',
-      context: factContext.scheduleAccelerationContext,
+      context: {
+        ...factContext.scheduleAccelerationContext,
+        runtime: {
+          ...factContext.scheduleAccelerationContext.runtime,
+          projectRemainingForecastFinishDate: '2026-12-31',
+        },
+      },
     })
 
     expect(runtime?.accelerationProposal?.calculationBasis?.runtimeContext).toEqual(expect.objectContaining({
@@ -2048,6 +2143,22 @@ describe('scheduleAccelerationService', () => {
           changedFields: expect.arrayContaining(['planned_end_date']),
           visualDiff: expect.objectContaining({
             durationDeltaDays: expect.any(Number),
+            durationDelta: expect.objectContaining({
+              unit: 'construction_production_day',
+              availability: 'available',
+            }),
+            startDelta: expect.objectContaining({
+              unit: 'calendar_day',
+              calendarRef: 'gregorian',
+              calendarVersion: 'ISO-8601',
+              availability: 'available',
+            }),
+            endDelta: expect.objectContaining({
+              unit: 'calendar_day',
+              calendarRef: 'gregorian',
+              calendarVersion: 'ISO-8601',
+              availability: 'available',
+            }),
             barDeltaKind: 'compressed',
           }),
         }),
@@ -2088,6 +2199,69 @@ describe('scheduleAccelerationService', () => {
         }),
       }),
     ]))
+
+  })
+
+  it('moves proposed plan dates by Gregorian calendar days without skipping construction shutdowns', () => {
+    const feasibility = evaluateScheduleTargetFeasibility({
+      rows: [
+        buildRow({
+          clientRowId: 'structure-calendar-shift',
+          values: {
+            ...buildRow().values,
+            planned_start_date: '2026-06-01',
+            planned_end_date: '2026-06-10',
+            duration_suggestion: { recommendedDurationDays: 10 },
+          },
+        }),
+        buildRow({
+          clientRowId: 'fitout-calendar-shift',
+          values: {
+            ...buildRow().values,
+            planned_start_date: '2026-06-11',
+            planned_end_date: '2026-06-20',
+            duration_suggestion: { recommendedDurationDays: 10 },
+          },
+          predecessorDependencies: [{
+            clientRowId: 'structure-calendar-shift',
+            dependencyType: 'FS',
+            lagDays: 0,
+            source: 'cross_item_workflow',
+            relationRole: 'workflow',
+          }],
+        }),
+      ],
+      targetEndDate: '2026-06-15',
+      mode: 'compression_preview',
+      context: {
+        asOfDate: '2026-06-01',
+        constructionCalendar: {
+          ...identifiedConstructionCalendar(),
+          windows: [
+            {
+              holidayCode: 'structure_shutdown',
+              startDate: '2026-06-04',
+              endDate: '2026-06-04',
+              counts_as_construction_shutdown: true,
+            },
+            {
+              holidayCode: 'fitout_shutdown',
+              startDate: '2026-06-14',
+              endDate: '2026-06-14',
+              counts_as_construction_shutdown: true,
+            },
+          ],
+        },
+      },
+    })
+
+    const crashAdjustment = feasibility?.accelerationProposal?.rescheduleDraft?.taskDateAdjustments
+      .find((adjustment) => adjustment.reschedulePolicy === 'resource_crash_preview')
+    expect(crashAdjustment).toBeDefined()
+    expect(crashAdjustment?.proposedEndDate).toBe(shiftGregorianDateOnly(
+      crashAdjustment?.currentStartDate ?? '',
+      Math.max(0, (crashAdjustment?.proposedDurationDays ?? 1) - 1),
+    ))
   })
 
   it('does not expose a reschedule draft when task edits do not recover the project terminal finish', () => {
@@ -2583,6 +2757,7 @@ describe('scheduleAccelerationService', () => {
         runtime: {
           criticalOrNearCriticalTaskCount: 8,
           floatingTaskCount: 0,
+          projectRemainingForecastFinishDate: '2026-07-20',
         },
       },
     })
@@ -3514,50 +3689,6 @@ describe('scheduleAccelerationService', () => {
     expect(structureAdjustment?.minDurationDays).toBeLessThan(10)
   })
 
-  it('keeps accelerated proposed finish dates out of construction shutdown windows', () => {
-    const feasibility = evaluateScheduleTargetFeasibility({
-      rows: [
-        buildRow({
-          clientRowId: 'structure',
-          values: {
-            title: 'Structure works',
-            planned_start_date: '2026-06-01',
-            planned_end_date: '2026-06-05',
-            duration_contribution_mode: 'duration_bearing',
-            row_projection_mode: 'schedule_row',
-            standard_task_metadata: {
-              criticalPathEligible: true,
-              executionPhase: 'superstructure',
-              resourceProfile: { resourceClass: 'rebar' },
-            },
-          },
-          predecessorDependencies: [],
-        }),
-      ],
-      targetEndDate: '2026-06-04',
-      mode: 'compression_preview',
-      context: {
-        constructionCalendar: {
-          basis: 'official_construction_calendar_seed',
-          windows: [{
-            holidayCode: 'site_shutdown',
-            startDate: '2026-06-04',
-            endDate: '2026-06-04',
-            counts_as_construction_shutdown: true,
-          }],
-        },
-      } as any,
-    })
-
-    const adjustment = feasibility?.accelerationProposal?.rescheduleDraft?.taskDateAdjustments
-      .find((item) => item.clientRowId === 'structure')
-    expect(adjustment).toEqual(expect.objectContaining({
-      currentDurationDays: 4,
-      proposedDurationDays: 3,
-      proposedEndDate: '2026-06-03',
-    }))
-  })
-
   it('caps acceleration recovery by the project terminal finish delta instead of summing parallel crashes', () => {
     const feasibility = evaluateScheduleTargetFeasibility({
       rows: [
@@ -3869,6 +4000,11 @@ describe('scheduleAccelerationService', () => {
       ],
       targetEndDate: '2026-01-25',
       mode: 'compression_preview',
+      context: {
+        runtime: {
+          projectRemainingForecastFinishDate: '2026-01-30',
+        },
+      },
       runtimeConsumerObservationQueryExec: queryExec,
       runtimeConsumerObservedAt: '2026-06-15T09:00:00.000Z',
       runtimeArtifactPublications: [

@@ -32,6 +32,24 @@ vi.mock('../services/planningReplayCalibrationService.js', () => ({
   readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
 }))
 
+vi.mock('../middleware/logger.js', () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
+}))
+
+vi.mock('../database.js', () => ({
+  getClient: vi.fn(),
+  query: vi.fn(),
+}))
+
+vi.mock('../services/realtimeServer.js', () => ({
+  broadcastRealtimeEvent: vi.fn(),
+}))
+
 import {
   __baselineGenerationV1474TestHooks,
   buildGeneratedBaselineItemsFromTasksV1474,
@@ -1313,6 +1331,156 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(candidate.metrics.durationSeedFactorCount).toBe(2)
     expect(candidate.generationSummary.durationSeedFactorCount).toBe(2)
     expect(candidate.metrics.forecastDelayedCount).toBe(1)
+  })
+
+  it('emits Gregorian calendar-day facts for baseline date movement across a valid leap day', async () => {
+    mocks.forecastBatchTasks.mockResolvedValue([])
+    mockSupabaseRows({})
+
+    const candidate = await buildBaselineGenerationCandidateV1474({
+      baseline: {
+        id: 'baseline-leap',
+        project_id: 'project-1',
+        version: 1,
+        status: 'confirmed',
+      } as any,
+      sourceItems: [
+        {
+          id: 'milestone-1',
+          title: 'Leap-day milestone',
+          source_milestone_id: 'milestone-1',
+          planned_start_date: '2024-02-29',
+          planned_end_date: '2024-02-29',
+          is_milestone: true,
+        } as any,
+      ],
+      candidateItems: [
+        {
+          id: 'milestone-1',
+          title: 'Leap-day milestone',
+          source_milestone_id: 'milestone-1',
+          planned_start_date: '2024-03-01',
+          planned_end_date: '2024-03-01',
+          is_milestone: true,
+        } as any,
+      ],
+      taskRows: [],
+      asOf: '2024-03-01',
+    })
+
+    expect(candidate.metrics.totalFinishShift).toEqual({
+      value: 1,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2024-03-01',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    expect(candidate.metrics.milestoneMaxShift).toEqual(candidate.metrics.totalFinishShift)
+    expect(candidate.metrics.totalFinishShiftDays).toBe(1)
+    expect(candidate.metrics.milestoneMaxShiftDays).toBe(1)
+  })
+
+  it('keeps valid same-day baseline movement available with a zero value', async () => {
+    mocks.forecastBatchTasks.mockResolvedValue([])
+    mockSupabaseRows({})
+
+    const item = {
+      id: 'milestone-same-day',
+      title: 'Same-day milestone',
+      source_milestone_id: 'milestone-same-day',
+      planned_start_date: '2024-02-29',
+      planned_end_date: '2024-02-29',
+      is_milestone: true,
+    } as any
+    const candidate = await buildBaselineGenerationCandidateV1474({
+      baseline: {
+        id: 'baseline-same-day',
+        project_id: 'project-1',
+        version: 1,
+        status: 'confirmed',
+      } as any,
+      sourceItems: [item],
+      candidateItems: [{ ...item }],
+      taskRows: [],
+      asOf: '2024-02-29',
+    })
+
+    expect(candidate.metrics.totalFinishShift).toMatchObject({
+      value: 0,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(candidate.metrics.milestoneMaxShift).toMatchObject({
+      value: 0,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(candidate.metrics.totalFinishShiftDays).toBe(0)
+    expect(candidate.metrics.milestoneMaxShiftDays).toBe(0)
+  })
+
+  it.each([
+    ['invalid', '2026-02-30'],
+    ['missing', null],
+  ])('fails baseline date movement facts closed when a required date is %s', async (_label, candidateEndDate) => {
+    mocks.forecastBatchTasks.mockResolvedValue([])
+    mockSupabaseRows({})
+
+    const candidate = await buildBaselineGenerationCandidateV1474({
+      baseline: {
+        id: 'baseline-invalid-date',
+        project_id: 'project-1',
+        version: 1,
+        status: 'confirmed',
+      } as any,
+      sourceItems: [
+        {
+          id: 'milestone-1',
+          title: 'Invalid milestone',
+          source_milestone_id: 'milestone-1',
+          planned_end_date: '2026-02-28',
+          is_milestone: true,
+        } as any,
+      ],
+      candidateItems: [
+        {
+          id: 'milestone-1',
+          title: 'Invalid milestone',
+          source_milestone_id: 'milestone-1',
+          planned_end_date: candidateEndDate,
+          is_milestone: true,
+        } as any,
+      ],
+      taskRows: [],
+      asOf: '2026-03-02',
+    })
+
+    expect(candidate.metrics.totalFinishShift).toMatchObject({
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    })
+    expect(candidate.metrics.milestoneMaxShift).toMatchObject({
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    })
+    expect(candidate.metrics.totalFinishShiftDays).toBeNull()
+    expect(candidate.metrics.milestoneMaxShiftDays).toBeNull()
+    expect(candidate.dataQualityReasons.join(' ')).toContain('date movement')
   })
 
   it('feeds project fact inputs into baseline candidate metrics and reasons', async () => {

@@ -66,7 +66,17 @@ import {
   startOfUtcDay,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
-import { inclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
+import {
+  inclusiveDurationDays,
+  normalizeDateOnlyText,
+  signedDurationDayDelta,
+} from '../utils/durationDays.js'
+import {
+  buildCalendarDayDurationMetric,
+  businessDateKey,
+  DEFAULT_DURATION_TIMEZONE,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
 import type { Task, TaskBaseline, TaskBaselineItem } from '../types/db.js'
 
@@ -161,7 +171,14 @@ export type BaselineGenerationCandidate = {
   reasons: BaselineGenerationCandidateReason[]
   businessReasons: string[]
   dataQualityReasons: string[]
-  metrics: Record<string, number>
+  metrics: Record<string, number | null | DurationMetricDto> & {
+    totalFinishShift: DurationMetricDto
+    milestoneMaxShift: DurationMetricDto
+    /** @deprecated Consume totalFinishShift; removed after one compatibility release. */
+    totalFinishShiftDays: number | null
+    /** @deprecated Consume milestoneMaxShift; removed after one compatibility release. */
+    milestoneMaxShiftDays: number | null
+  }
   diffCounts: Record<string, number>
   diffItems: BaselineDiffItem[]
   generationSummary: {
@@ -870,10 +887,11 @@ function buildBaselineGenerationSeedVersions(
 }
 
 function getLatestBaselineEndDate(items: TaskBaselineItemInput[]) {
-  return items
-    .map((item) => item.planned_end_date ?? null)
-    .filter((value): value is string => Boolean(value))
-    .sort((left, right) => String(right).localeCompare(String(left)))[0] ?? null
+  const workItems = items.filter(isBaselineWorkItem)
+  if (workItems.length === 0) return null
+  const dates = workItems.map((item) => normalizeDateOnlyText(item.planned_end_date ?? null))
+  if (dates.some((value) => value === null)) return null
+  return (dates as string[]).sort((left, right) => right.localeCompare(left))[0] ?? null
 }
 
 function isBaselineWorkItem(item: TaskBaselineItemInput) {
@@ -1728,13 +1746,20 @@ function getBaselineMilestoneMaxShiftDays(sourceItems: TaskBaselineItemInput[], 
       .map((item) => [getBaselineCompareKey(item as TaskBaselineItem), item]),
   )
 
-  return candidateItems
-    .filter((item) => item.is_milestone)
-    .reduce((maxShift, item) => {
-      const source = sourceByKey.get(getBaselineCompareKey(item as TaskBaselineItem))
-      if (!source) return maxShift
-      return Math.max(maxShift, Math.abs(signedDurationDayDelta(source.planned_end_date, item.planned_end_date) ?? 0))
-    }, 0)
+  let comparedMilestoneCount = 0
+  let maxShiftDays = 0
+  for (const item of candidateItems.filter((candidate) => candidate.is_milestone)) {
+    const source = sourceByKey.get(getBaselineCompareKey(item as TaskBaselineItem))
+    if (!source) continue
+    const sourceDate = normalizeDateOnlyText(source.planned_end_date ?? null)
+    const candidateDate = normalizeDateOnlyText(item.planned_end_date ?? null)
+    if (!sourceDate || !candidateDate) return null
+    const shiftDays = signedDurationDayDelta(sourceDate, candidateDate)
+    if (shiftDays === null) return null
+    comparedMilestoneCount += 1
+    maxShiftDays = Math.max(maxShiftDays, Math.abs(shiftDays))
+  }
+  return comparedMilestoneCount > 0 ? maxShiftDays : null
 }
 
 type ForecastMetrics = {
@@ -2306,6 +2331,8 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   candidateItems: TaskBaselineItemInput[]
   taskRows: TaskBaselineTaskRow[]
   criticalTaskIds?: Set<string>
+  asOf?: string
+  timezone?: string | null
 }): Promise<BaselineGenerationCandidate> {
   const diffItems = buildBaselineDiffItems(params.sourceItems, params.candidateItems)
   const diffCounts = buildBaselineDiffCounts(diffItems)
@@ -2317,11 +2344,21 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   const removedItemCount = diffCounts.removed
   const changedItemCount = diffCounts.modified + diffCounts.milestone_changed
   const structureChangeRatio = (addedItemCount + removedItemCount) / baselineTaskCount
-  const totalFinishShiftDays = Math.abs(signedDurationDayDelta(
+  const totalFinishShiftDelta = signedDurationDayDelta(
     getLatestBaselineEndDate(params.sourceItems),
     getLatestBaselineEndDate(params.candidateItems),
-  ) ?? 0)
-  const milestoneMaxShiftDays = getBaselineMilestoneMaxShiftDays(params.sourceItems, params.candidateItems)
+  )
+  const totalFinishShiftValue = totalFinishShiftDelta === null ? null : Math.abs(totalFinishShiftDelta)
+  const milestoneMaxShiftValue = getBaselineMilestoneMaxShiftDays(params.sourceItems, params.candidateItems)
+  const timezone = String(params.timezone ?? '').trim() || DEFAULT_DURATION_TIMEZONE
+  const asOf = params.asOf === undefined ? businessDateKey(new Date(), timezone) : params.asOf
+  const totalFinishShift = buildCalendarDayDurationMetric(totalFinishShiftValue, { asOf, timezone })
+  const milestoneMaxShift = buildCalendarDayDurationMetric(milestoneMaxShiftValue, { asOf, timezone })
+  const totalFinishShiftDays = totalFinishShift.availability === 'available' ? totalFinishShift.value : null
+  const milestoneMaxShiftDays = milestoneMaxShift.availability === 'available' ? milestoneMaxShift.value : null
+  const unavailableDateMovementCount = [totalFinishShift, milestoneMaxShift]
+    .filter((metric) => metric.availability === 'unavailable')
+    .length
   const criticalTaskIds = params.criticalTaskIds ?? new Set<string>()
   const [forecastMetrics, directSeedMetrics, projectFactMetrics, buildingPatternExecutionProfile] = await Promise.all([
     getForecastMetrics(params.taskRows),
@@ -2350,8 +2387,8 @@ export async function buildBaselineGenerationCandidateV1474(params: {
     removedItemCount,
     changedItemCount,
     criticalPathChangeCount: params.candidateItems.filter((item) => item.is_critical || item.is_baseline_critical).length,
-    milestoneShiftDays: milestoneMaxShiftDays,
-    finishShiftDays: totalFinishShiftDays,
+    milestoneShiftDays: milestoneMaxShiftValue ?? 0,
+    finishShiftDays: totalFinishShiftValue ?? 0,
     forecastDelayedCount: forecastMetrics.forecastDelayedCount,
     maxForecastDelayDays: forecastMetrics.maxForecastDelayDays,
     externalBlockingSignalCount: projectFactMetrics.blockingConditionCount
@@ -2363,11 +2400,29 @@ export async function buildBaselineGenerationCandidateV1474(params: {
     healthRiskSignalCount: projectFactMetrics.healthRiskSignalCount,
     lowConfidenceReasonCount: forecastMetrics.lowConfidenceReasonCount
       + directSeedMetrics.resourceConflictSeedCount
-      + projectFactMetrics.lowConfidenceReasonCount,
+      + projectFactMetrics.lowConfidenceReasonCount
+      + unavailableDateMovementCount,
   }
   const recommendation = scorePlanningRecommendation(scoringInput)
   const reasons = [
-    ...buildBaselineBusinessReasons(scoringInput),
+    ...buildBaselineBusinessReasons(scoringInput)
+      .filter((reason) => !['milestone_shift', 'finish_shift'].includes(reason.code)),
+    ...(milestoneMaxShiftValue !== null && milestoneMaxShiftValue > 0
+      ? [{
+          code: 'milestone_shift',
+          label: 'Milestone shifted',
+          detail: `Key milestone shift is about ${milestoneMaxShiftValue} calendar day(s).`,
+          severity: milestoneMaxShiftValue > 7 ? 'critical' as const : 'warning' as const,
+        }]
+      : []),
+    ...(totalFinishShiftValue !== null && totalFinishShiftValue > 0
+      ? [{
+          code: 'finish_shift',
+          label: 'Project finish shifted',
+          detail: `Overall finish date shifted by about ${totalFinishShiftValue} calendar day(s).`,
+          severity: totalFinishShiftValue > 14 ? 'critical' as const : 'warning' as const,
+        }]
+      : []),
     ...buildDirectSeedBusinessReasons(directSeedMetrics),
     buildBuildingPatternExecutionProfileReason(buildingPatternExecutionProfile),
     buildConstructionRhythmExpansionReason(constructionRhythmExpansion),
@@ -2400,9 +2455,14 @@ export async function buildBaselineGenerationCandidateV1474(params: {
       severity: reason.severity,
     })),
     businessReasons: reasons.map((reason) => reason.detail),
-    dataQualityReasons: forecastMetrics.lowConfidenceReasonCount > 0
-      ? ['Some duration forecast inputs have low confidence, so the recommendation was downgraded.']
-      : [],
+    dataQualityReasons: [
+      ...(forecastMetrics.lowConfidenceReasonCount > 0
+        ? ['Some duration forecast inputs have low confidence, so the recommendation was downgraded.']
+        : []),
+      ...(unavailableDateMovementCount > 0
+        ? ['Baseline date movement cannot be evaluated because required Gregorian dates are missing or invalid.']
+        : []),
+    ],
     metrics: {
       baselineTaskCount,
       candidateTaskCount,
@@ -2412,6 +2472,8 @@ export async function buildBaselineGenerationCandidateV1474(params: {
       removedItemCount,
       changedItemCount,
       structureChangeRatio,
+      milestoneMaxShift,
+      totalFinishShift,
       milestoneMaxShiftDays,
       totalFinishShiftDays,
       forecastDelayedCount: forecastMetrics.forecastDelayedCount,

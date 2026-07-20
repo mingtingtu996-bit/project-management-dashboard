@@ -54,9 +54,19 @@ import {
 import type { EngineeringObject, Risk, Task, TaskCondition, TaskObstacle } from '@/lib/supabase'
 import { DashboardApiService, type CriticalPathSummaryModel, type ProjectSummary } from '@/services/dashboardApi'
 import { MaterialsApiService, type MaterialReportSummary } from '@/services/materialsApi'
+import {
+  getProgressDeviationAnalysis,
+  type ProgressDeviationAnalysisResponse,
+  type ProgressDeviationCauseSummary,
+  type ProgressDeviationMainlineKey,
+  type ProgressDeviationMonthlyBucket,
+  type ProgressDeviationResponsibilityContribution,
+  type ProgressDeviationRow,
+  type ProgressDeviationVersionLock,
+} from '@/services/progressDeviationApi'
 import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { DeviationFocusHint, viewLabels } from './Reports/components/DeviationFocusHint'
-import { BaselineSwitchMarker, type BaselineSwitchEvent } from './Reports/components/BaselineSwitchMarker'
+import { BaselineSwitchMarker } from './Reports/components/BaselineSwitchMarker'
 import { DeviationDetailTable } from './Reports/components/DeviationDetailTable'
 import { DeviationShell } from './Reports/components/DeviationShell'
 import { DeviationTabs, type DeviationView } from './Reports/components/DeviationTabs'
@@ -197,117 +207,6 @@ type SCurveApiPoint = {
   actual_cumulative: number | null
 }
 
-type ProgressDeviationMainlineKey = 'baseline' | 'monthly_plan' | 'execution'
-
-type ProgressDeviationCauseChainItem = {
-  cause_type: string
-  affected_task_id?: string | null
-  upstream_task_id?: string | null
-  impacted_owner?: string | null
-  accountable_owner?: string | null
-  responsibility_basis?: string | null
-  evidence_source?: string | null
-  evidence_id?: string | null
-  impact_days?: number | null
-  wait_days?: number | null
-  confidence?: number | string | null
-  evidence?: (Record<string, unknown> & { wait_days?: number | string | null }) | null
-}
-
-type ProgressDeviationRow = {
-  id: string
-  title: string
-  mainline: ProgressDeviationMainlineKey
-  source_task_id?: string | null
-  planned_date?: string | null
-  planned_progress?: number | null
-  actual_progress?: number | null
-  actual_date?: string | null
-  deviation_days: number
-  deviation_rate: number
-  status: string
-  reason?: string | null
-  merged_into?: { title: string; group_id?: string | null; item_ids?: string[] } | null
-  child_group?: { parent_title: string; child_count: number; group_id?: string | null } | null
-  attribution?: {
-    cause_chain?: ProgressDeviationCauseChainItem[]
-  } | null
-}
-
-type ProgressDeviationMainline = {
-  key: ProgressDeviationMainlineKey
-  label: string
-  summary: {
-    total_items: number
-    deviated_items: number
-    delayed_items: number
-    unresolved_items: number
-  }
-  rows: ProgressDeviationRow[]
-}
-
-type ProgressDeviationTrendEvent = BaselineSwitchEvent
-
-type ProgressDeviationMonthlyBucket = {
-  month: string
-  on_track: number
-  delayed: number
-  carried_over: number
-  revised: number
-  unresolved: number
-}
-
-type ProgressDeviationResponsibilityContribution = {
-  owner: string
-  owner_id?: string | null
-  count: number
-  percentage: number
-  task_ids: string[]
-  causal_task_ids?: string[]
-  basis?: string | null
-  confidence?: number | null
-  impact_days?: number | null
-  weighted_count?: number | null
-  weighted_percentage?: number | null
-  evidence_sources?: string[]
-  responsibility_role?: 'accountable_subject' | 'execution_owner' | 'impacted_subject' | string | null
-}
-
-type ProgressDeviationCauseSummary = {
-  reason: string
-  count: number
-  percentage: number
-}
-
-type ProgressDeviationChartData = {
-  baselineDeviation?: ProgressDeviationRow[]
-  monthlyFulfillment?: ProgressDeviationMonthlyBucket[]
-  executionDeviation?: ProgressDeviationRow[]
-  monthly_buckets: ProgressDeviationMonthlyBucket[]
-}
-
-type ProgressDeviationAnalysisResponse = {
-  project_id: string
-  baseline_version_id: string
-  monthly_plan_version_id?: string | null
-  version_lock?: BaselineVersionLock | null
-  summary: {
-    total_items: number
-    deviated_items: number
-    carryover_items: number
-    unresolved_items: number
-    baseline_items: number
-    monthly_plan_items: number
-    execution_items: number
-  }
-  rows: ProgressDeviationRow[]
-  mainlines: ProgressDeviationMainline[]
-  trend_events: ProgressDeviationTrendEvent[]
-  chart_data?: ProgressDeviationChartData | null
-  responsibility_contribution?: ProgressDeviationResponsibilityContribution[]
-  top_deviation_causes?: ProgressDeviationCauseSummary[]
-}
-
 type ReportMilestoneCard = {
   id: string
   name: string
@@ -327,17 +226,6 @@ type TaskBaselineListItem = {
   source_version_label?: string | null
   confirmed_at?: string | null
   updated_at?: string | null
-}
-
-type BaselineVersionLock = {
-  id: string
-  project_id: string
-  baseline_version_id: string
-  resource_id: string
-  locked_by?: string | null
-  locked_at: string
-  lock_expires_at: string
-  is_locked: boolean
 }
 
 type IssueSummaryTrendPoint = {
@@ -561,13 +449,11 @@ function formatEvidenceConfidence(value?: number | string | null) {
   return formatWholePercent(normalized)
 }
 
-function getCauseImpactDays(item: ProgressDeviationCauseChainItem) {
-  const candidates = [item.impact_days, item.wait_days, item.evidence?.wait_days]
-  for (const candidate of candidates) {
-    const value = Number(candidate)
-    if (Number.isFinite(value) && value > 0) return Math.round(value * 10) / 10
-  }
-  return null
+function formatProductionDuration(metric: DurationMetricDto | null | undefined) {
+  return formatDurationMetric(metric, {
+    expectedUnit: 'construction_production_day',
+    unavailableLabel: '生产日口径不可用',
+  })
 }
 
 function formatEvidenceIds(ids?: string[]) {
@@ -1027,7 +913,7 @@ export default function Reports() {
   const [deviationData, setDeviationData] = useState<ProgressDeviationAnalysisResponse | null>(null)
   const [deviationLoading, setDeviationLoading] = useState(false)
   const [deviationError, setDeviationError] = useState<string | null>(null)
-  const [deviationLock, setDeviationLock] = useState<BaselineVersionLock | null>(null)
+  const [deviationLock, setDeviationLock] = useState<ProgressDeviationVersionLock | null>(null)
   const [deviationLockError, setDeviationLockError] = useState<string | null>(null)
   const [deviationTimeRange, setDeviationTimeRange] = useState<'all' | '7d' | '30d' | '90d'>('all')
   const [deviationBuildingFilter, setDeviationBuildingFilter] = useState('all')
@@ -1195,11 +1081,8 @@ export default function Reports() {
 
       setBaselineLabel(latestBaseline.title || latestBaseline.source_version_label || `v${latestBaseline.version}`)
       const [analysis, lockResult] = await Promise.all([
-        apiGet<ProgressDeviationAnalysisResponse>(
-          `/api/progress-deviation?project_id=${encodeURIComponent(projectId)}&baseline_version_id=${encodeURIComponent(latestBaseline.id)}`,
-          { signal },
-        ),
-        apiGet<{ lock: BaselineVersionLock | null }>(
+        getProgressDeviationAnalysis(projectId, latestBaseline.id, { signal }),
+        apiGet<{ lock: ProgressDeviationVersionLock | null }>(
           `/api/progress-deviation/lock?project_id=${encodeURIComponent(projectId)}&baseline_version_id=${encodeURIComponent(latestBaseline.id)}`,
           { signal },
         ).catch((lockError) => {
@@ -1208,6 +1091,9 @@ export default function Reports() {
           return { lock: null }
         }),
       ])
+      if (!analysis) {
+        throw new Error('偏差分析响应不可用')
+      }
       setDeviationData(analysis)
       setDeviationLock(lockResult.lock ?? analysis.version_lock ?? null)
     } catch (err) {
@@ -1718,7 +1604,7 @@ export default function Reports() {
   const deviationVersionEvents = deviationData?.trend_events ?? []
   const activeDeviationLock = deviationLock ?? deviationData?.version_lock ?? null
   // progress-deviation-ssot: this surface displays backend ProgressDeviationAnalysisResponse fields
-  // (`planned_progress`, `actual_progress`, `deviation_days`, `deviation_rate`) and must not
+  // (`planned_progress`, `actual_progress`, `deviation_duration`, `deviation_rate`) and must not
   // recompute delay/progress deviation from task dates or raw task progress.
   const deviationRowMeta = useMemo(
     () =>
@@ -1790,7 +1676,11 @@ export default function Reports() {
       const leftLinked = left.source_task_id ? 1 : 0
       const rightLinked = right.source_task_id ? 1 : 0
       if (rightLinked !== leftLinked) return rightLinked - leftLinked
-      return Math.abs(right.deviation_days) - Math.abs(left.deviation_days)
+      const leftValue = readAvailableDurationValue(left.deviation_duration, 'construction_production_day')
+      const rightValue = readAvailableDurationValue(right.deviation_duration, 'construction_production_day')
+      if (leftValue === null) return rightValue === null ? 0 : 1
+      if (rightValue === null) return -1
+      return Math.abs(rightValue) - Math.abs(leftValue)
     })
   }, [deviationView, filteredDeviationRows])
   const filteredDeviationRowIds = useMemo(
@@ -2388,10 +2278,6 @@ export default function Reports() {
                       const causalTaskIds = formatEvidenceIds(entry.causal_task_ids)
                       const evidenceSources = formatEvidenceIds(entry.evidence_sources)
                       const confidenceLabel = formatEvidenceConfidence(entry.confidence)
-                      const impactDays =
-                        typeof entry.impact_days === 'number' && Number.isFinite(entry.impact_days)
-                          ? Math.round(entry.impact_days * 10) / 10
-                          : null
                       const weightedCount =
                         typeof entry.weighted_count === 'number' && Number.isFinite(entry.weighted_count)
                           ? Math.round(entry.weighted_count * 10) / 10
@@ -2421,7 +2307,7 @@ export default function Reports() {
                           {affectedTaskIds ? <div>受影响任务 {affectedTaskIds}</div> : null}
                           {causalTaskIds ? <div>上游致因任务 {causalTaskIds}</div> : null}
                           {entry.owner_id ? <div>主体ID {entry.owner_id}</div> : null}
-                          {impactDays !== null ? <div>影响生产日 {impactDays}</div> : null}
+                          <div>影响 {formatProductionDuration(entry.impact_duration)}</div>
                           {weightedCount !== null ? <div>权重贡献 {weightedCount}</div> : null}
                           {evidenceSources ? <div>证据来源 {evidenceSources}</div> : null}
                           {confidenceLabel ? <div>证据置信度 {confidenceLabel}</div> : null}
@@ -2538,7 +2424,7 @@ export default function Reports() {
                     <DialogHeader className="space-y-2 text-left">
                       <DialogTitle className="text-xl">{selectedDeviationRow.title}</DialogTitle>
                       <DialogDescription className="text-sm text-slate-500">
-                        {deviationMainline?.label || deviationViewLabel} · 偏差 {selectedDeviationRow.deviation_days} 个生产日
+                        {deviationMainline?.label || deviationViewLabel} · 偏差 {formatProductionDuration(selectedDeviationRow.deviation_duration)}
                       </DialogDescription>
                     </DialogHeader>
                   </div>
@@ -2556,8 +2442,8 @@ export default function Reports() {
                         hint={selectedDeviationRow.actual_date || '无实际日期'}
                       />
                       <DetailStatCard
-                        label="偏差生产日"
-                        value={selectedDeviationRow.deviation_days}
+                        label="偏差"
+                        value={formatProductionDuration(selectedDeviationRow.deviation_duration)}
                         hint={`${formatWholePercent(selectedDeviationRow.deviation_rate)} 偏差率`}
                       />
                       <DetailStatCard
@@ -2592,8 +2478,6 @@ export default function Reports() {
                         </div>
                         {selectedDeviationRow.attribution.cause_chain.map((item, index) => {
                           const confidenceLabel = formatEvidenceConfidence(item.confidence)
-                          const impactDays = getCauseImpactDays(item)
-
                           return (
                             <div
                               key={`${item.cause_type}:${item.affected_task_id || index}:${item.upstream_task_id || 'cause'}`}
@@ -2608,7 +2492,8 @@ export default function Reports() {
                                 <div>受影响主体 {item.impacted_owner || '未明确'}</div>
                                 {item.affected_task_id ? <div>受影响任务 {item.affected_task_id}</div> : null}
                                 {item.upstream_task_id ? <div>上游致因任务 {item.upstream_task_id}</div> : null}
-                                {impactDays !== null ? <div>等待 {impactDays} 个生产日</div> : null}
+                                <div>影响 {formatProductionDuration(item.impact_duration)}</div>
+                                <div>等待 {formatProductionDuration(item.evidence?.wait_duration)}</div>
                                 {confidenceLabel ? <div>证据置信度 {confidenceLabel}</div> : null}
                               </div>
                               {item.evidence_source ? (

@@ -147,11 +147,13 @@ function normalizeMonthlyClipboardProgress(value?: number | string | null) {
   return Math.max(0, Math.min(100, parsed))
 }
 
-function shiftMonthlyPlanDate(value: string | null | undefined, shiftDays: number) {
+function shiftGregorianDateOnly(value: string | null | undefined, calendarDayShift: number) {
   if (!value) return null
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  parsed.setDate(parsed.getDate() + shiftDays)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isInteger(calendarDayShift)) return value
+  const [year, month, day] = value.split('-').map(Number)
+  const parsed = new Date(Date.UTC(year, month - 1, day))
+  if (parsed.toISOString().slice(0, 10) !== value) return value
+  parsed.setUTCDate(parsed.getUTCDate() + calendarDayShift)
   return parsed.toISOString().slice(0, 10)
 }
 
@@ -452,7 +454,7 @@ function buildMonthlyConfirmReminder(month: string, status?: MonthlyPlanVersion[
       tone: 'slate' as const,
       title: '第 3 日催办尚未触发',
       detail: `${formatMonthLabel(month)} 确认催办尚未开始，将在第 3 日前提醒完成 ${formatMonthLabel(month)} 确认。`,
-      badge: `剩余 ${Math.abs(diffDays)} 天`,
+      badge: `剩余 ${Math.abs(diffDays)} 个日历天`,
     }
   }
 
@@ -462,8 +464,8 @@ function buildMonthlyConfirmReminder(month: string, status?: MonthlyPlanVersion[
     detail:
       diffDays === 0
         ? `${formatMonthLabel(month)} 已进入确认催办节点，请尽快完成确认或补齐阻断项。`
-        : `${formatMonthLabel(month)} 已超过第 3 日催办节点 ${diffDays} 天，请优先处理确认链路。`,
-    badge: diffDays === 0 ? '今日触发' : `已超 ${diffDays} 天`,
+        : `${formatMonthLabel(month)} 已超过第 3 日催办节点 ${diffDays} 个日历天，请优先处理确认链路。`,
+    badge: diffDays === 0 ? '今日触发' : `已超 ${diffDays} 个日历天`,
   }
 }
 
@@ -1894,13 +1896,13 @@ function MonthlyPlanEditorPage() {
   const handleBatchShiftDates = async () => {
     if (!activePlan || readOnly || normalizedSelectedItemIds.length === 0) return
 
-    const raw = window.prompt('请输入顺延天数，支持负数回拨。', '1')
+    const raw = window.prompt('请输入顺延日历天数，支持负数回拨。', '1')
     if (raw === null) return
-    const shiftDays = Number(raw)
-    if (!Number.isFinite(shiftDays) || shiftDays === 0) {
+    const calendarDayShift = Number(raw)
+    if (!Number.isInteger(calendarDayShift) || calendarDayShift === 0) {
       toast({
-        title: '请输入有效天数',
-        description: '顺延天数必须是非 0 数字。',
+        title: '请输入有效日历天数',
+        description: '顺延日历天数必须是非 0 整数。',
         variant: 'destructive',
       })
       return
@@ -1912,8 +1914,8 @@ function MonthlyPlanEditorPage() {
       const nextItems = editorItems.map((item) => selectedIds.has(item.id)
         ? {
           ...item,
-          planned_start_date: shiftMonthlyPlanDate(item.planned_start_date, shiftDays),
-          planned_end_date: shiftMonthlyPlanDate(item.planned_end_date, shiftDays),
+          planned_start_date: shiftGregorianDateOnly(item.planned_start_date, calendarDayShift),
+          planned_end_date: shiftGregorianDateOnly(item.planned_end_date, calendarDayShift),
         }
         : item)
       commitEditorSnapshot(nextItems, normalizedSelectedItemIds)
@@ -2347,7 +2349,7 @@ function MonthlyPlanEditorPage() {
                 disabled={readOnly || normalizedSelectedItemIds.length === 0}
                 loading={actionLoading === 'batch_shift'}
               >
-                批量顺延
+                批量顺延（日历天）
               </Button>
               <Button
                 type="button"

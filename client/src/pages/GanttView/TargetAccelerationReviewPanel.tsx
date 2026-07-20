@@ -22,6 +22,10 @@ import { cn } from '@/lib/utils'
 import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { WbsAccelerationProposal, WbsAccelerationProposalAction, WbsTargetFeasibility } from '@/services/wbsTemplateGenerationApi'
 import type { Task } from '../GanttViewTypes'
+import {
+  hasTargetAccelerationTypedFacts,
+  isTargetAccelerationFeasibilityActionable,
+} from './targetAccelerationAvailability'
 
 type Props = {
   targetFeasibility: WbsTargetFeasibility
@@ -119,7 +123,11 @@ export function TargetAccelerationReviewPanel({
   if (overshootValue <= 0) return null
 
   const rescheduleDraft = proposal.rescheduleDraft ?? null
-  const canAcceptDraft = Boolean(onAcceptRescheduleDraft && rescheduleDraft && rescheduleDraft.operations.length > 0)
+  const typedFactsAvailable = hasTargetAccelerationTypedFacts(targetFeasibility)
+  const canAcceptDraft = Boolean(
+    onAcceptRescheduleDraft && isTargetAccelerationFeasibilityActionable(targetFeasibility),
+  )
+  const remainingGapValue = readAvailableDurationValue(proposal.remainingGap, 'construction_production_day')
   const fastTrack = proposal.actions.find((action) => action.type === 'fast_track')
   const crashing = proposal.actions.find((action) => action.type === 'crashing')
   const scope = proposal.actions.find((action) => action.type === 'scope_reduction')
@@ -149,11 +157,23 @@ export function TargetAccelerationReviewPanel({
           </p>
           <div className="flex flex-wrap gap-2 text-xs tabular-nums">
             <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-              预计可追回 {formatDurationMetric(proposal.totalRecover, { absolute: true })}
+              预计可追回 {formatDurationMetric(proposal.totalRecover, {
+                absolute: true,
+                expectedUnit: 'construction_production_day',
+                unavailableLabel: '生产日口径不可用',
+              })}
             </Badge>
-            {(readAvailableDurationValue(proposal.remainingGap, 'construction_production_day') ?? 0) > 0 ? (
+            {!typedFactsAvailable ? (
+              <Badge variant="outline" className="border-amber-200 bg-white text-amber-800">
+                生产日口径不可用，当前草案不可采纳
+              </Badge>
+            ) : remainingGapValue !== null && remainingGapValue > 0 ? (
               <Badge variant="outline" className="border-rose-200 bg-rose-50 text-rose-700">
-                仍需决策 {formatDurationMetric(proposal.remainingGap, { absolute: true })}
+                仍需决策 {formatDurationMetric(proposal.remainingGap, {
+                  absolute: true,
+                  expectedUnit: 'construction_production_day',
+                  unavailableLabel: '生产日口径不可用',
+                })}
               </Badge>
             ) : (
               <Badge variant="outline" className="border-blue-200 bg-blue-50 text-blue-700">
@@ -184,7 +204,10 @@ export function TargetAccelerationReviewPanel({
               size="sm"
               className="h-8 bg-blue-600 text-xs text-white hover:bg-blue-700"
               disabled={!canAcceptDraft || acceptingRescheduleDraft}
-              onClick={() => void onAcceptRescheduleDraft(proposal)}
+              onClick={() => {
+                if (!canAcceptDraft) return
+                void onAcceptRescheduleDraft(proposal)
+              }}
             >
               <CheckCircle2 className="h-3.5 w-3.5" />
               {acceptingRescheduleDraft ? '提交中' : '采纳重排草案'}

@@ -25,8 +25,6 @@ import type {
 } from './durationRuntimeConsumerObservationService.js'
 import { delayDayDelta, inclusiveDurationDays, normalizeDurationDateUtc, signedDurationDayDelta } from '../utils/durationDays.js'
 import {
-  addConstructionProductionDays,
-  isConstructionProductionDay,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
@@ -58,6 +56,7 @@ import {
   buildCalendarDayDurationMetric,
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
+  hasIdentifiedConstructionCalendar,
   type DurationMetricDto,
 } from './durationMetricService.js'
 
@@ -169,12 +168,12 @@ export type ScheduleTargetFeasibility = {
   overshootDays: number
   overshoot: DurationMetricDto
   /** @deprecated Use recoverable. */
-  recoverableDays: number
+  recoverableDays: number | null
   recoverable: DurationMetricDto
   /** @deprecated Use unrecoverable. */
-  unrecoverableDays: number
+  unrecoverableDays: number | null
   unrecoverable: DurationMetricDto
-  verdict: 'fit' | 'tight' | 'compressible' | 'requires_scope_change' | 'infeasible'
+  verdict: 'fit' | 'tight' | 'compressible' | 'requires_scope_change' | 'infeasible' | 'unavailable'
   strategies: Array<{
     type: 'fast_track' | 'crashing' | 'scope_reduction'
     affectedRowIds: string[]
@@ -342,8 +341,11 @@ export type ScheduleAccelerationRescheduleDraft = {
     changedFields: string[]
     visualDiff: {
       durationDeltaDays: number
+      durationDelta?: DurationMetricDto
       startDeltaDays: number
+      startDelta?: DurationMetricDto
       endDeltaDays: number
+      endDelta?: DurationMetricDto
       barDeltaKind: 'compressed' | 'shifted' | 'unchanged'
     }
   }>
@@ -1061,47 +1063,37 @@ function comparePlanDates(left: string | null, right: string | null) {
   return leftTime - rightTime
 }
 
-function scheduleShiftDays(from: string | null, to: string | null, calendar?: ConstructionCalendarContext | null) {
-  return delayDayDelta(from, to, calendar) ?? 0
+function calendarDateShiftDays(from: string | null, to: string | null) {
+  return signedDurationDayDelta(from, to) ?? 0
+}
+
+function productionScheduleShiftDays(
+  from: string | null,
+  to: string | null,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!hasIdentifiedConstructionCalendar(calendar)) return null
+  return delayDayDelta(from, to, calendar) ?? null
 }
 
 function hasConstructionCalendarRules(calendar?: ConstructionCalendarContext | null) {
-  return Boolean(calendar?.windows?.length)
+  return hasIdentifiedConstructionCalendar(calendar)
 }
 
 function resolveScheduleAccelerationCalendar(context?: ScheduleAccelerationContext | null) {
   return context?.constructionCalendar ?? context?.workCalendar ?? null
 }
 
-function addPlanDays(date: string | null, days: number, calendar?: ConstructionCalendarContext | null) {
-  if (hasConstructionCalendarRules(calendar)) {
-    const parsed = parseConstructionCalendarDate(date)
-    if (!parsed) return null
-    return addConstructionProductionDays(parsed, Math.max(1, Math.round(days) + 1), calendar)
-  }
-
+function addPlanCalendarDays(date: string | null, days: number) {
   const next = normalizeDurationDateUtc(date)
   if (!next) return null
   next.setUTCDate(next.getUTCDate() + Math.round(days))
   return next.toISOString().slice(0, 10)
 }
 
-function shiftPlanDate(date: string | null, deltaDays: number, calendar?: ConstructionCalendarContext | null) {
+function shiftPlanDateByCalendarDays(date: string | null, deltaDays: number) {
   const shift = Math.round(deltaDays)
   if (shift === 0) return normalizeDate(date)
-  if (hasConstructionCalendarRules(calendar)) {
-    const parsed = parseConstructionCalendarDate(date)
-    if (!parsed) return null
-    if (shift > 0) return addConstructionProductionDays(parsed, shift + 1, calendar)
-    const cursor = new Date(parsed)
-    let remaining = Math.abs(shift)
-    while (remaining > 0) {
-      cursor.setUTCDate(cursor.getUTCDate() - 1)
-      if (isConstructionProductionDay(cursor, calendar)) remaining -= 1
-    }
-    return cursor.toISOString().slice(0, 10)
-  }
-
   const next = normalizeDurationDateUtc(date)
   if (!next) return null
   next.setUTCDate(next.getUTCDate() + shift)
@@ -2439,7 +2431,7 @@ function buildTargetRescheduleDraft(params: {
       const currentEndDate = readGeneratedRowPlanEnd(row)
       const proposedStartDate = currentStartDate
       const proposedEndDate = currentStartDate
-        ? addPlanDays(currentStartDate, Math.max(0, adjustment.proposedDurationDays - 1), params.calendar)
+        ? addPlanCalendarDays(currentStartDate, Math.max(0, adjustment.proposedDurationDays - 1))
         : currentEndDate
       const changedFields = [
         proposedStartDate !== currentStartDate ? 'planned_start_date' : null,
@@ -2449,8 +2441,8 @@ function buildTargetRescheduleDraft(params: {
       if (changedFields.length === 0 && adjustment.recoverDays <= 0) return null
 
       const durationDeltaDays = adjustment.proposedDurationDays - adjustment.currentDurationDays
-      const startDeltaDays = scheduleShiftDays(currentStartDate, proposedStartDate, params.calendar)
-      const endDeltaDays = scheduleShiftDays(currentEndDate, proposedEndDate, params.calendar)
+      const startDeltaDays = calendarDateShiftDays(currentStartDate, proposedStartDate)
+      const endDeltaDays = calendarDateShiftDays(currentEndDate, proposedEndDate)
       return {
         clientRowId: adjustment.clientRowId,
         title: getGeneratedRowTitle(row),
@@ -2495,9 +2487,9 @@ function buildTargetRescheduleDraft(params: {
       if (recoverDays <= 0) return null
 
       const currentDurationDays = readGeneratedRowPlanDurationDays(row, params.calendar)
-      const proposedStartDate = shiftPlanDate(currentStartDate, -recoverDays, params.calendar)
+      const proposedStartDate = shiftPlanDateByCalendarDays(currentStartDate, -recoverDays)
       const proposedEndDate = proposedStartDate
-        ? addPlanDays(proposedStartDate, Math.max(0, currentDurationDays - 1), params.calendar)
+        ? addPlanCalendarDays(proposedStartDate, Math.max(0, currentDurationDays - 1))
         : currentEndDate
       const changedFields = [
         proposedStartDate !== currentStartDate ? 'planned_start_date' : null,
@@ -2505,8 +2497,8 @@ function buildTargetRescheduleDraft(params: {
       ].filter((item): item is string => Boolean(item))
       if (changedFields.length === 0) return null
 
-      const startDeltaDays = scheduleShiftDays(currentStartDate, proposedStartDate, params.calendar)
-      const endDeltaDays = scheduleShiftDays(currentEndDate, proposedEndDate, params.calendar)
+      const startDeltaDays = calendarDateShiftDays(currentStartDate, proposedStartDate)
+      const endDeltaDays = calendarDateShiftDays(currentEndDate, proposedEndDate)
       return {
         clientRowId: adjustment.successorClientRowId,
         title: getGeneratedRowTitle(row),
@@ -2579,14 +2571,14 @@ function getNetworkDependencyStartConstraint(params: {
   const lagDays = Math.round(Number(params.dependency.lagDays ?? 0) || 0)
   switch (params.dependency.dependencyType) {
     case 'SS':
-      return shiftPlanDate(params.predecessor.start, lagDays, params.calendar)
+      return shiftPlanDateByCalendarDays(params.predecessor.start, lagDays)
     case 'FF':
-      return shiftPlanDate(params.predecessor.end, lagDays - Math.max(0, params.successorDurationDays - 1), params.calendar)
+      return shiftPlanDateByCalendarDays(params.predecessor.end, lagDays - Math.max(0, params.successorDurationDays - 1))
     case 'SF':
-      return shiftPlanDate(params.predecessor.start, lagDays - Math.max(0, params.successorDurationDays - 1), params.calendar)
+      return shiftPlanDateByCalendarDays(params.predecessor.start, lagDays - Math.max(0, params.successorDurationDays - 1))
     case 'FS':
     default:
-      return shiftPlanDate(params.predecessor.end, lagDays + 1, params.calendar)
+      return shiftPlanDateByCalendarDays(params.predecessor.end, lagDays + 1)
   }
 }
 
@@ -2652,7 +2644,7 @@ function evaluateAccelerationNetworkTerminalFinish(params: {
     const start = dependencyStartConstraints.length > 0
       ? latestPlanDate(dependencyStartConstraints)
       : fallbackStart
-    const end = start ? addPlanDays(start, Math.max(0, durationDays - 1), params.calendar) : fallbackEnd
+    const end = start ? addPlanCalendarDays(start, Math.max(0, durationDays - 1)) : fallbackEnd
     resolving.delete(clientRowId)
     if (!start || !end) return null
     const result = { start, end }
@@ -2682,7 +2674,7 @@ function estimateNetworkRecoverDaysFromDraft(params: {
     calendar: params.calendar,
   })
   if (!baselineTerminalFinish || !proposedTerminalFinish) return null
-  return Math.max(0, scheduleShiftDays(proposedTerminalFinish, baselineTerminalFinish, params.calendar))
+  return Math.max(0, productionScheduleShiftDays(proposedTerminalFinish, baselineTerminalFinish, params.calendar) ?? 0)
 }
 
 function estimateTerminalRecoverDaysFromDraft(params: {
@@ -2736,7 +2728,10 @@ function estimateTerminalRecoverDaysFromDraft(params: {
     }
   }
 
-  const terminalRecoverDays = Math.max(0, scheduleShiftDays(projectedEndDate, params.naturalEndDate, params.calendar))
+  const terminalRecoverDays = Math.max(
+    0,
+    productionScheduleShiftDays(projectedEndDate, params.naturalEndDate, params.calendar) ?? 0,
+  )
   return {
     recoverDays: Math.min(params.rawRecoverDays, terminalRecoverDays),
     networkFallbackPolicy: 'projected_terminal_delta' as const,
@@ -2936,12 +2931,41 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
   const runtimeForecastFinishDate = scenario === 'runtime_delay_recovery'
     ? normalizeDate(params.context?.runtime?.projectRemainingForecastFinishDate)
     : null
+  if (scenario === 'runtime_delay_recovery' && !runtimeForecastFinishDate) return undefined
   const naturalEndDate = runtimeForecastFinishDate ?? getGeneratedRowsLatestEnd(comparableRows)
   if (!naturalEndDate) return undefined
   const calendar = resolveScheduleAccelerationCalendar(params.context)
   const overshootDays = Math.max(0, signedDurationDayDelta(targetEndDate, naturalEndDate) ?? 0)
-  const productionOvershootDays = Math.max(0, scheduleShiftDays(targetEndDate, naturalEndDate, calendar))
   const asOf = normalizeDate(params.context?.asOfDate) ?? businessDateKey(new Date(), calendar?.timezone)
+  const overshoot = buildCalendarDayDurationMetric(overshootDays, {
+    asOf,
+    timezone: calendar?.timezone,
+  })
+  if (!hasIdentifiedConstructionCalendar(calendar)) {
+    const unavailableProductionDuration = buildConstructionProductionDayDurationMetric(null, {
+      asOf,
+      timezone: calendar?.timezone,
+      calendar,
+    })
+    return {
+      mode: params.mode ?? 'compare_only',
+      scenario,
+      targetEndDate,
+      naturalEndDate,
+      overshootDays,
+      overshoot,
+      recoverableDays: null,
+      recoverable: unavailableProductionDuration,
+      unrecoverableDays: null,
+      unrecoverable: { ...unavailableProductionDuration },
+      verdict: overshootDays === 0 ? 'fit' : 'unavailable',
+      strategies: [],
+    }
+  }
+  const productionOvershootDays = Math.max(
+    0,
+    productionScheduleShiftDays(targetEndDate, naturalEndDate, calendar) ?? 0,
+  )
   const naturalStartDate = getGeneratedRowsEarliestStart(comparableRows)
   const budget = estimateRecoverableTargetBudget({
     rows: comparableRows,
@@ -2995,10 +3019,6 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
     naturalDurationDays,
     unrecoverableDays: verdictUnrecoverableDays,
   })
-  const overshoot = buildCalendarDayDurationMetric(overshootDays, {
-    asOf,
-    timezone: calendar?.timezone,
-  })
   const recoverable = buildConstructionProductionDayDurationMetric(recoverableDays, {
     asOf,
     timezone: calendar?.timezone,
@@ -3047,6 +3067,18 @@ function evaluateScheduleTargetFeasibilityInternal(params: {
                 currentDuration: productionDuration(adjustment.currentDurationDays),
                 proposedDuration: productionDuration(adjustment.proposedDurationDays),
                 recoverDuration: productionDuration(adjustment.recoverDays),
+                visualDiff: {
+                  ...adjustment.visualDiff,
+                  durationDelta: productionDuration(adjustment.visualDiff.durationDeltaDays),
+                  startDelta: buildCalendarDayDurationMetric(adjustment.visualDiff.startDeltaDays, {
+                    asOf,
+                    timezone: calendar?.timezone,
+                  }),
+                  endDelta: buildCalendarDayDurationMetric(adjustment.visualDiff.endDeltaDays, {
+                    asOf,
+                    timezone: calendar?.timezone,
+                  }),
+                },
               })),
               resourceAdjustments: accelerationProposal.rescheduleDraft.resourceAdjustments
                 .map(durationAdjustmentWithMetrics),

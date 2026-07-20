@@ -38,6 +38,20 @@ let versions: BaselineVersion[]
 let details: Record<string, BaselineDetail>
 let generateCandidateDefaultMasterPlanDraft = false
 let generateCandidateDefaultMasterPlanDraftGovernanceOnly = false
+let generationCandidateDurationMetrics: Record<string, unknown>
+
+function calendarDayMetric(value: number | null, availability: 'available' | 'unavailable' = 'available') {
+  return {
+    value,
+    unit: 'calendar_day',
+    calendarRef: 'gregorian',
+    calendarVersion: 'ISO-8601',
+    timezone: 'UTC',
+    asOf: '2026-05-09',
+    availability,
+    unavailableReason: availability === 'available' ? null : 'date_metadata_missing',
+  }
+}
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -416,6 +430,13 @@ describe('BaselinePage planning workflow', () => {
     seedBaselineFixtures()
     generateCandidateDefaultMasterPlanDraft = false
     generateCandidateDefaultMasterPlanDraftGovernanceOnly = false
+    generationCandidateDurationMetrics = {
+      milestoneMaxShift: calendarDayMetric(3),
+      totalFinishShift: calendarDayMetric(14),
+      // One-release compatibility fields deliberately conflict with typed truth.
+      milestoneMaxShiftDays: 903,
+      totalFinishShiftDays: 914,
+    }
 
     useStore.setState({
       currentProject: {
@@ -458,7 +479,7 @@ describe('BaselinePage planning workflow', () => {
             {
               code: 'finish_shift',
               label: '总完工日期偏移',
-              detail: '总完工日期偏移 14 天，超过 7 天阈值。',
+              detail: '总完工日期偏移 14 个日历天，超过 7 个日历天阈值。',
               severity: 'warning',
             },
           ],
@@ -471,8 +492,7 @@ describe('BaselinePage planning workflow', () => {
             removedItemCount: 0,
             changedItemCount: 1,
             structureChangeRatio: 0,
-            milestoneMaxShiftDays: 0,
-            totalFinishShiftDays: 14,
+            ...generationCandidateDurationMetrics,
           },
           diffCounts: { total: 1, 新增: 0, 修改: 1, 移除: 0, 里程碑变动: 0 },
           diffItems: [
@@ -825,21 +845,92 @@ describe('BaselinePage planning workflow', () => {
       '建议生成新版基线草案',
       '先不更新',
       '查看详情',
-      '总完工偏移 14 天',
+      '总完工偏移 14 个日历天',
     ])
+    expect(container.textContent).not.toContain('914')
 
     const acceptButton = container.querySelector('[data-testid="baseline-accept-generation-candidate"]') as HTMLButtonElement | null
     expect(acceptButton).toBeTruthy()
     expect(acceptButton?.getAttribute('title')).toContain('系统将基于当前任务列表和实际进度')
 
     await clickButtonByText(container, '查看详情')
-    await waitForText(document.body, ['新版基线候选详情', '总完工日期偏移', '计划完成: 2026-07-04 → 2026-07-18'])
+    await waitForText(document.body, ['新版基线候选详情', '里程碑最大偏移', '3 个日历天', '计划完成: 2026-07-04 → 2026-07-18'])
+    expect(document.body.textContent).not.toContain('903')
     expect(document.body.querySelector('[data-testid="baseline-generation-candidate-dialog"]')).toBeTruthy()
 
     await clickElement(acceptButton as HTMLButtonElement)
     await waitForCondition(() => mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/generate'))
     await waitForText(container, ['正在编辑计划表', '已根据当前任务列表生成新版基线'])
     expect(container.querySelector('[data-testid="baseline-generation-candidate"]')).toBeFalsy()
+
+    cleanup()
+  })
+
+  it('fails calendar-day candidate metrics closed instead of reading deprecated numerics', async () => {
+    generationCandidateDurationMetrics = {
+      milestoneMaxShift: calendarDayMetric(null, 'unavailable'),
+      totalFinishShift: calendarDayMetric(null, 'unavailable'),
+      milestoneMaxShiftDays: 803,
+      totalFinishShiftDays: 814,
+    }
+
+    const { container, cleanup } = renderBaselinePage()
+
+    await waitForText(container, ['总完工偏移 日历天口径不可用'])
+    expect(container.textContent).not.toContain('814')
+
+    await clickButtonByText(container, '查看详情')
+    await waitForText(document.body, ['里程碑最大偏移', '日历天口径不可用'])
+    expect(document.body.textContent).not.toContain('803')
+
+    cleanup()
+  })
+
+  it('renders structured 422 baseline validity metrics without parsing error prose', async () => {
+    const defaultPost = mockedApiPost.getMockImplementation()
+    mockedApiPost.mockImplementation(async (url: string, body?: unknown) => {
+      if (url === '/api/task-baselines/baseline-v7/publish') {
+        throw Object.assign(new Error('opaque realignment response mentioning 999 days'), {
+          status: 422,
+          serverCode: 'REQUIRES_REALIGNMENT',
+          serverDetails: {
+            validity: {
+              deviatedTaskRatio: 0.5,
+              shiftedMilestoneCount: 3,
+              averageMilestoneShift: calendarDayMetric(12),
+              averageMilestoneShiftDays: 999,
+              totalDurationDeviationRatio: 0.25,
+              triggeredRules: ['task_deviation_ratio', 'milestone_shift'],
+            },
+          },
+        })
+      }
+      return defaultPost?.(url, body) as never
+    })
+
+    const { container, cleanup } = renderBaselinePage()
+
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
+    await clickButtonByText(container, '保存')
+    await waitForText(container, ['已保存当前项目基线草稿。', '发布项目基线'])
+    await clickButtonByText(container, '发布项目基线')
+    await setTextareaValue(
+      document.body.querySelector('#baseline-publish-change-reason') as HTMLTextAreaElement,
+      '基于现场进展调整节点。',
+    )
+    await clickButtonByText(document.body, '确认发布')
+
+    await waitForText(container, [
+      '任务偏差率 50%',
+      '偏移里程碑 3 个',
+      '平均里程碑偏移 12 个日历天',
+      '总工期偏差 25%',
+    ])
+    const validity = container.querySelector('[data-testid="baseline-publish-validity"]')
+    expect(validity).toBeTruthy()
+    expect(validity?.textContent).not.toContain('999')
 
     cleanup()
   })

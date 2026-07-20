@@ -2,6 +2,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
 import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
+import { formatDurationMetric, type DurationMetricDto } from '@/lib/durationMetric'
 import {
   Table,
   TableBody,
@@ -19,7 +20,7 @@ type DetailRow = {
   planned_progress?: number | null
   actual_progress?: number | null
   actual_date?: string | null
-  deviation_days: number
+  deviation_duration: DurationMetricDto | null
   deviation_rate: number
   status: string
   reason?: string | null
@@ -99,7 +100,10 @@ export function DeviationDetailTable({
                   <TableCell className="px-4 py-3 text-right text-slate-700 num-mono" style={{ width: DEVIATION_DETAIL_COLUMN_WIDTHS.deviation }}>
                     <div className="inline-flex items-center justify-end gap-1.5">
                       <DurationBasisBadge basis="production" compact variant="outline" />
-                      <span>{row.deviation_days} 个生产日</span>
+                      <span>{formatDurationMetric(row.deviation_duration, {
+                        expectedUnit: 'construction_production_day',
+                        unavailableLabel: '生产日口径不可用',
+                      })}</span>
                     </div>
                     <div className="mt-1 text-xs text-slate-500">{row.deviation_rate}%</div>
                   </TableCell>
