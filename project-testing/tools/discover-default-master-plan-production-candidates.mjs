@@ -407,7 +407,7 @@ async function readPublicationReadiness(queryExec, schema, baseline) {
   const requiredConsumptionColumns = [
     'consumption_key', 'publication_key', 'asset_key', 'artifact_key', 'company_id', 'project_id',
     'consumer_surface', 'task_id', 'baseline_item_id', 'consumption_context',
-    'duration_day_basis', 'consumed_at',
+    'duration_day_basis', 'source_evidence_refs', 'consumed_at',
   ]
   const requiredBaselineColumns = ['id', 'project_id', 'baseline_version_id', 'source_task_id']
   const requiredProjectColumns = ['id', 'company_id']
@@ -434,6 +434,11 @@ async function readPublicationReadiness(queryExec, schema, baseline) {
                  AND industry_consumption.asset_key = publication.asset_key
                  AND industry_consumption.artifact_key = publication.artifact_key
                  AND publication.industry_key = industry_consumption.consumption_context ->> 'industryKey'
+                 AND industry_consumption.consumption_context ->> 'authoritySource'
+                       = 'runtime_resolver_publication_set'
+                 AND industry_consumption.source_evidence_refs @> jsonb_build_array(
+                       'duration_learning_runtime_publications:' || industry_consumption.publication_key
+                     )
             )
           )`
     : ''
@@ -463,13 +468,14 @@ async function readPublicationReadiness(queryExec, schema, baseline) {
       LIMIT 50`,
     [baseline.projectId],
   )
-  const publicationKeys = unique(publicationRows.map((row) => text(row.publication_key)).filter(Boolean))
+  const eligiblePublicationRows = publicationRows.filter((row) => runtimePublicationIdentity(row))
+  const publicationKeys = unique(eligiblePublicationRows.map((row) => text(row.publication_key)))
   if (!consumptionSchemaReady) {
     return {
       totalCount: publicationKeys.length,
       publishedCount: publicationKeys.length,
       trustedConsumptionCount: 0,
-      latestPublicationKey: publicationKeys[0] ?? '',
+      latestPublicationKey: '',
     }
   }
   const consumptionRows = await queryExec(
@@ -480,6 +486,8 @@ async function readPublicationReadiness(queryExec, schema, baseline) {
             publication.monitoring_status,
             consumption.consumption_key,
             consumption.consumer_surface,
+            consumption.source_evidence_refs,
+            consumption.consumption_context,
             consumption.consumed_at
        FROM public.duration_learning_runtime_consumptions consumption
        JOIN public.duration_learning_runtime_publications publication
@@ -504,6 +512,11 @@ async function readPublicationReadiness(queryExec, schema, baseline) {
         AND publication.monitoring_status NOT IN ('failed', 'rollback_pending')
         AND ((consumption.task_id IS NOT NULL)::int + (consumption.baseline_item_id IS NOT NULL)::int) = 1
         AND consumption.duration_day_basis = 'construction_production_day'
+        AND consumption.consumption_context ->> 'authoritySource'
+              = 'runtime_resolver_publication_set'
+        AND consumption.source_evidence_refs @> jsonb_build_array(
+              'duration_learning_runtime_publications:' || consumption.publication_key
+            )
         AND (
           publication.scope_level = 'global'
           OR (
@@ -521,12 +534,39 @@ async function readPublicationReadiness(queryExec, schema, baseline) {
       LIMIT 500`,
     [baseline.projectId, baseline.baselineId],
   )
+  const eligiblePublicationIdentities = new Set(
+    eligiblePublicationRows.map(runtimePublicationIdentity),
+  )
+  const trustedConsumptionRows = consumptionRows.filter((row) => {
+    const identity = runtimePublicationIdentity(row)
+    const publicationKey = text(row.publication_key)
+    const context = readObject(row.consumption_context)
+    const evidenceRefs = arrayOfText(row.source_evidence_refs)
+    return eligiblePublicationIdentities.has(identity)
+      && text(context.authoritySource) === 'runtime_resolver_publication_set'
+      && evidenceRefs.includes(`duration_learning_runtime_publications:${publicationKey}`)
+  })
+  const trustedPublicationIdentities = new Set(
+    trustedConsumptionRows.map(runtimePublicationIdentity),
+  )
+  const latestTrustedPublication = eligiblePublicationRows.find((row) => (
+    trustedPublicationIdentities.has(runtimePublicationIdentity(row))
+  ))
   return {
     totalCount: publicationKeys.length,
     publishedCount: publicationKeys.length,
-    trustedConsumptionCount: consumptionRows.length,
-    latestPublicationKey: publicationKeys[0] ?? '',
+    trustedConsumptionCount: trustedConsumptionRows.length,
+    latestPublicationKey: text(latestTrustedPublication?.publication_key),
   }
+}
+
+function runtimePublicationIdentity(row) {
+  const publicationKey = text(row?.publication_key)
+  const assetKey = text(row?.asset_key)
+  const artifactKey = text(row?.artifact_key)
+  return publicationKey && assetKey && artifactKey
+    ? `${publicationKey}\u0000${assetKey}\u0000${artifactKey}`
+    : ''
 }
 
 async function countRows(queryExec, tableName, where, params) {

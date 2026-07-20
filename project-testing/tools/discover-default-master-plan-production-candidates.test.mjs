@@ -192,6 +192,138 @@ test('keeps an applicable publication distinct from missing trusted baseline con
   }
 })
 
+test('recommends the latest publication trusted-consumed by the baseline instead of a newer publication-only row', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-discovery-'))
+  const output = path.join(root, 'candidate-discovery.json')
+  const newerPublicationKey = 'runtime.default_master_plan.project-1.v2'
+  const consumedPublicationKey = 'runtime.default_master_plan.project-1.v1'
+  const queryExec = async (sql, params = []) => {
+    if (sql.includes('information_schema.columns')) return columnsFor(params[1])
+    if (sql.includes('FROM public.task_baselines')) {
+      return [{
+        id: 'baseline-exact-publication-pair',
+        project_id: 'project-1',
+        status: 'draft',
+        name: 'exact publication pair',
+        source_version_label: 'managed_frontier_default_master_plan',
+        created_at: '2026-07-01T08:00:00.000Z',
+        updated_at: '2026-07-01T08:10:00.000Z',
+      }]
+    }
+    if (sql.includes('FROM public."task_baseline_items"')) return [{ count: 16 }]
+    if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 16 }]
+    if (sql.includes('FROM public."task_dependencies"')) return [{ count: 21 }]
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) {
+      return [
+        {
+          ...runtimePublicationRows(newerPublicationKey)[0],
+          artifact_key: 'facade-v4',
+          published_at: '2026-07-02T00:45:00.000Z',
+        },
+        {
+          ...runtimePublicationRows(consumedPublicationKey)[0],
+          published_at: '2026-07-01T00:45:00.000Z',
+        },
+      ]
+    }
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) {
+      return trustedConsumptionRows(consumedPublicationKey)
+    }
+    throw new Error(`unexpected SQL: ${sql}`)
+  }
+  queryExec.close = async () => {}
+
+  try {
+    const report = await discoverDefaultMasterPlanProductionCandidates({
+      output,
+      projectId: 'project-1',
+      environment: 'production',
+      exportedBy: 'release-user-1',
+      queryExec,
+      now: new Date('2026-07-02T01:00:00.000Z'),
+    })
+
+    const readiness = report.recommendedCandidate.evidenceReadiness
+    const command = report.recommendedCandidate.suggestedSourceExportCommand.join(' ')
+    assert.equal(readiness.runtimePublishedCount, 2)
+    assert.equal(readiness.trustedRuntimeConsumptionCount, 1)
+    assert.equal(readiness.gateStatus.runtimePublication, 'pass')
+    assert.equal(readiness.latestPublicationKey, consumedPublicationKey)
+    assert.match(command, new RegExp(`--publication-key ${consumedPublicationKey}`))
+    assert.doesNotMatch(command, new RegExp(`--publication-key ${newerPublicationKey}`))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('rejects physically joined consumptions without resolver authority and an exact publication ref', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-discovery-'))
+  const output = path.join(root, 'candidate-discovery.json')
+  const publicationKey = 'runtime.default_master_plan.project-1'
+  let consumptionSql = ''
+  const queryExec = async (sql, params = []) => {
+    if (sql.includes('information_schema.columns')) return columnsFor(params[1])
+    if (sql.includes('FROM public.task_baselines')) {
+      return [{
+        id: 'baseline-untrusted-consumption',
+        project_id: 'project-1',
+        status: 'draft',
+        name: 'untrusted consumption',
+        source_version_label: 'managed_frontier_default_master_plan',
+        created_at: '2026-07-01T08:00:00.000Z',
+        updated_at: '2026-07-01T08:10:00.000Z',
+      }]
+    }
+    if (sql.includes('FROM public."task_baseline_items"')) return [{ count: 16 }]
+    if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 16 }]
+    if (sql.includes('FROM public."task_dependencies"')) return [{ count: 21 }]
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) {
+      return runtimePublicationRows(publicationKey)
+    }
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) {
+      consumptionSql = sql
+      return [
+        {
+          ...trustedConsumptionRows(publicationKey)[0],
+          consumption_key: 'missing-authority',
+          consumption_context: { authoritySource: 'user_metadata' },
+        },
+        {
+          ...trustedConsumptionRows(publicationKey)[0],
+          consumption_key: 'missing-exact-ref',
+          source_evidence_refs: ['duration_learning_runtime_publications:another-publication'],
+        },
+      ]
+    }
+    throw new Error(`unexpected SQL: ${sql}`)
+  }
+  queryExec.close = async () => {}
+
+  try {
+    const report = await discoverDefaultMasterPlanProductionCandidates({
+      output,
+      projectId: 'project-1',
+      environment: 'staging',
+      exportedBy: 'release-user-1',
+      queryExec,
+      now: new Date('2026-07-02T01:00:00.000Z'),
+    })
+
+    const readiness = report.recommendedCandidate.evidenceReadiness
+    const command = report.recommendedCandidate.suggestedSourceExportCommand.join(' ')
+    assert.equal(readiness.runtimePublishedCount, 1)
+    assert.equal(readiness.trustedRuntimeConsumptionCount, 0)
+    assert.equal(readiness.gateStatus.runtimePublication, 'blocked')
+    assert.equal(readiness.blockers.includes('trusted_runtime_consumption_missing'), true)
+    assert.equal(readiness.latestPublicationKey, '')
+    assert.match(command, /--publication-key <publication-key>/)
+    assert.match(consumptionSql, /authoritySource.*runtime_resolver_publication_set/s)
+    assert.match(consumptionSql, /source_evidence_refs.*duration_learning_runtime_publications:/s)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test('carries candidate export hygiene blockers into the recommended candidate readiness', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-discovery-'))
   const output = path.join(root, 'candidate-discovery.json')
@@ -907,7 +1039,7 @@ function canonicalConsumptionColumns() {
   return [
     'consumption_key', 'publication_key', 'asset_key', 'artifact_key', 'company_id',
     'project_id', 'consumer_surface', 'task_id', 'baseline_item_id', 'consumption_context',
-    'duration_day_basis', 'consumed_at',
+    'duration_day_basis', 'source_evidence_refs', 'consumed_at',
   ]
 }
 
@@ -928,6 +1060,8 @@ function trustedConsumptionRows(publicationKey) {
     artifact_key: 'facade-v3',
     consumption_key: `duration-learning-consumption:${publicationKey}`,
     consumer_surface: 'baseline_commit',
+    consumption_context: { authoritySource: 'runtime_resolver_publication_set' },
+    source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
     consumed_at: '2026-07-02T00:30:00.000Z',
   }]
 }
