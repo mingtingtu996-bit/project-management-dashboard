@@ -32,7 +32,8 @@ test('discovers candidate default master-plan baselines and reports production e
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 5 }]
     if (sql.includes('FROM public."task_dependencies"') && sql.includes('construction_organization_plan_network')) return [{ count: 0 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 3 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {
@@ -114,10 +115,12 @@ test('labels production candidate source export next action as production/live o
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 16 }]
     if (sql.includes('FROM public."task_dependencies"') && sql.includes('construction_organization_plan_network')) return [{ count: 21 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 21 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return [{
-      publication_key: 'runtime.default_master_plan.project-1',
-      runtime_publication_status: 'runtime_published',
-    }]
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) {
+      return runtimePublicationRows('runtime.default_master_plan.project-1')
+    }
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) {
+      return trustedConsumptionRows('runtime.default_master_plan.project-1')
+    }
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -136,6 +139,54 @@ test('labels production candidate source export next action as production/live o
     assert.equal(report.nextAction.sourceExportMode, 'production_or_live')
     assert.equal(report.nextAction.mayRunProductionEvidencePipeline, true)
     assert.match(report.nextAction.description, /production\/live evidence pipeline/)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('keeps an applicable publication distinct from missing trusted baseline consumption', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-default-master-plan-discovery-'))
+  const output = path.join(root, 'candidate-discovery.json')
+  const queryExec = async (sql, params = []) => {
+    if (sql.includes('information_schema.columns')) return columnsFor(params[1])
+    if (sql.includes('FROM public.task_baselines')) {
+      return [{
+        id: 'baseline-publication-only',
+        project_id: 'project-1',
+        status: 'draft',
+        name: 'publication without consumption',
+        source_version_label: 'managed_frontier_default_master_plan',
+        created_at: '2026-07-01T08:00:00.000Z',
+        updated_at: '2026-07-01T08:10:00.000Z',
+      }]
+    }
+    if (sql.includes('FROM public."task_baseline_items"')) return [{ count: 16 }]
+    if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 16 }]
+    if (sql.includes('FROM public."task_dependencies"')) return [{ count: 21 }]
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) {
+      return runtimePublicationRows('runtime.default_master_plan.project-1')
+    }
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
+    throw new Error(`unexpected SQL: ${sql}`)
+  }
+  queryExec.close = async () => {}
+
+  try {
+    const report = await discoverDefaultMasterPlanProductionCandidates({
+      output,
+      projectId: 'project-1',
+      environment: 'staging',
+      exportedBy: 'release-user-1',
+      queryExec,
+      now: new Date('2026-07-02T01:00:00.000Z'),
+    })
+
+    const readiness = report.recommendedCandidate.evidenceReadiness
+    assert.equal(readiness.runtimePublishedCount, 1)
+    assert.equal(readiness.trustedRuntimeConsumptionCount, 0)
+    assert.equal(readiness.blockers.includes('runtime_publication_missing'), false)
+    assert.equal(readiness.blockers.includes('trusted_runtime_consumption_missing'), true)
+    assert.equal(readiness.gateStatus.runtimePublication, 'blocked')
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -184,10 +235,12 @@ test('carries candidate export hygiene blockers into the recommended candidate r
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 16 }]
     if (sql.includes('FROM public."task_dependencies"') && sql.includes('construction_organization_plan_network')) return [{ count: 21 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 21 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return [{
-      publication_key: 'runtime.default_master_plan.project-school',
-      runtime_publication_status: 'runtime_published',
-    }]
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) {
+      return runtimePublicationRows('runtime.default_master_plan.project-school')
+    }
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) {
+      return trustedConsumptionRows('runtime.default_master_plan.project-school')
+    }
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -287,7 +340,8 @@ test('counts candidate baseline items through baseline_version_id when legacy ba
     if (sql.includes('FROM public."change_logs"')) return [{ count: 0 }]
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 0 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 0 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {
@@ -342,7 +396,8 @@ test('does not issue concurrent queries against a single database client', async
       if (sql.includes('FROM public."change_logs"')) return [{ count: 0 }]
       if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 0 }]
       if (sql.includes('FROM public."task_dependencies"')) return [{ count: 0 }]
-      if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+      if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+      if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
       throw new Error(`unexpected SQL: ${sql}`)
     } finally {
       activeQuery = false
@@ -533,7 +588,8 @@ test('fails closed when managed-frontier rows carry hidden legacy handoff or deg
     if (sql.includes('FROM public."change_logs"')) return [{ count: 0 }]
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 0 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 0 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -608,7 +664,8 @@ test('fails closed when baseline items hide option-comparison package markers', 
     if (sql.includes('FROM public."change_logs"')) return [{ count: 0 }]
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 0 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 0 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -676,7 +733,8 @@ test('fails closed when baseline items hide retired original source lineage', as
     if (sql.includes('FROM public."change_logs"')) return [{ count: 0 }]
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 0 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 0 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -742,7 +800,8 @@ test('does not disqualify managed-frontier baselines whose item source is allowe
     if (sql.includes('FROM public."change_logs"')) return [{ count: 0 }]
     if (sql.includes('FROM public."duration_experience_samples"')) return [{ count: 0 }]
     if (sql.includes('FROM public."task_dependencies"')) return [{ count: 0 }]
-    if (sql.includes('FROM public.wbs_template_runtime_publications')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_publications publication')) return []
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions consumption')) return []
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -798,11 +857,13 @@ test('reports requested baseline not found separately from candidate source filt
 function columnsFor(tableName) {
   const columns = {
     task_baselines: ['id', 'project_id', 'status', 'name', 'source_version_label', 'created_at', 'updated_at'],
-    task_baseline_items: ['id', 'baseline_id'],
+    task_baseline_items: ['id', 'project_id', 'baseline_id', 'baseline_version_id', 'source_task_id'],
     change_logs: ['id', 'field_name', 'entity_id', 'project_id'],
     duration_experience_samples: ['id', 'project_id', 'sample_status', 'included_in_benchmark', 'actual_duration_days'],
     task_dependencies: ['id', 'project_id', 'source_type'],
-    wbs_template_runtime_publications: ['id', 'project_id', 'publication_key', 'accepted_baseline_id', 'runtime_publication_status', 'published_at'],
+    projects: ['id', 'company_id'],
+    duration_learning_runtime_publications: canonicalPublicationColumns(),
+    duration_learning_runtime_consumptions: canonicalConsumptionColumns(),
   }[tableName] ?? []
   return columns.map((column_name) => ({ column_name }))
 }
@@ -810,11 +871,13 @@ function columnsFor(tableName) {
 function columnsForBaselineVersionOnly(tableName) {
   const columns = {
     task_baselines: ['id', 'project_id', 'status', 'name', 'source_version_label', 'created_at', 'updated_at'],
-    task_baseline_items: ['id', 'baseline_version_id'],
+    task_baseline_items: ['id', 'project_id', 'baseline_version_id', 'source_task_id'],
     change_logs: ['id', 'field_name', 'entity_id', 'project_id'],
     duration_experience_samples: ['id', 'project_id', 'sample_status', 'included_in_benchmark', 'actual_duration_days'],
     task_dependencies: ['id', 'project_id', 'source_type'],
-    wbs_template_runtime_publications: ['id', 'project_id', 'publication_key', 'accepted_baseline_id', 'runtime_publication_status', 'published_at'],
+    projects: ['id', 'company_id'],
+    duration_learning_runtime_publications: canonicalPublicationColumns(),
+    duration_learning_runtime_consumptions: canonicalConsumptionColumns(),
   }[tableName] ?? []
   return columns.map((column_name) => ({ column_name }))
 }
@@ -822,11 +885,49 @@ function columnsForBaselineVersionOnly(tableName) {
 function columnsForWithMetadata(tableName) {
   const columns = {
     task_baselines: ['id', 'project_id', 'status', 'name', 'source_version_label', 'generation_metadata', 'created_at', 'updated_at'],
-    task_baseline_items: ['id', 'baseline_id', 'generation_metadata'],
+    task_baseline_items: ['id', 'project_id', 'baseline_id', 'baseline_version_id', 'source_task_id', 'generation_metadata'],
     change_logs: ['id', 'field_name', 'entity_id', 'project_id'],
     duration_experience_samples: ['id', 'project_id', 'sample_status', 'included_in_benchmark', 'actual_duration_days'],
     task_dependencies: ['id', 'project_id', 'source_type'],
-    wbs_template_runtime_publications: ['id', 'project_id', 'publication_key', 'accepted_baseline_id', 'runtime_publication_status', 'published_at'],
+    projects: ['id', 'company_id'],
+    duration_learning_runtime_publications: canonicalPublicationColumns(),
+    duration_learning_runtime_consumptions: canonicalConsumptionColumns(),
   }[tableName] ?? []
   return columns.map((column_name) => ({ column_name }))
+}
+
+function canonicalPublicationColumns() {
+  return [
+    'publication_key', 'asset_key', 'artifact_key', 'scope_level', 'company_id',
+    'project_id', 'industry_key', 'publication_stage', 'monitoring_status', 'published_at',
+  ]
+}
+
+function canonicalConsumptionColumns() {
+  return [
+    'consumption_key', 'publication_key', 'asset_key', 'artifact_key', 'company_id',
+    'project_id', 'consumer_surface', 'task_id', 'baseline_item_id', 'consumption_context',
+    'duration_day_basis', 'consumed_at',
+  ]
+}
+
+function runtimePublicationRows(publicationKey) {
+  return [{
+    publication_key: publicationKey,
+    asset_key: 'wbs_reference_days',
+    artifact_key: 'facade-v3',
+    publication_stage: 'stable',
+    monitoring_status: 'passed',
+  }]
+}
+
+function trustedConsumptionRows(publicationKey) {
+  return [{
+    publication_key: publicationKey,
+    asset_key: 'wbs_reference_days',
+    artifact_key: 'facade-v3',
+    consumption_key: `duration-learning-consumption:${publicationKey}`,
+    consumer_surface: 'baseline_commit',
+    consumed_at: '2026-07-02T00:30:00.000Z',
+  }]
 }

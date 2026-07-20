@@ -31,7 +31,7 @@ test('blocks source export rows that hide retired sources in governance fields',
   )
 })
 
-test('allows staging runtime writer markers as supporting source export evidence', () => {
+test('blocks retired staging runtime writer markers as current source evidence', () => {
   const blockers = sourceExportMetadataBlockers({
     export_metadata: {
       exported_at: '2026-07-01T09:00:00.000Z',
@@ -51,11 +51,11 @@ test('allows staging runtime writer markers as supporting source export evidence
 
   assert.equal(
     blockers.includes('duration_samples_unsupported_default_master_plan_source_label'),
-    false,
+    true,
   )
 })
 
-test('allows source export metadata source names without treating them as generation sources', () => {
+test('blocks legacy runtime table aliases from satisfying current evidence', () => {
   const blockers = sourceExportMetadataBlockers({
     export_metadata: {
       source: 'wbs_template_runtime_publications',
@@ -75,6 +75,35 @@ test('allows source export metadata source names without treating them as genera
     ],
   }, 'runtime_publications')
 
+  assert.equal(
+    blockers.includes('runtime_publications_legacy_runtime_source_cannot_satisfy_current_evidence'),
+    true,
+  )
+})
+
+test('allows canonical runtime source names without treating asset keys as generation sources', () => {
+  const blockers = sourceExportMetadataBlockers({
+    export_metadata: {
+      source: 'duration_learning_runtime_publications',
+      exported_at: '2026-07-01T09:00:00.000Z',
+      exported_by: 'release-user-1',
+      environment: 'staging',
+    },
+    duration_learning_runtime_publications: [
+      {
+        publication_key: 'duration-learning-runtime:wbs-reference-days:facade-v3',
+        asset_key: 'wbs_reference_days',
+        artifact_key: 'facade-v3',
+        publication_stage: 'stable',
+        monitoring_status: 'passed',
+      },
+    ],
+  }, 'runtime_publications')
+
+  assert.equal(
+    blockers.includes('runtime_publications_legacy_runtime_source_cannot_satisfy_current_evidence'),
+    false,
+  )
   assert.equal(
     blockers.includes('runtime_publications_unsupported_default_master_plan_source_label'),
     false,

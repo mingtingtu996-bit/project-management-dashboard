@@ -45,12 +45,14 @@ test('builds a no-write real production outcome package with production placehol
     assert.equal(report.realProductionOutcomeTemplate.evidenceRefPolicy.finalReadinessRequiresSourceExportRef, true)
     assert.match(report.realProductionOutcomeTemplate.evidenceRefPolicy.sourceExporterRewrite, /real_production_outcome_export:/)
     assert.equal(report.realProductionOutcomeTemplate.example.acceptedBy, 'production-owner:<user-id-or-uuid>')
-    assert.match(report.realProductionOutcomeTemplate.example.runtimePublicationEvidenceRef, /^wbs_template_runtime_publications_export:/)
+    assert.match(report.realProductionOutcomeTemplate.example.runtimePublicationEvidenceRef, /^duration_learning_runtime_publications_export:/)
+    assert.match(report.realProductionOutcomeTemplate.example.runtimeConsumptionEvidenceRef, /^duration_learning_runtime_consumptions_export:/)
     assert.match(report.realProductionOutcomeTemplate.example.apiReadSmokeEvidenceRef, /^api_read_smoke_export:/)
     assert.match(report.realProductionOutcomeTemplate.example.uiConsumptionSmokeEvidenceRef, /^ui_consumption_smoke_export:/)
     assert.match(report.realProductionOutcomeTemplate.example.criticalPathReadbackEvidenceRef, /^critical_path_readback_export:/)
     assert.match(report.realProductionOutcomeTemplate.example.rollbackEvidenceRef, /^rollback_verification_export:/)
     assert.equal(report.realProductionOutcomeTemplate.requiredFields.includes('acceptedBy'), true)
+    assert.equal(report.realProductionOutcomeTemplate.requiredFields.includes('runtimeConsumptionEvidenceRef'), true)
     assert.equal(report.nextCommands.sourceExport.includes('--environment production'), true)
     assert.equal(report.nextCommands.sourceExport.includes('--real-production-outcome <real-production-outcome.json>'), true)
     assert.equal(report.nextCommands.sourceExport.includes('staging-runtime'), false)
@@ -62,6 +64,7 @@ test('builds a no-write real production outcome package with production placehol
     const markdown = await readFile(outputPath.replace(/\.json$/, '.md'), 'utf8')
     assert.match(markdown, /Real Production Outcome Required Fields/)
     assert.match(markdown, /runtimePublicationEvidenceRef/)
+    assert.match(markdown, /runtimeConsumptionEvidenceRef/)
     assert.match(markdown, /Final readiness requires `real_production_outcome_export:`/)
     assert.doesNotMatch(markdown, /real-production-outcome:<path>/)
   } finally {
@@ -301,6 +304,7 @@ test('blocks a production outcome file when material evidence refs are not audit
   await writeJson(realOutcomePath, {
     ...realProductionOutcomeFixture(),
     runtimePublicationEvidenceRef: 'manual-note-runtime-publication',
+    runtimeConsumptionEvidenceRef: 'manual-note-runtime-consumption',
     apiReadSmokeEvidenceRef: 'manual-note-api-smoke',
     uiConsumptionSmokeEvidenceRef: 'manual-note-ui-smoke',
     criticalPathReadbackEvidenceRef: 'manual-note-critical-path',
@@ -340,6 +344,7 @@ test('blocks a production outcome file when material evidence refs are ordinary 
   await writeJson(runtimeMaterialPackagePath, runtimeMaterialPackageFixture())
   await writeJson(realOutcomePath, realProductionOutcomeFixture({
     runtimePublicationEvidenceRef: `project-testing/reports/default-master-plan-production-readiness/runtime-publication-evidence.json#sha256=${'1'.repeat(64)}`,
+    runtimeConsumptionEvidenceRef: `project-testing/reports/default-master-plan-production-readiness/runtime-consumption-evidence.json#sha256=${'6'.repeat(64)}`,
     apiReadSmokeEvidenceRef: `project-testing/reports/default-master-plan-production-readiness/api-read-smoke.json#sha256=${'2'.repeat(64)}`,
     uiConsumptionSmokeEvidenceRef: `project-testing/reports/default-master-plan-production-readiness/ui-consumption-smoke.json#sha256=${'3'.repeat(64)}`,
     criticalPathReadbackEvidenceRef: `project-testing/reports/default-master-plan-production-readiness/critical-path-readback.json#sha256=${'4'.repeat(64)}`,
@@ -609,6 +614,7 @@ function runtimeMaterialPackageFixture(overrides = {}) {
         'acceptedAt',
         'approvalRef',
         'runtimePublicationEvidenceRef',
+        'runtimeConsumptionEvidenceRef',
         'apiReadSmokeEvidenceRef',
         'uiConsumptionSmokeEvidenceRef',
         'criticalPathReadbackEvidenceRef',
@@ -638,7 +644,8 @@ function realProductionOutcomeFixture(overrides = {}) {
     acceptedBy: 'production-owner:9e4a5570-0032-43bd-8f17-0bc415a1eb70',
     acceptedAt: '2026-07-02T13:04:00.000Z',
     approvalRef: 'release:window-1',
-    runtimePublicationEvidenceRef: `wbs_template_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/wbs-template-runtime-publications-export.json#sha256=${'1'.repeat(64)}`,
+    runtimePublicationEvidenceRef: `duration_learning_runtime_publications_export:project-testing/reports/default-master-plan-production-readiness/duration-learning-runtime-publications-export.json#sha256=${'1'.repeat(64)}`,
+    runtimeConsumptionEvidenceRef: `duration_learning_runtime_consumptions_export:project-testing/reports/default-master-plan-production-readiness/duration-learning-runtime-consumptions-export.json#sha256=${'6'.repeat(64)}`,
     apiReadSmokeEvidenceRef: `api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/api-read-smoke-export.json#sha256=${'2'.repeat(64)}`,
     uiConsumptionSmokeEvidenceRef: `ui_consumption_smoke_export:project-testing/reports/default-master-plan-production-readiness/ui-consumption-smoke-export.json#sha256=${'3'.repeat(64)}`,
     criticalPathReadbackEvidenceRef: `critical_path_readback_export:project-testing/reports/default-master-plan-production-readiness/critical-path-readback-export.json#sha256=${'4'.repeat(64)}`,

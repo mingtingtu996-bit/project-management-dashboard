@@ -124,7 +124,24 @@ test('buildReadOnlyEvidenceQueuePlan blocks dangerous write flags even when an e
   const plan = buildReadOnlyEvidenceQueuePlan(sourceReport({
     operatorCommandExecutionQueues: {
       readOnlyEvidence: [
-        readOnlyEntry('node project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs --include-staging --confirm-staging-handoff --allow-write'),
+        readOnlyEntry('node project-testing/tools/unsafe-evidence-writer.mjs --include-staging --confirm-staging-handoff --allow-write'),
+      ],
+      manualPrerequisite: [],
+      guardedWriteOrLive: [],
+    },
+  }))
+
+  assert.equal(plan.status, 'blocked')
+  assert.equal(plan.summary.plannedCommandCount, 0)
+  assert.equal(plan.summary.rejectedReadOnlyQueueCommandCount, 1)
+  assert.equal(plan.rejectedReadOnlyQueueEntries[0].reason, 'forbidden_write_or_live_command_marker')
+})
+
+test('buildReadOnlyEvidenceQueuePlan rejects the retired staging writer even without write flags', () => {
+  const plan = buildReadOnlyEvidenceQueuePlan(sourceReport({
+    operatorCommandExecutionQueues: {
+      readOnlyEvidence: [
+        readOnlyEntry('node project-testing/tools/run-default-master-plan-staging-runtime-evidence.mjs'),
       ],
       manualPrerequisite: [],
       guardedWriteOrLive: [],

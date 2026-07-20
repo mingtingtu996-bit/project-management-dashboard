@@ -80,12 +80,13 @@ const EVIDENCE_ACTIONS = {
     gate: 'runtime_publication_evidence',
     builder: EVIDENCE_BUILDERS.runtimePublicationEvidence,
     requiredInputs: [
-      'wbs_template_runtime_publications export',
-      'source export metadata with exported_at, exported_by, and staging/production/live environment',
-      'published default master-plan row matching baseline and project',
+      'duration_learning_runtime_publications export',
+      'duration_learning_runtime_consumptions export joined to task_baseline_items physical baseline authority',
+      'separate source export hashes with exported_at, exported_by, and staging/production/live environment',
+      'exact publication_key, asset_key, artifact_key, company, project, and baseline lineage',
       'lineage refs for duration calibration and dependency writer evidence',
     ],
-    mutationBoundary: 'read-only evidence normalization; does not publish runtime asset or rollback',
+    mutationBoundary: 'read-only evidence normalization; does not publish runtime asset, create consumption, or rollback',
   },
   postPublishSmokeRollbackEvidence: {
     gate: 'post_publish_smoke_and_rollback_evidence',

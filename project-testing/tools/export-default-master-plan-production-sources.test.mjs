@@ -102,15 +102,8 @@ test('exports DB and file source payloads with auditable metadata and no-write b
         source_type: 'construction_organization_plan_network',
       }]
     }
-    if (sql.includes('public."wbs_template_runtime_publications"')) {
-      return [{
-        id: 'pub-1',
-        project_id: 'project-1',
-        publication_key: 'publication-1',
-        accepted_baseline_id: 'baseline-1',
-        runtime_publication_status: 'runtime_published',
-      }]
-    }
+    if (sql.includes('public."duration_learning_runtime_publications"')) return runtimePublicationRows()
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions')) return runtimeConsumptionRows()
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {
@@ -288,9 +281,8 @@ test('does not require real production outcome material for staging source expor
     if (sql.includes('public."task_dependencies"')) {
       return [{ id: 'dep-1', project_id: 'project-1', task_id: 'task-2', dependency_task_id: 'task-1', source_type: 'construction_organization_plan_network' }]
     }
-    if (sql.includes('public."wbs_template_runtime_publications"')) {
-      return [{ id: 'pub-1', project_id: 'project-1', publication_key: 'publication-1', accepted_baseline_id: 'baseline-1', runtime_publication_status: 'runtime_published' }]
-    }
+    if (sql.includes('public."duration_learning_runtime_publications"')) return runtimePublicationRows()
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions')) return runtimeConsumptionRows()
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -327,7 +319,8 @@ test('can rebuild full manifest from existing source export files without DB acc
   const durationSamples = path.join(outputRoot, 'duration-experience-samples-export.json')
   const rawCompletedTasks = path.join(outputRoot, 'raw-completed-tasks.json')
   const taskDependencies = path.join(outputRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(outputRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(outputRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(outputRoot, 'duration-learning-runtime-consumptions-export.json')
   const stagingSourceRoot = path.join(root, 'staging-runtime')
   const writerResult = path.join(stagingSourceRoot, 'dependency-writer-result.json')
   const criticalPathReadback = path.join(stagingSourceRoot, 'critical-path-readback.json')
@@ -359,10 +352,16 @@ test('can rebuild full manifest from existing source export files without DB acc
     rows: [{ id: 'dependency-1' }],
   })
   await writeExportedDbSource(runtimePublications, {
-    source: 'wbs_template_runtime_publications',
-    table: 'public.wbs_template_runtime_publications',
-    rowArrayKey: 'wbs_template_runtime_publications',
-    rows: [{ id: 'publication-1' }],
+    source: 'duration_learning_runtime_publications',
+    table: 'public.duration_learning_runtime_publications',
+    rowArrayKey: 'duration_learning_runtime_publications',
+    rows: runtimePublicationRows(),
+  })
+  await writeExportedDbSource(runtimeConsumptions, {
+    source: 'duration_learning_runtime_consumptions',
+    table: 'public.duration_learning_runtime_consumptions',
+    rowArrayKey: 'duration_learning_runtime_consumptions',
+    rows: runtimeConsumptionRows(),
   })
   await writeJson(writerResult, { baselineId: 'baseline-1', projectId: 'project-1', publicationKey: 'publication-1', execution_mode: 'execute' })
   await writeJson(criticalPathReadback, { status: 'readback_passed', baselineId: 'baseline-1', projectId: 'project-1', publicationKey: 'publication-1' })
@@ -383,6 +382,7 @@ test('can rebuild full manifest from existing source export files without DB acc
       rawCompletedTasks,
       taskDependencies,
       runtimePublications,
+      runtimeConsumptions,
       writerResult,
       criticalPathReadback,
       apiReadSmoke,
@@ -396,9 +396,11 @@ test('can rebuild full manifest from existing source export files without DB acc
     assert.equal(manifest.status, 'exported')
     assert.deepEqual(manifest.blockers, [])
     assert.equal(manifest.sourceExports.runtimePublications.rowCount, 1)
+    assert.equal(manifest.sourceExports.runtimeConsumptions.rowCount, 1)
     assert.equal(manifest.sourceExports.writerResult.rowCount, 1)
     assert.equal(manifest.sourceExports.writerResult.sourcePath.endsWith('staging-runtime/dependency-writer-result.json'), true)
     assert.equal(manifest.pipelineArgs.includes('--runtime-publications'), true)
+    assert.equal(manifest.pipelineArgs.includes('--runtime-consumptions'), true)
     assert.equal(manifest.pipelineArgs.includes(manifest.sourceExports.runtimePublications.path), true)
     assert.equal(manifest.pipelineArgs.includes('--source-manifest'), true)
     assert.equal(manifest.pipelineArgs.includes(`${manifest.outputRoot}/source-exports-manifest.json`), true)
@@ -418,7 +420,8 @@ test('rebuilds manifest with blocked real duration sample source export as an ex
   const durationSamples = path.join(outputRoot, 'duration-experience-samples-export.json')
   const rawCompletedTasks = path.join(outputRoot, 'raw-completed-tasks.json')
   const taskDependencies = path.join(outputRoot, 'task-dependencies-export.json')
-  const runtimePublications = path.join(outputRoot, 'wbs-template-runtime-publications-export.json')
+  const runtimePublications = path.join(outputRoot, 'duration-learning-runtime-publications-export.json')
+  const runtimeConsumptions = path.join(outputRoot, 'duration-learning-runtime-consumptions-export.json')
   const stagingSourceRoot = path.join(root, 'staging-runtime')
   const writerResult = path.join(stagingSourceRoot, 'dependency-writer-result.json')
   const criticalPathReadback = path.join(stagingSourceRoot, 'critical-path-readback.json')
@@ -462,10 +465,16 @@ test('rebuilds manifest with blocked real duration sample source export as an ex
     rows: [{ id: 'dependency-1' }],
   })
   await writeExportedDbSource(runtimePublications, {
-    source: 'wbs_template_runtime_publications',
-    table: 'public.wbs_template_runtime_publications',
-    rowArrayKey: 'wbs_template_runtime_publications',
-    rows: [{ id: 'publication-1' }],
+    source: 'duration_learning_runtime_publications',
+    table: 'public.duration_learning_runtime_publications',
+    rowArrayKey: 'duration_learning_runtime_publications',
+    rows: runtimePublicationRows(),
+  })
+  await writeExportedDbSource(runtimeConsumptions, {
+    source: 'duration_learning_runtime_consumptions',
+    table: 'public.duration_learning_runtime_consumptions',
+    rowArrayKey: 'duration_learning_runtime_consumptions',
+    rows: runtimeConsumptionRows(),
   })
   await writeJson(writerResult, { baselineId: 'baseline-1', projectId: 'project-1', publicationKey: 'publication-1', execution_mode: 'execute' })
   await writeJson(criticalPathReadback, { status: 'readback_passed', baselineId: 'baseline-1', projectId: 'project-1', publicationKey: 'publication-1' })
@@ -487,6 +496,7 @@ test('rebuilds manifest with blocked real duration sample source export as an ex
       rawCompletedTasks,
       taskDependencies,
       runtimePublications,
+      runtimeConsumptions,
       writerResult,
       criticalPathReadback,
       apiReadSmoke,
@@ -573,7 +583,7 @@ test('blocks production source exports before DB access when real production out
     })
 
     assert.equal(manifest.status, 'blocked')
-    assert.deepEqual(manifest.blockers.slice(0, 18), [
+    assert.deepEqual(manifest.blockers.slice(0, 19), [
       'real_production_outcome_status_pass_required',
       'real_production_outcome_production_or_live_environment_required',
       'real_production_outcome_environment_mismatch',
@@ -588,6 +598,7 @@ test('blocks production source exports before DB access when real production out
       'real_production_outcome_accepted_at_required',
       'real_production_outcome_approval_ref_required',
       'real_production_outcome_runtime_publication_evidence_ref_required',
+      'real_production_outcome_runtime_consumption_evidence_ref_required',
       'real_production_outcome_api_read_smoke_evidence_ref_required',
       'real_production_outcome_ui_consumption_smoke_evidence_ref_required',
       'real_production_outcome_critical_path_readback_evidence_ref_required',
@@ -640,7 +651,8 @@ test('blocks production source exports before DB access when real outcome materi
     acceptedBy: 'production-owner:9e4a5570-0032-43bd-8f17-0bc415a1eb70',
     acceptedAt: '2026-07-01T10:00:00.000Z',
     approvalRef: 'approval:production-release-window-1',
-    runtimePublicationEvidenceRef: fileEvidenceRef('wbs_template_runtime_publications_export', writerResult),
+    runtimePublicationEvidenceRef: fileEvidenceRef('duration_learning_runtime_publications_export', writerResult),
+    runtimeConsumptionEvidenceRef: fileEvidenceRef('duration_learning_runtime_consumptions_export', writerResult),
     apiReadSmokeEvidenceRef: 'api_read_smoke_export:project-testing/reports/default-master-plan-production-readiness/wrong-api-smoke.json#sha256=2222222222222222222222222222222222222222222222222222222222222222',
     uiConsumptionSmokeEvidenceRef: fileEvidenceRef('ui_consumption_smoke_export', uiConsumptionSmoke),
     criticalPathReadbackEvidenceRef: fileEvidenceRef('critical_path_readback_export', criticalPathReadback),
@@ -702,9 +714,8 @@ test('blocks production source exports when real outcome runtime publication ref
     if (sql.includes('public."task_dependencies"')) {
       return [{ id: 'dep-1', project_id: 'project-1', task_id: 'task-2', dependency_task_id: 'task-1', source_type: 'construction_organization_plan_network' }]
     }
-    if (sql.includes('public."wbs_template_runtime_publications"')) {
-      return [{ id: 'pub-1', project_id: 'project-1', publication_key: 'publication-1', accepted_baseline_id: 'baseline-1', runtime_publication_status: 'runtime_published' }]
-    }
+    if (sql.includes('public."duration_learning_runtime_publications"')) return runtimePublicationRows()
+    if (sql.includes('FROM public.duration_learning_runtime_consumptions')) return runtimeConsumptionRows()
     throw new Error(`unexpected SQL: ${sql}`)
   }
   queryExec.close = async () => {}
@@ -731,7 +742,8 @@ test('blocks production source exports when real outcome runtime publication ref
     acceptedBy: 'production-owner:9e4a5570-0032-43bd-8f17-0bc415a1eb70',
     acceptedAt: '2026-07-01T10:00:00.000Z',
     approvalRef: 'approval:production-release-window-1',
-    runtimePublicationEvidenceRef: fileEvidenceRef('wbs_template_runtime_publications_export', writerResult),
+    runtimePublicationEvidenceRef: fileEvidenceRef('duration_learning_runtime_publications_export', writerResult),
+    runtimeConsumptionEvidenceRef: fileEvidenceRef('duration_learning_runtime_consumptions_export', writerResult),
     apiReadSmokeEvidenceRef: fileEvidenceRef('api_read_smoke_export', apiReadSmoke),
     uiConsumptionSmokeEvidenceRef: fileEvidenceRef('ui_consumption_smoke_export', uiConsumptionSmoke),
     criticalPathReadbackEvidenceRef: fileEvidenceRef('critical_path_readback_export', criticalPathReadback),
@@ -758,8 +770,16 @@ test('blocks production source exports when real outcome runtime publication ref
 
     assert.equal(manifest.status, 'blocked')
     assert.equal(manifest.blockers.includes('real_production_outcome_runtime_publication_evidence_ref_mismatch'), true)
+    assert.equal(manifest.blockers.includes('real_production_outcome_runtime_consumption_evidence_ref_mismatch'), true)
     assert.equal(manifest.sourceExports.runtimePublications.rowCount, 1)
-    assert.equal(queries.some((query) => query.sql.includes('public."wbs_template_runtime_publications"')), true)
+    assert.equal(queries.some((query) => query.sql.includes('public."duration_learning_runtime_publications"')), true)
+    const consumptionQuery = queries.find((query) => query.sql.includes('FROM public.duration_learning_runtime_consumptions'))
+    assert.ok(consumptionQuery, 'expected canonical trusted consumption export query')
+    assert.match(consumptionQuery.sql, /JOIN public\.task_baseline_items baseline_item/)
+    assert.match(consumptionQuery.sql, /JOIN public\.projects project/)
+    assert.match(consumptionQuery.sql, /project\.company_id = consumption\.company_id/)
+    assert.match(consumptionQuery.sql, /baseline_item\.baseline_version_id = \$3/)
+    assert.deepEqual(consumptionQuery.params, ['project-1', 'publication-1', 'baseline-1'])
   } finally {
     await rm(root, { recursive: true, force: true })
   }
@@ -1283,7 +1303,8 @@ test('duration phase exports duration samples and raw completed tasks without PM
     assert.equal(manifest.pipelineArgs.includes('--runtime-publications'), false)
     assert.equal(manifest.sourceExports.rawCompletedTasks.path.endsWith('raw-completed-tasks.json'), true)
     assert.equal(queries.some((query) => query.sql.includes('public."task_dependencies"')), false)
-    assert.equal(queries.some((query) => query.sql.includes('public."wbs_template_runtime_publications"')), false)
+    assert.equal(queries.some((query) => query.sql.includes('public."duration_learning_runtime_publications"')), false)
+    assert.equal(queries.some((query) => query.sql.includes('public.duration_learning_runtime_consumptions')), false)
     assert.equal(queries.some((query) => query.sql.includes('public."change_logs"')), false)
     const rawCompletedTasksQuery = queries.find((query) => query.sql.includes('public."tasks"'))
     assert.ok(rawCompletedTasksQuery, 'expected duration phase to query completed tasks')
@@ -1417,7 +1438,57 @@ function columnsFor(tableName) {
     duration_experience_samples: ['id', 'project_id', 'task_id', 'sample_status', 'included_in_benchmark', 'actual_duration_days', 'stable_code', 'created_at'],
     tasks: ['id', 'project_id', 'title', 'status', 'standard_work_code', 'actual_start_date', 'actual_end_date', 'updated_at', 'created_at'],
     task_dependencies: ['id', 'project_id', 'task_id', 'dependency_task_id', 'source_type', 'created_at'],
-    wbs_template_runtime_publications: ['id', 'project_id', 'publication_key', 'accepted_baseline_id', 'runtime_publication_status', 'published_at'],
+    duration_learning_runtime_publications: [
+      'publication_key', 'asset_key', 'artifact_key', 'scope_level', 'company_id',
+      'project_id', 'industry_key', 'publication_stage', 'monitoring_status',
+      'source_evidence_refs', 'published_at',
+    ],
+    duration_learning_runtime_consumptions: [
+      'consumption_key', 'company_id', 'project_id', 'publication_key', 'asset_key',
+      'artifact_key', 'consumer_key', 'consumer_surface', 'task_id', 'baseline_item_id',
+      'duration_day_basis', 'source_evidence_refs', 'consumption_context', 'consumed_at',
+    ],
+    task_baseline_items: ['id', 'project_id', 'baseline_version_id', 'source_task_id'],
+    projects: ['id', 'company_id'],
   }[tableName] ?? []
   return columns.map((column_name) => ({ column_name }))
+}
+
+function runtimePublicationRows() {
+  return [{
+    publication_key: 'publication-1',
+    asset_key: 'wbs_reference_days',
+    artifact_key: 'facade-v3',
+    scope_level: 'project',
+    company_id: 'company-1',
+    project_id: 'project-1',
+    industry_key: null,
+    publication_stage: 'stable',
+    monitoring_status: 'passed',
+    source_evidence_refs: ['duration-learning-candidate:facade-v3'],
+    published_at: '2026-07-01T08:00:00.000Z',
+  }]
+}
+
+function runtimeConsumptionRows() {
+  return [{
+    consumption_key: 'duration-learning-consumption:baseline-item-1',
+    company_id: 'company-1',
+    project_id: 'project-1',
+    publication_key: 'publication-1',
+    asset_key: 'wbs_reference_days',
+    artifact_key: 'facade-v3',
+    consumer_key: 'wbsTemplateGenerationService',
+    consumer_surface: 'baseline_commit',
+    task_id: null,
+    baseline_item_id: 'baseline-item-1',
+    baseline_id: 'baseline-1',
+    baseline_project_id: 'project-1',
+    baseline_company_id: 'company-1',
+    baseline_authority: 'task_baseline_items_physical_join',
+    duration_day_basis: 'construction_production_day',
+    source_evidence_refs: ['duration_learning_runtime_publications:publication-1'],
+    consumption_context: { authoritySource: 'runtime_resolver_publication_set' },
+    consumed_at: '2026-07-01T08:05:00.000Z',
+  }]
 }

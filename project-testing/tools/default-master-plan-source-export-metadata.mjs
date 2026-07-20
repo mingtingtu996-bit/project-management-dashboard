@@ -4,6 +4,20 @@ import {
 } from './default-master-plan-source-guard.mjs'
 
 const REAL_ENVIRONMENTS = new Set(['staging', 'production', 'live'])
+const CURRENT_RUNTIME_SOURCE_ROW_ARRAY_KEYS = [
+  'duration_learning_runtime_publications',
+  'durationLearningRuntimePublications',
+  'duration_learning_runtime_consumptions',
+  'durationLearningRuntimeConsumptions',
+]
+const LEGACY_RUNTIME_SOURCE_ROW_ARRAY_KEYS = [
+  'wbs_template_runtime_publications',
+  'wbsTemplateRuntimePublications',
+  'duration_learning_legacy_default_master_plan_mappings',
+  'durationLearningLegacyDefaultMasterPlanMappings',
+  'duration_learning_legacy_runtime_row_archive',
+  'durationLearningLegacyRuntimeRowArchive',
+]
 
 function readObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -15,13 +29,20 @@ function text(value) {
 
 function sourceExportSourceGuardBlockers(payload) {
   const sourceGuard = defaultMasterPlanSourceBlockers(sourceExportPayloadSourceSignals(payload))
-  const filteredUnsupportedLabels = sourceGuard.unsupportedDefaultPlanLabels.filter((label) => {
-    return text(label) !== 'default_master_plan_staging_runtime_writer'
-  })
   return [
-    ...sourceGuard.blockers.filter((blocker) => blocker !== 'unsupported_default_master_plan_source_label'),
-    filteredUnsupportedLabels.length > 0 ? 'unsupported_default_master_plan_source_label' : null,
+    ...sourceGuard.blockers,
+    hasLegacyRuntimeSource(payload) ? 'legacy_runtime_source_cannot_satisfy_current_evidence' : null,
   ].filter(Boolean)
+}
+
+function hasLegacyRuntimeSource(payload) {
+  const root = readObject(payload)
+  const metadata = readSourceExportMetadata(root)
+  const source = text(metadata.source ?? metadata.source_name ?? metadata.sourceName)
+  return source === 'wbs_template_runtime_publications'
+    || source === 'duration_learning_legacy_default_master_plan_mappings'
+    || source === 'duration_learning_legacy_runtime_row_archive'
+    || LEGACY_RUNTIME_SOURCE_ROW_ARRAY_KEYS.some((key) => Array.isArray(root[key]) && root[key].length > 0)
 }
 
 export function readSourceExportMetadata(payload) {
@@ -122,12 +143,12 @@ const SOURCE_EXPORT_ROW_ARRAY_KEYS = [
   'change_logs',
   'changeLogs',
   'duration_experience_samples',
+  ...CURRENT_RUNTIME_SOURCE_ROW_ARRAY_KEYS,
   'runtime_publications',
   'runtimePublications',
   'task_dependencies',
   'taskDependencies',
-  'wbs_template_runtime_publications',
-  'wbsTemplateRuntimePublications',
+  ...LEGACY_RUNTIME_SOURCE_ROW_ARRAY_KEYS,
   'candidateDefaultMasterPlanReviews',
   'candidate_default_master_plan_reviews',
 ]

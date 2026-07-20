@@ -23,9 +23,7 @@ const DURATION_SAMPLE_SOURCE_KINDS = new Set([
   'blocked_real_duration_sample_material',
 ])
 const DEFAULT_CANDIDATE_HYGIENE = path.join(DEFAULT_OUTPUT_ROOT, 'candidate-export-hygiene.json')
-const SUPPORTED_SOURCE_MANIFEST_STRUCTURAL_DEFAULT_MASTER_PLAN_LABELS = new Set([
-  'default_master_plan_staging_runtime_writer',
-])
+const SUPPORTED_SOURCE_MANIFEST_STRUCTURAL_DEFAULT_MASTER_PLAN_LABELS = new Set()
 const SOURCE_EXPORT_RECORD_CONTRACTS = {
   durationSamples: {
     source: 'duration_experience_samples',
@@ -40,10 +38,16 @@ const SOURCE_EXPORT_RECORD_CONTRACTS = {
     pipelineFlag: '--task-dependencies',
   },
   runtimePublications: {
-    source: 'wbs_template_runtime_publications',
+    source: 'duration_learning_runtime_publications',
     kind: 'database_table',
-    table: 'public.wbs_template_runtime_publications',
+    table: 'public.duration_learning_runtime_publications',
     pipelineFlag: '--runtime-publications',
+  },
+  runtimeConsumptions: {
+    source: 'duration_learning_runtime_consumptions',
+    kind: 'database_table',
+    table: 'public.duration_learning_runtime_consumptions',
+    pipelineFlag: '--runtime-consumptions',
   },
   writerResult: {
     source: 'dependency_writer_result',
@@ -130,12 +134,21 @@ const SOURCE_REQUIREMENTS = [
     label: '运行时发布证据',
     fileName: 'runtime-publication-evidence.json',
     builder: 'project-testing/tools/build-default-master-plan-runtime-publication-evidence.mjs',
-    inputs: ['wbs_template_runtime_publications export', 'published row matching baseline/project', 'lineage refs'],
+    inputs: [
+      'duration_learning_runtime_publications export',
+      'duration_learning_runtime_consumptions export with task_baseline_items physical join',
+      'exact publication/artifact/project/baseline identity',
+      'lineage refs',
+    ],
     commandTemplate: () => [
       'node',
       'project-testing/tools/build-default-master-plan-runtime-publication-evidence.mjs',
       '--runtime-publications',
-      '<wbs_template_runtime_publications_export.json>',
+      '<duration_learning_runtime_publications_export.json>',
+      '--runtime-consumptions',
+      '<duration_learning_runtime_consumptions_export.json>',
+      '--publication-key',
+      '<publication-key>',
       '--baseline-id',
       '<baseline-id>',
       '--project-id',
@@ -149,7 +162,7 @@ const SOURCE_REQUIREMENTS = [
       '--output',
       '<runtime-publication-evidence.json>',
     ],
-    mutationBoundary: 'read-only source validation; does not publish runtime asset or rollback',
+    mutationBoundary: 'read-only source validation; does not publish runtime asset, create consumption, or rollback',
   },
   {
     key: 'postPublishSmokeRollbackEvidence',

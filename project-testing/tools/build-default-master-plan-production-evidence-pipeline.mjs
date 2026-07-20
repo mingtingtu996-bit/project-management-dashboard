@@ -58,6 +58,7 @@ function parseArgs(argv) {
     writerResult: null,
     taskDependencies: null,
     runtimePublications: null,
+    runtimeConsumptions: null,
     publishedBy: null,
     publishedAt: null,
     environment: null,
@@ -119,6 +120,9 @@ function parseArgs(argv) {
       index += 1
     } else if (arg === '--runtime-publications') {
       args.runtimePublications = path.resolve(argv[index + 1] ?? '')
+      index += 1
+    } else if (arg === '--runtime-consumptions') {
+      args.runtimeConsumptions = path.resolve(argv[index + 1] ?? '')
       index += 1
     } else if (arg === '--published-by') {
       args.publishedBy = text(argv[index + 1])
@@ -341,6 +345,7 @@ async function validateSourceManifest(args) {
     ['writerResult', args.writerResult],
     ['taskDependencies', args.taskDependencies],
     ['runtimePublications', args.runtimePublications],
+    ['runtimeConsumptions', args.runtimeConsumptions],
     ['apiReadSmoke', args.apiReadSmoke],
     ['uiConsumptionSmoke', args.uiConsumptionSmoke],
     ['criticalPathReadback', args.criticalPathReadback],
@@ -615,11 +620,16 @@ const builderPlans = [
   },
   {
     name: 'runtimePublicationEvidence',
-    requiredSources: [['runtimePublications', args.runtimePublications]],
+    requiredSources: [
+      ['runtimePublications', args.runtimePublications],
+      ['runtimeConsumptions', args.runtimeConsumptions],
+    ],
     outputPath: evidenceFiles.runtimePublicationEvidence,
     commandArgs: [
       TOOLS.publication,
       '--runtime-publications', args.runtimePublications,
+      '--runtime-consumptions', args.runtimeConsumptions,
+      '--publication-key', args.publicationKey,
       '--baseline-id', args.baselineId,
       '--project-id', args.projectId,
       '--published-by', args.publishedBy,

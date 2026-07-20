@@ -1,5 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import {
+  CANONICAL_RUNTIME_CONSUMPTION_REF_PREFIX,
+  CANONICAL_RUNTIME_PUBLICATION_REF_PREFIX,
+} from './default-master-plan-runtime-evidence-contract.mjs'
 
 const PASSING_REAL_OUTCOME_STATUSES = new Set(['pass', 'passed', 'verified', 'accepted', 'ready'])
 const PRODUCTION_READY_ENVIRONMENTS = new Set(['production', 'live'])
@@ -78,6 +82,7 @@ export function normalizeRealProductionOutcomeEvidence(payload) {
     acceptedAt: text(record.acceptedAt ?? record.accepted_at ?? record.reviewedAt ?? record.reviewed_at),
     approvalRef: text(record.approvalRef ?? record.approval_ref ?? record.manualApprovalRef ?? record.manual_approval_ref ?? record.releaseApprovalRef ?? record.release_approval_ref),
     runtimePublicationEvidenceRef: text(record.runtimePublicationEvidenceRef ?? record.runtime_publication_evidence_ref ?? record.runtimePublicationRef ?? record.runtime_publication_ref),
+    runtimeConsumptionEvidenceRef: text(record.runtimeConsumptionEvidenceRef ?? record.runtime_consumption_evidence_ref ?? record.runtimeConsumptionRef ?? record.runtime_consumption_ref),
     apiReadSmokeEvidenceRef: text(record.apiReadSmokeEvidenceRef ?? record.api_read_smoke_evidence_ref ?? record.apiSmokeEvidenceRef ?? record.api_smoke_evidence_ref),
     uiConsumptionSmokeEvidenceRef: text(record.uiConsumptionSmokeEvidenceRef ?? record.ui_consumption_smoke_evidence_ref ?? record.uiSmokeEvidenceRef ?? record.ui_smoke_evidence_ref),
     criticalPathReadbackEvidenceRef: text(record.criticalPathReadbackEvidenceRef ?? record.critical_path_readback_evidence_ref ?? record.criticalPathEvidenceRef ?? record.critical_path_evidence_ref),
@@ -136,6 +141,7 @@ function realProductionOutcomeMaterialCompletenessBlockers(evidence) {
     evidence.approvalRef ? null : 'real_production_outcome_approval_ref_required',
     evidence.approvalRef && !isAuditableApprovalRef(evidence.approvalRef) ? 'real_production_outcome_approval_ref_auditable_required' : null,
     ...auditableEvidenceRefBlockers('runtime_publication', evidence.runtimePublicationEvidenceRef),
+    ...auditableEvidenceRefBlockers('runtime_consumption', evidence.runtimeConsumptionEvidenceRef),
     ...auditableEvidenceRefBlockers('api_read_smoke', evidence.apiReadSmokeEvidenceRef),
     ...auditableEvidenceRefBlockers('ui_consumption_smoke', evidence.uiConsumptionSmokeEvidenceRef),
     ...auditableEvidenceRefBlockers('critical_path_readback', evidence.criticalPathReadbackEvidenceRef),
@@ -166,7 +172,8 @@ function isAuditableEvidenceRef(value) {
 function isAuditableSourceExportEvidenceRef(kind, value) {
   const ref = text(value)
   const expectedPrefixes = {
-    runtime_publication: ['wbs_template_runtime_publications_export'],
+    runtime_publication: [CANONICAL_RUNTIME_PUBLICATION_REF_PREFIX],
+    runtime_consumption: [CANONICAL_RUNTIME_CONSUMPTION_REF_PREFIX],
     api_read_smoke: ['api_read_smoke_export'],
     ui_consumption_smoke: ['ui_consumption_smoke_export'],
     critical_path_readback: ['critical_path_readback_export'],

@@ -25,7 +25,7 @@ This dashboard is a coordination layer. It does not replace existing `npm run ve
 - `tools/check-testing-tools.mjs`: read-only Phase 4 tool readiness checker.
 - `tools/check-default-master-plan-evidence-sources.mjs`: read-only source-kit checker for default master-plan review, calibration, writer, publication, smoke source inputs, and the full source-export manifest contract.
 - `tools/check-default-master-plan-candidate-export-hygiene.mjs`: read-only hygiene checker that makes the selected candidate export explicit and reports stale/ineligible candidate exports as ignored instead of allowing auto-discovery ambiguity.
-- `tools/run-default-master-plan-staging-runtime-evidence.mjs`: controlled staging writer for an explicitly authorized default master-plan test project; it writes staging task carriers, duration samples, dependencies, runtime publication, smoke/readback evidence, and rollback evidence only after staging unlock flags and a matching authorization file.
+- `tools/build-default-master-plan-runtime-publication-evidence.mjs`: read-only builder that requires hashed exports from `duration_learning_runtime_publications` and `duration_learning_runtime_consumptions`, including a physical `task_baseline_items` subject join.
 - `tools/build-default-master-plan-real-production-outcome-package.mjs`: no-write package builder for the production/live real outcome JSON contract and source-export command template.
 - `tools/check-default-master-plan-candidate-refresh-db-repair-readiness.mjs`: no-write DB repair preflight for failed candidate refresh execution; it compares the failed target fingerprint with the current env-file target without connecting to the database.
 - `tools/check-default-master-plan-candidate-refresh-execution-readiness.mjs`: no-write seal checker for candidate refresh execution; it validates the authorization package, preflight binding, sealed command, and explicit unlock environment variable without connecting to the database or running the writer.
@@ -139,13 +139,7 @@ npm run evidence:default-master-plan:candidate-hygiene
 
 It writes `project-testing/reports/default-master-plan-production-readiness/candidate-export-hygiene.json|md`, confirms the candidate selected by `operator-handoff.json`, lists stale/ineligible exports as ignored, and blocks if another eligible candidate export remains beside the selected baseline. It is read-only and cannot close production-ready.
 
-For an explicitly authorized staging test project, run the controlled staging runtime evidence writer only with all unlock flags and the matching authorization file:
-
-```powershell
-npm run evidence:default-master-plan:staging-runtime -- --env-file <env-file-containing-authorized-baseline> --baseline-id <baseline-id> --project-id <project-id> --company-id <company-id> --environment staging --reviewed-by <user-id> --staging-authorization-file project-testing/reports/default-master-plan-production-readiness/staging-runtime/staging-authorization.json --include-staging --confirm-staging-handoff --allow-write
-```
-
-This is a real staging write path. It may write task carriers, duration samples, task dependencies, runtime publication rows, readback/smoke evidence, and rollback events for the authorized test object. The report records the selected env-file fingerprint, Supabase project ref, database host, and connection source without secrets; an env-file/baseline mismatch is staging evidence boundary material, not production failure evidence. It must remain labeled staging controlled replay and cannot close production-ready; a separate production/live real outcome file is still required.
+The pre-315 controlled staging legacy writer is retired. Runtime evidence is collected read-only after the product commit path has created a canonical publication and trusted consumption; evidence tooling must not manufacture either row family.
 
 After refreshing the source-kit and readiness reports, generate the concise handoff summary:
 
