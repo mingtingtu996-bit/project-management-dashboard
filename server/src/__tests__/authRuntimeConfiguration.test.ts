@@ -1,11 +1,15 @@
 import type { Response } from 'express'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import * as authConfig from '../auth/config.js'
-import { clearAuthTokenCookie, setAuthTokenCookie } from '../auth/http.js'
+type AuthConfigModule = typeof import('../auth/config.js')
+type AuthHttpModule = typeof import('../auth/http.js')
 
 const originalEnv = { ...process.env }
-const JWT_CONFIG = authConfig.JWT_CONFIG
+
+let authConfig: AuthConfigModule
+let clearAuthTokenCookie: AuthHttpModule['clearAuthTokenCookie']
+let JWT_CONFIG: AuthConfigModule['JWT_CONFIG']
+let setAuthTokenCookie: AuthHttpModule['setAuthTokenCookie']
 
 function assertAuthRuntimeConfiguration() {
   const assertion = (authConfig as unknown as {
@@ -30,8 +34,14 @@ function setProductionEnvironment(target: 'production' | 'staging') {
 }
 
 describe('auth runtime configuration', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     process.env = { ...originalEnv }
+    vi.resetModules()
+    authConfig = await import('../auth/config.js')
+    const authHttp = await import('../auth/http.js')
+    clearAuthTokenCookie = authHttp.clearAuthTokenCookie
+    JWT_CONFIG = authConfig.JWT_CONFIG
+    setAuthTokenCookie = authHttp.setAuthTokenCookie
   })
 
   afterEach(() => {
@@ -143,56 +153,45 @@ describe('auth runtime configuration', () => {
     )
   })
 
-  it('keeps auth cookies HttpOnly in every runtime despite environment override attempts', () => {
-    for (const target of ['production', 'staging'] as const) {
-      setProductionEnvironment(target)
+  it('keeps auth cookies HttpOnly when override attempts exist before module initialization', async () => {
+    for (const target of ['production', 'staging', 'test'] as const) {
+      process.env = { ...originalEnv }
+      if (target === 'test') {
+        process.env.NODE_ENV = 'test'
+        delete process.env.AUTH_COOKIE_NAME
+      } else {
+        setProductionEnvironment(target)
+      }
       process.env.AUTH_COOKIE_HTTP_ONLY = 'false'
       process.env.JWT_COOKIE_HTTP_ONLY = 'false'
       process.env.COOKIE_HTTP_ONLY = 'false'
+
+      vi.resetModules()
+      const freshAuthConfig = await import('../auth/config.js')
+      const freshAuthHttp = await import('../auth/http.js')
 
       const response = {
         clearCookie: vi.fn(),
         cookie: vi.fn(),
       } as unknown as Response
 
-      setAuthTokenCookie(response, 'token')
-      clearAuthTokenCookie(response)
+      freshAuthHttp.setAuthTokenCookie(response, 'token')
+      freshAuthHttp.clearAuthTokenCookie(response)
 
-      expect(JWT_CONFIG.cookie.httpOnly).toBe(true)
+      const expectedCookieName = target === 'test'
+        ? 'auth_token'
+        : `workbuddy_${target}_auth_token`
+      expect(freshAuthConfig.JWT_CONFIG.cookie.httpOnly).toBe(true)
       expect(response.cookie).toHaveBeenCalledWith(
-        `workbuddy_${target}_auth_token`,
+        expectedCookieName,
         'token',
         expect.objectContaining({ httpOnly: true }),
       )
       expect(response.clearCookie).toHaveBeenCalledWith(
-        `workbuddy_${target}_auth_token`,
+        expectedCookieName,
         expect.objectContaining({ httpOnly: true }),
       )
     }
-
-    process.env.NODE_ENV = 'test'
-    delete process.env.AUTH_COOKIE_NAME
-    process.env.AUTH_COOKIE_HTTP_ONLY = 'false'
-    process.env.JWT_COOKIE_HTTP_ONLY = 'false'
-    process.env.COOKIE_HTTP_ONLY = 'false'
-    const response = {
-      clearCookie: vi.fn(),
-      cookie: vi.fn(),
-    } as unknown as Response
-
-    setAuthTokenCookie(response, 'token')
-    clearAuthTokenCookie(response)
-
-    expect(JWT_CONFIG.cookie.httpOnly).toBe(true)
-    expect(response.cookie).toHaveBeenCalledWith(
-      'auth_token',
-      'token',
-      expect.objectContaining({ httpOnly: true }),
-    )
-    expect(response.clearCookie).toHaveBeenCalledWith(
-      'auth_token',
-      expect.objectContaining({ httpOnly: true }),
-    )
   })
 
   it('retains the existing auth_token default in test mode', () => {
