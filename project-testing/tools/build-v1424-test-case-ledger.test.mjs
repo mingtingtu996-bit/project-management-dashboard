@@ -122,6 +122,14 @@ test('builds v1.4.24 test case ledger artifacts with complete baseline case clas
     assert.ok(coverage.baselines['PB-01'].caseIds.includes('PB01-COMPANY-CREATE-SWITCH-01'))
     assert.ok(coverage.baselines['PB-07'].caseIds.includes('PB01-COMPANY-CREATE-SWITCH-01'))
     assert.ok(coverage.baselines['PB-11'].caseIds.includes('PB01-COMPANY-CREATE-SWITCH-01'))
+    const runtimeRollbackCase = matrix.cases.find((item) => item.caseId === 'PB04-ROLLBACK-BOUNDARY-01')
+    assert.ok(runtimeRollbackCase)
+    assert.equal(
+      runtimeRollbackCase.existingCoverage.includes('wbsTemplateRuntimePublicationService.test.ts'),
+      false,
+    )
+    assert.ok(runtimeRollbackCase.existingCoverage.includes('durationLearningRuntimePublicationService.test.ts'))
+    assert.ok(runtimeRollbackCase.existingCoverage.includes('durationLearningRuntimeConsumptionService.test.ts'))
     assert.equal(falseGreen.schemaVersion, 'workbuddy/v1424-false-green-audit/v1')
     assert.equal(falseGreen.scanPolicy.scope, 'test-scripts-release-evidence-only')
     assert.ok(falseGreen.scannedRoots.includes(outputDir))
