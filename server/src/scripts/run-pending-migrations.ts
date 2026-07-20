@@ -18,7 +18,9 @@ import {
   releaseMigrationAdvisoryLock,
   resolveMigrationRuntimeConnectionConfig,
   schemaMigrationsTableExists,
+  selectMigrationConnectionTarget,
 } from '../services/migrationRunner.js'
+import { parseStrictPostgresConnectionTarget } from '../utils/postgresConnectionTargetIdentity.js'
 import {
   evaluateMigrationCheck,
   shouldFailMigrationCheckGate,
@@ -86,6 +88,10 @@ async function main() {
     })),
   )
 
+  const selectedConnectionTarget = selectMigrationConnectionTarget()
+  if (selectedConnectionTarget.mode === 'connection_string') {
+    parseStrictPostgresConnectionTarget(selectedConnectionTarget.connectionString)
+  }
   const client = new Client(await resolveMigrationRuntimeConnectionConfig())
   await client.connect()
   let lockAcquired = false

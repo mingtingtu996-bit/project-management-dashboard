@@ -27,7 +27,9 @@ function parseArgs(argv: string[]) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
-  const client = new Client(await resolveMigrationRuntimeConnectionConfig())
+  const targetIdentity = resolveDurationLearningLegacyRuntimeRetirementTargetIdentity()
+  const connectionConfig = await resolveMigrationRuntimeConnectionConfig()
+  const client = new Client(connectionConfig)
   await client.connect()
   try {
     const applied = await client.query<{ applied: boolean }>(
@@ -48,7 +50,7 @@ async function main() {
 
     const backup = await captureDurationLearningLegacyRuntimeRetirementBackup(
       (sql, values) => client.query(sql, values),
-      { targetIdentity: resolveDurationLearningLegacyRuntimeRetirementTargetIdentity() },
+      { targetIdentity },
     )
     const serialized = serializeDurationLearningLegacyRuntimeRetirementBackup(backup)
     const sha256 = calculateDurationLearningLegacyRuntimeRetirementBackupSha256(serialized)

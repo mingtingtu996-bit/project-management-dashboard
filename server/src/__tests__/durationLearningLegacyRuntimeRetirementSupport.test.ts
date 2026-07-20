@@ -9,6 +9,7 @@ import {
   captureDurationLearningLegacyRuntimeRetirementBackup,
   prepareDurationLearningLegacyRuntimeRetirementFromEnvironment,
   planDurationLearningLegacyRuntimeRetirementPendingPhase,
+  resolveDurationLearningLegacyRuntimeRetirementTargetIdentity,
   serializeDurationLearningLegacyRuntimeRetirementBackup,
   validateDurationLearningLegacyRuntimeRetirementBackup,
   verifyDurationLearningLegacyRuntimeRetirementReadback,
@@ -177,6 +178,40 @@ describe('duration learning legacy runtime retirement support', () => {
     expect(phase.status).toBe('ordinary_pending_ready')
     expect(phase.executableMigrations).toEqual([{ filename: '323_after_retirement.sql' }])
     expect(phase.deferredMigrations).toEqual([])
+  })
+
+  it('rejects direct and pooler connection identity overrides before backup or database access', async () => {
+    const expectedProjectRef = 'xemqmqpifsstkovbkatp'
+    const otherProjectRef = 'bbbbbbbbbbbbbbbbbbbb'
+    const overrideEnvironments = [
+      {
+        ...targetEnv,
+        DATABASE_URL:
+          `postgresql://postgres:secret@db.${expectedProjectRef}.supabase.co:5432/postgres`
+          + `?host=db.${otherProjectRef}.supabase.co`,
+      },
+      {
+        ...targetEnv,
+        DATABASE_URL:
+          `postgresql://postgres.${expectedProjectRef}:secret@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres`
+          + `?user=postgres.${otherProjectRef}`,
+      },
+    ]
+
+    for (const env of overrideEnvironments) {
+      expect(() => resolveDurationLearningLegacyRuntimeRetirementTargetIdentity(env))
+        .toThrow(/connection query parameter|effective target/i)
+
+      const query = vi.fn(async () => ({ rows: [] }))
+      const readTextFile = vi.fn(async () => '')
+      await expect(prepareDurationLearningLegacyRuntimeRetirementFromEnvironment(
+        query,
+        env,
+        readTextFile,
+      )).rejects.toThrow(/connection query parameter|effective target/i)
+      expect(readTextFile).not.toHaveBeenCalled()
+      expect(query).not.toHaveBeenCalled()
+    }
   })
 
   it('verifies the committed 322 ledger and exact retired readback before reporting completion', async () => {
