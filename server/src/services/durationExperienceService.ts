@@ -756,20 +756,31 @@ export async function collectDurationExperienceSampleFromTask(
       error: error instanceof Error ? error.message : String(error),
     }),
   })
-  const actualDurationProductionDays = Math.max(
-    1,
-    productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar),
-  )
-  const plannedDurationProductionDays = plannedStartDate && plannedEndDate
-    ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
-    : actualDurationProductionDays
-  const actualDuration = actualDurationProductionDays
-  const plannedDuration = plannedDurationProductionDays
+  const hasAuthoritativeConstructionCalendar = constructionCalendar.availability === 'available'
+    && constructionCalendar.basis === 'official_construction_calendar_seed'
+    && Boolean(normalizeText(constructionCalendar.calendarRef))
+    && Boolean(normalizeText(constructionCalendar.calendarVersion))
+  const durationDayBasis = hasAuthoritativeConstructionCalendar
+    ? 'construction_production_day' as const
+    : 'calendar_day' as const
+  const actualDurationProductionDays = hasAuthoritativeConstructionCalendar
+    ? Math.max(1, productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar))
+    : null
+  const plannedDurationProductionDays = hasAuthoritativeConstructionCalendar
+    ? plannedStartDate && plannedEndDate
+      ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
+      : actualDurationProductionDays
+    : null
+  const actualDuration = actualDurationProductionDays ?? actualDurationCalendarDays
+  const plannedDuration = plannedDurationProductionDays ?? plannedDurationCalendarDays
   const progressQuality = await resolveProgressQualityForSample(task)
   const dateSampleStrength = weakerSampleStrength(actualStart.strength, actualEnd.strength)
-  const finalSampleStrength = progressQuality.sampleStrength
+  const measuredSampleStrength = progressQuality.sampleStrength
     ? weakerSampleStrength(dateSampleStrength, progressQuality.sampleStrength)
     : dateSampleStrength
+  const finalSampleStrength: SampleStrength = hasAuthoritativeConstructionCalendar
+    ? measuredSampleStrength
+    : 'unusable'
   const confidence = confidenceForStrength(finalSampleStrength)
   const companyId = await resolveCompanyId(String(task.project_id))
   if (!companyId) {
@@ -871,13 +882,18 @@ export async function collectDurationExperienceSampleFromTask(
     previous_progress: options.previousTask?.progress ?? null,
     completed_status: task.status ?? null,
     completed_progress: task.progress ?? null,
-    duration_day_basis: 'construction_production_day',
+    duration_day_basis: durationDayBasis,
     actual_duration_calendar_days: actualDurationCalendarDays,
     actual_duration_production_days: actualDurationProductionDays,
     planned_duration_calendar_days: plannedDurationCalendarDays,
     planned_duration_production_days: plannedDurationProductionDays,
     construction_calendar_basis: constructionCalendar.basis,
     construction_calendar_window_count: constructionCalendar.windows.length,
+    construction_calendar_ref: constructionCalendar.calendarRef ?? null,
+    construction_calendar_version: constructionCalendar.calendarVersion ?? null,
+    construction_calendar_timezone: constructionCalendar.timezone ?? null,
+    construction_calendar_availability: constructionCalendar.availability ?? 'unavailable',
+    construction_calendar_unavailable_reason: constructionCalendar.unavailableReason ?? null,
     raw_task_title: task.title ?? null,
     title_weak_alias: normalizeText(backendStandardMapping.source) === 'algorithm_seed_rule'
       ? task.title ?? null
@@ -963,7 +979,7 @@ export async function collectDurationExperienceSampleFromTask(
     standard_work_code: task.standard_work_code ?? null,
     standard_work_name: task.standard_work_name ?? task.title ?? null,
     engineering_category_id: task.engineering_category_id ?? null,
-    duration_day_basis: 'construction_production_day',
+    duration_day_basis: durationDayBasis,
     actual_duration_calendar_days: actualDurationCalendarDays,
     actual_duration_production_days: actualDurationProductionDays,
     planned_duration_calendar_days: plannedDurationCalendarDays,
@@ -996,9 +1012,14 @@ export async function collectDurationExperienceSampleFromTask(
       taskId: String(task.id),
       actualStartSource: actualStart.source,
       actualEndSource: actualEnd.source,
-      durationDayBasis: 'construction_production_day',
+      durationDayBasis,
       constructionCalendarBasis: constructionCalendar.basis,
       constructionCalendarWindowCount: constructionCalendar.windows.length,
+      constructionCalendarRef: constructionCalendar.calendarRef ?? null,
+      constructionCalendarVersion: constructionCalendar.calendarVersion ?? null,
+      constructionCalendarTimezone: constructionCalendar.timezone ?? null,
+      constructionCalendarAvailability: constructionCalendar.availability ?? 'unavailable',
+      constructionCalendarUnavailableReason: constructionCalendar.unavailableReason ?? null,
       collectedTrigger: options.trigger ?? 'task_completion',
       collectedBy: options.actorId ?? null,
     },
