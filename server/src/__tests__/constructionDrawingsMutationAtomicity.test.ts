@@ -155,6 +155,11 @@ const harness = vi.hoisted(() => {
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
 
+    if (normalized.includes('from project_members') && normalized.includes('project_id = ?')) {
+      observe('project-members:als-read')
+      return [{ id: 'member-1', user_id: 'owner-1', permission_level: 'owner', is_active: true }]
+    }
+
     if (normalized.startsWith('insert into construction_drawings')) {
       mutate('construction-drawings:insert')
       state.insertedDrawing = {
@@ -259,6 +264,10 @@ const harness = vi.hoisted(() => {
   })
 
   const clearDrawingBoardCache = vi.fn(() => observe('cache:clear'))
+  const getMembers = vi.fn(async () => {
+    observe('project-members:supabase-read')
+    return [{ id: 'member-1', user_id: 'owner-1', permission_level: 'owner' }]
+  })
   const getAuthorizedRequestProjectId = vi.fn((req: any, expectedProjectId?: string | null) => {
     observe('authority:revalidate')
     const authorized = req.authorizedProjectIds ?? []
@@ -327,6 +336,7 @@ const harness = vi.hoisted(() => {
     executeSQLOne,
     withDatabaseTransaction,
     clearDrawingBoardCache,
+    getMembers,
     getAuthorizedRequestProjectId,
     persistNotification,
     syncPackageCurrentDrawingCertificateLink,
@@ -370,9 +380,7 @@ vi.mock('../middleware/logger.js', () => ({
 vi.mock('../services/dbService.js', () => ({
   executeSQL: harness.executeSQL,
   executeSQLOne: harness.executeSQLOne,
-  getMembers: vi.fn(async () => ([
-    { id: 'member-1', user_id: 'owner-1', permission_level: 'owner' },
-  ])),
+  getMembers: harness.getMembers,
 }))
 
 vi.mock('../database.js', () => ({
@@ -483,6 +491,7 @@ describe('construction drawing request mutation atomicity', () => {
       'drawing-versions:insert',
       'drawing-packages:pointer-update',
       'drawing-package-items:update',
+      'project-members:als-read',
       'notification:persist',
       'certificate-link:package-sync',
     ])
@@ -491,6 +500,7 @@ describe('construction drawing request mutation atomicity', () => {
       'package-current-count:read',
       'package-current-drawing:read',
     ])
+    expect(harness.getMembers).not.toHaveBeenCalled()
   })
 
   it('clears the drawing board cache only after a successful POST transaction commits', async () => {
@@ -556,16 +566,18 @@ describe('construction drawing request mutation atomicity', () => {
       'drawing-versions:insert',
       'drawing-packages:pointer-update',
       'package-current-drawing:read',
+      'project-members:als-read',
       'notification:persist',
       'certificate-link:package-sync',
       'task-conditions:auto-satisfy',
     ])
     expectAttemptOrder([
-      'drawing:locked-read',
       'drawing-package:locked-read',
+      'drawing:locked-read',
       'package-current-count:read',
       'package-current-drawing:read',
     ])
+    expect(harness.getMembers).not.toHaveBeenCalled()
   })
 
   it('returns a stale PUT conflict without mutating data or clearing cache', async () => {
@@ -610,6 +622,11 @@ describe('construction drawing request mutation atomicity', () => {
       'retention:event',
       'construction-drawings:delete',
       'certificate-link:package-sync',
+    ])
+    expectAttemptOrder([
+      'drawing-package:locked-read',
+      'drawing:locked-read',
+      'active-links:revalidate',
     ])
   })
 
