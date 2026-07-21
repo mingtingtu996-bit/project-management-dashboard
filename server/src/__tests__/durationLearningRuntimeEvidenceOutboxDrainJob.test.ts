@@ -90,6 +90,10 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
       resolve(process.cwd(), 'src/services/persistentJobScheduleService.ts'),
       'utf8',
     )
+    const lifecycleSource = readFileSync(
+      resolve(process.cwd(), 'src/services/durationLearningRuntimeLifecycleService.ts'),
+      'utf8',
+    )
     const jobsRouteSource = readFileSync(resolve(process.cwd(), 'src/routes/jobs.ts'), 'utf8')
     const serverPackage = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as {
       scripts?: Record<string, string>
@@ -105,6 +109,7 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
     expect(source).toContain('drainDurationLearningRuntimeEvidenceOutbox')
     expect(source).not.toContain('runDurationLearningRuntimeLifecycleSweep')
     expect(source).not.toContain('promoteDurationLearningRuntimeCanary')
+    expect(lifecycleSource).not.toContain('drainDurationLearningRuntimeEvidenceOutbox')
     expect(schedulerSource).toContain("import { durationLearningRuntimeEvidenceOutboxDrainJob } from './jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'")
     expect(schedulerSource).toContain('durationLearningRuntimeEvidenceOutboxDrainJob.start()')
     expect(schedulerSource).toContain('durationLearningRuntimeEvidenceOutboxDrainJob.stop()')
@@ -122,6 +127,10 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
     const recoveryRunbook = readFileSync(recoveryRunbookPath, 'utf8')
     expect(recoveryRunbook).toContain('No HTTP manual-execution endpoint')
     expect(recoveryRunbook).toContain('five-minute persistent schedule')
+    expect(recoveryRunbook).toContain('--environment staging')
+    expect(recoveryRunbook).toContain('--expected-release-sha <40-char-deployed-sha>')
+    expect(recoveryRunbook).toContain('--expected-project-ref <20-char-supabase-ref>')
+    expect(recoveryRunbook).toContain('--expected-database-role workbuddy_runtime_login')
   })
 
   it('drains with injectable authority, time and bounded batch inputs under its own lease', async () => {
@@ -256,16 +265,51 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
       expect(firstOutcome.error).toMatchObject({ code: 'JOB_ATTEMPT_TIMEOUT' })
       expect(attemptSignal?.aborted).toBe(true)
       expect(leaseHeld).toBe(true)
+      expect(job.getStatus().isRunning).toBe(true)
 
       await expect(job.executeNow()).resolves.toEqual({
         status: 'skipped',
         reason: 'lease_not_acquired',
       })
       expect(drain).toHaveBeenCalledTimes(1)
+      expect(job.getStatus().isRunning).toBe(true)
     } finally {
       releaseDrain?.()
       await vi.waitFor(() => expect(leaseHeld).toBe(false))
+      await vi.waitFor(() => expect(job.getStatus().isRunning).toBe(false))
     }
+  })
+
+  it('propagates lease loss into the drain signal as well as the attempt signal', async () => {
+    const leaseError = Object.assign(new Error('lease connection lost'), { code: 'JOB_LEASE_LOST' })
+    const leaseController = new AbortController()
+    let observedSignal: AbortSignal | undefined
+    const drain = vi.fn(async (input: { signal?: AbortSignal }) => {
+      observedSignal = input.signal
+      leaseController.abort(leaseError)
+      await Promise.resolve()
+      return successfulDrain()
+    })
+    const leaseRunner = vi.fn(async (_options, runner) => {
+      const context = {
+        ...createLeaseContext(),
+        signal: leaseController.signal,
+        assertActive: vi.fn(() => {
+          if (leaseController.signal.aborted) throw leaseController.signal.reason
+        }),
+      }
+      return { acquired: true as const, value: await runner(context) }
+    })
+    const job = new jobModule.DurationLearningRuntimeEvidenceOutboxDrainJob({
+      drain: drain as any,
+      queryExec: vi.fn(),
+      leaseRunner,
+      retryRunner: createSingleAttemptRetryRunner(),
+    })
+
+    await expect(job.executeNow()).rejects.toBe(leaseError)
+    expect(observedSignal?.aborted).toBe(true)
+    expect(observedSignal?.reason).toBe(leaseError)
   })
 
   it('propagates processor and lease failures so the persistent slot can retry', async () => {

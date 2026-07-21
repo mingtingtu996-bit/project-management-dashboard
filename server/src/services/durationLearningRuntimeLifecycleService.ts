@@ -24,7 +24,6 @@ import {
   type DurationLearningFactSource,
 } from './durationLearningAssetAutomationPolicyService.js'
 import {
-  drainDurationLearningRuntimeEvidenceOutbox,
   type DrainDurationLearningRuntimeEvidenceOutboxResult,
   type ProcessDurationLearningRuntimeEvidenceOutboxResult,
 } from './durationLearningRuntimeEvidenceOutboxService.js'
@@ -3009,11 +3008,7 @@ export async function runDurationLearningRuntimeLifecycleSweep(
   const rollbackPublication = input.rollbackPublication ?? rollbackDurationLearningRuntimePublication
   const observedAt = input.observedAt ?? new Date().toISOString()
   const result = emptySweepResult()
-  const evidenceOutboxProcessor = input.evidenceOutboxProcessor === undefined
-    ? input.candidateProvider || input.monitoringProvider
-      ? null
-      : drainDurationLearningRuntimeEvidenceOutbox
-    : input.evidenceOutboxProcessor
+  const evidenceOutboxProcessor = input.evidenceOutboxProcessor ?? null
   const collectionCursorStore = input.collectionCursorStore === undefined
     ? input.candidateProvider || input.monitoringProvider
       ? null

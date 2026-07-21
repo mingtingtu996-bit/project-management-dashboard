@@ -332,12 +332,22 @@ describe('duration learning evidence outbox follow-up contracts', () => {
         lineageResolution: 'no_trusted_consumption',
       },
     }
+    const secondRow = {
+      ...row,
+      event_key: 'event-abort-second-row',
+      subject_id: 'baseline-abort-second',
+      input_subject_ids: ['baseline-abort-second'],
+      payload: {
+        ...row.payload,
+        generatedEntityIds: ['baseline-abort-second'],
+      },
+    }
     let claimCount = 0
     const queryExec = vi.fn(async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
       if (sql.includes(':quarantine-unsafe')) return [] as T[]
       if (sql.includes(':claim')) {
         claimCount += 1
-        return [row] as T[]
+        return [row, secondRow] as T[]
       }
       if (sql.includes(':authority')) return [{ authorized: true }] as T[]
       if (sql.includes(':complete')) {
@@ -348,15 +358,17 @@ describe('duration learning evidence outbox follow-up contracts', () => {
       return [] as T[]
     }) as any
 
+    const recordWbsCandidate = vi.fn(async () => undefined)
     await expect(outbox.drainDurationLearningRuntimeEvidenceOutbox({
       queryExec,
       ownerId: 'worker-abort',
       maxBatches: 4,
       signal: controller.signal,
-      recordWbsCandidate: vi.fn(async () => undefined),
+      recordWbsCandidate,
     })).rejects.toBe(timeoutError)
 
     expect(claimCount).toBe(1)
+    expect(recordWbsCandidate).toHaveBeenCalledTimes(1)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes(':backlog'))).toBe(false)
   })
 
