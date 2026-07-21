@@ -131,6 +131,11 @@ const db = vi.hoisted(() => {
   let contentionPromise = Promise.resolve()
   let resolveContention: (() => void) | null = null
   const lockEvents: string[] = []
+  const enforceRetentionOrBlock = vi.fn(async () => ({
+    blocked: false,
+    reason: 'physical_delete_allowed',
+    result: { resolvedAction: 'physical_delete' },
+  }))
   const persistNotification = vi.fn(async (payload: Record<string, unknown>) => payload)
   const getMembers = vi.fn(async () => ([
     { id: 'member-1', project_id: 'project-1', user_id: 'owner-1', role: 'owner', joined_at: '2026-04-15T00:00:00.000Z' },
@@ -1009,6 +1014,9 @@ const db = vi.hoisted(() => {
       const projectId = String(params[1] ?? '')
       const index = drawings.findIndex((row) => row.id === drawingId && row.project_id === projectId)
       if (index >= 0) drawings.splice(index, 1)
+      for (let versionIndex = versions.length - 1; versionIndex >= 0; versionIndex -= 1) {
+        if (versions[versionIndex]?.drawing_id === drawingId) versions.splice(versionIndex, 1)
+      }
       return []
     }
 
@@ -1306,6 +1314,7 @@ const db = vi.hoisted(() => {
     certificateWorkItems,
     certificateDependencies,
     preMilestones,
+    enforceRetentionOrBlock,
     persistNotification,
     getMembers,
     executeSQL,
@@ -1374,11 +1383,7 @@ vi.mock('../services/warningChainService.js', () => ({
 }))
 
 vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
-  enforceRetentionOrBlock: vi.fn(async () => ({
-    blocked: false,
-    reason: 'physical_delete_allowed',
-    result: { resolvedAction: 'physical_delete' },
-  })),
+  enforceRetentionOrBlock: db.enforceRetentionOrBlock,
   buildRetentionBlockedApiError: vi.fn(),
   buildRetentionBlockedHttpStatus: vi.fn(),
 }))
@@ -1925,6 +1930,43 @@ describe('construction drawing current-version write path', () => {
     expect(db.certificateDependencies[0]?.predecessor_id).toBe('cert-b')
   })
 
+  it('rejects standalone deletion of a package current drawing before retention or mutation', async () => {
+    const request = supertest(buildApp())
+    const drawingsBefore = db.drawings.map((drawing) => ({ ...drawing }))
+    const versionsBefore = db.versions.map((version) => ({ ...version }))
+
+    const response = await request.delete('/api/construction-drawings/draw-1')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'MISSING_TARGET_DRAWING',
+        message: '当前有效版不能为空',
+      },
+    })
+    expect(db.drawings).toEqual(drawingsBefore)
+    expect(db.versions).toEqual(versionsBefore)
+    expect(db.packages[0]?.current_version_drawing_id).toBe('draw-1')
+    expect(db.enforceRetentionOrBlock).not.toHaveBeenCalled()
+    expect(db.executeSQL.mock.calls.some(([sql]) => (
+      String(sql).toLowerCase().includes('delete from construction_drawings')
+    ))).toBe(false)
+  })
+
+  it('allows standalone deletion of a non-current drawing and preserves the package current pointer', async () => {
+    const request = supertest(buildApp())
+
+    const response = await request.delete('/api/construction-drawings/draw-2')
+
+    expect(response.status).toBe(200)
+    expect(db.drawings.map((drawing) => drawing.id)).toEqual(['draw-1'])
+    expect(db.versions.map((version) => version.id)).toEqual(['ver-1'])
+    expect(currentDrawingIds()).toEqual(['draw-1'])
+    expect(db.packages[0]?.current_version_drawing_id).toBe('draw-1')
+    expect(db.enforceRetentionOrBlock).toHaveBeenCalledTimes(1)
+  })
+
   it('serializes a current-version switch before a concurrent drawing POST', async () => {
     const request = supertest(buildApp())
     const projectId = '11111111-1111-4111-8111-111111111111'
@@ -2007,13 +2049,13 @@ describe('construction drawing current-version write path', () => {
     db.prepareConcurrentPackageMutation('drawing-lock')
 
     const deletePromise = request
-      .delete('/api/construction-drawings/draw-1')
+      .delete('/api/construction-drawings/draw-2')
       .then((response) => response)
     await db.waitForPausedQuery()
 
     const switchPromise = request
       .post('/api/drawing-packages/packages/pkg-1/set-current-version')
-      .send({ drawingId: 'draw-2' })
+      .send({ drawingId: 'draw-1' })
       .then((response) => response)
 
     const observed = await Promise.race([
@@ -2026,7 +2068,7 @@ describe('construction drawing current-version write path', () => {
     expect(observed).toBe('contention')
     expect(deleteResponse.status).toBe(200)
     expect(switchResponse.status).toBe(200)
-    expect(db.drawings.some((drawing) => drawing.id === 'draw-1')).toBe(false)
-    expect(currentDrawingIds()).toEqual(['draw-2'])
+    expect(db.drawings.some((drawing) => drawing.id === 'draw-2')).toBe(false)
+    expect(currentDrawingIds()).toEqual(['draw-1'])
   })
 })
