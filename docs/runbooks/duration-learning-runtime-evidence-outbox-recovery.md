@@ -14,17 +14,17 @@ Before execution:
 
 1. Confirm the checked-out commit is the exact release SHA deployed to the target environment.
 2. Confirm the target is explicitly staging or production and load only that environment's secrets.
-3. Resolve and record the expected Supabase project reference, effective database host, and runtime database role before any write.
+3. Resolve and record the expected Supabase project reference, effective database host, database name, and non-privileged runtime database role before any write.
 4. Confirm the ordinary five-minute schedule and worker restart/catch-up path cannot recover the backlog in time.
 5. Keep staging and production executions separate. Never reuse a local `.env` as deployment evidence.
 
 Run from the repository root:
 
 ```powershell
-npm run recover:duration-learning-runtime-evidence-outbox --workspace=server -- --allow-write --confirm DRAIN_DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_NOW
+npm run recover:duration-learning-runtime-evidence-outbox --workspace=server -- --allow-write --confirm DRAIN_DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_NOW --environment staging --expected-release-sha <40-char-deployed-sha> --expected-project-ref <20-char-supabase-ref> --expected-database-role workbuddy_runtime_login --expected-database postgres
 ```
 
-The command loads the job and database graph only after both confirmation arguments pass. A lease-contention or local-overlap `skipped` result exits as a failure; wait for the active worker or investigate the lease instead of reporting recovery success.
+Use `--environment production` only in the production release shell. The command compares every expected value with `DEPLOY_TARGET`, `RELEASE_SHA`, `SUPABASE_URL`, and the effective `DB_CONNECTION_STRING` or explicit `DB_*` connection authority. It permits only the matching Supabase direct or verified pooler host, exact project ref, database, and runtime role. Pure target checks run before the strict PostgreSQL parser is loaded, and the job/database graph loads only after the strict effective target also matches. A lease-contention or local-overlap `skipped` result exits as a failure; wait for the active worker or investigate the lease instead of reporting recovery success.
 
 After execution, read `/api/jobs/status` and the target database backlog metrics from the same environment. Record the target, immutable SHA, command exit code, and sanitized result. Do not store credentials or connection strings in logs or artifacts.
 

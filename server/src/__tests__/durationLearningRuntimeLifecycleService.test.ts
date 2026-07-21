@@ -2517,4 +2517,24 @@ describe('durationLearningRuntimeLifecycleService', () => {
       })],
     }))
   })
+
+  it('leaves production outbox draining to the dedicated leased job', async () => {
+    const queryExec = vi.fn(async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      return [] as T[]
+    }) as any
+
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      queryExec,
+      checkpointStore: null,
+      collectionCursorStore: null,
+      observedAt: '2026-07-21T00:00:00.000Z',
+    })
+
+    expect(queryExec.mock.calls.some(([sql]) => (
+      String(sql).includes('duration-learning-runtime-evidence-outbox:')
+    ))).toBe(false)
+    expect(result.evidenceOutboxClaimed).toBe(0)
+    expect(result.evidenceOutboxCompleted).toBe(0)
+    expect(result.evidenceOutboxFailed).toBe(0)
+  })
 })

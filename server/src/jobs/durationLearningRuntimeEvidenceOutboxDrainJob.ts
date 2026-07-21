@@ -93,6 +93,7 @@ function assertDrainComplete(result: DrainDurationLearningRuntimeEvidenceOutboxR
 
 export class DurationLearningRuntimeEvidenceOutboxDrainJob {
   private isRunning = false
+  private activeLeaseCallbackCount = 0
   private lastRun: Date | null = null
   private nextRun: Date | null = null
   private readonly wallClockTimer: DrainTimer
@@ -134,7 +135,7 @@ export class DurationLearningRuntimeEvidenceOutboxDrainJob {
     const timerStatus = this.wallClockTimer.getStatus()
     const nextRun = this.nextRun ?? timerStatus.nextRun
     return {
-      isRunning: this.isRunning,
+      isRunning: this.isRunning || this.activeLeaseCallbackCount > 0,
       isScheduled: timerStatus.isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: nextRun ? nextRun.toISOString() : null,
@@ -174,21 +175,26 @@ export class DurationLearningRuntimeEvidenceOutboxDrainJob {
             jobId,
           },
           async (lease) => {
-            lease.assertActive()
-            const now = this.options.now?.() ?? new Date().toISOString()
-            const ownerId = this.options.ownerId?.trim()
-              || `${DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_DRAIN_JOB_NAME}:${process.env.HOSTNAME ?? 'local'}:${process.pid}:${jobId}`
-            const result = await drain({
-              queryExec: this.options.queryExec ?? executeSQL,
-              ownerId,
-              now,
-              limit: this.options.limit ?? DEFAULT_LIMIT,
-              maxBatches: this.options.maxBatches ?? DEFAULT_MAX_BATCHES,
-              backlogAgeGateMs: this.options.backlogAgeGateMs ?? DEFAULT_BACKLOG_AGE_GATE_MS,
-              signal: attemptContext.signal,
-            })
-            lease.assertActive()
-            return assertDrainComplete(result)
+            this.activeLeaseCallbackCount += 1
+            try {
+              lease.assertActive()
+              const now = this.options.now?.() ?? new Date().toISOString()
+              const ownerId = this.options.ownerId?.trim()
+                || `${DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_DRAIN_JOB_NAME}:${process.env.HOSTNAME ?? 'local'}:${process.pid}:${jobId}`
+              const result = await drain({
+                queryExec: this.options.queryExec ?? executeSQL,
+                ownerId,
+                now,
+                limit: this.options.limit ?? DEFAULT_LIMIT,
+                maxBatches: this.options.maxBatches ?? DEFAULT_MAX_BATCHES,
+                backlogAgeGateMs: this.options.backlogAgeGateMs ?? DEFAULT_BACKLOG_AGE_GATE_MS,
+                signal: AbortSignal.any([attemptContext.signal, lease.signal]),
+              })
+              lease.assertActive()
+              return assertDrainComplete(result)
+            } finally {
+              this.activeLeaseCallbackCount = Math.max(0, this.activeLeaseCallbackCount - 1)
+            }
           },
         ),
       )

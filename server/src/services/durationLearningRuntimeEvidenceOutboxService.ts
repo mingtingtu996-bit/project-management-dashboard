@@ -1133,6 +1133,7 @@ async function cancelClaimedRuntimeEvidenceEvent(input: {
 export async function processDurationLearningRuntimeEvidenceOutbox(
   input: ProcessEvidenceOutboxInput,
 ): Promise<ProcessDurationLearningRuntimeEvidenceOutboxResult> {
+  throwIfRuntimeEvidenceDrainAborted(input.signal)
   const ownerId = text(input.ownerId)
   if (!ownerId) throw new Error('duration_learning_runtime_evidence_outbox_owner_required')
   const now = input.now ?? new Date().toISOString()
@@ -1189,6 +1190,7 @@ export async function processDurationLearningRuntimeEvidenceOutbox(
      returning outbox.event_key`,
     [now],
   )
+  throwIfRuntimeEvidenceDrainAborted(input.signal)
   const claimedRows = await input.queryExec<EvidenceOutboxRow>(
     `/* duration-learning-runtime-evidence-outbox:claim */
      with selected as (
@@ -1229,6 +1231,7 @@ export async function processDurationLearningRuntimeEvidenceOutbox(
      returning outbox.*`,
     [now, limit, ownerId],
   )
+  throwIfRuntimeEvidenceDrainAborted(input.signal)
   const result = { claimed: claimedRows.length, completed: 0, failed: 0, failureKeys: [] as string[] }
   const recordDurationPrediction = input.recordDurationPrediction ?? recordCommittedDurationSuggestionPredictionEvidence
   const recordWbsCandidate = input.recordWbsCandidate ?? recordWbsTemplateCandidateEventStrict
@@ -1237,10 +1240,13 @@ export async function processDurationLearningRuntimeEvidenceOutbox(
       ? async <T>(work: () => Promise<T>) => work()
       : withDatabaseTransaction)
   for (const row of claimedRows) {
+    throwIfRuntimeEvidenceDrainAborted(input.signal)
     const event = mapOutboxRow(row)
     try {
       await transactionRunner(async () => {
+        throwIfRuntimeEvidenceDrainAborted(input.signal)
         await assertClaimedEventAuthority(event, input.queryExec)
+        throwIfRuntimeEvidenceDrainAborted(input.signal)
         if (event.eventType === 'duration_prediction') {
           await recordDurationPrediction(event.payload as unknown as CommittedDurationSuggestionPredictionEvidence)
         } else if (event.eventType === 'wbs_candidate') {
@@ -1268,6 +1274,7 @@ export async function processDurationLearningRuntimeEvidenceOutbox(
         } else {
           throw new Error(`duration_learning_runtime_evidence_type_unsupported:${event.eventType}`)
         }
+        throwIfRuntimeEvidenceDrainAborted(input.signal)
         const completed = await input.queryExec<{ event_key?: unknown }>(
           `/* duration-learning-runtime-evidence-outbox:complete */
            update public.duration_learning_runtime_evidence_outbox outbox
@@ -1303,6 +1310,7 @@ export async function processDurationLearningRuntimeEvidenceOutbox(
       })
       result.completed += 1
     } catch (error) {
+      throwIfRuntimeEvidenceDrainAborted(input.signal)
       const errorMessage = error instanceof Error ? error.message : String(error)
       let authorityStillValid = false
       try {
