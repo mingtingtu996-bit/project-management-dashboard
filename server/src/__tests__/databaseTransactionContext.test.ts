@@ -23,6 +23,7 @@ describe('database transaction context', () => {
   it('reuses one client for nested services and runs effects only after the outer commit', async () => {
     const events: string[] = []
     const client = createClient(events)
+    const controller = new AbortController()
 
     await runWithDatabaseTransactionClient(client, async () => {
       expect(isDatabaseTransactionActive()).toBe(true)
@@ -35,7 +36,7 @@ describe('database transaction context', () => {
       await registerDatabasePostCommitEffect('notify', async () => {
         events.push('POST_COMMIT_EFFECT')
       })
-    })
+    }, { signal: controller.signal })
 
     expect(events).toEqual([
       'BEGIN',
@@ -45,6 +46,67 @@ describe('database transaction context', () => {
       'RELEASE',
       'POST_COMMIT_EFFECT',
     ])
+  })
+
+  it('rolls back instead of committing when the attempt aborts after deferred work returns', async () => {
+    const events: string[] = []
+    const client = createClient(events)
+    const controller = new AbortController()
+    const timeoutError = Object.assign(new Error('transaction attempt timed out'), {
+      code: 'JOB_ATTEMPT_TIMEOUT',
+    })
+    let releaseWork!: () => void
+    const workStarted = new Promise<void>((resolveStarted) => {
+      releaseWork = resolveStarted
+    })
+    let markWorkStarted!: () => void
+    const workEntered = new Promise<void>((resolveEntered) => {
+      markWorkStarted = resolveEntered
+    })
+
+    const transaction = runWithDatabaseTransactionClient(client, async () => {
+      markWorkStarted()
+      await workStarted
+      events.push('WORK_SETTLED')
+      queueMicrotask(() => controller.abort(timeoutError))
+      return 'late-result'
+    }, { signal: controller.signal })
+
+    await workEntered
+    releaseWork()
+
+    await expect(transaction).rejects.toBe(timeoutError)
+    expect(events).toEqual([
+      'BEGIN',
+      'WORK_SETTLED',
+      'ROLLBACK',
+      'RELEASE',
+    ])
+    expect(events).not.toContain('COMMIT')
+  })
+
+  it('does not enter nested transaction work when its attempt signal is already aborted', async () => {
+    const events: string[] = []
+    const client = createClient(events)
+    const controller = new AbortController()
+    const timeoutError = Object.assign(new Error('nested transaction attempt timed out'), {
+      code: 'JOB_ATTEMPT_TIMEOUT',
+    })
+    controller.abort(timeoutError)
+
+    await expect(runWithDatabaseTransactionClient(client, async () => {
+      await runWithDatabaseTransactionClient(client, async () => {
+        events.push('NESTED_WORK')
+      }, { signal: controller.signal })
+    })).rejects.toBe(timeoutError)
+
+    expect(events).toEqual([
+      'BEGIN',
+      'ROLLBACK',
+      'RELEASE',
+    ])
+    expect(events).not.toContain('NESTED_WORK')
+    expect(events).not.toContain('COMMIT')
   })
 
   it('marks the outer transaction rollback-only when a nested service rolls back', async () => {

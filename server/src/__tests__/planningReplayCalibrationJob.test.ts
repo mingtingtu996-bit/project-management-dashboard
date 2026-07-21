@@ -17,11 +17,20 @@ const mocks = vi.hoisted(() => ({
     failedGroupCount: 0,
     failures: [],
   })),
-  runJobWithRetry: vi.fn(async (_context: unknown, run: () => Promise<unknown>) => {
+  runJobWithRetry: vi.fn(async (
+    _context: unknown,
+    run: (attempt: number, context: { signal: AbortSignal; deadlineAt: string }) => Promise<unknown>,
+  ) => {
     let lastError: unknown = null
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        return { attempts: attempt, value: await run() }
+        return {
+          attempts: attempt,
+          value: await run(attempt, {
+            signal: new AbortController().signal,
+            deadlineAt: '2026-07-21T00:10:00.000Z',
+          }),
+        }
       } catch (error) {
         lastError = error
       }
@@ -58,11 +67,20 @@ const {
 describe('planningReplayCalibrationJob', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.runJobWithRetry.mockImplementation(async (_context: unknown, run: () => Promise<unknown>) => {
+    mocks.runJobWithRetry.mockImplementation(async (
+      _context: unknown,
+      run: (attempt: number, context: { signal: AbortSignal; deadlineAt: string }) => Promise<unknown>,
+    ) => {
       let lastError: unknown = null
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
-          return { attempts: attempt, value: await run() }
+          return {
+            attempts: attempt,
+            value: await run(attempt, {
+              signal: new AbortController().signal,
+              deadlineAt: '2026-07-21T00:10:00.000Z',
+            }),
+          }
         } catch (error) {
           lastError = error
         }

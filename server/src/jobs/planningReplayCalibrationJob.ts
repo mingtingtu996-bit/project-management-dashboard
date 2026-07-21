@@ -1,5 +1,5 @@
 import { logger } from '../middleware/logger.js'
-import { withDatabaseTransaction } from '../database.js'
+import { withDatabaseTransaction, type DatabaseTransactionOptions } from '../database.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
 import { executeSQL } from '../services/dbService.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
@@ -40,11 +40,12 @@ export type PlanningReplayCalibrationSweepInput = {
   minMaeImprovement?: number
   writeReports?: boolean
   sampleProvider?: PlanningReplayCalibrationSampleProvider
+  signal?: AbortSignal
 }
 
 export type PlanningReplayCalibrationJobOptions = {
   sweep?: (params?: PlanningReplayCalibrationSweepInput) => Promise<PlanningReplayCalibrationJobResult>
-  withTransaction?: <T>(work: () => Promise<T>) => Promise<T>
+  withTransaction?: <T>(work: () => Promise<T>, options?: DatabaseTransactionOptions) => Promise<T>
 }
 
 function emptyResult(): PlanningReplayCalibrationJobResult {
@@ -62,6 +63,13 @@ function emptyResult(): PlanningReplayCalibrationJobResult {
     factWritesBlocked: 0,
     seedWritesBlocked: 0,
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Planning replay calibration aborted')
 }
 
 function normalizeText(value: unknown) {
@@ -292,15 +300,19 @@ async function defaultPlanningReplayCalibrationSampleProvider(projectId: string)
 export async function runPlanningReplayCalibrationSweep(
   params: PlanningReplayCalibrationSweepInput = {},
 ): Promise<PlanningReplayCalibrationJobResult> {
+  throwIfAborted(params.signal)
   const projectIds = await listActiveProjectIds(params.projectIds)
+  throwIfAborted(params.signal)
   const sampleProvider = params.sampleProvider ?? defaultPlanningReplayCalibrationSampleProvider
   const result = emptyResult()
   const runKey = `planning-replay-${Date.now()}`
 
   for (const projectId of projectIds) {
+    throwIfAborted(params.signal)
     result.scannedProjects += 1
     try {
       const samples = await sampleProvider(projectId)
+      throwIfAborted(params.signal)
       const report = evaluatePlanningReplayCalibration({
         projectId,
         samples,
@@ -324,11 +336,13 @@ export async function runPlanningReplayCalibrationSweep(
           report,
           runKey: `${runKey}:${projectId}`,
         })
+        throwIfAborted(params.signal)
         result.persistedGroupCount += persistence.persistedGroupCount
         result.persistedReplayResultCount += persistence.persistedReplayResultCount
         result.persistenceFailedGroupCount += persistence.failedGroupCount
       }
     } catch (error) {
+      throwIfAborted(params.signal)
       result.failedReports += 1
       logger.warn('[planningReplayCalibrationJob] project planning replay calibration failed', {
         projectId,
@@ -337,11 +351,13 @@ export async function runPlanningReplayCalibrationSweep(
     }
   }
 
+  throwIfAborted(params.signal)
   return result
 }
 
 export class PlanningReplayCalibrationJob {
   private isRunning = false
+  private activeTransactionCallbackCount = 0
   private lastRun: Date | null = null
   private nextRun: Date | null = null
   private wallClockTimer: PersistentWallClockJobTimer
@@ -378,7 +394,7 @@ export class PlanningReplayCalibrationJob {
 
   getStatus() {
     return {
-      isRunning: this.isRunning,
+      isRunning: this.isRunning || this.activeTransactionCallbackCount > 0,
       isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
@@ -390,7 +406,7 @@ export class PlanningReplayCalibrationJob {
   }
 
   async execute(trigger: 'manual' | 'scheduler' = 'manual', projectIds?: string[] | null) {
-    if (this.isRunning) {
+    if (this.isRunning || this.activeTransactionCallbackCount > 0) {
       logger.warn('planningReplayCalibrationJob execution skipped because a previous run is still active', { trigger })
       return null
     }
@@ -406,11 +422,22 @@ export class PlanningReplayCalibrationJob {
           jobId,
           triggeredBy: trigger,
         },
-        async () => withTransaction(async () => requireCompletePlanningReplayCalibration(
-          await sweep({
-            projectIds: Array.isArray(projectIds) ? projectIds : null,
-          }),
-        )),
+        async (_attempt, attemptContext) => {
+          this.activeTransactionCallbackCount += 1
+          try {
+            return await withTransaction(async () => {
+              throwIfAborted(attemptContext.signal)
+              const result = await sweep({
+                projectIds: Array.isArray(projectIds) ? projectIds : null,
+                signal: attemptContext.signal,
+              })
+              throwIfAborted(attemptContext.signal)
+              return requireCompletePlanningReplayCalibration(result)
+            }, { signal: attemptContext.signal })
+          } finally {
+            this.activeTransactionCallbackCount = Math.max(0, this.activeTransactionCallbackCount - 1)
+          }
+        },
       )
       this.lastRun = new Date()
       logger.info('planningReplayCalibrationJob completed', { trigger, jobId, attempts, ...value })
