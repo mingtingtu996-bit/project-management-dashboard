@@ -18,6 +18,12 @@ import {
   isValidScopedDurationForecastDate,
 } from '../services/scopedDurationForecastRuntimeService.js'
 import { getProjectTimelineEvents, isTaskTimelineEventStoreReady } from '../services/taskTimelineService.js'
+import {
+  getTaskSummaryAssigneeRows,
+  getTaskSummaryCompletionTrend,
+  getTaskSummaryMonthlyPlanFulfillmentTrend,
+  getTaskSummaryProjectMemberNameMap,
+} from '../services/projectExecutionSummaryService.js'
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
 import { businessDateKey } from '../services/durationMetricService.js'
@@ -204,39 +210,6 @@ async function loadTaskSummaryScopeBindingMap(projectId: string): Promise<TaskSu
   return labels
 }
 
-async function loadProjectMemberNameMap(projectId: string, userIds: string[]) {
-  const uniqueIds = Array.from(new Set(userIds.filter(Boolean)))
-  if (uniqueIds.length === 0) return new Map<string, string>()
-
-  const { data: members, error: membersError } = await supabase
-    .from('project_members')
-    .select('user_id')
-    .eq('project_id', projectId)
-    .in('user_id', uniqueIds)
-    .eq('is_active', true)
-
-  if (membersError) throw new Error(`[project-members] 查询失败: ${membersError.message}`)
-
-  const memberUserIds = Array.from(new Set((members || []).map((row: any) => normalizeText(row.user_id)).filter(Boolean)))
-  if (memberUserIds.length === 0) return new Map<string, string>()
-
-  const { data: users, error: usersError } = await supabase
-    .from('users')
-    .select('id, display_name, username')
-    .in('id', memberUserIds)
-
-  if (usersError) throw new Error(`[users] 查询失败: ${usersError.message}`)
-
-  const userNameMap = new Map(
-    (users || []).map((row: any) => [
-      String(row.id),
-      normalizeText(row.display_name) || normalizeText(row.username) || '责任人待确认',
-    ]),
-  )
-
-  return new Map(memberUserIds.map((userId) => [userId, userNameMap.get(userId) || '责任人待确认']))
-}
-
 function resolveTaskSummaryScopeBinding(
   bindings: TaskSummaryScopeBinding[],
   value: unknown,
@@ -289,178 +262,6 @@ async function loadTaskSummaryTaskMilestones(projectId: string, taskIds: string[
     .not('milestone_id', 'is', null)
   if (error) throw error
   return (data ?? []).map((row: any) => ({ task_id: row.id, milestone_id: row.milestone_id }))
-}
-
-type TaskSummaryTrendResultRow = {
-  month: string
-  total: number
-  on_time: number
-  delayed: number
-}
-
-async function loadTaskSummaryTrendRows(projectId: string, fromDate: string): Promise<TaskSummaryTrendResultRow[]> {
-  const [rows, workCalendar] = await Promise.all([
-    (async () => {
-      const { data, error } = await supabase
-        .from('tasks')
-        .select('planned_end_date, end_date, actual_end_date, status, progress')
-        .eq('project_id', projectId)
-        .not('actual_end_date', 'is', null)
-        .gte('actual_end_date', fromDate)
-
-      if (error) throw new Error(`[trend] 查询失败: ${error.message}`)
-      return data ?? []
-    })(),
-    resolveConstructionCalendarContext({ projectId }),
-  ])
-
-  const monthMap: Record<string, TaskSummaryTrendResultRow> = {}
-  for (const task of (rows || [])) {
-    if (!isCompletedTask(task)) continue
-    const completedAt = getTaskActualEndDate(task)
-    if (!completedAt || completedAt < fromDate) continue
-    const month = completedAt.slice(0, 7)
-    if (!monthMap[month]) monthMap[month] = { month, total: 0, on_time: 0, delayed: 0 }
-    monthMap[month].total++
-    if (isTaskDelayedByPeriodEnd(task, completedAt, workCalendar)) monthMap[month].delayed++
-    else monthMap[month].on_time++
-  }
-
-  return Object.values(monthMap).sort((a, b) => a.month.localeCompare(b.month))
-}
-
-type TaskSummaryAssigneeResultRow = {
-  assignee: string
-  total: number
-  on_time: number
-  delayed: number
-  on_time_rate: number
-}
-
-async function loadTaskSummaryAssignees(projectId: string): Promise<TaskSummaryAssigneeResultRow[]> {
-  const rows = await (async () => {
-    const { data, error } = await supabase
-      .from('tasks')
-      .select('assignee_user_id, planned_end_date, end_date, actual_end_date, status, progress')
-      .eq('project_id', projectId)
-
-    if (error) throw new Error(`[assignees] 查询失败: ${error.message}`)
-    return data ?? []
-  })()
-
-  const [projectMemberNameMap, workCalendar] = await Promise.all([
-    loadProjectMemberNameMap(
-      projectId,
-      (rows || []).map((row: any) => row.assignee_user_id).filter(Boolean),
-    ),
-    resolveConstructionCalendarContext({ projectId }),
-  ])
-
-  const map: Record<string, { assignee: string; total: number; on_time: number; delayed: number }> = {}
-  for (const r of (rows || [])) {
-    if (!isCompletedTask(r)) continue
-    const assigneeUserId = normalizeText(r.assignee_user_id)
-    const isLinkedProjectMember = Boolean(assigneeUserId && projectMemberNameMap.has(assigneeUserId))
-    const key = isLinkedProjectMember ? assigneeUserId : '__unassigned__'
-    if (!map[key]) {
-      map[key] = {
-        assignee: isLinkedProjectMember ? projectMemberNameMap.get(assigneeUserId) || '责任人待确认' : '未关联责任人',
-        total: 0,
-        on_time: 0,
-        delayed: 0,
-      }
-    }
-    map[key].total++
-    const completedAt = getTaskActualEndDate(r)
-    if (completedAt && isTaskDelayedByPeriodEnd(r, completedAt, workCalendar)) map[key].delayed++
-    else map[key].on_time++
-  }
-
-  return Object.values(map)
-    .map((v) => ({
-      assignee: v.assignee,
-      total: v.total,
-      on_time: v.on_time,
-      delayed: v.delayed,
-      on_time_rate: v.total > 0 ? Math.round((v.on_time / v.total) * 100) : 0,
-    }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 10)
-}
-
-async function loadMonthlyFulfillmentTrend(projectId: string, months = 6) {
-  const safeMonths = Math.min(Math.max(Math.trunc(months), 1), 24)
-
-  const { data: plansData, error: plansError } = await supabase
-    .from('monthly_plans')
-    .select('id, month, status')
-    .eq('project_id', projectId)
-    .in('status', ['confirmed', 'closed'])
-    .order('month', { ascending: false })
-    .limit(safeMonths)
-
-  if (plansError) throw plansError
-
-  const plans = (plansData ?? []) as Array<{ id: string; month: string; status: string }>
-  if (plans.length === 0) {
-    return [] as Array<{ month: string; committedCount: number; fulfilledCount: number; rate: number }>
-  }
-
-  const planIds = plans.map((plan) => plan.id)
-  const { data: itemsData, error: itemsError } = await supabase
-    .from('monthly_plan_items')
-    .select('monthly_plan_version_id, source_task_id, commitment_status')
-    .in('monthly_plan_version_id', planIds)
-
-  if (itemsError) throw itemsError
-
-  const items = (itemsData ?? []) as Array<{
-    monthly_plan_version_id: string
-    source_task_id: string | null
-    commitment_status: string | null
-  }>
-
-  const taskIds = [...new Set(items.map((item) => item.source_task_id).filter(Boolean))] as string[]
-  const { data: tasksData, error: tasksError } = taskIds.length > 0
-    ? await supabase.from('tasks').select('id, status, progress').in('id', taskIds)
-    : { data: [], error: null }
-
-  if (tasksError) throw tasksError
-
-  const taskStatusMap = new Map(
-    (tasksData ?? []).map((task: { id: string; status: string; progress: number | null }) => [
-      task.id,
-      { status: task.status, progress: task.progress },
-    ]),
-  )
-
-  return plans
-    .map((plan) => {
-      const planItems = items.filter(
-        (item) =>
-          item.monthly_plan_version_id === plan.id &&
-          item.commitment_status !== 'cancelled' &&
-          item.commitment_status !== null,
-      )
-      const committedCount = planItems.length
-
-      const fulfilledCount = planItems.filter((item) => {
-        if (!item.source_task_id) return false
-        const taskStatus = taskStatusMap.get(item.source_task_id)
-        if (!taskStatus) return false
-        return isCompletedTask(taskStatus)
-      }).length
-
-      const rate = committedCount > 0 ? Math.round((fulfilledCount / committedCount) * 100) : 0
-
-      return {
-        month: plan.month,
-        committedCount,
-        fulfilledCount,
-        rate,
-      }
-    })
-    .reverse()
 }
 
 // 获取任务总结
@@ -634,7 +435,7 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
   const workCalendarPromise = resolveConstructionCalendarContext({ projectId })
 
   const timelineReadyPromise = isTaskTimelineEventStoreReady(projectId)
-  const monthlyFulfillmentPromise = loadMonthlyFulfillmentTrend(projectId)
+  const monthlyFulfillmentPromise = getTaskSummaryMonthlyPlanFulfillmentTrend(projectId)
 
   const [milestones, taskRows, scopeBindingMap, workCalendar, timelineReady, monthlyFulfillment] = await Promise.all([
     milestonesPromise,
@@ -744,7 +545,7 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
 
   const [participantUnitNameMap, projectMemberNameMap, taskMilestoneRows, timelineEvents] = await Promise.all([
     loadParticipantUnitNameMap(projectId, participantUnitIds),
-    loadProjectMemberNameMap(projectId, assigneeUserIds),
+    getTaskSummaryProjectMemberNameMap(projectId, assigneeUserIds),
     loadTaskSummaryTaskMilestones(projectId, taskIds),
     timelineReady ? getProjectTimelineEvents(projectId) : Promise.resolve([]),
   ])
@@ -869,7 +670,7 @@ router.get('/projects/:id/task-summary/trend', validateIdParam, requireProjectMe
     return res.json(cachedResponse)
   }
 
-  const data = await loadTaskSummaryTrendRows(projectId, fromDate)
+  const data = await getTaskSummaryCompletionTrend(projectId, fromDate)
   const response = { success: true, data, timestamp: new Date().toISOString() }
   setCachedTaskSummaryResponse(cacheKey, response)
   res.json(response)
@@ -879,7 +680,7 @@ router.get('/projects/:id/task-summary/trend', validateIdParam, requireProjectMe
 router.get('/projects/:id/task-summary/assignees', validateIdParam, requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
 
-  const data = await loadTaskSummaryAssignees(projectId)
+  const data = await getTaskSummaryAssigneeRows(projectId)
   res.json({ success: true, data, timestamp: new Date().toISOString() })
 }))
 
@@ -957,7 +758,7 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, requireProject
       projectId,
       (projectTasks || []).map((task: any) => task.participant_unit_id).filter(Boolean),
     ),
-    loadProjectMemberNameMap(
+    getTaskSummaryProjectMemberNameMap(
       projectId,
       (projectTasks || []).map((task: any) => task.assignee_user_id).filter(Boolean),
     ),
@@ -1097,7 +898,7 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
       projectId,
       (updatedTasks || []).map((task: any) => task.participant_unit_id).filter(Boolean),
     ),
-    loadProjectMemberNameMap(
+    getTaskSummaryProjectMemberNameMap(
       projectId,
       (updatedTasks || []).map((task: any) => task.assignee_user_id).filter(Boolean),
     ),

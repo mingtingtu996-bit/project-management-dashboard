@@ -1,4 +1,4 @@
-import { executeSQL, getProject, getRisks, getTasks, getIssues } from './dbService.js'
+import { executeSQL, getProject, getRisks, getTasks, getIssues, supabase } from './dbService.js'
 import { calculateProjectHealth } from './projectHealthService.js'
 import {
   resolveConstructionCalendarContext,
@@ -29,6 +29,10 @@ import {
   getMonthlyPlanFulfillmentTrend,
   getMonthlyPlanStatusSummary,
 } from './monthlyPlanSummaryService.js'
+import {
+  getTaskActualEndDate,
+  isTaskDelayedByPeriodEnd,
+} from './taskSummaryCompareService.js'
 import { attachCurrentBaselineProjectionToTasks } from './taskBaselineProjectionService.js'
 import { logger } from '../middleware/logger.js'
 import type {
@@ -472,6 +476,183 @@ async function executeSummaryQuery<T = unknown>(
       return result.rows as T[]
     }
   }
+}
+
+export type TaskSummaryAggregationTask = Record<string, unknown> & {
+  assignee_user_id?: string | null
+  planned_end_date?: string | null
+  end_date?: string | null
+  actual_end_date?: string | null
+  status?: string | null
+  progress?: number | null
+}
+
+export type TaskSummaryCompletionTrendRow = {
+  month: string
+  total: number
+  on_time: number
+  delayed: number
+}
+
+export type TaskSummaryAssigneeRow = {
+  assignee: string
+  total: number
+  on_time: number
+  delayed: number
+  on_time_rate: number
+}
+
+function normalizeTaskSummaryText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+export function buildTaskSummaryCompletionTrend(
+  tasks: TaskSummaryAggregationTask[],
+  fromDate: string,
+  calendar?: ConstructionCalendarContext | null,
+): TaskSummaryCompletionTrendRow[] {
+  const monthMap: Record<string, TaskSummaryCompletionTrendRow> = {}
+  for (const task of tasks) {
+    if (!isCompletedTask(task)) continue
+    const completedAt = getTaskActualEndDate(task)
+    if (!completedAt || completedAt < fromDate) continue
+    const month = completedAt.slice(0, 7)
+    if (!monthMap[month]) monthMap[month] = { month, total: 0, on_time: 0, delayed: 0 }
+    // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: projectExecutionSummaryService
+    monthMap[month].total++
+    if (isTaskDelayedByPeriodEnd(task, completedAt, calendar)) monthMap[month].delayed++
+    else monthMap[month].on_time++
+  }
+
+  return Object.values(monthMap).sort((left, right) => left.month.localeCompare(right.month))
+}
+
+export function buildTaskSummaryAssigneeRows(
+  tasks: TaskSummaryAggregationTask[],
+  projectMemberNameMap: Map<string, string>,
+  calendar?: ConstructionCalendarContext | null,
+): TaskSummaryAssigneeRow[] {
+  const rowsByAssignee: Record<string, Omit<TaskSummaryAssigneeRow, 'on_time_rate'>> = {}
+  for (const task of tasks) {
+    if (!isCompletedTask(task)) continue
+    const assigneeUserId = normalizeTaskSummaryText(task.assignee_user_id)
+    const isLinkedProjectMember = Boolean(assigneeUserId && projectMemberNameMap.has(assigneeUserId))
+    const key = isLinkedProjectMember ? assigneeUserId : '__unassigned__'
+    if (!rowsByAssignee[key]) {
+      rowsByAssignee[key] = {
+        assignee: isLinkedProjectMember
+          ? projectMemberNameMap.get(assigneeUserId) || '责任人待确认'
+          : '未关联责任人',
+        total: 0,
+        on_time: 0,
+        delayed: 0,
+      }
+    }
+    // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: projectExecutionSummaryService
+    rowsByAssignee[key].total++
+    const completedAt = getTaskActualEndDate(task)
+    if (completedAt && isTaskDelayedByPeriodEnd(task, completedAt, calendar)) rowsByAssignee[key].delayed++
+    else rowsByAssignee[key].on_time++
+  }
+
+  return Object.values(rowsByAssignee)
+    .map((row) => ({
+      ...row,
+      on_time_rate: row.total > 0 ? Math.round((row.on_time / row.total) * 100) : 0,
+    }))
+    .sort((left, right) => right.total - left.total)
+    .slice(0, 10)
+}
+
+export async function getTaskSummaryProjectMemberNameMap(
+  projectId: string,
+  userIds: string[],
+): Promise<Map<string, string>> {
+  const uniqueIds = Array.from(new Set(userIds.map(normalizeTaskSummaryText).filter(Boolean)))
+  if (uniqueIds.length === 0) return new Map()
+
+  const { data: members, error: membersError } = await supabase
+    .from('project_members')
+    .select('user_id')
+    .eq('project_id', projectId)
+    .in('user_id', uniqueIds)
+    .eq('is_active', true)
+
+  if (membersError) throw new Error(`[project-members] 查询失败: ${membersError.message}`)
+
+  const memberUserIds = Array.from(new Set(
+    (members ?? [])
+      .map((row: { user_id?: string | null }) => normalizeTaskSummaryText(row.user_id))
+      .filter(Boolean),
+  ))
+  if (memberUserIds.length === 0) return new Map()
+
+  const { data: users, error: usersError } = await supabase
+    .from('users')
+    .select('id, display_name, username')
+    .in('id', memberUserIds)
+
+  if (usersError) throw new Error(`[users] 查询失败: ${usersError.message}`)
+
+  const userNameMap = new Map(
+    (users ?? []).map((row: { id: string; display_name?: string | null; username?: string | null }) => [
+      String(row.id),
+      normalizeTaskSummaryText(row.display_name)
+        || normalizeTaskSummaryText(row.username)
+        || '责任人待确认',
+    ]),
+  )
+
+  return new Map(memberUserIds.map((userId) => [
+    userId,
+    userNameMap.get(userId) || '责任人待确认',
+  ]))
+}
+
+export async function getTaskSummaryCompletionTrend(
+  projectId: string,
+  fromDate: string,
+): Promise<TaskSummaryCompletionTrendRow[]> {
+  const [taskResult, calendar] = await Promise.all([
+    supabase
+      .from('tasks')
+      .select('planned_end_date, end_date, actual_end_date, status, progress')
+      .eq('project_id', projectId)
+      .not('actual_end_date', 'is', null)
+      .gte('actual_end_date', fromDate),
+    resolveConstructionCalendarContext({ projectId }),
+  ])
+
+  if (taskResult.error) throw new Error(`[trend] 查询失败: ${taskResult.error.message}`)
+  return buildTaskSummaryCompletionTrend(
+    (taskResult.data ?? []) as TaskSummaryAggregationTask[],
+    fromDate,
+    calendar,
+  )
+}
+
+export async function getTaskSummaryAssigneeRows(projectId: string): Promise<TaskSummaryAssigneeRow[]> {
+  const taskResult = await supabase
+    .from('tasks')
+    .select('assignee_user_id, planned_end_date, end_date, actual_end_date, status, progress')
+    .eq('project_id', projectId)
+
+  if (taskResult.error) throw new Error(`[assignees] 查询失败: ${taskResult.error.message}`)
+  const tasks = (taskResult.data ?? []) as TaskSummaryAggregationTask[]
+  const [projectMemberNameMap, calendar] = await Promise.all([
+    getTaskSummaryProjectMemberNameMap(
+      projectId,
+      tasks.map((task) => normalizeTaskSummaryText(task.assignee_user_id)).filter(Boolean),
+    ),
+    resolveConstructionCalendarContext({ projectId }),
+  ])
+
+  return buildTaskSummaryAssigneeRows(tasks, projectMemberNameMap, calendar)
+}
+
+export async function getTaskSummaryMonthlyPlanFulfillmentTrend(projectId: string, months = 6) {
+  const safeMonths = Math.min(Math.max(Math.trunc(months), 1), 24)
+  return getMonthlyPlanFulfillmentTrend(projectId, safeMonths)
 }
 
 async function loadPlanningGovernanceStates(
