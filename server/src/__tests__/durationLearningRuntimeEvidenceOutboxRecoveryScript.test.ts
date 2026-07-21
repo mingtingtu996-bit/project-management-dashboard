@@ -113,6 +113,30 @@ describe('duration learning runtime evidence outbox recovery CLI', () => {
     ['environment mismatch', validEnv(), validArgs().map((arg) => arg === 'staging' ? 'production' : arg)],
     ['release mismatch', { ...validEnv(), RELEASE_SHA: 'b'.repeat(40) }, validArgs()],
     ['malformed Supabase URL', { ...validEnv(), SUPABASE_URL: 'not-a-url' }, validArgs()],
+    [
+      'Supabase URL with a trailing slash that runtime host fallback cannot parse',
+      validHostEnv({
+        SUPABASE_URL: `https://${projectRef}.supabase.co/`,
+        SUPABASE_HOST: '',
+      }),
+      validArgs(),
+    ],
+    [
+      'Supabase URL with surrounding whitespace that runtime host fallback cannot parse',
+      validHostEnv({
+        SUPABASE_URL: ` https://${projectRef}.supabase.co `,
+        SUPABASE_HOST: '',
+      }),
+      validArgs(),
+    ],
+    [
+      'Supabase URL with non-canonical scheme and host case that runtime host fallback cannot parse',
+      validHostEnv({
+        SUPABASE_URL: `HTTPS://${projectRef}.SUPABASE.CO`,
+        SUPABASE_HOST: '',
+      }),
+      validArgs(),
+    ],
     ['Supabase project mismatch', { ...validEnv(), SUPABASE_URL: 'https://bbbbbbbbbbbbbbbbbbbb.supabase.co' }, validArgs()],
     ['malformed runtime URL', validEnv('not-a-postgres-url'), validArgs()],
     ['blank-looking runtime URL', validHostEnv({ DB_CONNECTION_STRING: '   ' }), validArgs()],
@@ -131,6 +155,21 @@ describe('duration learning runtime evidence outbox recovery CLI', () => {
     ['runtime database mismatch', validEnv(poolerRuntimeUrl.replace('/postgres?', '/template1?')), validArgs()],
     ['runtime database case mismatch', validEnv(poolerRuntimeUrl.replace('/postgres?', '/POSTGRES?')), validArgs()],
     ['runtime query override', validEnv(`${poolerRuntimeUrl}&options=unsafe`), validArgs()],
+    [
+      'non-canonical expected runtime role case',
+      validEnv(),
+      validArgs().map((arg) => arg === runtimeRole ? 'Workbuddy_Runtime_Login' : arg),
+    ],
+    [
+      'non-canonical expected Supabase project ref case',
+      validEnv(),
+      validArgs().map((arg) => arg === projectRef ? projectRef.toUpperCase() : arg),
+    ],
+    [
+      'non-canonical expected database case',
+      validEnv(),
+      validArgs().map((arg) => arg === 'postgres' ? 'Postgres' : arg),
+    ],
   ])('fails closed for %s before Client/parser/job/query loading', async (_label, env, argv) => {
     const loadStrictTargetParser = vi.fn()
     const loadJob = vi.fn(async () => ({ executeNow: vi.fn(async () => completedResult()) }))
@@ -192,7 +231,7 @@ describe('duration learning runtime evidence outbox recovery CLI', () => {
     const loadJob = vi.fn(async () => ({ executeNow }))
     const parseStrictTarget = vi.fn((value: string) => strictTarget(value))
     const loadStrictTargetParser = vi.fn(async () => parseStrictTarget)
-    const env = validHostEnv()
+    const env = validHostEnv({ SUPABASE_HOST: '' })
 
     await expect(runDurationLearningRuntimeEvidenceOutboxRecoveryCli(validArgs(), {
       env,

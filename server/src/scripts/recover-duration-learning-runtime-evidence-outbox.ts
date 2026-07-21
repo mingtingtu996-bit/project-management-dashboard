@@ -1,5 +1,7 @@
 import { pathToFileURL } from 'node:url'
 
+import { deriveRuntimeSupabaseProjectRefFromRawUrl } from '../utils/runtimeDatabaseConnectionTarget.js'
+
 export const DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_CONFIRMATION =
   'DRAIN_DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_NOW'
 
@@ -100,28 +102,11 @@ function decodeUrlComponent(value: string, label: string) {
 }
 
 function parseSupabaseProjectRef(value: string) {
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
+  const projectRef = deriveRuntimeSupabaseProjectRefFromRawUrl(value)
+  if (!projectRef || !/^[a-z0-9]{20}$/u.test(projectRef)) {
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_SUPABASE_URL_INVALID')
   }
-  if (
-    url.protocol !== 'https:'
-    || url.username
-    || url.password
-    || url.port
-    || (url.pathname !== '' && url.pathname !== '/')
-    || url.search
-    || url.hash
-  ) {
-    throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_SUPABASE_URL_INVALID')
-  }
-  const match = /^([a-z0-9]{20})\.supabase\.co$/u.exec(url.hostname.toLowerCase())
-  if (!match) {
-    throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_SUPABASE_URL_INVALID')
-  }
-  return match[1]
+  return projectRef
 }
 
 function isSupabasePoolerHost(value: string) {
@@ -233,22 +218,26 @@ function resolveRecoveryTarget(argv: string[], env: RuntimeEnv): RecoveryTarget 
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_RELEASE_SHA_MISMATCH')
   }
 
-  const projectRef = readSingleArgument(argv, '--expected-project-ref').toLowerCase()
+  const projectRef = readSingleArgument(argv, '--expected-project-ref')
   if (!/^[a-z0-9]{20}$/u.test(projectRef)) {
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_PROJECT_REF_INVALID')
   }
-  if (parseSupabaseProjectRef(requiredEnv(env, 'SUPABASE_URL')) !== projectRef) {
+  const configuredSupabaseUrl = env.SUPABASE_URL
+  if (!String(configuredSupabaseUrl ?? '').trim()) {
+    throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_ENV_REQUIRED:SUPABASE_URL')
+  }
+  if (parseSupabaseProjectRef(configuredSupabaseUrl) !== projectRef) {
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_SUPABASE_PROJECT_MISMATCH')
   }
 
-  const databaseRole = readSingleArgument(argv, '--expected-database-role').toLowerCase()
+  const databaseRole = readSingleArgument(argv, '--expected-database-role')
   if (!/^[a-z_][a-z0-9_]{0,62}$/u.test(databaseRole)) {
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_DATABASE_ROLE_INVALID')
   }
   if (['postgres', 'service_role', 'supabase_admin'].includes(databaseRole)) {
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_DATABASE_ROLE_PRIVILEGED')
   }
-  const database = readSingleArgument(argv, '--expected-database').toLowerCase()
+  const database = readSingleArgument(argv, '--expected-database')
   if (!/^[a-z_][a-z0-9_]{0,62}$/u.test(database)) {
     throw new Error('DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_RECOVERY_DATABASE_NAME_INVALID')
   }

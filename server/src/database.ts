@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 
 import { getJobLeaseFenceRequestHeaders } from './services/jobLeaseFenceContext.js';
+import { deriveRuntimeSupabaseProjectRefFromRawUrl } from './utils/runtimeDatabaseConnectionTarget.js';
 
 // 确保环境变量在 Pool 创建前加载
 const __filename = fileURLToPath(import.meta.url);
@@ -184,8 +185,7 @@ async function resolveConnectionConfig() {
     return config;
   }
 
-  const supabaseUrl = process.env.SUPABASE_URL || '';
-  const projectRef = supabaseUrl.match(/^https:\/\/([^.]+)\.supabase\.co$/)?.[1];
+  const projectRef = deriveRuntimeSupabaseProjectRefFromRawUrl(process.env.SUPABASE_URL);
   const host = process.env.DB_HOST || process.env.SUPABASE_HOST || (projectRef ? `db.${projectRef}.supabase.co` : '127.0.0.1');
 
   const config = withStatementTimeoutWhenSupported({
