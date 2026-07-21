@@ -4,7 +4,12 @@
 import { Router } from 'express'
 import { executeSQL, executeSQLOne, getMembers } from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
+import {
+  authenticate,
+  getAuthorizedRequestProjectId,
+  requireProjectEditor,
+  requireProjectMember,
+} from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { constructionDrawingSchema, constructionDrawingUpdateSchema } from '../middleware/validation.js'
 import type { ApiResponse } from '../types/index.js'
@@ -29,11 +34,33 @@ import {
   CONSTRUCTION_DRAWING_COLUMNS,
   DRAWING_VERSION_COLUMNS,
 } from '../services/sqlColumns.js'
+import { withDatabaseTransaction } from '../database.js'
 
 const router = Router()
 router.use(authenticate)
 const CONSTRUCTION_DRAWING_SELECT = `SELECT ${CONSTRUCTION_DRAWING_COLUMNS} FROM construction_drawings`
 const DRAWING_VERSION_SELECT = `SELECT ${DRAWING_VERSION_COLUMNS} FROM drawing_versions`
+
+type DrawingMutationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; status: number; response: ApiResponse }
+
+function drawingMutationFailure(
+  status: number,
+  code: string,
+  message: string,
+  details?: unknown,
+): DrawingMutationResult<never> {
+  return {
+    ok: false,
+    status,
+    response: {
+      success: false,
+      error: { code, message, ...(details === undefined ? {} : { details }) },
+      timestamp: new Date().toISOString(),
+    },
+  }
+}
 
 registerDrawingPackageRoutes(router)
 registerDrawingReviewRuleRoutes(router)
@@ -105,11 +132,23 @@ async function resolveConstructionDrawingProjectId(drawingId: string) {
   return drawing?.project_id ?? undefined
 }
 
-async function validateDrawingProjectReferences(projectId: string, payload: Record<string, unknown>) {
-  const packageId = normalizeNullableText(payload.package_id)
-  if (packageId) {
+async function validateDrawingProjectReferences(
+  projectId: string,
+  payload: Record<string, unknown>,
+  options: {
+    lockForUpdate?: boolean
+    additionalPackageIds?: Array<string | null | undefined>
+  } = {},
+) {
+  const lockClause = options.lockForUpdate ? ' FOR UPDATE' : ''
+  const packageIds = [...new Set([
+    normalizeNullableText(payload.package_id),
+    ...(options.additionalPackageIds ?? []).map(normalizeNullableText),
+  ].filter((value): value is string => Boolean(value)))].sort()
+
+  for (const packageId of packageIds) {
     const drawingPackage = await executeSQLOne<{ project_id?: string | null }>(
-      'SELECT project_id FROM drawing_packages WHERE id = ? LIMIT 1',
+      `SELECT project_id FROM drawing_packages WHERE id = ? LIMIT 1${lockClause}`,
       [packageId],
     )
     if (!drawingPackage || normalizeNullableText(drawingPackage.project_id) !== projectId) {
@@ -127,7 +166,7 @@ async function validateDrawingProjectReferences(projectId: string, payload: Reco
   const parentDrawingId = normalizeNullableText(payload.parent_drawing_id)
   if (parentDrawingId) {
     const parentDrawing = await executeSQLOne<{ project_id?: string | null }>(
-      'SELECT project_id FROM construction_drawings WHERE id = ? LIMIT 1',
+      `SELECT project_id FROM construction_drawings WHERE id = ? LIMIT 1${lockClause}`,
       [parentDrawingId],
     )
     if (!parentDrawing || normalizeNullableText(parentDrawing.project_id) !== projectId) {
@@ -145,7 +184,7 @@ async function validateDrawingProjectReferences(projectId: string, payload: Reco
   const relatedLicenseId = normalizeNullableText(payload.related_license_id)
   if (relatedLicenseId) {
     const relatedLicense = await executeSQLOne<{ project_id?: string | null }>(
-      'SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1',
+      `SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1${lockClause}`,
       [relatedLicenseId],
     )
     if (!relatedLicense || normalizeNullableText(relatedLicense.project_id) !== projectId) {
@@ -624,11 +663,6 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
     return res.status(400).json(response)
   }
   const payload = parsed.data
-  const referenceError = await validateDrawingProjectReferences(payload.project_id, payload as Record<string, unknown>)
-  if (referenceError) {
-    return res.status(referenceError.status).json(referenceError.response)
-  }
-
   const id = uuidv4()
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
   const explicitCurrentVersion = Object.prototype.hasOwnProperty.call(payload, 'is_current_version')
@@ -646,151 +680,172 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
     hasChange: payload.has_change,
     scheduleImpactFlag: payload.schedule_impact_flag,
   })
-  const currentVersionPolicy = packageId
-    ? resolveDrawingCurrentVersionPolicy({
-        explicitCurrentVersion,
-        targetPackageCurrentCount: await countPackageCurrentDrawings(packageId),
-        targetWasCurrent: false,
-      })
-    : {
-        resolvedCurrentVersion: explicitCurrentVersion === true,
-        error: null,
-      }
-
-  if (currentVersionPolicy.error) {
-    const response: ApiResponse = {
-      success: false,
-      error: currentVersionPolicy.error,
-      timestamp: new Date().toISOString(),
+  const mutation: DrawingMutationResult<ConstructionDrawing> = await withDatabaseTransaction(async () => {
+    if (!getAuthorizedRequestProjectId(req, payload.project_id)) {
+      return drawingMutationFailure(403, 'FORBIDDEN', '您没有编辑此项目的权限')
     }
-    return res.status(currentVersionPolicy.error.status).json(response)
+
+    const referenceError = await validateDrawingProjectReferences(
+      payload.project_id,
+      payload as Record<string, unknown>,
+      { lockForUpdate: true },
+    )
+    if (referenceError) {
+      return { ok: false, ...referenceError }
+    }
+
+    const currentVersionPolicy = packageId
+      ? resolveDrawingCurrentVersionPolicy({
+          explicitCurrentVersion,
+          targetPackageCurrentCount: await countPackageCurrentDrawings(packageId),
+          targetWasCurrent: false,
+        })
+      : {
+          resolvedCurrentVersion: explicitCurrentVersion === true,
+          error: null,
+        }
+
+    if (currentVersionPolicy.error) {
+      return drawingMutationFailure(
+        currentVersionPolicy.error.status,
+        currentVersionPolicy.error.code,
+        currentVersionPolicy.error.message,
+      )
+    }
+
+    const insertValues = [
+      id,
+      payload.project_id,
+      normalizeNullableText(payload.drawing_type) ?? '建筑',
+      payload.drawing_name,
+      normalizeNullableText(payload.version) ?? '1.0',
+      normalizeNullableText(payload.description),
+      normalizeNullableText(payload.status) ?? '编制中',
+      normalizeNullableText(payload.design_unit),
+      normalizeNullableText(payload.design_person),
+      normalizeNullableDate(payload.drawing_date),
+      normalizeNullableText(payload.review_unit),
+      normalizedReviewStatus ?? '未提交',
+      normalizeNullableDate(payload.review_date),
+      normalizeNullableText(payload.review_opinion),
+      normalizeNullableText(payload.review_report_no),
+      normalizeNullableText(payload.related_license_id),
+      normalizeNullableDate(payload.planned_submit_date),
+      normalizeNullableDate(payload.planned_pass_date),
+      normalizeNullableDate(payload.actual_submit_date),
+      normalizeNullableDate(payload.actual_pass_date),
+      normalizeNullableText(payload.lead_unit),
+      normalizeNullableText(payload.responsible_user_id),
+      Number(payload.sort_order ?? 0) || 0,
+      normalizeNullableText(payload.notes),
+      normalizeNullableText(payload.created_by || payload.user_id),
+      ts,
+      ts,
+      normalizeNullableText(payload.package_id),
+      normalizeNullableText(payload.package_code),
+      normalizeNullableText(payload.package_name),
+      normalizeNullableText(payload.discipline_type),
+      normalizeNullableText(payload.document_purpose),
+      normalizeNullableText(payload.drawing_code),
+      normalizeNullableText(payload.parent_drawing_id),
+      normalizeNullableText(payload.version_no ?? payload.version),
+      normalizeNullableText(payload.revision_no ?? payload.version_no ?? payload.version),
+      normalizeNullableText(payload.issued_for ?? payload.document_purpose),
+      normalizeNullableDate(payload.effective_date ?? payload.actual_pass_date ?? payload.drawing_date),
+      currentVersionPolicy.resolvedCurrentVersion ? 1 : 0,
+      normalizeNullableBoolean(payload.requires_review) ?? false,
+      normalizeNullableText(payload.review_mode) ?? 'none',
+      normalizeNullableText(payload.review_basis),
+      normalizeNullableBoolean(payload.has_change) ?? false,
+      normalizeNullableText(payload.change_reason),
+      scheduleImpactFlag ? 1 : 0,
+      normalizeNullableBoolean(payload.is_ready_for_construction) ?? false,
+      normalizeNullableBoolean(payload.is_ready_for_acceptance) ?? false,
+    ]
+
+    await executeSQL(
+      `INSERT INTO construction_drawings
+         (id, project_id, drawing_type, drawing_name, version, description,
+          status, design_unit, design_person, drawing_date,
+          review_unit, review_status, review_date, review_opinion, review_report_no,
+          related_license_id, planned_submit_date, planned_pass_date,
+          actual_submit_date, actual_pass_date,
+          lead_unit, responsible_user_id, sort_order, notes, created_by, created_at, updated_at,
+          package_id, package_code, package_name, discipline_type, document_purpose, drawing_code,
+          parent_drawing_id, version_no, revision_no, issued_for, effective_date,
+          is_current_version, requires_review, review_mode, review_basis, has_change,
+          change_reason, schedule_impact_flag, is_ready_for_construction, is_ready_for_acceptance)
+       VALUES (${insertValues.map(() => '?').join(', ')})`,
+      insertValues,
+    )
+
+    const versionNo = normalizeNullableText(payload.version_no ?? payload.version) ?? '1.0'
+    let snapshot: DrawingVersionRecordSource | null = null
+    if (packageId) {
+      snapshot = await ensureDrawingVersionSnapshot({
+        projectId: payload.project_id,
+        packageId,
+        drawingId: id,
+        versionNo,
+        parentDrawingId: normalizeNullableText(payload.parent_drawing_id),
+        revisionNo: normalizeNullableText(payload.revision_no ?? payload.version_no ?? payload.version),
+        issuedFor: normalizeNullableText(payload.issued_for ?? payload.document_purpose),
+        effectiveDate: normalizeNullableDate(payload.effective_date ?? payload.actual_pass_date ?? payload.drawing_date),
+        changeReason: normalizeNullableText(payload.change_reason),
+        createdBy: normalizeNullableText(payload.created_by || payload.user_id),
+        isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
+      })
+      await applyPackageCurrentVersionSelection({
+        packageId,
+        drawingId: id,
+        projectId: payload.project_id,
+        versionId: snapshot?.id ?? null,
+        isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
+      })
+      await syncPackageItemCurrentDrawing({
+        packageId,
+        drawingId: id,
+        drawingCode: normalizeNullableText(payload.drawing_code),
+        versionNo,
+        isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
+      })
+    }
+
+    if (snapshot) {
+      await notifyDrawingVersionUpdate({
+        projectId: payload.project_id,
+        drawingId: id,
+        drawingName: payload.drawing_name,
+        packageId,
+        versionNo,
+        versionRecordId: snapshot.id ?? null,
+        responsibleUserId: normalizeNullableText(payload.responsible_user_id),
+      })
+    }
+
+    const data = await executeSQLOne<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
+      [id],
+    )
+    if (!data) throw new Error('Construction drawing was not persisted')
+
+    if (packageId) {
+      await syncPackageCurrentDrawingCertificateLink(payload.project_id, packageId)
+    } else {
+      await syncDrawingCertificateLink(data as unknown as Record<string, unknown>)
+    }
+
+    return { ok: true, value: data }
+  })
+
+  if (mutation.ok === false) {
+    return res.status(mutation.status).json(mutation.response)
   }
 
-  const insertValues = [
-    id,
-    payload.project_id,
-    normalizeNullableText(payload.drawing_type) ?? '建筑',
-    payload.drawing_name,
-    normalizeNullableText(payload.version) ?? '1.0',
-    normalizeNullableText(payload.description),
-    normalizeNullableText(payload.status) ?? '编制中',
-    normalizeNullableText(payload.design_unit),
-    normalizeNullableText(payload.design_person),
-    normalizeNullableDate(payload.drawing_date),
-    normalizeNullableText(payload.review_unit),
-    normalizedReviewStatus ?? '未提交',
-    normalizeNullableDate(payload.review_date),
-    normalizeNullableText(payload.review_opinion),
-    normalizeNullableText(payload.review_report_no),
-    normalizeNullableText(payload.related_license_id),
-    normalizeNullableDate(payload.planned_submit_date),
-    normalizeNullableDate(payload.planned_pass_date),
-    normalizeNullableDate(payload.actual_submit_date),
-    normalizeNullableDate(payload.actual_pass_date),
-    normalizeNullableText(payload.lead_unit),
-    normalizeNullableText(payload.responsible_user_id),
-    Number(payload.sort_order ?? 0) || 0,
-    normalizeNullableText(payload.notes),
-    normalizeNullableText(payload.created_by || payload.user_id),
-    ts,
-    ts,
-    normalizeNullableText(payload.package_id),
-    normalizeNullableText(payload.package_code),
-    normalizeNullableText(payload.package_name),
-    normalizeNullableText(payload.discipline_type),
-    normalizeNullableText(payload.document_purpose),
-    normalizeNullableText(payload.drawing_code),
-    normalizeNullableText(payload.parent_drawing_id),
-    normalizeNullableText(payload.version_no ?? payload.version),
-    normalizeNullableText(payload.revision_no ?? payload.version_no ?? payload.version),
-    normalizeNullableText(payload.issued_for ?? payload.document_purpose),
-    normalizeNullableDate(payload.effective_date ?? payload.actual_pass_date ?? payload.drawing_date),
-    currentVersionPolicy.resolvedCurrentVersion ? 1 : 0,
-    normalizeNullableBoolean(payload.requires_review) ?? false,
-    normalizeNullableText(payload.review_mode) ?? 'none',
-    normalizeNullableText(payload.review_basis),
-    normalizeNullableBoolean(payload.has_change) ?? false,
-    normalizeNullableText(payload.change_reason),
-    scheduleImpactFlag ? 1 : 0,
-    normalizeNullableBoolean(payload.is_ready_for_construction) ?? false,
-    normalizeNullableBoolean(payload.is_ready_for_acceptance) ?? false,
-  ]
-
-  await executeSQL(
-    `INSERT INTO construction_drawings
-       (id, project_id, drawing_type, drawing_name, version, description,
-        status, design_unit, design_person, drawing_date,
-        review_unit, review_status, review_date, review_opinion, review_report_no,
-        related_license_id, planned_submit_date, planned_pass_date,
-        actual_submit_date, actual_pass_date,
-        lead_unit, responsible_user_id, sort_order, notes, created_by, created_at, updated_at,
-        package_id, package_code, package_name, discipline_type, document_purpose, drawing_code,
-        parent_drawing_id, version_no, revision_no, issued_for, effective_date,
-        is_current_version, requires_review, review_mode, review_basis, has_change,
-        change_reason, schedule_impact_flag, is_ready_for_construction, is_ready_for_acceptance)
-     VALUES (${insertValues.map(() => '?').join(', ')})`,
-    insertValues,
-  )
-
-  const versionNo = normalizeNullableText(payload.version_no ?? payload.version) ?? '1.0'
-  let snapshot: DrawingVersionRecordSource | null = null
-  if (packageId) {
-    snapshot = await ensureDrawingVersionSnapshot({
-      projectId: payload.project_id,
-      packageId,
-      drawingId: id,
-      versionNo,
-      parentDrawingId: normalizeNullableText(payload.parent_drawing_id),
-      revisionNo: normalizeNullableText(payload.revision_no ?? payload.version_no ?? payload.version),
-      issuedFor: normalizeNullableText(payload.issued_for ?? payload.document_purpose),
-      effectiveDate: normalizeNullableDate(payload.effective_date ?? payload.actual_pass_date ?? payload.drawing_date),
-      changeReason: normalizeNullableText(payload.change_reason),
-      createdBy: normalizeNullableText(payload.created_by || payload.user_id),
-      isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
-    })
-    await applyPackageCurrentVersionSelection({
-      packageId,
-      drawingId: id,
-      projectId: payload.project_id,
-      versionId: snapshot?.id ?? null,
-      isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
-    })
-    await syncPackageItemCurrentDrawing({
-      packageId,
-      drawingId: id,
-      drawingCode: normalizeNullableText(payload.drawing_code),
-      versionNo,
-      isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
-    })
-  }
-
-  if (snapshot) {
-    await notifyDrawingVersionUpdate({
-      projectId: payload.project_id,
-      drawingId: id,
-      drawingName: payload.drawing_name,
-      packageId,
-      versionNo,
-      versionRecordId: snapshot.id ?? null,
-      responsibleUserId: normalizeNullableText(payload.responsible_user_id),
-    })
-  }
-
-  const data = await executeSQLOne(
-    `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
-    [id]
-  )
-
-  if (packageId) {
-    await syncPackageCurrentDrawingCertificateLink(payload.project_id, packageId)
-  } else {
-    await syncDrawingCertificateLink(data as Record<string, unknown>)
-  }
   clearDrawingBoardCache(payload.project_id)
-
   const response: ApiResponse<ConstructionDrawing> = {
     success: true,
-    data,
+    data: mutation.value,
     timestamp: new Date().toISOString(),
   }
   res.status(201).json(response)
@@ -825,70 +880,56 @@ router.put('/:id', requireProjectEditor(async (req) => {
   const payloadRecord = payload as Record<string, unknown>
   const expectedLockVersion = normalizeLockVersion(payload.lock_version)
 
-  const current = await executeSQLOne(
-    `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
-    [id]
-  )
+  const mutation: DrawingMutationResult<{ data: ConstructionDrawing; projectId: string }> = await withDatabaseTransaction(async () => {
+    const current = await executeSQLOne<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [id],
+    )
 
-  if (!current) {
-    const response: ApiResponse = {
-      success: false,
-      error: { code: 'DRAWING_NOT_FOUND', message: '施工图纸不存在' },
-      timestamp: new Date().toISOString(),
+    if (!current) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
     }
-    return res.status(404).json(response)
-  }
 
-  const currentRecord = current as Record<string, unknown>
-  const currentProjectId = normalizeNullableText(currentRecord.project_id)
-  const requestedProjectId = normalizeNullableText(payload.project_id)
-  if (requestedProjectId && currentProjectId && requestedProjectId !== currentProjectId) {
-    const response: ApiResponse = {
-      success: false,
-      error: { code: 'PROJECT_ID_IMMUTABLE', message: '施工图纸所属项目不能修改' },
-      timestamp: new Date().toISOString(),
+    const currentRecord = current as unknown as Record<string, unknown>
+    const currentProjectId = normalizeNullableText(currentRecord.project_id)
+    if (!currentProjectId || !getAuthorizedRequestProjectId(req, currentProjectId)) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
     }
-    return res.status(400).json(response)
-  }
 
-  if (currentProjectId) {
+    const requestedProjectId = normalizeNullableText(payload.project_id)
+    if (requestedProjectId && requestedProjectId !== currentProjectId) {
+      return drawingMutationFailure(400, 'PROJECT_ID_IMMUTABLE', '施工图纸所属项目不能修改')
+    }
+
     const referenceError = await validateDrawingProjectReferences(currentProjectId, {
       package_id: readMergedValue(payloadRecord, currentRecord, 'package_id'),
       parent_drawing_id: readMergedValue(payloadRecord, currentRecord, 'parent_drawing_id'),
       related_license_id: readMergedValue(payloadRecord, currentRecord, 'related_license_id'),
+    }, {
+      lockForUpdate: true,
+      additionalPackageIds: [normalizeNullableText(currentRecord.package_id)],
     })
     if (referenceError) {
-      return res.status(referenceError.status).json(referenceError.response)
+      return { ok: false, ...referenceError }
     }
-  }
 
-  const currentLockVersion = normalizeLockVersion(currentRecord.lock_version) ?? 1
-  if (expectedLockVersion === null) {
-    const response: ApiResponse = {
-      success: false,
-      error: { code: 'LOCK_VERSION_REQUIRED', message: '更新施工图纸时必须携带 lock_version' },
-      timestamp: new Date().toISOString(),
+    const currentLockVersion = normalizeLockVersion(currentRecord.lock_version) ?? 1
+    if (expectedLockVersion === null) {
+      return drawingMutationFailure(400, 'LOCK_VERSION_REQUIRED', '更新施工图纸时必须携带 lock_version')
     }
-    return res.status(400).json(response)
-  }
 
-  if (expectedLockVersion !== currentLockVersion) {
-    const response: ApiResponse = {
-      success: false,
-      error: { code: 'VERSION_MISMATCH', message: '施工图纸已被其他人更新，请刷新后重试' },
-      timestamp: new Date().toISOString(),
+    if (expectedLockVersion !== currentLockVersion) {
+      return drawingMutationFailure(409, 'VERSION_MISMATCH', '施工图纸已被其他人更新，请刷新后重试')
     }
-    return res.status(409).json(response)
-  }
 
-  const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
-  const explicitCurrentVersion = Object.prototype.hasOwnProperty.call(payload, 'is_current_version')
-    ? normalizeNullableBoolean(payload.is_current_version)
-    : null
-  const normalizedMergedReviewStatus = normalizeStoredDrawingReviewStatus(
-    readMergedValue(payloadRecord, currentRecord, 'review_status'),
-  )
-  const scheduleImpactFlag = deriveDrawingScheduleImpactFlag({
+    const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
+    const explicitCurrentVersion = Object.prototype.hasOwnProperty.call(payload, 'is_current_version')
+      ? normalizeNullableBoolean(payload.is_current_version)
+      : null
+    const normalizedMergedReviewStatus = normalizeStoredDrawingReviewStatus(
+      readMergedValue(payloadRecord, currentRecord, 'review_status'),
+    )
+    const scheduleImpactFlag = deriveDrawingScheduleImpactFlag({
     status: readMergedValue(payloadRecord, currentRecord, 'status'),
     drawingStatus: readMergedValue(payloadRecord, currentRecord, 'drawing_status'),
     reviewStatus: normalizedMergedReviewStatus,
@@ -898,7 +939,7 @@ router.put('/:id', requireProjectEditor(async (req) => {
     actualPassDate: readMergedValue(payloadRecord, currentRecord, 'actual_pass_date'),
     hasChange: readMergedValue(payloadRecord, currentRecord, 'has_change'),
     scheduleImpactFlag: hasOwn(payloadRecord, 'schedule_impact_flag') ? payloadRecord.schedule_impact_flag : null,
-  })
+    })
 
   const fieldMap: Record<string, any> = {
     drawing_type: readOptionalNormalizedValue(payloadRecord, 'drawing_type', normalizeNullableText),
@@ -970,12 +1011,7 @@ router.put('/:id', requireProjectEditor(async (req) => {
   const targetWasCurrent = normalizeNullableBoolean(currentRecord.is_current_version) === true
 
   if (packageChanged && targetWasCurrent && currentPackageCurrentCount <= 1) {
-    const response: ApiResponse = {
-      success: false,
-      error: { code: 'MISSING_TARGET_DRAWING', message: '当前有效版不能为空' },
-      timestamp: new Date().toISOString(),
-    }
-    return res.status(400).json(response)
+    return drawingMutationFailure(400, 'MISSING_TARGET_DRAWING', '当前有效版不能为空')
   }
 
   const currentVersionPolicy = packageId
@@ -992,12 +1028,11 @@ router.put('/:id', requireProjectEditor(async (req) => {
   fieldMap.is_current_version = currentVersionPolicy.resolvedCurrentVersion
 
   if (currentVersionPolicy.error) {
-    const response: ApiResponse = {
-      success: false,
-      error: currentVersionPolicy.error,
-      timestamp: new Date().toISOString(),
-    }
-    return res.status(currentVersionPolicy.error.status).json(response)
+    return drawingMutationFailure(
+      currentVersionPolicy.error.status,
+      currentVersionPolicy.error.code,
+      currentVersionPolicy.error.message,
+    )
   }
 
   const writeProjectId = currentProjectId || payload.project_id || ''
@@ -1105,12 +1140,7 @@ router.put('/:id', requireProjectEditor(async (req) => {
     [id, writeProjectId]
   )
   if (!updated || (normalizeLockVersion((updated as Record<string, unknown>).lock_version) ?? currentLockVersion) === currentLockVersion) {
-    const response: ApiResponse = {
-      success: false,
-      error: { code: 'VERSION_MISMATCH', message: '施工图纸已被其他人更新，请刷新后重试' },
-      timestamp: new Date().toISOString(),
-    }
-    return res.status(409).json(response)
+    return drawingMutationFailure(409, 'VERSION_MISMATCH', '施工图纸已被其他人更新，请刷新后重试')
   }
   const updatedRecord = updated as Record<string, unknown>
   const previousVersionNo = normalizeNullableText(currentRecord.version_no ?? currentRecord.version)
@@ -1192,8 +1222,6 @@ router.put('/:id', requireProjectEditor(async (req) => {
   } else {
     await syncDrawingCertificateLink(updatedRecord)
   }
-  clearDrawingBoardCache(writeProjectId)
-
   const becameApproved = !isApprovedReviewStatus(currentRecord.review_status) && isApprovedReviewStatus(updatedRecord.review_status)
   if (packageId && becameApproved) {
     await autoSatisfyDrawingPackageConditions({
@@ -1205,11 +1233,23 @@ router.put('/:id', requireProjectEditor(async (req) => {
     })
   }
 
-  const data = updated
+    return {
+      ok: true,
+      value: {
+        data: updated as ConstructionDrawing,
+        projectId: writeProjectId,
+      },
+    }
+  })
 
+  if (mutation.ok === false) {
+    return res.status(mutation.status).json(mutation.response)
+  }
+
+  clearDrawingBoardCache(mutation.value.projectId)
   const response: ApiResponse<ConstructionDrawing> = {
     success: true,
-    data,
+    data: mutation.value.data,
     timestamp: new Date().toISOString(),
   }
   res.json(response)
@@ -1226,60 +1266,79 @@ router.delete('/:id', requireProjectEditor(async (req) => {
   const { id } = req.params
   logger.info('Deleting construction drawing', { id })
 
-  const current = await executeSQLOne<ConstructionDrawing>(
-    `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
-    [id],
-  )
-  if (!current) {
-    return res.status(404).json({
-      success: false,
-      error: { code: 'DRAWING_NOT_FOUND', message: '施工图纸不存在' },
-      timestamp: new Date().toISOString(),
-    } satisfies ApiResponse)
-  }
+  const mutation: DrawingMutationResult<{ projectId: string }> = await withDatabaseTransaction(async () => {
+    const current = await executeSQLOne<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1 FOR UPDATE`,
+      [id],
+    )
+    if (!current) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
+    }
 
-  if (current?.project_id) {
+    if (!current.project_id || !getAuthorizedRequestProjectId(req, current.project_id)) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
+    }
+
+    const referenceError = await validateDrawingProjectReferences(
+      current.project_id,
+      { package_id: current.package_id },
+      { lockForUpdate: true },
+    )
+    if (referenceError) {
+      return { ok: false, ...referenceError }
+    }
+
     const activeLinks = await listActiveEntityLinksForEntity({
       projectId: current.project_id,
       entityType: 'construction_drawing',
       entityId: id,
     })
     if (activeLinks.length > 0) {
-      const response: ApiResponse = {
-        success: false,
-        error: {
-          code: 'CONSTRUCTION_DRAWING_LINKED',
-          message: 'This construction drawing still has active task/certificate links. Deactivate or archive the linkage before deleting.',
-          details: { activeLinkCount: activeLinks.length },
-        },
-        timestamp: new Date().toISOString(),
-      }
-      return res.status(422).json(response)
+      return drawingMutationFailure(
+        422,
+        'CONSTRUCTION_DRAWING_LINKED',
+        'This construction drawing still has active task/certificate links. Deactivate or archive the linkage before deleting.',
+        { activeLinkCount: activeLinks.length },
+      )
     }
-  }
 
-  // v1.4.15: retention decision must block unsafe physical deletes.
-  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
-  const retention = await enforceRetentionOrBlock({
-    entityType: 'construction_drawing',
-    entityId: id,
-    projectId: current?.project_id ?? null,
-    userId: req.user?.id ?? null,
-    userAction: 'delete',
+    // v1.4.15: retention decision must block unsafe physical deletes.
+    const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+    const retention = await enforceRetentionOrBlock({
+      entityType: 'construction_drawing',
+      entityId: id,
+      projectId: current.project_id,
+      userId: req.user?.id ?? null,
+      userAction: 'delete',
+    })
+    if (retention.blocked) {
+      return {
+        ok: false,
+        status: buildRetentionBlockedHttpStatus(retention.result),
+        response: {
+          success: false,
+          error: buildRetentionBlockedApiError(retention.reason, retention.result),
+          timestamp: new Date().toISOString(),
+        },
+      }
+    }
+
+    await executeSQL('DELETE FROM construction_drawings WHERE id = ? AND project_id = ?', [id, current.project_id])
+
+    if (current.package_id) {
+      await syncPackageCurrentDrawingCertificateLink(current.project_id, current.package_id)
+    } else {
+      await cleanupDrawingCertificateLink(current as unknown as Record<string, unknown>)
+    }
+
+    return { ok: true, value: { projectId: current.project_id } }
   })
-  if (retention.blocked) {
-    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+
+  if (mutation.ok === false) {
+    return res.status(mutation.status).json(mutation.response)
   }
 
-  await executeSQL('DELETE FROM construction_drawings WHERE id = ? AND project_id = ?', [id, current.project_id])
-
-  if (current?.package_id) {
-    await syncPackageCurrentDrawingCertificateLink(current.project_id, current.package_id)
-  } else {
-    await cleanupDrawingCertificateLink(current as unknown as Record<string, unknown> | null)
-  }
-  clearDrawingBoardCache(current.project_id)
-
+  clearDrawingBoardCache(mutation.value.projectId)
   const response: ApiResponse = {
     success: true,
     timestamp: new Date().toISOString(),

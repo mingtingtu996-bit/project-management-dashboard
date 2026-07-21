@@ -370,7 +370,7 @@ const db = vi.hoisted(() => {
       )
     }
 
-    if (normalized === 'select project_id from pre_milestones where id = ? limit 1') {
+    if (normalized.startsWith('select project_id from pre_milestones where id = ? limit 1')) {
       return clonePreMilestone(preMilestones.find((row) => row.id === String(params[0] ?? '')))
     }
 
@@ -1120,9 +1120,20 @@ vi.mock('../middleware/auth.js', () => ({
   }),
   optionalAuthenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
   requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
-  requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectEditor: vi.fn((resolveProjectId: (req: any) => string | undefined | Promise<string | undefined>) => (
+    async (req: any, _res: unknown, next: () => void) => {
+      const projectId = await resolveProjectId(req)
+      if (projectId) req.authorizedProjectIds = [projectId]
+      next()
+    }
+  )),
   requireProjectOwner: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
   checkResourceAccess: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  getAuthorizedRequestProjectId: vi.fn((req: any, expectedProjectId?: string | null) => {
+    const projectIds = req.authorizedProjectIds ?? []
+    if (expectedProjectId) return projectIds.includes(expectedProjectId) ? expectedProjectId : null
+    return projectIds.at(-1) ?? null
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({

@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   insertNotification: vi.fn(),
   updateNotificationById: vi.fn(),
   from: vi.fn(),
+  clearAttentionSummaryCache: vi.fn(),
+  registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => effect()),
 }))
 
 vi.mock('../services/notificationStore.js', () => ({
@@ -20,7 +22,11 @@ vi.mock('../services/dbService.js', () => ({
 }))
 
 vi.mock('../services/todoTouchpointService.js', () => ({
-  clearAttentionSummaryCache: vi.fn(),
+  clearAttentionSummaryCache: mocks.clearAttentionSummaryCache,
+}))
+
+vi.mock('../database.js', () => ({
+  registerDatabasePostCommitEffect: mocks.registerDatabasePostCommitEffect,
 }))
 
 const { notificationTouchpointService } = await import('../services/notificationTouchpointService.js')
@@ -40,6 +46,35 @@ describe('notificationTouchpointService governance metadata', () => {
     mocks.from.mockReturnValue({
       upsert: vi.fn(async () => ({ error: null })),
     })
+    mocks.registerDatabasePostCommitEffect.mockImplementation(async (_label: string, effect: () => Promise<void>) => effect())
+  })
+
+  it('defers recipient state writes and attention cache invalidation until commit', async () => {
+    const postCommitEffects: Array<() => Promise<void>> = []
+    mocks.registerDatabasePostCommitEffect.mockImplementation(async (_label, effect) => {
+      postCommitEffects.push(effect)
+    })
+
+    await notificationTouchpointService.emit({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      type: 'drawing_version_updated',
+      notification_type: 'flow-reminder',
+      source_entity_type: 'drawing_version',
+      source_entity_id: 'drawing-version-1',
+      title: 'Drawing updated',
+      content: 'Drawing D-001 is now version 2.0',
+      recipients: ['user-1'],
+    })
+
+    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.clearAttentionSummaryCache).not.toHaveBeenCalled()
+    expect(postCommitEffects).toHaveLength(1)
+
+    await postCommitEffects[0]?.()
+
+    expect(mocks.from).toHaveBeenCalledWith('notification_user_states')
+    expect(mocks.clearAttentionSummaryCache).toHaveBeenCalledTimes(1)
   })
 
   it('adds projection version/source and dedupe governance metadata when emitting a touchpoint', async () => {

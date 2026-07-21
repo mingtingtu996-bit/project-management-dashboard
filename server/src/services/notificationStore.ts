@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 
 import { executeSQL, executeSQLOne } from './dbService.js'
 import type { Notification } from '../types/db.js'
+import { registerDatabasePostCommitEffect } from '../database.js'
 import { broadcastRealtimeEvent } from './realtimeServer.js'
 import { buildNotificationTouchpointFields } from './notificationTouchpointRules.js'
 
@@ -136,23 +137,29 @@ function groupNotificationIdsByScope(rows: Array<Pick<Notification, 'id' | 'proj
   return grouped
 }
 
-function broadcastNotificationMutation(
+async function broadcastNotificationMutation(
   action: 'insert' | 'update' | 'delete',
   rows: Array<Pick<Notification, 'id' | 'project_id' | 'company_id'>>,
 ) {
   const grouped = groupNotificationIdsByScope(rows)
+  const notificationIds = rows.map(({ id }) => id).sort()
 
-  for (const { projectId, companyId, ids } of grouped.values()) {
-    broadcastRealtimeEvent({
-      channel: 'notifications',
-      type: 'notification.changed',
-      companyId,
-      projectId,
-      entityType: 'notification',
-      ids,
-      payload: { action },
-    })
-  }
+  await registerDatabasePostCommitEffect(
+    `notification-realtime:${action}:${notificationIds.join(',')}`,
+    async () => {
+      for (const { projectId, companyId, ids } of grouped.values()) {
+        broadcastRealtimeEvent({
+          channel: 'notifications',
+          type: 'notification.changed',
+          companyId,
+          projectId,
+          entityType: 'notification',
+          ids,
+          payload: { action },
+        })
+      }
+    },
+  )
 }
 
 function applyNotificationRecordScope<T extends { eq: (column: string, value: unknown) => T; is: (column: string, value: null) => T }>(
@@ -346,7 +353,7 @@ export async function insertNotification(notification: NotificationInput): Promi
     `INSERT INTO notifications (${columns.join(', ')}) VALUES (${placeholders.join(', ')})`,
     values,
   )
-  broadcastNotificationMutation('insert', [row])
+  await broadcastNotificationMutation('insert', [row])
   return row
 }
 
@@ -382,7 +389,7 @@ export async function updateNotificationById(
   await executeScopedNotificationUpdate(id, updates, current)
 
   if (current) {
-    broadcastNotificationMutation('update', [{ id: current.id, project_id: current.project_id ?? null, company_id: current.company_id ?? null }])
+    await broadcastNotificationMutation('update', [{ id: current.id, project_id: current.project_id ?? null, company_id: current.company_id ?? null }])
   }
 }
 
@@ -423,7 +430,7 @@ export async function updateNotificationsByIds(
   }
 
   if (currentRows.length > 0) {
-    broadcastNotificationMutation(
+    await broadcastNotificationMutation(
       'update',
       currentRows.map((row) => ({ id: row.id, project_id: row.project_id ?? null, company_id: row.company_id ?? null })),
     )
@@ -451,6 +458,6 @@ export async function deleteNotificationById(id: string, current: Notification):
     }, current)
 
   if (current) {
-    broadcastNotificationMutation('delete', [{ id: current.id, project_id: current.project_id ?? null, company_id: current.company_id ?? null }])
+    await broadcastNotificationMutation('delete', [{ id: current.id, project_id: current.project_id ?? null, company_id: current.company_id ?? null }])
   }
 }

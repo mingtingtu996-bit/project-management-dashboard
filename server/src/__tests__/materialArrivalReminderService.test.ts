@@ -144,6 +144,7 @@ const state = vi.hoisted(() => {
 
 vi.mock('../database.js', () => ({
   query: state.rawQuery,
+  registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => effect()),
 }))
 
 vi.mock('../services/materialReportsService.js', () => ({
