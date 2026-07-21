@@ -61,6 +61,25 @@ describe('task-summary production delay semantics', () => {
     expect(compareAndDailySource).not.toContain('route-level-aggregation-approved')
   })
 
+  it('delegates trend, assignee, and monthly-plan aggregation to the project summary authority', () => {
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const summarySource = readFileSync(resolve(serverRoot, 'src/services/projectExecutionSummaryService.ts'), 'utf8')
+
+    expect(routeSource).toContain('getTaskSummaryCompletionTrend(projectId, fromDate)')
+    expect(routeSource).toContain('getTaskSummaryAssigneeRows(projectId)')
+    expect(routeSource).toContain('getTaskSummaryMonthlyPlanFulfillmentTrend(projectId)')
+    expect(routeSource).not.toContain('async function loadTaskSummaryTrendRows(')
+    expect(routeSource).not.toContain('async function loadTaskSummaryAssignees(')
+    expect(routeSource).not.toContain('async function loadMonthlyFulfillmentTrend(')
+    expect(routeSource).not.toContain('const monthMap: Record<string, TaskSummaryTrendResultRow>')
+    expect(routeSource).not.toContain(".from('monthly_plan_items')")
+
+    expect(summarySource).toContain('export async function getTaskSummaryCompletionTrend(')
+    expect(summarySource).toContain('export async function getTaskSummaryAssigneeRows(')
+    expect(summarySource).toContain('export async function getTaskSummaryMonthlyPlanFulfillmentTrend(')
+    expect(summarySource).toContain('return getMonthlyPlanFulfillmentTrend(projectId, safeMonths)')
+  })
+
   it('uses planned_end_date before legacy end_date when deciding whether a task is overdue by a period end', () => {
     const task = {
       status: 'in_progress',
