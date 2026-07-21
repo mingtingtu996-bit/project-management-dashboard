@@ -311,6 +311,55 @@ describe('duration learning evidence outbox follow-up contracts', () => {
     expect(queryExec).toHaveBeenCalledWith(expect.stringContaining(':backlog'), expect.any(Array))
   })
 
+  it('stops before the next bounded batch when the job attempt signal is aborted', async () => {
+    const controller = new AbortController()
+    const timeoutError = Object.assign(new Error('attempt deadline exceeded'), { code: 'JOB_ATTEMPT_TIMEOUT' })
+    const row = {
+      event_key: 'event-abort-between-batches',
+      event_type: 'wbs_candidate',
+      company_id: companyId,
+      project_id: projectId,
+      subject_type: 'baseline_item',
+      subject_id: 'baseline-abort',
+      input_subject_ids: ['baseline-abort'],
+      input_task_ids: [],
+      payload: {
+        companyId,
+        projectId,
+        generatedEntityIds: ['baseline-abort'],
+        authoritativeRuntimeLineage: null,
+        authoritativeRuntimeLineages: [],
+        lineageResolution: 'no_trusted_consumption',
+      },
+    }
+    let claimCount = 0
+    const queryExec = vi.fn(async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      if (sql.includes(':quarantine-unsafe')) return [] as T[]
+      if (sql.includes(':claim')) {
+        claimCount += 1
+        return [row] as T[]
+      }
+      if (sql.includes(':authority')) return [{ authorized: true }] as T[]
+      if (sql.includes(':complete')) {
+        controller.abort(timeoutError)
+        return [{ event_key: row.event_key }] as T[]
+      }
+      if (sql.includes(':backlog')) throw new Error('backlog must not be read after abort')
+      return [] as T[]
+    }) as any
+
+    await expect(outbox.drainDurationLearningRuntimeEvidenceOutbox({
+      queryExec,
+      ownerId: 'worker-abort',
+      maxBatches: 4,
+      signal: controller.signal,
+      recordWbsCandidate: vi.fn(async () => undefined),
+    })).rejects.toBe(timeoutError)
+
+    expect(claimCount).toBe(1)
+    expect(queryExec.mock.calls.some(([sql]) => String(sql).includes(':backlog'))).toBe(false)
+  })
+
   it('backs off a failed event instead of hot-retrying it through every drain batch', async () => {
     const row = {
       event_key: 'failed-event',

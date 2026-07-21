@@ -161,19 +161,19 @@ export class DurationLearningRuntimeEvidenceOutboxDrainJob {
     const retryRunner = this.options.retryRunner ?? defaultRetryRunner
     const drain = this.options.drain ?? drainDurationLearningRuntimeEvidenceOutbox
     try {
-      const lease = await leaseRunner(
+      const execution = await retryRunner(
         {
           jobName: DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_DRAIN_JOB_NAME,
+          triggeredBy,
           jobId,
+          maxAttempts: 1,
         },
-        async (lease) => retryRunner(
+        async (_attempt, attemptContext) => leaseRunner(
           {
             jobName: DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_DRAIN_JOB_NAME,
-            triggeredBy,
             jobId,
-            maxAttempts: 1,
           },
-          async () => {
+          async (lease) => {
             lease.assertActive()
             const now = this.options.now?.() ?? new Date().toISOString()
             const ownerId = this.options.ownerId?.trim()
@@ -185,6 +185,7 @@ export class DurationLearningRuntimeEvidenceOutboxDrainJob {
               limit: this.options.limit ?? DEFAULT_LIMIT,
               maxBatches: this.options.maxBatches ?? DEFAULT_MAX_BATCHES,
               backlogAgeGateMs: this.options.backlogAgeGateMs ?? DEFAULT_BACKLOG_AGE_GATE_MS,
+              signal: attemptContext.signal,
             })
             lease.assertActive()
             return assertDrainComplete(result)
@@ -192,6 +193,7 @@ export class DurationLearningRuntimeEvidenceOutboxDrainJob {
         ),
       )
 
+      const lease = execution.value
       if (!lease.acquired) {
         logger.warn('durationLearningRuntimeEvidenceOutboxDrainJob skipped because distributed lease was not acquired', {
           triggeredBy,
@@ -201,7 +203,8 @@ export class DurationLearningRuntimeEvidenceOutboxDrainJob {
         return { status: 'skipped' as const, reason: 'lease_not_acquired' as const }
       }
 
-      const { attempts, value } = lease.value
+      const { attempts } = execution
+      const { value } = lease
       logger.info('durationLearningRuntimeEvidenceOutboxDrainJob completed', {
         triggeredBy,
         jobId,

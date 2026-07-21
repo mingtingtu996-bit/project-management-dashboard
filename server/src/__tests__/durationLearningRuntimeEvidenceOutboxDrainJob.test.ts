@@ -1,10 +1,22 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+
+const runtimeMocks = vi.hoisted(() => ({
+  query: vi.fn(async () => ({ rows: [], rowCount: 1 })),
+}))
+
+vi.mock('../database.js', () => ({
+  query: runtimeMocks.query,
+}))
 
 const JOB_NAME = 'durationLearningRuntimeEvidenceOutboxDrainJob'
 const jobSourcePath = resolve(process.cwd(), 'src/jobs/durationLearningRuntimeEvidenceOutboxDrainJob.ts')
+const recoveryRunbookPath = resolve(
+  process.cwd(),
+  '../docs/runbooks/duration-learning-runtime-evidence-outbox-recovery.md',
+)
 
 function successfulDrain(overrides: Record<string, unknown> = {}) {
   return {
@@ -26,12 +38,21 @@ function successfulDrain(overrides: Record<string, unknown> = {}) {
 }
 
 type JobModule = typeof import('../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js')
+type JobRuntimeModule = typeof import('../services/jobRuntime.js')
 let jobModule: JobModule
+let jobRuntimeModule: JobRuntimeModule
 
 beforeAll(async () => {
   expect(existsSync(jobSourcePath), `${JOB_NAME} source must exist`).toBe(true)
-  jobModule = await import('../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js')
+  ;[jobModule, jobRuntimeModule] = await Promise.all([
+    import('../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'),
+    import('../services/jobRuntime.js'),
+  ])
 }, 60_000)
+
+afterEach(() => {
+  jobRuntimeModule.resetJobRuntimeStateForTests()
+})
 
 function createLeaseContext() {
   return {
@@ -69,6 +90,10 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
       resolve(process.cwd(), 'src/services/persistentJobScheduleService.ts'),
       'utf8',
     )
+    const jobsRouteSource = readFileSync(resolve(process.cwd(), 'src/routes/jobs.ts'), 'utf8')
+    const serverPackage = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>
+    }
     const registry = JSON.parse(readFileSync(
       resolve(process.cwd(), 'src/registry/system-domain-registry.json'),
       'utf8',
@@ -85,6 +110,18 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
     expect(schedulerSource).toContain('durationLearningRuntimeEvidenceOutboxDrainJob.stop()')
     expect(persistentScheduleSource).toContain(`'${JOB_NAME}'`)
     expect(registry.entries).toContainEqual(expect.objectContaining({ kind: 'job', id: JOB_NAME }))
+    expect(jobsRouteSource).toContain("import { durationLearningRuntimeEvidenceOutboxDrainJob } from '../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'")
+    expect(jobsRouteSource).toContain('const durationLearningRuntimeEvidenceOutboxDrainStatus = durationLearningRuntimeEvidenceOutboxDrainJob.getStatus()')
+    expect(jobsRouteSource).toContain(`name: '${JOB_NAME}'`)
+    expect(jobsRouteSource).not.toContain(`case '${JOB_NAME}':`)
+    expect(jobsRouteSource).not.toContain("/operator/duration-learning-runtime-evidence-outbox-drain")
+    expect(serverPackage.scripts?.['recover:duration-learning-runtime-evidence-outbox']).toBe(
+      'tsx -r dotenv/config src/scripts/recover-duration-learning-runtime-evidence-outbox.ts',
+    )
+    expect(existsSync(recoveryRunbookPath)).toBe(true)
+    const recoveryRunbook = readFileSync(recoveryRunbookPath, 'utf8')
+    expect(recoveryRunbook).toContain('No HTTP manual-execution endpoint')
+    expect(recoveryRunbook).toContain('five-minute persistent schedule')
   })
 
   it('drains with injectable authority, time and bounded batch inputs under its own lease', async () => {
@@ -114,14 +151,15 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
       expect.objectContaining({ jobName: JOB_NAME, triggeredBy: 'manual', maxAttempts: 1 }),
       expect.any(Function),
     )
-    expect(drain).toHaveBeenCalledWith({
+    expect(drain).toHaveBeenCalledWith(expect.objectContaining({
       queryExec,
       ownerId: 'outbox-owner',
       now: '2026-07-21T04:00:00.000Z',
       limit: 25,
       maxBatches: 3,
       backlogAgeGateMs: 15 * 60 * 1_000,
-    })
+      signal: expect.anything(),
+    }))
     expect(result).toEqual(expect.objectContaining({
       status: 'completed',
       attempts: 1,
@@ -172,6 +210,62 @@ describe('durationLearningRuntimeEvidenceOutboxDrainJob', () => {
 
     releaseDrain?.()
     await expect(first).resolves.toEqual(expect.objectContaining({ status: 'completed' }))
+  })
+
+  it('keeps the distributed lease until a non-abort-aware timed-out drain actually settles', async () => {
+    let leaseHeld = false
+    let releaseDrain: (() => void) | undefined
+    let attemptSignal: AbortSignal | undefined
+    let drainCallCount = 0
+    const drain = vi.fn((input: { signal?: AbortSignal }) => {
+      drainCallCount += 1
+      attemptSignal = input.signal
+      if (drainCallCount > 1) return Promise.resolve(successfulDrain())
+      return new Promise<ReturnType<typeof successfulDrain>>((resolveDrain) => {
+        releaseDrain = () => resolveDrain(successfulDrain())
+      })
+    })
+    const leaseRunner = vi.fn(async (_options, runner) => {
+      if (leaseHeld) {
+        return { acquired: false as const, reason: 'lease_not_acquired' as const }
+      }
+      leaseHeld = true
+      try {
+        return { acquired: true as const, value: await runner(createLeaseContext()) }
+      } finally {
+        leaseHeld = false
+      }
+    })
+    const retryRunner: typeof jobRuntimeModule.runJobWithRetry = (options, runner) =>
+      jobRuntimeModule.runJobWithRetry({ ...options, timeoutMs: 20 }, runner)
+    const job = new jobModule.DurationLearningRuntimeEvidenceOutboxDrainJob({
+      drain: drain as any,
+      queryExec: vi.fn(),
+      leaseRunner,
+      retryRunner,
+    })
+
+    const first = job.executeNow().then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    )
+    await vi.waitFor(() => expect(drain).toHaveBeenCalledTimes(1))
+
+    try {
+      const firstOutcome = await first
+      expect(firstOutcome.error).toMatchObject({ code: 'JOB_ATTEMPT_TIMEOUT' })
+      expect(attemptSignal?.aborted).toBe(true)
+      expect(leaseHeld).toBe(true)
+
+      await expect(job.executeNow()).resolves.toEqual({
+        status: 'skipped',
+        reason: 'lease_not_acquired',
+      })
+      expect(drain).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseDrain?.()
+      await vi.waitFor(() => expect(leaseHeld).toBe(false))
+    }
   })
 
   it('propagates processor and lease failures so the persistent slot can retry', async () => {

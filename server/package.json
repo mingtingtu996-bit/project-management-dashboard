@@ -46,6 +46,7 @@
     "test:watch": "vitest",
     "health:snapshot": "tsx -r dotenv/config run-health-history-snapshot.ts",
     "calendar:refresh-official": "tsx -r dotenv/config src/scripts/refresh-official-work-calendar.ts",
+    "recover:duration-learning-runtime-evidence-outbox": "tsx -r dotenv/config src/scripts/recover-duration-learning-runtime-evidence-outbox.ts",
     "migrate:pending": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts",
     "migrate:plan": "tsx -r dotenv/config src/scripts/run-pending-migrations.ts --plan",
     "verify:commercial-trigger-rpc-target": "tsx -r dotenv/config src/scripts/verify-commercial-trigger-rpc-target.ts",
