@@ -199,6 +199,22 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   assert.match(guardWorkflow, /application-release-atomicity\.contract\.test\.mjs/u)
 })
 
+test('workflow installs server dependencies before the YAML-backed atomicity contract', async () => {
+  const workflow = loadYaml(await source('.github/workflows/workflow-guard.yml'))
+  const steps = workflow.jobs['deploy-workflow-contract'].steps
+  const installIndex = steps.findIndex((step) => step.name === 'Install server dependencies')
+  const atomicityIndex = steps.findIndex(
+    (step) => step.name === 'Verify application release atomicity contract',
+  )
+
+  assert.notEqual(installIndex, -1, 'server dependency installation step is required')
+  assert.notEqual(atomicityIndex, -1, 'application release atomicity step is required')
+  assert.ok(
+    installIndex < atomicityIndex,
+    'server dependencies must be installed before loading the YAML-backed contract',
+  )
+})
+
 test('application commit and rollback require healthy exact-SHA Web, API, and worker containers', async () => {
   const [script, compose] = await Promise.all([
     source('scripts/deploy-lighthouse-server.sh'),

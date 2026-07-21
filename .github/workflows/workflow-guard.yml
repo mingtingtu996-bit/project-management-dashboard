@@ -651,10 +651,6 @@ jobs:
         working-directory: .
         run: node --test scripts/domain-sni-ingress.contract.test.mjs
 
-      - name: Verify application release atomicity contract
-        working-directory: .
-        run: node --test scripts/application-release-atomicity.contract.test.mjs
-
       - name: Enable pnpm via Corepack
         working-directory: .
         run: |
@@ -663,6 +659,10 @@ jobs:
 
       - name: Install server dependencies
         run: npm ci --workspaces=false
+
+      - name: Verify application release atomicity contract
+        working-directory: .
+        run: node --test scripts/application-release-atomicity.contract.test.mjs
 
       - name: Build server for staging learning-cycle contract
         run: npm run build
