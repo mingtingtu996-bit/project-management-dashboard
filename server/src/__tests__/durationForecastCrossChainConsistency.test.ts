@@ -7,7 +7,15 @@ import { buildScopedDurationForecasts } from '../services/scopedDurationForecast
 import type { ProjectTaskAttribution } from '../services/taskAttributionProjectionService.js'
 import type { TaskDurationForecast } from '../services/taskDurationForecastService.js'
 
-const calendar: ConstructionCalendarContext = { basis: 'calendar_day', windows: [] }
+const calendar: ConstructionCalendarContext = {
+  basis: 'official_construction_calendar_seed',
+  windows: [],
+  calendarRef: 'work_calendar',
+  calendarVersion: 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  availability: 'available',
+  unavailableReason: null,
+}
 
 describe('duration forecast cross-chain consistency', () => {
   it('keeps a single-division P50 aligned with project deterministic P50 and explains the risk-band adjustment', () => {
