@@ -19,6 +19,14 @@ const ASSET_KEYS = [
   'dependency_rule_candidate',
   'critical_path_rule_candidate',
 ]
+const QUALITY_MODEL_BY_ASSET = {
+  base_duration_benchmark: 'numeric_holdout',
+  standard_work_duration_seed: 'numeric_holdout',
+  special_work_duration_seed: 'numeric_replay',
+  wbs_reference_days: 'numeric_holdout',
+  dependency_rule_candidate: 'structural_replay',
+  critical_path_rule_candidate: 'structural_replay',
+}
 const STRUCTURAL_ASSET_KEYS = new Set([
   'dependency_rule_candidate',
   'critical_path_rule_candidate',
@@ -480,11 +488,15 @@ function controlledEvidenceIds(primaryId, label, count) {
 }
 
 function controlledAutomationDecision(modules, assetKey, scopeLevel, evidence) {
+  const qualityModel = QUALITY_MODEL_BY_ASSET[assetKey]
   const decision = modules.automation.evaluateDurationLearningAssetAutomationPolicy({
     experienceTier: STRUCTURAL_ASSET_KEYS.has(assetKey) ? 'T3' : 'T2',
     reuseScope: scopeLevel,
-    factSource: assetKey === 'base_duration_benchmark' ? 'actual_outcome' : 'hybrid',
+    factSource: qualityModel === 'numeric_replay'
+      ? 'replay'
+      : qualityModel === 'structural_replay' ? 'hybrid' : 'actual_outcome',
     targetStage: 'canary',
+    qualityModel,
     evidence,
   })
   assert.equal(decision.autoPromotionAllowed, true, `controlled canary policy blocked for ${scopeLevel}`)
@@ -492,11 +504,15 @@ function controlledAutomationDecision(modules, assetKey, scopeLevel, evidence) {
 }
 
 function evaluateProposalAutomationPolicy(modules, proposal) {
+  const qualityModel = proposal.qualityModel
   return modules.automation.evaluateDurationLearningAssetAutomationPolicy({
     experienceTier: STRUCTURAL_ASSET_KEYS.has(proposal.assetKey) ? 'T3' : 'T2',
     reuseScope: proposal.scope.level,
-    factSource: proposal.assetKey === 'base_duration_benchmark' ? 'actual_outcome' : 'hybrid',
+    factSource: qualityModel === 'numeric_replay'
+      ? 'replay'
+      : qualityModel === 'structural_replay' ? 'hybrid' : 'actual_outcome',
     targetStage: 'canary',
+    qualityModel,
     evidence: {
       ...proposal.automationEvidence,
       validChangeCount: proposal.sampleCount,
@@ -544,11 +560,16 @@ function buildCandidateBase(modules, assetKey, scopeLevel, fixture, nonce) {
     `${assetKey}:${scopeLevel}:task`,
     floor.minDistinctTasks,
   )
+  const qualityModel = QUALITY_MODEL_BY_ASSET[assetKey]
   const automationEvidence = {
+    holdoutSampleCount: Math.max(3, Math.ceil(floor.minRealOutcomes * 0.2)),
     maeBefore: 2,
     maeAfter: 1,
     conflictRate: 0,
     overcompensationRate: 0,
+    replayPassRate: 1,
+    outcomeAcceptanceRate: 1,
+    qualityConsistencyRate: 1,
     rollbackReady: true,
     tenantScopeValid: true,
     structuralMutation: false,
@@ -583,6 +604,7 @@ function buildCandidateBase(modules, assetKey, scopeLevel, fixture, nonce) {
     observationWindowDays: floor.minObservationDays,
     conflictCount: 0,
     replayPassed: true,
+    qualityModel,
     blockingReasons: [],
     policyEvaluationRequired: true,
     automationEvidence,
@@ -858,8 +880,10 @@ function monitoringCandidateForProposal(proposal, publicationKey, failure = fals
   return {
     publicationKey,
     assetKey: proposal.assetKey,
+    artifactKey: proposal.artifactKey,
     publicationStage: failure ? 'stable' : 'canary',
-    scopeLevel: proposal.scope.level,
+    monitoringStatus: 'pending',
+    scope: proposal.scope,
     monitoringWindowHours: structural ? 168 : 72,
     monitoringElapsedHours: 192,
     observedCount: OBSERVATIONS_PER_PUBLICATION,
