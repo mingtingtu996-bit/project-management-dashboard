@@ -21,6 +21,51 @@ export type TaskProgressSnapshotReconciliationScheduledResult = {
   projectFailures: Array<{ projectId: string; error: string }>
 }
 
+export type PlanningReplayCalibrationScheduledResult = {
+  failedReports: number
+  persistenceFailedGroupCount: number
+}
+
+export type ConstructionOrganizationPlanNetworkRuntimeEvidenceScheduledResult = {
+  failed: number
+}
+
+export function requireCompletePlanningReplayCalibration<
+  T extends PlanningReplayCalibrationScheduledResult,
+>(result: T): T {
+  const reasons = [
+    result.failedReports > 0 ? 'planning_replay_project_failures' : null,
+    result.persistenceFailedGroupCount > 0 ? 'planning_replay_persistence_failures' : null,
+  ].filter((reason): reason is string => Boolean(reason))
+
+  if (reasons.length > 0) {
+    throw Object.assign(
+      new Error(`Planning replay calibration partially failed: ${reasons.join(', ')}`),
+      {
+        code: 'PLANNING_REPLAY_CALIBRATION_PARTIAL_FAILURE',
+        reasons,
+        result,
+      },
+    )
+  }
+  return result
+}
+
+export function requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence<
+  T extends ConstructionOrganizationPlanNetworkRuntimeEvidenceScheduledResult,
+>(result: T): T {
+  if (result.failed > 0) {
+    throw Object.assign(
+      new Error(`Construction organization plan network runtime evidence failed for ${result.failed} candidate(s)`),
+      {
+        code: 'CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_RUNTIME_EVIDENCE_PARTIAL_FAILURE',
+        result,
+      },
+    )
+  }
+  return result
+}
+
 export function requireCompleteProjectDailySnapshotWrite<T extends ProjectDailySnapshotScheduledResult>(result: T): T {
   if (result.failed > 0) {
     throw Object.assign(

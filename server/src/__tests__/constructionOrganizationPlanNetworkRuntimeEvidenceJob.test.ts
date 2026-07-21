@@ -1,6 +1,34 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const runtimeMocks = vi.hoisted(() => ({
+  runJobWithRetry: vi.fn(async (_context: unknown, run: () => Promise<unknown>) => {
+    let lastError: unknown = null
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return { attempts: attempt, value: await run() }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError
+  }),
+  runWithJobLease: vi.fn(async (
+    _context: unknown,
+    run: (lease: { assertActive: () => void }) => Promise<unknown>,
+  ) => ({
+    acquired: true as const,
+    value: await run({ assertActive: vi.fn() }),
+  })),
+}))
+
+vi.mock('../services/jobRuntime.js', () => ({
+  runJobWithRetry: runtimeMocks.runJobWithRetry,
+  runWithJobLease: runtimeMocks.runWithJobLease,
+}))
+
 import {
+  ConstructionOrganizationPlanNetworkRuntimeEvidenceJob,
   collectConstructionOrganizationPlanNetworkRuntimeEvidenceCandidates,
   runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep,
   type ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepCandidate,
@@ -34,6 +62,11 @@ function buildCandidate(
 }
 
 describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
+  beforeEach(() => {
+    runtimeMocks.runJobWithRetry.mockClear()
+    runtimeMocks.runWithJobLease.mockClear()
+  })
+
   it('runs retryable sweeps only while holding the distributed job lease', () => {
     const jobSource = readFileSync(
       new URL('../jobs/constructionOrganizationPlanNetworkRuntimeEvidenceJob.ts', import.meta.url),
@@ -48,7 +81,11 @@ describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
     expect(executeSource).toContain('triggeredBy,')
     expect(executeSource).toContain('jobId,')
     expect(executeSource.match(/lease\.assertActive\(\)/g)).toHaveLength(2)
-    expect(executeSource).toContain('await runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options)')
+    expect(executeSource).toContain('const sweep = this.options.sweep ?? runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep')
+    expect(executeSource).toContain('const withTransaction = this.options.withTransaction ?? withDatabaseTransaction')
+    expect(executeSource).toContain('const value = await withTransaction(async () => (')
+    expect(executeSource).toContain('requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence(')
+    expect(executeSource).toContain('await sweep(this.options)')
     expect(executeSource).toContain('if (!leaseRun.acquired)')
     expect(executeSource).toContain('const { attempts, value } = leaseRun.value')
   })
@@ -119,6 +156,53 @@ describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
       rollbackTarget: 'construction-org-plan-network-release:project-1:previous',
       rollbackVerificationMode: 'path_verified_no_runtime_reversal',
     }))
+  })
+
+  it('retries partial evidence only after the transaction rolls back earlier candidate writes', async () => {
+    const committedWrites: string[] = []
+    let transactionCallCount = 0
+    const withTransaction = async <T>(work: () => Promise<T>): Promise<T> => {
+      transactionCallCount += 1
+      const savepoint = committedWrites.length
+      try {
+        return await work()
+      } catch (error) {
+        committedWrites.splice(savepoint)
+        throw error
+      }
+    }
+    const completeResult = {
+      source: 'construction_organization_plan_network_runtime_evidence_job' as const,
+      total: 2,
+      monitored: 2,
+      impactMonitoringRecorded: 2,
+      rollbackVerificationRecorded: 2,
+      runtimeEngineEvidenceRecorded: 0,
+      skipped: 0,
+      failed: 0,
+    }
+    const sweep = vi.fn()
+      .mockImplementationOnce(async () => {
+        committedWrites.push('publication-a-events')
+        return {
+          ...completeResult,
+          monitored: 1,
+          impactMonitoringRecorded: 1,
+          rollbackVerificationRecorded: 1,
+          failed: 1,
+        }
+      })
+      .mockImplementationOnce(async () => {
+        committedWrites.push('publication-a-events', 'publication-b-events')
+        return completeResult
+      })
+    const job = new ConstructionOrganizationPlanNetworkRuntimeEvidenceJob({ sweep, withTransaction })
+
+    await expect(job.executeNow()).resolves.toEqual(completeResult)
+
+    expect(sweep).toHaveBeenCalledTimes(2)
+    expect(transactionCallCount).toBe(2)
+    expect(committedWrites).toEqual(['publication-a-events', 'publication-b-events'])
   })
 
   it('records missing E1/E3/E5 runtime engine evidence from verified runtime-adopted plan networks', async () => {
