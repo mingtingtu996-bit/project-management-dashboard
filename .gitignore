@@ -59,5 +59,14 @@ tmp-*.pdf
 artifacts/
 project-testing/reports/
 
+# Keep testing-center roots reproducible in clean checkouts while ignoring outputs.
+!project-testing/artifacts/
+project-testing/artifacts/**
+!project-testing/artifacts/**/
+!project-testing/artifacts/**/README.md
+!project-testing/reports/
+project-testing/reports/*
+!project-testing/reports/README.md
+
 # Project specific
 .project-snapshots/
