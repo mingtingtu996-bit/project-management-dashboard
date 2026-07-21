@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildStandardDTO } from '../services/taskStandardModelService.js'
 import { taskSchema } from '../middleware/validation.js'
 import { TASK_STATUS_DERIVATION_RULE_VERSION } from '../services/taskStatusDerivationService.js'
 
 describe('taskStandardModelService', async () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('treats any v1.4.1 scope object id as a valid standard-model scope', async () => {
     const scopeFields = [
       'building_object_id',
@@ -154,6 +158,9 @@ describe('taskStandardModelService', async () => {
   })
 
   it('returns unified status evidence and flat axis fields for list DTO consumers', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-20T00:00:00.000Z'))
+
     const dto = await buildStandardDTO(
       {
         id: 'task-status-dto',
@@ -191,7 +198,41 @@ describe('taskStandardModelService', async () => {
     expect(dto.lagStatus).toBeDefined()
   })
 
+  it('keeps overdue status but withholds production-day count without calendar identity', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-02T00:00:00.000Z'))
+
+    const dto = await buildStandardDTO(
+      {
+        id: 'task-status-overdue-without-calendar',
+        status: 'in_progress',
+        progress: 40,
+        building_object_id: 'building-1',
+        wbs_node_type: 'process',
+        planned_end_date: '2026-06-01',
+      },
+      { mode: 'list' },
+    )
+
+    expect(dto.dueStatus).toEqual(expect.objectContaining({
+      status: 'overdue',
+      daysUntilDue: null,
+    }))
+    expect(dto.statusDerivation).toMatchObject({
+      dueStatus: {
+        duration: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+        },
+      },
+    })
+  })
+
   it('passes policy and forecast signal fields into the standard DTO unified axes', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-20T00:00:00.000Z'))
+
     const dto = await buildStandardDTO(
       {
         id: 'task-status-policy-forecast-dto',
