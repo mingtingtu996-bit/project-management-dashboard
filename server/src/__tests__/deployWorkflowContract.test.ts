@@ -234,6 +234,68 @@ describe('deploy workflow contract', () => {
     expect(dropStep).toContain('npm run guard:pending-migration-drop-targets -- "${drop_guard_args[@]}"')
   })
 
+  it('runs migration 322 only after explicit pre-write authorization and an uploaded exact backup', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const migrationJob = workflow.slice(
+      workflow.indexOf('  database-migration:'),
+      workflow.indexOf('  workspace-isolation-live:'),
+    )
+    const confirmationInput = 'duration_learning_legacy_runtime_retirement_confirmation'
+    const confirmationPhrase = 'RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322'
+    const migrationFilename = '322_duration_learning_legacy_runtime_retirement.sql'
+    const authorizationStep = migrationJob.indexOf('Authorize duration learning legacy runtime retirement 322')
+    const dropPreflightStep = migrationJob.indexOf('Preflight pending migration DROP targets')
+    const ordinaryApplyStep = migrationJob.indexOf('Apply pending migrations')
+    const backupStep = migrationJob.indexOf('Backup duration learning legacy runtime retirement data')
+    const uploadStep = migrationJob.indexOf('Upload duration learning legacy runtime retirement backup')
+    const dedicatedApplyStep = migrationJob.indexOf('Apply and verify duration learning legacy runtime retirement 322')
+    const pendingZeroStep = migrationJob.indexOf('Check migration pending zero after apply')
+
+    expect(workflow).toContain(`${confirmationInput}:`)
+    expect(workflow).toContain(confirmationPhrase)
+    expect(authorizationStep).toBeGreaterThan(-1)
+    expect(dropPreflightStep).toBeGreaterThan(authorizationStep)
+    expect(ordinaryApplyStep).toBeGreaterThan(dropPreflightStep)
+    expect(migrationJob.slice(authorizationStep, dropPreflightStep)).toContain(
+      `DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_CONFIRMATION: \${{ github.event.inputs.${confirmationInput} }}`,
+    )
+    expect(migrationJob.slice(authorizationStep, dropPreflightStep)).toContain(
+      `"deferredMigrations":["${migrationFilename}"]`,
+    )
+    expect(migrationJob.slice(authorizationStep, dropPreflightStep)).toContain(confirmationPhrase)
+    expect(migrationJob.slice(authorizationStep, dropPreflightStep)).toContain('exit 1')
+
+    const dropPreflightStage = migrationJob.slice(dropPreflightStep, ordinaryApplyStep)
+    expect(dropPreflightStage).toContain(
+      `DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PENDING: \${{ steps.duration-learning-retirement-322.outputs.pending }}`,
+    )
+    expect(dropPreflightStage).toContain(
+      `drop_guard_args+=(--approve-existing-drop-targets-for "${migrationFilename}")`,
+    )
+    expect(dropPreflightStage).toContain(
+      '[ "$DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PENDING" = "true" ]',
+    )
+
+    expect(backupStep).toBeGreaterThan(ordinaryApplyStep)
+    expect(uploadStep).toBeGreaterThan(backupStep)
+    expect(dedicatedApplyStep).toBeGreaterThan(uploadStep)
+    expect(pendingZeroStep).toBeGreaterThan(dedicatedApplyStep)
+
+    const backupStage = migrationJob.slice(backupStep, dedicatedApplyStep)
+    expect(backupStage).toContain('npm run backup:duration-learning-legacy-runtime-retirement')
+    expect(backupStage).toContain('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_BACKUP_FILE=')
+    expect(backupStage).toContain('DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_AUTHORIZATION_REF=change:github-actions:')
+    expect(backupStage).toContain('if-no-files-found: error')
+    expect(backupStage).toContain("steps.duration-learning-retirement-322.outputs.pending == 'true'")
+
+    const dedicatedApplyStage = migrationJob.slice(dedicatedApplyStep, pendingZeroStep)
+    expect(dedicatedApplyStage).toContain('npm run migrate:duration-learning-legacy-runtime-retirement')
+    expect(dedicatedApplyStage).toContain(
+      'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE',
+    )
+    expect(dedicatedApplyStage).toContain("steps.duration-learning-retirement-322.outputs.pending == 'true'")
+  })
+
   it('blocks target database mutation until deployment and runtime secrets pass preflight', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
     const preflightStart = workflow.indexOf('  deployment-target-preflight:')

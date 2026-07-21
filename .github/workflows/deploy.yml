@@ -67,6 +67,11 @@ on:
         required: true
         default: false
         type: boolean
+      duration_learning_legacy_runtime_retirement_confirmation:
+        description: Type RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322 only when explicitly authorizing pending migration 322
+        required: false
+        default: ''
+        type: string
       production_migration_governance_evidence:
         description: Repository-relative path to MG-01..MG-07 production migration governance evidence JSON
         required: false
@@ -829,10 +834,38 @@ jobs:
           set -o pipefail
           npm run migrate:diagnose | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Authorize duration learning legacy runtime retirement 322
+        id: duration-learning-retirement-322
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_CONFIRMATION: ${{ github.event.inputs.duration_learning_legacy_runtime_retirement_confirmation }}
+        run: |
+          set -euo pipefail
+          plan_output="$(npm run --silent migrate:plan)"
+          retirement_boundary='"deferredMigrations":["322_duration_learning_legacy_runtime_retirement.sql"]'
+          if grep -Fq -- "$retirement_boundary" <<< "$plan_output"; then
+            if [ "$DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_CONFIRMATION" != "RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322" ]; then
+              {
+                echo "### Migration 322 blocked"
+                echo ""
+                echo "- Migration 322 is pending and retires legacy duration-learning runtime tables."
+                echo "- Re-run with \`duration_learning_legacy_runtime_retirement_confirmation=RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322\` after reviewing the controlled backup and rollback contract."
+                echo "- No database migration writes were started."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            echo "Migration 322 explicit authorization accepted for this protected workflow run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Preflight pending migration DROP targets
         if: steps.migration-config.outputs.can_run == 'true'
         env:
           DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PENDING: ${{ steps.duration-learning-retirement-322.outputs.pending }}
         run: |
           set -euo pipefail
           plan_output="$(npm run --silent migrate:plan)"
@@ -844,6 +877,9 @@ jobs:
               drop_guard_args+=(--approve-existing-drop-targets-for "$migration")
             fi
           done
+          if [ "$DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PENDING" = "true" ]; then
+            drop_guard_args+=(--approve-existing-drop-targets-for "322_duration_learning_legacy_runtime_retirement.sql")
+          fi
           npm run guard:pending-migration-drop-targets -- "${drop_guard_args[@]}" \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
@@ -923,6 +959,43 @@ jobs:
           DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: npm run migrate:pending
+
+      - name: Backup duration learning legacy runtime retirement data
+        if: steps.migration-config.outputs.can_run == 'true' && steps.duration-learning-retirement-322.outputs.pending == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/duration-learning-legacy-runtime-retirement-322-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:duration-learning-legacy-runtime-retirement -- --output "$backup_file"
+          test -s "$backup_file"
+          test -s "$backup_file.sha256"
+          echo "DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          echo "DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_AUTHORIZATION_REF=change:github-actions:${GITHUB_REPOSITORY}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Upload duration learning legacy runtime retirement backup
+        if: steps.migration-config.outputs.can_run == 'true' && steps.duration-learning-retirement-322.outputs.pending == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: duration-learning-legacy-runtime-retirement-322-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/duration-learning-legacy-runtime-retirement-322-*.json
+            ${{ runner.temp }}/duration-learning-legacy-runtime-retirement-322-*.json.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Apply and verify duration learning legacy runtime retirement 322
+        if: steps.migration-config.outputs.can_run == 'true' && steps.duration-learning-retirement-322.outputs.pending == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          readback_log="$RUNNER_TEMP/duration-learning-legacy-runtime-retirement-322-readback.log"
+          npm run migrate:duration-learning-legacy-runtime-retirement | tee "$readback_log"
+          grep -Fq 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE' "$readback_log"
+          cat "$readback_log" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check migration pending zero after apply
         if: steps.migration-config.outputs.can_run == 'true'
