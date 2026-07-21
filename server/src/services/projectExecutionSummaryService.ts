@@ -21,6 +21,7 @@ import {
   buildCalendarDayDurationMetric,
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
+  DEFAULT_DURATION_TIMEZONE,
   hasIdentifiedConstructionCalendar,
   type DurationMetricDto,
 } from './durationMetricService.js'
@@ -502,8 +503,43 @@ export type TaskSummaryAssigneeRow = {
   on_time_rate: number
 }
 
+export type TaskSummaryTrendWindowOptions = {
+  months?: number
+  asOf?: Date
+  timezone?: string
+}
+
+export type TaskSummaryTrendWindow = {
+  months: number
+  asOfDate: string
+  fromDate: string
+  timezone: string
+}
+
 function normalizeTaskSummaryText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+export function resolveTaskSummaryTrendWindow(
+  options: TaskSummaryTrendWindowOptions = {},
+): TaskSummaryTrendWindow {
+  const requestedMonths = options.months ?? 6
+  const months = Number.isFinite(requestedMonths)
+    ? Math.min(Math.max(Math.trunc(requestedMonths), 1), 24)
+    : 6
+  const timezone = normalizeTaskSummaryText(options.timezone) || DEFAULT_DURATION_TIMEZONE
+  const asOfDate = businessDateKey(options.asOf ?? new Date(), timezone)
+  const [asOfYear, asOfMonth] = asOfDate.split('-').map(Number)
+  const firstMonthIndex = (asOfYear * 12) + (asOfMonth - 1) - (months - 1)
+  const fromYear = Math.floor(firstMonthIndex / 12)
+  const fromMonth = firstMonthIndex - (fromYear * 12) + 1
+
+  return {
+    months,
+    asOfDate,
+    fromDate: `${fromYear}-${String(fromMonth).padStart(2, '0')}-01`,
+    timezone,
+  }
 }
 
 export function buildTaskSummaryCompletionTrend(
@@ -611,8 +647,9 @@ export async function getTaskSummaryProjectMemberNameMap(
 
 export async function getTaskSummaryCompletionTrend(
   projectId: string,
-  fromDate: string,
+  options: TaskSummaryTrendWindowOptions = {},
 ): Promise<TaskSummaryCompletionTrendRow[]> {
+  const { fromDate } = resolveTaskSummaryTrendWindow(options)
   const [taskResult, calendar] = await Promise.all([
     supabase
       .from('tasks')

@@ -23,6 +23,7 @@ import {
   getTaskSummaryCompletionTrend,
   getTaskSummaryMonthlyPlanFulfillmentTrend,
   getTaskSummaryProjectMemberNameMap,
+  resolveTaskSummaryTrendWindow,
 } from '../services/projectExecutionSummaryService.js'
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
@@ -657,12 +658,8 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
 // GET /projects/:id/task-summary/trend — 近6个月月度完成趋势
 router.get('/projects/:id/task-summary/trend', validateIdParam, requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
-
-  // 计算6个月前的日期
-  const sixMonthsAgo = new Date()
-  sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 5)
-  sixMonthsAgo.setDate(1)
-  const fromDate = sixMonthsAgo.toISOString().slice(0, 10)
+  const asOf = new Date()
+  const { fromDate } = resolveTaskSummaryTrendWindow({ months: 6, asOf })
 
   const cacheKey = ['task-summary-trend', projectId, fromDate].join(':')
   const cachedResponse = getCachedTaskSummaryResponse<ApiResponse>(cacheKey)
@@ -670,8 +667,8 @@ router.get('/projects/:id/task-summary/trend', validateIdParam, requireProjectMe
     return res.json(cachedResponse)
   }
 
-  const data = await getTaskSummaryCompletionTrend(projectId, fromDate)
-  const response = { success: true, data, timestamp: new Date().toISOString() }
+  const data = await getTaskSummaryCompletionTrend(projectId, { months: 6, asOf })
+  const response = { success: true, data, timestamp: asOf.toISOString() }
   setCachedTaskSummaryResponse(cacheKey, response)
   res.json(response)
 }))

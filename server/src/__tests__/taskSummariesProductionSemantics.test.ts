@@ -65,7 +65,10 @@ describe('task-summary production delay semantics', () => {
     const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
     const summarySource = readFileSync(resolve(serverRoot, 'src/services/projectExecutionSummaryService.ts'), 'utf8')
 
-    expect(routeSource).toContain('getTaskSummaryCompletionTrend(projectId, fromDate)')
+    expect(routeSource).toContain('resolveTaskSummaryTrendWindow({ months: 6, asOf })')
+    expect(routeSource).toContain('getTaskSummaryCompletionTrend(projectId, { months: 6, asOf })')
+    expect(routeSource).not.toContain('sixMonthsAgo.setMonth(')
+    expect(routeSource).not.toContain('sixMonthsAgo.setDate(')
     expect(routeSource).toContain('getTaskSummaryAssigneeRows(projectId)')
     expect(routeSource).toContain('getTaskSummaryMonthlyPlanFulfillmentTrend(projectId)')
     expect(routeSource).not.toContain('async function loadTaskSummaryTrendRows(')
@@ -75,6 +78,7 @@ describe('task-summary production delay semantics', () => {
     expect(routeSource).not.toContain(".from('monthly_plan_items')")
 
     expect(summarySource).toContain('export async function getTaskSummaryCompletionTrend(')
+    expect(summarySource).toContain('export function resolveTaskSummaryTrendWindow(')
     expect(summarySource).toContain('export async function getTaskSummaryAssigneeRows(')
     expect(summarySource).toContain('export async function getTaskSummaryMonthlyPlanFulfillmentTrend(')
     expect(summarySource).toContain('return getMonthlyPlanFulfillmentTrend(projectId, safeMonths)')
