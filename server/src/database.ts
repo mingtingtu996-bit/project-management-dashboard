@@ -216,6 +216,10 @@ type DatabasePostCommitEffect = {
   effect: () => Promise<void>;
 };
 
+export type DatabaseTransactionOptions = {
+  signal?: AbortSignal;
+};
+
 type DatabaseTransactionContext = {
   client: DatabaseTransactionClientLike;
   nestedClient: PoolClient;
@@ -224,6 +228,15 @@ type DatabaseTransactionContext = {
 };
 
 const databaseTransactionStorage = new AsyncLocalStorage<DatabaseTransactionContext>();
+
+function throwIfDatabaseTransactionAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : Object.assign(new Error('Database transaction aborted'), {
+        code: 'DATABASE_TRANSACTION_ABORTED',
+      });
+}
 
 async function setJobLeaseFenceRequestHeaders(client: DatabaseTransactionClientLike) {
   const headers = getJobLeaseFenceRequestHeaders();
@@ -284,22 +297,31 @@ export async function registerDatabasePostCommitEffect(
 export async function runWithDatabaseTransactionClient<T>(
   client: DatabaseTransactionClientLike,
   work: () => Promise<T>,
+  options: DatabaseTransactionOptions = {},
 ): Promise<T> {
   if (databaseTransactionStorage.getStore()) {
-    return work();
+    throwIfDatabaseTransactionAborted(options.signal);
+    const nestedResult = await work();
+    throwIfDatabaseTransactionAborted(options.signal);
+    return nestedResult;
   }
 
-  await client.query('BEGIN');
-  const context = {
-    client,
-    nestedClient: null as unknown as PoolClient,
-    rollbackOnly: false,
-    postCommitEffects: [],
-  } satisfies DatabaseTransactionContext;
-  context.nestedClient = createNestedTransactionClient(context);
-
-  let result: T;
+  let transactionStarted = false;
+  let transactionCommitted = false;
+  let context: DatabaseTransactionContext | null = null;
+  let result!: T;
   try {
+    throwIfDatabaseTransactionAborted(options.signal);
+    await client.query('BEGIN');
+    transactionStarted = true;
+    context = {
+      client,
+      nestedClient: null as unknown as PoolClient,
+      rollbackOnly: false,
+      postCommitEffects: [],
+    } satisfies DatabaseTransactionContext;
+    context.nestedClient = createNestedTransactionClient(context);
+
     await setJobLeaseFenceRequestHeaders(client);
     result = await databaseTransactionStorage.run(context, work);
     if (context.rollbackOnly) {
@@ -308,15 +330,19 @@ export async function runWithDatabaseTransactionClient<T>(
         statusCode: 500,
       });
     }
+    throwIfDatabaseTransactionAborted(options.signal);
     await client.query('COMMIT');
+    transactionCommitted = true;
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => undefined);
+    if (transactionStarted && !transactionCommitted) {
+      await client.query('ROLLBACK').catch(() => undefined);
+    }
     throw error;
   } finally {
     client.release?.();
   }
 
-  for (const { label, effect } of context.postCommitEffects) {
+  for (const { label, effect } of context?.postCommitEffects ?? []) {
     try {
       await effect();
     } catch (error) {
@@ -329,11 +355,16 @@ export async function runWithDatabaseTransactionClient<T>(
   return result;
 }
 
-export async function withDatabaseTransaction<T>(work: () => Promise<T>): Promise<T> {
-  if (databaseTransactionStorage.getStore()) return work();
+export async function withDatabaseTransaction<T>(
+  work: () => Promise<T>,
+  options: DatabaseTransactionOptions = {},
+): Promise<T> {
+  const context = databaseTransactionStorage.getStore();
+  if (context) return runWithDatabaseTransactionClient(context.client, work, options);
+  throwIfDatabaseTransactionAborted(options.signal);
   const pool = await getPool();
   const client = await pool.connect();
-  return runWithDatabaseTransactionClient(client, work);
+  return runWithDatabaseTransactionClient(client, work, options);
 }
 
 async function getPool() {

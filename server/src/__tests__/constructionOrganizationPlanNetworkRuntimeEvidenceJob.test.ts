@@ -2,11 +2,20 @@ import { readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const runtimeMocks = vi.hoisted(() => ({
-  runJobWithRetry: vi.fn(async (_context: unknown, run: () => Promise<unknown>) => {
+  runJobWithRetry: vi.fn(async (
+    _context: unknown,
+    run: (attempt: number, context: { signal: AbortSignal; deadlineAt: string }) => Promise<unknown>,
+  ) => {
     let lastError: unknown = null
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        return { attempts: attempt, value: await run() }
+        return {
+          attempts: attempt,
+          value: await run(attempt, {
+            signal: new AbortController().signal,
+            deadlineAt: '2026-07-21T00:10:00.000Z',
+          }),
+        }
       } catch (error) {
         lastError = error
       }
@@ -15,10 +24,13 @@ const runtimeMocks = vi.hoisted(() => ({
   }),
   runWithJobLease: vi.fn(async (
     _context: unknown,
-    run: (lease: { assertActive: () => void }) => Promise<unknown>,
+    run: (lease: { assertActive: () => void; signal: AbortSignal }) => Promise<unknown>,
   ) => ({
     acquired: true as const,
-    value: await run({ assertActive: vi.fn() }),
+    value: await run({
+      assertActive: vi.fn(),
+      signal: new AbortController().signal,
+    }),
   })),
 }))
 
@@ -75,19 +87,20 @@ describe('constructionOrganizationPlanNetworkRuntimeEvidenceJob', () => {
     const executeSource = jobSource.slice(jobSource.indexOf("private async execute(triggeredBy"))
 
     expect(jobSource).toContain("import { runJobWithRetry, runWithJobLease } from '../services/jobRuntime.js'")
-    expect(executeSource).toContain('const leaseRun = await runWithJobLease(')
-    expect(executeSource).toContain('async (lease) => runJobWithRetry(')
+    expect(executeSource).toContain('const execution = await runJobWithRetry(')
+    expect(executeSource).toContain('async (_attempt, attemptContext) => runWithJobLease(')
     expect(executeSource).toContain("jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob'")
     expect(executeSource).toContain('triggeredBy,')
     expect(executeSource).toContain('jobId,')
-    expect(executeSource.match(/lease\.assertActive\(\)/g)).toHaveLength(2)
+    expect(executeSource.match(/lease\.assertActive\(\)/g)).toHaveLength(3)
     expect(executeSource).toContain('const sweep = this.options.sweep ?? runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep')
     expect(executeSource).toContain('const withTransaction = this.options.withTransaction ?? withDatabaseTransaction')
-    expect(executeSource).toContain('const value = await withTransaction(async () => (')
+    expect(executeSource).toContain('AbortSignal.any([attemptContext.signal, lease.signal])')
+    expect(executeSource).toContain('const value = await withTransaction(async () => {')
     expect(executeSource).toContain('requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence(')
-    expect(executeSource).toContain('await sweep(this.options)')
+    expect(executeSource).toContain('await sweep({ ...this.options, signal })')
     expect(executeSource).toContain('if (!leaseRun.acquired)')
-    expect(executeSource).toContain('const { attempts, value } = leaseRun.value')
+    expect(executeSource).toContain('const { attempts } = execution')
   })
 
   it('is registered in the scheduler and manual jobs route', () => {

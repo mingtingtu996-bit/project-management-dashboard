@@ -1,5 +1,5 @@
 import { logger } from '../middleware/logger.js'
-import { withDatabaseTransaction } from '../database.js'
+import { withDatabaseTransaction, type DatabaseTransactionOptions } from '../database.js'
 import { executeSQL } from '../services/dbService.js'
 import {
   recordConstructionOrganizationPlanNetworkRuntimeEngineEvidence,
@@ -68,6 +68,7 @@ export type ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepInput = {
   candidates?: ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepCandidate[] | null
   candidateProvider?: () => Promise<ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepCandidate[]>
   executedAt?: string
+  signal?: AbortSignal
 }
 
 export type ConstructionOrganizationPlanNetworkRuntimeEvidenceJobOptions = {
@@ -76,7 +77,7 @@ export type ConstructionOrganizationPlanNetworkRuntimeEvidenceJobOptions = {
   sweep?: (
     input?: ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepInput,
   ) => Promise<ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepResult>
-  withTransaction?: <T>(work: () => Promise<T>) => Promise<T>
+  withTransaction?: <T>(work: () => Promise<T>, options?: DatabaseTransactionOptions) => Promise<T>
 }
 
 function createJobId() {
@@ -123,6 +124,13 @@ function emptyResult(total = 0): ConstructionOrganizationPlanNetworkRuntimeEvide
     skipped: 0,
     failed: 0,
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('Construction organization plan network evidence sweep aborted')
 }
 
 function isRuntimeEngineCode(value: unknown): value is ConstructionOrganizationPlanNetworkRuntimeEngineCode {
@@ -486,16 +494,19 @@ export async function collectConstructionOrganizationPlanNetworkRuntimeEvidenceC
 export async function runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(
   input: ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepInput = {},
 ) {
+  throwIfAborted(input.signal)
   const queryExec = input.queryExec ?? executeSQL
   const candidates = input.candidates ?? (
     input.candidateProvider
       ? await input.candidateProvider()
       : await collectConstructionOrganizationPlanNetworkRuntimeEvidenceCandidates(queryExec)
   )
+  throwIfAborted(input.signal)
   const result = emptyResult(candidates.length)
   const executedAt = normalizeText(input.executedAt) || new Date().toISOString()
 
   for (const candidate of candidates) {
+    throwIfAborted(input.signal)
     if (!isSweepCandidateReady(candidate)) {
       result.skipped += 1
       continue
@@ -560,6 +571,7 @@ export async function runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep
         }
       }
     } catch (error) {
+      throwIfAborted(input.signal)
       result.failed += 1
       logger.warn('constructionOrganizationPlanNetworkRuntimeEvidenceJob candidate failed', {
         publicationKey: candidate.publicationKey,
@@ -571,11 +583,13 @@ export async function runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep
     }
   }
 
+  throwIfAborted(input.signal)
   return result
 }
 
 export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
   private isRunning = false
+  private activeLeaseCallbackCount = 0
   private lastRun: Date | null = null
   private nextRun: Date | null = null
   private wallClockTimer: PersistentWallClockJobTimer
@@ -613,7 +627,7 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
 
   getStatus() {
     return {
-      isRunning: this.isRunning,
+      isRunning: this.isRunning || this.activeLeaseCallbackCount > 0,
       isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
@@ -625,7 +639,7 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
   }
 
   private async execute(triggeredBy: 'scheduler' | 'manual') {
-    if (this.isRunning) {
+    if (this.isRunning || this.activeLeaseCallbackCount > 0) {
       logger.warn('constructionOrganizationPlanNetworkRuntimeEvidenceJob is already running, skip tick', { triggeredBy })
       return emptyResult()
     }
@@ -635,29 +649,39 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
       this.lastRun = new Date()
       const sweep = this.options.sweep ?? runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep
       const withTransaction = this.options.withTransaction ?? withDatabaseTransaction
-      const leaseRun = await runWithJobLease(
+      const execution = await runJobWithRetry(
         {
           jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob',
+          triggeredBy,
           jobId,
         },
-        async (lease) => runJobWithRetry(
+        async (_attempt, attemptContext) => runWithJobLease(
           {
             jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob',
-            triggeredBy,
             jobId,
           },
-          async () => {
-            lease.assertActive()
-            const value = await withTransaction(async () => (
-              requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence(
-                await sweep(this.options),
-              )
-            ))
-            lease.assertActive()
-            return value
+          async (lease) => {
+            this.activeLeaseCallbackCount += 1
+            const signal = AbortSignal.any([attemptContext.signal, lease.signal])
+            try {
+              lease.assertActive()
+              const value = await withTransaction(async () => {
+                throwIfAborted(signal)
+                const result = await sweep({ ...this.options, signal })
+                throwIfAborted(signal)
+                lease.assertActive()
+                return requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence(result)
+              }, { signal })
+              lease.assertActive()
+              return value
+            } finally {
+              this.activeLeaseCallbackCount = Math.max(0, this.activeLeaseCallbackCount - 1)
+            }
           },
         ),
       )
+
+      const leaseRun = execution.value
 
       if (!leaseRun.acquired) {
         logger.warn('constructionOrganizationPlanNetworkRuntimeEvidenceJob skipped because distributed lease was not acquired', {
@@ -668,7 +692,8 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
         return emptyResult()
       }
 
-      const { attempts, value } = leaseRun.value
+      const { attempts } = execution
+      const { value } = leaseRun
       logger.info('constructionOrganizationPlanNetworkRuntimeEvidenceJob completed', {
         triggeredBy,
         jobId,
