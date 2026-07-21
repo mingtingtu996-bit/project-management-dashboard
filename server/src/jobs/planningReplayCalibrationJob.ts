@@ -1,8 +1,10 @@
 import { logger } from '../middleware/logger.js'
+import { withDatabaseTransaction } from '../database.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
 import { executeSQL } from '../services/dbService.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
+import { requireCompletePlanningReplayCalibration } from '../services/scheduledDurationJobResultPolicyService.js'
 import {
   evaluatePlanningReplayCalibration,
   persistPlanningReplayCalibrationReport,
@@ -29,6 +31,20 @@ export type PlanningReplayCalibrationJobResult = {
   persistenceFailedGroupCount: number
   factWritesBlocked: number
   seedWritesBlocked: number
+}
+
+export type PlanningReplayCalibrationSweepInput = {
+  projectIds?: string[] | null
+  minAcceptedSamplesPerProcess?: number
+  maxOvercompensationRate?: number
+  minMaeImprovement?: number
+  writeReports?: boolean
+  sampleProvider?: PlanningReplayCalibrationSampleProvider
+}
+
+export type PlanningReplayCalibrationJobOptions = {
+  sweep?: (params?: PlanningReplayCalibrationSweepInput) => Promise<PlanningReplayCalibrationJobResult>
+  withTransaction?: <T>(work: () => Promise<T>) => Promise<T>
 }
 
 function emptyResult(): PlanningReplayCalibrationJobResult {
@@ -273,14 +289,9 @@ async function defaultPlanningReplayCalibrationSampleProvider(projectId: string)
   return [...baselineSamples, ...monthlySamples]
 }
 
-export async function runPlanningReplayCalibrationSweep(params: {
-  projectIds?: string[] | null
-  minAcceptedSamplesPerProcess?: number
-  maxOvercompensationRate?: number
-  minMaeImprovement?: number
-  writeReports?: boolean
-  sampleProvider?: PlanningReplayCalibrationSampleProvider
-} = {}): Promise<PlanningReplayCalibrationJobResult> {
+export async function runPlanningReplayCalibrationSweep(
+  params: PlanningReplayCalibrationSweepInput = {},
+): Promise<PlanningReplayCalibrationJobResult> {
   const projectIds = await listActiveProjectIds(params.projectIds)
   const sampleProvider = params.sampleProvider ?? defaultPlanningReplayCalibrationSampleProvider
   const result = emptyResult()
@@ -333,22 +344,26 @@ export class PlanningReplayCalibrationJob {
   private isRunning = false
   private lastRun: Date | null = null
   private nextRun: Date | null = null
-  private wallClockTimer = new PersistentWallClockJobTimer({
-    jobName: 'planningReplayCalibrationJob',
-    schedule: { kind: 'daily', hour: 6, minute: 45 },
-    execute: () => this.execute('scheduler'),
-    onScheduled: ({ nextRun, delayMs }) => {
-      this.nextRun = nextRun
-      logger.info('planningReplayCalibrationJob scheduled', {
-        nextRun: nextRun.toISOString(),
-        trigger: 'daily_06_45',
-        initialDelay: delayMs,
-      })
-    },
-    onError: (error) => logger.error('planningReplayCalibrationJob scheduler failed', {
-      error: error instanceof Error ? error.message : String(error),
-    }),
-  })
+  private wallClockTimer: PersistentWallClockJobTimer
+
+  constructor(private readonly options: PlanningReplayCalibrationJobOptions = {}) {
+    this.wallClockTimer = new PersistentWallClockJobTimer({
+      jobName: 'planningReplayCalibrationJob',
+      schedule: { kind: 'daily', hour: 6, minute: 45 },
+      execute: () => this.execute('scheduler'),
+      onScheduled: ({ nextRun, delayMs }) => {
+        this.nextRun = nextRun
+        logger.info('planningReplayCalibrationJob scheduled', {
+          nextRun: nextRun.toISOString(),
+          trigger: 'daily_06_45',
+          initialDelay: delayMs,
+        })
+      },
+      onError: (error) => logger.error('planningReplayCalibrationJob scheduler failed', {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    })
+  }
 
   start() {
     if (!this.wallClockTimer.start()) {
@@ -383,19 +398,23 @@ export class PlanningReplayCalibrationJob {
     this.isRunning = true
     const jobId = createJobId()
     try {
-      const result = await runJobWithRetry(
+      const sweep = this.options.sweep ?? runPlanningReplayCalibrationSweep
+      const withTransaction = this.options.withTransaction ?? withDatabaseTransaction
+      const { attempts, value } = await runJobWithRetry(
         {
           jobName: 'planningReplayCalibrationJob',
           jobId,
           triggeredBy: trigger,
         },
-        async () => runPlanningReplayCalibrationSweep({
-          projectIds: Array.isArray(projectIds) ? projectIds : null,
-        }),
+        async () => withTransaction(async () => requireCompletePlanningReplayCalibration(
+          await sweep({
+            projectIds: Array.isArray(projectIds) ? projectIds : null,
+          }),
+        )),
       )
       this.lastRun = new Date()
-      logger.info('planningReplayCalibrationJob completed', { trigger, jobId, result })
-      return result
+      logger.info('planningReplayCalibrationJob completed', { trigger, jobId, attempts, ...value })
+      return value
     } finally {
       this.isRunning = false
     }

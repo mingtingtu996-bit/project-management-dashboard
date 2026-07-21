@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence,
   requireCompleteDailyDurationForecastRefresh,
+  requireCompletePlanningReplayCalibration,
   requireCompleteProjectDailySnapshotWrite,
   runScheduledDailyDurationForecastRefresh,
   runScheduledProjectDailySnapshotWrite,
@@ -9,6 +11,32 @@ import {
 import * as scheduledDurationJobResultPolicy from '../services/scheduledDurationJobResultPolicyService.js'
 
 describe('scheduled duration job result policy', () => {
+  it('rejects planning replay partial project or persistence failures', () => {
+    expect(() => requireCompletePlanningReplayCalibration({
+      failedReports: 1,
+      persistenceFailedGroupCount: 2,
+    })).toThrowError(expect.objectContaining({
+      code: 'PLANNING_REPLAY_CALIBRATION_PARTIAL_FAILURE',
+      reasons: [
+        'planning_replay_project_failures',
+        'planning_replay_persistence_failures',
+      ],
+      result: expect.objectContaining({
+        failedReports: 1,
+        persistenceFailedGroupCount: 2,
+      }),
+    }))
+  })
+
+  it('rejects construction organization runtime evidence partial failures', () => {
+    expect(() => requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence({
+      failed: 1,
+    })).toThrowError(expect.objectContaining({
+      code: 'CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_RUNTIME_EVIDENCE_PARTIAL_FAILURE',
+      result: expect.objectContaining({ failed: 1 }),
+    }))
+  })
+
   it('rejects a project snapshot batch when any project failed', () => {
     expect(() => requireCompleteProjectDailySnapshotWrite({
       recorded: 9,

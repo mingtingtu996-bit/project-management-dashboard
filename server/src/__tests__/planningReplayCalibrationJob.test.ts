@@ -17,6 +17,17 @@ const mocks = vi.hoisted(() => ({
     failedGroupCount: 0,
     failures: [],
   })),
+  runJobWithRetry: vi.fn(async (_context: unknown, run: () => Promise<unknown>) => {
+    let lastError: unknown = null
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        return { attempts: attempt, value: await run() }
+      } catch (error) {
+        lastError = error
+      }
+    }
+    throw lastError
+  }),
 }))
 
 vi.mock('../services/activeProjectService.js', () => ({
@@ -27,6 +38,10 @@ vi.mock('../services/dbService.js', () => ({
   executeSQL: mocks.executeSQL,
 }))
 
+vi.mock('../services/jobRuntime.js', () => ({
+  runJobWithRetry: mocks.runJobWithRetry,
+}))
+
 vi.mock('../services/planningReplayCalibrationService.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../services/planningReplayCalibrationService.js')>()
   return {
@@ -35,11 +50,25 @@ vi.mock('../services/planningReplayCalibrationService.js', async (importOriginal
   }
 })
 
-const { runPlanningReplayCalibrationSweep } = await import('../jobs/planningReplayCalibrationJob.js')
+const {
+  PlanningReplayCalibrationJob,
+  runPlanningReplayCalibrationSweep,
+} = await import('../jobs/planningReplayCalibrationJob.js')
 
 describe('planningReplayCalibrationJob', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.runJobWithRetry.mockImplementation(async (_context: unknown, run: () => Promise<unknown>) => {
+      let lastError: unknown = null
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          return { attempts: attempt, value: await run() }
+        } catch (error) {
+          lastError = error
+        }
+      }
+      throw lastError
+    })
     mocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
       if (/\bJOIN\b|\bCOALESCE\s*\(/i.test(sql)) {
         throw new Error(`complex SQL is not allowed in planning replay sample collection: ${sql}`)
@@ -238,5 +267,56 @@ describe('planningReplayCalibrationJob', () => {
 
     expect(jobSource).not.toMatch(/executeSQL<any>\(`[\s\S]*\bJOIN\b[\s\S]*`\s*,/i)
     expect(jobSource).not.toMatch(/executeSQL<any>\(`[\s\S]*\bCOALESCE\s*\(/i)
+  })
+
+  it('retries a partial sweep only after rolling back its successful project writes', async () => {
+    const committedWrites: string[] = []
+    let transactionCallCount = 0
+    const withTransaction = async <T>(work: () => Promise<T>): Promise<T> => {
+      transactionCallCount += 1
+      const savepoint = committedWrites.length
+      try {
+        return await work()
+      } catch (error) {
+        committedWrites.splice(savepoint)
+        throw error
+      }
+    }
+    const completeResult = {
+      scannedProjects: 2,
+      completedReports: 2,
+      failedReports: 0,
+      sampleCount: 4,
+      readyGroupCount: 2,
+      blockedGroupCount: 0,
+      rejectedSampleCount: 0,
+      persistedGroupCount: 2,
+      persistedReplayResultCount: 4,
+      persistenceFailedGroupCount: 0,
+      factWritesBlocked: 2,
+      seedWritesBlocked: 2,
+    }
+    const sweep = vi.fn()
+      .mockImplementationOnce(async () => {
+        committedWrites.push('project-1-report')
+        return {
+          ...completeResult,
+          completedReports: 1,
+          failedReports: 1,
+          persistedGroupCount: 1,
+          persistedReplayResultCount: 2,
+        }
+      })
+      .mockImplementationOnce(async () => {
+        committedWrites.push('project-1-report', 'project-2-report')
+        return completeResult
+      })
+    const job = new PlanningReplayCalibrationJob({ sweep, withTransaction })
+
+    await expect(job.executeNow(['project-1', 'project-2'])).resolves.toEqual(completeResult)
+
+    expect(sweep).toHaveBeenCalledTimes(2)
+    expect(transactionCallCount).toBe(2)
+    expect(committedWrites).toEqual(['project-1-report', 'project-2-report'])
   })
 })

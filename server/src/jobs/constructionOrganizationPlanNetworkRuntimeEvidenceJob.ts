@@ -1,4 +1,5 @@
 import { logger } from '../middleware/logger.js'
+import { withDatabaseTransaction } from '../database.js'
 import { executeSQL } from '../services/dbService.js'
 import {
   recordConstructionOrganizationPlanNetworkRuntimeEngineEvidence,
@@ -8,6 +9,9 @@ import {
 } from '../services/constructionOrganizationPlanNetworkRuntimeEvidenceService.js'
 import { runJobWithRetry, runWithJobLease } from '../services/jobRuntime.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
+import {
+  requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence,
+} from '../services/scheduledDurationJobResultPolicyService.js'
 
 const RUNTIME_ENGINE_CODES: ConstructionOrganizationPlanNetworkRuntimeEngineCode[] = [
   'standard_duration_reference',
@@ -69,6 +73,10 @@ export type ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepInput = {
 export type ConstructionOrganizationPlanNetworkRuntimeEvidenceJobOptions = {
   queryExec?: ConstructionOrganizationPlanNetworkRuntimeEvidenceQueryExec
   candidateProvider?: () => Promise<ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepCandidate[]>
+  sweep?: (
+    input?: ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepInput,
+  ) => Promise<ConstructionOrganizationPlanNetworkRuntimeEvidenceSweepResult>
+  withTransaction?: <T>(work: () => Promise<T>) => Promise<T>
 }
 
 function createJobId() {
@@ -625,6 +633,8 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
     const jobId = createJobId()
     try {
       this.lastRun = new Date()
+      const sweep = this.options.sweep ?? runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep
+      const withTransaction = this.options.withTransaction ?? withDatabaseTransaction
       const leaseRun = await runWithJobLease(
         {
           jobName: 'constructionOrganizationPlanNetworkRuntimeEvidenceJob',
@@ -638,7 +648,11 @@ export class ConstructionOrganizationPlanNetworkRuntimeEvidenceJob {
           },
           async () => {
             lease.assertActive()
-            const value = await runConstructionOrganizationPlanNetworkRuntimeEvidenceSweep(this.options)
+            const value = await withTransaction(async () => (
+              requireCompleteConstructionOrganizationPlanNetworkRuntimeEvidence(
+                await sweep(this.options),
+              )
+            ))
             lease.assertActive()
             return value
           },
