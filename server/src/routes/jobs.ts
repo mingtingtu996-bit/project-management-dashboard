@@ -9,6 +9,7 @@ import { constructionOrganizationPlanNetworkRuntimeEvidenceJob } from '../jobs/c
 import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
 import { defaultMasterPlanVisibilityLearningJob } from '../jobs/defaultMasterPlanVisibilityLearningJob.js'
 import { durationContextPolicyLearningJob } from '../jobs/durationContextPolicyLearningJob.js'
+import { durationLearningRuntimeEvidenceOutboxDrainJob } from '../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'
 import { durationLiveLearningProductionClaimAuditJob } from '../jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { drawingPackageExperienceIterationJob } from '../jobs/drawingPackageExperienceIterationJob.js'
 import { forecastResidualOverlayProductionJob } from '../jobs/forecastResidualOverlayProductionJob.js'
@@ -104,6 +105,23 @@ function buildStatus(isRunning: boolean, isScheduled: boolean) {
   return 'idle'
 }
 
+function buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
+  jobStatus = durationLearningRuntimeEvidenceOutboxDrainJob.getStatus(),
+): JobStatusView {
+  return {
+    name: 'durationLearningRuntimeEvidenceOutboxDrainJob',
+    displayName: 'Duration learning runtime evidence outbox drain job',
+    isRunning: jobStatus.isRunning,
+    isScheduled: jobStatus.isScheduled,
+    schedule: '*/5 * * * *',
+    lastRun: jobStatus.lastRun,
+    nextRun: jobStatus.nextRun,
+    status: buildStatus(jobStatus.isRunning, jobStatus.isScheduled),
+    description:
+      'Drains durable duration-learning runtime evidence every five minutes. HTTP manual execution is unavailable; controlled recovery uses the server CLI runbook.',
+  }
+}
+
 function buildJobStatusViews(): JobStatusView[] {
   const riskJobStatus = riskStatisticsJob.getStatus()
   const draftLockStatus = planningDraftLockTimeoutJob.getStatus()
@@ -120,6 +138,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const projectProductivityCalibrationStatus = projectProductivityCalibrationJob.getStatus()
   const forecastResidualOverlayProductionStatus = forecastResidualOverlayProductionJob.getStatus()
   const durationContextPolicyLearningStatus = durationContextPolicyLearningJob.getStatus()
+  const durationLearningRuntimeEvidenceOutboxDrainStatus = durationLearningRuntimeEvidenceOutboxDrainJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
   const templateDurationGovernanceStatus = templateDurationGovernanceJob.getStatus()
   const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
@@ -409,6 +428,9 @@ function buildJobStatusViews(): JobStatusView[] {
       description:
         'Runs the checkpointed duration-context learning sweep and governed runtime publication bridge for the current visible project scope.',
     },
+    buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
+      durationLearningRuntimeEvidenceOutboxDrainStatus,
+    ),
     {
       name: 'constructionDependencyReplayCalibrationJob',
       displayName: 'Construction dependency replay calibration job',

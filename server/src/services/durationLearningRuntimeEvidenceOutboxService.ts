@@ -79,6 +79,7 @@ type ProcessEvidenceOutboxInput = {
   ownerId: string
   now?: string
   limit?: number
+  signal?: AbortSignal
   recordDurationPrediction?: typeof recordCommittedDurationSuggestionPredictionEvidence
   recordWbsCandidate?: typeof recordWbsTemplateCandidateEventStrict
   transactionRunner?: <T>(work: () => Promise<T>) => Promise<T>
@@ -1353,6 +1354,13 @@ export type DrainDurationLearningRuntimeEvidenceOutboxResult =
     backlogAgeExceeded: boolean
   }
 
+function throwIfRuntimeEvidenceDrainAborted(signal?: AbortSignal) {
+  if (!signal?.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error('duration_learning_runtime_evidence_outbox_drain_aborted')
+}
+
 export async function drainDurationLearningRuntimeEvidenceOutbox(
   input: ProcessEvidenceOutboxInput & { maxBatches?: number; backlogAgeGateMs?: number },
 ): Promise<DrainDurationLearningRuntimeEvidenceOutboxResult> {
@@ -1374,6 +1382,7 @@ export async function drainDurationLearningRuntimeEvidenceOutbox(
   }
 
   for (let batch = 0; batch < maxBatches; batch += 1) {
+    throwIfRuntimeEvidenceDrainAborted(input.signal)
     const result = await processDurationLearningRuntimeEvidenceOutbox(input)
     aggregate.batches += 1
     aggregate.claimed += result.claimed
@@ -1383,8 +1392,10 @@ export async function drainDurationLearningRuntimeEvidenceOutbox(
     // A failed row receives backoff in processDurationLearningRuntimeEvidenceOutbox.
     // Continue the bounded drain so one transient failure cannot starve later events.
     if (result.claimed === 0) break
+    throwIfRuntimeEvidenceDrainAborted(input.signal)
   }
 
+  throwIfRuntimeEvidenceDrainAborted(input.signal)
   const backlogRows = await input.queryExec<{
     pending_count?: unknown
     ready_pending_count?: unknown
@@ -1409,6 +1420,7 @@ export async function drainDurationLearningRuntimeEvidenceOutbox(
          or (processing_status = 'processing' and lease_expires_at <= $1::timestamptz)`,
     [input.now ?? new Date().toISOString()],
   )
+  throwIfRuntimeEvidenceDrainAborted(input.signal)
   aggregate.backlogCount = Number(backlogRows[0]?.pending_count ?? 0)
   aggregate.readyBacklogCount = Number(backlogRows[0]?.ready_pending_count ?? 0)
   aggregate.failedBacklogCount = Number(backlogRows[0]?.failed_count ?? 0)
