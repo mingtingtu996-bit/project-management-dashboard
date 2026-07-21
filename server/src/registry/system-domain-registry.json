@@ -97,6 +97,13 @@
     },
     {
       "kind": "job",
+      "id": "durationLearningRuntimeEvidenceOutboxDrainJob",
+      "architectureUnit": "\u5b66\u4e60\u6cbb\u7406\u73af",
+      "runtimeScope": "governance",
+      "assignmentReason": "Runs only the durable duration-learning evidence outbox drain every five minutes under an independent distributed lease; it does not execute publication lifecycle, auto-promotion or rollback logic."
+    },
+    {
+      "kind": "job",
       "id": "durationLiveLearningProductionClaimAuditJob",
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",

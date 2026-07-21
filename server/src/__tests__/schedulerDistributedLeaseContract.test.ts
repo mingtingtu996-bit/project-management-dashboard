@@ -30,6 +30,16 @@ describe('scheduler distributed job leases', () => {
     ['WeeklyDigestJob', 'MaterialArrivalReminderJob', 'weeklyDigestJob'],
     ['MaterialArrivalReminderJob', undefined, 'materialArrivalReminderJob'],
   ] as const
+  const expectedLeaseJobNames = [
+    ...scheduledJobs.map(([, , jobName]) => jobName),
+    'warningImpactSignalGovernanceJob',
+    'durationLearningRuntimeEvidenceOutboxDrainJob',
+  ]
+
+  it('keeps nine independent distributed lease keys', () => {
+    expect(expectedLeaseJobNames).toHaveLength(9)
+    expect(new Set(expectedLeaseJobNames)).toHaveLength(9)
+  })
 
   it.each(scheduledJobs)('%s holds its own distributed lease around retry and side effects', (
     className,
@@ -68,6 +78,28 @@ describe('scheduler distributed job leases', () => {
     const retryIndex = source.indexOf('runJobWithRetry(')
 
     expect(source).toContain("jobName: 'warningImpactSignalGovernanceJob'")
+    expect(leaseIndex).toBeGreaterThanOrEqual(0)
+    expect(retryIndex).toBeGreaterThan(leaseIndex)
+    expect(source).toContain('lease.assertActive()')
+    expect(source).toContain('if (!lease.acquired)')
+    expect(source).toContain("reason: 'lease_not_acquired'")
+  })
+
+  it('duration evidence outbox drain holds a dedicated lease around its retry and bounded drain', () => {
+    const relativePath = ['src', 'jobs', 'durationLearningRuntimeEvidenceOutboxDrainJob.ts']
+    const absolutePath = path.resolve(
+      fs.existsSync(path.resolve(process.cwd(), 'src', 'scheduler.ts'))
+        ? process.cwd()
+        : path.resolve(process.cwd(), 'server'),
+      ...relativePath,
+    )
+    expect(fs.existsSync(absolutePath)).toBe(true)
+    if (!fs.existsSync(absolutePath)) return
+    const source = fs.readFileSync(absolutePath, 'utf8')
+    const leaseIndex = source.indexOf('runWithJobLease(')
+    const retryIndex = source.indexOf('runJobWithRetry(')
+
+    expect(source).toContain("jobName: DURATION_LEARNING_RUNTIME_EVIDENCE_OUTBOX_DRAIN_JOB_NAME")
     expect(leaseIndex).toBeGreaterThanOrEqual(0)
     expect(retryIndex).toBeGreaterThan(leaseIndex)
     expect(source).toContain('lease.assertActive()')

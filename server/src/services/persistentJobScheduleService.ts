@@ -77,6 +77,7 @@ export const PERSISTENT_SCHEDULED_JOB_NAMES = Object.freeze([
   'deletionRetentionCleanupJob',
   'drawingPackageExperienceIterationJob',
   'durationContextPolicyLearningJob',
+  'durationLearningRuntimeEvidenceOutboxDrainJob',
   'durationLiveLearningProductionClaimAuditJob',
   'forecastResidualOverlayProductionJob',
   'materialArrivalReminderJob',
