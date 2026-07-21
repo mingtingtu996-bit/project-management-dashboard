@@ -530,8 +530,12 @@ test('application deploy distinguishes first bootstrap from upgrades and verifie
     source('scripts/deploy-lighthouse-server.sh'),
   ])
 
-  assert.match(workflow, /initial_runtime_bootstrap:/u)
+  assert.doesNotMatch(workflow, /initial_runtime_bootstrap:/u)
   assert.match(workflow, /initial_runtime_bootstrap_confirmation:/u)
+  assert.match(
+    workflow,
+    /initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' \|\| 'false'/u,
+  )
   assert.match(workflow, /INGRESS_READY_UPSTREAM_UNAVAILABLE/u)
   assert.match(workflow, /ingress_ready_upstream_unavailable/u)
   assert.match(workflow, /public_readyz_status/u)

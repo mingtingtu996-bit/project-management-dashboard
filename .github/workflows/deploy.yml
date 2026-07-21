@@ -22,11 +22,6 @@ on:
         options:
           - domain_hsts
           - temporary_ip_tls
-      initial_runtime_bootstrap:
-        description: Allow a verified domain ingress to return 502 before the first target runtime starts
-        required: true
-        default: false
-        type: boolean
       initial_runtime_bootstrap_confirmation:
         description: Type INGRESS_READY_UPSTREAM_UNAVAILABLE when enabling the one-time bootstrap path
         required: false
@@ -37,11 +32,11 @@ on:
         required: false
         default: ''
         type: string
-      allow_skip_migration:
-        description: 'Break-glass only: allow deploy after externally verified migration and drift gates'
-        required: true
-        default: false
-        type: boolean
+      migration_skip_confirmation:
+        description: Type EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO for break-glass only
+        required: false
+        default: ''
+        type: string
       migration_skip_reason:
         description: Why CI cannot run migrations directly
         required: false
@@ -52,16 +47,6 @@ on:
         required: false
         default: ''
         type: string
-      external_pending_zero_confirmed:
-        description: Confirm external evidence shows pending migration count is zero
-        required: true
-        default: false
-        type: boolean
-      external_schema_drift_zero_confirmed:
-        description: Confirm external evidence shows blocking schema drift is zero
-        required: true
-        default: false
-        type: boolean
       migration_maintenance_window_confirmed:
         description: Confirm staging or production is in a controlled low-traffic migration window
         required: true
@@ -437,7 +422,7 @@ jobs:
     env:
       DEPLOY_TARGET: ${{ github.event.inputs.environment }}
       PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
-      INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}
+      INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
       INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
       EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     steps:
@@ -745,20 +730,22 @@ jobs:
         id: migration-config
         env:
           DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          MIGRATION_SKIP_REASON: ${{ github.event.inputs.migration_skip_reason }}
+          EXTERNAL_MIGRATION_EVIDENCE_REF: ${{ github.event.inputs.external_migration_evidence_ref }}
+          MIGRATION_SKIP_CONFIRMATION: ${{ github.event.inputs.migration_skip_confirmation }}
         run: |
-          migration_skip_reason="${{ github.event.inputs.migration_skip_reason }}"
-          external_migration_evidence_ref="${{ github.event.inputs.external_migration_evidence_ref }}"
+          migration_skip_reason="$MIGRATION_SKIP_REASON"
+          external_migration_evidence_ref="$EXTERNAL_MIGRATION_EVIDENCE_REF"
+          migration_skip_confirmation="$MIGRATION_SKIP_CONFIRMATION"
 
           if [ -n "${DATABASE_URL}" ]; then
             echo "can_run=true" >> "$GITHUB_OUTPUT"
             echo "break_glass=false" >> "$GITHUB_OUTPUT"
           else
             if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-              && [ "${{ github.event.inputs.allow_skip_migration }}" = "true" ] \
               && [ -n "$migration_skip_reason" ] \
               && [ -n "$external_migration_evidence_ref" ] \
-              && [ "${{ github.event.inputs.external_pending_zero_confirmed }}" = "true" ] \
-              && [ "${{ github.event.inputs.external_schema_drift_zero_confirmed }}" = "true" ]; then
+              && [ "$migration_skip_confirmation" = "EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO" ]; then
               echo "can_run=false" >> "$GITHUB_OUTPUT"
               echo "break_glass=true" >> "$GITHUB_OUTPUT"
               {
@@ -767,8 +754,7 @@ jobs:
                 echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret, so CI did not connect to the database directly."
                 echo "- Reason: ${migration_skip_reason}"
                 echo "- Evidence: ${external_migration_evidence_ref}"
-                echo "- External pending migration count confirmed zero: ${{ github.event.inputs.external_pending_zero_confirmed }}"
-                echo "- External blocking schema drift confirmed zero: ${{ github.event.inputs.external_schema_drift_zero_confirmed }}"
+                echo "- Exact external pending-zero and blocking-schema-drift-zero confirmation accepted."
               } >> "$GITHUB_STEP_SUMMARY"
             else
               echo "can_run=false" >> "$GITHUB_OUTPUT"
@@ -778,7 +764,7 @@ jobs:
                 echo ""
                 echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
                 echo "- Manual releases cannot skip migration gates without complete break-glass inputs."
-                echo "- Manual break-glass requires \`allow_skip_migration=true\`, \`migration_skip_reason\`, \`external_migration_evidence_ref\`, \`external_pending_zero_confirmed=true\`, and \`external_schema_drift_zero_confirmed=true\` confirming blocking schema drift is zero."
+                echo "- Manual break-glass requires \`migration_skip_confirmation=EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO\`, \`migration_skip_reason\`, and \`external_migration_evidence_ref\`."
               } >> "$GITHUB_STEP_SUMMARY"
               exit 1
             fi
@@ -997,6 +983,19 @@ jobs:
           grep -Fq 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE' "$readback_log"
           cat "$readback_log" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify committed duration learning legacy runtime retirement 322
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          WORKBUDDY_TARGET_ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          readback_log="$RUNNER_TEMP/duration-learning-legacy-runtime-retirement-322-committed-readback.log"
+          npm run verify:duration-learning-legacy-runtime-retirement | tee "$readback_log"
+          grep -Fq 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE' "$readback_log"
+          cat "$readback_log" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Check migration pending zero after apply
         if: steps.migration-config.outputs.can_run == 'true'
         env:
@@ -1192,7 +1191,7 @@ jobs:
           DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
           EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
-          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}
+          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
           EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
@@ -1257,7 +1256,7 @@ jobs:
           DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
           EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
-          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}
+          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
           EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
