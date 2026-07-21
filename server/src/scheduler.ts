@@ -1,5 +1,6 @@
 import { algorithmSeedCandidateDiscoveryJob } from './jobs/algorithmSeedCandidateDiscoveryJob.js'
 import { algorithmAssetLearnableParameterImpactMonitoringJob } from './jobs/algorithmAssetLearnableParameterImpactMonitoringJob.js'
+import { durationLearningRuntimeEvidenceOutboxDrainJob } from './jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'
 import { acceptanceTemplatePolicyAutoPublishJob } from './jobs/acceptanceTemplatePolicyAutoPublishJob.js'
 import { certificateTemplatePolicyAutoPublishJob } from './jobs/certificateTemplatePolicyAutoPublishJob.js'
 import { constructionDependencyReplayCalibrationJob } from './jobs/constructionDependencyReplayCalibrationJob.js'
@@ -1109,6 +1110,9 @@ export async function startAllJobs(options: SchedulerStartOptions = {}) {
   algorithmAssetLearnableParameterImpactMonitoringJob.start()
   console.log('Algorithm asset learnable parameter impact monitoring job started (daily 07:05)')
 
+  durationLearningRuntimeEvidenceOutboxDrainJob.start()
+  console.log('Duration learning runtime evidence outbox drain job started (every 5 minutes)')
+
   constructionOrganizationPlanNetworkRuntimeEvidenceJob.start()
   console.log('Construction organization plan network runtime evidence job started (daily 07:20)')
 
@@ -1183,6 +1187,7 @@ function stopScheduledJobTimers() {
   acceptanceTemplatePolicyAutoPublishJob.stop()
   policyTemplateReleaseImpactMonitoringJob.stop()
   algorithmAssetLearnableParameterImpactMonitoringJob.stop()
+  durationLearningRuntimeEvidenceOutboxDrainJob.stop()
   constructionOrganizationPlanNetworkRuntimeEvidenceJob.stop()
   drawingPackageExperienceIterationJob.stop()
   projectWeatherForecastJob.stop()

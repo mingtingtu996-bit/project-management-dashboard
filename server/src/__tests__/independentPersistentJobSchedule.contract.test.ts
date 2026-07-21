@@ -32,6 +32,7 @@ const jobs = [
   ['defaultMasterPlanVisibilityLearningJob.ts', "schedule: { kind: 'daily', hour: 6, minute: 35 }", true],
   ['planningReplayCalibrationJob.ts', "schedule: { kind: 'daily', hour: 6, minute: 45 }", false],
   ['durationLiveLearningProductionClaimAuditJob.ts', "schedule: { kind: 'daily', hour: 6, minute: 45 }", true],
+  ['durationLearningRuntimeEvidenceOutboxDrainJob.ts', "schedule: { kind: 'minute_interval', intervalMinutes", 'always'],
   ['algorithmAssetLearnableParameterImpactMonitoringJob.ts', "schedule: { kind: 'daily', hour: 7, minute: 5 }", true],
   ['constructionOrganizationPlanNetworkRuntimeEvidenceJob.ts', "schedule: { kind: 'daily', hour: 7, minute: 20 }", false],
   ['projectWeatherForecastJob.ts', "schedule: { kind: 'hourly_interval', intervalHours", true],
@@ -46,7 +47,11 @@ describe('independent persistent job schedule contract', () => {
       expect(source).not.toContain('setInterval')
       expect(source).not.toContain('setTimeout')
       if (requiresSchedulerRethrow) {
-        expect(source).toContain("if (triggeredBy === 'scheduler') throw error")
+        if (requiresSchedulerRethrow === 'always') {
+          expect(source).toMatch(/catch \(error\) \{[\s\S]*?throw error/)
+        } else {
+          expect(source).toContain("if (triggeredBy === 'scheduler') throw error")
+        }
       }
     })
   }
