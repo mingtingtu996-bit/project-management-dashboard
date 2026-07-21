@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 
 import type { Notification } from '../types/db.js'
+import { registerDatabasePostCommitEffect } from '../database.js'
 import { supabase } from './dbService.js'
 import {
   findNotification,
@@ -242,8 +243,13 @@ export class NotificationTouchpointService {
       action_due_at: resolveActionDueAt(governedInput),
       metadata: buildTouchpointMetadata(governedInput, emitFields.touchpoint_type, dedupeKey),
     })
-    await initializeUserStates(governedInput, notification)
-    clearAttentionSummaryCache()
+    await registerDatabasePostCommitEffect(
+      `notification-touchpoint:${notification.id}`,
+      async () => {
+        await initializeUserStates(governedInput, notification)
+        clearAttentionSummaryCache()
+      },
+    )
     return notification
   }
 
@@ -290,7 +296,6 @@ export class NotificationTouchpointService {
         updated_at: now,
       })
       await updateNotificationById(existing.id, patch, existing)
-      clearAttentionSummaryCache()
       return {
         ...existing,
         ...patch,
@@ -319,7 +324,6 @@ export class NotificationTouchpointService {
         created_at: input.created_at ?? now,
         updated_at: input.updated_at ?? now,
       })
-      clearAttentionSummaryCache()
       return notification
     } catch (error) {
       if (!dedupeKey || !isUniqueViolation(error)) throw error
@@ -345,7 +349,10 @@ export class NotificationTouchpointService {
       resolved_source: input.resolved_source ?? 'source_resolved',
       updated_at: now,
     }, existing)
-    clearAttentionSummaryCache()
+    await registerDatabasePostCommitEffect(
+      `notification-touchpoint-resolve:${existing.id}`,
+      async () => clearAttentionSummaryCache(),
+    )
     return true
   }
 }

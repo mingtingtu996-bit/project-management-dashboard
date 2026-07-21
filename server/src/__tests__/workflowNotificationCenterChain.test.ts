@@ -365,9 +365,20 @@ vi.mock('../middleware/auth.js', () => ({
   }),
   optionalAuthenticate: vi.fn((_req: any, _res: any, next: () => void) => next()),
   requireProjectMember: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
-  requireProjectEditor: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
+  requireProjectEditor: vi.fn((resolveProjectId: (req: any) => string | undefined | Promise<string | undefined>) => (
+    async (req: any, _res: any, next: () => void) => {
+      const projectId = await resolveProjectId(req)
+      if (projectId) req.authorizedProjectIds = [projectId]
+      next()
+    }
+  )),
   requireProjectOwner: vi.fn(() => (_req: any, _res: any, next: () => void) => next()),
   checkResourceAccess: vi.fn((_req: any, _res: any, next: () => void) => next()),
+  getAuthorizedRequestProjectId: vi.fn((req: any, expectedProjectId?: string | null) => {
+    const projectIds = req.authorizedProjectIds ?? []
+    if (expectedProjectId) return projectIds.includes(expectedProjectId) ? expectedProjectId : null
+    return projectIds.at(-1) ?? null
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
