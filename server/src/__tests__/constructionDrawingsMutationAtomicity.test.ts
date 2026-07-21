@@ -43,6 +43,7 @@ const harness = vi.hoisted(() => {
     attemptedEvents: [] as Array<{ label: string; inTransaction: boolean }>,
     drawingUpdated: false,
     drawingDeleted: false,
+    drawingIsCurrent: true,
     insertedDrawing: null as Record<string, unknown> | null,
     insertedVersion: null as Record<string, unknown> | null,
   }
@@ -60,9 +61,10 @@ const harness = vi.hoisted(() => {
 
   function currentDrawing() {
     if (state.drawingDeleted) return null
-    if (!state.drawingUpdated) return { ...baseDrawing }
+    if (!state.drawingUpdated) return { ...baseDrawing, is_current_version: state.drawingIsCurrent }
     return {
       ...baseDrawing,
+      is_current_version: state.drawingIsCurrent,
       drawing_name: 'Structure drawing updated',
       version: '2.0',
       version_no: '2.0',
@@ -321,6 +323,7 @@ const harness = vi.hoisted(() => {
     state.attemptedEvents.splice(0)
     state.drawingUpdated = false
     state.drawingDeleted = false
+    state.drawingIsCurrent = true
     state.insertedDrawing = null
     state.insertedVersion = null
   }
@@ -604,6 +607,7 @@ describe('construction drawing request mutation atomicity', () => {
 
   it('rolls back DELETE and retention-governed certificate cleanup when downstream cleanup fails', async () => {
     harness.state.failure = 'certificate'
+    harness.state.drawingIsCurrent = false
 
     const response = await supertest(buildApp())
       .delete(`/api/construction-drawings/${harness.drawingId}`)
@@ -621,17 +625,40 @@ describe('construction drawing request mutation atomicity', () => {
       'active-links:revalidate',
       'retention:event',
       'construction-drawings:delete',
+      'package-current-drawing:read',
+      'drawing-packages:pointer-update',
       'certificate-link:package-sync',
     ])
     expectAttemptOrder([
       'drawing-package:locked-read',
       'drawing:locked-read',
       'active-links:revalidate',
+      'construction-drawings:delete',
+      'package-current-drawing:read',
+      'drawing-packages:pointer-update',
+      'certificate-link:package-sync',
     ])
+  })
+
+  it('rejects DELETE of the package current drawing before retention or cache mutation', async () => {
+    const response = await supertest(buildApp())
+      .delete(`/api/construction-drawings/${harness.drawingId}`)
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: { code: 'MISSING_TARGET_DRAWING' },
+    })
+    expect(harness.state.drawingDeleted).toBe(false)
+    expect(harness.state.committedEvents).toEqual([])
+    expect(harness.listActiveEntityLinksForEntity).not.toHaveBeenCalled()
+    expect(harness.enforceRetentionOrBlock).not.toHaveBeenCalled()
+    expect(harness.clearDrawingBoardCache).not.toHaveBeenCalled()
   })
 
   it('returns a retention-blocked DELETE without deleting data or clearing cache', async () => {
     harness.state.retentionBlocked = true
+    harness.state.drawingIsCurrent = false
 
     const response = await supertest(buildApp())
       .delete(`/api/construction-drawings/${harness.drawingId}`)

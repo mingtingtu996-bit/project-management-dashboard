@@ -1337,6 +1337,9 @@ router.delete('/:id', requireProjectEditor(async (req) => {
     ) {
       return drawingMutationFailure(409, 'VERSION_MISMATCH', '施工图纸已被其他人更新，请刷新后重试')
     }
+    if (current.package_id && normalizeNullableBoolean(current.is_current_version) === true) {
+      return drawingMutationFailure(400, 'MISSING_TARGET_DRAWING', '当前有效版不能为空')
+    }
 
     const activeLinks = await listActiveEntityLinksForEntity({
       projectId: current.project_id,
@@ -1376,6 +1379,7 @@ router.delete('/:id', requireProjectEditor(async (req) => {
     await executeSQL('DELETE FROM construction_drawings WHERE id = ? AND project_id = ?', [id, current.project_id])
 
     if (current.package_id) {
+      await refreshPackageCurrentPointer(current.package_id, current.project_id)
       await syncPackageCurrentDrawingCertificateLink(current.project_id, current.package_id)
     } else {
       await cleanupDrawingCertificateLink(current as unknown as Record<string, unknown>)
