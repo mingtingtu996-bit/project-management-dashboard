@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { selectMigrationConnectionTarget } from '../services/migrationRunner.js'
 import {
   isSupabasePoolerHost,
-  parseStrictPostgresConnectionTarget,
+  parsePostgresConnectionAuthority,
 } from '../utils/postgresConnectionTargetIdentity.js'
 
 export const DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_MIGRATION =
@@ -285,10 +285,10 @@ function projectRefFromSupabaseUrl(value: string | undefined) {
 function projectRefsFromSelectedTarget(env: RetirementEnv) {
   const selected = selectMigrationConnectionTarget(env)
   if (selected.mode === 'connection_string') {
-    const effective = parseStrictPostgresConnectionTarget(selected.connectionString)
-    const direct = /^(?:db\.)?([a-z0-9]{20})\.supabase\.co$/.exec(effective.host)?.[1]
-    const pooler = isSupabasePoolerHost(effective.host)
-      ? /(?:^|\.)([a-z0-9]{20})$/i.exec(effective.user)?.[1]?.toLowerCase()
+    const authority = parsePostgresConnectionAuthority(selected.connectionString)
+    const direct = /^(?:db\.)?([a-z0-9]{20})\.supabase\.co$/.exec(authority.host)?.[1]
+    const pooler = isSupabasePoolerHost(authority.host)
+      ? /(?:^|\.)([a-z0-9]{20})$/i.exec(authority.user)?.[1]?.toLowerCase()
       : null
     return [direct, pooler].filter((value): value is string => Boolean(value))
   }

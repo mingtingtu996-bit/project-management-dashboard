@@ -37,7 +37,7 @@ function validateConnectionSearchParams(url: URL): void {
   }
 }
 
-export function parseStrictPostgresConnectionTarget(
+export function parsePostgresConnectionAuthority(
   connectionString: string,
 ): PostgresConnectionTargetIdentity {
   let url: URL
@@ -62,7 +62,14 @@ export function parseStrictPostgresConnectionTarget(
     throw new Error('PostgreSQL connection authority must include host, user, port, and database')
   }
 
-  const effectiveParseUrl = new URL(url.toString())
+  return authority
+}
+
+export function parseStrictPostgresConnectionTarget(
+  connectionString: string,
+): PostgresConnectionTargetIdentity {
+  const authority = parsePostgresConnectionAuthority(connectionString)
+  const effectiveParseUrl = new URL(connectionString)
   if (effectiveParseUrl.searchParams.get('sslmode') === 'require') {
     effectiveParseUrl.searchParams.set('sslmode', 'verify-full')
   }

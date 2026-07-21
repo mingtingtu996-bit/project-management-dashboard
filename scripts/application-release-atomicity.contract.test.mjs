@@ -145,7 +145,7 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
 
   assert.match(
     deployWorkflow,
-    /INITIAL_RUNTIME_BOOTSTRAP:\s*\$\{\{ github\.event\.inputs\.initial_runtime_bootstrap \|\| 'false' \}\}/u,
+    /INITIAL_RUNTIME_BOOTSTRAP:\s*\$\{\{ github\.event\.inputs\.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' \|\| 'false' \}\}/u,
   )
   const workflow = loadYaml(deployWorkflow)
   const deploymentStep = Object.values(workflow.jobs)
@@ -154,7 +154,7 @@ test('deployment workflow supplies the explicit bootstrap contract and runs the 
   assert.ok(deploymentStep?.run, 'self-hosted deployment shell is required')
   assert.equal(
     deploymentStep.env?.INITIAL_RUNTIME_BOOTSTRAP,
-    "${{ github.event.inputs.initial_runtime_bootstrap || 'false' }}",
+    "${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}",
   )
   assert.equal(
     deploymentStep.env?.EXPECTED_JWT_SECRET_SHA256,

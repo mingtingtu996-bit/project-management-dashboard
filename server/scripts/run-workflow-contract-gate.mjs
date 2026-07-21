@@ -15,6 +15,7 @@ const longRunningWorkflowContractTests = new Set([
 const workflowContractTests = [
   'src/__tests__/releaseGateManifestIntegrity.test.ts',
   'src/__tests__/deployWorkflowContract.test.ts',
+  'src/__tests__/durationLearningLegacyRuntimeRetirementVerifier.test.ts',
   'src/__tests__/commercialTriggerRpcAclRemediationService.test.ts',
   'src/__tests__/productionAdvisorAclRemediationWorkflowContract.test.ts',
   'src/__tests__/environmentSwitchScript.test.ts',

@@ -118,7 +118,7 @@ npm run migrate:pending
 2. 普通 `migrate:pending` 先完成 migration 315 及其他安全迁移，使归档和 mapping readback 达到可备份状态。
 3. `backup:duration-learning-legacy-runtime-retirement` 生成绑定目标环境、Supabase project ref、源数据 fingerprint 和 manifest fingerprint 的 JSON 与 SHA-256 文件。
 4. 备份文件成功上传为受保护的 GitHub Actions artifact 后，工作流才调用 `migrate:duration-learning-legacy-runtime-retirement`。
-5. 专用命令必须输出 `DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE`，随后通用 pending-zero、schema-drift 与 migration governance gate 仍需全部通过。
+5. 专用命令必须输出 `DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE`；无论 migration 322 是本次刚应用还是此前已应用，工作流随后都必须独立运行 `verify:duration-learning-legacy-runtime-retirement`，再进入通用 pending-zero、schema-drift 与 migration governance gate。
 
 未填写确认、备份或 checksum 缺失、目标身份不匹配、归档状态漂移、artifact 上传失败或 readback 不完整时都必须终止发布。不得改用普通 `migrate:pending -- --only=322` 绕过专用链。
 
@@ -135,7 +135,7 @@ npm run migrate:pending
 
 建议将它配置为 Supabase 提供的 pooler/session 连接串。当前直连 `db.<project>.supabase.co` 在 GitHub Hosted Runner 上通常只有 IPv6，CI 迁移不稳定。
 
-如果未配置 `SUPABASE_MIGRATION_URL`，工作流默认阻断发布。只有手动 dispatch 同时提供完整 break-glass 原因、外部证据引用、pending-zero 与 blocking-drift-zero 确认时，才允许跳过 CI 直连迁移；该路径也不能以普通 pending 证据替代 migration 322 的专用备份和授权记录。
+如果未配置 `SUPABASE_MIGRATION_URL`，工作流默认阻断发布。只有手动 dispatch 同时提供完整 break-glass 原因、外部证据引用，并精确填写 `migration_skip_confirmation=EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO` 时，才允许跳过 CI 直连迁移；该路径也不能以普通 pending 证据替代 migration 322 的专用备份和授权记录。
 
 官方年度工作日历导入也依赖可写库连接。生产环境应配置 `DB_CONNECTION_STRING` 或复用 `SUPABASE_MIGRATION_URL`，并执行：
 

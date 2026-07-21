@@ -30,7 +30,47 @@ function extractWorkflowEventPaths(workflow: string, eventName: 'push' | 'pull_r
   return eventPathLines.map((line) => line.replace(/^      - ['"]?/, '').replace(/['"]?$/, ''))
 }
 
+function extractWorkflowDispatchInputs(workflow: string) {
+  const lines = workflow.split(/\r?\n/)
+  const dispatchStart = lines.findIndex((line) => line === '  workflow_dispatch:')
+  const inputsStart = lines.findIndex((line, index) => (
+    index > dispatchStart && line === '    inputs:'
+  ))
+  expect(dispatchStart).toBeGreaterThanOrEqual(0)
+  expect(inputsStart).toBeGreaterThan(dispatchStart)
+
+  const names: string[] = []
+  for (const line of lines.slice(inputsStart + 1)) {
+    if (/^  [a-z_]+:/u.test(line)) break
+    const match = /^      ([a-z_][a-z0-9_]*):\s*$/u.exec(line)
+    if (match) names.push(match[1])
+  }
+  return names
+}
+
 describe('deploy workflow contract', () => {
+  it('keeps manual dispatch within the GitHub ten-input limit with exact confirmations', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+
+    expect(extractWorkflowDispatchInputs(workflow)).toEqual([
+      'environment',
+      'public_ingress_mode',
+      'initial_runtime_bootstrap_confirmation',
+      'production_confirmation',
+      'migration_skip_confirmation',
+      'migration_skip_reason',
+      'external_migration_evidence_ref',
+      'migration_maintenance_window_confirmed',
+      'duration_learning_legacy_runtime_retirement_confirmation',
+      'production_migration_governance_evidence',
+    ])
+    expect(workflow).toContain('EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO')
+    expect(workflow).not.toContain('initial_runtime_bootstrap:')
+    expect(workflow).not.toContain('allow_skip_migration:')
+    expect(workflow).not.toContain('external_pending_zero_confirmed:')
+    expect(workflow).not.toContain('external_schema_drift_zero_confirmed:')
+  })
+
   it('builds a fail-closed v1.4.23.1 readiness artifact from browser suite results', () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'v14231-gate-'))
     const artifactsRoot = join(tempDir, 'browser-artifacts')
@@ -236,6 +276,14 @@ describe('deploy workflow contract', () => {
 
   it('runs migration 322 only after explicit pre-write authorization and an uploaded exact backup', () => {
     const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const workflowGuard = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'workflow-guard.yml'), 'utf8')
+    const workflowContractGate = readFileSync(
+      resolve(workspaceRoot, 'server', 'scripts', 'run-workflow-contract-gate.mjs'),
+      'utf8',
+    )
+    const serverPackageJson = JSON.parse(
+      readFileSync(resolve(workspaceRoot, 'server', 'package.json'), 'utf8'),
+    ) as { scripts?: Record<string, string> }
     const migrationJob = workflow.slice(
       workflow.indexOf('  database-migration:'),
       workflow.indexOf('  workspace-isolation-live:'),
@@ -249,7 +297,12 @@ describe('deploy workflow contract', () => {
     const backupStep = migrationJob.indexOf('Backup duration learning legacy runtime retirement data')
     const uploadStep = migrationJob.indexOf('Upload duration learning legacy runtime retirement backup')
     const dedicatedApplyStep = migrationJob.indexOf('Apply and verify duration learning legacy runtime retirement 322')
+    const committedReadbackStep = migrationJob.indexOf(
+      'Verify committed duration learning legacy runtime retirement 322',
+    )
     const pendingZeroStep = migrationJob.indexOf('Check migration pending zero after apply')
+    const schemaDriftStep = migrationJob.indexOf('Check schema drift')
+    const governanceEvidenceStep = migrationJob.indexOf('Generate current migration governance evidence')
 
     expect(workflow).toContain(`${confirmationInput}:`)
     expect(workflow).toContain(confirmationPhrase)
@@ -279,7 +332,10 @@ describe('deploy workflow contract', () => {
     expect(backupStep).toBeGreaterThan(ordinaryApplyStep)
     expect(uploadStep).toBeGreaterThan(backupStep)
     expect(dedicatedApplyStep).toBeGreaterThan(uploadStep)
-    expect(pendingZeroStep).toBeGreaterThan(dedicatedApplyStep)
+    expect(committedReadbackStep).toBeGreaterThan(dedicatedApplyStep)
+    expect(pendingZeroStep).toBeGreaterThan(committedReadbackStep)
+    expect(schemaDriftStep).toBeGreaterThan(pendingZeroStep)
+    expect(governanceEvidenceStep).toBeGreaterThan(schemaDriftStep)
 
     const backupStage = migrationJob.slice(backupStep, dedicatedApplyStep)
     expect(backupStage).toContain('npm run backup:duration-learning-legacy-runtime-retirement')
@@ -288,12 +344,36 @@ describe('deploy workflow contract', () => {
     expect(backupStage).toContain('if-no-files-found: error')
     expect(backupStage).toContain("steps.duration-learning-retirement-322.outputs.pending == 'true'")
 
-    const dedicatedApplyStage = migrationJob.slice(dedicatedApplyStep, pendingZeroStep)
+    const dedicatedApplyStage = migrationJob.slice(dedicatedApplyStep, committedReadbackStep)
     expect(dedicatedApplyStage).toContain('npm run migrate:duration-learning-legacy-runtime-retirement')
     expect(dedicatedApplyStage).toContain(
       'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE',
     )
     expect(dedicatedApplyStage).toContain("steps.duration-learning-retirement-322.outputs.pending == 'true'")
+
+    const committedReadbackStage = migrationJob.slice(committedReadbackStep, pendingZeroStep)
+    expect(committedReadbackStage).toContain(
+      'npm run verify:duration-learning-legacy-runtime-retirement',
+    )
+    expect(committedReadbackStage).toContain(
+      'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE',
+    )
+    expect(committedReadbackStage).toContain("steps.migration-config.outputs.can_run == 'true'")
+    expect(committedReadbackStage).not.toContain(
+      "steps.duration-learning-retirement-322.outputs.pending == 'true'",
+    )
+    expect(serverPackageJson.scripts?.['verify:duration-learning-legacy-runtime-retirement'])
+      .toContain('verify-duration-learning-legacy-runtime-retirement.ts')
+    for (const guardedPath of [
+      'server/src/scripts/verify-duration-learning-legacy-runtime-retirement.ts',
+      'server/src/scripts/durationLearningLegacyRuntimeRetirementSupport.ts',
+      'server/src/__tests__/durationLearningLegacyRuntimeRetirementVerifier.test.ts',
+    ]) {
+      expect(workflowGuard.split(guardedPath)).toHaveLength(3)
+    }
+    expect(workflowContractGate).toContain(
+      'src/__tests__/durationLearningLegacyRuntimeRetirementVerifier.test.ts',
+    )
   })
 
   it('blocks target database mutation until deployment and runtime secrets pass preflight', () => {
@@ -359,6 +439,26 @@ describe('deploy workflow contract', () => {
     expect(identityCheckIndex).toBeGreaterThan(preflightStart)
     expect(identityCheckIndex).toBeLessThan(migrationStart)
     expect(applyIndex).toBeGreaterThan(migrationStart)
+  })
+
+  it('passes break-glass migration inputs through environment variables, not shell interpolation', () => {
+    const workflow = readFileSync(resolve(workspaceRoot, '.github', 'workflows', 'deploy.yml'), 'utf8')
+    const migrationStart = workflow.indexOf('  database-migration:')
+    const isolationStart = workflow.indexOf('  workspace-isolation-live:', migrationStart)
+    const migrationJob = workflow.slice(migrationStart, isolationStart)
+    const configStart = migrationJob.indexOf('      - name: Check migration connection secret')
+    const configEnd = migrationJob.indexOf('\n      - name:', configStart + 10)
+    const configStep = migrationJob.slice(configStart, configEnd)
+
+    expect(configStep).toContain('MIGRATION_SKIP_REASON: ${{ github.event.inputs.migration_skip_reason }}')
+    expect(configStep).toContain('EXTERNAL_MIGRATION_EVIDENCE_REF: ${{ github.event.inputs.external_migration_evidence_ref }}')
+    expect(configStep).toContain('MIGRATION_SKIP_CONFIRMATION: ${{ github.event.inputs.migration_skip_confirmation }}')
+    expect(configStep).toContain('migration_skip_reason="$MIGRATION_SKIP_REASON"')
+    expect(configStep).toContain('external_migration_evidence_ref="$EXTERNAL_MIGRATION_EVIDENCE_REF"')
+    expect(configStep).toContain('migration_skip_confirmation="$MIGRATION_SKIP_CONFIRMATION"')
+    expect(configStep).not.toContain('migration_skip_reason="${{ github.event.inputs.')
+    expect(configStep).not.toContain('external_migration_evidence_ref="${{ github.event.inputs.')
+    expect(configStep).not.toContain('migration_skip_confirmation="${{ github.event.inputs.')
   })
 
   it('fails before applying migrations when current governance inputs are missing', () => {
@@ -469,13 +569,15 @@ describe('deploy workflow contract', () => {
     expect(workflow).toMatch(/Install server Playwright Chromium[\s\S]+npx playwright install --with-deps chromium[\s\S]+Server tests/)
     expect(workflow).toContain('Check migration connection secret')
     expect(workflow).toContain('SUPABASE_MIGRATION_URL')
-    expect(workflow).toContain('allow_skip_migration')
+    expect(workflow).toContain('migration_skip_confirmation')
+    expect(workflow).toContain('EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO')
     expect(workflow).toContain('migration_skip_reason')
     expect(workflow).toContain('external_migration_evidence_ref')
     expect(workflow).toContain('production_migration_governance_evidence')
     expect(workflow).toContain("default: ''")
-    expect(workflow).toContain('external_pending_zero_confirmed')
-    expect(workflow).toContain('external_schema_drift_zero_confirmed')
+    expect(workflow).not.toContain('allow_skip_migration')
+    expect(workflow).not.toContain('external_pending_zero_confirmed')
+    expect(workflow).not.toContain('external_schema_drift_zero_confirmed')
     expect(workflow).toContain('Database migration blocked')
     expect(workflow).toContain('Break-glass migration skip approved')
     expect(workflow).toContain('Live workspace isolation gate blocked')
@@ -1219,9 +1321,9 @@ describe('deploy workflow contract', () => {
     expect(driftScript).toContain('coverageBacklog: []')
     expect(driftScript).toContain('triggers, functions, views, enums, declared extensions, and explicit/default grants or revocations')
     expect(driftScript).not.toContain('Backlog objects are not included in drift=0 claims')
-    expect(workflow).toContain('Confirm external evidence shows blocking schema drift is zero')
-    expect(workflow).toContain('External blocking schema drift confirmed zero')
-    expect(workflow).toContain('confirming blocking schema drift is zero')
+    expect(workflow).toContain('EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO')
+    expect(workflow).toContain('Exact external pending-zero and blocking-schema-drift-zero confirmation accepted.')
+    expect(workflow).toContain('migration_skip_confirmation=EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO')
     expect(workflow).not.toContain('Confirm external evidence shows schema drift is zero')
     expect(workflow).not.toContain('External schema drift confirmed zero')
   })
