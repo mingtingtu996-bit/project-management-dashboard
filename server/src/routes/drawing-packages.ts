@@ -2,7 +2,12 @@
 import { v4 as uuidv4 } from 'uuid'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
+import {
+  authenticate,
+  getAuthorizedRequestProjectId,
+  requireProjectEditor,
+  requireProjectMember,
+} from '../middleware/auth.js'
 import { withDatabaseTransaction } from '../database.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import {
@@ -1331,89 +1336,90 @@ export function registerDrawingPackageRoutes(router: Router) {
     const drawingId = normalizeText(req.body.drawingId ?? req.body.drawing_id)
     const versionId = normalizeText(req.body.versionId ?? req.body.version_id)
 
-    const packageRow = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
-    if (!packageRow) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'PACKAGE_NOT_FOUND', message: '图纸包不存在' },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    const [drawingsByPackageId, drawingsByPackageCode, versions] = await Promise.all([
-      executeSQL<DrawingRecordSource>(
-        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY created_at ASC`,
-        [normalizeText(packageRow.project_id), packageRow.id || packageId],
-      ),
-      normalizeText(packageRow.package_code)
-        ? executeSQL<DrawingRecordSource>(
-          `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_code = ? ORDER BY created_at ASC`,
-          [normalizeText(packageRow.project_id), normalizeText(packageRow.package_code)],
-        )
-        : Promise.resolve([] as DrawingRecordSource[]),
-      executeSQL<DrawingVersionRecordSource>(
-        `${DRAWING_VERSION_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY is_current_version DESC, created_at DESC`,
-        [normalizeText(packageRow.project_id), packageRow.id || packageId],
-      ),
-    ])
-    const drawings = dedupeRowsById([...drawingsByPackageId, ...drawingsByPackageCode])
-
-    let target = resolveDrawingPackageCurrentVersionTarget({
-      packageId: packageRow.id || packageId,
-      versionId,
-      drawingId,
-      versions,
-      drawings,
-    })
-
-    if (target.error?.code === 'DRAWING_NOT_IN_PACKAGE' && drawingId) {
-      const directDrawing = drawings.find((drawing) => normalizeText(drawing.id) === drawingId)
-      if (directDrawing) {
-        const directVersion = sortVersionsDesc(
-          versions.filter((version) => normalizeText(version.drawing_id) === drawingId),
-        )[0] ?? null
-        target = {
-          targetVersion: directVersion,
-          targetDrawingId: normalizeText(directDrawing.id),
-          targetDrawing: directDrawing,
-          needsSnapshot: !directVersion,
-          error: null,
+    const mutation = await withDatabaseTransaction(async () => {
+      const packageRow = await executeSQLOne<DrawingPackageSource>(
+        `${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1 FOR UPDATE`,
+        [packageId],
+      )
+      const projectId = normalizeText(packageRow?.project_id)
+      if (!packageRow || !projectId || !getAuthorizedRequestProjectId(req, projectId)) {
+        return {
+          ok: false as const,
+          status: 404,
+          code: 'PACKAGE_NOT_FOUND',
+          message: '图纸包不存在',
         }
       }
-    }
 
-    if (target.error) {
-      return res.status(target.error.status).json({
-        success: false,
-        error: { code: target.error.code, message: target.error.message },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    if (
-      !target.targetDrawingId
-      || (!target.targetVersion && !(target.needsSnapshot && target.targetDrawing))
-    ) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'MISSING_TARGET_DRAWING', message: '当前有效版不能为空' },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    const mutation = await withDatabaseTransaction(async () => {
-      const lockedPackage = await executeSQLOne<{ id?: string | null }>(
-        'SELECT id FROM drawing_packages WHERE id = ? AND project_id = ? LIMIT 1 FOR UPDATE',
-        [packageRow.id || packageId, normalizeText(packageRow.project_id)],
+      const lockedPackageId = normalizeText(packageRow.id) || packageId
+      const packageCode = normalizeText(packageRow.package_code)
+      const drawingsByPackageId = await executeSQL<DrawingRecordSource>(
+        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY created_at ASC FOR UPDATE`,
+        [projectId, lockedPackageId],
       )
-      if (!lockedPackage) throw new Error('Drawing package disappeared before current-version switch')
+      const drawingsByPackageCode = packageCode
+        ? await executeSQL<DrawingRecordSource>(
+          `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_code = ? ORDER BY created_at ASC FOR UPDATE`,
+          [projectId, packageCode],
+        )
+        : []
+      const versions = await executeSQL<DrawingVersionRecordSource>(
+        `${DRAWING_VERSION_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY is_current_version DESC, created_at DESC FOR UPDATE`,
+        [projectId, lockedPackageId],
+      )
+      const drawings = dedupeRowsById([...drawingsByPackageId, ...drawingsByPackageCode])
+
+      let target = resolveDrawingPackageCurrentVersionTarget({
+        packageId: lockedPackageId,
+        versionId,
+        drawingId,
+        versions,
+        drawings,
+      })
+
+      if (target.error?.code === 'DRAWING_NOT_IN_PACKAGE' && drawingId) {
+        const directDrawing = drawings.find((drawing) => normalizeText(drawing.id) === drawingId)
+        if (directDrawing) {
+          const directVersion = sortVersionsDesc(
+            versions.filter((version) => normalizeText(version.drawing_id) === drawingId),
+          )[0] ?? null
+          target = {
+            targetVersion: directVersion,
+            targetDrawingId: normalizeText(directDrawing.id),
+            targetDrawing: directDrawing,
+            needsSnapshot: !directVersion,
+            error: null,
+          }
+        }
+      }
+
+      if (target.error) {
+        return {
+          ok: false as const,
+          status: target.error.status,
+          code: target.error.code,
+          message: target.error.message,
+        }
+      }
+
+      if (
+        !target.targetDrawingId
+        || (!target.targetVersion && !(target.needsSnapshot && target.targetDrawing))
+      ) {
+        return {
+          ok: false as const,
+          status: 400,
+          code: 'MISSING_TARGET_DRAWING',
+          message: '当前有效版不能为空',
+        }
+      }
 
       let targetVersion = target.targetVersion
       const targetDrawingId = target.targetDrawingId as string
       if (!targetVersion && target.needsSnapshot && target.targetDrawing) {
         targetVersion = await ensureDrawingVersionSnapshot({
-          projectId: normalizeText(packageRow.project_id) || normalizeText(target.targetDrawing.project_id) || '',
-          packageId: packageRow.id || packageId,
+          projectId,
+          packageId: lockedPackageId,
           drawingId: targetDrawingId,
           versionNo: normalizeText(target.targetDrawing.version_no ?? target.targetDrawing.version, '1.0'),
           parentDrawingId: normalizeText(target.targetDrawing.parent_drawing_id),
@@ -1427,45 +1433,74 @@ export function registerDrawingPackageRoutes(router: Router) {
       }
       if (!targetVersion) throw new Error('Drawing version snapshot was not persisted')
 
-      for (const drawing of drawings) {
+      await executeSQL(
+        `UPDATE construction_drawings
+            SET is_current_version = CASE WHEN id = ? THEN ? ELSE ? END
+          WHERE project_id = ? AND package_id = ?`,
+        [targetDrawingId, true, false, projectId, lockedPackageId],
+      )
+      if (packageCode) {
         await executeSQL(
-          'UPDATE construction_drawings SET is_current_version = ? WHERE id = ? AND project_id = ?',
-          [drawing.id === targetDrawingId ? 1 : 0, drawing.id, normalizeText(packageRow.project_id)],
+          `UPDATE construction_drawings
+              SET is_current_version = CASE WHEN id = ? THEN ? ELSE ? END
+            WHERE project_id = ? AND package_code = ? AND package_id IS DISTINCT FROM ?`,
+          [targetDrawingId, true, false, projectId, packageCode, lockedPackageId],
         )
       }
-      await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE package_id = ? AND project_id = ?', [0, packageRow.id || packageId, normalizeText(packageRow.project_id)])
-      await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = ? WHERE id = ? AND project_id = ?', [1, null, targetVersion.id, normalizeText(packageRow.project_id)])
+      await executeSQL(
+        `UPDATE drawing_versions
+            SET is_current_version = CASE WHEN id = ? THEN ? ELSE ? END,
+                superseded_at = CASE WHEN id = ? THEN ? ELSE CURRENT_TIMESTAMP END
+          WHERE package_id = ? AND project_id = ?`,
+        [targetVersion.id, true, false, targetVersion.id, null, lockedPackageId, projectId],
+      )
       await executeSQL(
         'UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?',
-        [targetDrawingId, packageRow.id || packageId, normalizeText(packageRow.project_id)],
+        [targetDrawingId, lockedPackageId, projectId],
       )
       await syncPackageItemCurrentDrawing({
-        packageId: packageRow.id || packageId,
+        packageId: lockedPackageId,
         drawingId: targetDrawingId,
         drawingCode: normalizeText(target.targetDrawing?.drawing_code),
         versionNo: normalizeText(targetVersion.version_no),
       })
       await syncPackageCurrentDrawingCertificateLink(
-        normalizeText(packageRow.project_id),
-        normalizeText(packageRow.id || packageId),
+        projectId,
+        lockedPackageId,
       )
-      return { targetDrawingId, targetVersion }
+      return {
+        ok: true as const,
+        packageRow,
+        projectId,
+        packageId: lockedPackageId,
+        targetDrawing: target.targetDrawing,
+        targetDrawingId,
+        targetVersion,
+      }
     })
 
+    if (!mutation.ok) {
+      return res.status(mutation.status).json({
+        success: false,
+        error: { code: mutation.code, message: mutation.message },
+        timestamp: new Date().toISOString(),
+      })
+    }
+
     await recordDrawingVersionSampleHealthEvidence({
-      projectId: normalizeText(packageRow.project_id),
+      projectId: mutation.projectId,
       drawingId: mutation.targetDrawingId,
       versionId: normalizeText(mutation.targetVersion.id),
-      drawingCode: normalizeText(target.targetDrawing?.drawing_code),
+      drawingCode: normalizeText(mutation.targetDrawing?.drawing_code),
       versionNo: normalizeText(mutation.targetVersion.version_no),
       confirmedAt: normalizeText(mutation.targetVersion.updated_at ?? mutation.targetVersion.created_at),
     })
 
     const updatedPackage = await executeSQLOne<DrawingPackageSource>(
       `${DRAWING_PACKAGE_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
-      [packageRow.id || packageId, normalizeText(packageRow.project_id)],
+      [mutation.packageId, mutation.projectId],
     )
-    clearDrawingBoardCache(packageRow.project_id)
+    clearDrawingBoardCache(mutation.projectId)
     res.json({
       success: true,
       data: updatedPackage,

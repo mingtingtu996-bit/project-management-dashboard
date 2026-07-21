@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import express from 'express'
 import supertest from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -112,6 +113,24 @@ const db = vi.hoisted(() => {
   const certificateWorkItems: CertificateWorkItemRow[] = []
   const certificateDependencies: CertificateDependencyRow[] = []
   const preMilestones: PreMilestoneRow[] = []
+  type TestTransaction = { id: number; packageLocks: Set<string> }
+  type TransactionStorage = {
+    getStore: () => TestTransaction | undefined
+    run: <T>(store: TestTransaction, work: () => T) => T
+  }
+  let transactionStorage: TransactionStorage | null = null
+  let serializePackageLocks = false
+  let nextTransactionId = 1
+  const packageLockOwners = new Map<string, TestTransaction>()
+  const packageLockWaiters = new Map<string, Array<() => void>>()
+  let pauseKind: 'package-drawing-read' | 'drawing-lock' | null = null
+  let pauseReachedPromise = Promise.resolve()
+  let resolvePauseReached: (() => void) | null = null
+  let pauseReleasePromise = Promise.resolve()
+  let resolvePauseRelease: (() => void) | null = null
+  let contentionPromise = Promise.resolve()
+  let resolveContention: (() => void) | null = null
+  const lockEvents: string[] = []
   const persistNotification = vi.fn(async (payload: Record<string, unknown>) => payload)
   const getMembers = vi.fn(async () => ([
     { id: 'member-1', project_id: 'project-1', user_id: 'owner-1', role: 'owner', joined_at: '2026-04-15T00:00:00.000Z' },
@@ -119,6 +138,100 @@ const db = vi.hoisted(() => {
 
   const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase()
   const isCurrent = (value: unknown) => value === true || value === 1 || value === '1' || value === 'true'
+
+  function configureTransactionStorage(storage: TransactionStorage) {
+    transactionStorage = storage
+  }
+
+  function prepareConcurrentPackageMutation(
+    kind: 'package-drawing-read' | 'drawing-lock',
+  ) {
+    serializePackageLocks = true
+    pauseKind = kind
+    pauseReachedPromise = new Promise<void>((resolve) => {
+      resolvePauseReached = resolve
+    })
+    pauseReleasePromise = new Promise<void>((resolve) => {
+      resolvePauseRelease = resolve
+    })
+    contentionPromise = new Promise<void>((resolve) => {
+      resolveContention = resolve
+    })
+  }
+
+  async function waitForPausedQuery() {
+    await pauseReachedPromise
+  }
+
+  function releasePausedQuery() {
+    resolvePauseRelease?.()
+  }
+
+  async function waitForPackageContention() {
+    await contentionPromise
+  }
+
+  async function acquirePackageLock(packageId: string) {
+    if (!serializePackageLocks) return
+    const transaction = transactionStorage?.getStore()
+    if (!transaction) {
+      throw new Error(`Package row lock requested outside transaction: ${packageId}`)
+    }
+
+    while (true) {
+      const owner = packageLockOwners.get(packageId)
+      if (!owner || owner === transaction) {
+        packageLockOwners.set(packageId, transaction)
+        transaction.packageLocks.add(packageId)
+        lockEvents.push(`acquired:${packageId}:tx-${transaction.id}`)
+        return
+      }
+
+      lockEvents.push(`contention:${packageId}:tx-${transaction.id}:owner-${owner.id}`)
+      resolveContention?.()
+      await new Promise<void>((resolve) => {
+        const waiters = packageLockWaiters.get(packageId) ?? []
+        waiters.push(resolve)
+        packageLockWaiters.set(packageId, waiters)
+      })
+    }
+  }
+
+  function releasePackageLocks(transaction: TestTransaction) {
+    for (const packageId of transaction.packageLocks) {
+      if (packageLockOwners.get(packageId) !== transaction) continue
+      lockEvents.push(`released:${packageId}:tx-${transaction.id}`)
+      packageLockOwners.delete(packageId)
+      const waiters = packageLockWaiters.get(packageId) ?? []
+      packageLockWaiters.delete(packageId)
+      for (const wake of waiters) wake()
+    }
+  }
+
+  async function applyPackageLock(sql: string, params: unknown[]) {
+    if (
+      serializePackageLocks
+      && sql.includes('from drawing_packages')
+      && sql.includes('for update')
+    ) {
+      await acquirePackageLock(String(params[0] ?? ''))
+    }
+  }
+
+  async function pauseMatchingQuery(sql: string) {
+    const matches = pauseKind === 'package-drawing-read'
+      ? sql.includes('from construction_drawings')
+        && sql.includes('project_id = ? and package_id = ?')
+        && sql.includes('order by created_at asc')
+      : pauseKind === 'drawing-lock'
+        ? sql.includes('from construction_drawings where id = ? limit 1 for update')
+        : false
+    if (!matches) return
+
+    pauseKind = null
+    resolvePauseReached?.()
+    await pauseReleasePromise
+  }
 
   const clonePackage = (row: PackageRow | undefined) => (row ? { ...row } : null)
   const cloneDrawing = (row: DrawingRow | undefined) => (row ? { ...row } : null)
@@ -292,6 +405,8 @@ const db = vi.hoisted(() => {
 
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
+    await applyPackageLock(normalized, params)
+    await pauseMatchingQuery(normalized)
 
     if (normalized.includes('from construction_drawings where id = ? and project_id = ? limit 1')) {
       const id = String(params[0] ?? '')
@@ -463,6 +578,8 @@ const db = vi.hoisted(() => {
 
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
+    await applyPackageLock(normalized, params)
+    await pauseMatchingQuery(normalized)
 
     if (normalized.includes('from construction_drawings where project_id = ? and package_id = ? order by created_at asc')) {
       const projectId = String(params[0] ?? '')
@@ -585,6 +702,39 @@ const db = vi.hoisted(() => {
       return versionsForPackage(params[0])
     }
 
+    if (
+      normalized === 'update construction_drawings set is_current_version = case when id = ? then ? else ? end where project_id = ? and package_id = ?'
+    ) {
+      const targetDrawingId = String(params[0] ?? '')
+      const projectId = String(params[3] ?? '')
+      const packageId = String(params[4] ?? '')
+      for (const row of drawings) {
+        if (row.project_id === projectId && row.package_id === packageId) {
+          row.is_current_version = row.id === targetDrawingId
+        }
+      }
+      return []
+    }
+
+    if (
+      normalized === 'update construction_drawings set is_current_version = case when id = ? then ? else ? end where project_id = ? and package_code = ? and package_id is distinct from ?'
+    ) {
+      const targetDrawingId = String(params[0] ?? '')
+      const projectId = String(params[3] ?? '')
+      const packageCode = String(params[4] ?? '')
+      const packageId = String(params[5] ?? '')
+      for (const row of drawings) {
+        if (
+          row.project_id === projectId
+          && row.package_code === packageCode
+          && row.package_id !== packageId
+        ) {
+          row.is_current_version = row.id === targetDrawingId
+        }
+      }
+      return []
+    }
+
     if (normalized === 'update construction_drawings set is_current_version = ? where package_id = ? and id <> ?') {
       const nextCurrent = isCurrent(params[0])
       const packageId = String(params[1] ?? '')
@@ -647,6 +797,21 @@ const db = vi.hoisted(() => {
       for (const row of versions) {
         if (row.drawing_id === drawingId && row.package_id === packageId && row.id !== excludedId) {
           row.is_current_version = nextCurrent
+        }
+      }
+      return []
+    }
+
+    if (
+      normalized === 'update drawing_versions set is_current_version = case when id = ? then ? else ? end, superseded_at = case when id = ? then ? else current_timestamp end where package_id = ? and project_id = ?'
+    ) {
+      const targetVersionId = String(params[0] ?? '')
+      const packageId = String(params[5] ?? '')
+      const projectId = String(params[6] ?? '')
+      for (const row of versions) {
+        if (row.package_id === packageId && row.project_id === projectId) {
+          row.is_current_version = row.id === targetVersionId
+          row.superseded_at = row.id === targetVersionId ? null : '2026-04-16 00:00:00'
         }
       }
       return []
@@ -836,6 +1001,14 @@ const db = vi.hoisted(() => {
       if (pkg) {
         pkg.current_version_drawing_id = currentVersionDrawingId
       }
+      return []
+    }
+
+    if (normalized === 'delete from construction_drawings where id = ? and project_id = ?') {
+      const drawingId = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      const index = drawings.findIndex((row) => row.id === drawingId && row.project_id === projectId)
+      if (index >= 0) drawings.splice(index, 1)
       return []
     }
 
@@ -1093,9 +1266,38 @@ const db = vi.hoisted(() => {
     certificateWorkItems.splice(0, certificateWorkItems.length, ...(seed.certificateWorkItems ?? []).map((row) => ({ ...row })))
     certificateDependencies.splice(0, certificateDependencies.length, ...(seed.certificateDependencies ?? []).map((row) => ({ ...row })))
     preMilestones.splice(0, preMilestones.length, ...(seed.preMilestones ?? []).map((row) => ({ ...row })))
+    serializePackageLocks = false
+    packageLockOwners.clear()
+    packageLockWaiters.clear()
+    pauseKind = null
+    resolvePauseReached = null
+    resolvePauseRelease = null
+    resolveContention = null
+    lockEvents.splice(0)
   }
 
-  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => work())
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+    if (!serializePackageLocks) return work()
+    if (!transactionStorage) throw new Error('Transaction storage was not configured')
+    if (transactionStorage.getStore()) {
+      lockEvents.push(`nested:tx-${transactionStorage.getStore()?.id}`)
+      return work()
+    }
+
+    const transaction: TestTransaction = {
+      id: nextTransactionId,
+      packageLocks: new Set(),
+    }
+    nextTransactionId += 1
+    lockEvents.push(`started:tx-${transaction.id}`)
+    return transactionStorage.run(transaction, async () => {
+      try {
+        return await work()
+      } finally {
+        releasePackageLocks(transaction)
+      }
+    })
+  })
 
   return {
     packages,
@@ -1109,9 +1311,17 @@ const db = vi.hoisted(() => {
     executeSQL,
     executeSQLOne,
     withDatabaseTransaction,
+    configureTransactionStorage,
+    prepareConcurrentPackageMutation,
+    waitForPausedQuery,
+    releasePausedQuery,
+    waitForPackageContention,
+    lockEvents,
     reset,
   }
 })
+
+db.configureTransactionStorage(new AsyncLocalStorage())
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
@@ -1161,6 +1371,16 @@ vi.mock('../auth/access.js', () => ({
 
 vi.mock('../services/warningChainService.js', () => ({
   persistNotification: db.persistNotification,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({
+    blocked: false,
+    reason: 'physical_delete_allowed',
+    result: { resolvedAction: 'physical_delete' },
+  })),
+  buildRetentionBlockedApiError: vi.fn(),
+  buildRetentionBlockedHttpStatus: vi.fn(),
 }))
 
 const { default: constructionDrawingsRouter } = await import('../routes/construction-drawings.js')
@@ -1703,5 +1923,110 @@ describe('construction drawing current-version write path', () => {
     })
     expect(db.certificateDependencies).toHaveLength(1)
     expect(db.certificateDependencies[0]?.predecessor_id).toBe('cert-b')
+  })
+
+  it('serializes a current-version switch before a concurrent drawing POST', async () => {
+    const request = supertest(buildApp())
+    const projectId = '11111111-1111-4111-8111-111111111111'
+    const packageId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    db.packages[0] = { ...db.packages[0], id: packageId, project_id: projectId }
+    for (const drawing of db.drawings) {
+      drawing.project_id = projectId
+      drawing.package_id = packageId
+    }
+    for (const version of db.versions) {
+      version.project_id = projectId
+      version.package_id = packageId
+    }
+    db.prepareConcurrentPackageMutation('package-drawing-read')
+
+    const switchPromise = request
+      .post(`/api/drawing-packages/packages/${packageId}/set-current-version`)
+      .send({ drawingId: 'draw-2' })
+      .then((response) => response)
+    await db.waitForPausedQuery()
+
+    const createPromise = request
+      .post('/api/construction-drawings')
+      .send({
+        project_id: projectId,
+        package_id: packageId,
+        package_code: 'pkg-1',
+        package_name: 'Concurrent package',
+        drawing_name: 'Concurrent drawing',
+        version: '2.0',
+        version_no: '2.0',
+        review_mode: 'none',
+        is_current_version: true,
+      })
+      .then((response) => response)
+
+    const observed = await Promise.race([
+      db.waitForPackageContention().then(() => 'contention' as const),
+      createPromise.then(() => 'settled' as const),
+    ])
+    db.releasePausedQuery()
+    const [switchResponse, createResponse] = await Promise.all([switchPromise, createPromise])
+
+    expect(observed, db.lockEvents.join('\n')).toBe('contention')
+    expect(switchResponse.status).toBe(200)
+    expect(createResponse.status).toBe(201)
+    expect(currentDrawingIds()).toEqual([createResponse.body.data.id])
+  })
+
+  it('keeps a drawing PUT package lock ahead of a concurrent current-version switch', async () => {
+    const request = supertest(buildApp())
+    db.prepareConcurrentPackageMutation('drawing-lock')
+
+    const updatePromise = request
+      .put('/api/construction-drawings/draw-1')
+      .send({ drawing_name: 'Concurrent update', lock_version: 1 })
+      .then((response) => response)
+    await db.waitForPausedQuery()
+
+    const switchPromise = request
+      .post('/api/drawing-packages/packages/pkg-1/set-current-version')
+      .send({ drawingId: 'draw-2' })
+      .then((response) => response)
+
+    const observed = await Promise.race([
+      db.waitForPackageContention().then(() => 'contention' as const),
+      switchPromise.then(() => 'settled' as const),
+    ])
+    db.releasePausedQuery()
+    const [updateResponse, switchResponse] = await Promise.all([updatePromise, switchPromise])
+
+    expect(observed).toBe('contention')
+    expect(updateResponse.status).toBe(200)
+    expect(switchResponse.status).toBe(200)
+    expect(currentDrawingIds()).toEqual(['draw-2'])
+  })
+
+  it('keeps a drawing DELETE package lock ahead of a concurrent current-version switch', async () => {
+    const request = supertest(buildApp())
+    db.prepareConcurrentPackageMutation('drawing-lock')
+
+    const deletePromise = request
+      .delete('/api/construction-drawings/draw-1')
+      .then((response) => response)
+    await db.waitForPausedQuery()
+
+    const switchPromise = request
+      .post('/api/drawing-packages/packages/pkg-1/set-current-version')
+      .send({ drawingId: 'draw-2' })
+      .then((response) => response)
+
+    const observed = await Promise.race([
+      db.waitForPackageContention().then(() => 'contention' as const),
+      switchPromise.then(() => 'settled' as const),
+    ])
+    db.releasePausedQuery()
+    const [deleteResponse, switchResponse] = await Promise.all([deletePromise, switchPromise])
+
+    expect(observed).toBe('contention')
+    expect(deleteResponse.status).toBe(200)
+    expect(switchResponse.status).toBe(200)
+    expect(db.drawings.some((drawing) => drawing.id === 'draw-1')).toBe(false)
+    expect(currentDrawingIds()).toEqual(['draw-2'])
   })
 })

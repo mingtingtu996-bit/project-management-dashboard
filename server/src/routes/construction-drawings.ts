@@ -2,7 +2,7 @@
 // 独立于前期证照（pre-milestones），施工图纸有独立的表和管理逻辑
 
 import { Router } from 'express'
-import { executeSQL, executeSQLOne, getMembers } from '../services/dbService.js'
+import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import {
   authenticate,
@@ -318,7 +318,18 @@ async function notifyDrawingVersionUpdate(input: {
   responsibleUserId?: string | null
 }) {
   if (!input.projectId || !input.versionNo) return
-  const members = await getMembers(input.projectId)
+  const members = await executeSQL<{
+    user_id?: string | null
+    permission_level?: string | null
+  }>(
+    `SELECT user_id, permission_level
+       FROM project_members
+      WHERE project_id = ?
+        AND permission_level = ?
+        AND is_active IS DISTINCT FROM FALSE
+      ORDER BY joined_at DESC`,
+    [input.projectId, 'owner'],
+  )
   const recipients = uniqueRecipients([
     input.responsibleUserId ?? null,
     ...members
@@ -881,33 +892,58 @@ router.put('/:id', requireProjectEditor(async (req) => {
   const expectedLockVersion = normalizeLockVersion(payload.lock_version)
 
   const mutation: DrawingMutationResult<{ data: ConstructionDrawing; projectId: string }> = await withDatabaseTransaction(async () => {
+    const candidate = await executeSQLOne<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
+      [id],
+    )
+
+    if (!candidate) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
+    }
+
+    const candidateRecord = candidate as unknown as Record<string, unknown>
+    const candidateProjectId = normalizeNullableText(candidateRecord.project_id)
+    if (!candidateProjectId || !getAuthorizedRequestProjectId(req, candidateProjectId)) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
+    }
+
+    const requestedProjectId = normalizeNullableText(payload.project_id)
+    if (requestedProjectId && requestedProjectId !== candidateProjectId) {
+      return drawingMutationFailure(400, 'PROJECT_ID_IMMUTABLE', '施工图纸所属项目不能修改')
+    }
+
+    const packageReferenceError = await validateDrawingProjectReferences(candidateProjectId, {
+      package_id: readMergedValue(payloadRecord, candidateRecord, 'package_id'),
+    }, {
+      lockForUpdate: true,
+      additionalPackageIds: [normalizeNullableText(candidateRecord.package_id)],
+    })
+    if (packageReferenceError) {
+      return { ok: false, ...packageReferenceError }
+    }
+
     const current = await executeSQLOne<ConstructionDrawing>(
       `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1 FOR UPDATE`,
       [id],
     )
-
     if (!current) {
       return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
     }
 
     const currentRecord = current as unknown as Record<string, unknown>
     const currentProjectId = normalizeNullableText(currentRecord.project_id)
-    if (!currentProjectId || !getAuthorizedRequestProjectId(req, currentProjectId)) {
-      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
-    }
-
-    const requestedProjectId = normalizeNullableText(payload.project_id)
-    if (requestedProjectId && requestedProjectId !== currentProjectId) {
-      return drawingMutationFailure(400, 'PROJECT_ID_IMMUTABLE', '施工图纸所属项目不能修改')
+    if (
+      currentProjectId !== candidateProjectId
+      || normalizeNullableText(currentRecord.package_id) !== normalizeNullableText(candidateRecord.package_id)
+    ) {
+      return drawingMutationFailure(409, 'VERSION_MISMATCH', '施工图纸已被其他人更新，请刷新后重试')
     }
 
     const referenceError = await validateDrawingProjectReferences(currentProjectId, {
-      package_id: readMergedValue(payloadRecord, currentRecord, 'package_id'),
       parent_drawing_id: readMergedValue(payloadRecord, currentRecord, 'parent_drawing_id'),
       related_license_id: readMergedValue(payloadRecord, currentRecord, 'related_license_id'),
     }, {
       lockForUpdate: true,
-      additionalPackageIds: [normalizeNullableText(currentRecord.package_id)],
     })
     if (referenceError) {
       return { ok: false, ...referenceError }
@@ -1267,6 +1303,27 @@ router.delete('/:id', requireProjectEditor(async (req) => {
   logger.info('Deleting construction drawing', { id })
 
   const mutation: DrawingMutationResult<{ projectId: string }> = await withDatabaseTransaction(async () => {
+    const candidate = await executeSQLOne<ConstructionDrawing>(
+      `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
+      [id],
+    )
+    if (!candidate) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
+    }
+
+    if (!candidate.project_id || !getAuthorizedRequestProjectId(req, candidate.project_id)) {
+      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
+    }
+
+    const referenceError = await validateDrawingProjectReferences(
+      candidate.project_id,
+      { package_id: candidate.package_id },
+      { lockForUpdate: true },
+    )
+    if (referenceError) {
+      return { ok: false, ...referenceError }
+    }
+
     const current = await executeSQLOne<ConstructionDrawing>(
       `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1 FOR UPDATE`,
       [id],
@@ -1274,18 +1331,11 @@ router.delete('/:id', requireProjectEditor(async (req) => {
     if (!current) {
       return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
     }
-
-    if (!current.project_id || !getAuthorizedRequestProjectId(req, current.project_id)) {
-      return drawingMutationFailure(404, 'DRAWING_NOT_FOUND', '施工图纸不存在')
-    }
-
-    const referenceError = await validateDrawingProjectReferences(
-      current.project_id,
-      { package_id: current.package_id },
-      { lockForUpdate: true },
-    )
-    if (referenceError) {
-      return { ok: false, ...referenceError }
+    if (
+      current.project_id !== candidate.project_id
+      || normalizeNullableText(current.package_id) !== normalizeNullableText(candidate.package_id)
+    ) {
+      return drawingMutationFailure(409, 'VERSION_MISMATCH', '施工图纸已被其他人更新，请刷新后重试')
     }
 
     const activeLinks = await listActiveEntityLinksForEntity({

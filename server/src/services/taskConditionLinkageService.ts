@@ -1,4 +1,4 @@
-import { query as rawQuery } from '../database.js'
+import { query as rawQuery, registerDatabasePostCommitEffect } from '../database.js'
 import { enqueueProjectHealthUpdate } from './projectHealthService.js'
 
 const DRAWING_CONDITION_TYPES = ['图纸', 'drawing']
@@ -53,7 +53,12 @@ async function markConditionsSatisfied(params: {
     ],
   )
 
-  enqueueProjectHealthUpdate(params.projectId, 'task_condition_auto_satisfied')
+  await registerDatabasePostCommitEffect(
+    `task-condition-health-refresh:${params.projectId}`,
+    async () => {
+      await enqueueProjectHealthUpdate(params.projectId, 'task_condition_auto_satisfied')
+    },
+  )
   return conditionIds.length
 }
 
