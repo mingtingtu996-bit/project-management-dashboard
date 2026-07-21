@@ -80,6 +80,7 @@ describe('BI status utilities', () => {
     const taskSummaryServiceSource = readFileSync(sourcePath('services/taskSummaryService.ts'), 'utf8')
     const taskSummaryCompareSource = readFileSync(sourcePath('services/taskSummaryCompareService.ts'), 'utf8')
     const taskAttributionSummarySource = readFileSync(sourcePath('services/taskAttributionSummaryService.ts'), 'utf8')
+    const projectExecutionSummarySource = readFileSync(sourcePath('services/projectExecutionSummaryService.ts'), 'utf8')
 
     expect(dbServiceSource).toContain("from '../utils/taskStatus.js'")
     expect(dbServiceSource).not.toContain('function isCompletedTaskLike')
@@ -90,9 +91,14 @@ describe('BI status utilities', () => {
       taskSummaryServiceSource,
       taskSummaryCompareSource,
       taskAttributionSummarySource,
+      projectExecutionSummarySource,
     ]
     completionSources.forEach((source) => {
       expect(source).toContain("from '../utils/taskStatus.js'")
+      expect(source).not.toContain("String(task.status ?? '').toLowerCase() === 'completed'")
+      expect(source).not.toContain("['completed', 'done', 'finished', 'on_time', 'delayed'].includes(status)")
+      expect(source).not.toContain("status === '已完成' ||")
+      expect(source).not.toContain("status === 'completed' ||")
     })
     expect(COMPLETED_TASK_STATUS_SQL_LIST).toContain("'已完成'")
     expect(taskSummarySource).not.toContain("IN ('completed', 'done')")
@@ -102,10 +108,6 @@ describe('BI status utilities', () => {
       0,
     )).toBeGreaterThanOrEqual(8)
     expect((taskSummarySource.match(/\bisCompletedMilestone\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
-    expect(taskSummaryServiceSource).not.toContain("String(task.status ?? '').toLowerCase() === 'completed'")
-    expect(taskAttributionSummarySource).not.toContain("['completed', 'done', 'finished', 'on_time', 'delayed'].includes(status)")
-    expect(taskSummarySource).not.toContain("status === '已完成' ||")
-    expect(taskSummarySource).not.toContain("status === 'completed' ||")
     expect(taskSummarySource).not.toContain(".in('status', ['已完成', 'completed'])")
   })
 })
