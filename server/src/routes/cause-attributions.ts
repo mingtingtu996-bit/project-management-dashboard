@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 
 import { getRequestCompanyId } from '../auth/companyContext.js'
+import { CANONICAL_STRUCTURED_CAUSE_CODES } from '../domain/structuredCauseTaxonomy.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate } from '../middleware/validation.js'
@@ -13,6 +14,8 @@ import {
   persistStructuredCauseCandidates,
   recordUserConfirmedStructuredCauseAttribution,
   rejectStructuredCauseAttribution,
+  STRUCTURED_CAUSE_TAXONOMY,
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
 } from '../services/structuredCauseAttributionService.js'
 
 const router = Router()
@@ -57,22 +60,7 @@ const responsibilityClassSchema = z.enum([
   'undetermined',
 ])
 
-const causeCodeSchema = z.enum([
-  'predecessor_delay',
-  'material_shortage',
-  'labor_shortage',
-  'equipment_unavailable',
-  'design_change',
-  'drawing_delay',
-  'quality_rework',
-  'weather_impact',
-  'owner_decision',
-  'government_inspection',
-  'site_capacity_pressure',
-  'workflow_sequence',
-  'external_readiness',
-  'other',
-])
+const causeCodeSchema = z.enum(CANONICAL_STRUCTURED_CAUSE_CODES)
 
 const userConfirmedCauseBodySchema = z.object({
   causeCode: causeCodeSchema,
@@ -104,6 +92,17 @@ function requireCompanyId(req: Parameters<typeof getRequestCompanyId>[0]) {
   }
   return companyId
 }
+
+router.get('/taxonomy', (_req, res) => {
+  res.json({
+    success: true,
+    data: {
+      version: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+      entries: STRUCTURED_CAUSE_TAXONOMY,
+    },
+    timestamp: new Date().toISOString(),
+  })
+})
 
 router.post(
   '/projects/:projectId/tasks/:taskId/infer',

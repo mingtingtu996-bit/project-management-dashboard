@@ -25,18 +25,22 @@ vi.mock('../auth/companyContext.js', () => ({
   getRequestCompanyId: () => 'company-1',
 }))
 
-vi.mock('../services/structuredCauseAttributionService.js', () => ({
-  StructuredCauseAttributionError: class StructuredCauseAttributionError extends Error {},
-  loadTaskStructuredCauseEvidence: mocks.loadTaskStructuredCauseEvidence,
-  persistStructuredCauseCandidates: mocks.persistStructuredCauseCandidates,
-  listStructuredCauseAttributions: mocks.listStructuredCauseAttributions,
-  getStructuredCauseAttributionQualityMetrics: mocks.getStructuredCauseAttributionQualityMetrics,
-  confirmStructuredCauseAttribution: mocks.confirmStructuredCauseAttribution,
-  recordUserConfirmedStructuredCauseAttribution: mocks.recordUserConfirmedStructuredCauseAttribution,
-  rejectStructuredCauseAttribution: mocks.rejectStructuredCauseAttribution,
-}))
+vi.mock('../services/structuredCauseAttributionService.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/structuredCauseAttributionService.js')>()
+  return {
+    ...actual,
+    loadTaskStructuredCauseEvidence: mocks.loadTaskStructuredCauseEvidence,
+    persistStructuredCauseCandidates: mocks.persistStructuredCauseCandidates,
+    listStructuredCauseAttributions: mocks.listStructuredCauseAttributions,
+    getStructuredCauseAttributionQualityMetrics: mocks.getStructuredCauseAttributionQualityMetrics,
+    confirmStructuredCauseAttribution: mocks.confirmStructuredCauseAttribution,
+    recordUserConfirmedStructuredCauseAttribution: mocks.recordUserConfirmedStructuredCauseAttribution,
+    rejectStructuredCauseAttribution: mocks.rejectStructuredCauseAttribution,
+  }
+})
 
 import causeAttributionRoutes from '../routes/cause-attributions.js'
+import { STRUCTURED_CAUSE_TAXONOMY, STRUCTURED_CAUSE_TAXONOMY_VERSION } from '../services/structuredCauseAttributionService.js'
 
 function buildApp() {
   const app = express()
@@ -63,6 +67,18 @@ describe('cause attribution routes', () => {
     mocks.confirmStructuredCauseAttribution.mockResolvedValue({ id: 'cause-1', status: 'confirmed' })
     mocks.recordUserConfirmedStructuredCauseAttribution.mockResolvedValue({ id: 'cause-user-1', status: 'confirmed' })
     mocks.rejectStructuredCauseAttribution.mockResolvedValue({ id: 'cause-1', status: 'rejected' })
+  })
+
+  it('returns the exact canonical structured-cause taxonomy authority', async () => {
+    const response = await supertest(buildApp())
+      .get('/api/cause-attributions/taxonomy')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toEqual({
+      version: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+      entries: STRUCTURED_CAUSE_TAXONOMY,
+    })
+    expect(response.body.data.entries).toHaveLength(14)
   })
 
   it('infers from server-loaded facts and persists under request tenant scope', async () => {

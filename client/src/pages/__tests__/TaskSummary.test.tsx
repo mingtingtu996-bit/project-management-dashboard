@@ -1,10 +1,13 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import TaskSummary from '../TaskSummary'
 import { clearApiClientRuntimeCache } from '@/lib/apiClient'
+
+const permissionState = vi.hoisted(() => ({ canEdit: true }))
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
@@ -23,6 +26,10 @@ vi.mock('@/hooks/useStore', () => ({
 
 vi.mock('@/hooks/use-toast', () => ({
   toast: vi.fn(),
+}))
+
+vi.mock('@/hooks/usePermissions', () => ({
+  usePermissions: () => ({ canEdit: permissionState.canEdit, loading: false }),
 }))
 
 const mockedUseNavigate = vi.mocked(useNavigate)
@@ -215,20 +222,67 @@ describe('TaskSummary page contract', () => {
   let forecastMode: 'success' | 'error' | 'pending' = 'success'
   let summaryMode: 'default' | 'empty' = 'default'
   let resolvePendingForecast: (() => void) | null = null
+  let confirmedTaskCause: Record<string, unknown> | null = null
 
   beforeEach(() => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
+    Object.assign(HTMLElement.prototype, {
+      hasPointerCapture: () => false,
+      setPointerCapture: () => undefined,
+      releasePointerCapture: () => undefined,
+      scrollIntoView: () => undefined,
+    })
+    class ResizeObserverStub {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.defineProperty(window, 'ResizeObserver', { configurable: true, value: ResizeObserverStub })
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
     clearApiClientRuntimeCache()
     forecastMode = 'success'
     summaryMode = 'default'
     resolvePendingForecast = null
+    permissionState.canEdit = true
+    confirmedTaskCause = null
 
     mockedUseNavigate.mockReturnValue(vi.fn())
 
-    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
+
+      if (url === '/api/cause-attributions/taxonomy') {
+        return jsonResponse({
+          success: true,
+          data: {
+            version: 'v1.0.0',
+            entries: [{
+              code: 'material_shortage',
+              label: 'Material shortage or late arrival',
+              category: 'resource',
+              linkedDeviationReasonTypes: [],
+              priority: 90,
+            }],
+          },
+        })
+      }
+
+      if (url === `/api/cause-attributions/projects/${projectId}?subjectType=task&status=confirmed`) {
+        return jsonResponse({ success: true, data: confirmedTaskCause ? [confirmedTaskCause] : [] })
+      }
+
+      if (url === `/api/cause-attributions/projects/${projectId}/subjects/task/task-1/confirm` && init?.method === 'POST') {
+        confirmedTaskCause = {
+          id: 'cause-1',
+          subject_id: 'task-1',
+          cause_code: 'material_shortage',
+          status: 'confirmed',
+          raw_text: '材料到场延后',
+        }
+        return jsonResponse({ success: true, data: confirmedTaskCause })
+      }
 
       if (url === `/api/task-summaries/projects/${projectId}/task-summary` && summaryMode === 'empty') {
         return jsonResponse({
@@ -868,5 +922,91 @@ describe('TaskSummary page contract', () => {
     await waitForSelector(container, '[data-testid="task-summary-scope-forecast-division-division-main"]')
     const forecastCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/duration-forecasts'))
     expect(forecastCalls).toHaveLength(2)
+  })
+
+  it('keeps raw delay text visible while showing the confirmed canonical label after task confirmation', async () => {
+    const user = userEvent.setup()
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+          <Routes>
+            <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1-detail"]')
+
+    const openConfirmation = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('确认延误原因'))
+    expect(openConfirmation).toBeTruthy()
+    await act(async () => {
+      openConfirmation?.click()
+      await flush()
+    })
+
+    const categorySelect = document.querySelector<HTMLElement>('[aria-label="延误原因分类"]')
+    expect(categorySelect).toBeTruthy()
+    if (categorySelect) await user.click(categorySelect)
+    await waitForSelector(document.body, '[role="option"]')
+    const option = Array.from(document.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find((item) => item.textContent?.includes('Material shortage or late arrival'))
+    expect(option).toBeTruthy()
+    if (option) await user.click(option)
+    const confirmCause = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('确认原因'))
+    expect(confirmCause).toBeTruthy()
+    if (confirmCause) await user.click(confirmCause)
+    await waitForSelector(container, '[data-testid="task-cause-confirmed-label-task-1"]')
+
+    expect(container.textContent).toContain('Material shortage or late arrival')
+    expect(container.textContent).toContain('材料到场延后')
+  })
+
+  it('does not expose a confirmation command to read-only users while retaining the confirmed label', async () => {
+    permissionState.canEdit = false
+    confirmedTaskCause = {
+      id: 'cause-1',
+      subject_id: 'task-1',
+      cause_code: 'material_shortage',
+      status: 'confirmed',
+      raw_text: '材料到场延后',
+    }
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+          <Routes>
+            <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1-detail"]')
+
+    await waitForSelector(container, '[data-testid="task-cause-confirmed-label-task-1"]')
+    expect(container.textContent).toContain('材料到场延后')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('确认延误原因'))).toBe(false)
   })
 })

@@ -5,6 +5,7 @@ import { Breadcrumb } from '@/components/Breadcrumb'
 import { EmptyState } from '@/components/EmptyState'
 import { V14231PageReadinessBoundary } from '@/components/governance/V14231PageReadinessBoundary'
 import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
+import { TaskCauseConfirmationDialog } from '@/components/task/TaskCauseConfirmationDialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -20,6 +21,7 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useCurrentProject } from '@/hooks/useStore'
+import { usePermissions } from '@/hooks/usePermissions'
 import { toast } from '@/hooks/use-toast'
 import { apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import {
@@ -28,6 +30,8 @@ import {
   type DurationMetricDto,
 } from '@/lib/durationMetric'
 import { cn, formatDate } from '@/lib/utils'
+import { listCauseAttributions, listCauseTaxonomy } from '@/services/causeAttributionApi'
+import type { CauseAttributionRecord } from '@/domain/structuredCauseTaxonomy'
 import {
   Building2,
   CheckSquare,
@@ -1009,7 +1013,21 @@ function TaskSummaryPageTitle({
   )
 }
 
-function TaskProcessReplay({ task, timelineEvents }: { task: TaskSummaryLedgerRow; timelineEvents: TaskTimelineEvent[] }) {
+function TaskProcessReplay({
+  task,
+  timelineEvents,
+  confirmedCause,
+  confirmedCauseLabel,
+  canEdit,
+  onConfirmCause,
+}: {
+  task: TaskSummaryLedgerRow
+  timelineEvents: TaskTimelineEvent[]
+  confirmedCause: CauseAttributionRecord | null
+  confirmedCauseLabel: string | null
+  canEdit: boolean
+  onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
+}) {
   const processEvents = useMemo(() => getTaskProcessEvents(task, timelineEvents), [task, timelineEvents])
   const groupedEvents = useMemo(() => groupProcessEventsByDate(processEvents), [processEvents])
   const completionNarrative = getTaskCompletionNarrative(task)
@@ -1046,6 +1064,23 @@ function TaskProcessReplay({ task, timelineEvents }: { task: TaskSummaryLedgerRo
                 <span className="mr-2 min-w-16 text-slate-400">延期说明</span>
                 <span className="text-slate-500">{delayReason}</span>
               </div>
+            ) : null}
+            {confirmedCause && confirmedCauseLabel ? (
+              <div className="flex min-h-5 items-baseline">
+                <span className="mr-2 min-w-16 text-slate-400">确认原因</span>
+                <span data-testid={`task-cause-confirmed-label-${task.id}`} className="text-slate-700">{confirmedCauseLabel}</span>
+              </div>
+            ) : null}
+            {delayReason && !confirmedCause && canEdit ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="mt-1"
+                onClick={() => onConfirmCause(task, delayReason)}
+              >
+                确认延误原因
+              </Button>
             ) : null}
           </div>
         </div>
@@ -1281,12 +1316,20 @@ function TaskSummaryLedgerRow({
   selected,
   onSelect,
   timelineEvents,
+  confirmedCauses,
+  causeLabels,
+  canEdit,
+  onConfirmCause,
 }: {
   task: TaskSummaryLedgerRow
   index: number
   selected: boolean
   onSelect: (taskId: string) => void
   timelineEvents: TaskTimelineEvent[]
+  confirmedCauses: Record<string, CauseAttributionRecord>
+  causeLabels: Record<string, string>
+  canEdit: boolean
+  onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
   const delayed = isTaskDelayed(task)
   const statusLabel = delayed ? '延期' : isTaskOnTime(task) ? '按时' : '待确认'
@@ -1341,7 +1384,14 @@ function TaskSummaryLedgerRow({
       {selected ? (
         <TableRow data-testid={`task-summary-row-${task.id}-detail`} className="border-b border-slate-100 bg-blue-50/40">
           <TableCell colSpan={6} className="p-0">
-            <TaskProcessReplay task={task} timelineEvents={timelineEvents} />
+            <TaskProcessReplay
+              task={task}
+              timelineEvents={timelineEvents}
+              confirmedCause={confirmedCauses[task.id] ?? null}
+              confirmedCauseLabel={confirmedCauses[task.id] ? causeLabels[confirmedCauses[task.id].cause_code] ?? null : null}
+              canEdit={canEdit}
+              onConfirmCause={onConfirmCause}
+            />
           </TableCell>
         </TableRow>
       ) : null}
@@ -1354,11 +1404,19 @@ function TaskSummaryTaskLedgerTable({
   timelineEvents,
   selectedTaskId,
   onSelectTask,
+  confirmedCauses,
+  causeLabels,
+  canEdit,
+  onConfirmCause,
 }: {
   rows: TaskSummaryLedgerRow[]
   timelineEvents: TaskTimelineEvent[]
   selectedTaskId: string | null
   onSelectTask: (taskId: string) => void
+  confirmedCauses: Record<string, CauseAttributionRecord>
+  causeLabels: Record<string, string>
+  canEdit: boolean
+  onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
   const ledgerSummary = useMemo(() => getLedgerSummary(rows), [rows])
 
@@ -1403,6 +1461,10 @@ function TaskSummaryTaskLedgerTable({
               selected={selectedTaskId === task.id}
               onSelect={onSelectTask}
               timelineEvents={timelineEvents}
+              confirmedCauses={confirmedCauses}
+              causeLabels={causeLabels}
+              canEdit={canEdit}
+              onConfirmCause={onConfirmCause}
             />
           ))}
         </TableBody>
@@ -1576,6 +1638,10 @@ function AttributionLedgerCard({
   selectedTaskId,
   onSelectTask,
   timelineEvents,
+  confirmedCauses,
+  causeLabels,
+  canEdit,
+  onConfirmCause,
 }: {
   option: TaskAttributionOption
   summary: TaskAttributionSummary
@@ -1587,6 +1653,10 @@ function AttributionLedgerCard({
   selectedTaskId: string | null
   onSelectTask: (taskId: string) => void
   timelineEvents: TaskTimelineEvent[]
+  confirmedCauses: Record<string, CauseAttributionRecord>
+  causeLabels: Record<string, string>
+  canEdit: boolean
+  onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
   const Icon = TASK_ATTRIBUTION_ICON_MAP[option.dimension]
   const tone = getAttributionHealthTone(summary.healthLevel)
@@ -1661,6 +1731,10 @@ function AttributionLedgerCard({
               selectedTaskId={selectedTaskId}
               onSelectTask={onSelectTask}
               timelineEvents={timelineEvents}
+              confirmedCauses={confirmedCauses}
+              causeLabels={causeLabels}
+              canEdit={canEdit}
+              onConfirmCause={onConfirmCause}
             />
           </div>
         </div>
@@ -1678,6 +1752,10 @@ function TaskSummaryLedgerSection({
   forecastLoading,
   forecastError,
   onRetryForecast,
+  confirmedCauses,
+  causeLabels,
+  canEdit,
+  onConfirmCause,
 }: {
   groups: TaskSummaryGroup[]
   attributionGroups: TaskAttributionOption[]
@@ -1687,6 +1765,10 @@ function TaskSummaryLedgerSection({
   forecastLoading: boolean
   forecastError: string | null
   onRetryForecast: () => void
+  confirmedCauses: Record<string, CauseAttributionRecord>
+  causeLabels: Record<string, string>
+  canEdit: boolean
+  onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
   const [search, setSearch] = useState('')
   const [activeDimension, setActiveDimension] = useState<TaskAttributionDimension>(DEFAULT_TASK_ATTRIBUTION_DIMENSION)
@@ -1850,6 +1932,10 @@ function TaskSummaryLedgerSection({
                         selectedTaskId={selectedTaskId}
                         onSelectTask={(taskId) => setSelectedTaskId((current) => (current === taskId ? null : taskId))}
                         timelineEvents={timelineEvents}
+                        confirmedCauses={confirmedCauses}
+                        causeLabels={causeLabels}
+                        canEdit={canEdit}
+                        onConfirmCause={onConfirmCause}
                       />
                     )
                   })}
@@ -1905,6 +1991,7 @@ export default function TaskSummary() {
 
   const { id: projectId } = useParams<{ id: string }>()
   const currentProject = useCurrentProject()
+  const { canEdit } = usePermissions({ projectId })
 
   const [stats, setStats] = useState<ProjectSummaryStats | null>(null)
   const [groups, setGroups] = useState<TaskSummaryGroup[]>([])
@@ -1917,6 +2004,38 @@ export default function TaskSummary() {
   const [forecastError, setForecastError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [confirmedCauses, setConfirmedCauses] = useState<Record<string, CauseAttributionRecord>>({})
+  const [causeLabels, setCauseLabels] = useState<Record<string, string>>({})
+  const [causeConfirmationTask, setCauseConfirmationTask] = useState<{ id: string; title: string; rawText: string } | null>(null)
+
+  const loadTaskCauseSurface = useCallback(async () => {
+    if (!projectId) return
+
+    try {
+      const [attributions, taxonomy] = await Promise.all([
+        listCauseAttributions({ projectId, subjectType: 'task', status: 'confirmed' }),
+        listCauseTaxonomy(),
+      ])
+      const nextConfirmedCauses: Record<string, CauseAttributionRecord> = {}
+      for (const attribution of attributions) {
+        if (attribution.subject_id) nextConfirmedCauses[attribution.subject_id] = attribution
+      }
+      const nextCauseLabels: Record<string, string> = {}
+      for (const entry of taxonomy.entries) {
+        nextCauseLabels[entry.code] = entry.label
+      }
+      setConfirmedCauses(nextConfirmedCauses)
+      setCauseLabels(nextCauseLabels)
+    } catch (error) {
+      setConfirmedCauses({})
+      setCauseLabels({})
+      toast({
+        title: '加载失败',
+        description: getApiErrorMessage(error, '无法加载已确认延误原因'),
+        variant: 'destructive',
+      })
+    }
+  }, [projectId])
 
   const loadData = useCallback(async (signal?: AbortSignal) => {
     if (!projectId) return
@@ -1994,9 +2113,10 @@ export default function TaskSummary() {
     const controller = new AbortController()
     void loadData(controller.signal)
     void loadDurationForecasts(controller.signal)
+    void loadTaskCauseSurface()
 
     return () => controller.abort()
-  }, [loadData, loadDurationForecasts])
+  }, [loadData, loadDurationForecasts, loadTaskCauseSurface])
 
   const exportTaskSummary = useCallback(() => {
     if (!stats) {
@@ -2074,6 +2194,7 @@ export default function TaskSummary() {
         onRefresh={() => {
           void loadData()
           void loadDurationForecasts()
+          void loadTaskCauseSurface()
         }}
         onExport={exportTaskSummary}
       />
@@ -2100,6 +2221,23 @@ export default function TaskSummary() {
         forecastLoading={forecastLoading}
         forecastError={forecastError}
         onRetryForecast={() => void loadDurationForecasts()}
+        confirmedCauses={confirmedCauses}
+        causeLabels={causeLabels}
+        canEdit={canEdit === true}
+        onConfirmCause={(task, rawText) => {
+          setCauseConfirmationTask({ id: task.id, title: task.title, rawText })
+        }}
+      />
+      <TaskCauseConfirmationDialog
+        open={Boolean(causeConfirmationTask)}
+        projectId={projectId || ''}
+        task={causeConfirmationTask}
+        onOpenChange={(open) => {
+          if (!open) setCauseConfirmationTask(null)
+        }}
+        onConfirmed={() => {
+          void loadTaskCauseSurface()
+        }}
       />
     </div>
   )
