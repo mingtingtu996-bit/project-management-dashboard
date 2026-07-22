@@ -198,3 +198,103 @@ Result: PASS. `git diff --check` produced no output and `git status --short` was
 - No database connection, migration execution, deployment, staging, or production/live verification was performed, as required.
 - SQL and rollback behavior were verified with deterministic `PoolClient` tests and TypeScript compilation, not a live PostgreSQL schema.
 - No known in-scope code concern remains after the required focused, adjacent, and TypeScript gates.
+
+---
+
+## Second Re-Review Fix Report (2026-07-23)
+
+### Status And Commits
+
+DONE
+
+- Second re-review baseline: `1e5d73255cb0189f1c312b3ff0058ef2c64bdc77`
+- Superseded implementation: `510ce6ca2ed3324c6cd4009e691efa3bf72e6d4e`
+- Verified superseding implementation HEAD/full commit: `532c94a4dc57a9df22393b032b6fda9befe81f6e`
+- Implementation commit subject: `fix(duration): preserve float benchmark precision`
+- This report append is committed separately after the verified implementation commit.
+
+### Exact Manifest
+
+- `.superpowers/sdd/task-4-report.md` (this append only)
+- `server/src/services/durationBenchmarkCauseSegmentService.ts`
+- `server/src/services/durationSuggestionService.ts`
+- `server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts`
+- `server/src/__tests__/durationSuggestionService.test.ts`
+
+The implementation stayed within the four authorized paths. Migration 324, the atomic writer, UI, deployment, database state, and other workstreams were not changed.
+
+### RED Evidence
+
+PostgreSQL `REAL` roundtrip RED:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts
+```
+
+Result before the production change: RED, 1 file, 10 tests, 1 failed and 9 passed. A valid large `mean_days`/`variance` readback transformed with `Math.fround` threw `cause segment INSERT readback mismatch`. The companion 1% altered-mean fixture passed by correctly rejecting the tampered readback.
+
+Zero-variance/CV RED:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationSuggestionService.test.ts -t "zero variance"
+```
+
+Result before the production change: RED, 99 discovered tests, 1 failed, 1 passed, and 97 skipped. The zero-variance DTO returned both `durationDistribution.variance` and `durationDistribution.coefficientOfVariation` as `null` instead of `0`; the parameterized non-zero case remained green.
+
+### GREEN And Required Gates
+
+Direct test-file GREEN after each production correction:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationSuggestionService.test.ts -t "zero variance"
+```
+
+Result: PASS. Cause segment service: 10/10. Filtered suggestion cases: 2 passed and 97 skipped.
+
+Focused three-file gate before implementation commit:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts server/src/__tests__/durationLearningAssetAtomicStoreService.test.ts server/src/__tests__/durationSuggestionService.test.ts
+```
+
+Result: PASS, 3 files, 116/116 tests. This includes the existing atomic-writer rollback coverage for strict segment persistence failures.
+
+Focused plus adjacent gate after implementation commit `532c94a4dc57a9df22393b032b6fda9befe81f6e`:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts server/src/__tests__/durationLearningAssetAtomicStoreService.test.ts server/src/__tests__/durationSuggestionService.test.ts server/src/__tests__/durationSuggestionSimulation.test.ts server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts
+```
+
+Result: PASS, 5 files, 168/168 tests.
+
+Server TypeScript after the implementation commit:
+
+```powershell
+npm run typecheck --workspace=server
+```
+
+Result: PASS, exit 0, no diagnostics (`tsc -p tsconfig.json --noEmit`).
+
+Repository checks after the implementation commit:
+
+```powershell
+git diff --check
+git status --short
+```
+
+Result: PASS. Both commands produced no output before this report append.
+
+### Self-Review
+
+- Strict readback now compares only migration 324's `REAL` fields (`mean_days` and `variance`) at float32 precision using `Math.fround(actual) === Math.fround(expected)`. Integer percentiles retain the existing comparison.
+- The large-value fixture exercises float32 rounding that exceeds the former absolute `1e-6` threshold; persisted DTO values are asserted from the actual rounded readback.
+- A materially altered float32 mean remains a hard mismatch. The focused atomic-store suite confirms strict segment persistence failures still roll back the enclosing benchmark transaction.
+- Benchmark variance/CV extraction now uses the existing finite non-negative reader, preserving zero while continuing to reject negative and non-finite values.
+- The parameterized exact-segment DTO test covers both non-zero `sqrt(variance) / mean` and zero variance, asserting `durationDistribution.variance: 0` and `coefficientOfVariation: 0` in calculation context.
+
+### Unverified Boundaries And Concerns
+
+- No database connection, migration execution, deployment, staging, or production/live verification was performed, as required.
+- PostgreSQL `REAL` behavior is modeled with JavaScript `Math.fround` in deterministic unit tests; it was not exercised against a live PostgreSQL instance.
+- No known in-scope code concern remains after focused, adjacent, TypeScript, diff, and clean-tree gates.
