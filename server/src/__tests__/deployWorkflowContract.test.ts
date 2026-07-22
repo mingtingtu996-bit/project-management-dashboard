@@ -1478,6 +1478,8 @@ describe('deploy workflow contract', () => {
     expect(workflowGuard).toContain('npm run verify:c18-live-evidence-contracts')
     expect(workflowGuard).toContain('Verify v1.4.23.1 client contracts')
     expect(workflowGuard).toContain('npm run verify:v14231-client-contracts --workspace=client')
+    expect(extractWorkflowEventPaths(workflowGuard, 'push')).toContain('**')
+    expect(extractWorkflowEventPaths(workflowGuard, 'pull_request')).toContain('**')
   })
 
   it('runs an independent legacy scope runtime surface guard before server tests', () => {

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
     paths:
+      - '**'
       - '.github/workflows/deploy.yml'
       - '.github/workflows/provision-domain-ingress.yml'
       - '.github/workflows/staging-duration-learning-cycle-v2.yml'
@@ -307,6 +308,7 @@ on:
       - 'scripts/write-v14231-readiness-gate.mjs'
   pull_request:
     paths:
+      - '**'
       - '.github/workflows/deploy.yml'
       - '.github/workflows/provision-domain-ingress.yml'
       - '.github/workflows/staging-duration-learning-cycle-v2.yml'
