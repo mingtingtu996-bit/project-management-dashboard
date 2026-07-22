@@ -2660,7 +2660,10 @@ describe('durationSuggestionService', () => {
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+company_history_sample')
   })
 
-  it('prefers an exact confirmed cause segment and exposes its persisted provenance', async () => {
+  it.each([
+    { label: 'non-zero variance', variance: 0.15, coefficientOfVariation: Math.sqrt(0.15) / 4.5 },
+    { label: 'zero variance', variance: 0, coefficientOfVariation: 0 },
+  ])('prefers an exact confirmed cause segment and preserves $label in its DTO', async ({ variance, coefficientOfVariation }) => {
     const benchmarkSelects: string[] = []
     mocks.query.select.mockImplementation((columns?: string) => {
       if (isDurationBenchmarkQuery() && typeof columns === 'string') benchmarkSelects.push(columns)
@@ -2699,7 +2702,7 @@ describe('durationSuggestionService', () => {
       p75Days: 5,
       p80Days: 6,
       meanDays: 4.5,
-      variance: 0.15,
+      variance,
       generatedAt: '2026-07-21T00:00:00.000Z',
       sourceWindowStart: '2026-07-01T00:00:00.000Z',
       sourceAsOf: '2026-07-20T00:00:00.000Z',
@@ -2749,8 +2752,8 @@ describe('durationSuggestionService', () => {
     expect(suggestion.conservativeDurationDays).toBe(12)
     expect(suggestion.calculationContext).toEqual(expect.objectContaining({
       durationDistribution: expect.objectContaining({
-        variance: 0.15,
-        coefficientOfVariation: expect.closeTo(Math.sqrt(0.15) / 4.5, 6),
+        variance,
+        coefficientOfVariation: expect.closeTo(coefficientOfVariation, 6),
       }),
     }))
     expect(benchmarkSelects.some((columns) => columns.includes('id'))).toBe(true)

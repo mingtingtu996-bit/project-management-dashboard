@@ -2777,7 +2777,7 @@ function benchmarkReferenceFromP50P75(
 function readBenchmarkMetadataNumber(benchmark: DurationBenchmarkRow | null | undefined, ...keys: string[]) {
   const metadata = readMetadataObject(benchmark?.metadata)
   for (const key of keys) {
-    const value = readPositiveRawNumber((benchmark as any)?.[key] ?? metadata[key])
+    const value = readOptionalNonNegativeNumber((benchmark as any)?.[key] ?? metadata[key])
     if (value !== null) return value
   }
   return null

@@ -135,6 +135,74 @@ describe('durationBenchmarkCauseSegmentService', () => {
       .toBeLessThan(executedSql.findIndex((sql) => sql.includes('INSERT INTO public.duration_benchmark_cause_segments')))
   })
 
+  it('accepts PostgreSQL REAL roundtrips for large mean and variance values', async () => {
+    let attemptedMean: number | null = null
+    let attemptedVariance: number | null = null
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM public.duration_experience_samples sample')) {
+          return {
+            rows: [
+              confirmedSample({ sample_id: 'large-real-1', actual_duration_production_days: 1 }),
+              confirmedSample({ sample_id: 'large-real-2', actual_duration_production_days: 1_000_000 }),
+              confirmedSample({ sample_id: 'large-real-3', actual_duration_production_days: 2_000_000 }),
+            ],
+          }
+        }
+        if (sql.includes('UPDATE public.duration_benchmark_cause_segments')) return { rows: [] }
+        if (sql.includes('INSERT INTO public.duration_benchmark_cause_segments')) {
+          attemptedMean = Number(params[9])
+          attemptedVariance = Number(params[10])
+          return {
+            rows: [persistedSegmentRow(params, {
+              mean_days: Math.fround(attemptedMean),
+              variance: Math.fround(attemptedVariance),
+            })],
+          }
+        }
+        throw new Error(`Unexpected SQL: ${sql}`)
+      }),
+    }
+
+    const persisted = await persistCurrentCauseSegments(input, client as never)
+
+    expect(attemptedMean).toBeGreaterThan(1_000_000)
+    expect(attemptedVariance).toBeGreaterThan(100_000_000_000)
+    expect(persisted[0]).toEqual(expect.objectContaining({
+      meanDays: Math.fround(attemptedMean!),
+      variance: Math.fround(attemptedVariance!),
+    }))
+  })
+
+  it('rejects a materially altered PostgreSQL REAL readback', async () => {
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM public.duration_experience_samples sample')) {
+          return {
+            rows: [
+              confirmedSample({ sample_id: 'tampered-real-1', actual_duration_production_days: 1 }),
+              confirmedSample({ sample_id: 'tampered-real-2', actual_duration_production_days: 1_000_000 }),
+              confirmedSample({ sample_id: 'tampered-real-3', actual_duration_production_days: 2_000_000 }),
+            ],
+          }
+        }
+        if (sql.includes('UPDATE public.duration_benchmark_cause_segments')) return { rows: [] }
+        if (sql.includes('INSERT INTO public.duration_benchmark_cause_segments')) {
+          return {
+            rows: [persistedSegmentRow(params, {
+              mean_days: Math.fround(Number(params[9]) * 1.01),
+              variance: Math.fround(Number(params[10])),
+            })],
+          }
+        }
+        throw new Error(`Unexpected SQL: ${sql}`)
+      }),
+    }
+
+    await expect(persistCurrentCauseSegments(input, client as never))
+      .rejects.toThrow('cause segment INSERT readback mismatch')
+  })
+
   it('fails closed when one sample resolves to multiple canonical attribution identities', async () => {
     const client = {
       query: vi.fn(async (sql: string) => {

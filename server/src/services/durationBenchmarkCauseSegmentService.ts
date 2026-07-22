@@ -402,6 +402,11 @@ function nullableNumbersMatch(left: number | null, right: number | null) {
   return Math.abs(left - right) < 0.000001
 }
 
+function nullableFloat4NumbersMatch(left: number | null, right: number | null) {
+  if (left === null || right === null) return left === right
+  return Math.fround(left) === Math.fround(right)
+}
+
 function isPersistedSegmentReadback(
   persisted: DurationBenchmarkCauseSegment,
   expected: DurationBenchmarkCauseSegment,
@@ -415,8 +420,8 @@ function isPersistedSegmentReadback(
     && nullableNumbersMatch(persisted.p50Days, expected.p50Days)
     && nullableNumbersMatch(persisted.p75Days, expected.p75Days)
     && nullableNumbersMatch(persisted.p80Days, expected.p80Days)
-    && nullableNumbersMatch(persisted.meanDays, expected.meanDays)
-    && nullableNumbersMatch(persisted.variance, expected.variance)
+    && nullableFloat4NumbersMatch(persisted.meanDays, expected.meanDays)
+    && nullableFloat4NumbersMatch(persisted.variance, expected.variance)
     && persisted.generatedAt === expected.generatedAt
     && persisted.sourceWindowStart === expected.sourceWindowStart
     && persisted.sourceAsOf === expected.sourceAsOf
