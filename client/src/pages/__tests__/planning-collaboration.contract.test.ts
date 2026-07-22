@@ -703,7 +703,7 @@ describe('planning collaboration contracts', () => {
     expect(ganttRows).toContain('getDependencyChain(candidateId, taskMap).has(taskId)')
     expect(ganttRows).toContain("dependencies: [...predecessorIds, taskId]")
     expect(ganttDialogs).toContain('handleDependencyChange(taskId, true)')
-    expect(ganttRows).toContain('Boolean(criticalTask)')
+    expect(ganttRows).toContain('Boolean(criticalTask || criticalSchedule?.isAutoCritical)')
     expect(planningTreeView).toContain('isTaskTable && row.isCritical')
     expect(ganttView).not.toContain('gantt-complete-task-confirm-dialog')
     expect(ganttHeader).not.toContain('gantt-open-task-summary')
