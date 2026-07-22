@@ -313,9 +313,35 @@ if [ -f "$STATE_FILE" ]; then
   FAILED_RELEASE_SHA="$stale_activation_sha" rollback
 fi
 
+resolve_previous_target() {
+  local current_path="$ROOT_DIR/current"
+  local previous_target
+  if [ -L "$current_path" ]; then
+    previous_target="$(readlink -f "$current_path" 2>/dev/null || true)"
+    case "$previous_target" in
+      "$ROOT_DIR/releases/"*) ;;
+      *)
+        echo "Current ingress release symlink does not target a governed release." >&2
+        return 1
+        ;;
+    esac
+    [ -d "$previous_target" ] || {
+      echo "Current ingress release symlink target is missing." >&2
+      return 1
+    }
+    printf '%s' "$previous_target"
+    return 0
+  fi
+  [ ! -e "$current_path" ] || {
+    echo "Current ingress release must be a symlink." >&2
+    return 1
+  }
+  return 0
+}
+
 RELEASE_DIR="$ROOT_DIR/releases/$RELEASE_SHA"
 CANDIDATE_DIR="$ROOT_DIR/.candidate-$RELEASE_SHA-$$"
-PREVIOUS_TARGET="$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)"
+PREVIOUS_TARGET="$(resolve_previous_target)"
 ACTIVATED=false
 
 restore_on_failure() {
@@ -354,6 +380,11 @@ restore_on_failure() {
   exit "$exit_code"
 }
 trap restore_on_failure ERR INT TERM
+
+fail_activation() {
+  printf '%s\n' "$1" >&2
+  return 1
+}
 
 if [ -d "$RELEASE_DIR" ] \
   && [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$RELEASE_DIR" ]; then
@@ -414,8 +445,7 @@ for attempt in $(seq 1 18); do
     fi
   fi
   if [ "$attempt" -eq 18 ]; then
-    echo "Domain TLS or redirect probes did not become ready." >&2
-    exit 1
+    fail_activation "Domain TLS or redirect probes did not become ready."
   fi
   sleep 5
 done
@@ -426,14 +456,13 @@ if [ "$BOOTSTRAP_MODE" = initial ]; then
     case "$status" in
       200) ;;
       502) classification=ingress_ready_upstream_unavailable ;;
-      *) echo "Initial ingress returned unexpected HTTPS status: $status" >&2; exit 1 ;;
+      *) fail_activation "Initial ingress returned unexpected HTTPS status: $status" ;;
     esac
   done
 else
-  [ "$production_status" = 200 ] && [ "$staging_status" = 200 ] || {
-    echo "Upgrade ingress requires both existing runtimes to be ready." >&2
-    exit 1
-  }
+  if [ "$production_status" != 200 ] || [ "$staging_status" != 200 ]; then
+    fail_activation "Upgrade ingress requires both existing runtimes to be ready."
+  fi
 fi
 
 trap - ERR INT TERM
