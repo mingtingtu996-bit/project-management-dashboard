@@ -21962,12 +21962,26 @@ DECLARE
   benchmark_company_id UUID;
   benchmark_project_id UUID;
   project_company_id UUID;
+  lock_benchmark_scope BOOLEAN;
 BEGIN
-  SELECT benchmark.company_id, benchmark.project_id
-    INTO benchmark_company_id, benchmark_project_id
-    FROM public.duration_benchmarks benchmark
-   WHERE benchmark.id = NEW.benchmark_id
-   FOR SHARE;
+  IF TG_OP = 'INSERT' THEN
+    lock_benchmark_scope := TRUE;
+  ELSE
+    lock_benchmark_scope := NEW.benchmark_id IS DISTINCT FROM OLD.benchmark_id;
+  END IF;
+
+  IF lock_benchmark_scope THEN
+    SELECT benchmark.company_id, benchmark.project_id
+      INTO benchmark_company_id, benchmark_project_id
+      FROM public.duration_benchmarks benchmark
+     WHERE benchmark.id = NEW.benchmark_id
+     FOR SHARE;
+  ELSE
+    SELECT benchmark.company_id, benchmark.project_id
+      INTO benchmark_company_id, benchmark_project_id
+      FROM public.duration_benchmarks benchmark
+     WHERE benchmark.id = NEW.benchmark_id;
+  END IF;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'duration benchmark cause segment benchmark not found';

@@ -72,11 +72,23 @@ describe('canonical cause benchmark migration', () => {
     )
   })
 
-  it('serializes parent-first and segment-first scope races while preserving scope authority', () => {
+  it('locks INSERT and benchmark moves in both orderings but leaves ordinary UPDATE parent reads unlocked', () => {
     const forward = readSql('migrations', migrationName)
     const segmentScopeFunction = forward.slice(
       forward.indexOf('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()'),
       forward.indexOf('DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger'),
+    )
+    const parentLoadBlock = segmentScopeFunction.slice(
+      segmentScopeFunction.indexOf('BEGIN'),
+      segmentScopeFunction.indexOf('IF NOT FOUND THEN'),
+    )
+    const lockedParentLoad = parentLoadBlock.slice(
+      parentLoadBlock.indexOf('IF lock_benchmark_scope THEN'),
+      parentLoadBlock.indexOf('ELSE', parentLoadBlock.indexOf('IF lock_benchmark_scope THEN')),
+    )
+    const ordinaryUpdateParentLoad = parentLoadBlock.slice(
+      parentLoadBlock.indexOf('ELSE', parentLoadBlock.indexOf('IF lock_benchmark_scope THEN')),
+      parentLoadBlock.lastIndexOf('END IF;'),
     )
     const parentScopeFunction = forward.slice(
       forward.indexOf('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()'),
@@ -87,11 +99,20 @@ describe('canonical cause benchmark migration', () => {
     expect(segmentScopeFunction).toContain('SECURITY INVOKER')
     expect(segmentScopeFunction).not.toContain('SECURITY DEFINER')
     expect(segmentScopeFunction).toContain('SET search_path = pg_catalog')
-    // Parent-first: FOR SHARE waits, then the segment validator reads the committed parent scope.
-    // Segment-first: the held share lock delays the parent update until its definer guard can see the segment.
-    expect(segmentScopeFunction).toMatch(
+    expect(parentLoadBlock).toMatch(
+      /IF TG_OP = 'INSERT' THEN\s+lock_benchmark_scope := TRUE;\s+ELSE\s+lock_benchmark_scope := NEW\.benchmark_id IS DISTINCT FROM OLD\.benchmark_id;\s+END IF/,
+    )
+    // Parent-first INSERT/move: FOR SHARE waits, then validation reads committed parent scope.
+    // Child-first INSERT/move: FOR SHARE delays parent scope UPDATE until the guard can see the segment.
+    expect(lockedParentLoad).toMatch(
       /FROM public\.duration_benchmarks benchmark\s+WHERE benchmark\.id = NEW\.benchmark_id\s+FOR SHARE/,
     )
+    // Ordinary UPDATE: avoid child->parent lock inversion during ON DELETE CASCADE; the existing parent guard protects scope.
+    expect(ordinaryUpdateParentLoad).toMatch(
+      /FROM public\.duration_benchmarks benchmark\s+WHERE benchmark\.id = NEW\.benchmark_id/,
+    )
+    expect(ordinaryUpdateParentLoad).not.toContain('FOR SHARE')
+    expect(parentLoadBlock.match(/FOR SHARE/g)).toHaveLength(1)
     expect(forward).toContain('BEFORE INSERT OR UPDATE')
     expect(forward).toContain('NEW.company_id IS DISTINCT FROM benchmark_company_id')
     expect(forward).toContain('NEW.project_id IS DISTINCT FROM benchmark_project_id')
