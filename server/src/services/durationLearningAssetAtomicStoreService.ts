@@ -1,11 +1,13 @@
 import type { PoolClient } from 'pg'
 
 import { getClient } from '../database.js'
+import { persistCurrentCauseSegments } from './durationBenchmarkCauseSegmentService.js'
 
 type PersistenceRow = Record<string, unknown>
 
 const DURATION_BENCHMARK_COLUMNS = [
   'company_id',
+  'project_id',
   'benchmark_key',
   'benchmark_version',
   'template_node_id',
@@ -26,6 +28,9 @@ const DURATION_BENCHMARK_COLUMNS = [
   'is_active',
   'duration_calibration_source',
   'metadata',
+  'generated_at',
+  'source_window_start',
+  'source_as_of',
   'created_at',
   'updated_at',
 ] as const
@@ -61,6 +66,10 @@ const PROJECT_PRODUCTIVITY_CALIBRATION_COLUMNS = [
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function normalizeTimestamp(value: unknown) {
+  return value instanceof Date ? value.toISOString() : normalizeText(value)
 }
 
 function requireText(value: unknown, fieldName: string) {
@@ -135,24 +144,64 @@ async function withTransaction<T>(operation: (client: PoolClient) => Promise<T>)
 export async function replaceDurationBenchmarkAtomically(row: PersistenceRow) {
   const benchmarkKey = requireText(row.benchmark_key, 'benchmark_key')
   const companyId = normalizeText(row.company_id) || null
+  const projectId = normalizeText(row.project_id) || null
   return withTransaction(async (client) => {
     await client.query(
       `update public.duration_benchmarks
           set is_current = false,
-              updated_at = coalesce($3::timestamptz, now())
+              updated_at = coalesce($4::timestamptz, now())
         where benchmark_key = $1
           and company_id is not distinct from $2::uuid
+          and project_id is not distinct from $3::uuid
           and is_current = true
           and is_active = true`,
-      [benchmarkKey, companyId, row.updated_at ?? null],
+      [benchmarkKey, companyId, projectId, row.updated_at ?? null],
     )
-    return insertAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, row)
+    const inserted = await insertAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, row)
+    const persistedMetadata = inserted.metadata && typeof inserted.metadata === 'object' && !Array.isArray(inserted.metadata)
+      ? inserted.metadata as Record<string, unknown>
+      : {}
+    const generatedAt = normalizeTimestamp(inserted.generated_at)
+    const sourceAsOf = normalizeTimestamp(inserted.source_as_of)
+    const calendarRef = normalizeText(
+      persistedMetadata.calendar_ref
+      ?? persistedMetadata.calendarRef
+      ?? persistedMetadata.construction_calendar_ref
+      ?? persistedMetadata.constructionCalendarRef,
+    )
+    const calendarVersion = normalizeText(
+      persistedMetadata.calendar_version
+      ?? persistedMetadata.calendarVersion
+      ?? persistedMetadata.construction_calendar_version
+      ?? persistedMetadata.constructionCalendarVersion,
+    )
+    if (
+      normalizeText(inserted.duration_day_basis) === 'construction_production_day'
+      && generatedAt
+      && sourceAsOf
+      && calendarRef
+      && calendarVersion
+    ) {
+      await persistCurrentCauseSegments({
+        benchmarkId: requireText(inserted.id, 'persisted benchmark id'),
+        companyId: normalizeText(inserted.company_id) || null,
+        projectId: normalizeText(inserted.project_id) || null,
+        benchmarkKey: requireText(inserted.benchmark_key, 'persisted benchmark key'),
+        generatedAt,
+        sourceWindowStart: normalizeTimestamp(inserted.source_window_start) || null,
+        sourceAsOf,
+        calendarRef,
+        calendarVersion,
+      }, client)
+    }
+    return inserted
   })
 }
 
 export async function stageDurationBenchmarkCandidateAtomically(row: PersistenceRow) {
   const benchmarkKey = requireText(row.benchmark_key, 'benchmark_key')
   const companyId = normalizeText(row.company_id) || null
+  const projectId = normalizeText(row.project_id) || null
   const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata)
     ? row.metadata as Record<string, unknown>
     : {}
@@ -174,12 +223,13 @@ export async function stageDurationBenchmarkCandidateAtomically(row: Persistence
          from public.duration_benchmarks
         where benchmark_key = $1
           and company_id is not distinct from $2::uuid
-          and metadata ->> 'candidate_operation_id' = $3
+          and project_id is not distinct from $3::uuid
+          and metadata ->> 'candidate_operation_id' = $4
           and is_current = false
           and is_active = true
         limit 1
         for update`,
-      [benchmarkKey, companyId, candidateOperationId],
+      [benchmarkKey, companyId, projectId, candidateOperationId],
     )
     const existingId = existing.rows[0]?.id ?? null
     return existingId

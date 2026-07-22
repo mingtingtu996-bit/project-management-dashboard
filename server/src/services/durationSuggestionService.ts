@@ -94,11 +94,16 @@ import type { T2RhythmScheduleCandidateNetworkPhase1Evaluation } from './t2Rhyth
 import type { T2RhythmSchedulePhase1Selection } from './t2RhythmSchedulePhase1SelectionService.js'
 import type { ConstructionOrganizationScenarioSelection } from './constructionOrganizationScenarioSelector.js'
 import {
+  loadCurrentCauseSegment,
+  type DurationBenchmarkCauseSegment,
+} from './durationBenchmarkCauseSegmentService.js'
+import {
   mergeConstructionOrganizationLineageIntoContext,
   readConstructionOrganizationPlanNetworkRuntimeLineage,
   type ConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
 import { resolveDurationDayBasis } from '../utils/durationDayBasis.js'
+import type { StructuredCauseCode } from '../domain/structuredCauseTaxonomy.js'
 
 export type DurationCalibrationSource =
   | 'enterprise_override'
@@ -196,6 +201,13 @@ export interface DurationSuggestion {
   packageChildRhythmWindowStartDay?: number | null
   packageChildRhythmWindowEndDay?: number | null
   packageChildRhythmWindowRole?: string | null
+  benchmarkCauseSegment?: {
+    causeCode: StructuredCauseCode
+    taxonomyVersion: string
+    generatedAt: string
+    sourceAsOf: string
+    sampleCount: number
+  } | null
 }
 
 export interface DurationSuggestionInput {
@@ -259,6 +271,7 @@ export interface DurationSuggestionInput {
   workCalendar?: ConstructionCalendarContext | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
   runtimeEvidenceMode?: 'record' | 'no_write'
+  confirmedCauseCode?: StructuredCauseCode | null
 }
 
 export interface DurationSuggestionRuntimeArtifactPublication {
@@ -319,6 +332,7 @@ const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
 ])
 
 type DurationBenchmarkRow = {
+  id?: string | null
   p50_days?: number | null
   p75_days?: number | null
   p80_days?: number | null
@@ -328,6 +342,9 @@ type DurationBenchmarkRow = {
   confidence_score?: number | null
   company_id?: string | null
   project_id?: string | null
+  generated_at?: string | null
+  source_window_start?: string | null
+  source_as_of?: string | null
   metadata?: Record<string, unknown> | null
   variance?: number | null
   cv?: number | null
@@ -1646,10 +1663,11 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
 async function findBenchmark(benchKey: string, companyId: string | null): Promise<DurationBenchmarkRow | null> {
   let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, duration_day_basis, metadata')
+    .select('id, p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, project_id, duration_day_basis, generated_at, source_window_start, source_as_of, metadata')
     .eq('benchmark_key', benchKey)
     .eq('is_current', true)
     .eq('is_active', true)
+    .is('project_id', null)
 
   query = companyId ? query.eq('company_id', companyId) : query.is('company_id', null)
 
@@ -1659,22 +1677,35 @@ async function findBenchmark(benchKey: string, companyId: string | null): Promis
   return (data ?? null) as DurationBenchmarkRow | null
 }
 
-async function findProjectBenchmark(benchKey: string, projectId: string | null): Promise<DurationBenchmarkRow | null> {
+async function findProjectBenchmark(
+  benchKey: string,
+  companyId: string | null,
+  projectId: string | null,
+): Promise<DurationBenchmarkRow | null> {
   const normalizedProjectId = normalizeId(projectId)
   if (!normalizedProjectId) return null
 
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, duration_day_basis, metadata')
+    .select('id, p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, project_id, duration_day_basis, generated_at, source_window_start, source_as_of, metadata')
     .eq('benchmark_key', benchKey)
     .eq('project_id', normalizedProjectId)
     .eq('is_current', true)
     .eq('is_active', true)
-    .maybeSingle()
+
+  const normalizedCompanyId = normalizeId(companyId)
+  query = normalizedCompanyId ? query.eq('company_id', normalizedCompanyId) : query.is('company_id', null)
+  const { data, error } = await query.maybeSingle()
 
   if (error) throw error
 
-  return data ? { ...(data as DurationBenchmarkRow), project_id: normalizedProjectId } : null
+  return data
+    ? {
+        ...(data as DurationBenchmarkRow),
+        company_id: normalizedCompanyId || null,
+        project_id: normalizedProjectId,
+      }
+    : null
 }
 
 function isTemplateUsableForContext(
@@ -1703,7 +1734,10 @@ function isBenchmarkCandidateScopeConsistent(
   const inputProjectId = normalizeId(input.projectId)
 
   if (scope === 'project') {
-    return Boolean(inputProjectId) && rowProjectId === inputProjectId
+    return Boolean(inputProjectId)
+      && rowProjectId === inputProjectId
+      && Boolean(companyId)
+      && rowCompanyId === companyId
   }
   if (scope === 'company') {
     return Boolean(companyId) && rowCompanyId === companyId && !rowProjectId
@@ -1784,7 +1818,7 @@ async function collectBenchmarkCandidates(params: {
     }
 
     if (!occupiedScopes.has('project')) {
-      addCandidate(await findProjectBenchmark(benchKey, params.input.projectId ?? null), 'project')
+      addCandidate(await findProjectBenchmark(benchKey, params.companyId, params.input.projectId ?? null), 'project')
     }
 
     if (params.companyId && !occupiedScopes.has('company')) {
@@ -1798,6 +1832,72 @@ async function collectBenchmarkCandidates(params: {
     if (candidates.length > 0) return candidates
   }
   return []
+}
+
+function benchmarkRowFromCauseSegment(
+  benchmark: DurationBenchmarkRow,
+  segment: DurationBenchmarkCauseSegment,
+): DurationBenchmarkRow {
+  return {
+    ...benchmark,
+    p50_days: segment.p50Days,
+    p75_days: segment.p75Days,
+    p80_days: segment.p80Days,
+    mean_days: segment.meanDays,
+    sample_count: segment.sampleCount,
+    variance: segment.variance,
+    coefficient_of_variation: segment.variance,
+    company_id: segment.companyId,
+    project_id: segment.projectId,
+    duration_day_basis: segment.durationDayBasis,
+    generated_at: segment.generatedAt,
+    source_window_start: segment.sourceWindowStart,
+    source_as_of: segment.sourceAsOf,
+  }
+}
+
+async function selectCauseAwareBenchmarkCandidates(
+  candidates: DurationBenchmarkCandidate[],
+  confirmedCauseCode: StructuredCauseCode | null | undefined,
+) {
+  const primary = candidates[0] ?? null
+  if (!confirmedCauseCode || !primary) {
+    return {
+      candidates,
+      segment: null as DurationBenchmarkCauseSegment | null,
+      fallback: null as 'all_cause' | null,
+    }
+  }
+
+  const benchmarkId = normalizeId(primary.benchmark.id)
+  if (!benchmarkId) {
+    return { candidates, segment: null, fallback: 'all_cause' as const }
+  }
+
+  try {
+    const segment = await loadCurrentCauseSegment({
+      benchmarkId,
+      causeCode: confirmedCauseCode,
+      companyId: normalizeId(primary.benchmark.company_id) || null,
+      projectId: normalizeId(primary.benchmark.project_id) || null,
+    }, executeDurationLearningRuntimePublicationQuery)
+    if (!segment || !readPositiveNumber(segment.p50Days)) {
+      return { candidates, segment: null, fallback: 'all_cause' as const }
+    }
+    const exactCandidate: DurationBenchmarkCandidate = {
+      ...primary,
+      benchmark: benchmarkRowFromCauseSegment(primary.benchmark, segment),
+      sampleSize: segment.sampleCount,
+    }
+    return { candidates: [exactCandidate], segment, fallback: null }
+  } catch (error) {
+    logger.warn('[durationSuggestionService] failed to load exact benchmark cause segment', {
+      benchmarkId,
+      confirmedCauseCode,
+      error,
+    })
+    return { candidates, segment: null, fallback: 'all_cause' as const }
+  }
 }
 
 async function findDurationOverride(input: {
@@ -4946,12 +5046,19 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       ?? normalizedInput.standardWorkCode
       ?? normalizedInput.engineeringCategoryId
       ?? 'all'
-    const benchmarkCandidates = await collectBenchmarkCandidates({
+    const allCauseBenchmarkCandidates = await collectBenchmarkCandidates({
       benchmarkIdentity,
       wbsNodeType,
       input: normalizedInput,
       companyId,
     })
+    const causeAwareBenchmarkSelection = await selectCauseAwareBenchmarkCandidates(
+      allCauseBenchmarkCandidates,
+      normalizedInput.confirmedCauseCode,
+    )
+    const benchmarkCandidates = causeAwareBenchmarkSelection.candidates
+    const benchmarkCauseSegment = causeAwareBenchmarkSelection.segment
+    const benchmarkCauseFallback = causeAwareBenchmarkSelection.fallback
     const primaryBenchmarkCandidate = benchmarkCandidates[0] ?? null
     const companyBenchmarkCandidate = benchmarkCandidates.find((candidate) => candidate.scope === 'company') ?? null
     const benchmark = primaryBenchmarkCandidate?.benchmark ?? null
@@ -5271,7 +5378,17 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           benchmarkSampleCount: benchmarkBlend?.sampleCount,
           benchmarkBlendWeightSource: benchmarkMetadataCandidate?.weightSource,
           benchmarkGeneralizationSkipped,
+          benchmarkCauseFallback,
         },
+        benchmarkCauseSegment: benchmarkCauseSegment
+          ? {
+              causeCode: benchmarkCauseSegment.causeCode,
+              taxonomyVersion: benchmarkCauseSegment.taxonomyVersion,
+              generatedAt: benchmarkCauseSegment.generatedAt,
+              sourceAsOf: benchmarkCauseSegment.sourceAsOf,
+              sampleCount: benchmarkCauseSegment.sampleCount,
+            }
+          : null,
         benchmarkKey: standardBenchmarkKey,
         sampleSize: 0,
         dataMaturity: maturity.level,
@@ -5297,7 +5414,19 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       businessReason: noSeedReason.message,
       businessReasonCode: noSeedReason.code,
       businessReasonCodes: [noSeedReason.code],
-      businessReasonParams: noSeedReason.params,
+      businessReasonParams: {
+        ...noSeedReason.params,
+        benchmarkCauseFallback,
+      },
+      benchmarkCauseSegment: benchmarkCauseSegment
+        ? {
+            causeCode: benchmarkCauseSegment.causeCode,
+            taxonomyVersion: benchmarkCauseSegment.taxonomyVersion,
+            generatedAt: benchmarkCauseSegment.generatedAt,
+            sourceAsOf: benchmarkCauseSegment.sourceAsOf,
+            sampleCount: benchmarkCauseSegment.sampleCount,
+          }
+        : null,
       dataMaturity: unavailableMaturity.level,
       dataMaturityReasons: unavailableMaturity.reasons,
       dataUpgradePath: unavailableMaturity.upgradePath,

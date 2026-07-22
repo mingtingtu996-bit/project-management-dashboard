@@ -4,10 +4,15 @@ const mocks = vi.hoisted(() => ({
   query: vi.fn(),
   release: vi.fn(),
   getClient: vi.fn(),
+  persistCurrentCauseSegments: vi.fn(),
 }))
 
 vi.mock('../database.js', () => ({
   getClient: mocks.getClient,
+}))
+
+vi.mock('../services/durationBenchmarkCauseSegmentService.js', () => ({
+  persistCurrentCauseSegments: mocks.persistCurrentCauseSegments,
 }))
 
 const {
@@ -21,6 +26,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.getClient.mockResolvedValue({ query: mocks.query, release: mocks.release })
+    mocks.persistCurrentCauseSegments.mockResolvedValue([])
     mocks.query.mockImplementation(async (sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
       if (['begin', 'commit', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
@@ -63,6 +69,109 @@ describe('durationLearningAssetAtomicStoreService', () => {
     expect(mocks.release).toHaveBeenCalledOnce()
   })
 
+  it('uses the exact project scope and persists cause segments before committing the benchmark', async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'commit', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('update public.duration_benchmarks')) return { rows: [], rowCount: 1 }
+      if (normalized.includes('insert into public.duration_benchmarks')) {
+        return {
+          rows: [{
+            id: 'benchmark-project-1',
+            benchmark_key: 'work-1',
+            company_id: 'company-1',
+            project_id: 'project-1',
+            duration_day_basis: 'construction_production_day',
+            generated_at: new Date('2026-07-21T00:00:00.000Z'),
+            source_window_start: new Date('2026-07-01T00:00:00.000Z'),
+            source_as_of: new Date('2026-07-20T00:00:00.000Z'),
+            metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07' },
+          }],
+          rowCount: 1,
+        }
+      }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    await replaceDurationBenchmarkAtomically({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      benchmark_key: 'work-1',
+      benchmark_version: 'v1:2026-07-21',
+      generated_at: '2026-07-21T00:00:00.000Z',
+      source_window_start: '2026-07-01T00:00:00.000Z',
+      source_as_of: '2026-07-20T00:00:00.000Z',
+      duration_day_basis: 'construction_production_day',
+      is_current: true,
+      is_active: true,
+      metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07' },
+    })
+
+    const sql = mocks.query.mock.calls.map(([statement]) => String(statement).replace(/\s+/g, ' ').trim().toLowerCase())
+    const replacementSql = sql.find((statement) => statement.includes('update public.duration_benchmarks'))
+    expect(replacementSql).toContain('project_id is not distinct from $3::uuid')
+    const insertCall = mocks.query.mock.calls.find(([statement]) => String(statement).includes('insert into public.duration_benchmarks'))
+    expect(insertCall?.[0]).toContain('project_id')
+    expect(insertCall?.[0]).toContain('generated_at')
+    expect(insertCall?.[0]).toContain('source_window_start')
+    expect(insertCall?.[0]).toContain('source_as_of')
+    expect(mocks.persistCurrentCauseSegments).toHaveBeenCalledWith({
+      benchmarkId: 'benchmark-project-1',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      benchmarkKey: 'work-1',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+    }, expect.anything())
+    const commitIndex = sql.indexOf('commit')
+    expect(commitIndex).toBeGreaterThan(sql.findIndex((statement) => statement.includes('insert into public.duration_benchmarks')))
+    expect(mocks.persistCurrentCauseSegments.mock.invocationCallOrder[0])
+      .toBeLessThan(mocks.query.mock.invocationCallOrder[commitIndex])
+  })
+
+  it('rolls back the benchmark when cause-segment persistence fails', async () => {
+    mocks.persistCurrentCauseSegments.mockRejectedValueOnce(new Error('segment insert failed'))
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('update public.duration_benchmarks')) return { rows: [], rowCount: 1 }
+      if (normalized.includes('insert into public.duration_benchmarks')) {
+        return {
+          rows: [{
+            id: 'benchmark-new',
+            benchmark_key: 'work-1',
+            company_id: 'company-1',
+            project_id: null,
+            duration_day_basis: 'construction_production_day',
+            generated_at: '2026-07-21T00:00:00.000Z',
+            source_window_start: null,
+            source_as_of: '2026-07-20T00:00:00.000Z',
+            metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07' },
+          }],
+          rowCount: 1,
+        }
+      }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    await expect(replaceDurationBenchmarkAtomically({
+      company_id: 'company-1',
+      benchmark_key: 'work-1',
+      benchmark_version: 'v1:2026-07-21',
+      generated_at: '2026-07-21T00:00:00.000Z',
+      source_as_of: '2026-07-20T00:00:00.000Z',
+      duration_day_basis: 'construction_production_day',
+      is_current: true,
+      is_active: true,
+      metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07' },
+    })).rejects.toThrow('segment insert failed')
+
+    expect(mocks.query.mock.calls.map(([statement]) => String(statement).trim().toLowerCase())).toContain('rollback')
+  })
+
   it('stages a learned benchmark candidate without retiring the current stable benchmark', async () => {
     mocks.query.mockImplementation(async (sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
@@ -94,6 +203,12 @@ describe('durationLearningAssetAtomicStoreService', () => {
       expect.stringContaining('set is_current = false'),
     ]))
     const insertCall = mocks.query.mock.calls.find(([statement]) => String(statement).includes('insert into public.duration_benchmarks'))
+    const currentCandidateCall = mocks.query.mock.calls.find(([statement]) => (
+      String(statement).includes('from public.duration_benchmarks')
+      && String(statement).includes("metadata ->> 'candidate_operation_id'")
+    ))
+    expect(currentCandidateCall?.[0]).toContain('project_id is not distinct from $3::uuid')
+    expect(currentCandidateCall?.[1]?.slice(0, 4)).toEqual(['work-1', 'company-1', null, 'abc'])
     expect(insertCall?.[1]).toContain(false)
     expect(sql.at(-1)).toBe('commit')
   })
