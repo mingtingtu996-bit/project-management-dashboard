@@ -95,6 +95,16 @@ test('Caddy owns only shared 80/443 and routes the two domain names to loopback 
   assert.match(caddyfile, /reverse_proxy 127\.0\.0\.1:8080/u)
   assert.match(caddyfile, /reverse_proxy 127\.0\.0\.1:8081/u)
   assert.match(caddyfile, /Strict-Transport-Security/u)
+  assert.match(
+    caddyfile,
+    /\(workbuddy_upstream_error_response\)\s*\{[\s\S]*?handle_errors\s*\{[\s\S]*?import workbuddy_security_headers[\s\S]*?respond "" \{err\.status_code\}/u,
+    'Caddy-generated upstream errors must preserve their status behind the shared security headers',
+  )
+  assert.equal(
+    Array.from(caddyfile.matchAll(/^\s*import workbuddy_upstream_error_response\s*$/gmu)).length,
+    2,
+    'both HTTPS virtual hosts must harden bootstrap 502 responses',
+  )
   assert.doesNotMatch(caddyfile, /8443|8082/u)
 
   assert.match(

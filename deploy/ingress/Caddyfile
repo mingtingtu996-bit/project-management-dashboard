@@ -12,6 +12,13 @@
 	}
 }
 
+(workbuddy_upstream_error_response) {
+	handle_errors {
+		import workbuddy_security_headers
+		respond "" {err.status_code}
+	}
+}
+
 http://{$PRODUCTION_HOST} {
 	redir https://{$PRODUCTION_HOST}{uri} 308
 }
@@ -22,12 +29,14 @@ http://{$STAGING_HOST} {
 
 https://{$PRODUCTION_HOST} {
 	import workbuddy_security_headers
+	import workbuddy_upstream_error_response
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8080
 }
 
 https://{$STAGING_HOST} {
 	import workbuddy_security_headers
+	import workbuddy_upstream_error_response
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8081
 }
