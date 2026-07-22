@@ -229,6 +229,73 @@ describe('structuredCauseAttributionService', () => {
     })).toThrowError(/CAUSE_EVIDENCE_SOURCE_UNSUPPORTED/)
   })
 
+  it('uses nonblank manual evidence text for candidate identity and persistence fallback', async () => {
+    const scope = {
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task' as const,
+      subjectId: 'task-1',
+      eventType: 'delay' as const,
+      evidence: [{
+        sourceType: 'manual_text' as const,
+        sourceId: 'task:task-1:delay_reason',
+        attributes: { text: 'Evidence fallback text' },
+      }],
+    }
+    const [omitted] = buildStructuredCauseCandidates(scope)
+    const [whitespace] = buildStructuredCauseCandidates({ ...scope, rawText: '   ' })
+    const [direct] = buildStructuredCauseCandidates({
+      ...scope,
+      rawText: '  evidence   FALLBACK text  ',
+      evidence: [],
+    })
+
+    for (const candidate of [omitted, whitespace]) {
+      expect(candidate).toEqual(expect.objectContaining({
+        causeCode: 'other',
+        availability: 'review_required',
+        status: 'candidate',
+        autoConfirmed: false,
+        rawText: 'Evidence fallback text',
+        responsibilityBasis: null,
+        reviewReasonCodes: ['manual_text_requires_user_confirmation'],
+      }))
+    }
+    expect(whitespace.dedupeKey).toBe(omitted.dedupeKey)
+    expect(direct.dedupeKey).toBe(omitted.dedupeKey)
+    expect(buildStructuredCauseCandidates({
+      ...scope,
+      rawText: '   ',
+      evidence: [{
+        sourceType: 'manual_text',
+        sourceId: 'empty-manual-text',
+        attributes: { text: '\t' },
+      }],
+    })).toEqual([])
+
+    let insertParams: unknown[] | undefined
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM public.projects')) {
+        return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        insertParams = params
+        return { rows: [], rowCount: 0 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+    const [persisted] = await persistStructuredCauseCandidates(
+      { ...scope, rawText: '   ' },
+      { queryExec, withTransaction: async (work) => work() },
+    )
+
+    expect(insertParams?.[9]).toBe('Evidence fallback text')
+    expect(persisted).toEqual(expect.objectContaining({
+      rawText: 'Evidence fallback text',
+      dedupeKey: omitted.dedupeKey,
+    }))
+  })
+
   it('persists manual other candidates with collision-proof idempotent identity', async () => {
     const scope = {
       companyId: 'company-1',
@@ -262,6 +329,7 @@ describe('structuredCauseAttributionService', () => {
       },
     ]])
     let nextId = 1
+    let lastUpsertSql = ''
     const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
       if (sql.includes('FROM public.projects')) {
         return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
@@ -269,16 +337,26 @@ describe('structuredCauseAttributionService', () => {
       if (!sql.includes('INSERT INTO public.structured_cause_attributions')) {
         return { rows: [], rowCount: 0 }
       }
+      lastUpsertSql = sql
 
       const evidenceSourceTypes = JSON.parse(String(params[11])) as string[]
       const incoming = {
         id: `manual-other-${nextId}`,
         dedupe_key: String(params[20]),
         cause_code: String(params[5]),
+        prefilled_cause_code: String(params[5]),
+        prefill_modified: null,
         cause_role: String(params[6]),
+        responsibility_class: null,
+        responsibility_basis: params[8],
         status: String(params[16]),
         auto_confirmed: params[17] === true,
         confirmation_source: String(params[18]),
+        confirmed_by: null,
+        confirmed_at: null,
+        rejected_by: null,
+        rejected_at: null,
+        rejection_reason: null,
         raw_text: params[9],
         review_reason_codes: JSON.parse(String(params[19])) as string[],
         evidence_source_types: evidenceSourceTypes,
@@ -293,9 +371,19 @@ describe('structuredCauseAttributionService', () => {
       const resetsManualConflict = /EXCLUDED\.evidence_source_types\s+@>\s+'\["manual_text"\]'::jsonb/.test(sql)
       if (evidenceSourceTypes.includes('manual_text') && resetsManualConflict) {
         Object.assign(current, {
+          cause_code: incoming.cause_code,
+          prefilled_cause_code: incoming.prefilled_cause_code,
+          prefill_modified: incoming.prefill_modified,
           status: 'candidate',
           auto_confirmed: false,
           confirmation_source: 'candidate',
+          responsibility_class: null,
+          responsibility_basis: null,
+          confirmed_by: null,
+          confirmed_at: null,
+          rejected_by: null,
+          rejected_at: null,
+          rejection_reason: null,
           raw_text: incoming.raw_text,
           review_reason_codes: ['manual_text_requires_user_confirmation'],
         })
@@ -332,9 +420,19 @@ describe('structuredCauseAttributionService', () => {
 
     const persistedManual = stored.get(String(created.dedupe_key))!
     Object.assign(persistedManual, {
+      cause_code: 'material_shortage',
+      prefilled_cause_code: 'other',
+      prefill_modified: true,
       status: 'confirmed',
       auto_confirmed: true,
-      confirmation_source: 'deterministic_policy',
+      confirmation_source: 'user_confirmed',
+      responsibility_class: 'contractor_attributable',
+      responsibility_basis: 'supplier_default',
+      confirmed_by: 'reviewer-1',
+      confirmed_at: '2026-04-21T08:00:00.000Z',
+      rejected_by: 'reviewer-2',
+      rejected_at: '2026-04-22T08:00:00.000Z',
+      rejection_reason: 'stale rejection decision',
       review_reason_codes: [],
     })
     const [repeated] = await persistStructuredCauseCandidates(
@@ -345,12 +443,45 @@ describe('structuredCauseAttributionService', () => {
     expect(repeated).toEqual(expect.objectContaining({
       id: created.id,
       dedupe_key: created.dedupe_key,
+      cause_code: 'other',
+      prefilled_cause_code: 'other',
+      prefill_modified: null,
       status: 'candidate',
       auto_confirmed: false,
       confirmation_source: 'candidate',
+      responsibility_class: null,
+      responsibility_basis: null,
+      confirmed_by: null,
+      confirmed_at: null,
+      rejected_by: null,
+      rejected_at: null,
+      rejection_reason: null,
       raw_text: 'material   NOT delivered',
       review_reason_codes: ['manual_text_requires_user_confirmation'],
     }))
+    expect(lastUpsertSql).toContain('evidence_refs = EXCLUDED.evidence_refs')
+    expect(lastUpsertSql).toContain('evidence_source_types = EXCLUDED.evidence_source_types')
+    for (const field of [
+      'cause_code',
+      'prefilled_cause_code',
+      'prefill_modified',
+      'status',
+      'auto_confirmed',
+      'confirmation_source',
+      'raw_text',
+      'review_reason_codes',
+      'responsibility_class',
+      'responsibility_basis',
+      'confirmed_by',
+      'confirmed_at',
+      'rejected_by',
+      'rejected_at',
+      'rejection_reason',
+    ]) {
+      expect(lastUpsertSql).toMatch(new RegExp(
+        `(?:^|\\n)\\s*${field}\\s*=\\s*CASE[\\s\\S]*?manual_text[\\s\\S]*?THEN\\s+EXCLUDED\\.${field}`,
+      ))
+    }
 
     const [different] = await persistStructuredCauseCandidates(
       manualInput('Supplier approval pending'),

@@ -179,6 +179,18 @@ function normalizedManualTextIdentity(value: unknown) {
   return text(value).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ')
 }
 
+function resolveManualRawText(input: StructuredCauseCandidateInput) {
+  const directText = text(input.rawText)
+  if (directText) return directText
+
+  for (const evidence of input.evidence) {
+    if (evidence.sourceType !== 'manual_text') continue
+    const evidenceText = text(evidence.attributes?.text)
+    if (evidenceText) return evidenceText
+  }
+  return null
+}
+
 function asFiniteNumber(value: unknown, fallback = 0) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
@@ -285,12 +297,15 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
     }
   }
 
-  const evidenceItems = input.evidence.slice()
-  if (text(input.rawText) && !evidenceItems.some((item) => item.sourceType === 'manual_text')) {
+  const resolvedManualRawText = resolveManualRawText(input)
+  const evidenceItems = input.evidence.filter((item) => (
+    item.sourceType !== 'manual_text' || resolvedManualRawText !== null
+  ))
+  if (resolvedManualRawText && !evidenceItems.some((item) => item.sourceType === 'manual_text')) {
     evidenceItems.push({
       sourceType: 'manual_text',
       sourceId: `manual:${input.subjectType}:${input.subjectId}:${input.eventType}`,
-      attributes: { text: text(input.rawText) },
+      attributes: { text: resolvedManualRawText },
     })
   }
 
@@ -331,10 +346,7 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
         : 'contributing'
     const hasManualTextSource = sourceTypes.includes('manual_text')
     const manualTextIdentity = hasManualTextSource
-      ? normalizedManualTextIdentity(
-          input.rawText
-            ?? value.evidence.find((item) => item.sourceType === 'manual_text')?.attributes?.text,
-        )
+      ? normalizedManualTextIdentity(resolvedManualRawText)
       : ''
     const dedupeSourceIdentity = hasManualTextSource
       ? `manual_text/v1:${createHash('sha256').update(manualTextIdentity).digest('hex')}`
@@ -360,7 +372,7 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       causeCode,
       causeRole,
       taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-      rawText: text(input.rawText) || null,
+      rawText: hasManualTextSource ? resolvedManualRawText : text(input.rawText) || null,
       evidenceRefs,
       evidenceSourceTypes: sourceTypes,
       windowStart: text(input.windowStart) || null,
@@ -371,7 +383,9 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       autoConfirmed,
       confirmationSource: autoConfirmed ? 'deterministic_policy' : 'candidate',
       responsibilityClass: null,
-      responsibilityBasis: [...new Set(value.responsibilityBases)].join('+') || null,
+      responsibilityBasis: hasManualTextSource
+        ? null
+        : [...new Set(value.responsibilityBases)].join('+') || null,
       requiresManualReview: !autoConfirmed,
       reviewReasonCodes,
       dedupeKey: buildDedupeKey(input, causeCode, causeRole, dedupeSourceIdentity),
@@ -680,20 +694,35 @@ export async function persistStructuredCauseCandidates(
            $21, NULL
          )
          ON CONFLICT (company_id, dedupe_key) DO UPDATE SET
+           cause_code = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.cause_code
+             ELSE structured_cause_attributions.cause_code
+           END,
+           prefilled_cause_code = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.prefilled_cause_code
+             ELSE structured_cause_attributions.prefilled_cause_code
+           END,
+           prefill_modified = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.prefill_modified
+             ELSE structured_cause_attributions.prefill_modified
+           END,
            evidence_refs = EXCLUDED.evidence_refs,
            evidence_source_types = EXCLUDED.evidence_source_types,
-           confidence = GREATEST(structured_cause_attributions.confidence, EXCLUDED.confidence),
+           confidence = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confidence
+             ELSE GREATEST(structured_cause_attributions.confidence, EXCLUDED.confidence)
+           END,
            status = CASE
-             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN 'candidate'
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.status
              WHEN structured_cause_attributions.status IN ('confirmed', 'rejected') THEN structured_cause_attributions.status
              ELSE EXCLUDED.status
            END,
            auto_confirmed = CASE
-             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN FALSE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.auto_confirmed
              ELSE structured_cause_attributions.auto_confirmed OR EXCLUDED.auto_confirmed
            END,
            confirmation_source = CASE
-             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN 'candidate'
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confirmation_source
              ELSE structured_cause_attributions.confirmation_source
            END,
            raw_text = CASE
@@ -702,20 +731,36 @@ export async function persistStructuredCauseCandidates(
            END,
            review_reason_codes = CASE
              WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb
-               THEN '["manual_text_requires_user_confirmation"]'::jsonb
+               THEN EXCLUDED.review_reason_codes
              ELSE structured_cause_attributions.review_reason_codes
            END,
            responsibility_class = CASE
-             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN NULL
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.responsibility_class
              ELSE structured_cause_attributions.responsibility_class
            END,
+           responsibility_basis = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.responsibility_basis
+             ELSE structured_cause_attributions.responsibility_basis
+           END,
            confirmed_by = CASE
-             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN NULL
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confirmed_by
              ELSE structured_cause_attributions.confirmed_by
            END,
            confirmed_at = CASE
-             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN NULL
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confirmed_at
              ELSE structured_cause_attributions.confirmed_at
+           END,
+           rejected_by = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.rejected_by
+             ELSE structured_cause_attributions.rejected_by
+           END,
+           rejected_at = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.rejected_at
+             ELSE structured_cause_attributions.rejected_at
+           END,
+           rejection_reason = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.rejection_reason
+             ELSE structured_cause_attributions.rejection_reason
            END,
            updated_at = NOW()
          RETURNING *`,
