@@ -7807,6 +7807,15 @@ describe('managed-frontier WBS generation', () => {
         operation: {
           type: 'template_generate',
           generationBatchId: scenario.batchId,
+          constructionCalendar: {
+            basis: 'official_construction_calendar_seed',
+            windows: [],
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            availability: 'available',
+            unavailableReason: null,
+          },
           templateIds: [CHINA_GB55032_TEMPLATE_ID],
           selectedNodesByTemplate: {
             [CHINA_GB55032_TEMPLATE_ID]: ['01', '02'],
@@ -7839,6 +7848,12 @@ describe('managed-frontier WBS generation', () => {
       expect(generated.targetFeasibility, scenario.mode).toEqual(expect.objectContaining({
         scenario: 'baseline_target_alignment',
         verdict: expect.stringMatching(/^(tight|unrecoverable)$/),
+        recoverable: expect.objectContaining({
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          availability: 'available',
+        }),
       }))
       expect(proposal, scenario.mode).toBeTruthy()
       expect(consumedScenario, scenario.mode).toEqual(expect.objectContaining({
