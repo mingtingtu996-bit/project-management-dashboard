@@ -402,6 +402,69 @@ test -d "$active"
   assert.equal(result.status, 0, result.stderr)
 })
 
+test('initial activation records no previous target unless current is a valid release symlink', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const resolvePreviousTarget = script.match(
+    /(resolve_previous_target\(\) \{[\s\S]*?\n\})\n\nRELEASE_DIR=/u,
+  )?.[1]
+  assert.ok(resolvePreviousTarget, 'resolve_previous_target must remain executable in isolation')
+  const symlinkProbe = process.platform === 'win32'
+    ? ''
+    : `
+previous="$ROOT_DIR/releases/${'1'.repeat(40)}"
+mkdir -p "$previous"
+ln -s "$previous" "$ROOT_DIR/current"
+test "$(resolve_previous_target)" = "$previous"
+rm -f "$ROOT_DIR/current"
+`
+
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+${resolvePreviousTarget}
+test -z "$(resolve_previous_target)"
+${symlinkProbe}
+touch "$ROOT_DIR/current"
+set +e
+resolve_previous_target
+status=$?
+set -e
+test "$status" -ne 0
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
+})
+
+test('post-activation validation failure invokes rollback instead of bypassing the ERR trap', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const restoreOnFailure = script.match(
+    /(restore_on_failure\(\) \{[\s\S]*?\n\})\ntrap restore_on_failure/u,
+  )?.[1]
+  const failActivation = script.match(
+    /(fail_activation\(\) \{[\s\S]*?\n\})\n\nif \[ -d "\$RELEASE_DIR" \]/u,
+  )?.[1]
+  assert.ok(restoreOnFailure, 'restore_on_failure must remain executable in isolation')
+  assert.ok(failActivation, 'fail_activation must remain executable in isolation')
+  assert.doesNotMatch(script.slice(script.indexOf('ACTIVATED=true')), /\bexit 1\b/u)
+
+  const result = runBash(`
+set -euo pipefail
+CANDIDATE_DIR=/tmp/workbuddy-ingress-candidate
+ACTIVATED=true
+RELEASE_SHA=${'2'.repeat(40)}
+rollback() { printf '%s\\n' rollback-called >&2; return 0; }
+${restoreOnFailure}
+${failActivation}
+trap restore_on_failure ERR
+fail_activation forced-probe-failure
+`)
+
+  assert.equal(result.status, 1, result.stderr)
+  assert.match(result.stderr, /forced-probe-failure/u)
+  assert.match(result.stderr, /rollback-called/u)
+})
+
 test('activation failure still attempts rollback when candidate cleanup fails', async () => {
   const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
   const restoreOnFailure = script.match(
