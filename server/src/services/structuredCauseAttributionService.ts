@@ -1,31 +1,22 @@
 import { createHash, randomUUID } from 'node:crypto'
 
 import { query as rawQuery, withDatabaseTransaction } from '../database.js'
+import {
+  CANONICAL_STRUCTURED_CAUSE_CODES,
+  isStructuredCauseCode,
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  translateLegacyProgressFactor,
+  type StructuredCauseCode,
+} from '../domain/structuredCauseTaxonomy.js'
 import { delayDayDelta } from '../utils/durationDays.js'
 
-export const STRUCTURED_CAUSE_TAXONOMY_VERSION = 'v1.0.0'
+export { STRUCTURED_CAUSE_TAXONOMY_VERSION, type StructuredCauseCode }
 export const STRUCTURED_CAUSE_RULE_VERSION = 'structured-cause-rules-v1'
 export const STRUCTURED_CAUSE_QUALITY_POLICY = Object.freeze({
   minimumSampleCount: 20,
   otherRateRevisionThresholdPercent: 20,
   prefillModificationRateRevisionThresholdPercent: 30,
 })
-
-export type StructuredCauseCode =
-  | 'predecessor_delay'
-  | 'material_shortage'
-  | 'labor_shortage'
-  | 'equipment_unavailable'
-  | 'design_change'
-  | 'drawing_delay'
-  | 'quality_rework'
-  | 'weather_impact'
-  | 'owner_decision'
-  | 'government_inspection'
-  | 'site_capacity_pressure'
-  | 'workflow_sequence'
-  | 'external_readiness'
-  | 'other'
 
 export type CauseRole = 'primary' | 'contributing' | 'transmitted'
 export type CauseStatus = 'candidate' | 'confirmed' | 'rejected' | 'superseded'
@@ -57,22 +48,27 @@ export type StructuredCauseTaxonomyEntry = {
   priority: number
 }
 
-export const STRUCTURED_CAUSE_TAXONOMY: StructuredCauseTaxonomyEntry[] = [
-  { code: 'predecessor_delay', label: 'Predecessor transmission delay', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 92 },
-  { code: 'material_shortage', label: 'Material shortage or late arrival', category: 'resource', linkedDeviationReasonTypes: ['external_readiness', 'site_capacity_pressure'], priority: 90 },
-  { code: 'labor_shortage', label: 'Labor shortage', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 86 },
-  { code: 'equipment_unavailable', label: 'Equipment unavailable', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 84 },
-  { code: 'design_change', label: 'Design change', category: 'design', linkedDeviationReasonTypes: ['external_readiness', 'process_constraint'], priority: 88 },
-  { code: 'drawing_delay', label: 'Drawing or approval delay', category: 'design', linkedDeviationReasonTypes: ['external_readiness'], priority: 89 },
-  { code: 'quality_rework', label: 'Quality rework', category: 'quality', linkedDeviationReasonTypes: ['process_constraint'], priority: 87 },
-  { code: 'weather_impact', label: 'Weather impact', category: 'external', linkedDeviationReasonTypes: ['calendar_productivity'], priority: 82 },
-  { code: 'owner_decision', label: 'Owner decision delay', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 83 },
-  { code: 'government_inspection', label: 'Government inspection or approval', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 81 },
-  { code: 'site_capacity_pressure', label: 'Site capacity pressure', category: 'site', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 80 },
-  { code: 'workflow_sequence', label: 'Workflow sequence deviation', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 78 },
-  { code: 'external_readiness', label: 'External readiness not met', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 76 },
-  { code: 'other', label: 'Other or unclassified', category: 'fallback', linkedDeviationReasonTypes: [], priority: 1 },
-]
+const STRUCTURED_CAUSE_TAXONOMY_DETAILS: Record<StructuredCauseCode, Omit<StructuredCauseTaxonomyEntry, 'code'>> = {
+  predecessor_delay: { label: 'Predecessor transmission delay', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 92 },
+  material_shortage: { label: 'Material shortage or late arrival', category: 'resource', linkedDeviationReasonTypes: ['external_readiness', 'site_capacity_pressure'], priority: 90 },
+  labor_shortage: { label: 'Labor shortage', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 86 },
+  equipment_unavailable: { label: 'Equipment unavailable', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 84 },
+  design_change: { label: 'Design change', category: 'design', linkedDeviationReasonTypes: ['external_readiness', 'process_constraint'], priority: 88 },
+  drawing_delay: { label: 'Drawing or approval delay', category: 'design', linkedDeviationReasonTypes: ['external_readiness'], priority: 89 },
+  quality_rework: { label: 'Quality rework', category: 'quality', linkedDeviationReasonTypes: ['process_constraint'], priority: 87 },
+  weather_impact: { label: 'Weather impact', category: 'external', linkedDeviationReasonTypes: ['calendar_productivity'], priority: 82 },
+  owner_decision: { label: 'Owner decision delay', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 83 },
+  government_inspection: { label: 'Government inspection or approval', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 81 },
+  site_capacity_pressure: { label: 'Site capacity pressure', category: 'site', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 80 },
+  workflow_sequence: { label: 'Workflow sequence deviation', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 78 },
+  external_readiness: { label: 'External readiness not met', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 76 },
+  other: { label: 'Other or unclassified', category: 'fallback', linkedDeviationReasonTypes: [], priority: 1 },
+}
+
+export const STRUCTURED_CAUSE_TAXONOMY: StructuredCauseTaxonomyEntry[] = CANONICAL_STRUCTURED_CAUSE_CODES.map((code) => ({
+  code,
+  ...STRUCTURED_CAUSE_TAXONOMY_DETAILS[code],
+}))
 
 const TAXONOMY_BY_CODE = new Map(STRUCTURED_CAUSE_TAXONOMY.map((entry) => [entry.code, entry]))
 const AUTO_CONFIRM_MIN_CONFIDENCE = 0.94
@@ -165,7 +161,7 @@ function asFiniteNumber(value: unknown, fallback = 0) {
 }
 
 function isCauseCode(value: unknown): value is StructuredCauseCode {
-  return TAXONOMY_BY_CODE.has(text(value) as StructuredCauseCode)
+  return isStructuredCauseCode(text(value))
 }
 
 function resolveObstacleCause(attributes: Record<string, unknown>): CauseRuleMatch {
@@ -194,11 +190,13 @@ function resolveConditionCause(attributes: Record<string, unknown>): CauseRuleMa
 
 function resolveForecastFactorCause(attributes: Record<string, unknown>): CauseRuleMatch | null {
   const key = text(attributes.factorKey ?? attributes.factor_key ?? attributes.key)
-  if (key === 'resource_conflict' || key === 'progress_velocity') return { causeCode: 'site_capacity_pressure', confidence: 0.78, responsibilityBasis: 'site_capacity' }
-  if (key === 'external_readiness') return { causeCode: 'external_readiness', confidence: 0.76, responsibilityBasis: 'external_wait' }
-  if (key === 'weather_forecast_impact' || key === 'seasonal_productivity') return { causeCode: 'weather_impact', confidence: 0.74, responsibilityBasis: 'calendar_productivity' }
-  if (key === 'workflow_sequence') return { causeCode: 'workflow_sequence', confidence: 0.74, responsibilityBasis: 'workflow' }
-  return null
+  const translation = translateLegacyProgressFactor(key)
+  if (!translation) return null
+
+  if (key === 'resource_conflict' || key === 'progress_velocity') return { causeCode: translation.causeCode, confidence: 0.78, responsibilityBasis: 'site_capacity' }
+  if (key === 'external_readiness') return { causeCode: translation.causeCode, confidence: 0.76, responsibilityBasis: 'external_wait' }
+  if (key === 'seasonal_productivity' || key === 'process_seasonal_sensitivity' || key === 'weather_forecast_impact' || key === 'productivity_compensation') return { causeCode: translation.causeCode, confidence: 0.74, responsibilityBasis: 'calendar_productivity' }
+  return { causeCode: translation.causeCode, confidence: 0.74, responsibilityBasis: 'workflow' }
 }
 
 function resolveEvidenceCause(evidence: StructuredCauseEvidence): CauseRuleMatch | null {

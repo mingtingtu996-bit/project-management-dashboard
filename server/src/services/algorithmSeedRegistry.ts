@@ -61,6 +61,7 @@ import {
   V1474_REGIONAL_CLIMATE_RULE_SEED_META,
 } from '../seeds/v1474RegionalClimateRuleSeed.js'
 import { PROGRESS_DEVIATION_CAUSE_RULES } from '../seeds/progressDeviationCauseRegistry.js'
+import { STRUCTURED_CAUSE_TAXONOMY_VERSION } from '../domain/structuredCauseTaxonomy.js'
 import { RESPONSIBILITY_HEALTH_RULE_SEED } from '../seeds/responsibilityHealthRuleSeed.js'
 import { MILESTONE_INTEGRITY_RULE_SEED } from '../seeds/milestoneIntegrityRuleSeed.js'
 import {
@@ -1179,7 +1180,7 @@ export const ALGORITHM_SEED_REGISTRY: AlgorithmSeedRegistryEntry[] = [
     meta: {
       seedVersion: 'v1.4.19-progress-deviation-cause-rule-seed',
       seedScope: 'progress_deviation_cause',
-      sourceStandards: ['progress_deviation_cause_registry', 'v1.4.19 health and deviation analysis'],
+      sourceStandards: ['structured_cause_taxonomy', 'progress_deviation_cause_registry', 'v1.4.19 health and deviation analysis'],
       expectedCounts: { records: PROGRESS_DEVIATION_CAUSE_RULES.length },
       evidenceSources: [
         {
@@ -1188,7 +1189,7 @@ export const ALGORITHM_SEED_REGISTRY: AlgorithmSeedRegistryEntry[] = [
           sourceType: 'curated_rule_seed',
         },
       ],
-      generationPolicy: 'rule_seed_only; deviation causes classify governed factor signals and do not create progress facts',
+      generationPolicy: `rule_seed_only; ${STRUCTURED_CAUSE_TAXONOMY_VERSION} translates legacy factor signals to canonical causes and does not create progress facts`,
       relationshipRole: 'progress_deviation_cause_classifier',
       upstreamRuleTypes: ['duration_context_factor_summary', 'project_schedule_state', 'impact_signal_summary'],
       downstreamRuleTypes: ['progressDeviationService', 'Reports deviation reason chain', 'projectHealthDeviationSummaryService'],
