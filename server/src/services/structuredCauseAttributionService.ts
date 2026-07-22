@@ -20,6 +20,13 @@ export const STRUCTURED_CAUSE_QUALITY_POLICY = Object.freeze({
 
 export type CauseRole = 'primary' | 'contributing' | 'transmitted'
 export type CauseStatus = 'candidate' | 'confirmed' | 'rejected' | 'superseded'
+export type StructuredCauseAvailability = 'available' | 'review_required' | 'unavailable'
+export type CanonicalCauseResolution = {
+  availability: StructuredCauseAvailability
+  causeCode: StructuredCauseCode | null
+  taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
+  reviewReasonCodes: string[]
+}
 export type ContractualResponsibilityClass =
   | 'owner_attributable'
   | 'contractor_attributable'
@@ -36,9 +43,21 @@ export type StructuredCauseEvidenceSource =
   | 'weather_signal'
   | 'change_log'
   | 'forecast_factor'
-  | 'offline_label'
   | 'manual_text'
   | 'user_confirmation'
+
+const STRUCTURED_CAUSE_EVIDENCE_SOURCES = new Set<StructuredCauseEvidenceSource>([
+  'task_obstacle',
+  'task_condition',
+  'task_dependency',
+  'material_arrival',
+  'drawing_package',
+  'weather_signal',
+  'change_log',
+  'forecast_factor',
+  'manual_text',
+  'user_confirmation',
+])
 
 export type StructuredCauseTaxonomyEntry = {
   code: StructuredCauseCode
@@ -120,6 +139,7 @@ export type StructuredCauseCandidate = {
   subjectType: StructuredCauseCandidateInput['subjectType']
   subjectId: string
   eventType: StructuredCauseCandidateInput['eventType']
+  availability: Exclude<StructuredCauseAvailability, 'unavailable'>
   causeCode: StructuredCauseCode
   causeRole: CauseRole
   taxonomyVersion: string
@@ -220,12 +240,6 @@ function resolveEvidenceCause(evidence: StructuredCauseEvidence): CauseRuleMatch
       return { causeCode: 'design_change', confidence: 0.9, responsibilityBasis: 'change_log' }
     case 'forecast_factor':
       return resolveForecastFactorCause(attributes)
-    case 'offline_label': {
-      const code = attributes.suggestedCauseCode ?? attributes.suggested_cause_code
-      return isCauseCode(code)
-        ? { causeCode: code, confidence: Math.min(0.99, Math.max(0, asFiniteNumber(attributes.confidence, 0.5))), responsibilityBasis: 'offline_label' }
-        : { causeCode: 'other', confidence: 0.35, responsibilityBasis: 'offline_label' }
-    }
     case 'manual_text':
       return { causeCode: 'other', confidence: 0.3, responsibilityBasis: 'manual_text' }
     default:
@@ -255,6 +269,21 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
   }>()
 
   for (const evidence of input.evidence) {
+    if (!STRUCTURED_CAUSE_EVIDENCE_SOURCES.has(evidence.sourceType)) {
+      throw new Error(`CAUSE_EVIDENCE_SOURCE_UNSUPPORTED:${String(evidence.sourceType)}`)
+    }
+  }
+
+  const evidenceItems = input.evidence.slice()
+  if (text(input.rawText) && !evidenceItems.some((item) => item.sourceType === 'manual_text')) {
+    evidenceItems.push({
+      sourceType: 'manual_text',
+      sourceId: `manual:${input.subjectType}:${input.subjectId}:${input.eventType}`,
+      attributes: { text: text(input.rawText) },
+    })
+  }
+
+  for (const evidence of evidenceItems) {
     const match = resolveEvidenceCause(evidence)
     if (!match) continue
     const existing = grouped.get(match.causeCode) ?? {
@@ -289,15 +318,16 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       : causeCode === firstDirectCause
         ? 'primary'
         : 'contributing'
-    const hasOfflineOrManualSource = sourceTypes.some((source) => source === 'offline_label' || source === 'manual_text')
-    const reviewReasonCodes = [
-      confidence < AUTO_CONFIRM_MIN_CONFIDENCE ? 'confidence_below_auto_confirm_threshold' : '',
-      sourceTypes.length < AUTO_CONFIRM_MIN_SOURCE_TYPES ? 'insufficient_independent_evidence_sources' : '',
-      asFiniteNumber(input.impactDays) > AUTO_CONFIRM_MAX_IMPACT_DAYS ? 'high_impact_requires_review' : '',
-      ALWAYS_REVIEW_CODES.has(causeCode) ? 'cause_code_requires_review' : '',
-      hasOfflineOrManualSource ? 'offline_or_manual_label_requires_confirmation' : '',
-      causeRole === 'transmitted' ? 'transmitted_cause_requires_chain_confirmation' : '',
-    ].filter(Boolean)
+    const hasManualTextSource = sourceTypes.includes('manual_text')
+    const reviewReasonCodes = hasManualTextSource
+      ? ['manual_text_requires_user_confirmation']
+      : [
+          confidence < AUTO_CONFIRM_MIN_CONFIDENCE ? 'confidence_below_auto_confirm_threshold' : '',
+          sourceTypes.length < AUTO_CONFIRM_MIN_SOURCE_TYPES ? 'insufficient_independent_evidence_sources' : '',
+          asFiniteNumber(input.impactDays) > AUTO_CONFIRM_MAX_IMPACT_DAYS ? 'high_impact_requires_review' : '',
+          ALWAYS_REVIEW_CODES.has(causeCode) ? 'cause_code_requires_review' : '',
+          causeRole === 'transmitted' ? 'transmitted_cause_requires_chain_confirmation' : '',
+        ].filter(Boolean)
     const autoConfirmed = reviewReasonCodes.length === 0
 
     return {
@@ -306,6 +336,7 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       subjectType: input.subjectType,
       subjectId: input.subjectId,
       eventType: input.eventType,
+      availability: autoConfirmed ? 'available' : 'review_required',
       causeCode,
       causeRole,
       taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,

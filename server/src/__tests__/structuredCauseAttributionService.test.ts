@@ -183,8 +183,31 @@ describe('structuredCauseAttributionService', () => {
     ]))
   })
 
-  it('never auto-confirms an offline-model label or an unclassified free-text fallback', () => {
+  it('keeps manual text as review-required raw evidence', () => {
     const candidates = buildStructuredCauseCandidates({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      subjectId: 'task-1',
+      eventType: 'delay',
+      rawText: 'material not delivered',
+      evidence: [],
+    })
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        causeCode: 'other',
+        availability: 'review_required',
+        rawText: 'material not delivered',
+        status: 'candidate',
+        autoConfirmed: false,
+        reviewReasonCodes: ['manual_text_requires_user_confirmation'],
+      }),
+    ])
+  })
+
+  it('rejects offline labels as new production evidence', () => {
+    expect(() => buildStructuredCauseCandidates({
       companyId: 'company-1',
       projectId: 'project-1',
       subjectType: 'task',
@@ -193,7 +216,7 @@ describe('structuredCauseAttributionService', () => {
       rawText: '现场临时协调后恢复',
       evidence: [
         {
-          sourceType: 'offline_label',
+          sourceType: 'offline_label' as never,
           sourceId: 'label-1',
           attributes: { suggestedCauseCode: 'labor_shortage', confidence: 0.99 },
         },
@@ -203,12 +226,7 @@ describe('structuredCauseAttributionService', () => {
           attributes: { text: '现场临时协调后恢复' },
         },
       ],
-    })
-
-    expect(candidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ causeCode: 'labor_shortage', status: 'candidate', autoConfirmed: false }),
-      expect.objectContaining({ causeCode: 'other', status: 'candidate', autoConfirmed: false }),
-    ]))
+    })).toThrowError(/CAUSE_EVIDENCE_SOURCE_UNSUPPORTED/)
   })
 
   it('rejects cross-tenant persistence before writing candidate rows', async () => {

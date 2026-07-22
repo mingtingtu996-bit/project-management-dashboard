@@ -27,9 +27,9 @@ import {
   type DurationContributionMode,
 } from '../seeds/durationContributionMode.js'
 import {
-  resolveProgressDeviationCauseRule,
-  type ProgressDeviationCauseRuleMatch,
-} from '../seeds/progressDeviationCauseRegistry.js'
+  translateLegacyProgressFactor,
+  type StructuredCauseCode,
+} from '../domain/structuredCauseTaxonomy.js'
 import type {
   DurationContextFactor,
   DurationContextSummary,
@@ -391,8 +391,89 @@ function canUseWindowAttribution(mode: DurationContributionMode) {
     || mode === 'handover_marker'
 }
 
-function getFactorReasonConfig(key: string, mode: DurationContributionMode): ProgressDeviationCauseRuleMatch | null {
-  return resolveProgressDeviationCauseRule(key, mode)
+type ProgressDeviationFactorReasonConfig = {
+  reason: string
+  reasonType: string
+  canonicalCauseCode: StructuredCauseCode
+  taxonomyVersion: string
+  priority: number
+  confidenceWeight: number
+  responsibilityBasis: string
+}
+
+function getFactorReasonConfig(key: string, mode: DurationContributionMode): ProgressDeviationFactorReasonConfig | null {
+  const translation = translateLegacyProgressFactor(key)
+  if (!translation) return null
+
+  if (
+    mode !== 'duration_bearing'
+    && (
+      (key !== 'process_constraint' && key !== 'external_readiness')
+      || !canUseWindowAttribution(mode)
+    )
+  ) return null
+
+  if (key === 'resource_conflict' || key === 'progress_velocity') {
+    return {
+      ...translation,
+      canonicalCauseCode: translation.causeCode,
+      reason: '\u73b0\u573a\u627f\u8f7d\u538b\u529b',
+      reasonType: 'site_capacity_pressure',
+      priority: 90,
+      confidenceWeight: 0.82,
+      responsibilityBasis: 'site_capacity',
+    }
+  }
+  if (key === 'workflow_sequence') {
+    return {
+      ...translation,
+      canonicalCauseCode: translation.causeCode,
+      reason: '\u6d41\u6c34\u8282\u594f\u504f\u5dee',
+      reasonType: 'workflow_sequence',
+      priority: 80,
+      confidenceWeight: 0.76,
+      responsibilityBasis: 'workflow',
+    }
+  }
+  if (
+    key === 'seasonal_productivity'
+    || key === 'process_seasonal_sensitivity'
+    || key === 'weather_forecast_impact'
+    || key === 'productivity_compensation'
+  ) {
+    return {
+      ...translation,
+      canonicalCauseCode: translation.causeCode,
+      reason: '\u5b63\u8282/\u65e5\u5386\u4ea7\u80fd\u5f71\u54cd',
+      reasonType: 'calendar_productivity',
+      priority: 70,
+      confidenceWeight: 0.7,
+      responsibilityBasis: 'calendar_productivity',
+    }
+  }
+  if (key === 'process_constraint') {
+    return {
+      ...translation,
+      canonicalCauseCode: translation.causeCode,
+      reason: '\u5de5\u5e8f\u786c\u7ea6\u675f\u672a\u6ee1\u8db3',
+      reasonType: 'process_constraint',
+      priority: 75,
+      confidenceWeight: 0.74,
+      responsibilityBasis: 'quality_gate',
+    }
+  }
+  if (key === 'external_readiness') {
+    return {
+      ...translation,
+      canonicalCauseCode: translation.causeCode,
+      reason: '\u5916\u90e8\u6761\u4ef6\u672a\u6ee1\u8db3',
+      reasonType: 'external_readiness',
+      priority: 78,
+      confidenceWeight: 0.78,
+      responsibilityBasis: 'external_wait',
+    }
+  }
+  return null
 }
 
 function readFactorSummary(value: unknown): DurationContextSummary | null {
@@ -679,6 +760,8 @@ function buildForecastDelayReasons(params: {
         evidence: compactRecord({
           ...evidenceProfile.evidence,
           factor_key: key,
+          canonical_cause_code: config.canonicalCauseCode,
+          canonical_cause_taxonomy_version: config.taxonomyVersion,
           factor_label: normalizeText(factor.label) || null,
           factor_source: normalizeText(factor.source) || null,
           raw_extra_days: rawImpactDays,
