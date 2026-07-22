@@ -35,6 +35,18 @@ describe('migration helper entrypoints', () => {
     expect(mismatches).toEqual([])
   })
 
+  it('exposes migration 324 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '324_canonical_cause_and_benchmark_provenance.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.duration_benchmark_cause_segments')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean.trimEnd().endsWith(forward.trim())).toBe(true)
+  })
+
   it('pins clean migration helpers to the canonical V4 bundle only', () => {
     const cleanRunner = readServerFile('run-clean-migration.mjs')
     const guidanceRunner = readServerFile('run-migration.js')
