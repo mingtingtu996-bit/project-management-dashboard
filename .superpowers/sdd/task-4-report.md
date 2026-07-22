@@ -93,3 +93,108 @@ Result: `git diff --check` passed. Git emitted only the repository's existing LF
 - No database connection, migration execution, deployment, or live/staging verification was performed, as explicitly required by the task.
 - SQL behavior was verified through fixed-SQL unit tests and TypeScript compilation, not against a live PostgreSQL schema.
 - The root `npx vitest` launcher is unavailable in this worktree; verification used the already-installed server-local Vitest executable with the required runner config.
+
+---
+
+## Review Fix Report (2026-07-23)
+
+### Status And Commits
+
+DONE
+
+- Review baseline: `182ba4b31d111f38816efdc178576c01fa337a08`
+- Verified superseding implementation HEAD/full commit: `510ce6ca2ed3324c6cd4009e691efa3bf72e6d4e`
+- Implementation commit subject: `fix(duration): harden cause benchmark segments`
+- This appended report is committed separately after the verified implementation commit so the implementation SHA is immutable and exact.
+
+### Exact Review-Fix Manifest
+
+- `.superpowers/sdd/task-4-report.md` (this appended report only)
+- `server/src/services/durationBenchmarkCauseSegmentService.ts`
+- `server/src/services/durationSuggestionService.ts`
+- `server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts`
+- `server/src/__tests__/durationLearningAssetAtomicStoreService.test.ts`
+- `server/src/__tests__/durationSuggestionService.test.ts`
+
+No migration, UI, deployment, database, or other-workstream file was changed. No adjacent type-file expansion was needed because the affected row/DTO types are local to the two changed service files.
+
+### RED Evidence
+
+All Vitest commands used the required runner loader.
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts
+```
+
+Result before the attribution and taxonomy fix: RED, 4 tests, 3 failed and 1 passed. Unrelated source/event/role, post-window attribution, snapshot mismatch, and multiple-primary fixtures inflated the accepted material sample count from 3 to 9; multiple canonical identities and cross-cause mixed taxonomy versions did not fail closed.
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts server/src/__tests__/durationLearningAssetAtomicStoreService.test.ts
+```
+
+Result before strict INSERT readback: RED, 2 files, 14 tests, 4 failed and 10 passed. Empty, two-row, and malformed scope/provenance `RETURNING` data were accepted, and the atomic writer reached `COMMIT` instead of rejecting and rolling back.
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationSuggestionService.test.ts -t "exact confirmed cause|exact cause segment|falls back to all-cause"
+```
+
+Result before usability/CV correction: RED, 98 discovered tests, 3 failed and 95 skipped. Exact segments with sample counts 1 and 4 changed the final recommendation to 12 days instead of retaining the all-cause 10-day recommended/13-day conservative result. The exact-segment case added the covering `sqrt(variance) / mean` assertion; expected final days were calibrated against the pre-change business path before production code was changed.
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts -t "mismatched sample lineage"
+```
+
+Result before lineage validation: RED, 1 failed and 7 skipped. The promise resolved with the persisted DTO instead of rejecting the mismatched `RETURNING.lineage`.
+
+Each production correction was made only after its corresponding test demonstrated the missing behavior.
+
+### GREEN And Required Gates
+
+Focused GREEN before the implementation commit:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts server/src/__tests__/durationLearningAssetAtomicStoreService.test.ts server/src/__tests__/durationSuggestionService.test.ts
+```
+
+Result: PASS, 3 files, 113 tests.
+
+Required focused plus adjacent suite, run after implementation commit `510ce6ca2ed3324c6cd4009e691efa3bf72e6d4e`:
+
+```powershell
+& .\server\node_modules\.bin\vitest.cmd run --config server/vitest.config.ts --configLoader runner server/src/__tests__/durationBenchmarkCauseSegmentService.test.ts server/src/__tests__/durationLearningAssetAtomicStoreService.test.ts server/src/__tests__/durationSuggestionService.test.ts server/src/__tests__/durationSuggestionSimulation.test.ts server/src/__tests__/durationLearningRuntimeLifecycleService.test.ts
+```
+
+Result: PASS, 5 files, 165 tests.
+
+Server TypeScript, run after the implementation commit:
+
+```powershell
+npm run typecheck --workspace=server
+```
+
+Result: PASS, exit 0, no diagnostics (`tsc -p tsconfig.json --noEmit`). The direct `server/node_modules/.bin/tsc.cmd` launcher was absent, so the repository's server workspace script was used.
+
+Repository checks after the implementation commit:
+
+```powershell
+git diff --check
+git status --short
+```
+
+Result: PASS. `git diff --check` produced no output and `git status --short` was empty before this report append.
+
+### Review-Finding Self-Review
+
+- Attribution SQL now joins each accepted sample through `metadata.structured_cause_snapshot.confirmed_causes[].attribution_id`, with matching cause/taxonomy identity, and requires `task_completion`, `completion`, `primary`, `confirmed`, and `confirmed_at <= source_as_of`. Defensive row validation mirrors those constraints.
+- A sample must resolve to exactly one primary snapshot identity. Duplicate rows for the same identity deduplicate; conflicting canonical identities fail closed, so one sample cannot populate multiple cause segments.
+- Compatible rows are checked for one non-empty taxonomy version across the entire benchmark before any per-cause aggregation or write.
+- Exact cause segments use the existing scope/specificity minimum-sample usability gate. Counts 1-4 retain all-cause candidates, final all-cause days, and `benchmarkCauseFallback: 'all_cause'`.
+- Segment `INSERT RETURNING` must contain exactly one row. Mapped scope, distribution, timestamps, calendar/day basis, taxonomy, sample count, and lineage must equal the attempted write; empty, multiple, malformed, or mismatched readback throws inside the existing `PoolClient` transaction and causes benchmark plus segment rollback.
+- Segment coefficient of variation is `sqrt(variance) / mean` only for finite non-negative variance and finite positive mean; otherwise it is null. The calculation context assertion covers the converted value.
+- Self-review found and closed an additional provenance gap: persisted lineage is now validated, with its own RED and GREEN evidence above.
+
+### Unverified Boundaries And Concerns
+
+- No database connection, migration execution, deployment, staging, or production/live verification was performed, as required.
+- SQL and rollback behavior were verified with deterministic `PoolClient` tests and TypeScript compilation, not a live PostgreSQL schema.
+- No known in-scope code concern remains after the required focused, adjacent, and TypeScript gates.
