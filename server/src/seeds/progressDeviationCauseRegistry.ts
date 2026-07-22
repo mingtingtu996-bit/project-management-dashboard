@@ -1,6 +1,7 @@
 import type { DurationContributionMode } from './durationContributionMode.js'
 import {
   STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  translateLegacyProgressFactor,
   type StructuredCauseCode,
 } from '../domain/structuredCauseTaxonomy.js'
 
@@ -84,13 +85,34 @@ export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   },
 ]
 
-const RULE_BY_FACTOR_KEY = new Map<string, ProgressDeviationCauseRule>()
+export function buildProgressDeviationCauseRuleIndex(
+  rules: readonly ProgressDeviationCauseRule[],
+): Map<string, ProgressDeviationCauseRule> {
+  const index = new Map<string, ProgressDeviationCauseRule>()
 
-for (const rule of PROGRESS_DEVIATION_CAUSE_RULES) {
-  for (const key of rule.factorKeys) {
-    RULE_BY_FACTOR_KEY.set(key, rule)
+  for (const rule of rules) {
+    for (const factorKey of rule.factorKeys) {
+      if (index.has(factorKey)) {
+        throw new Error(`progress_deviation_cause_duplicate_factor:${factorKey}`)
+      }
+
+      const translation = translateLegacyProgressFactor(factorKey)
+      if (
+        !translation
+        || translation.causeCode !== rule.canonicalCauseCode
+        || translation.taxonomyVersion !== rule.taxonomyVersion
+      ) {
+        throw new Error(`progress_deviation_cause_translation_mismatch:${factorKey}`)
+      }
+
+      index.set(factorKey, rule)
+    }
   }
+
+  return index
 }
+
+const RULE_BY_FACTOR_KEY = buildProgressDeviationCauseRuleIndex(PROGRESS_DEVIATION_CAUSE_RULES)
 
 export function resolveProgressDeviationCauseRule(
   factorKey: string,
