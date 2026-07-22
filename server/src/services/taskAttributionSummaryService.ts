@@ -443,9 +443,11 @@ export function buildTaskSummaryAttributionTotals(
       .filter((value): value is number => value !== null)
     const allDelayValuesAvailable = delayValues.length === delayedRows.length
     const delayDaysTotal = allDelayValuesAvailable
+      // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
       ? delayValues.reduce((sum, value) => sum + value, 0)
       : null
     const maxDelayDays = allDelayValuesAvailable
+      // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
       ? delayValues.reduce((max, value) => Math.max(max, value), 0)
       : null
     const avgDelayDays = delayDaysTotal !== null
