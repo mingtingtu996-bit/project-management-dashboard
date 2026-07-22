@@ -21952,6 +21952,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmark_cause_segment_current
 CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
 AS $$
 DECLARE
   benchmark_company_id UUID;
@@ -21987,7 +21989,7 @@ BEGIN
     END IF;
   END IF;
 
-  NEW.updated_at := NOW();
+  NEW.updated_at := pg_catalog.now();
   RETURN NEW;
 END
 $$;
@@ -22000,11 +22002,58 @@ CREATE TRIGGER ensure_duration_benchmark_cause_segment_scope_trigger
   FOR EACH ROW
   EXECUTE FUNCTION public.ensure_duration_benchmark_cause_segment_scope();
 
+CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF (
+    NEW.company_id IS DISTINCT FROM OLD.company_id
+    OR NEW.project_id IS DISTINCT FROM OLD.project_id
+  ) AND EXISTS (
+    SELECT 1
+    FROM public.duration_benchmark_cause_segments segment
+    WHERE segment.benchmark_id = OLD.id
+  ) THEN
+    RAISE EXCEPTION 'duration benchmark scope cannot change while cause segments exist';
+  END IF;
+
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger
+  ON public.duration_benchmarks;
+CREATE TRIGGER prevent_duration_benchmark_scope_drift_with_segments_trigger
+  BEFORE UPDATE OF company_id, project_id
+  ON public.duration_benchmarks
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments();
+
+REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
+  FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()
+  FROM PUBLIC, anon, authenticated;
+
 ALTER TABLE public.duration_benchmark_cause_segments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duration_benchmark_cause_segments FORCE ROW LEVEL SECURITY;
 
 REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM PUBLIC, anon;
-REVOKE INSERT, UPDATE, DELETE ON TABLE public.duration_benchmark_cause_segments FROM authenticated;
+REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM authenticated;
+REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM workbuddy_runtime;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope() FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments() FROM service_role';
+  END IF;
+END
+$$;
+
 GRANT SELECT ON TABLE public.duration_benchmark_cause_segments TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.duration_benchmark_cause_segments TO workbuddy_runtime;
 
@@ -22036,9 +22085,15 @@ CREATE POLICY duration_benchmark_cause_segments_member_read
           duration_benchmark_cause_segments.company_id,
           NULL::TEXT[]
         )
-        AND workbuddy_private.is_active_project_member(
-          duration_benchmark_cause_segments.project_id,
-          NULL::TEXT[]
+        AND (
+          workbuddy_private.is_active_company_member(
+            duration_benchmark_cause_segments.company_id,
+            ARRAY['company_admin']::TEXT[]
+          )
+          OR workbuddy_private.is_active_project_member(
+            duration_benchmark_cause_segments.project_id,
+            NULL::TEXT[]
+          )
         )
         AND EXISTS (
           SELECT 1
@@ -22047,6 +22102,13 @@ CREATE POLICY duration_benchmark_cause_segments_member_read
             AND project.company_id = duration_benchmark_cause_segments.company_id
         )
       )
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.duration_benchmarks benchmark
+      WHERE benchmark.id = duration_benchmark_cause_segments.benchmark_id
+        AND benchmark.company_id IS NOT DISTINCT FROM duration_benchmark_cause_segments.company_id
+        AND benchmark.project_id IS NOT DISTINCT FROM duration_benchmark_cause_segments.project_id
     )
   );
 

@@ -34,9 +34,14 @@ describe('canonical cause benchmark migration', () => {
     expect(forward).toContain("RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 324'")
     expect(forward).toContain('ALTER TABLE public.duration_benchmark_cause_segments FORCE ROW LEVEL SECURITY')
     expect(forward).toContain('REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM PUBLIC, anon')
-    expect(forward).toContain('REVOKE INSERT, UPDATE, DELETE ON TABLE public.duration_benchmark_cause_segments FROM authenticated')
+    expect(forward).toContain('REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM authenticated')
+    expect(forward).toContain('REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM workbuddy_runtime')
+    expect(forward).toMatch(
+      /IF EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = 'service_role'\) THEN\s+EXECUTE 'REVOKE ALL ON TABLE public\.duration_benchmark_cause_segments FROM service_role'/,
+    )
     expect(forward).toContain('GRANT SELECT ON TABLE public.duration_benchmark_cause_segments TO authenticated')
     expect(forward).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.duration_benchmark_cause_segments TO workbuddy_runtime')
+    expect(forward).not.toMatch(/GRANT [^;]+ON TABLE public\.duration_benchmark_cause_segments TO service_role/)
     expect(forward).toContain('CREATE POLICY duration_benchmark_cause_segments_backend_runtime')
     expect(forward).toContain('FOR ALL')
     expect(forward).toContain('TO workbuddy_runtime')
@@ -44,25 +49,69 @@ describe('canonical cause benchmark migration', () => {
 
   it('preserves global and tenant-member reads with project/company authority checks', () => {
     const forward = readSql('migrations', migrationName)
+    const memberReadPolicy = forward.slice(
+      forward.indexOf('CREATE POLICY duration_benchmark_cause_segments_member_read'),
+      forward.indexOf('DROP POLICY IF EXISTS duration_benchmark_cause_segments_backend_runtime'),
+    )
 
     expect(forward).toContain('CREATE POLICY duration_benchmark_cause_segments_member_read')
-    expect(forward).toContain('workbuddy_private.is_active_company_member')
-    expect(forward).toContain('workbuddy_private.is_active_project_member')
-    expect(forward).toContain('duration_benchmark_cause_segments.company_id IS NULL')
-    expect(forward).toContain('duration_benchmark_cause_segments.project_id IS NULL')
-    expect(forward).toContain('project.company_id = duration_benchmark_cause_segments.company_id')
+    expect(memberReadPolicy).toMatch(
+      /duration_benchmark_cause_segments\.company_id IS NULL\s+AND duration_benchmark_cause_segments\.project_id IS NULL/,
+    )
+    expect(memberReadPolicy).toMatch(
+      /duration_benchmark_cause_segments\.company_id IS NOT NULL\s+AND duration_benchmark_cause_segments\.project_id IS NULL\s+AND workbuddy_private\.is_active_company_member\(\s*duration_benchmark_cause_segments\.company_id,\s*NULL::TEXT\[\]\s*\)/,
+    )
+    expect(memberReadPolicy).toMatch(
+      /duration_benchmark_cause_segments\.project_id IS NOT NULL[\s\S]*workbuddy_private\.is_active_company_member\(\s*duration_benchmark_cause_segments\.company_id,\s*NULL::TEXT\[\]\s*\)\s+AND \(\s*workbuddy_private\.is_active_company_member\(\s*duration_benchmark_cause_segments\.company_id,\s*ARRAY\['company_admin'\]::TEXT\[\]\s*\)\s+OR workbuddy_private\.is_active_project_member\(\s*duration_benchmark_cause_segments\.project_id,\s*NULL::TEXT\[\]\s*\)\s*\)/,
+    )
+    expect(memberReadPolicy).toContain('project.company_id = duration_benchmark_cause_segments.company_id')
+    expect(memberReadPolicy).toMatch(
+      /FROM public\.duration_benchmarks benchmark\s+WHERE benchmark\.id = duration_benchmark_cause_segments\.benchmark_id\s+AND benchmark\.company_id IS NOT DISTINCT FROM duration_benchmark_cause_segments\.company_id\s+AND benchmark\.project_id IS NOT DISTINCT FROM duration_benchmark_cause_segments\.project_id/,
+    )
   })
 
   it('rejects segment scope that disagrees with its benchmark or project authority', () => {
     const forward = readSql('migrations', migrationName)
+    const segmentScopeFunction = forward.slice(
+      forward.indexOf('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()'),
+      forward.indexOf('DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger'),
+    )
+    const parentScopeFunction = forward.slice(
+      forward.indexOf('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()'),
+      forward.indexOf('DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger'),
+    )
 
     expect(forward).toContain('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()')
+    expect(segmentScopeFunction).toContain('SECURITY INVOKER')
+    expect(segmentScopeFunction).toContain('SET search_path = pg_catalog')
     expect(forward).toContain('BEFORE INSERT OR UPDATE')
     expect(forward).toContain('NEW.company_id IS DISTINCT FROM benchmark_company_id')
     expect(forward).toContain('NEW.project_id IS DISTINCT FROM benchmark_project_id')
     expect(forward).toContain("RAISE EXCEPTION 'duration benchmark cause segment scope mismatch'")
     expect(forward).toContain('project_company_id IS DISTINCT FROM NEW.company_id')
     expect(forward).toContain("RAISE EXCEPTION 'duration benchmark cause segment project/company mismatch'")
+    expect(forward).toContain('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()')
+    expect(parentScopeFunction).toContain('SECURITY INVOKER')
+    expect(parentScopeFunction).toContain('SET search_path = pg_catalog')
+    expect(parentScopeFunction).toMatch(
+      /\(\s*NEW\.company_id IS DISTINCT FROM OLD\.company_id\s+OR NEW\.project_id IS DISTINCT FROM OLD\.project_id\s*\)\s+AND EXISTS \(\s*SELECT 1\s+FROM public\.duration_benchmark_cause_segments segment\s+WHERE segment\.benchmark_id = OLD\.id\s*\)/,
+    )
+    expect(parentScopeFunction).toContain("RAISE EXCEPTION 'duration benchmark scope cannot change while cause segments exist'")
+    expect(forward).toMatch(
+      /CREATE TRIGGER prevent_duration_benchmark_scope_drift_with_segments_trigger\s+BEFORE UPDATE OF company_id, project_id\s+ON public\.duration_benchmarks\s+FOR EACH ROW\s+EXECUTE FUNCTION public\.prevent_duration_benchmark_scope_drift_with_segments\(\)/,
+    )
+    expect(forward).toMatch(
+      /REVOKE EXECUTE ON FUNCTION public\.ensure_duration_benchmark_cause_segment_scope\(\)\s+FROM PUBLIC, anon, authenticated/,
+    )
+    expect(forward).toMatch(
+      /REVOKE EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_drift_with_segments\(\)\s+FROM PUBLIC, anon, authenticated/,
+    )
+    expect(forward).toMatch(
+      /EXECUTE 'REVOKE EXECUTE ON FUNCTION public\.ensure_duration_benchmark_cause_segment_scope\(\) FROM service_role'/,
+    )
+    expect(forward).toMatch(
+      /EXECUTE 'REVOKE EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_drift_with_segments\(\) FROM service_role'/,
+    )
   })
 
   it('provides an exact rollback limited to migration 324 objects', () => {
@@ -70,16 +119,36 @@ describe('canonical cause benchmark migration', () => {
 
     expect(existsSync(rollbackPath)).toBe(true)
     const rollback = readSql('migrations', 'rollback', migrationName)
-    expect(rollback).toContain('DROP POLICY IF EXISTS duration_benchmark_cause_segments_member_read')
-    expect(rollback).toContain('DROP POLICY IF EXISTS duration_benchmark_cause_segments_backend_runtime')
-    expect(rollback).toContain('DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger')
+    expect(rollback).toMatch(
+      /IF to_regclass\('public\.duration_benchmark_cause_segments'\) IS NOT NULL THEN[\s\S]*EXECUTE 'DROP POLICY IF EXISTS duration_benchmark_cause_segments_member_read ON public\.duration_benchmark_cause_segments'[\s\S]*EXECUTE 'DROP POLICY IF EXISTS duration_benchmark_cause_segments_backend_runtime ON public\.duration_benchmark_cause_segments'[\s\S]*EXECUTE 'DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger ON public\.duration_benchmark_cause_segments'[\s\S]*END IF/,
+    )
+    expect(rollback).toMatch(
+      /IF to_regclass\('public\.duration_benchmarks'\) IS NOT NULL THEN\s+EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger ON public\.duration_benchmarks';\s+END IF/,
+    )
     expect(rollback).toContain('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope()')
+    expect(rollback).toContain('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_drift_with_segments()')
     expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
+    expect(rollback).toContain('ALTER TABLE IF EXISTS public.duration_benchmarks')
     expect(rollback).toContain('DROP COLUMN IF EXISTS generated_at')
     expect(rollback).toContain('DROP COLUMN IF EXISTS source_window_start')
     expect(rollback).toContain('DROP COLUMN IF EXISTS source_as_of')
     expect(rollback).not.toContain('DROP TABLE IF EXISTS public.duration_benchmarks')
     expect(rollback).not.toContain('DROP POLICY IF EXISTS duration_benchmarks_')
+
+    const parentTriggerDrop = rollback.indexOf('DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger')
+    const segmentTriggerDrop = rollback.indexOf('DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger')
+    const parentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_drift_with_segments()')
+    const segmentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope()')
+    const tableDrop = rollback.indexOf('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
+    const columnDrop = rollback.indexOf('ALTER TABLE IF EXISTS public.duration_benchmarks')
+
+    expect(parentTriggerDrop).toBeGreaterThan(-1)
+    expect(segmentTriggerDrop).toBeGreaterThan(-1)
+    expect(parentFunctionDrop).toBeGreaterThan(parentTriggerDrop)
+    expect(segmentFunctionDrop).toBeGreaterThan(segmentTriggerDrop)
+    expect(tableDrop).toBeGreaterThan(parentFunctionDrop)
+    expect(tableDrop).toBeGreaterThan(segmentFunctionDrop)
+    expect(columnDrop).toBeGreaterThan(tableDrop)
   })
 
   it('is the exact migration 324 block at CLEAN EOF', () => {
