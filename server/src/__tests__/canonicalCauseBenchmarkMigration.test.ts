@@ -25,6 +25,8 @@ describe('canonical cause benchmark migration', () => {
     expect(forward).toContain("'government_inspection','site_capacity_pressure','workflow_sequence','external_readiness','other'")
     expect(forward).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmark_cause_segment_current')
     expect(forward).toContain('WHERE is_current = TRUE')
+    expect(forward).toContain('CREATE INDEX IF NOT EXISTS idx_duration_benchmark_cause_segments_benchmark_id')
+    expect(forward).toContain('ON public.duration_benchmark_cause_segments (benchmark_id)')
   })
 
   it('fails closed on missing runtime role and limits direct mutation authority', () => {
@@ -70,48 +72,57 @@ describe('canonical cause benchmark migration', () => {
     )
   })
 
-  it('rejects segment scope that disagrees with its benchmark or project authority', () => {
+  it('serializes parent-first and segment-first scope races while preserving scope authority', () => {
     const forward = readSql('migrations', migrationName)
     const segmentScopeFunction = forward.slice(
       forward.indexOf('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()'),
       forward.indexOf('DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger'),
     )
     const parentScopeFunction = forward.slice(
-      forward.indexOf('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()'),
-      forward.indexOf('DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger'),
+      forward.indexOf('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()'),
+      forward.indexOf('DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger'),
     )
 
     expect(forward).toContain('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()')
     expect(segmentScopeFunction).toContain('SECURITY INVOKER')
+    expect(segmentScopeFunction).not.toContain('SECURITY DEFINER')
     expect(segmentScopeFunction).toContain('SET search_path = pg_catalog')
+    // Parent-first: FOR SHARE waits, then the segment validator reads the committed parent scope.
+    // Segment-first: the held share lock delays the parent update until its definer guard can see the segment.
+    expect(segmentScopeFunction).toMatch(
+      /FROM public\.duration_benchmarks benchmark\s+WHERE benchmark\.id = NEW\.benchmark_id\s+FOR SHARE/,
+    )
     expect(forward).toContain('BEFORE INSERT OR UPDATE')
     expect(forward).toContain('NEW.company_id IS DISTINCT FROM benchmark_company_id')
     expect(forward).toContain('NEW.project_id IS DISTINCT FROM benchmark_project_id')
     expect(forward).toContain("RAISE EXCEPTION 'duration benchmark cause segment scope mismatch'")
     expect(forward).toContain('project_company_id IS DISTINCT FROM NEW.company_id')
     expect(forward).toContain("RAISE EXCEPTION 'duration benchmark cause segment project/company mismatch'")
-    expect(forward).toContain('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()')
-    expect(parentScopeFunction).toContain('SECURITY INVOKER')
+    expect(forward).toContain('CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()')
+    expect(parentScopeFunction).toContain('SECURITY DEFINER')
+    expect(parentScopeFunction).not.toContain('SECURITY INVOKER')
     expect(parentScopeFunction).toContain('SET search_path = pg_catalog')
+    expect(parentScopeFunction).not.toContain('EXECUTE ')
     expect(parentScopeFunction).toMatch(
       /\(\s*NEW\.company_id IS DISTINCT FROM OLD\.company_id\s+OR NEW\.project_id IS DISTINCT FROM OLD\.project_id\s*\)\s+AND EXISTS \(\s*SELECT 1\s+FROM public\.duration_benchmark_cause_segments segment\s+WHERE segment\.benchmark_id = OLD\.id\s*\)/,
     )
     expect(parentScopeFunction).toContain("RAISE EXCEPTION 'duration benchmark scope cannot change while cause segments exist'")
     expect(forward).toMatch(
-      /CREATE TRIGGER prevent_duration_benchmark_scope_drift_with_segments_trigger\s+BEFORE UPDATE OF company_id, project_id\s+ON public\.duration_benchmarks\s+FOR EACH ROW\s+EXECUTE FUNCTION public\.prevent_duration_benchmark_scope_drift_with_segments\(\)/,
+      /CREATE TRIGGER prevent_duration_benchmark_scope_change_with_segments_trigger\s+BEFORE UPDATE OF company_id, project_id\s+ON public\.duration_benchmarks\s+FOR EACH ROW\s+EXECUTE FUNCTION public\.prevent_duration_benchmark_scope_change_with_segments\(\)/,
     )
     expect(forward).toMatch(
       /REVOKE EXECUTE ON FUNCTION public\.ensure_duration_benchmark_cause_segment_scope\(\)\s+FROM PUBLIC, anon, authenticated/,
     )
     expect(forward).toMatch(
-      /REVOKE EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_drift_with_segments\(\)\s+FROM PUBLIC, anon, authenticated/,
+      /REVOKE EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_change_with_segments\(\)\s+FROM PUBLIC, anon, authenticated/,
     )
     expect(forward).toMatch(
       /EXECUTE 'REVOKE EXECUTE ON FUNCTION public\.ensure_duration_benchmark_cause_segment_scope\(\) FROM service_role'/,
     )
     expect(forward).toMatch(
-      /EXECUTE 'REVOKE EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_drift_with_segments\(\) FROM service_role'/,
+      /EXECUTE 'REVOKE EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_change_with_segments\(\) FROM service_role'/,
     )
+    expect(forward).not.toMatch(/GRANT EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_change_with_segments\(\)/)
   })
 
   it('provides an exact rollback limited to migration 324 objects', () => {
@@ -123,10 +134,10 @@ describe('canonical cause benchmark migration', () => {
       /IF to_regclass\('public\.duration_benchmark_cause_segments'\) IS NOT NULL THEN[\s\S]*EXECUTE 'DROP POLICY IF EXISTS duration_benchmark_cause_segments_member_read ON public\.duration_benchmark_cause_segments'[\s\S]*EXECUTE 'DROP POLICY IF EXISTS duration_benchmark_cause_segments_backend_runtime ON public\.duration_benchmark_cause_segments'[\s\S]*EXECUTE 'DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger ON public\.duration_benchmark_cause_segments'[\s\S]*END IF/,
     )
     expect(rollback).toMatch(
-      /IF to_regclass\('public\.duration_benchmarks'\) IS NOT NULL THEN\s+EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger ON public\.duration_benchmarks';\s+END IF/,
+      /IF to_regclass\('public\.duration_benchmarks'\) IS NOT NULL THEN\s+EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger ON public\.duration_benchmarks';\s+END IF/,
     )
     expect(rollback).toContain('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope()')
-    expect(rollback).toContain('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_drift_with_segments()')
+    expect(rollback).toContain('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_change_with_segments()')
     expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
     expect(rollback).toContain('ALTER TABLE IF EXISTS public.duration_benchmarks')
     expect(rollback).toContain('DROP COLUMN IF EXISTS generated_at')
@@ -135,9 +146,9 @@ describe('canonical cause benchmark migration', () => {
     expect(rollback).not.toContain('DROP TABLE IF EXISTS public.duration_benchmarks')
     expect(rollback).not.toContain('DROP POLICY IF EXISTS duration_benchmarks_')
 
-    const parentTriggerDrop = rollback.indexOf('DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger')
+    const parentTriggerDrop = rollback.indexOf('DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger')
     const segmentTriggerDrop = rollback.indexOf('DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger')
-    const parentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_drift_with_segments()')
+    const parentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_change_with_segments()')
     const segmentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope()')
     const tableDrop = rollback.indexOf('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
     const columnDrop = rollback.indexOf('ALTER TABLE IF EXISTS public.duration_benchmarks')

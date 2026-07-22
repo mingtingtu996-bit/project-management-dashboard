@@ -11,12 +11,12 @@ BEGIN
   END IF;
 
   IF to_regclass('public.duration_benchmarks') IS NOT NULL THEN
-    EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger ON public.duration_benchmarks';
+    EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger ON public.duration_benchmarks';
   END IF;
 END
 $$;
 
-DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_drift_with_segments();
+DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_change_with_segments();
 DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope();
 
 DROP TABLE IF EXISTS public.duration_benchmark_cause_segments;

@@ -21949,6 +21949,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmark_cause_segment_current
   ON public.duration_benchmark_cause_segments (benchmark_id, cause_code, taxonomy_version)
   WHERE is_current = TRUE;
 
+CREATE INDEX IF NOT EXISTS idx_duration_benchmark_cause_segments_benchmark_id
+  ON public.duration_benchmark_cause_segments (benchmark_id);
+
 CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -21963,7 +21966,8 @@ BEGIN
   SELECT benchmark.company_id, benchmark.project_id
     INTO benchmark_company_id, benchmark_project_id
     FROM public.duration_benchmarks benchmark
-   WHERE benchmark.id = NEW.benchmark_id;
+   WHERE benchmark.id = NEW.benchmark_id
+   FOR SHARE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'duration benchmark cause segment benchmark not found';
@@ -22002,10 +22006,10 @@ CREATE TRIGGER ensure_duration_benchmark_cause_segment_scope_trigger
   FOR EACH ROW
   EXECUTE FUNCTION public.ensure_duration_benchmark_cause_segment_scope();
 
-CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()
+CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()
 RETURNS TRIGGER
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
 BEGIN
@@ -22024,17 +22028,17 @@ BEGIN
 END
 $$;
 
-DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_drift_with_segments_trigger
+DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger
   ON public.duration_benchmarks;
-CREATE TRIGGER prevent_duration_benchmark_scope_drift_with_segments_trigger
+CREATE TRIGGER prevent_duration_benchmark_scope_change_with_segments_trigger
   BEFORE UPDATE OF company_id, project_id
   ON public.duration_benchmarks
   FOR EACH ROW
-  EXECUTE FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments();
+  EXECUTE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments();
 
 REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
   FROM PUBLIC, anon, authenticated;
-REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments()
+REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()
   FROM PUBLIC, anon, authenticated;
 
 ALTER TABLE public.duration_benchmark_cause_segments ENABLE ROW LEVEL SECURITY;
@@ -22049,7 +22053,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM service_role';
     EXECUTE 'REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope() FROM service_role';
-    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_drift_with_segments() FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_change_with_segments() FROM service_role';
   END IF;
 END
 $$;
