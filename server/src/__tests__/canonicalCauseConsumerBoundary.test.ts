@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import * as ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 const sourceRoot = fileURLToPath(new URL('../', import.meta.url))
@@ -12,26 +13,35 @@ function productionTypeScriptFiles(directory: string): string[] {
     if (entry.isDirectory()) {
       return entry.name === '__tests__' ? [] : productionTypeScriptFiles(path)
     }
-    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : []
+    return entry.isFile() && /\.tsx?$/.test(entry.name) ? [path] : []
   })
 }
 
-function sourceText(relativePath: string) {
-  return readFileSync(join(sourceRoot, relativePath), 'utf8')
+function importDeclarations(path: string) {
+  const source = readFileSync(path, 'utf8')
+  const scriptKind = path.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, scriptKind)
+  return sourceFile.statements.filter(ts.isImportDeclaration)
 }
 
-describe('canonical cause consumer boundary', () => {
-  it('limits the progress deviation registry to translation inventory modules', () => {
-    const consumers = productionTypeScriptFiles(sourceRoot)
-      .filter((path) => readFileSync(path, 'utf8').includes('progressDeviationCauseRegistry'))
-      .map((path) => relative(sourceRoot, path).replaceAll('\\', '/'))
-      .sort()
+function importedModule(declaration: ts.ImportDeclaration) {
+  return ts.isStringLiteral(declaration.moduleSpecifier) ? declaration.moduleSpecifier.text : ''
+}
 
-    expect(consumers).toEqual([
-      'services/algorithmRuleAssetInventoryService.ts',
-      'services/algorithmSeedRegistry.ts',
-      'services/v14223RequirementCoverageAuditService.ts',
-    ])
+const progressDeviationRegistryInventoryAllowlist = new Set([
+  'services/algorithmSeedRegistry.ts',
+])
+
+describe('canonical cause consumer boundary', () => {
+  it('limits actual progress deviation registry imports to the inventory allowlist', () => {
+    const consumers = productionTypeScriptFiles(sourceRoot).flatMap((path) => {
+      const importsRegistry = importDeclarations(path).some((declaration) => (
+        importedModule(declaration).endsWith('/progressDeviationCauseRegistry.js')
+      ))
+      return importsRegistry ? [relative(sourceRoot, path).replaceAll('\\', '/')] : []
+    })
+
+    expect(consumers.sort()).toEqual([...progressDeviationRegistryInventoryAllowlist].sort())
   })
 
   it('requires deviation consumers to translate legacy factors through the canonical domain', () => {
@@ -39,9 +49,20 @@ describe('canonical cause consumer boundary', () => {
       'services/progressDeviationService.ts',
       'services/projectHealthDeviationSummaryService.ts',
     ]) {
-      const source = sourceText(relativePath)
-      expect(source).toContain('translateLegacyProgressFactor')
-      expect(source).not.toContain('progressDeviationCauseRegistry')
+      const path = join(sourceRoot, relativePath)
+      const imports = importDeclarations(path)
+      const canonicalImport = imports.find((declaration) => (
+        importedModule(declaration).endsWith('/domain/structuredCauseTaxonomy.js')
+      ))
+      const namedImports = canonicalImport?.importClause?.namedBindings
+      const importedNames = namedImports && ts.isNamedImports(namedImports)
+        ? namedImports.elements.map((element) => element.name.text)
+        : []
+
+      expect(importedNames).toContain('translateLegacyProgressFactor')
+      expect(imports.some((declaration) => (
+        importedModule(declaration).endsWith('/progressDeviationCauseRegistry.js')
+      ))).toBe(false)
     }
   })
 })

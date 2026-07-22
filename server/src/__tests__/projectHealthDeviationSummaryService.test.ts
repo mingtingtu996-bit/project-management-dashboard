@@ -136,7 +136,7 @@ describe('projectHealthDeviationSummaryService', () => {
     }))
   })
 
-  it('uses the shared cause registry, dedupes a reason type per forecast, and ignores unknown factors', async () => {
+  it('dedupes known canonical causes and exposes unknown factors as unavailable', async () => {
     mocks.tables.task_duration_forecasts.push(
       {
         project_id: 'project-1',
@@ -173,11 +173,15 @@ describe('projectHealthDeviationSummaryService', () => {
       'site_capacity_pressure',
       'external_readiness',
       'calendar_productivity',
+      'unavailable:unregistered_factor',
     ])
     expect(causes[0]).toEqual(expect.objectContaining({
       count: 2,
       maxDelayDays: 6,
       factorKeys: ['resource_conflict', 'progress_velocity'],
+      canonicalCauseAvailability: 'available',
+      canonicalCauseCode: 'site_capacity_pressure',
+      canonicalCauseTaxonomyVersion: 'v1.0.0',
       responsibilityBasis: 'site_capacity',
     }))
     expect(causes[1]).toEqual(expect.objectContaining({
@@ -190,7 +194,17 @@ describe('projectHealthDeviationSummaryService', () => {
       factorKeys: ['weather_forecast_impact'],
       responsibilityBasis: 'calendar_productivity',
     }))
-    expect(causes.some((cause) => cause.code === 'unregistered_factor')).toBe(false)
+    expect(causes[3]).toEqual(expect.objectContaining({
+      count: 1,
+      maxDelayDays: 6,
+      factorKeys: ['unregistered_factor'],
+      canonicalCauseAvailability: 'unavailable',
+      canonicalCauseCode: null,
+      canonicalCauseTaxonomyVersion: null,
+      responsibilityBasis: null,
+      confidenceWeight: 0,
+      reasons: ['must not create a parallel cause code'],
+    }))
   })
 
   it('prefers latest snapshot health fields and falls back to persisted project health', async () => {

@@ -661,6 +661,9 @@ function buildUnstartedOverdueDelayReason(
   return {
     id: `${taskId}:unstarted_overdue_rule`,
     reason: '\u672a\u5f00\u5de5\u903e\u671f/\u9519\u8fc7\u7a97\u53e3',
+    canonicalCauseAvailability: 'unavailable',
+    canonicalCauseCode: null,
+    canonicalCauseTaxonomyVersion: null,
     delay_reason: unknownBlockerCount > 0
       ? '\u5b58\u5728\u672a\u77e5\u963b\u65ad\uff0c\u9700\u8865\u5145\u4e8b\u5b9e\u8bc1\u636e'
       : '\u5df2\u8d85\u8fc7\u53ef\u5f00\u5de5\u7a97\u53e3',
@@ -714,8 +717,49 @@ function buildForecastDelayReasons(params: {
       || getFactorImpactScore(right) - getFactorImpactScore(left))
     .forEach((factor, index) => {
       const key = normalizeText(factor.key)
+      const canonicalTranslation = translateLegacyProgressFactor(key)
       const config = getFactorReasonConfig(key, params.durationContributionMode)
-      if (!config || seenReasons.has(config.reason)) return
+      if (!config) {
+        if (canonicalTranslation) return
+        const unavailableReasonKey = `canonical_unavailable:${key || index}`
+        if (seenReasons.has(unavailableReasonKey)) return
+        seenReasons.add(unavailableReasonKey)
+        reasons.push({
+          id: `${params.taskId}:duration_factor:${key || 'unknown'}:${index}`,
+          reason: 'Canonical cause unavailable',
+          canonicalCauseAvailability: 'unavailable',
+          canonicalCauseCode: null,
+          canonicalCauseTaxonomyVersion: null,
+          delay_reason: normalizeText(factor.reason)
+            || normalizeText(factor.label)
+            || normalizeText(forecast.business_reason)
+            || 'Forecast factor has no canonical cause mapping.',
+          status: normalizeText(factor.actionPolicy) || normalizeText(forecast.confidence_level) || null,
+          delayed_date: normalizeText(forecast.generated_at ?? forecast.created_at) || null,
+          reason_type: null,
+          source: 'task_duration_forecasts.factor_summary',
+          confidence: evidenceProfile.confidence,
+          impact_days: null,
+          responsibility_basis: null,
+          quantification_basis: 'canonical_cause_unavailable',
+          attribution_role: 'evidence_candidate',
+          review_status: 'canonical_cause_unavailable',
+          evidence: compactRecord({
+            ...evidenceProfile.evidence,
+            factor_key: key || null,
+            factor_label: normalizeText(factor.label) || null,
+            factor_source: normalizeText(factor.source) || null,
+            raw_extra_days: Math.max(0, Number(factor.extraDays ?? 0) || 0),
+            multiplier: toNullableNumber(factor.multiplier),
+            confidence_delta: toNullableNumber(factor.confidenceDelta),
+            action_policy: normalizeText(factor.actionPolicy) || null,
+            data_dependencies: Array.isArray(factor.dataDependencies) ? factor.dataDependencies : null,
+            factor_metadata: readJsonRecord(factor.metadata),
+          }),
+        })
+        return
+      }
+      if (seenReasons.has(config.reason)) return
       seenReasons.add(config.reason)
       const reasonDetail = normalizeText(factor.reason)
         || normalizeText(factor.label)
@@ -745,6 +789,9 @@ function buildForecastDelayReasons(params: {
       reasons.push({
         id: `${params.taskId}:duration_factor:${key}:${index}`,
         reason: config.reason,
+        canonicalCauseAvailability: 'available',
+        canonicalCauseCode: config.canonicalCauseCode,
+        canonicalCauseTaxonomyVersion: config.taxonomyVersion,
         delay_reason: reasonDetail,
         status: normalizeText(factor.actionPolicy) || normalizeText(forecast.confidence_level) || null,
         delayed_date: normalizeText(forecast.generated_at ?? forecast.created_at) || null,
@@ -1387,6 +1434,9 @@ function buildManualDelayReason(task: PlanningTaskRow | null, mode: DurationCont
   return {
     id: `${taskId}:manual_delay_reason`,
     reason: '\u4eba\u5de5\u5ef6\u671f\u8bf4\u660e',
+    canonicalCauseAvailability: 'unavailable',
+    canonicalCauseCode: null,
+    canonicalCauseTaxonomyVersion: null,
     delay_reason: reason,
     status: 'manual',
     delayed_date: normalizeText(task?.updated_at) || null,

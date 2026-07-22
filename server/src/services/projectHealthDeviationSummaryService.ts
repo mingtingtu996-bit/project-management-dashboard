@@ -124,9 +124,10 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
     maxDelayDays: number
     reasons: string[]
     factorKeys: string[]
-    canonicalCauseCode: string
-    canonicalCauseTaxonomyVersion: string
-    responsibilityBasis: string
+    canonicalCauseAvailability: 'available' | 'unavailable'
+    canonicalCauseCode: string | null
+    canonicalCauseTaxonomyVersion: string | null
+    responsibilityBasis: string | null
     confidenceWeight: number
   }>()
 
@@ -143,8 +144,37 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
           ?? metadata.durationContributionMode
           ?? metadata.duration_contribution_mode,
       ) ?? 'duration_bearing'
+      const translation = translateLegacyProgressFactor(key)
       const rule = resolveCanonicalFactorPresentation(key, contributionMode)
-      if (!rule) continue
+      if (!rule) {
+        if (translation) continue
+        const unavailableKey = `unavailable:${key || 'unknown_factor'}`
+        const unavailableReason = normalizeText(factor.reason)
+          || summary.businessReasons[0]
+          || 'Forecast factor has no canonical cause mapping.'
+        const existing = causes.get(unavailableKey) ?? {
+          code: unavailableKey,
+          label: 'Canonical cause unavailable',
+          count: 0,
+          maxDelayDays: 0,
+          reasons: [],
+          factorKeys: [],
+          canonicalCauseAvailability: 'unavailable' as const,
+          canonicalCauseCode: null,
+          canonicalCauseTaxonomyVersion: null,
+          responsibilityBasis: null,
+          confidenceWeight: 0,
+        }
+        if (!countedReasonTypes.has(unavailableKey)) {
+          existing.count += 1
+          countedReasonTypes.add(unavailableKey)
+        }
+        existing.maxDelayDays = Math.max(existing.maxDelayDays, delayDays)
+        existing.factorKeys = Array.from(new Set([...existing.factorKeys, key].filter(Boolean)))
+        existing.reasons = Array.from(new Set([...existing.reasons, unavailableReason])).slice(0, 5)
+        causes.set(unavailableKey, existing)
+        continue
+      }
       const reason = normalizeText(factor.reason) || summary.businessReasons[0] || '现场承载压力影响当前工期预测。'
       const existing = causes.get(rule.reasonType) ?? {
         code: rule.reasonType,
@@ -153,6 +183,7 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
         maxDelayDays: 0,
         reasons: [],
         factorKeys: [],
+        canonicalCauseAvailability: 'available' as const,
         canonicalCauseCode: rule.causeCode,
         canonicalCauseTaxonomyVersion: rule.taxonomyVersion,
         responsibilityBasis: rule.responsibilityBasis,

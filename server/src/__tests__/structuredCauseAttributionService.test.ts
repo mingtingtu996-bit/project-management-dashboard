@@ -229,6 +229,137 @@ describe('structuredCauseAttributionService', () => {
     })).toThrowError(/CAUSE_EVIDENCE_SOURCE_UNSUPPORTED/)
   })
 
+  it('persists manual other candidates with collision-proof idempotent identity', async () => {
+    const scope = {
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task' as const,
+      subjectId: 'task-1',
+      eventType: 'delay' as const,
+      windowStart: '2026-04-01',
+      windowEnd: '2026-04-20',
+    }
+    const existingOther = buildStructuredCauseCandidates({
+      ...scope,
+      evidence: [{
+        sourceType: 'task_obstacle',
+        sourceId: 'obstacle-unclassified',
+        attributes: { obstacleType: 'unclassified' },
+      }],
+    })[0]
+    const stored = new Map<string, Record<string, unknown>>([[
+      existingOther.dedupeKey,
+      {
+        id: 'confirmed-other-1',
+        dedupe_key: existingOther.dedupeKey,
+        cause_code: 'other',
+        cause_role: 'primary',
+        status: 'confirmed',
+        auto_confirmed: false,
+        confirmation_source: 'user_confirmed',
+        raw_text: null,
+        review_reason_codes: [],
+      },
+    ]])
+    let nextId = 1
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM public.projects')) {
+        return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+      if (!sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [], rowCount: 0 }
+      }
+
+      const evidenceSourceTypes = JSON.parse(String(params[11])) as string[]
+      const incoming = {
+        id: `manual-other-${nextId}`,
+        dedupe_key: String(params[20]),
+        cause_code: String(params[5]),
+        cause_role: String(params[6]),
+        status: String(params[16]),
+        auto_confirmed: params[17] === true,
+        confirmation_source: String(params[18]),
+        raw_text: params[9],
+        review_reason_codes: JSON.parse(String(params[19])) as string[],
+        evidence_source_types: evidenceSourceTypes,
+      }
+      const current = stored.get(incoming.dedupe_key)
+      if (!current) {
+        nextId += 1
+        stored.set(incoming.dedupe_key, incoming)
+        return { rows: [{ ...incoming }], rowCount: 1 }
+      }
+
+      const resetsManualConflict = /EXCLUDED\.evidence_source_types\s+@>\s+'\["manual_text"\]'::jsonb/.test(sql)
+      if (evidenceSourceTypes.includes('manual_text') && resetsManualConflict) {
+        Object.assign(current, {
+          status: 'candidate',
+          auto_confirmed: false,
+          confirmation_source: 'candidate',
+          raw_text: incoming.raw_text,
+          review_reason_codes: ['manual_text_requires_user_confirmation'],
+        })
+      } else {
+        current.status = ['confirmed', 'rejected'].includes(String(current.status))
+          ? current.status
+          : incoming.status
+        current.auto_confirmed = current.auto_confirmed === true || incoming.auto_confirmed
+      }
+      return { rows: [{ ...current }], rowCount: 1 }
+    })
+    const manualInput = (rawText: string) => ({
+      ...scope,
+      rawText,
+      evidence: [],
+    })
+    const dependencies = {
+      queryExec,
+      withTransaction: async <T>(work: () => Promise<T>) => work(),
+    }
+
+    const [created] = await persistStructuredCauseCandidates(
+      manualInput('Material not delivered'),
+      dependencies,
+    )
+    expect(stored.size).toBe(2)
+    expect(created).toEqual(expect.objectContaining({
+      status: 'candidate',
+      auto_confirmed: false,
+      confirmation_source: 'candidate',
+      review_reason_codes: ['manual_text_requires_user_confirmation'],
+    }))
+    expect(created.dedupe_key).not.toBe(existingOther.dedupeKey)
+
+    const persistedManual = stored.get(String(created.dedupe_key))!
+    Object.assign(persistedManual, {
+      status: 'confirmed',
+      auto_confirmed: true,
+      confirmation_source: 'deterministic_policy',
+      review_reason_codes: [],
+    })
+    const [repeated] = await persistStructuredCauseCandidates(
+      manualInput('  material   NOT delivered  '),
+      dependencies,
+    )
+    expect(stored.size).toBe(2)
+    expect(repeated).toEqual(expect.objectContaining({
+      id: created.id,
+      dedupe_key: created.dedupe_key,
+      status: 'candidate',
+      auto_confirmed: false,
+      confirmation_source: 'candidate',
+      raw_text: 'material   NOT delivered',
+      review_reason_codes: ['manual_text_requires_user_confirmation'],
+    }))
+
+    const [different] = await persistStructuredCauseCandidates(
+      manualInput('Supplier approval pending'),
+      dependencies,
+    )
+    expect(stored.size).toBe(3)
+    expect(different.dedupe_key).not.toBe(created.dedupe_key)
+  })
+
   it('rejects cross-tenant persistence before writing candidate rows', async () => {
     const queryExec = vi.fn(async (sql: string) => {
       if (sql.includes('FROM public.projects')) {
