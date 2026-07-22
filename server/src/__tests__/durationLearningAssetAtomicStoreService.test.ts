@@ -22,6 +22,10 @@ const {
   rollbackProjectProductivityCalibrationAtomically,
 } = await import('../services/durationLearningAssetAtomicStoreService.js')
 
+const { persistCurrentCauseSegments: persistCurrentCauseSegmentsActual } = await vi.importActual<
+  typeof import('../services/durationBenchmarkCauseSegmentService.js')
+>('../services/durationBenchmarkCauseSegmentService.js')
+
 describe('durationLearningAssetAtomicStoreService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -133,10 +137,10 @@ describe('durationLearningAssetAtomicStoreService', () => {
   })
 
   it('rolls back the benchmark when cause-segment persistence fails', async () => {
-    mocks.persistCurrentCauseSegments.mockRejectedValueOnce(new Error('segment insert failed'))
+    mocks.persistCurrentCauseSegments.mockImplementationOnce(persistCurrentCauseSegmentsActual)
     mocks.query.mockImplementation(async (sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
-      if (['begin', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (['begin', 'commit', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
       if (normalized.includes('update public.duration_benchmarks')) return { rows: [], rowCount: 1 }
       if (normalized.includes('insert into public.duration_benchmarks')) {
         return {
@@ -154,6 +158,38 @@ describe('durationLearningAssetAtomicStoreService', () => {
           rowCount: 1,
         }
       }
+      if (normalized.includes('from public.duration_experience_samples sample')) {
+        return {
+          rows: [{
+            sample_id: 'sample-1',
+            attribution_id: 'attribution-1',
+            cause_code: 'material_shortage',
+            taxonomy_version: 'v1.0.0',
+            actual_duration_production_days: 6,
+            sample_company_id: 'company-1',
+            sample_project_id: null,
+            attribution_company_id: 'company-1',
+            attribution_project_id: null,
+            attribution_status: 'confirmed',
+            attribution_event_type: 'completion',
+            cause_role: 'primary',
+            confirmed_at: '2026-07-19T00:00:00.000Z',
+            source_type: 'task_completion',
+            snapshot_attribution_id: 'attribution-1',
+            snapshot_cause_code: 'material_shortage',
+            snapshot_taxonomy_version: 'v1.0.0',
+            snapshot_primary_count: 1,
+            included_in_benchmark: true,
+            sample_strength: 'strong',
+            duration_day_basis: 'construction_production_day',
+            calendar_ref: 'cn-work-calendar',
+            calendar_version: '2026.07',
+          }],
+          rowCount: 1,
+        }
+      }
+      if (normalized.includes('update public.duration_benchmark_cause_segments')) return { rows: [], rowCount: 0 }
+      if (normalized.includes('insert into public.duration_benchmark_cause_segments')) return { rows: [], rowCount: 0 }
       throw new Error(`Unexpected SQL: ${normalized}`)
     })
 
@@ -167,7 +203,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
       is_current: true,
       is_active: true,
       metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07' },
-    })).rejects.toThrow('segment insert failed')
+    })).rejects.toThrow('cause segment INSERT must return exactly one row')
 
     expect(mocks.query.mock.calls.map(([statement]) => String(statement).trim().toLowerCase())).toContain('rollback')
   })

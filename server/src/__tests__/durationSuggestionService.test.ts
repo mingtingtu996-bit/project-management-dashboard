@@ -2745,6 +2745,14 @@ describe('durationSuggestionService', () => {
       benchmarkP50: 4,
       benchmarkCauseFallback: null,
     }))
+    expect(suggestion.recommendedDurationDays).toBe(10)
+    expect(suggestion.conservativeDurationDays).toBe(12)
+    expect(suggestion.calculationContext).toEqual(expect.objectContaining({
+      durationDistribution: expect.objectContaining({
+        variance: 0.15,
+        coefficientOfVariation: expect.closeTo(Math.sqrt(0.15) / 4.5, 6),
+      }),
+    }))
     expect(benchmarkSelects.some((columns) => columns.includes('id'))).toBe(true)
     expect(benchmarkSelects.some((columns) => columns.includes('project_id'))).toBe(true)
     expect(benchmarkSelects.some((columns) => columns.includes('generated_at'))).toBe(true)
@@ -2798,6 +2806,79 @@ describe('durationSuggestionService', () => {
     expect(suggestion.benchmarkCauseSegment).toBeNull()
     expect(suggestion.businessReasonParams?.benchmarkCauseFallback).toBe('all_cause')
     expect(suggestion.businessReasonParams?.benchmarkP50).toBe(8)
+  })
+
+  it.each([1, 4])('falls back to all-cause duration outputs when an exact cause segment has only %i samples', async (sampleCount) => {
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
+      return {
+        data: {
+          id: 'benchmark-company-1',
+          company_id: 'company-1',
+          project_id: null,
+          duration_day_basis: 'construction_production_day',
+          p50_days: 8,
+          p75_days: 9,
+          p80_days: 11,
+          sample_count: 30,
+          confidence_level: 'high',
+          confidence_score: 88,
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-07-01T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
+        },
+        error: null,
+      }
+    })
+    mocks.loadCurrentCauseSegment.mockResolvedValue({
+      id: `segment-thin-${sampleCount}`,
+      benchmarkId: 'benchmark-company-1',
+      companyId: 'company-1',
+      projectId: null,
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      sampleCount,
+      p50Days: 4,
+      p75Days: 5,
+      p80Days: 6,
+      meanDays: 4.5,
+      variance: 0.15,
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 2,
+      variableDays: 8,
+      confidence: 'medium',
+      benchmarkBasis: 'Seed reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by materials',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'material_shortage',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(10)
+    expect(suggestion.conservativeDurationDays).toBe(13)
+    expect(suggestion.benchmarkCauseSegment).toBeNull()
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      benchmarkCauseFallback: 'all_cause',
+      benchmarkP50: 8,
+      benchmarkBlendWeight: 0.7,
+    }))
   })
 
   it('blends E1 seed and mature non-company benchmark candidates for execution reference instead of replacing the seed', async () => {

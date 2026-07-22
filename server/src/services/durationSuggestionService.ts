@@ -1838,6 +1838,14 @@ function benchmarkRowFromCauseSegment(
   benchmark: DurationBenchmarkRow,
   segment: DurationBenchmarkCauseSegment,
 ): DurationBenchmarkRow {
+  const coefficientOfVariation = segment.variance !== null
+    && Number.isFinite(segment.variance)
+    && segment.variance >= 0
+    && segment.meanDays !== null
+    && Number.isFinite(segment.meanDays)
+    && segment.meanDays > 0
+    ? Math.sqrt(segment.variance) / segment.meanDays
+    : null
   return {
     ...benchmark,
     p50_days: segment.p50Days,
@@ -1846,7 +1854,7 @@ function benchmarkRowFromCauseSegment(
     mean_days: segment.meanDays,
     sample_count: segment.sampleCount,
     variance: segment.variance,
-    coefficient_of_variation: segment.variance,
+    coefficient_of_variation: coefficientOfVariation,
     company_id: segment.companyId,
     project_id: segment.projectId,
     duration_day_basis: segment.durationDayBasis,
@@ -1881,7 +1889,11 @@ async function selectCauseAwareBenchmarkCandidates(
       companyId: normalizeId(primary.benchmark.company_id) || null,
       projectId: normalizeId(primary.benchmark.project_id) || null,
     }, executeDurationLearningRuntimePublicationQuery)
-    if (!segment || !readPositiveNumber(segment.p50Days)) {
+    if (
+      !segment
+      || !readPositiveNumber(segment.p50Days)
+      || !isBenchmarkCandidateUsable(primary.scope, segment.sampleCount, primary.specificity)
+    ) {
       return { candidates, segment: null, fallback: 'all_cause' as const }
     }
     const exactCandidate: DurationBenchmarkCandidate = {
@@ -5282,6 +5294,12 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           p80: benchmarkDistributionCandidate.p80,
           mean: readPositiveNumber(benchmarkDistributionCandidate.benchmark.mean_days) ?? benchmarkDistributionCandidate.p50,
           variance: benchmarkDistributionCandidate.variance,
+          coefficientOfVariation: readBenchmarkMetadataNumber(
+            benchmarkDistributionCandidate.benchmark,
+            'cv',
+            'coefficient_of_variation',
+            'coefficientOfVariation',
+          ),
           dayBasis: 'construction_production_day',
           source: 'duration_benchmarks',
           scope: benchmarkDistributionCandidate.scope,

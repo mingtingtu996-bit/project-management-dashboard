@@ -55,6 +55,14 @@ type ConfirmedCauseSampleRow = {
   attribution_company_id?: unknown
   attribution_project_id?: unknown
   attribution_status?: unknown
+  attribution_event_type?: unknown
+  cause_role?: unknown
+  confirmed_at?: unknown
+  source_type?: unknown
+  snapshot_attribution_id?: unknown
+  snapshot_cause_code?: unknown
+  snapshot_taxonomy_version?: unknown
+  snapshot_primary_count?: unknown
   included_in_benchmark?: unknown
   sample_strength?: unknown
   duration_day_basis?: unknown
@@ -81,6 +89,7 @@ type DurationBenchmarkCauseSegmentRow = {
   duration_day_basis?: unknown
   calendar_ref?: unknown
   calendar_version?: unknown
+  lineage?: unknown
 }
 
 const CONFIRMED_CAUSE_SAMPLE_SQL = `
@@ -95,14 +104,43 @@ const CONFIRMED_CAUSE_SAMPLE_SQL = `
     attribution.company_id AS attribution_company_id,
     attribution.project_id AS attribution_project_id,
     attribution.status AS attribution_status,
+    attribution.event_type AS attribution_event_type,
+    attribution.cause_role,
+    attribution.confirmed_at,
+    sample.source_type,
+    confirmed_cause ->> 'attribution_id' AS snapshot_attribution_id,
+    confirmed_cause ->> 'cause_code' AS snapshot_cause_code,
+    confirmed_cause ->> 'taxonomy_version' AS snapshot_taxonomy_version,
+    (
+      SELECT COUNT(*)
+      FROM jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(sample.metadata -> 'structured_cause_snapshot' -> 'confirmed_causes') = 'array'
+            THEN sample.metadata -> 'structured_cause_snapshot' -> 'confirmed_causes'
+          ELSE '[]'::jsonb
+        END
+      ) snapshot_cause
+      WHERE snapshot_cause ->> 'cause_role' = 'primary'
+    ) AS snapshot_primary_count,
     sample.included_in_benchmark,
     sample.sample_strength,
     sample.duration_day_basis,
     sample.metadata ->> 'construction_calendar_ref' AS calendar_ref,
     sample.metadata ->> 'construction_calendar_version' AS calendar_version
   FROM public.duration_experience_samples sample
+  CROSS JOIN LATERAL jsonb_array_elements(
+    CASE
+      WHEN jsonb_typeof(sample.metadata -> 'structured_cause_snapshot' -> 'confirmed_causes') = 'array'
+        THEN sample.metadata -> 'structured_cause_snapshot' -> 'confirmed_causes'
+      ELSE '[]'::jsonb
+    END
+  ) confirmed_cause
   INNER JOIN public.structured_cause_attributions attribution
-    ON attribution.subject_type = 'task'
+    ON confirmed_cause ->> 'attribution_id' = attribution.id::text
+   AND confirmed_cause ->> 'cause_code' = attribution.cause_code
+   AND confirmed_cause ->> 'taxonomy_version' = attribution.taxonomy_version
+   AND confirmed_cause ->> 'cause_role' = 'primary'
+   AND attribution.subject_type = 'task'
    AND attribution.subject_id = sample.task_id::text
    AND attribution.company_id IS NOT DISTINCT FROM sample.company_id
    AND attribution.project_id IS NOT DISTINCT FROM sample.project_id
@@ -118,16 +156,31 @@ const CONFIRMED_CAUSE_SAMPLE_SQL = `
       )
     ) = $3
     AND sample.completed_at <= $4::timestamptz
+    AND sample.source_type = 'task_completion'
     AND sample.sample_status = 'active'
     AND sample.included_in_benchmark = TRUE
     AND COALESCE(sample.sample_strength, '') NOT IN ('weak', 'unusable')
     AND sample.duration_day_basis = 'construction_production_day'
     AND sample.actual_duration_production_days > 0
     AND attribution.status = 'confirmed'
+    AND attribution.event_type = 'completion'
+    AND attribution.cause_role = 'primary'
+    AND attribution.confirmed_at <= $4::timestamptz
     AND attribution.cause_code = ANY($5::text[])
     AND sample.metadata ->> 'construction_calendar_ref' = $6
     AND sample.metadata ->> 'construction_calendar_version' = $7
     AND ($8::timestamptz IS NULL OR sample.completed_at >= $8::timestamptz)
+    AND (
+      SELECT COUNT(*)
+      FROM jsonb_array_elements(
+        CASE
+          WHEN jsonb_typeof(sample.metadata -> 'structured_cause_snapshot' -> 'confirmed_causes') = 'array'
+            THEN sample.metadata -> 'structured_cause_snapshot' -> 'confirmed_causes'
+          ELSE '[]'::jsonb
+        END
+      ) snapshot_cause
+      WHERE snapshot_cause ->> 'cause_role' = 'primary'
+    ) = 1
   ORDER BY attribution.cause_code, sample.id
 `
 
@@ -204,10 +257,30 @@ function sameNullableText(left: unknown, right: string | null) {
   return nullableText(left) === right
 }
 
+function isTimestampAtOrBefore(value: unknown, upperBound: string) {
+  const timestampValue = Date.parse(timestamp(value))
+  const upperBoundValue = Date.parse(upperBound)
+  return Number.isFinite(timestampValue)
+    && Number.isFinite(upperBoundValue)
+    && timestampValue <= upperBoundValue
+}
+
 function isCompatibleSample(row: ConfirmedCauseSampleRow, input: PersistCurrentCauseSegmentsInput) {
   const causeCode = text(row.cause_code)
+  const taxonomyVersion = text(row.taxonomy_version)
   return isStructuredCauseCode(causeCode)
+    && Boolean(text(row.sample_id))
+    && Boolean(text(row.attribution_id))
+    && Boolean(taxonomyVersion)
     && text(row.attribution_status) === 'confirmed'
+    && text(row.attribution_event_type) === 'completion'
+    && text(row.cause_role) === 'primary'
+    && text(row.source_type) === 'task_completion'
+    && isTimestampAtOrBefore(row.confirmed_at, input.sourceAsOf)
+    && Number(row.snapshot_primary_count) === 1
+    && text(row.snapshot_attribution_id) === text(row.attribution_id)
+    && text(row.snapshot_cause_code) === causeCode
+    && text(row.snapshot_taxonomy_version) === taxonomyVersion
     && row.included_in_benchmark === true
     && !['weak', 'unusable'].includes(text(row.sample_strength))
     && text(row.duration_day_basis) === 'construction_production_day'
@@ -224,13 +297,30 @@ function aggregateConfirmedCauseSamples(
   rows: readonly ConfirmedCauseSampleRow[],
   input: PersistCurrentCauseSegmentsInput,
 ) {
+  const compatibleRows = rows.filter((row) => isCompatibleSample(row, input))
+  const taxonomyVersions = [...new Set(compatibleRows.map((row) => text(row.taxonomy_version)))]
+  if (taxonomyVersions.length > 1) throw new Error('Mixed taxonomy versions for benchmark')
+
+  const canonicalIdentityBySample = new Map<string, string>()
+  for (const row of compatibleRows) {
+    const sampleId = text(row.sample_id)
+    const canonicalIdentity = [
+      text(row.attribution_id),
+      text(row.cause_code),
+      text(row.taxonomy_version),
+    ].join(':')
+    const existingIdentity = canonicalIdentityBySample.get(sampleId)
+    if (existingIdentity && existingIdentity !== canonicalIdentity) {
+      throw new Error(`Sample ${sampleId} has multiple canonical attribution identities`)
+    }
+    canonicalIdentityBySample.set(sampleId, canonicalIdentity)
+  }
+
   const groups = new Map<StructuredCauseCode, ConfirmedCauseSampleRow[]>()
   const seenSamples = new Set<string>()
-  for (const row of rows) {
-    if (!isCompatibleSample(row, input)) continue
+  for (const row of compatibleRows) {
     const causeCode = text(row.cause_code) as StructuredCauseCode
-    const sampleIdentity = text(row.sample_id) || text(row.attribution_id)
-    const dedupeKey = `${causeCode}:${sampleIdentity}`
+    const dedupeKey = `${text(row.sample_id)}:${text(row.attribution_id)}`
     if (seenSamples.has(dedupeKey)) continue
     seenSamples.add(dedupeKey)
     groups.set(causeCode, [...(groups.get(causeCode) ?? []), row])
@@ -245,9 +335,6 @@ function aggregateConfirmedCauseSamples(
         .sort((left, right) => left - right)
       const mean = durations.reduce((sum, value) => sum + value, 0) / durations.length
       const variance = durations.reduce((sum, value) => sum + ((value - mean) ** 2), 0) / durations.length
-      const taxonomyVersions = [...new Set(samples.map((sample) => text(sample.taxonomy_version)).filter(Boolean))]
-      if (taxonomyVersions.length !== 1) throw new Error(`Mixed taxonomy versions for cause segment ${causeCode}`)
-
       return {
         id: '',
         benchmarkId: input.benchmarkId,
@@ -310,6 +397,40 @@ function mapSegmentRow(row: DurationBenchmarkCauseSegmentRow): DurationBenchmark
   }
 }
 
+function nullableNumbersMatch(left: number | null, right: number | null) {
+  if (left === null || right === null) return left === right
+  return Math.abs(left - right) < 0.000001
+}
+
+function isPersistedSegmentReadback(
+  persisted: DurationBenchmarkCauseSegment,
+  expected: DurationBenchmarkCauseSegment,
+) {
+  return persisted.benchmarkId === expected.benchmarkId
+    && persisted.companyId === expected.companyId
+    && persisted.projectId === expected.projectId
+    && persisted.causeCode === expected.causeCode
+    && persisted.taxonomyVersion === expected.taxonomyVersion
+    && persisted.sampleCount === expected.sampleCount
+    && nullableNumbersMatch(persisted.p50Days, expected.p50Days)
+    && nullableNumbersMatch(persisted.p75Days, expected.p75Days)
+    && nullableNumbersMatch(persisted.p80Days, expected.p80Days)
+    && nullableNumbersMatch(persisted.meanDays, expected.meanDays)
+    && nullableNumbersMatch(persisted.variance, expected.variance)
+    && persisted.generatedAt === expected.generatedAt
+    && persisted.sourceWindowStart === expected.sourceWindowStart
+    && persisted.sourceAsOf === expected.sourceAsOf
+    && persisted.durationDayBasis === expected.durationDayBasis
+    && persisted.calendarRef === expected.calendarRef
+    && persisted.calendarVersion === expected.calendarVersion
+}
+
+function isPersistedLineageReadback(value: unknown, expected: string[]) {
+  return Array.isArray(value)
+    && value.length === expected.length
+    && value.every((sampleId, index) => typeof sampleId === 'string' && sampleId === expected[index])
+}
+
 async function replaceCurrentCauseSegments(
   client: PoolClient,
   input: PersistCurrentCauseSegmentsInput,
@@ -361,8 +482,18 @@ async function replaceCurrentCauseSegments(
         JSON.stringify(segment.lineage),
       ],
     )
-    const { lineage: _lineage, ...unpersistedSegment } = segment
-    persisted.push(mapSegmentRow(result.rows[0] ?? {}) ?? unpersistedSegment)
+    if (result.rows.length !== 1) {
+      throw new Error('cause segment INSERT must return exactly one row')
+    }
+    const persistedSegment = mapSegmentRow(result.rows[0])
+    if (
+      !persistedSegment
+      || !isPersistedSegmentReadback(persistedSegment, segment)
+      || !isPersistedLineageReadback(result.rows[0].lineage, segment.lineage)
+    ) {
+      throw new Error('cause segment INSERT readback mismatch')
+    }
+    persisted.push(persistedSegment)
   }
   return persisted
 }
