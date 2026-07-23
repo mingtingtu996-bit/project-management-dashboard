@@ -711,8 +711,13 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
     })
   })
 
-  it('keeps an explicit link to the unified duration assets published tab', () => {
-    expect(readClientSource('src/pages/RuleAssetGovernanceWorkbenchAdmin.tsx')).toContain('/admin/duration-assets?tab=published')
+  it('renders the unified duration assets published link', async () => {
+    await act(async () => {
+      root.render(<RuleAssetGovernanceWorkbenchAdmin />)
+    })
+    await waitForText(container, ['\u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03'])
+    const link = Array.from(container.querySelectorAll('a')).find((element) => element.textContent === '\u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03')
+    expect(link?.getAttribute('href')).toBe('/admin/duration-assets?tab=published')
   })
 
   afterEach(() => {

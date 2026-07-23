@@ -1,6 +1,4 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -26,17 +24,6 @@ const { default: DurationAccuracyAdminPage } = await import('../DurationAccuracy
 
 function DurationAccuracyAdmin() {
   return <MemoryRouter><DurationAccuracyAdminPage /></MemoryRouter>
-}
-
-function readClientSource(relativePath: string) {
-  for (const candidate of [join(process.cwd(), relativePath), join(process.cwd(), 'client', relativePath)]) {
-    try {
-      return readFileSync(candidate, 'utf8')
-    } catch {
-      // Continue through the workspace-root candidates.
-    }
-  }
-  throw new Error(`Unable to locate ${relativePath}`)
 }
 
 const summary = {
@@ -149,8 +136,9 @@ describe('DurationAccuracyAdmin', () => {
     }))
   })
 
-  it('keeps an explicit link to the unified duration assets accuracy tab', () => {
-    expect(readClientSource('src/pages/DurationAccuracyAdmin.tsx')).toContain('/admin/duration-assets?tab=accuracy')
+  it('renders the unified duration assets accuracy link', async () => {
+    render(<DurationAccuracyAdmin />)
+    expect(await screen.findByRole('link', { name: '\u6253\u5f00\u7edf\u4e00\u5de5\u671f\u8d44\u4ea7\u9875' })).toHaveAttribute('href', '/admin/duration-assets?tab=accuracy')
   })
 
   it('renders real samples, replay, publications, runtime calls and observations without exposing dangerous commands', async () => {

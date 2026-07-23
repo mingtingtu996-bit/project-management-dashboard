@@ -1643,7 +1643,7 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
                 后台治理入口，集中展示规则 / Seed / 算法资产的台账、准入、证据和 blocker，并提交受控交接操作；readiness 不写 runtime，不授予发布权。
               </p>
               <Link to="/admin/duration-assets?tab=published" className="mt-2 inline-flex text-sm font-medium text-blue-700 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
-                \u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03
+                {'\u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03'}
               </Link>
             </div>
           </div>

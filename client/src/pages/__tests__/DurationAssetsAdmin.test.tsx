@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   queueState: 'ready' as 'ready' | 'loading' | 'empty' | 'error' | 'permission' | 'stale',
+  accuracyState: 'ready' as 'ready' | 'loading' | 'error' | 'permission' | 'stale',
+  governanceState: 'ready' as 'ready' | 'loading' | 'error' | 'permission' | 'stale',
   generatedAt: new Date().toISOString(),
   getDurationAssetReviewItems: vi.fn(),
   getDurationAccuracySummary: vi.fn(),
@@ -47,7 +49,13 @@ function configureState(state: 'loading' | 'empty' | 'error' | 'permission' | 's
 describe('DurationAssetsAdmin', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    })
     mocks.queueState = 'ready'
+    mocks.accuracyState = 'ready'
+    mocks.governanceState = 'ready'
     mocks.generatedAt = new Date().toISOString()
     mocks.getDurationAssetReviewItems.mockImplementation(async () => {
       if (mocks.queueState === 'error') throw new Error('queue unavailable')
@@ -55,8 +63,25 @@ describe('DurationAssetsAdmin', () => {
       if (mocks.queueState === 'loading') return new Promise(() => {})
       return { generatedAt: mocks.generatedAt, total: mocks.queueState === 'empty' ? 0 : 2, items: mocks.queueState === 'empty' ? [] : [queueItem, { ...queueItem, id: 'shared-1', scope: { level: 'global' }, canReview: false, approvalReady: false }] }
     })
-    mocks.getDurationAccuracySummary.mockResolvedValue({ generatedAt: mocks.generatedAt, metrics: [{ engineCode: 'critical_path_cpm', sampleCount: 2, status: 'backtested' }] })
-    mocks.getDurationAccuracyGovernanceReadModel.mockResolvedValue({ generatedAt: mocks.generatedAt, publications: [{ publicationKey: 'pub-1', assetKey: 'base_duration_benchmark', publicationStage: 'canary', monitoringStatus: 'collecting' }], observations: [], runtimeCalls: [], samples: [] })
+    mocks.getDurationAccuracySummary.mockImplementation(async () => {
+      if (mocks.accuracyState === 'error') throw new Error('accuracy unavailable')
+      if (mocks.accuracyState === 'permission') throw Object.assign(new Error('forbidden'), { status: 403 })
+      if (mocks.accuracyState === 'loading') return new Promise(() => {})
+      return {
+        generatedAt: mocks.accuracyState === 'stale' ? '2026-07-23T00:00:00.000Z' : mocks.generatedAt,
+        metrics: [{ engineCode: 'critical_path_cpm', sampleCount: 2, status: 'backtested' }],
+      }
+    })
+    mocks.getDurationAccuracyGovernanceReadModel.mockImplementation(async () => {
+      if (mocks.governanceState === 'error') throw new Error('governance unavailable')
+      if (mocks.governanceState === 'permission') throw Object.assign(new Error('forbidden'), { status: 403 })
+      if (mocks.governanceState === 'loading') return new Promise(() => {})
+      return {
+        generatedAt: mocks.governanceState === 'stale' ? '2026-07-23T00:00:00.000Z' : mocks.generatedAt,
+        publications: [{ publicationKey: 'pub-1', assetKey: 'base_duration_benchmark', publicationStage: 'canary', monitoringStatus: 'collecting' }],
+        observations: [], runtimeCalls: [], samples: [],
+      }
+    })
   })
 
   it('renders queue, published, monitoring, and accuracy tabs from governed read models', async () => {
@@ -79,9 +104,41 @@ describe('DurationAssetsAdmin', () => {
     expect(await screen.findByTestId(`duration-assets-${state}`)).toBeInTheDocument()
   })
 
+  it.each([
+    ['published', 'governanceState', 'loading', 'duration-assets-loading'],
+    ['monitoring', 'governanceState', 'error', 'duration-assets-error'],
+    ['accuracy', 'accuracyState', 'permission', 'duration-assets-permission'],
+    ['published', 'governanceState', 'stale', 'duration-assets-stale'],
+  ] as const)('renders %s direct-tab %s boundaries', async (tab, stateKey, state, testId) => {
+    mocks[stateKey] = state
+    renderAdmin(`/admin/duration-assets?tab=${tab}`)
+    expect(await screen.findByTestId(testId)).toBeInTheDocument()
+    if (state === 'stale') expect(screen.getByText('pub-1')).toBeInTheDocument()
+  })
+
+  it('clears prior governed read models after a failed reload instead of relabeling them empty', async () => {
+    renderAdmin('/admin/duration-assets?tab=published')
+    expect(await screen.findByText('pub-1')).toBeInTheDocument()
+    mocks.governanceState = 'error'
+    fireEvent.click(screen.getByRole('button', { name: '\u5237\u65b0' }))
+    expect(await screen.findByTestId('duration-assets-error')).toBeInTheDocument()
+    expect(screen.queryByText('pub-1')).not.toBeInTheDocument()
+  })
+
   it('applies filters, confirms decisions, disables commands, retries failures, refreshes success, supports keyboard tabs, and preserves mobile table overflow', async () => {
     renderAdmin('/admin/duration-assets?tab=queue')
-    await screen.findByRole('button', { name: '\u6279\u51c6' })
+    const initialDecisionNotes = await screen.findByLabelText('\u51b3\u7b56\u5907\u6ce8')
+    const approve = screen.getByRole('button', { name: '\u6279\u51c6' })
+    const reject = screen.getByRole('button', { name: '\u9a73\u56de' })
+    const supersede = screen.getByRole('button', { name: '\u66ff\u4ee3' })
+    expect(initialDecisionNotes).toHaveValue('')
+    expect(approve).toBeDisabled()
+    expect(reject).toBeDisabled()
+    expect(supersede).toBeDisabled()
+    fireEvent.change(initialDecisionNotes, { target: { value: '   ' } })
+    expect(approve).toBeDisabled()
+    expect(reject).toBeDisabled()
+    expect(supersede).toBeDisabled()
     expect(screen.getByTestId('duration-assets-table-overflow')).toHaveClass('overflow-x-auto')
     const queueTab = screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' })
     queueTab.focus()
@@ -91,17 +148,44 @@ describe('DurationAssetsAdmin', () => {
     publishedTab.focus()
     fireEvent.keyDown(publishedTab, { key: 'ArrowLeft' })
     await waitFor(() => expect(screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' })).toHaveAttribute('aria-selected', 'true'))
+    const chooseOption = async (triggerId: string, optionName: string) => {
+      fireEvent.click(document.getElementById(triggerId) as HTMLButtonElement)
+      fireEvent.click(await screen.findByRole('option', { name: optionName }))
+    }
+    await chooseOption('duration-asset-family', 'base_duration_benchmark')
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ assetKey: 'base_duration_benchmark' })))
+    await chooseOption('duration-asset-scope', '\u9879\u76ee')
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ scope: 'project' })))
+    await chooseOption('duration-asset-status', '\u5df2\u7531\u53d1\u5e03\u89e3\u51b3')
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'resolved_by_publication' })))
+    await chooseOption('duration-asset-age', '30 \u5929')
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ age: '30d' })))
+    fireEvent.change(screen.getByLabelText('\u9879\u76ee\u7b5b\u9009'), { target: { value: 'project-1' } })
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ projectId: 'project-1' })))
     fireEvent.change(screen.getByLabelText('\u539f\u56e0\u7b5b\u9009'), { target: { value: 'replay_required' } })
     await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'replay_required' })))
+    const decisionNotes = await screen.findByLabelText('\u51b3\u7b56\u5907\u6ce8')
+    fireEvent.change(decisionNotes, { target: { value: 'evidence reviewed' } })
     fireEvent.click(await screen.findByRole('button', { name: '\u6279\u51c6' }))
     expect(await screen.findByTestId('duration-assets-decision-dialog')).toBeInTheDocument()
     mocks.decideDurationAssetReviewItem.mockRejectedValueOnce(new Error('decision failed'))
     fireEvent.click(screen.getByRole('button', { name: '\u786e\u8ba4\u6279\u51c6' }))
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'destructive' })))
+    expect(decisionNotes).toHaveValue('evidence reviewed')
+    expect(mocks.decideDurationAssetReviewItem).toHaveBeenCalledWith(expect.objectContaining({ id: 'review-1' }), 'approve', 'evidence reviewed')
+    const retryAction = mocks.toast.mock.calls.at(-1)?.[0]?.action as { props: { onClick: () => void } }
+    retryAction.props.onClick()
+    expect(await screen.findByTestId('duration-assets-decision-dialog')).toBeInTheDocument()
     const queueCallsBeforeSuccess = mocks.getDurationAssetReviewItems.mock.calls.length
-    fireEvent.click(screen.getByRole('button', { name: '\u6279\u51c6' }))
     mocks.decideDurationAssetReviewItem.mockResolvedValueOnce({ status: 'operation_delegated' })
     fireEvent.click(screen.getByRole('button', { name: '\u786e\u8ba4\u6279\u51c6' }))
     await waitFor(() => expect(mocks.getDurationAssetReviewItems.mock.calls.length).toBeGreaterThan(queueCallsBeforeSuccess))
+    await waitFor(() => expect(decisionNotes).toHaveValue(''))
+    fireEvent.change(decisionNotes, { target: { value: 'alternative evidence' } })
+    fireEvent.click(await screen.findByRole('button', { name: '\u9a73\u56de' }))
+    expect(await screen.findByRole('button', { name: '\u786e\u8ba4\u9a73\u56de' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '\u53d6\u6d88' }))
+    fireEvent.click(await screen.findByRole('button', { name: '\u66ff\u4ee3' }))
+    expect(await screen.findByRole('button', { name: '\u786e\u8ba4\u66ff\u4ee3' })).toBeInTheDocument()
   })
 })
