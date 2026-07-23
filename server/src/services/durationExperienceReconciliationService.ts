@@ -1,8 +1,11 @@
 import type { Task } from '../types/db.js'
 import { getProjectCompanyId } from '../auth/access.js'
-import { query as databaseQuery } from '../database.js'
+import { query as databaseQuery, withDatabaseTransaction } from '../database.js'
 import { calendarDaysToMilliseconds } from '../utils/durationDays.js'
-import { collectDurationExperienceSampleFromTask } from './durationExperienceService.js'
+import {
+  collectDurationExperienceSampleFromTask,
+  type DurationExperienceCollectionOptions,
+} from './durationExperienceService.js'
 
 export type DurationExperienceReconciliationSourceType =
   | 'task_completion'
@@ -63,6 +66,20 @@ export interface DurationExperienceReconciliationStore {
 }
 
 type QueryExecutor = (text: string, params?: unknown[]) => Promise<{ rows?: unknown[]; rowCount?: number | null }>
+type WithTransaction = <T>(work: () => Promise<T>) => Promise<T>
+
+export type DurationExperienceTaskLockInput = DurationExperienceCollectionOptions & {
+  companyId?: string | null
+  projectId: string
+  taskId: string
+}
+
+type DurationExperienceTaskLockDependencies = {
+  queryExec?: QueryExecutor
+  withTransaction?: WithTransaction
+  collectSample?: typeof collectDurationExperienceSampleFromTask
+  resolveCompanyId?: typeof getProjectCompanyId
+}
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -317,6 +334,48 @@ function createDatabaseDurationExperienceReconciliationStore(
 
 const databaseStore = createDatabaseDurationExperienceReconciliationStore()
 
+export async function collectDurationExperienceSampleWithTaskLock(
+  input: DurationExperienceTaskLockInput,
+  dependencies: DurationExperienceTaskLockDependencies = {},
+): Promise<boolean> {
+  const projectId = normalizeText(input.projectId)
+  const taskId = normalizeText(input.taskId)
+  if (!projectId || !taskId) {
+    throw new Error('Task-locked duration experience collection requires exact project and task identity.')
+  }
+
+  const queryExec = dependencies.queryExec ?? (databaseQuery as QueryExecutor)
+  const withTransaction = dependencies.withTransaction ?? withDatabaseTransaction
+  const collectSample = dependencies.collectSample ?? collectDurationExperienceSampleFromTask
+  const resolveCompanyId = dependencies.resolveCompanyId ?? getProjectCompanyId
+
+  return withTransaction(async () => {
+    const companyId = normalizeText(input.companyId) || normalizeText(await resolveCompanyId(projectId))
+    if (!companyId) {
+      throw new Error('Task-locked duration experience collection requires exact tenant ownership.')
+    }
+    const result = await queryExec(
+      `SELECT task.*
+         FROM public.tasks task
+         JOIN public.projects project ON project.id = task.project_id
+        WHERE task.id = $1
+          AND task.project_id = $2
+          AND project.company_id = $3
+        FOR UPDATE OF task`,
+      [taskId, projectId, companyId],
+    )
+    const task = result.rows?.[0] as Task | undefined
+    if (!task) {
+      throw new Error('Task-locked duration experience collection task was not found in the requested tenant scope.')
+    }
+    return collectSample(task, {
+      previousTask: input.previousTask,
+      actorId: normalizeText(input.actorId) || null,
+      trigger: normalizeText(input.trigger) || 'task_completion',
+    })
+  })
+}
+
 export async function enqueueDurationExperienceCollectionFailure(input: {
   companyId?: string | null
   projectId: string
@@ -407,12 +466,14 @@ export async function reconcileDurationExperienceSamples(input: {
 } = {}, dependencies: {
   store?: DurationExperienceReconciliationStore
   collectSample?: typeof collectDurationExperienceSampleFromTask
+  queryExec?: QueryExecutor
+  withTransaction?: WithTransaction
+  resolveCompanyId?: typeof getProjectCompanyId
 } = {}) {
   const projectIds = [...new Set((input.projectIds ?? []).map(normalizeText).filter(Boolean))]
   const limit = Math.min(500, positiveInteger(input.limit, 100))
   const maxAttempts = Math.min(20, positiveInteger(input.maxAttempts, 5))
   const store = dependencies.store ?? databaseStore
-  const collectSample = dependencies.collectSample ?? collectDurationExperienceSampleFromTask
   const discovered = await store.registerMissingCompletedTasks({ projectIds, maxAttempts })
   const items = await store.listDue({ projectIds, limit })
   const summary = {
@@ -426,9 +487,17 @@ export async function reconcileDurationExperienceSamples(input: {
 
   for (const item of items) {
     try {
-      const collected = await collectSample(item.task, {
+      const collected = await collectDurationExperienceSampleWithTaskLock({
+        companyId: item.companyId,
+        projectId: item.projectId,
+        taskId: item.taskId,
         actorId: item.actorId,
         trigger: item.trigger,
+      }, {
+        queryExec: dependencies.queryExec,
+        withTransaction: dependencies.withTransaction,
+        collectSample: dependencies.collectSample,
+        resolveCompanyId: dependencies.resolveCompanyId,
       })
       if (!collected) {
         const applied = await store.markDeferred(item.id, {
@@ -474,8 +543,10 @@ export async function rebuildDurationExperienceSampleForTask(input: {
   actorId?: string | null
   trigger?: string | null
 }, dependencies: {
-  queryExec?: typeof databaseQuery
+  queryExec?: QueryExecutor
+  withTransaction?: WithTransaction
   collectSample?: typeof collectDurationExperienceSampleFromTask
+  resolveCompanyId?: typeof getProjectCompanyId
 } = {}) {
   const companyId = normalizeText(input.companyId)
   const projectId = normalizeText(input.projectId)
@@ -484,27 +555,13 @@ export async function rebuildDurationExperienceSampleForTask(input: {
     throw new Error('Duration experience sample rebuild requires exact tenant, project, and task identity.')
   }
 
-  const queryExec = dependencies.queryExec ?? databaseQuery
-  const result = await queryExec(
-    `SELECT task.*
-       FROM public.tasks task
-       JOIN public.projects project ON project.id = task.project_id
-      WHERE task.id = $1
-        AND task.project_id = $2
-        AND project.company_id = $3
-      LIMIT 1`,
-    [taskId, projectId, companyId],
-  )
-  const task = result.rows[0] as Task | undefined
-  if (!task) {
-    throw new Error('Duration experience sample rebuild task was not found in the requested tenant scope.')
-  }
-
-  const collectSample = dependencies.collectSample ?? collectDurationExperienceSampleFromTask
-  return collectSample(task, {
+  return collectDurationExperienceSampleWithTaskLock({
+    companyId,
+    projectId,
+    taskId,
     actorId: normalizeText(input.actorId) || null,
     trigger: normalizeText(input.trigger) || 'structured_cause_user_confirmation',
-  })
+  }, dependencies)
 }
 
 export { createDatabaseDurationExperienceReconciliationStore }

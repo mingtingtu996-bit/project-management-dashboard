@@ -141,6 +141,7 @@ const state = vi.hoisted(() => {
     })),
     inferAndPersistTaskStructuredCauseAttributions: vi.fn(async () => []),
     collectDurationExperienceSampleFromTask: vi.fn(async () => true),
+    collectDurationExperienceSampleWithTaskLock: vi.fn(async () => true),
     retireDurationExperienceSampleForTask: vi.fn(async () => true),
     enqueueDurationExperienceCollectionFailure: vi.fn(async () => undefined),
     applyTaskMaterialLifecycleFeedback: vi.fn(async () => undefined),
@@ -207,6 +208,7 @@ vi.mock('../services/durationExperienceService.js', () => ({
 }))
 
 vi.mock('../services/durationExperienceReconciliationService.js', () => ({
+  collectDurationExperienceSampleWithTaskLock: state.collectDurationExperienceSampleWithTaskLock,
   enqueueDurationExperienceCollectionFailure: state.enqueueDurationExperienceCollectionFailure,
 }))
 
@@ -644,9 +646,15 @@ describe('taskWriteChainService participant unit lookup', () => {
     expect(state.inferAndPersistTaskStructuredCauseAttributions).toHaveBeenCalledWith({
       task: expect.objectContaining({ id: 'task-1', status: 'completed' }),
     })
-    expect(state.collectDurationExperienceSampleFromTask).toHaveBeenCalled()
+    expect(state.collectDurationExperienceSampleWithTaskLock).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      previousTask: expect.objectContaining({ id: 'task-1', status: 'in_progress' }),
+      actorId: 'user-1',
+      trigger: 'task_completion',
+    })
     expect(state.inferAndPersistTaskStructuredCauseAttributions.mock.invocationCallOrder[0])
-      .toBeLessThan(state.collectDurationExperienceSampleFromTask.mock.invocationCallOrder[0])
+      .toBeLessThan(state.collectDurationExperienceSampleWithTaskLock.mock.invocationCallOrder[0])
   })
 
   it('rejects disabled participant units before creating the task row', async () => {

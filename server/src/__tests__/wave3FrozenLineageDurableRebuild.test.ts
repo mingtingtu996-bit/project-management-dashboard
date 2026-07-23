@@ -155,6 +155,7 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
       registerPostCommitEffect: async (_label, effect) => { postCommitEffects.push(effect) },
       rebuildTaskDurationExperienceSample: (input) => rebuildDurationExperienceSampleForTask(input, {
         queryExec: async () => ({ rows: [{ id: taskId, project_id: projectId, status: 'completed' }] }),
+        withTransaction: async (work) => work(),
         collectSample: failedPostCommitCollect,
       }),
     })
@@ -211,6 +212,8 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
     })
     await expect(reconcileDurationExperienceSamples({ projectIds: [projectId] }, {
       store: workerStore,
+      queryExec: async () => ({ rows: [queuedItem!.task], rowCount: 1 }),
+      withTransaction: async (work) => work(),
       collectSample: recoveryCollect,
     })).resolves.toEqual(expect.objectContaining({ recovered: 1, retrying: 0, deadLettered: 0 }))
     expect(queueStatus).toBe('completed')
