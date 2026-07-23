@@ -1078,6 +1078,43 @@ describe('TaskSummary page contract', () => {
     ))).toHaveLength(0)
   })
 
+  it('keeps the legacy untyped synthetic reason display-only', async () => {
+    taskDelayRecords = [{
+      delay_days: 2,
+      reason: '实际完成时间晚于计划完成时间',
+      recorded_at: '2026-04-10',
+    }]
+
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+          <Routes>
+            <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1-detail"]')
+
+    expect(container.textContent).toContain('实际完成时间晚于计划完成时间')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('确认延误原因'))).toBe(false)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(fetchMock.mock.calls.filter(([url, init]) => (
+      String(url).endsWith('/subjects/task/task-1/confirm') && init?.method === 'POST'
+    ))).toHaveLength(0)
+  })
+
   it('shows production-derived completion variance text without exposing cause confirmation', async () => {
     taskDelayRecords = [{
       delay_days: 2,
