@@ -16,6 +16,7 @@ vi.mock('../database.js', async (importOriginal) => {
 })
 
 import { runWithDatabaseTransactionClient } from '../database.js'
+import { createDatabaseDurationAssetReviewQueueStore } from '../services/durationAssetReviewQueueService.js'
 import { promoteDurationBenchmarkRuntimeCanaryAtomically } from '../services/durationLearningAssetAtomicStoreService.js'
 import {
   collectDurationLearningRuntimeCandidateProposals,
@@ -23,6 +24,7 @@ import {
 } from '../services/durationLearningRuntimeLifecycleService.js'
 import {
   persistDurationLearningRuntimePublication,
+  recordDurationLearningRuntimeImpact,
   resolveDurationLearningRuntimePublication,
 } from '../services/durationLearningRuntimePublicationService.js'
 import {
@@ -160,7 +162,8 @@ describe('duration benchmark production chain', () => {
           company_id: params[4], project_id: params[5], industry_key: params[6], publication_stage: params[7],
           runtime_payload: params[8], source_candidate_refs: params[9], source_evidence_refs: params[10],
           automation_decision: params[11], previous_publication_key: params[12], traffic_percent: params[13],
-          monitoring_window_hours: params[14], monitoring_status: 'passed', published_at: params[15],
+          monitoring_window_hours: params[14], monitoring_status: 'passed', impact_metrics: null,
+          published_at: params[15],
         }
         return [publication] as T[]
       }
@@ -186,12 +189,27 @@ describe('duration benchmark production chain', () => {
     let persistedSegment: Record<string, any> | null = null
     let benchmarkCurrent = false
     let causeSegmentsCurrent = false
+    let failFinalQueueResolution = true
+    const reviewRow = {
+      reviewKind: 'stable_promotion',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: proposal.artifactKey,
+      scopeLevel: 'project',
+      companyId,
+      projectId,
+      publicationKey,
+      status: 'open',
+      resolvedPublicationKey: null as string | null,
+    }
     let transactionSnapshot: null | {
       publicationStage: string
       monitoringStatus: string
+      impactMetrics: Record<string, unknown> | null
       benchmarkCurrent: boolean
       causeSegmentsCurrent: boolean
       persistedSegment: Record<string, any> | null
+      reviewStatus: string
+      reviewResolvedPublicationKey: string | null
     } = null
     const client = {
       release: vi.fn(),
@@ -201,9 +219,12 @@ describe('duration benchmark production chain', () => {
           transactionSnapshot = {
             publicationStage: String(publication!.publication_stage),
             monitoringStatus: String(publication!.monitoring_status),
+            impactMetrics: publication!.impact_metrics ?? null,
             benchmarkCurrent,
             causeSegmentsCurrent,
             persistedSegment,
+            reviewStatus: reviewRow.status,
+            reviewResolvedPublicationKey: reviewRow.resolvedPublicationKey,
           }
           return { rows: [], rowCount: 0 }
         }
@@ -215,12 +236,45 @@ describe('duration benchmark production chain', () => {
           if (transactionSnapshot) {
             publication!.publication_stage = transactionSnapshot.publicationStage
             publication!.monitoring_status = transactionSnapshot.monitoringStatus
+            publication!.impact_metrics = transactionSnapshot.impactMetrics
             benchmarkCurrent = transactionSnapshot.benchmarkCurrent
             causeSegmentsCurrent = transactionSnapshot.causeSegmentsCurrent
             persistedSegment = transactionSnapshot.persistedSegment
+            reviewRow.status = transactionSnapshot.reviewStatus
+            reviewRow.resolvedPublicationKey = transactionSnapshot.reviewResolvedPublicationKey
           }
           transactionSnapshot = null
           return { rows: [], rowCount: 0 }
+        }
+        if (normalized.includes('set impact_metrics = $1::jsonb')) {
+          publication!.impact_metrics = params[0] as Record<string, unknown>
+          publication!.monitoring_status = params[1]
+          return {
+            rows: [{ publication_key: publicationKey, monitoring_status: params[1] }],
+            rowCount: 1,
+          }
+        }
+        if (normalized.includes('as scope_authorized')) {
+          return { rows: [{ scope_authorized: true }], rowCount: 1 }
+        }
+        if (normalized.startsWith('with resolved as ( update public.duration_asset_review_items')) {
+          if (failFinalQueueResolution) {
+            failFinalQueueResolution = false
+            throw new Error('queue resolution update failed')
+          }
+          const identityMatches = params[0] === reviewRow.reviewKind
+            && params[1] === reviewRow.assetKey
+            && params[2] === reviewRow.artifactKey
+            && params[3] === reviewRow.scopeLevel
+            && params[4] === reviewRow.companyId
+            && params[5] === reviewRow.projectId
+            && params[8] === reviewRow.publicationKey
+          const resolvedCount = Number(identityMatches && reviewRow.status === 'open')
+          if (resolvedCount === 1) {
+            reviewRow.status = 'resolved_by_publication'
+            reviewRow.resolvedPublicationKey = String(params[9])
+          }
+          return { rows: [{ resolved_count: resolvedCount }], rowCount: 1 }
         }
         if (normalized.includes('from public.duration_learning_runtime_publications')) {
           return { rows: [publication], rowCount: 1 }
@@ -306,17 +360,13 @@ describe('duration benchmark production chain', () => {
       if (!databaseMocks.actualGetClient) throw new Error('actual database getClient unavailable')
       return databaseMocks.actualGetClient()
     })
-    const reviewQueueStore = {
-      upsertOpen: vi.fn(),
-      loadForUpdate: vi.fn(),
-      resolveByPublication: vi.fn(),
-      resolveOpenByPublicationIdentity: vi.fn()
-        .mockRejectedValueOnce(new Error('queue unavailable'))
-        .mockResolvedValueOnce(1),
-      decide: vi.fn(),
-      list: vi.fn(),
-    }
+    const transactionQueryExec = async <T = Record<string, unknown>>(
+      sql: string,
+      params: unknown[] = [],
+    ): Promise<T[]> => (await client.query(sql, params)).rows as T[]
+    const reviewQueueStore = createDatabaseDurationAssetReviewQueueStore(transactionQueryExec)
     const lifecycleInput = {
+      queryExec: transactionQueryExec,
       candidateProvider: async () => [],
       monitoringProvider: async () => [{
         publicationKey,
@@ -347,19 +397,22 @@ describe('duration benchmark production chain', () => {
         retainPreviousStable: false,
         reasonCodes: [],
       }),
-      reviewQueueStore: reviewQueueStore as any,
+      reviewQueueStore,
       transactionRunner: <T>(work: () => Promise<T>) => runWithDatabaseTransactionClient(client, work),
-      recordImpact: async () => ({ status: 'impact_recorded' as const, reasons: [] }),
+      recordImpact: recordDurationLearningRuntimeImpact,
       promoteBenchmarkCanary: promoteDurationBenchmarkRuntimeCanaryAtomically,
       observedAt: '2026-07-22T00:00:00.000Z',
     }
 
     const failedPromotion = await runDurationLearningRuntimeLifecycleSweep(lifecycleInput as any)
     expect(failedPromotion).toMatchObject({ stablePromoted: 0, reviewItemsResolved: 0, failed: 1 })
+    expect(failedPromotion.failureRefs).toEqual([expect.objectContaining({ phase: 'review_queue' })])
     expect(publication!.publication_stage).toBe('canary')
     expect(benchmarkCurrent).toBe(false)
     expect(causeSegmentsCurrent).toBe(false)
     expect(persistedSegment).toBeNull()
+    expect(publication!.impact_metrics).toBeNull()
+    expect(reviewRow).toMatchObject({ status: 'open', resolvedPublicationKey: null })
     let transactionSql = client.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase())
     expect(transactionSql.filter((sql) => sql === 'begin')).toHaveLength(1)
     expect(transactionSql.filter((sql) => sql === 'rollback')).toHaveLength(1)
@@ -371,6 +424,14 @@ describe('duration benchmark production chain', () => {
     expect(publication!.publication_stage).toBe('stable')
     expect(benchmarkCurrent).toBe(true)
     expect(causeSegmentsCurrent).toBe(true)
+    expect(publication!.impact_metrics).toEqual(expect.objectContaining({
+      monitoringWindowHours: 72,
+      monitoringElapsedHours: 96,
+    }))
+    expect(reviewRow).toMatchObject({
+      status: 'resolved_by_publication',
+      resolvedPublicationKey: publicationKey,
+    })
     transactionSql = client.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase())
     expect(transactionSql.filter((sql) => sql === 'begin')).toHaveLength(1)
     expect(transactionSql.filter((sql) => sql === 'commit')).toHaveLength(1)

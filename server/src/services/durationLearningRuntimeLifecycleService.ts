@@ -147,9 +147,9 @@ export interface DurationLearningRuntimeLifecycleSweepResult {
   stablePromotionReused: number
   rollbackExecuted: number
   rollbackReused: number
-  reviewItemsOpened?: number
-  reviewItemsReused?: number
-  reviewItemsResolved?: number
+  reviewItemsOpened: number
+  reviewItemsReused: number
+  reviewItemsResolved: number
   failed: number
   failureRefs: DurationLearningRuntimeLifecycleFailureRef[]
   collectionCursorAdvanced: boolean
@@ -3022,7 +3022,15 @@ function proposalCanEnterCanary(proposal: DurationLearningRuntimeCandidatePropos
     && proposal.automationDecision?.autoPromotionAllowed === true
 }
 
-export function reviewRequirementForProposal(proposal: DurationLearningRuntimeCandidateProposal) {
+function normalizedPublicationBlockReasonCodes(reasonCodes: readonly unknown[]) {
+  const normalized = uniqueTexts(reasonCodes).sort()
+  return normalized.length > 0 ? normalized : ['runtime_publication_not_published']
+}
+
+export function reviewRequirementForProposal(
+  proposal: DurationLearningRuntimeCandidateProposal,
+  publicationBlockReasonCodes: readonly unknown[] = [],
+) {
   const reasonCodes = [
     ...(proposal.conflictCount > 0 ? ['candidate_conflict_detected'] : []),
     ...(proposal.sampleCount > 0 ? [] : ['candidate_samples_missing']),
@@ -3034,6 +3042,7 @@ export function reviewRequirementForProposal(proposal: DurationLearningRuntimeCa
     ...(proposal.policyEvaluationRequired ? [] : ['automation_policy_evaluation_missing']),
     ...(proposal.automationDecision?.manualReviewRequired ? proposal.automationDecision.reasonCodes : []),
     ...(proposal.automationDecision?.autoPromotionAllowed === true ? [] : ['automatic_eligibility_not_granted']),
+    ...publicationBlockReasonCodes,
   ]
   const normalizedReasonCodes = uniqueTexts(reasonCodes).sort()
   return {
@@ -3072,8 +3081,11 @@ function candidateReviewSourceKey(proposal: DurationLearningRuntimeCandidateProp
   })
 }
 
-function candidateReviewQueueInput(proposal: DurationLearningRuntimeCandidateProposal) {
-  const requirement = reviewRequirementForProposal(proposal)
+function candidateReviewQueueInput(
+  proposal: DurationLearningRuntimeCandidateProposal,
+  publicationBlockReasonCodes: readonly unknown[] = [],
+) {
+  const requirement = reviewRequirementForProposal(proposal, publicationBlockReasonCodes)
   return {
     reviewKind: requirement.reviewKind,
     assetKey: proposal.assetKey,
@@ -3174,6 +3186,8 @@ function evaluateMonitoring(candidate: DurationLearningRuntimeMonitoringCandidat
     ...(structural && weakOrRejectedRate > 0.05 ? ['structural_outcome_conflict_rate_exceeds_limit'] : []),
   ]
   const metrics = {
+    monitoringWindowHours: candidate.monitoringWindowHours,
+    monitoringElapsedHours: candidate.monitoringElapsedHours,
     observedCount: candidate.observedCount,
     rejectedObservationCount: candidate.rejectedObservationCount,
     acceptedOutcomeCount: candidate.acceptedOutcomeCount,
@@ -3644,6 +3658,20 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         monitoringWindowHours: STRUCTURAL_ASSET_KEYS.has(proposal.assetKey) ? 168 : 72,
         publishedAt: observedAt,
       }
+      const resolveCurrentCandidateReviews = () => runReviewQueueOperation((store) => (
+        store.resolveOpenByPublicationIdentity({
+          reviewKind: 'candidate_publication',
+          assetKey: proposal.assetKey,
+          artifactKey: proposal.artifactKey,
+          scope: proposal.scope,
+          proposalKey: proposal.proposalKey,
+          publicationKey,
+          reviewedAt: observedAt,
+          resolutionSource: 'automatic_publication',
+          reviewerUserId: null,
+          decisionReason: 'automatic_candidate_publication',
+        })
+      ))
       if (checkpointStore) {
         const checkpointed = await executeDurationContextPolicyLearningStage({
           identity: buildRuntimePublicationCheckpointIdentity(proposal, publicationKey),
@@ -3656,25 +3684,17 @@ export async function runDurationLearningRuntimeLifecycleSweep(
             if (publication.status !== 'published') {
               throw new Error(`duration_learning_runtime_publication_blocked:${publication.reasons.join(',')}`)
             }
-            const reviewItemsResolved = await runReviewQueueOperation((store) => (
-              store.resolveOpenByPublicationIdentity({
-                reviewKind: 'candidate_publication',
-                assetKey: proposal.assetKey,
-                artifactKey: proposal.artifactKey,
-                scope: proposal.scope,
-                proposalKey: proposal.proposalKey,
-                publicationKey,
-                reviewedAt: observedAt,
-                resolutionSource: 'automatic_publication',
-                reviewerUserId: null,
-                decisionReason: 'automatic_candidate_publication',
-              })
-            ))
+            const reviewItemsResolved = await resolveCurrentCandidateReviews()
             return { publication, reviewItemsResolved }
           }),
         })
-        if (checkpointed.disposition === 'reused') result.candidateCheckpointReused += 1
-        else {
+        if (checkpointed.disposition === 'reused') {
+          const reviewItemsResolved = await requireTransactionRunner()(
+            resolveCurrentCandidateReviews,
+          )
+          result.candidateCheckpointReused += 1
+          result.reviewItemsResolved += reviewItemsResolved
+        } else {
           result.canaryPublished += 1
           result.reviewItemsResolved += checkpointed.output.reviewItemsResolved
         }
@@ -3682,27 +3702,26 @@ export async function runDurationLearningRuntimeLifecycleSweep(
       }
       const published = await requireTransactionRunner()(async () => {
         const publication = await persistPublication(publicationInput)
-        if (publication.status !== 'published') return { publication, reviewItemsResolved: 0 }
-        const reviewItemsResolved = await runReviewQueueOperation((store) => (
-          store.resolveOpenByPublicationIdentity({
-            reviewKind: 'candidate_publication',
-            assetKey: proposal.assetKey,
-            artifactKey: proposal.artifactKey,
-            scope: proposal.scope,
-            proposalKey: proposal.proposalKey,
-            publicationKey,
-            reviewedAt: observedAt,
-            resolutionSource: 'automatic_publication',
-            reviewerUserId: null,
-            decisionReason: 'automatic_candidate_publication',
-          })
-        ))
-        return { publication, reviewItemsResolved }
+        if (publication.status !== 'published') {
+          const reviewWrite = await runReviewQueueOperation((store) => store.upsertOpen(
+            candidateReviewQueueInput(
+              proposal,
+              normalizedPublicationBlockReasonCodes(publication.reasons),
+            ),
+          ))
+          return { publication, reviewItemsResolved: 0, reviewWrite }
+        }
+        const reviewItemsResolved = await resolveCurrentCandidateReviews()
+        return { publication, reviewItemsResolved, reviewWrite: null }
       })
       if (published.publication.status === 'published') {
         result.canaryPublished += 1
         result.reviewItemsResolved += published.reviewItemsResolved
       } else {
+        if (!published.reviewWrite) {
+          throw new Error('duration_learning_runtime_blocked_publication_review_required')
+        }
+        recordReviewWrite(published.reviewWrite)
         result.candidateCollecting += 1
       }
     } catch (error) {

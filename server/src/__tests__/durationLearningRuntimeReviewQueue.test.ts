@@ -7,8 +7,10 @@ import {
 import * as lifecycleExports from '../services/durationLearningRuntimeLifecycleService.js'
 import type {
   DurationLearningRuntimeCandidateProposal,
+  DurationLearningRuntimeLifecycleSweepResult,
   DurationLearningRuntimeMonitoringCandidate,
 } from '../services/durationLearningRuntimeLifecycleService.js'
+import { createInMemoryDurationContextPolicyLearningCheckpointStore } from '../services/durationContextPolicyLearningCheckpointService.js'
 
 const lifecycleModule = lifecycleExports as Record<string, any>
 const runDurationLearningRuntimeLifecycleSweep = lifecycleExports.runDurationLearningRuntimeLifecycleSweep
@@ -228,6 +230,106 @@ describe('duration learning lifecycle review queue integration', () => {
     expect(result).toMatchObject({ ...expected, reviewItemsOpened: 1, failed: 0 })
   })
 
+  it.each(DURATION_ASSET_REVIEW_KEYS)('persists one durable candidate-collecting item for %s', async (assetKey) => {
+    const candidate = proposal({ assetKey })
+    candidate.sampleCount = 0
+    const store = reviewQueueStore()
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => [candidate],
+      monitoringProvider: async () => [],
+      reviewQueueStore: store as any,
+      transactionRunner: transactionHarness([]),
+    } as any)
+
+    expect(store.upsertOpen).toHaveBeenCalledWith(expect.objectContaining({
+      assetKey,
+      reviewKind: 'candidate_publication',
+      reasonCodes: expect.arrayContaining(['candidate_samples_missing']),
+    }))
+    expect(result).toMatchObject({ candidateCollecting: 1, reviewItemsOpened: 1, failed: 0 })
+  })
+
+  it.each(DURATION_ASSET_REVIEW_KEYS)('persists a blocked %s publication before candidate collecting', async (assetKey) => {
+    const events: string[] = []
+    const store = reviewQueueStore({ events })
+    const persistPublication = vi.fn(async () => {
+      events.push('publication:blocked')
+      return {
+        status: 'blocked' as const,
+        publication: null,
+        reasons: [' project_scope_company_mismatch ', 'payload_contract_invalid', 'payload_contract_invalid'],
+      }
+    })
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => [proposal({ assetKey })],
+      monitoringProvider: async () => [],
+      persistPublication: persistPublication as any,
+      reviewQueueStore: store as any,
+      transactionRunner: transactionHarness(events),
+    } as any)
+
+    expect(events).toEqual([
+      'transaction:start',
+      'publication:blocked',
+      'review:upsert:candidate_publication',
+      'transaction:commit',
+    ])
+    expect(store.upsertOpen).toHaveBeenCalledWith(expect.objectContaining({
+      assetKey,
+      reasonCodes: ['payload_contract_invalid', 'project_scope_company_mismatch'],
+      reviewPayload: expect.objectContaining({
+        reasonCodes: ['payload_contract_invalid', 'project_scope_company_mismatch'],
+      }),
+    }))
+    expect(result).toMatchObject({
+      candidateCollecting: 1,
+      reviewItemsOpened: 1,
+      canaryPublished: 0,
+      failed: 0,
+    })
+  })
+
+  it('includes normalized publication-block reasons in the candidate decision fingerprint', async () => {
+    const fingerprints: string[] = []
+    for (const reason of ['payload_contract_invalid', 'project_scope_company_mismatch']) {
+      const store = reviewQueueStore()
+      store.upsertOpen.mockImplementationOnce(async (input: any) => {
+        fingerprints.push(input.decisionFingerprint)
+        return { disposition: 'created', item: { sourceKey: `review:${reason}` } }
+      })
+      await runDurationLearningRuntimeLifecycleSweep({
+        candidateProvider: async () => [proposal({ assetKey: 'base_duration_benchmark' })],
+        monitoringProvider: async () => [],
+        persistPublication: async () => ({ status: 'blocked', publication: null, reasons: [reason] }),
+        reviewQueueStore: store as any,
+        transactionRunner: transactionHarness([]),
+      } as any)
+    }
+
+    expect(fingerprints).toHaveLength(2)
+    expect(fingerprints[0]).not.toBe(fingerprints[1])
+  })
+
+  it('routes a blocked-publication queue failure before candidate collecting advances', async () => {
+    const events: string[] = []
+    const store = reviewQueueStore({ events })
+    store.upsertOpen.mockRejectedValueOnce(new Error('queue unavailable'))
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => [proposal({ assetKey: 'critical_path_rule_candidate' })],
+      monitoringProvider: async () => [],
+      persistPublication: async () => {
+        events.push('publication:blocked')
+        return { status: 'blocked', publication: null, reasons: ['payload_contract_invalid'] }
+      },
+      reviewQueueStore: store as any,
+      transactionRunner: transactionHarness(events),
+    } as any)
+
+    expect(events).toEqual(['transaction:start', 'publication:blocked', 'transaction:rollback'])
+    expect(result).toMatchObject({ candidateCollecting: 0, reviewItemsOpened: 0, failed: 1 })
+    expect(result.failureRefs).toEqual([expect.objectContaining({ phase: 'review_queue' })])
+  })
+
   it('fails the lifecycle attempt when review persistence fails', async () => {
     const store = reviewQueueStore()
     store.upsertOpen.mockRejectedValueOnce(new Error('queue unavailable'))
@@ -308,6 +410,108 @@ describe('duration learning lifecycle review queue integration', () => {
       .toBe(lifecycleModule.reviewRequirementForMonitoringCandidate(reordered, evaluation, decision).decisionFingerprint)
     expect(lifecycleModule.reviewRequirementForMonitoringCandidate(candidate, evaluation, decision).decisionFingerprint)
       .not.toBe(lifecycleModule.reviewRequirementForMonitoringCandidate(candidate, changedEvaluation, decision).decisionFingerprint)
+  })
+
+  it('includes complete monitoring timing evidence in metrics and decision fingerprints', () => {
+    const candidate = monitoringCandidate({ assetKey: 'base_duration_benchmark' })
+    const changedWindow = { ...candidate, monitoringWindowHours: candidate.monitoringWindowHours + 1 }
+    const changedElapsed = { ...candidate, monitoringElapsedHours: candidate.monitoringElapsedHours + 1 }
+    const evaluate = (value: DurationLearningRuntimeMonitoringCandidate) => (
+      lifecycleModule.evaluateDurationLearningRuntimeMonitoringCandidate(
+        value,
+        () => stableDecision(),
+      ).evaluation
+    )
+    const baseEvaluation = evaluate(candidate)
+    const windowEvaluation = evaluate(changedWindow)
+    const elapsedEvaluation = evaluate(changedElapsed)
+    const decision = stableDecision()
+    const fingerprint = (
+      value: DurationLearningRuntimeMonitoringCandidate,
+      evaluation: Record<string, any>,
+    ) => lifecycleModule.reviewRequirementForMonitoringCandidate(value, evaluation, decision).decisionFingerprint
+
+    expect(baseEvaluation.metrics).toMatchObject({
+      monitoringWindowHours: 72,
+      monitoringElapsedHours: 96,
+    })
+    expect(fingerprint(candidate, baseEvaluation)).not.toBe(fingerprint(changedWindow, windowEvaluation))
+    expect(fingerprint(candidate, baseEvaluation)).not.toBe(fingerprint(changedElapsed, elapsedEvaluation))
+  })
+
+  it('reuses a content checkpoint and resolves a later proposal-lineage review atomically', async () => {
+    const checkpointStore = createInMemoryDurationContextPolicyLearningCheckpointStore()
+    const events: string[] = []
+    let reviewOpen = false
+    const store = reviewQueueStore({ events, resolvedCount: 0 })
+    store.upsertOpen.mockImplementation(async (input: any) => {
+      events.push(`review:upsert:${input.reviewKind}`)
+      reviewOpen = true
+      return { disposition: 'created', item: { sourceKey: 'review:checkpoint-reuse' } }
+    })
+    store.resolveOpenByPublicationIdentity.mockImplementation(async () => {
+      events.push('review:resolve-open:automatic_publication')
+      if (!reviewOpen) return 0
+      reviewOpen = false
+      return 1
+    })
+    const persistPublication = vi.fn(async (input: any) => publicationResult(input))
+    const eligible = proposal({ assetKey: 'standard_work_duration_seed' })
+    const manual = structuredClone(eligible)
+    manual.automationDecision = {
+      stage: 'manual_review',
+      autoPromotionAllowed: false,
+      manualReviewRequired: true,
+      reasonCodes: ['policy_manual_review_required'],
+    }
+    const run = (candidate: DurationLearningRuntimeCandidateProposal, ownerId: string) => (
+      runDurationLearningRuntimeLifecycleSweep({
+        candidateProvider: async () => [candidate],
+        monitoringProvider: async () => [],
+        persistPublication: persistPublication as any,
+        checkpointStore,
+        checkpointOwnerId: ownerId,
+        reviewQueueStore: store as any,
+        transactionRunner: transactionHarness(events),
+      } as any)
+    )
+
+    const first = await run(eligible, 'worker-a')
+    const opened = await run(manual, 'worker-b')
+    events.length = 0
+    const reused = await run(eligible, 'worker-c')
+
+    expect(first).toMatchObject({ canaryPublished: 1, candidateCheckpointReused: 0, failed: 0 })
+    expect(opened).toMatchObject({ manualFallback: 1, reviewItemsOpened: 1, failed: 0 })
+    expect(reused).toMatchObject({
+      canaryPublished: 0,
+      candidateCheckpointReused: 1,
+      reviewItemsResolved: 1,
+      failed: 0,
+    })
+    expect(events).toEqual([
+      'transaction:start',
+      'review:resolve-open:automatic_publication',
+      'transaction:commit',
+    ])
+    expect(reviewOpen).toBe(false)
+    expect(persistPublication).toHaveBeenCalledTimes(1)
+  })
+
+  it('exposes required initialized review counters on every lifecycle result', async () => {
+    const result = await runDurationLearningRuntimeLifecycleSweep({
+      candidateProvider: async () => [],
+      monitoringProvider: async () => [],
+      reviewQueueStore: reviewQueueStore() as any,
+      transactionRunner: transactionHarness([]),
+    } as any)
+    const requiredCounts: Record<'reviewItemsOpened' | 'reviewItemsReused' | 'reviewItemsResolved', number> = {
+      reviewItemsOpened: (result as DurationLearningRuntimeLifecycleSweepResult).reviewItemsOpened,
+      reviewItemsReused: (result as DurationLearningRuntimeLifecycleSweepResult).reviewItemsReused,
+      reviewItemsResolved: (result as DurationLearningRuntimeLifecycleSweepResult).reviewItemsResolved,
+    }
+
+    expect(requiredCounts).toEqual({ reviewItemsOpened: 0, reviewItemsReused: 0, reviewItemsResolved: 0 })
   })
 
   it('reuses an idempotent stable-promotion review item', async () => {
