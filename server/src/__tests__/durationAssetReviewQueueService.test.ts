@@ -100,7 +100,10 @@ function rowForInput(input: ReturnType<typeof upsertInput>, id: string): Row {
   }
 }
 
-function createHarness(initialRows: Row[] = []) {
+function createHarness(initialRows: Row[] = [], options: {
+  leaveSourceOpenAfterUpdate?: boolean
+  leaveDecisionOpenAfterUpdate?: boolean
+} = {}) {
   const rows = new Map(initialRows.map((row) => [String(row.source_key), row]))
   let nextId = initialRows.length + 1
   const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
@@ -141,6 +144,7 @@ function createHarness(initialRows: Row[] = []) {
     if (sql.includes('where source_key = $1') && sql.includes("status = 'open'") && sql.includes('resolved_publication_key')) {
       const row = rows.get(String(params[0]))
       if (!row || row.status !== 'open') return []
+      if (options.leaveSourceOpenAfterUpdate) return []
       Object.assign(row, {
         status: 'resolved_by_publication', resolved_publication_key: params[1], reviewed_at: params[2],
         resolution_source: params[3], reviewed_by_user_id: params[4], decision_reason: params[5],
@@ -157,8 +161,10 @@ function createHarness(initialRows: Row[] = []) {
         && row.company_id === params[4]
         && row.project_id === params[5]
         && row.industry_key === params[6]
-        && row.proposal_key === params[7]
-        && (params[7] !== null || row.publication_key === params[8])
+        && (
+          (params[0] === 'candidate_publication' && row.proposal_key === params[7])
+          || (params[0] === 'stable_promotion' && row.proposal_key === null && row.publication_key === params[8])
+        )
       ))
       for (const row of matches) {
         Object.assign(row, {
@@ -171,6 +177,7 @@ function createHarness(initialRows: Row[] = []) {
     if (sql.includes('where id = $1') && sql.includes("status = 'open'") && sql.includes('resolution_source')) {
       const row = Array.from(rows.values()).find((item) => item.id === params[0])
       if (!row || row.status !== 'open') return []
+      if (options.leaveDecisionOpenAfterUpdate) return []
       Object.assign(row, {
         status: params[1], reviewed_by_user_id: params[2], reviewed_at: params[3],
         decision_reason: params[4], resolution_source: params[5],
@@ -213,6 +220,27 @@ describe('durationAssetReviewQueueService', () => {
       .not.toBe(buildDurationAssetReviewSourceKey(sourceInput))
   })
 
+  it('changes the fingerprint independently for every material decision dimension', () => {
+    const variants = [
+      buildDurationAssetReviewDecisionFingerprint({ ...fingerprintInput, conflictState: { conflictCount: 1 } }),
+      buildDurationAssetReviewDecisionFingerprint({ ...fingerprintInput, replayState: { replayPassed: false } }),
+      buildDurationAssetReviewDecisionFingerprint({
+        ...fingerprintInput,
+        policyEvidence: { ...fingerprintInput.policyEvidence, stage: 'blocked', evidence: { holdoutSampleCount: 13 } },
+      }),
+      buildDurationAssetReviewDecisionFingerprint({
+        ...fingerprintInput,
+        monitoringEvidence: {
+          publicationKey: 'publication-monitoring', monitoringStatus: 'failed',
+          monitoringMetrics: { mae: 7 }, stableDecision: { promoted: false },
+        },
+      }),
+      buildDurationAssetReviewDecisionFingerprint({ ...fingerprintInput, reasonCodes: ['different_reason'] }),
+    ]
+    expect(new Set(variants).size).toBe(variants.length)
+    for (const fingerprint of variants) expect(fingerprint).not.toBe(decisionFingerprint)
+  })
+
   it('reuses an open row and does not reopen a terminal row', async () => {
     const { queryExec, store } = createHarness()
     const first = await store.upsertOpen(upsertInput())
@@ -245,15 +273,23 @@ describe('durationAssetReviewQueueService', () => {
     })
   })
 
-  it('records automatic publication resolution without fabricating a reviewer', async () => {
-    const { queryExec, store } = createHarness()
-    await store.upsertOpen(upsertInput())
+  it('resolves only the locked source key on the single-source automatic path', async () => {
+    const primary = upsertInput()
+    const sibling = upsertInput({ decisionFingerprint: 'c'.repeat(64) })
+    const primaryRow = rowForInput(primary, 'review-primary')
+    const siblingRow = rowForInput(sibling, 'review-sibling')
+    const { queryExec, rows, store } = createHarness([primaryRow, siblingRow])
     await store.resolveByPublication({
       sourceKey: buildDurationAssetReviewSourceKey(sourceInput), publicationKey: 'publication-auto',
       reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
       reviewerUserId: null, decisionReason: 'automatic_policy_approved',
     })
     expect(queryExec).toHaveBeenCalledWith(expect.stringContaining('reviewed_by_user_id = $'), expect.arrayContaining([null]))
+    expect(rows.get(String(primaryRow.source_key))?.status).toBe('resolved_by_publication')
+    expect(rows.get(String(siblingRow.source_key))?.status).toBe('open')
+    const updateSql = queryExec.mock.calls.map(([sql]) => String(sql)).find((sql) => sql.includes('update public.duration_asset_review_items'))
+    expect(updateSql).toContain('where source_key = $1')
+    expect(updateSql).not.toContain('where review_kind = $1')
   })
 
   it('records the real reviewer and reason for manual approval', async () => {
@@ -270,16 +306,63 @@ describe('durationAssetReviewQueueService', () => {
     )
   })
 
-  it('automatically resolves every open fingerprint for the same publication lineage', async () => {
+  it('bulk-resolves candidate fingerprints by an exact non-empty proposal lineage', async () => {
     const old = upsertInput({ decisionFingerprint: 'a'.repeat(64) })
     const next = upsertInput({ decisionFingerprint: 'b'.repeat(64) })
-    const { store } = createHarness([rowForInput(old, 'review-old'), rowForInput(next, 'review-new')])
+    const { queryExec, store } = createHarness([rowForInput(old, 'review-old'), rowForInput(next, 'review-new')])
     await expect(store.resolveOpenByPublicationIdentity({
       reviewKind: 'candidate_publication', assetKey: 'base_duration_benchmark', artifactKey: sourceInput.artifactKey,
       scope: { level: 'project', companyId, projectId }, proposalKey: 'proposal-1', publicationKey: 'publication-1',
       reviewedAt: '2026-07-23T08:00:00.000Z',
       resolutionSource: 'automatic_publication', reviewerUserId: null, decisionReason: 'automatic_stable_promotion',
     })).resolves.toBe(2)
+    const [sql, params] = queryExec.mock.calls.at(-1) as [string, unknown[]]
+    const normalizedSql = sql.replace(/\s+/g, ' ')
+    expect(normalizedSql).toContain("$1 = 'candidate_publication' and proposal_key is not distinct from $8::text")
+    expect(normalizedSql).toContain("$1 = 'stable_promotion' and proposal_key is null and publication_key is not distinct from $9::text")
+    expect(params.slice(0, 10)).toEqual([
+      'candidate_publication', 'base_duration_benchmark', sourceInput.artifactKey, 'project',
+      companyId, projectId, null, 'proposal-1', 'publication-1', 'publication-1',
+    ])
+  })
+
+  it('bulk-resolves stable fingerprints only by exact publication identity', async () => {
+    const stableBase = upsertInput({
+      reviewKind: 'stable_promotion', proposalKey: null, publicationKey: 'publication-stable',
+      scope: { level: 'company', companyId }, decisionFingerprint: 'd'.repeat(64),
+    })
+    const stableNext = upsertInput({ ...stableBase, decisionFingerprint: 'e'.repeat(64) })
+    const otherPublication = upsertInput({ ...stableBase, publicationKey: 'publication-other', decisionFingerprint: 'f'.repeat(64) })
+    const stableRows = [
+      { ...rowForInput(stableBase, 'review-stable-1'), scope_level: 'company', project_id: null },
+      { ...rowForInput(stableNext, 'review-stable-2'), scope_level: 'company', project_id: null },
+      { ...rowForInput(otherPublication, 'review-stable-other'), scope_level: 'company', project_id: null },
+    ]
+    const { rows, store } = createHarness(stableRows)
+    await expect(store.resolveOpenByPublicationIdentity({
+      reviewKind: 'stable_promotion', assetKey: 'base_duration_benchmark', artifactKey: sourceInput.artifactKey,
+      scope: { level: 'company', companyId }, publicationKey: 'publication-stable',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_stable_promotion',
+    })).resolves.toBe(2)
+    expect(rows.get(String(stableRows[2].source_key))?.status).toBe('open')
+  })
+
+  it('rejects missing candidate proposal lineage and any stable proposal before mutation', async () => {
+    const { queryExec, store } = createHarness()
+    await expect(store.resolveOpenByPublicationIdentity({
+      reviewKind: 'candidate_publication', assetKey: 'base_duration_benchmark', artifactKey: sourceInput.artifactKey,
+      scope: { level: 'company', companyId }, publicationKey: 'publication-1',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_candidate_publication',
+    })).rejects.toThrow('duration_asset_review_candidate_proposal_key_required')
+    await expect(store.resolveOpenByPublicationIdentity({
+      reviewKind: 'stable_promotion', assetKey: 'base_duration_benchmark', artifactKey: sourceInput.artifactKey,
+      scope: { level: 'company', companyId }, proposalKey: 'proposal-bypass', publicationKey: 'publication-1',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_stable_promotion',
+    })).rejects.toThrow('duration_asset_review_stable_proposal_key_forbidden')
+    expect(queryExec).not.toHaveBeenCalled()
   })
 
   it('sanitizes industry and global rows for company-admin reads', async () => {
@@ -292,20 +375,24 @@ describe('durationAssetReviewQueueService', () => {
         ...rowForInput(upsertInput(), 'review-global'), scope_level: 'global', company_id: null, project_id: null,
         source_key: 'review-global', proposal_key: 'proposal-hidden', candidate_event_ref: 'candidate-hidden',
         conflict_ref: 'conflict-hidden', review_payload: { stableKeys: { artifactKey: 'hidden' } },
+        assigned_to_user_id: 'global-assignee-hidden', reviewed_by_user_id: 'global-reviewer-hidden',
       },
       {
         ...rowForInput(upsertInput(), 'review-industry'), scope_level: 'industry', company_id: null, project_id: null,
         industry_key: 'general_civil', source_key: 'review-industry', proposal_key: 'proposal-hidden',
         candidate_event_ref: 'candidate-hidden', conflict_ref: 'conflict-hidden', review_payload: { stableKeys: { artifactKey: 'hidden' } },
+        assigned_to_user_id: 'industry-assignee-hidden', reviewed_by_user_id: 'industry-reviewer-hidden',
       },
     ]
     const { queryExec } = createHarness(sharedRows)
     const result = await listDurationAssetReviewItems({ companyId, projectIds: [projectId], queryExec })
     expect(result.items.find((item) => item.scope.level === 'global')).toEqual(expect.objectContaining({
       canReview: false, proposalKey: null, candidateEventRef: null, conflictRef: null, reviewPayload: null,
+      assignedToUserId: null, reviewedByUserId: null,
     }))
     expect(result.items.find((item) => item.scope.level === 'industry')).toEqual(expect.objectContaining({
       canReview: false, proposalKey: null, candidateEventRef: null, conflictRef: null, reviewPayload: null,
+      assignedToUserId: null, reviewedByUserId: null,
     }))
   })
 
@@ -330,12 +417,47 @@ describe('durationAssetReviewQueueService', () => {
       .toThrow('duration_asset_review_payload_stable_key_invalid')
     expect(() => buildDurationAssetReviewPayload({ stableKeys: { source: 'x'.repeat(32769) } }))
       .toThrow('duration_asset_review_payload_too_large')
+    expect(() => buildDurationAssetReviewPayload({ stableKeys: { source: '界'.repeat(11000) } }))
+      .toThrow('duration_asset_review_payload_too_large')
+    expect(() => buildDurationAssetReviewPayload({ counts: { nestedCredentialCount: 1 } }))
+      .toThrow('duration_asset_review_payload_key_forbidden')
+    expect(buildDurationAssetReviewPayload({})).toMatchObject({
+      stableKeys: {}, counts: {}, reasonCodes: [], sourceCandidateRefCount: 0, sourceEvidenceRefCount: 0,
+    })
+  })
+
+  it.each([
+    ['stableKeys null', { stableKeys: null }, 'duration_asset_review_payload_stable_keys_invalid'],
+    ['stableKeys array', { stableKeys: [] }, 'duration_asset_review_payload_stable_keys_invalid'],
+    ['counts string', { counts: '2' }, 'duration_asset_review_payload_counts_invalid'],
+    ['counts array', { counts: [] }, 'duration_asset_review_payload_counts_invalid'],
+    ['reason codes string', { reasonCodes: 'manual_review_required' }, 'duration_asset_review_payload_reason_codes_invalid'],
+    ['candidate refs string', { sourceCandidateRefs: 'candidate-1' }, 'duration_asset_review_payload_source_candidate_refs_invalid'],
+    ['evidence refs object', { sourceEvidenceRefs: { ref: 'evidence-1' } }, 'duration_asset_review_payload_source_evidence_refs_invalid'],
+  ])('rejects malformed supplied payload field: %s', (_name, invalidInput, error) => {
+    expect(() => buildDurationAssetReviewPayload(invalidInput as never)).toThrow(error)
+  })
+
+  it.each([
+    ['boolean', true],
+    ['string', '2'],
+    ['fraction', 1.5],
+  ])('rejects a %s count value', (_name, value) => {
+    expect(() => buildDurationAssetReviewPayload({ counts: { candidateCount: value } })).toThrow(
+      'duration_asset_review_payload_count_invalid',
+    )
   })
 
   it('rejects invalid manual and automatic resolutions before mutation', async () => {
     const { queryExec, store } = createHarness()
     await store.upsertOpen(upsertInput())
     const sourceKey = buildDurationAssetReviewSourceKey(sourceInput)
+    const callsBeforeInvalidSource = queryExec.mock.calls.length
+    await expect(store.resolveByPublication({
+      sourceKey, publicationKey: 'publication-invalid', reviewedAt: '2026-07-23T08:00:00.000Z',
+      resolutionSource: 'unknown_resolution', reviewerUserId: null, decisionReason: 'invalid',
+    } as never)).rejects.toThrow('duration_asset_review_resolution_source_invalid')
+    expect(queryExec).toHaveBeenCalledTimes(callsBeforeInvalidSource)
     await expect(store.resolveByPublication({
       sourceKey, publicationKey: 'publication-auto', reviewedAt: '2026-07-23T08:00:00.000Z',
       resolutionSource: 'automatic_publication', reviewerUserId: 'fabricated-user', decisionReason: 'automatic',
@@ -352,14 +474,49 @@ describe('durationAssetReviewQueueService', () => {
     expect(queryExec).toHaveBeenCalled()
   })
 
-  it('uses fixed list predicates and preserves the exact current-company boundary when visibility is disabled', async () => {
-    const { queryExec, store } = createHarness()
-    const list = await store.list({ companyId, projectIds: null, assetKey: 'base_duration_benchmark', scopeLevel: 'company', status: 'open', reason: 'manual_review_required', projectId, age: '7d' })
-    expect(list.total).toBe(0)
+  it('rejects an unknown decision status before locking or mutation', async () => {
+    const { queryExec, store } = createHarness([rowForInput(upsertInput(), 'review-invalid-status')])
+    await expect(store.decide({
+      id: 'review-invalid-status', status: 'archived', reviewerUserId: 'user-1',
+      reviewedAt: '2026-07-23T08:00:00.000Z', decisionReason: 'invalid',
+      resolutionSource: 'manual_supersession',
+    } as never)).rejects.toThrow('duration_asset_review_decision_status_invalid')
+    expect(queryExec).not.toHaveBeenCalled()
+  })
+
+  it('throws a deterministic resolution conflict when a no-row update reloads open', async () => {
+    const open = upsertInput()
+    const { store } = createHarness([rowForInput(open, 'review-resolution-race')], {
+      leaveSourceOpenAfterUpdate: true,
+    })
+    await expect(store.resolveByPublication({
+      sourceKey: buildDurationAssetReviewSourceKey(open), publicationKey: 'publication-race',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_policy_approved',
+    })).rejects.toThrow('duration_asset_review_resolution_conflict')
+  })
+
+  it('throws a deterministic decision conflict when a no-row update reloads open', async () => {
+    const openRow = rowForInput(upsertInput(), 'review-decision-race')
+    const { store } = createHarness([openRow], { leaveDecisionOpenAfterUpdate: true })
+    await expect(store.decide({
+      id: 'review-decision-race', status: 'rejected', reviewerUserId: 'user-1',
+      reviewedAt: '2026-07-23T08:00:00.000Z', decisionReason: 'not applicable',
+      resolutionSource: 'manual_rejection',
+    })).rejects.toThrow('duration_asset_review_decision_conflict')
+  })
+
+  it('keeps project rows when project visibility is disabled while preserving the company boundary', async () => {
+    const projectRow = rowForInput(upsertInput(), 'review-visible-when-permission-disabled')
+    const { queryExec, store } = createHarness([projectRow])
+    const list = await store.list({
+      companyId, projectIds: null, now: '2026-07-23T09:00:00.000Z',
+    })
+    expect(list.items).toEqual([expect.objectContaining({ id: projectRow.id, scope: sourceInput.scope })])
     const [sql, params] = queryExec.mock.calls.at(-1) as [string, unknown[]]
-    expect(sql).toContain('company_id = $1::uuid')
-    expect(sql).toContain('any($2::uuid[])')
-    expect(sql).toContain('is not distinct from $7::uuid')
-    expect(params).toEqual(expect.arrayContaining([companyId, null, 'base_duration_benchmark', 'company', 'open', 'manual_review_required', projectId, '7d']))
+    const normalizedSql = sql.replace(/\s+/g, ' ')
+    expect(normalizedSql).toContain("(scope_level in ('company', 'project') and company_id = $1::uuid) or scope_level in ('industry', 'global')")
+    expect(normalizedSql).toContain("and (scope_level <> 'project' or $2::uuid[] is null or project_id = any($2::uuid[]))")
+    expect(params).toEqual([companyId, null, null, null, null, null, null, '2026-07-23T09:00:00.000Z', 'all', 100])
   })
 })

@@ -58,13 +58,13 @@ export interface BuildDurationAssetReviewSourceKeyInput {
 }
 
 export interface BuildDurationAssetReviewPayloadInput {
-  stableKeys?: Record<string, unknown> | null
-  counts?: Record<string, unknown> | null
+  stableKeys?: Record<string, unknown>
+  counts?: Record<string, unknown>
   stage?: string | null
   scope?: DurationLearningRuntimeScope | null
-  reasonCodes?: string[] | null
-  sourceCandidateRefs?: string[] | null
-  sourceEvidenceRefs?: string[] | null
+  reasonCodes?: string[]
+  sourceCandidateRefs?: string[]
+  sourceEvidenceRefs?: string[]
   monitoringEvidence?: BuildDurationAssetReviewDecisionFingerprintInput['monitoringEvidence']
 }
 
@@ -258,6 +258,22 @@ function requireReviewStatus(value: unknown): DurationAssetReviewStatus {
   return normalized as DurationAssetReviewStatus
 }
 
+function requirePublicationResolutionSource(value: unknown): 'automatic_publication' | 'manual_approval' {
+  const normalized = normalizeText(value)
+  if (normalized !== 'automatic_publication' && normalized !== 'manual_approval') {
+    throw new Error('duration_asset_review_resolution_source_invalid')
+  }
+  return normalized
+}
+
+function requireDecisionStatus(value: unknown): 'rejected' | 'superseded' {
+  const normalized = normalizeText(value)
+  if (normalized !== 'rejected' && normalized !== 'superseded') {
+    throw new Error('duration_asset_review_decision_status_invalid')
+  }
+  return normalized
+}
+
 function normalizeScope(scope: DurationLearningRuntimeScope): DurationLearningRuntimeScope {
   const record = asRecord(scope)
   const level = normalizeText(record.level) as DurationLearningRuntimeScope['level']
@@ -315,7 +331,11 @@ function assertPayloadSize(payload: Record<string, unknown>) {
 }
 
 function normalizeStableKeys(value: unknown) {
-  return Object.fromEntries(Object.entries(asRecord(value)).map(([key, entry]) => {
+  if (value === undefined) return {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('duration_asset_review_payload_stable_keys_invalid')
+  }
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => {
     const stableKey = requireNonEmpty(key, 'duration_asset_review_payload_stable_key_invalid')
     if (entry == null || typeof entry === 'object' || typeof entry === 'boolean') {
       throw new Error('duration_asset_review_payload_stable_key_invalid')
@@ -325,18 +345,31 @@ function normalizeStableKeys(value: unknown) {
 }
 
 function normalizeCounts(value: unknown) {
-  return Object.fromEntries(Object.entries(asRecord(value)).map(([key, value]) => {
+  if (value === undefined) return {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('duration_asset_review_payload_counts_invalid')
+  }
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, value]) => {
     const countKey = requireNonEmpty(key, 'duration_asset_review_payload_count_invalid')
-    const count = Number(value)
-    if (!Number.isFinite(count) || count < 0) throw new Error('duration_asset_review_payload_count_invalid')
-    return [countKey, Math.trunc(count)]
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+      throw new Error('duration_asset_review_payload_count_invalid')
+    }
+    return [countKey, value]
   }))
 }
 
 function normalizePayloadCount(value: unknown) {
-  const count = Number(value ?? 0)
-  if (!Number.isFinite(count) || count < 0) throw new Error('duration_asset_review_payload_count_invalid')
-  return Math.trunc(count)
+  if (value === undefined) return 0
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error('duration_asset_review_payload_count_invalid')
+  }
+  return value
+}
+
+function normalizeOptionalTextList(value: unknown, error: string) {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) throw new Error(error)
+  return uniqueTexts(value).sort()
 }
 
 function validateQueuePayload(value: unknown) {
@@ -358,7 +391,7 @@ function validateQueuePayload(value: unknown) {
     counts: normalizeCounts(payload.counts),
     stage: nullableText(payload.stage),
     scope: payload.scope == null ? null : normalizeScope(payload.scope as DurationLearningRuntimeScope),
-    reasonCodes: uniqueTexts(asArray(payload.reasonCodes)).sort(),
+    reasonCodes: normalizeOptionalTextList(payload.reasonCodes, 'duration_asset_review_payload_reason_codes_invalid'),
     sourceCandidateRefCount: normalizePayloadCount(payload.sourceCandidateRefCount),
     sourceEvidenceRefCount: normalizePayloadCount(payload.sourceEvidenceRefCount),
     monitoringEvidenceDigest,
@@ -422,9 +455,15 @@ export function buildDurationAssetReviewPayload(input: BuildDurationAssetReviewP
     counts,
     stage: nullableText(input.stage),
     scope: input.scope ? normalizeScope(input.scope) : null,
-    reasonCodes: uniqueTexts(input.reasonCodes ?? []).sort(),
-    sourceCandidateRefCount: uniqueTexts(input.sourceCandidateRefs ?? []).length,
-    sourceEvidenceRefCount: uniqueTexts(input.sourceEvidenceRefs ?? []).length,
+    reasonCodes: normalizeOptionalTextList(input.reasonCodes, 'duration_asset_review_payload_reason_codes_invalid'),
+    sourceCandidateRefCount: normalizeOptionalTextList(
+      input.sourceCandidateRefs,
+      'duration_asset_review_payload_source_candidate_refs_invalid',
+    ).length,
+    sourceEvidenceRefCount: normalizeOptionalTextList(
+      input.sourceEvidenceRefs,
+      'duration_asset_review_payload_source_evidence_refs_invalid',
+    ).length,
     monitoringEvidenceDigest: input.monitoringEvidence
       ? hashDurationContextPolicyLearningValue({
           publicationKey: input.monitoringEvidence.publicationKey,
@@ -477,8 +516,8 @@ function rowToItem(row: QueueRow, options: { sanitizeShared?: boolean } = {}): D
     status,
     canReview: !shared,
     approvalReady: status === 'open' && !shared,
-    assignedToUserId: nullableText(field(row, 'assigned_to_user_id', 'assignedToUserId')),
-    reviewedByUserId: nullableText(field(row, 'reviewed_by_user_id', 'reviewedByUserId')),
+    assignedToUserId: sanitize ? null : nullableText(field(row, 'assigned_to_user_id', 'assignedToUserId')),
+    reviewedByUserId: sanitize ? null : nullableText(field(row, 'reviewed_by_user_id', 'reviewedByUserId')),
     reviewedAt: nullableText(field(row, 'reviewed_at', 'reviewedAt')),
     decisionReason: nullableText(field(row, 'decision_reason', 'decisionReason')),
     resolutionSource,
@@ -591,10 +630,11 @@ export function createDatabaseDurationAssetReviewQueueStore(
       const reviewedAt = normalizeReviewedAt(input.reviewedAt)
       const decisionReason = normalizeDecisionReason(input.decisionReason)
       const reviewerUserId = normalizeOptionalId(input.reviewerUserId)
-      if (input.resolutionSource === 'automatic_publication' && reviewerUserId) {
+      const resolutionSource = requirePublicationResolutionSource(input.resolutionSource)
+      if (resolutionSource === 'automatic_publication' && reviewerUserId) {
         throw new Error('automatic_publication_reviewer_forbidden')
       }
-      if (input.resolutionSource === 'manual_approval' && !reviewerUserId) {
+      if (resolutionSource === 'manual_approval' && !reviewerUserId) {
         throw new Error('manual_approval_reviewer_required')
       }
       return transactionRunner(async () => {
@@ -613,11 +653,12 @@ export function createDatabaseDurationAssetReviewQueueStore(
             where source_key = $1
               and status = 'open'
           returning *`,
-          [sourceKey, publicationKey, reviewedAt, input.resolutionSource, reviewerUserId, decisionReason],
+          [sourceKey, publicationKey, reviewedAt, resolutionSource, reviewerUserId, decisionReason],
         )
         if (rows[0]) return { item: rowToItem(rows[0]), disposition: 'resolved' }
         const current = await loadBySourceKeyForUpdate(sourceKey)
         if (!current) throw new Error('duration_asset_review_item_not_found')
+        if (current.status === 'open') throw new Error('duration_asset_review_resolution_conflict')
         return { item: current, disposition: 'terminal_reused' }
       })
     },
@@ -627,11 +668,22 @@ export function createDatabaseDurationAssetReviewQueueStore(
       const reviewKind = requireReviewKind(input.reviewKind)
       const artifactKey = requireNonEmpty(input.artifactKey, 'duration_asset_review_artifact_key_required')
       const scopeValue = scopeFields(input.scope)
-      await assertProjectScopeAuthorized(queryExec, scopeValue.scope)
-      if (input.resolutionSource !== 'automatic_publication' || input.reviewerUserId !== null) {
+      const resolutionSource = requirePublicationResolutionSource(input.resolutionSource)
+      if (resolutionSource !== 'automatic_publication') {
+        throw new Error('duration_asset_review_resolution_source_invalid')
+      }
+      if (input.reviewerUserId !== null) {
         throw new Error('automatic_publication_reviewer_forbidden')
       }
+      const proposalKey = nullableText(input.proposalKey)
+      if (reviewKind === 'candidate_publication' && !proposalKey) {
+        throw new Error('duration_asset_review_candidate_proposal_key_required')
+      }
+      if (reviewKind === 'stable_promotion' && proposalKey) {
+        throw new Error('duration_asset_review_stable_proposal_key_forbidden')
+      }
       const publicationKey = requireNonEmpty(input.publicationKey, 'duration_asset_review_publication_key_required')
+      await assertProjectScopeAuthorized(queryExec, scopeValue.scope)
       const rows = await queryExec<QueueRow>(
         `with resolved as (
            update public.duration_asset_review_items
@@ -649,15 +701,17 @@ export function createDatabaseDurationAssetReviewQueueStore(
               and company_id is not distinct from $5::uuid
               and project_id is not distinct from $6::uuid
               and industry_key is not distinct from $7
-              and proposal_key is not distinct from $8
-              and ($8::text is not null or publication_key is not distinct from $9)
+              and (
+                ($1 = 'candidate_publication' and proposal_key is not distinct from $8::text)
+                or ($1 = 'stable_promotion' and proposal_key is null and publication_key is not distinct from $9::text)
+              )
               and status = 'open'
             returning id
          ) select count(*)::int as resolved_count from resolved`,
         [
           reviewKind, assetKey, artifactKey, scopeValue.scope.level, scopeValue.companyId, scopeValue.projectId,
-          scopeValue.industryKey, nullableText(input.proposalKey), publicationKey, publicationKey,
-          normalizeReviewedAt(input.reviewedAt), input.resolutionSource, normalizeDecisionReason(input.decisionReason),
+          scopeValue.industryKey, proposalKey, publicationKey, publicationKey,
+          normalizeReviewedAt(input.reviewedAt), resolutionSource, normalizeDecisionReason(input.decisionReason),
         ],
       )
       return Math.max(0, Math.trunc(Number(rows[0]?.resolved_count) || 0))
@@ -665,9 +719,10 @@ export function createDatabaseDurationAssetReviewQueueStore(
 
     async decide(input) {
       const id = requireNonEmpty(input.id, 'duration_asset_review_id_required')
+      const status = requireDecisionStatus(input.status)
       const reviewerUserId = requireNonEmpty(input.reviewerUserId, 'duration_asset_review_reviewer_required')
       const decisionReason = normalizeDecisionReason(input.decisionReason)
-      const source = input.status === 'rejected' ? 'manual_rejection' : 'manual_supersession'
+      const source = status === 'rejected' ? 'manual_rejection' : 'manual_supersession'
       if (input.resolutionSource !== source) throw new Error('duration_asset_review_resolution_source_invalid')
       return transactionRunner(async () => {
         const locked = await loadForUpdate(id)
@@ -684,11 +739,12 @@ export function createDatabaseDurationAssetReviewQueueStore(
             where id = $1::uuid
               and status = 'open'
           returning *`,
-          [id, input.status, reviewerUserId, normalizeReviewedAt(input.reviewedAt), decisionReason, source],
+          [id, status, reviewerUserId, normalizeReviewedAt(input.reviewedAt), decisionReason, source],
         )
         if (rows[0]) return { item: rowToItem(rows[0]), disposition: 'decided' }
         const current = await loadForUpdate(id)
         if (!current) throw new Error('duration_asset_review_item_not_found')
+        if (current.status === 'open') throw new Error('duration_asset_review_decision_conflict')
         return { item: current, disposition: 'terminal_reused' }
       })
     },
@@ -713,7 +769,7 @@ export function createDatabaseDurationAssetReviewQueueStore(
             (scope_level in ('company', 'project') and company_id = $1::uuid)
             or scope_level in ('industry', 'global')
           )
-            and (scope_level <> 'project' or ($2::uuid[] is not null and project_id = any($2::uuid[])))
+            and (scope_level <> 'project' or $2::uuid[] is null or project_id = any($2::uuid[]))
             and ($3::text is null or asset_key = $3)
             and ($4::text is null or scope_level = $4)
             and ($5::text is null or status = $5)
