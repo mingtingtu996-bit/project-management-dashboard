@@ -706,6 +706,10 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
     })
   })
 
+  it('keeps an explicit link to the unified duration assets published tab', () => {
+    expect(readClientSource('src/pages/RuleAssetGovernanceWorkbenchAdmin.tsx')).toContain('/admin/duration-assets?tab=published')
+  })
+
   afterEach(() => {
     act(() => {
       root.unmount()

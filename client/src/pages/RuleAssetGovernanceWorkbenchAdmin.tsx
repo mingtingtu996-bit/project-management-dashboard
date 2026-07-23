@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Database, RefreshCw, Send, ShieldCheck, XCircle } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -1641,6 +1642,9 @@ export default function RuleAssetGovernanceWorkbenchAdmin() {
               <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
                 后台治理入口，集中展示规则 / Seed / 算法资产的台账、准入、证据和 blocker，并提交受控交接操作；readiness 不写 runtime，不授予发布权。
               </p>
+              <Link to="/admin/duration-assets?tab=published" className="mt-2 inline-flex text-sm font-medium text-blue-700 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                \u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03
+              </Link>
             </div>
           </div>
           <Button type="button" variant="outline" onClick={() => void load()} disabled={loading}>

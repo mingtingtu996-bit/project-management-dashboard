@@ -26,6 +26,7 @@ export type RuleAssetGovernanceWorkbenchOperationAction =
   | 'runtime_recommendation_adopt'
   | 'runtime_recommendation_decline'
   | 'runtime_rollback'
+  | 'duration_asset_review_decision'
 export type RuleAssetGovernanceCompletionDeclarationStatus =
   | 'current_snapshot_gate_passed'
   | 'evidence_layer_ready'
@@ -43,6 +44,7 @@ export type RuleAssetGovernanceWorkbenchAssetType =
   | 'dependency_rule'
   | 'template_seed'
   | 'construction_organization_plan_network'
+  | 'duration_learning_runtime'
 
 export interface RuleAssetGovernanceWorkbenchSummary {
   totalAssetCount: number
@@ -182,6 +184,9 @@ export interface RuleAssetGovernanceWorkbenchOperationInput {
   selectedScenarioIds?: string[]
   manualConflictReviewDecision?: 'approved_ready_for_replay' | 'rejected_needs_plan_date_adjustment' | null
   constructionOrganizationPlanNetworkDraft?: Record<string, unknown>
+  reviewItemId?: string
+  reviewDecision?: 'approve' | 'reject' | 'supersede'
+  decisionNotes?: string
 }
 
 export interface RuleAssetGovernanceWorkbenchOperationResult {
@@ -1628,6 +1633,7 @@ function normalizeOperationAction(raw: unknown): RuleAssetGovernanceWorkbenchOpe
     || raw === 'runtime_recommendation_adopt'
     || raw === 'runtime_recommendation_decline'
     || raw === 'runtime_rollback'
+    || raw === 'duration_asset_review_decision'
     ? raw
     : null
 }
@@ -1644,6 +1650,7 @@ function normalizeAssetType(raw: unknown): RuleAssetGovernanceWorkbenchAssetType
     'dependency_rule',
     'template_seed',
     'construction_organization_plan_network',
+    'duration_learning_runtime',
   ]
   return knownTypes.includes(value as RuleAssetGovernanceWorkbenchAssetType)
     ? value as RuleAssetGovernanceWorkbenchAssetType

@@ -1,4 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -20,6 +22,17 @@ vi.mock('@/services/v14231ReadinessApi', async () => {
 })
 
 const { default: DurationAccuracyAdmin } = await import('../DurationAccuracyAdmin')
+
+function readClientSource(relativePath: string) {
+  for (const candidate of [join(process.cwd(), relativePath), join(process.cwd(), 'client', relativePath)]) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Continue through the workspace-root candidates.
+    }
+  }
+  throw new Error(`Unable to locate ${relativePath}`)
+}
 
 const summary = {
   projectId: null,
@@ -129,6 +142,10 @@ describe('DurationAccuracyAdmin', () => {
         requiresLiveEvidenceForUpgrade: true,
       },
     }))
+  })
+
+  it('keeps an explicit link to the unified duration assets accuracy tab', () => {
+    expect(readClientSource('src/pages/DurationAccuracyAdmin.tsx')).toContain('/admin/duration-assets?tab=accuracy')
   })
 
   it('renders real samples, replay, publications, runtime calls and observations without exposing dangerous commands', async () => {

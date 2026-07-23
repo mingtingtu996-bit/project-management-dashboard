@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, Database, History, Radio, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -232,6 +233,9 @@ export default function DurationAccuracyAdmin() {
               <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
                 查看预测、回测、运行发布与消费证据。
               </p>
+              <Link to="/admin/duration-assets?tab=accuracy" className="mt-2 inline-flex text-sm font-medium text-blue-700 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                \u6253\u5f00\u7edf\u4e00\u5de5\u671f\u8d44\u4ea7\u9875
+              </Link>
             </div>
           </div>
           <Button type="button" variant="outline" onClick={() => void load()} disabled={summaryLoading || governanceLoading}>

@@ -33,7 +33,8 @@ function resolveHref(href: string, projectId?: string | null) {
 }
 
 function isActivePath(pathname: string, target: string) {
-  return pathname === target || pathname.startsWith(`${target}/`)
+  const targetPathname = target.split('?')[0]
+  return pathname === targetPathname || pathname.startsWith(`${targetPathname}/`)
 }
 
 function getOnboardingTarget(key: string) {
@@ -79,7 +80,7 @@ export default function Sidebar() {
   const isCurrentCompanyAdmin = currentCompanyRole === 'company_admin'
   const navigation = isProjectPage
     ? PROJECT_NAVIGATION
-    : COMPANY_NAVIGATION.filter((item) => item.key !== 'company' || isCurrentCompanyAdmin)
+    : COMPANY_NAVIGATION.filter((item) => (item.key !== 'company' && item.key !== 'duration-assets') || isCurrentCompanyAdmin)
   const projectDisplayName = getProjectDisplayName(currentProject?.name)
   const projectDisplayDescription = getProjectDisplayDescription(currentProject?.description, PROJECT_NAVIGATION_LABELS.projectHome)
 

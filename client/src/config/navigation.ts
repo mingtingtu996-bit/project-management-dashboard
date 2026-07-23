@@ -4,6 +4,7 @@ import {
   Bell,
   Building2,
   Calendar,
+  DatabaseZap,
   Flag,
   FolderKanban,
   GanttChart,
@@ -100,6 +101,7 @@ export const PROJECT_NAVIGATION_LABELS = {
 
 export const COMPANY_NAVIGATION: NavigationItem[] = [
   { key: 'company', label: PROJECT_NAVIGATION_LABELS.company, href: '/company', icon: Building2 },
+  { key: 'duration-assets', label: '\u5de5\u671f\u8d44\u4ea7\u6cbb\u7406', href: '/admin/duration-assets?tab=queue', icon: DatabaseZap },
   { key: 'notifications', label: PROJECT_NAVIGATION_LABELS.notifications, href: '/notifications', icon: Bell },
 ]
 

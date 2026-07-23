@@ -22,6 +22,26 @@ describe('ruleAssetGovernanceWorkbenchApi', () => {
     vi.clearAllMocks()
   })
 
+  it('accepts the governed duration asset review decision operation contract', async () => {
+    mocks.apiPost.mockResolvedValueOnce({
+      status: 'operation_delegated', operationAction: 'duration_asset_review_decision',
+      assetType: 'duration_learning_runtime', delegatedToDomainWriter: true,
+      domainWriterKey: 'duration_asset_review_decision_service', reasons: [], domainResult: { status: 'approved' },
+    })
+
+    const result = await executeRuleAssetGovernanceWorkbenchOperation({
+      action: 'duration_asset_review_decision', assetType: 'duration_learning_runtime',
+      domainWriterKey: 'duration_asset_review_decision_service', evidenceToken: 'source-1',
+      reviewItemId: 'review-1', reviewDecision: 'approve', decisionNotes: 'approved after review',
+    })
+
+    expect(mocks.apiPost).toHaveBeenCalledWith(
+      '/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations',
+      expect.objectContaining({ reviewItemId: 'review-1', reviewDecision: 'approve' }),
+    )
+    expect(result.operationAction).toBe('duration_asset_review_decision')
+  })
+
   it('does not synthesize a frontend option-comparison package when the backend package is missing', async () => {
     mocks.apiGet.mockResolvedValueOnce({
       source: 'construction_organization_plan_network_draft_read_model',
