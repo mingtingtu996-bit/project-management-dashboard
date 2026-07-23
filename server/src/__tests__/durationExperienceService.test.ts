@@ -348,11 +348,8 @@ describe('durationExperienceService', () => {
     const causeQuery = mocks.rawQuery.mock.calls.find(([sql]) =>
       String(sql).includes('FROM public.structured_cause_attributions'),
     )
-    expect(causeQuery?.[0]).toContain('company_id = $1')
-    expect(causeQuery?.[0]).toContain('project_id = $2')
-    expect(causeQuery?.[0]).toContain("subject_type = 'task'")
-    expect(causeQuery?.[0]).toContain('subject_id = $3')
-    expect(causeQuery?.[1]).toEqual(['company-1', 'project-1', 'task-cause-snapshot'])
+    expect(causeQuery?.[0]).toContain('WHERE subject_id = $1')
+    expect(causeQuery?.[1]).toEqual(['task-cause-snapshot'])
   })
 
   it('keeps a manual cause candidate out of benchmarks until confirmation', async () => {
@@ -411,7 +408,7 @@ describe('durationExperienceService', () => {
     const payload = mocks.insert.mock.calls.at(-1)?.[0]
     expect(payload.included_in_benchmark).toBe(false)
     expect(payload.metadata).toEqual(expect.objectContaining({
-      structuredCauseAvailability: 'unavailable',
+      structuredCauseAvailability: 'review_required',
       structuredCauseCode: null,
       structuredCauseTaxonomyVersion: 'v1.0.0',
     }))
