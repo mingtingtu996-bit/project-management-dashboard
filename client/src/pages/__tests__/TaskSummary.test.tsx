@@ -224,6 +224,11 @@ describe('TaskSummary page contract', () => {
   let resolvePendingForecast: (() => void) | null = null
   let causeListModes: Record<string, 'success' | 'error' | 'pending'> = {}
   let confirmedTaskCauses: Record<string, Array<Record<string, unknown>>> = {}
+  let taskDelayRecords: Array<{
+    delay_days: number
+    reason?: string | null
+    recorded_at: string
+  }> = []
   let pendingCauseRequests: Array<{
     projectId: string
     signal: AbortSignal | null | undefined
@@ -254,6 +259,11 @@ describe('TaskSummary page contract', () => {
     permissionState.canEdit = true
     causeListModes = { 'project-1': 'success' }
     confirmedTaskCauses = { 'project-1': [] }
+    taskDelayRecords = [{
+      delay_days: 2,
+      reason: '材料到场延后',
+      recorded_at: '2026-04-09',
+    }]
     pendingCauseRequests = []
 
     mockedUseNavigate.mockReturnValue(vi.fn())
@@ -375,13 +385,7 @@ describe('TaskSummary page contract', () => {
                     completed_at: '2026-04-10',
                     status_label: 'on_time',
                     delay_total_days: 2,
-                    delay_records: [
-                      {
-                        delay_days: 2,
-                        reason: '材料到场延后',
-                        recorded_at: '2026-04-09',
-                      },
-                    ],
+                    delay_records: taskDelayRecords,
                   },
                 ],
               },
@@ -1018,6 +1022,54 @@ describe('TaskSummary page contract', () => {
 
     expect(container.textContent).toContain('Material shortage or late arrival')
     expect(container.textContent).toContain('材料到场延后')
+    const confirmRequest = fetchMock.mock.calls.find(([url, init]) => (
+      String(url).endsWith('/subjects/task/task-1/confirm') && init?.method === 'POST'
+    ))
+    expect(confirmRequest).toBeTruthy()
+    expect(JSON.parse(String(confirmRequest?.[1]?.body))).toEqual(expect.objectContaining({
+      rawText: '材料到场延后',
+    }))
+  })
+
+  it('shows the delayed placeholder without exposing confirmation when no real reason exists', async () => {
+    taskDelayRecords = [{
+      delay_days: 1,
+      reason: '   ',
+      recorded_at: '2026-04-08',
+    }, {
+      delay_days: 1,
+      recorded_at: '2026-04-09',
+    }]
+
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+          <Routes>
+            <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1-detail"]')
+
+    expect(container.textContent).toContain('延期原因待补齐')
+    expect(container.querySelector('[data-testid="task-cause-surface-loading-task-1"]')).toBeNull()
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('确认延误原因'))).toBe(false)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+    expect(fetchMock.mock.calls.filter(([url, init]) => (
+      String(url).endsWith('/subjects/task/task-1/confirm') && init?.method === 'POST'
+    ))).toHaveLength(0)
   })
 
   it('does not expose a confirmation command to read-only users while retaining the confirmed label', async () => {

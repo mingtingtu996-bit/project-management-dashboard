@@ -638,8 +638,12 @@ function getDelayReasonSummary(task: TaskSummaryTaskRow) {
   const reasons = (task.delay_records ?? [])
     .map((record) => String(record.reason ?? '').trim())
     .filter(Boolean)
-  if (reasons.length > 0) return reasons.slice(0, 2).join('；')
-  return isTaskDelayed(task) ? '延期原因待补齐' : ''
+  return {
+    displayText: reasons.length > 0
+      ? reasons.slice(0, 2).join('；')
+      : isTaskDelayed(task) ? '延期原因待补齐' : '',
+    confirmableSourceText: reasons[0] ?? '',
+  }
 }
 
 function getTaskProcessEvents(task: TaskSummaryTaskRow, timelineEvents: TaskTimelineEvent[]): ProcessEvent[] {
@@ -1066,18 +1070,18 @@ function TaskProcessReplay({
               <span className="mr-2 min-w-16 text-slate-400">责任单位</span>
               <span>{getTaskAssigneeUnitLabel(task)}</span>
             </div>
-            {delayReason ? (
+            {delayReason.displayText ? (
               <div className="flex min-h-5 items-baseline">
                 <span className="mr-2 min-w-16 text-slate-400">延期说明</span>
-                <span className="text-slate-500">{delayReason}</span>
+                <span className="text-slate-500">{delayReason.displayText}</span>
               </div>
             ) : null}
-            {delayReason && causeSurfaceStatus === 'loading' ? (
+            {delayReason.displayText && causeSurfaceStatus === 'loading' ? (
               <div data-testid={`task-cause-surface-loading-${task.id}`} role="status" className="text-slate-500">
                 延误原因确认状态加载中
               </div>
             ) : null}
-            {delayReason && causeSurfaceStatus === 'error' ? (
+            {delayReason.displayText && causeSurfaceStatus === 'error' ? (
               <div data-testid={`task-cause-surface-error-${task.id}`} role="status" className="text-amber-700">
                 延误原因确认暂不可用
               </div>
@@ -1088,13 +1092,13 @@ function TaskProcessReplay({
                 <span data-testid={`task-cause-confirmed-label-${task.id}`} className="text-slate-700">{confirmedCauseLabel}</span>
               </div>
             ) : null}
-            {delayReason && causeSurfaceStatus === 'ready' && !confirmedCause && canEdit ? (
+            {delayReason.confirmableSourceText && causeSurfaceStatus === 'ready' && !confirmedCause && canEdit ? (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="mt-1"
-                onClick={() => onConfirmCause(task, delayReason)}
+                onClick={() => onConfirmCause(task, delayReason.confirmableSourceText)}
               >
                 确认延误原因
               </Button>
