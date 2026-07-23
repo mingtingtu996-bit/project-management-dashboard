@@ -70,11 +70,17 @@ export interface DurationAssetReviewReadModel {
 
 export interface DurationAccuracySummary {
   generatedAt: string | null
+  dataStatus: 'ok' | 'partial' | 'unavailable'
+  sourceErrors: Record<string, string>
   metrics: Array<Record<string, unknown> & { engineCode: string; sampleCount: number; status: string }>
 }
 
+export type DurationAccuracyGovernanceSourceKey = 'samples' | 'publications' | 'runtimeCalls' | 'observations'
+
 export interface DurationAccuracyGovernanceReadModel {
   generatedAt: string | null
+  sourceStatus: Record<DurationAccuracyGovernanceSourceKey, 'available' | 'unavailable'>
+  sourceErrors: Partial<Record<DurationAccuracyGovernanceSourceKey, string>>
   samples: Array<Record<string, unknown>>
   publications: Array<Record<string, unknown> & { publicationKey: string; assetKey: string; publicationStage: string; monitoringStatus: string }>
   runtimeCalls: Array<Record<string, unknown>>
@@ -96,6 +102,23 @@ function number(value: unknown): number {
 
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.map(text).filter(Boolean) : []
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .map(([key, entry]) => [key, text(entry)] as const)
+    .filter(([, entry]) => Boolean(entry)))
+}
+
+function governanceSourceStatus(value: unknown): DurationAccuracyGovernanceReadModel['sourceStatus'] {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  return {
+    samples: raw.samples === 'unavailable' ? 'unavailable' : 'available',
+    publications: raw.publications === 'unavailable' ? 'unavailable' : 'available',
+    runtimeCalls: raw.runtimeCalls === 'unavailable' ? 'unavailable' : 'available',
+    observations: raw.observations === 'unavailable' ? 'unavailable' : 'available',
+  }
 }
 
 function reviewScope(value: unknown): DurationAssetReviewScope {
@@ -159,6 +182,8 @@ export async function getDurationAccuracySummary(projectId?: string | null): Pro
   const model = await apiGet<any>(`/api/admin/duration-accuracy/summary${params.size ? `?${params}` : ''}`, { runtimeCache: 'off' })
   return {
     generatedAt: nullableText(model?.generatedAt),
+    dataStatus: model?.dataStatus === 'partial' || model?.dataStatus === 'unavailable' ? model.dataStatus : 'ok',
+    sourceErrors: stringRecord(model?.sourceErrors),
     metrics: Array.isArray(model?.metrics) ? model.metrics.map((metric: any) => ({
       ...metric, engineCode: text(metric?.engineCode), sampleCount: number(metric?.sampleCount), status: text(metric?.status),
     })) : [],
@@ -171,7 +196,8 @@ export async function getDurationAccuracyGovernanceReadModel(projectId?: string 
   const model = await apiGet<any>(`/api/admin/duration-accuracy/governance-read-model?${params}`, { runtimeCache: 'off' })
   const records = (value: unknown) => Array.isArray(value) ? value.filter((item) => item && typeof item === 'object') as Record<string, unknown>[] : []
   return {
-    generatedAt: nullableText(model?.generatedAt), samples: records(model?.samples), runtimeCalls: records(model?.runtimeCalls), observations: records(model?.observations),
+    generatedAt: nullableText(model?.generatedAt), sourceStatus: governanceSourceStatus(model?.sourceStatus),
+    sourceErrors: stringRecord(model?.sourceErrors), samples: records(model?.samples), runtimeCalls: records(model?.runtimeCalls), observations: records(model?.observations),
     publications: records(model?.publications).map((publication) => ({
       ...publication, publicationKey: text(publication.publicationKey), assetKey: text(publication.assetKey),
       publicationStage: text(publication.publicationStage), monitoringStatus: text(publication.monitoringStatus),

@@ -10,7 +10,12 @@ vi.mock('@/services/ruleAssetGovernanceWorkbenchApi', () => ({
   executeRuleAssetGovernanceWorkbenchOperation: mocks.executeRuleAssetGovernanceWorkbenchOperation,
 }))
 
-const { decideDurationAssetReviewItem, getDurationAssetReviewItems } = await import('../durationAssetsApi')
+const {
+  decideDurationAssetReviewItem,
+  getDurationAccuracyGovernanceReadModel,
+  getDurationAccuracySummary,
+  getDurationAssetReviewItems,
+} = await import('../durationAssetsApi')
 
 describe('durationAssetsApi', () => {
   beforeEach(() => vi.clearAllMocks())
@@ -64,6 +69,28 @@ describe('durationAssetsApi', () => {
       action: 'duration_asset_review_decision', assetType: 'duration_learning_runtime',
       domainWriterKey: 'duration_asset_review_decision_service', evidenceToken: 'source-1',
       reviewItemId: 'review-1', reviewDecision: 'approve', decisionNotes: 'reviewed evidence',
+    })
+  })
+
+  it('preserves backend availability metadata for accuracy and governance sources', async () => {
+    mocks.apiGet
+      .mockResolvedValueOnce({
+        generatedAt: '2026-07-23T08:00:00.000Z', dataStatus: 'partial',
+        sourceErrors: { duration_accuracy_metrics: 'duration_accuracy_metrics_unavailable' },
+        metrics: [{ engineCode: 'critical_path_cpm', sampleCount: 2, status: 'backtested' }],
+      })
+      .mockResolvedValueOnce({
+        generatedAt: '2026-07-23T08:00:00.000Z', samples: [], publications: [], runtimeCalls: [], observations: [],
+        sourceStatus: { samples: 'available', publications: 'unavailable', runtimeCalls: 'available', observations: 'unavailable' },
+        sourceErrors: { publications: 'publication_source_unavailable', observations: 'observation_source_unavailable' },
+      })
+
+    await expect(getDurationAccuracySummary()).resolves.toMatchObject({
+      dataStatus: 'partial', sourceErrors: { duration_accuracy_metrics: 'duration_accuracy_metrics_unavailable' },
+    })
+    await expect(getDurationAccuracyGovernanceReadModel()).resolves.toMatchObject({
+      sourceStatus: { publications: 'unavailable', observations: 'unavailable' },
+      sourceErrors: { publications: 'publication_source_unavailable', observations: 'observation_source_unavailable' },
     })
   })
 })
