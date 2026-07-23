@@ -1393,8 +1393,65 @@ describe('taskDurationForecastService', () => {
 
     expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'project-1',
-      confirmedCauseCode: 'material_shortage',
+      structuredCauseAuthority: {
+        state: 'confirmed',
+        causeCode: 'material_shortage',
+        taxonomyVersion: 'v1.0.0',
+        reasonCodes: [],
+      },
     }))
+    expect(mocks.getTaskDurationSuggestion.mock.calls.at(-1)?.[0]).not.toHaveProperty('confirmedCauseCode')
+  })
+
+  it.each([
+    {
+      name: 'no cause',
+      rows: [],
+      readFails: false,
+      expected: { state: 'no_cause', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+    },
+    {
+      name: 'review required',
+      rows: [{
+        id: '00000000-0000-4000-8000-000000000092', company_id: 'company-1', project_id: 'project-1',
+        subject_type: 'task', subject_id: 'task-authority-state', event_type: 'delay', status: 'candidate',
+        cause_code: 'quality_rework', cause_role: 'primary', taxonomy_version: 'v1.0.0',
+        confirmation_source: 'candidate', confirmed_at: null,
+        review_reason_codes: ['manual_text_requires_user_confirmation'],
+      }],
+      readFails: false,
+      expected: {
+        state: 'review_required', causeCode: 'quality_rework', taxonomyVersion: 'v1.0.0',
+        reasonCodes: ['manual_text_requires_user_confirmation'],
+      },
+    },
+    {
+      name: 'unavailable',
+      rows: [],
+      readFails: true,
+      expected: {
+        state: 'unavailable', causeCode: null, taxonomyVersion: 'v1.0.0',
+        reasonCodes: ['structured_cause_read_failed'],
+      },
+    },
+  ])('passes the discriminated $name authority state into duration suggestion', async ({ rows, readFails, expected }) => {
+    state.tasks = [{
+      id: 'task-authority-state', project_id: 'project-1', title: 'Authority state task',
+      planned_start_date: '2026-05-01', planned_end_date: '2026-05-20', actual_start_date: '2026-05-02', progress: 45,
+    }]
+    state.projects = [{ id: 'project-1', company_id: 'company-1' }]
+    mocks.rawQuery.mockImplementation(async (sql = '') => {
+      if (!sql.includes('FROM public.structured_cause_attributions')) return { rows: [] }
+      if (readFails) throw new Error('rls denied')
+      return { rows }
+    })
+
+    await forecastTaskDuration('task-authority-state')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      structuredCauseAuthority: expected,
+    }))
+    expect(mocks.getTaskDurationSuggestion.mock.calls.at(-1)?.[0]).not.toHaveProperty('confirmedCauseCode')
   })
 
   it('uses SPI and recent velocity when execution facts show the task is slower than the reference ratio', async () => {

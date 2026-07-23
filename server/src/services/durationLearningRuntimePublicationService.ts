@@ -269,14 +269,56 @@ function scopeReasons(scope: DurationLearningRuntimeScope) {
   return []
 }
 
-function payloadReasons(assetKey: DurationLearningRuntimeAssetKey, payload: Record<string, unknown>) {
+function payloadReasons(
+  assetKey: DurationLearningRuntimeAssetKey,
+  payload: Record<string, unknown>,
+  scope: DurationLearningRuntimeScope,
+) {
   const reasons: string[] = []
   if (Object.keys(payload).length === 0) reasons.push('runtime_payload_required')
 
   if (assetKey === 'base_duration_benchmark') {
     const basis = normalizeText(payload.durationDayBasis ?? payload.duration_day_basis)
     if (basis !== 'construction_production_day') reasons.push('benchmark_production_day_basis_required')
-    if (!normalizeText(payload.benchmarkId ?? payload.benchmark_id)) reasons.push('benchmark_id_required')
+    const aggregate = scope.level !== 'project'
+    const benchmarkId = normalizeText(payload.benchmarkId ?? payload.benchmark_id)
+    const benchmarkKind = normalizeText(payload.benchmarkKind ?? payload.benchmark_kind)
+    const causeApplicability = normalizeText(payload.causeApplicability ?? payload.cause_applicability)
+    const aggregateProvenance = readRecord(payload.aggregateProvenance ?? payload.aggregate_provenance)
+    if (!aggregate && !benchmarkId) reasons.push('benchmark_id_required')
+    if (!aggregate && (benchmarkKind === 'aggregate_all_cause' || Object.keys(aggregateProvenance).length > 0)) {
+      reasons.push('benchmark_project_exact_provenance_required')
+    }
+    if (aggregate) {
+      if (benchmarkId) reasons.push('benchmark_aggregate_project_id_forbidden')
+      if (benchmarkKind !== 'aggregate_all_cause' || causeApplicability !== 'all_cause') {
+        reasons.push('benchmark_aggregate_provenance_required')
+      }
+      const schemaVersion = normalizeText(aggregateProvenance.schemaVersion ?? aggregateProvenance.schema_version)
+      const scopeLevel = normalizeText(aggregateProvenance.scopeLevel ?? aggregateProvenance.scope_level)
+      const sourceBenchmarkIds = uniqueText(readList(
+        aggregateProvenance.sourceBenchmarkIds ?? aggregateProvenance.source_benchmark_ids,
+      ))
+      const sourceProjectIds = uniqueText(readList(
+        aggregateProvenance.sourceProjectIds ?? aggregateProvenance.source_project_ids,
+      ))
+      const calendarIdentities = readList(
+        aggregateProvenance.calendarIdentities ?? aggregateProvenance.calendar_identities,
+      ).map(readRecord)
+      if (
+        schemaVersion !== 'duration-benchmark-aggregate/v1'
+        || scopeLevel !== scope.level
+        || sourceBenchmarkIds.length === 0
+        || sourceProjectIds.length === 0
+      ) reasons.push('benchmark_aggregate_provenance_required')
+      if (
+        calendarIdentities.length === 0
+        || calendarIdentities.some((identity) => (
+          !normalizeText(identity.calendarRef ?? identity.calendar_ref)
+          || !normalizeText(identity.calendarVersion ?? identity.calendar_version)
+        ))
+      ) reasons.push('benchmark_aggregate_calendar_identity_required')
+    }
     if (!readPositiveNumber(payload.p50Days ?? payload.p50_days)) reasons.push('benchmark_p50_days_required')
     if (!readPositiveNumber(payload.p75Days ?? payload.p75_days)) reasons.push('benchmark_p75_days_required')
     if (!readPositiveNumber(payload.p80Days ?? payload.p80_days)) reasons.push('benchmark_p80_days_required')
@@ -293,8 +335,8 @@ function payloadReasons(assetKey: DurationLearningRuntimeAssetKey, payload: Reco
     if (!readTimestamp(payload.generatedAt ?? payload.generated_at)) reasons.push('benchmark_generated_at_required')
     if (!readTimestamp(payload.sourceWindowStart ?? payload.source_window_start)) reasons.push('benchmark_source_window_start_required')
     if (!readTimestamp(payload.sourceAsOf ?? payload.source_as_of)) reasons.push('benchmark_source_as_of_required')
-    if (!normalizeText(payload.calendarRef ?? payload.calendar_ref)) reasons.push('benchmark_calendar_ref_required')
-    if (!normalizeText(payload.calendarVersion ?? payload.calendar_version)) reasons.push('benchmark_calendar_version_required')
+    if (!aggregate && !normalizeText(payload.calendarRef ?? payload.calendar_ref)) reasons.push('benchmark_calendar_ref_required')
+    if (!aggregate && !normalizeText(payload.calendarVersion ?? payload.calendar_version)) reasons.push('benchmark_calendar_version_required')
   }
   if (assetKey === 'standard_work_duration_seed') {
     if (!normalizeText(payload.stableCode ?? payload.stable_code)) reasons.push('standard_seed_stable_code_required')
@@ -517,7 +559,7 @@ export async function persistDurationLearningRuntimePublication(
     ...(sourceCandidateRefs.length > 0 ? [] : ['source_candidate_refs_required']),
     ...(sourceEvidenceRefs.length > 0 ? [] : ['source_evidence_refs_required']),
     ...scopeReasons(input.scope),
-    ...payloadReasons(input.assetKey, input.runtimePayload),
+    ...payloadReasons(input.assetKey, input.runtimePayload, input.scope),
   ]))
   if (reasons.length > 0) return { status: 'blocked', publication: null, reasons }
 

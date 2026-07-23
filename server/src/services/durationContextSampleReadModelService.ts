@@ -26,6 +26,7 @@ export type DurationExperienceSampleRow = {
   duration_calibration_source?: string | null
   completed_at?: string | Date | null
   created_at?: string | Date | null
+  updated_at?: string | Date | null
   experience_tier?: string | null
   reuse_scope?: string | null
   fact_source?: string | null
@@ -99,6 +100,7 @@ const DURATION_EXPERIENCE_SAMPLE_COLUMNS = [
   'duration_calibration_source',
   'completed_at',
   'created_at',
+  'updated_at',
   'experience_tier',
   'reuse_scope',
   'fact_source',

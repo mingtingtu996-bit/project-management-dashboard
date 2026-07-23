@@ -645,7 +645,7 @@ function aggregateProposal(
   const taskIds = uniqueTexts(proposals.flatMap((proposal) => proposal.taskIds ?? []))
   const conflictCount = proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.conflictCount), 0)
   const sampleCount = proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.sampleCount), 0)
-  const runtimePayload = aggregateRuntimePayload(proposals)
+  const runtimePayload = aggregateRuntimePayload(proposals, scope)
   const proposalKey = `duration-learning-aggregate:${proposalGroupingIdentity(first)}:${scopeIdentity(scope)}:${payloadFingerprint(runtimePayload)}`
   const aggregate: DurationLearningRuntimeCandidateProposal = {
     proposalKey,
@@ -741,6 +741,59 @@ function weightedSignedPayloadNumber(
   return Math.round(values.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight)
 }
 
+function weightedPayloadMetric(
+  proposals: DurationLearningRuntimeCandidateProposal[],
+  keys: string[],
+) {
+  const values = proposals.flatMap((proposal) => {
+    const raw = keys.map((key) => proposal.runtimePayload[key]).find((value) => optionalNumber(value) !== null)
+    const value = optionalNumber(raw)
+    return value === null ? [] : [{ value, weight: Math.max(1, proposal.sampleCount) }]
+  })
+  if (values.length !== proposals.length) return null
+  const totalWeight = values.reduce((sum, item) => sum + item.weight, 0)
+  return Number((values.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight).toFixed(6))
+}
+
+function aggregatePayloadTimestamp(
+  proposals: DurationLearningRuntimeCandidateProposal[],
+  keys: string[],
+  order: 'earliest' | 'latest',
+) {
+  const values = proposals.map((proposal) => (
+    keys.map((key) => timestamp(proposal.runtimePayload[key])).find(Boolean) ?? ''
+  ))
+  if (values.some((value) => !value)) return null
+  values.sort()
+  return order === 'earliest' ? values[0] : values.at(-1) ?? null
+}
+
+function aggregateCalendarIdentities(proposals: DurationLearningRuntimeCandidateProposal[]) {
+  const identities = proposals.flatMap((proposal) => {
+    const payload = proposal.runtimePayload
+    const directRef = text(payload.calendarRef ?? payload.calendar_ref)
+    const directVersion = text(payload.calendarVersion ?? payload.calendar_version)
+    const aggregateProvenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
+    const nested = list(aggregateProvenance.calendarIdentities ?? aggregateProvenance.calendar_identities)
+      .map(record)
+      .map((identity) => ({
+        calendarRef: text(identity.calendarRef ?? identity.calendar_ref),
+        calendarVersion: text(identity.calendarVersion ?? identity.calendar_version),
+      }))
+      .filter((identity) => identity.calendarRef && identity.calendarVersion)
+    return [
+      ...(directRef && directVersion ? [{ calendarRef: directRef, calendarVersion: directVersion }] : []),
+      ...nested,
+    ]
+  })
+  return [...new Map(
+    identities.map((identity) => [`${identity.calendarRef}\u0000${identity.calendarVersion}`, identity] as const),
+  ).values()].sort((left, right) => (
+    left.calendarRef.localeCompare(right.calendarRef)
+    || left.calendarVersion.localeCompare(right.calendarVersion)
+  ))
+}
+
 function nodeIdentity(node: Record<string, unknown>) {
   return text(node.sourceId ?? node.source_id ?? node.stableCode ?? node.stable_code ?? node.path)
 }
@@ -800,17 +853,76 @@ function aggregatePayloadNodes(proposals: DurationLearningRuntimeCandidatePropos
     })
 }
 
-function aggregateRuntimePayload(proposals: DurationLearningRuntimeCandidateProposal[]) {
+function aggregateRuntimePayload(
+  proposals: DurationLearningRuntimeCandidateProposal[],
+  scope: DurationLearningRuntimeScope,
+) {
   const first = proposals[0]
   if (first.assetKey === 'base_duration_benchmark') {
     const productionDaySamples = proposals.flatMap((proposal) => proposal.productionDaySamples ?? [])
+      .map(positiveNumber)
+      .filter((value): value is number => value !== null)
+    const pooledMean = productionDaySamples.length > 0
+      ? productionDaySamples.reduce((sum, value) => sum + value, 0) / productionDaySamples.length
+      : null
+    const meanDays = pooledMean === null
+      ? weightedPayloadMetric(proposals, ['meanDays', 'mean_days', 'p50Days', 'p50_days'])
+      : Number(pooledMean.toFixed(6))
+    const variance = pooledMean === null
+      ? weightedPayloadMetric(proposals, ['variance'])
+      : Number((productionDaySamples.reduce((sum, value) => sum + (value - pooledMean) ** 2, 0)
+          / productionDaySamples.length).toFixed(6))
+    const coefficientOfVariation = meanDays && variance !== null
+      ? Number((Math.sqrt(Math.max(0, variance)) / meanDays).toFixed(6))
+      : weightedPayloadMetric(proposals, ['coefficientOfVariation', 'coefficient_of_variation'])
+    const sourceBenchmarkIds = uniqueTexts(proposals.flatMap((proposal) => {
+      const payload = proposal.runtimePayload
+      const direct = text(payload.benchmarkId ?? payload.benchmark_id)
+      const provenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
+      return [direct, ...list(provenance.sourceBenchmarkIds ?? provenance.source_benchmark_ids).map(text)]
+    }))
+    const confidenceLevels = proposals.map((proposal) => text(
+      proposal.runtimePayload.confidenceLevel ?? proposal.runtimePayload.confidence_level,
+    ))
+    const confidenceRank: Record<string, number> = { low: 1, medium: 2, high: 3 }
+    const confidenceLevel = confidenceLevels.every(Boolean)
+      ? [...confidenceLevels].sort((left, right) => (
+          (confidenceRank[left] ?? 0) - (confidenceRank[right] ?? 0)
+          || left.localeCompare(right)
+        ))[0]
+      : null
     return {
+      benchmarkKind: 'aggregate_all_cause',
+      causeApplicability: 'all_cause',
       p50Days: pooledPercentile(productionDaySamples, 0.5)
         ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
+      p75Days: pooledPercentile(productionDaySamples, 0.75)
+        ?? weightedPayloadNumber(proposals, ['p75Days', 'p75_days'])
+        ?? weightedPayloadNumber(proposals, ['p80Days', 'p80_days']),
       p80Days: pooledPercentile(productionDaySamples, 0.8)
         ?? weightedPayloadNumber(proposals, ['p80Days', 'p80_days'])
         ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
+      meanDays,
+      variance,
+      coefficientOfVariation,
+      sampleCount: proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.sampleCount), 0),
+      confidenceLevel,
+      confidenceScore: Math.min(...proposals.map((proposal) => (
+        optionalNumber(proposal.runtimePayload.confidenceScore ?? proposal.runtimePayload.confidence_score) ?? -1
+      ))),
       durationDayBasis: 'construction_production_day',
+      generatedAt: aggregatePayloadTimestamp(proposals, ['generatedAt', 'generated_at'], 'latest'),
+      sourceWindowStart: aggregatePayloadTimestamp(proposals, ['sourceWindowStart', 'source_window_start'], 'earliest'),
+      sourceAsOf: aggregatePayloadTimestamp(proposals, ['sourceAsOf', 'source_as_of'], 'latest'),
+      aggregateProvenance: {
+        schemaVersion: 'duration-benchmark-aggregate/v1',
+        scopeLevel: scope.level,
+        sourceBenchmarkIds,
+        sourceProjectIds: uniqueTexts(proposals.flatMap((proposal) => proposal.projectIds)),
+        sourceCompanyIds: uniqueTexts(proposals.flatMap((proposal) => proposal.companyIds)),
+        sourceIndustryKeys: canonicalIndustryKeys(proposals.flatMap((proposal) => proposal.industryKeys)),
+        calendarIdentities: aggregateCalendarIdentities(proposals),
+      },
     }
   }
   if (first.assetKey === 'standard_work_duration_seed') {
@@ -3355,7 +3467,7 @@ export async function runDurationLearningRuntimeLifecycleSweep(
       })
       if (impact.status !== 'impact_recorded') throw operationBlockedError('duration_learning_runtime_impact', impact)
       if (candidate.publicationStage === 'canary') {
-        const promotion = candidate.assetKey === 'base_duration_benchmark'
+        const promotion = candidate.assetKey === 'base_duration_benchmark' && candidate.scope.level === 'project'
           ? await promoteBenchmarkCanary({
               publicationKey: candidate.publicationKey,
               promotedAt: observedAt,

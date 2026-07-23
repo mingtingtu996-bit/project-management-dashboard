@@ -17,6 +17,13 @@ BEGIN
 END
 $$;
 
+ALTER TABLE IF EXISTS public.duration_benchmarks
+  DROP CONSTRAINT IF EXISTS duration_benchmarks_project_company_fk;
+
+DROP INDEX IF EXISTS public.uq_duration_benchmarks_candidate_operation;
+DROP INDEX IF EXISTS public.uq_structured_cause_task_active_primary;
+DROP INDEX IF EXISTS public.uq_projects_id_company_id_for_duration_benchmarks;
+
 DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_change_with_segments();
 DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_scope();
 DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope();

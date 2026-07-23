@@ -231,7 +231,8 @@ describe('durationLearningAssetAtomicStoreService', () => {
     mocks.query.mockImplementation(async (sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
       if (['begin', 'commit', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
-      if (normalized.includes('select id from public.duration_benchmarks')) return { rows: [], rowCount: 0 }
+      if (normalized.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }
+      if (normalized.includes('from public.duration_benchmarks')) return { rows: [], rowCount: 0 }
       if (normalized.includes('insert into public.duration_benchmarks')) {
         return { rows: [{ id: 'benchmark-candidate', is_current: false }], rowCount: 1 }
       }
@@ -268,6 +269,162 @@ describe('durationLearningAssetAtomicStoreService', () => {
     expect(sql.at(-1)).toBe('commit')
   })
 
+  it('returns an unchanged outstanding-canary candidate without rewriting replay clocks', async () => {
+    const existing = {
+      id: '11111111-1111-4111-8111-111111111111',
+      company_id: 'company-1', project_id: null, benchmark_key: 'work-1',
+      benchmark_version: 'candidate:2026-07-17:abc', duration_day_basis: 'construction_production_day',
+      p50_days: 8, sample_count: 20, is_current: false, is_active: true,
+      generated_at: '2026-07-17T00:00:00.000Z', source_window_start: '2026-07-01T00:00:00.000Z',
+      source_as_of: '2026-07-16T00:00:00.000Z',
+      metadata: { candidate_operation_id: 'abc', evidence_contract_hash: 'contract-1', runtime_publication_status: 'canary' },
+    }
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'commit'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }
+      if (normalized.includes('from public.duration_benchmarks')) return { rows: [existing], rowCount: 1 }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    const replayed = await stageDurationBenchmarkCandidateAtomically({
+      ...existing,
+      generated_at: '2026-07-18T00:00:00.000Z',
+      created_at: '2026-07-18T00:00:00.000Z',
+      updated_at: '2026-07-18T00:00:00.000Z',
+    })
+
+    expect(replayed).toEqual(existing)
+    expect(mocks.query.mock.calls.some(([sql]) => String(sql).includes('UPDATE public.duration_benchmarks'))).toBe(false)
+  })
+
+  it('rejects a same-operation replay whose evidence contract differs', async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }
+      if (normalized.includes('from public.duration_benchmarks')) return { rows: [{
+        id: '11111111-1111-4111-8111-111111111111', company_id: 'company-1', project_id: null,
+        benchmark_key: 'work-1', p50_days: 8, is_current: true, is_active: true,
+        metadata: { candidate_operation_id: 'abc', evidence_contract_hash: 'contract-original' },
+      }], rowCount: 1 }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    await expect(stageDurationBenchmarkCandidateAtomically({
+      company_id: 'company-1', benchmark_key: 'work-1', p50_days: 9,
+      duration_day_basis: 'construction_production_day',
+      metadata: { candidate_operation_id: 'abc', evidence_contract_hash: 'contract-different' },
+    })).rejects.toThrow('duration benchmark candidate operation contract mismatch')
+  })
+
+  it('serializes absent-row staging by operation identity before lookup', async () => {
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'commit'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }
+      if (normalized.includes('from public.duration_benchmarks')) return { rows: [], rowCount: 0 }
+      if (normalized.includes('insert into public.duration_benchmarks')) return { rows: [{ id: 'created' }], rowCount: 1 }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    await stageDurationBenchmarkCandidateAtomically({
+      company_id: 'company-1', benchmark_key: 'work-1', duration_day_basis: 'construction_production_day',
+      metadata: { candidate_operation_id: 'serialized', evidence_contract_hash: 'contract-1' },
+    })
+
+    const statements = mocks.query.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim().toLowerCase())
+    const operationLockIndex = statements.findIndex((sql) => sql.includes('pg_advisory_xact_lock'))
+    expect(operationLockIndex).toBeGreaterThan(0)
+    expect(operationLockIndex).toBeLessThan(statements.findIndex((sql) => sql.includes('from public.duration_benchmarks')))
+  })
+
+  it('serializes concurrent absent-row staging so both callers observe one immutable row', async () => {
+    let insertedRow: Record<string, unknown> | null = null
+    let insertCount = 0
+    let lockOwner: string | null = null
+    const lockWaiters: Array<() => void> = []
+    let secondTransactionStarted!: () => void
+    const secondTransaction = new Promise<void>((resolve) => {
+      secondTransactionStarted = resolve
+    })
+
+    const createClient = (name: string) => {
+      const release = vi.fn()
+      const query = vi.fn(async (sql: string) => {
+        const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+        if (normalized === 'begin') {
+          if (name === 'second') secondTransactionStarted()
+          return { rows: [], rowCount: 0 }
+        }
+        if (normalized.includes('pg_advisory_xact_lock')) {
+          if (lockOwner && lockOwner !== name) {
+            await new Promise<void>((resolve) => lockWaiters.push(resolve))
+          }
+          lockOwner = name
+          return { rows: [{}], rowCount: 1 }
+        }
+        if (normalized.includes('from public.duration_benchmarks')) {
+          return insertedRow
+            ? { rows: [insertedRow], rowCount: 1 }
+            : { rows: [], rowCount: 0 }
+        }
+        if (normalized.includes('insert into public.duration_benchmarks')) {
+          insertCount += 1
+          if (name === 'first') await secondTransaction
+          insertedRow = {
+            id: `created-${insertCount}`,
+            company_id: 'company-1',
+            project_id: null,
+            benchmark_key: 'work-1',
+            is_current: false,
+            is_active: true,
+            metadata: {
+              candidate_operation_id: 'concurrent-operation',
+              evidence_contract_hash: 'contract-1',
+            },
+          }
+          return { rows: [insertedRow], rowCount: 1 }
+        }
+        if (normalized === 'commit' || normalized === 'rollback') {
+          if (lockOwner === name) {
+            lockOwner = null
+            lockWaiters.shift()?.()
+          }
+          return { rows: [], rowCount: 0 }
+        }
+        throw new Error(`Unexpected SQL: ${normalized}`)
+      })
+      return { query, release }
+    }
+
+    const firstClient = createClient('first')
+    const secondClient = createClient('second')
+    mocks.getClient
+      .mockResolvedValueOnce(firstClient)
+      .mockResolvedValueOnce(secondClient)
+
+    const row = {
+      company_id: 'company-1',
+      project_id: null,
+      benchmark_key: 'work-1',
+      duration_day_basis: 'construction_production_day',
+      metadata: {
+        candidate_operation_id: 'concurrent-operation',
+        evidence_contract_hash: 'contract-1',
+      },
+    }
+    const [first, second] = await Promise.all([
+      stageDurationBenchmarkCandidateAtomically(row),
+      stageDurationBenchmarkCandidateAtomically(row),
+    ])
+
+    expect(insertCount).toBe(1)
+    expect(first).toEqual(second)
+    expect(firstClient.release).toHaveBeenCalledOnce()
+    expect(secondClient.release).toHaveBeenCalledOnce()
+  })
+
   it.each([
     { name: 'missing company', companyId: null, projectCompanyId: null, expected: 'company_id is required for project-scoped duration benchmark' },
     { name: 'missing project', companyId: 'company-1', projectCompanyId: null, expected: 'duration benchmark project not found' },
@@ -301,6 +458,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
       if (['begin', 'commit'].includes(normalized)) return { rows: [], rowCount: 0 }
       if (normalized.includes('from public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (normalized.includes('pg_advisory_xact_lock')) return { rows: [{}], rowCount: 1 }
       if (normalized.includes('from public.duration_benchmarks')) return { rows: [], rowCount: 0 }
       if (normalized.includes('insert into public.duration_benchmarks')) return { rows: [{ id: 'benchmark-valid' }], rowCount: 1 }
       throw new Error(`Unexpected SQL: ${normalized}`)
@@ -315,10 +473,11 @@ describe('durationLearningAssetAtomicStoreService', () => {
     })
 
     const statements = mocks.query.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim().toLowerCase())
-    const projectLockIndex = statements.findIndex((sql) => sql.includes('from public.projects') && sql.includes('for key share'))
+    const projectLockIndex = statements.findIndex((sql) => sql.includes('from public.projects') && sql.includes('for no key update'))
     const benchmarkMutationIndex = statements.findIndex((sql) => sql.includes('public.duration_benchmarks'))
     expect(projectLockIndex).toBeGreaterThan(0)
     expect(projectLockIndex).toBeLessThan(benchmarkMutationIndex)
+    expect(statements.some((sql) => sql.includes('from public.projects') && sql.includes('for key share'))).toBe(false)
   })
 
   it('promotes a runtime canary, activates its exact candidate, and writes segments in one transaction', async () => {

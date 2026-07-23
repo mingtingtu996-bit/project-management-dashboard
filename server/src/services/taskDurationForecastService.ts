@@ -9,7 +9,10 @@ import { assembleDurationInput } from './durationInputAssemblerService.js'
 import type { DurationAlgorithmHydratableInput } from './durationAlgorithmInputHydrationService.js'
 import { supabase } from './dbService.js'
 import { query as rawQuery } from '../database.js'
-import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
+import {
+  readTaskStructuredCauseAuthority,
+  type TaskStructuredCauseAuthority,
+} from './taskStructuredCauseAuthorityService.js'
 import {
   detectProgressAnomalySignals,
   type ProgressAnomalySignal,
@@ -2537,15 +2540,17 @@ async function loadProjectCompanyId(projectId: string | null): Promise<string | 
   }
 }
 
-async function loadConfirmedTaskPrimaryCause(taskId: string, projectId: string) {
+async function loadTaskStructuredCauseAuthority(taskId: string, projectId: string): Promise<TaskStructuredCauseAuthority> {
   const companyId = await loadProjectCompanyId(projectId)
-  if (!companyId) return null
-  const authority = await readTaskStructuredCauseAuthority({ companyId, projectId, taskId })
-  return authority.resolution.availability === 'available'
-    && authority.confirmedPrimaryCause
-    && authority.confirmedPrimaryCause.causeCode === authority.resolution.causeCode
-    ? authority.confirmedPrimaryCause.causeCode
-    : null
+  if (!companyId) {
+    return {
+      state: 'unavailable',
+      causeCode: null,
+      taxonomyVersion: 'v1.0.0',
+      reasonCodes: ['structured_cause_company_unavailable'],
+    }
+  }
+  return (await readTaskStructuredCauseAuthority({ companyId, projectId, taskId })).authority
 }
 
 async function queryForecastResidualOverlays(filters: {
@@ -5502,7 +5507,7 @@ async function refreshTaskDurationForecast(
     projectTypeCode: factInput.projectTypeCode,
     structureTypeCode: factInput.structureTypeCode,
     methodVariantCodes: factInput.methodVariantCodes,
-    confirmedCauseCode: null as Awaited<ReturnType<typeof loadConfirmedTaskPrimaryCause>>,
+    structuredCauseAuthority: null as TaskStructuredCauseAuthority | null,
     runtimeExecutionFacts: buildForecastRuntimeExecutionFacts(task),
   }
 
@@ -5521,15 +5526,15 @@ async function refreshTaskDurationForecast(
   const modelProfilePromise = loadForecastModelProfile(task)
   const earliestStartRulePromise = loadEarliestStartRule(task)
   const currentForecastPromise = loadCurrentForecast(taskId, { projectId })
-  const confirmedCausePromise = loadConfirmedTaskPrimaryCause(taskId, projectId)
-  const [snapshots, obstacles, confirmedCauseCode] = await Promise.all([
+  const structuredCauseAuthorityPromise = loadTaskStructuredCauseAuthority(taskId, projectId)
+  const [snapshots, obstacles, structuredCauseAuthority] = await Promise.all([
     snapshotsPromise,
     obstaclesPromise,
-    confirmedCausePromise,
+    structuredCauseAuthorityPromise,
   ])
   input = {
     ...input,
-    confirmedCauseCode,
+    structuredCauseAuthority,
     runtimeExecutionFacts: buildForecastRuntimeExecutionFacts(task, snapshots, obstacles),
   }
   const [suggestion, dependencyContext, externalReadiness, workCalendar, velocityLearning, modelProfile, earliestStartRule, currentForecast] = await Promise.all([

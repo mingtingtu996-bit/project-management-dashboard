@@ -345,6 +345,9 @@ describe('structuredCauseAttributionService', () => {
       if (sql.includes('FROM public.projects')) {
         return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
       }
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
       if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
         insertParams = params
         return { rows: [], rowCount: 0 }
@@ -400,6 +403,9 @@ describe('structuredCauseAttributionService', () => {
     const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
       if (sql.includes('FROM public.projects')) {
         return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
       }
       if (!sql.includes('INSERT INTO public.structured_cause_attributions')) {
         return { rows: [], rowCount: 0 }
@@ -581,11 +587,94 @@ describe('structuredCauseAttributionService', () => {
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.structured_cause_attributions'))).toBe(false)
   })
 
+  it('serializes concurrent delay/completion candidate primaries on one task authority row', async () => {
+    const activeRows: Array<Record<string, unknown>> = []
+    let nextId = 1
+    let taskLockOwner: string | null = null
+    const taskLockWaiters: Array<() => void> = []
+    let secondTransactionStarted!: () => void
+    const secondTransaction = new Promise<void>((resolve) => { secondTransactionStarted = resolve })
+
+    const dependenciesFor = (name: 'first' | 'second') => {
+      const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM public.projects')) {
+          return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+        }
+        if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+          if (taskLockOwner && taskLockOwner !== name) {
+            await new Promise<void>((resolve) => taskLockWaiters.push(resolve))
+          }
+          taskLockOwner = name
+          return { rows: [{ id: 'task-1' }], rowCount: 1 }
+        }
+        if (sql.includes("SET status = 'superseded'")) {
+          for (const row of activeRows) {
+            if (
+              ['candidate', 'confirmed'].includes(String(row.status))
+              && row.cause_role === 'primary'
+              && row.dedupe_key !== params[3]
+            ) row.status = 'superseded'
+          }
+          return { rows: [], rowCount: 0 }
+        }
+        if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+          if (name === 'first') await secondTransaction
+          const dedupeKey = String(params[20])
+          const existing = activeRows.find((row) => row.dedupe_key === dedupeKey)
+          if (existing) return { rows: [{ ...existing }], rowCount: 1 }
+          const row = {
+            id: `candidate-${nextId++}`,
+            event_type: String(params[4]),
+            cause_code: String(params[5]),
+            cause_role: String(params[6]),
+            status: String(params[16]),
+            dedupe_key: dedupeKey,
+          }
+          activeRows.push(row)
+          return { rows: [{ ...row }], rowCount: 1 }
+        }
+        return { rows: [], rowCount: 0 }
+      })
+      return {
+        queryExec,
+        withTransaction: async <T>(work: () => Promise<T>) => {
+          if (name === 'second') secondTransactionStarted()
+          try {
+            return await work()
+          } finally {
+            if (taskLockOwner === name) {
+              taskLockOwner = null
+              taskLockWaiters.shift()?.()
+            }
+          }
+        },
+      }
+    }
+    const input = (eventType: 'delay' | 'completion', rawText: string) => ({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task' as const, subjectId: 'task-1',
+      eventType, rawText, evidence: [],
+    })
+
+    await Promise.all([
+      persistStructuredCauseCandidates(input('delay', 'Material delay'), dependenciesFor('first')),
+      persistStructuredCauseCandidates(input('completion', 'Completion review'), dependenciesFor('second')),
+    ])
+
+    const activePrimaries = activeRows.filter((row) => (
+      ['candidate', 'confirmed'].includes(String(row.status)) && row.cause_role === 'primary'
+    ))
+    expect(activePrimaries).toHaveLength(1)
+    expect(activePrimaries[0]).toEqual(expect.objectContaining({ event_type: 'completion' }))
+  })
+
   it('requires explicit confirmation before assigning contractual responsibility', async () => {
     const registeredEffects: Array<() => Promise<void>> = []
     const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
     const queryExec = vi.fn(async (sql: string) => {
-      if (sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.structured_cause_attributions')) {
         return {
           rows: [{
             id: 'attribution-1',
@@ -632,6 +721,17 @@ describe('structuredCauseAttributionService', () => {
       status: 'confirmed',
       responsibility_class: 'contractor_attributable',
     }))
+    const statements = queryExec.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim())
+    const identityRead = statements.findIndex((sql) => (
+      sql.includes('FROM public.structured_cause_attributions') && !sql.includes('FOR UPDATE')
+    ))
+    const taskLock = statements.findIndex((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))
+    const attributionLock = statements.findIndex((sql) => (
+      sql.includes('FROM public.structured_cause_attributions') && sql.includes('FOR UPDATE')
+    ))
+    expect(identityRead).toBeGreaterThanOrEqual(0)
+    expect(taskLock).toBeGreaterThan(identityRead)
+    expect(attributionLock).toBeGreaterThan(taskLock)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes("confirmation_source = 'user_confirmed'"))).toBe(true)
     const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
     expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
@@ -647,7 +747,10 @@ describe('structuredCauseAttributionService', () => {
 
   it('keeps the inferred prefill and records whether a user changed it during confirmation', async () => {
     const queryExec = vi.fn(async (sql: string, params?: unknown[]) => {
-      if (sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.structured_cause_attributions')) {
         return {
           rows: [{
             id: 'attribution-1',
@@ -850,6 +953,13 @@ describe('structuredCauseAttributionService', () => {
     })
 
     const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
+    const statements = queryExec.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim())
+    const taskLockIndex = statements.findIndex((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))
+    const supersedeIndex = statements.findIndex((sql) => sql.includes("SET status = 'superseded'"))
+    const insertIndex = statements.findIndex((sql) => sql.includes('INSERT INTO public.structured_cause_attributions'))
+    expect(taskLockIndex).toBeGreaterThan(0)
+    expect(taskLockIndex).toBeLessThan(supersedeIndex)
+    expect(supersedeIndex).toBeLessThan(insertIndex)
     expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
     expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
     expect(supersede?.[0]).toContain('dedupe_key <>')
@@ -865,6 +975,27 @@ describe('structuredCauseAttributionService', () => {
       actorId: 'user-1',
       trigger: 'structured_cause_user_confirmation',
     })
+  })
+
+  it('does not take the task-primary lock or supersede authority for a contributing task cause', async () => {
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'contributing-1', cause_role: 'contributing', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'delay', causeCode: 'weather_impact', causeRole: 'contributing',
+      rawText: 'Weather contributed to delay.', actorId: 'user-1',
+    }, { queryExec, withTransaction: async (work) => work() })
+
+    const statements = queryExec.mock.calls.map(([sql]) => String(sql))
+    expect(statements.some((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))).toBe(false)
+    expect(statements.some((sql) => sql.includes("SET status = 'superseded'"))).toBe(false)
   })
 
   it('discards the task sample rebuild effect when confirmation rolls back', async () => {

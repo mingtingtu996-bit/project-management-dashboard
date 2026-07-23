@@ -34,6 +34,32 @@ export type ConfirmedTaskPrimaryCause = {
   eventType: 'delay' | 'completion'
 }
 
+export type TaskStructuredCauseAuthority =
+  | {
+      state: 'confirmed'
+      causeCode: StructuredCauseCode
+      taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
+      reasonCodes: []
+    }
+  | {
+      state: 'no_cause'
+      causeCode: null
+      taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
+      reasonCodes: []
+    }
+  | {
+      state: 'review_required'
+      causeCode: StructuredCauseCode | null
+      taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
+      reasonCodes: string[]
+    }
+  | {
+      state: 'unavailable'
+      causeCode: null
+      taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
+      reasonCodes: string[]
+    }
+
 function text(value: unknown) {
   return String(value ?? '').trim()
 }
@@ -67,6 +93,28 @@ function unavailable(reviewReasonCodes: string[] = []): CanonicalCauseResolution
   }
 }
 
+function reviewRequired(causeCode: StructuredCauseCode | null, reviewReasonCodes: string[]): CanonicalCauseResolution {
+  return {
+    availability: 'review_required',
+    causeCode,
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+    reviewReasonCodes,
+  }
+}
+
+function authority(
+  state: TaskStructuredCauseAuthority['state'],
+  causeCode: StructuredCauseCode | null,
+  reasonCodes: string[],
+): TaskStructuredCauseAuthority {
+  return {
+    state,
+    causeCode,
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+    reasonCodes,
+  } as TaskStructuredCauseAuthority
+}
+
 function emptySnapshot() {
   return {
     schema_version: 'structured_cause_snapshot/v1',
@@ -89,19 +137,31 @@ function rowReason(row: StructuredCauseRow, scope: {
   ) return 'structured_cause_scope_mismatch'
   if (!isUuid(row.id)) return 'structured_cause_id_invalid'
   if (!['delay', 'completion'].includes(text(row.event_type))) return 'structured_cause_event_invalid'
-  if (!['confirmed', 'candidate'].includes(text(row.status))) return 'structured_cause_status_invalid'
+  const status = text(row.status)
+  if (!['confirmed', 'candidate', 'rejected', 'superseded'].includes(status)) return 'structured_cause_status_invalid'
   if (!['primary', 'contributing', 'transmitted'].includes(text(row.cause_role))) return 'structured_cause_role_invalid'
   if (!isStructuredCauseCode(row.cause_code)) return 'structured_cause_code_invalid'
   if (text(row.taxonomy_version) !== STRUCTURED_CAUSE_TAXONOMY_VERSION) {
     return 'structured_cause_taxonomy_version_invalid'
   }
-  if (text(row.status) === 'confirmed') {
+  if (status === 'confirmed') {
     if (!['deterministic_policy', 'user_confirmed'].includes(text(row.confirmation_source))) {
       return 'structured_cause_confirmation_source_invalid'
     }
     if (!timestamp(row.confirmed_at)) return 'structured_cause_confirmed_at_required'
-  } else if (text(row.confirmation_source) !== 'candidate' || text(row.confirmed_at)) {
-    return 'structured_cause_confirmation_source_invalid'
+  } else if (status === 'candidate') {
+    if (text(row.confirmation_source) !== 'candidate' || text(row.confirmed_at)) {
+      return 'structured_cause_confirmation_source_invalid'
+    }
+  } else {
+    const confirmationSource = text(row.confirmation_source)
+    if (confirmationSource === 'candidate') {
+      if (text(row.confirmed_at)) return 'structured_cause_confirmation_source_invalid'
+    } else if (['deterministic_policy', 'user_confirmed'].includes(confirmationSource)) {
+      if (!timestamp(row.confirmed_at)) return 'structured_cause_confirmed_at_required'
+    } else {
+      return 'structured_cause_confirmation_source_invalid'
+    }
   }
   return null
 }
@@ -116,18 +176,20 @@ export async function readTaskStructuredCauseAuthority(
               cause_code, cause_role, taxonomy_version, confirmation_source, confirmed_at,
               responsibility_class, review_reason_codes
          FROM public.structured_cause_attributions
-        WHERE company_id = $1
-          AND project_id = $2
-          AND subject_type = 'task'
-          AND subject_id = $3
-          AND event_type IN ('delay', 'completion')
-          AND status IN ('confirmed', 'candidate')
+        WHERE subject_id = $1
         ORDER BY confirmed_at DESC NULLS LAST, id ASC`,
-      [scope.companyId, scope.projectId, scope.taskId],
+      [scope.taskId],
     )
-    const rows = (Array.isArray(result) ? result : result.rows ?? []) as StructuredCauseRow[]
+    const rawRows = Array.isArray(result)
+      ? result
+      : result && typeof result === 'object'
+        ? (result as QueryResult).rows
+        : null
+    if (!Array.isArray(rawRows)) throw new Error('structured cause authority readback required')
+    const rows = rawRows as StructuredCauseRow[]
     if (rows.length === 0) {
       return {
+        authority: authority('no_cause', null, []),
         snapshot: emptySnapshot(),
         resolution: unavailable(),
         causeBenchmarkEligible: true,
@@ -137,8 +199,9 @@ export async function readTaskStructuredCauseAuthority(
 
     const invalidReasons = [...new Set(rows.map((row) => rowReason(row, scope)).filter((reason) => reason !== null))]
     const validRows = rows.filter((row) => !rowReason(row, scope))
-    const confirmedRows = validRows.filter((row) => text(row.status) === 'confirmed')
-    const candidateRows = validRows.filter((row) => text(row.status) === 'candidate')
+    const activeRows = validRows.filter((row) => ['confirmed', 'candidate'].includes(text(row.status)))
+    const confirmedRows = activeRows.filter((row) => text(row.status) === 'confirmed')
+    const candidateRows = activeRows.filter((row) => text(row.status) === 'candidate')
     const confirmedPrimaryRows = confirmedRows.filter((row) => text(row.cause_role) === 'primary')
     const candidatePrimaryRows = candidateRows.filter((row) => text(row.cause_role) === 'primary')
     const confirmedCauses = confirmedRows.map((row) => {
@@ -171,32 +234,47 @@ export async function readTaskStructuredCauseAuthority(
 
     if (invalidReasons.length > 0) {
       return {
+        authority: authority('review_required', null, invalidReasons),
         snapshot,
-        resolution: unavailable(invalidReasons),
+        resolution: reviewRequired(null, invalidReasons),
+        causeBenchmarkEligible: false,
+        confirmedPrimaryCause: null as ConfirmedTaskPrimaryCause | null,
+      }
+    }
+    if (activeRows.length === 0) {
+      const reasons = ['structured_cause_no_active_authority']
+      return {
+        authority: authority('review_required', null, reasons),
+        snapshot,
+        resolution: reviewRequired(null, reasons),
         causeBenchmarkEligible: false,
         confirmedPrimaryCause: null as ConfirmedTaskPrimaryCause | null,
       }
     }
     if (confirmedPrimaryRows.length > 1) {
+      const reasons = ['structured_cause_primary_ambiguous']
       return {
+        authority: authority('review_required', null, reasons),
         snapshot,
-        resolution: unavailable(['structured_cause_primary_ambiguous']),
+        resolution: reviewRequired(null, reasons),
         causeBenchmarkEligible: false,
         confirmedPrimaryCause: null as ConfirmedTaskPrimaryCause | null,
       }
     }
     if (confirmedPrimaryRows.length === 0) {
       const candidate = candidatePrimaryRows[0]
+      const candidateCode = candidate && isStructuredCauseCode(candidate.cause_code) ? candidate.cause_code : null
+      const reasons = candidatePrimaryRows.length > 1
+        ? ['structured_cause_candidate_primary_ambiguous']
+        : candidate
+          ? reviewReasons(candidate.review_reason_codes).length > 0
+            ? reviewReasons(candidate.review_reason_codes)
+            : ['structured_cause_confirmation_required']
+          : ['structured_cause_primary_required']
       return {
+        authority: authority('review_required', candidateCode, reasons),
         snapshot,
-        resolution: candidate && isStructuredCauseCode(candidate.cause_code)
-          ? {
-              availability: 'review_required' as const,
-              causeCode: candidate.cause_code,
-              taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-              reviewReasonCodes: reviewReasons(candidate.review_reason_codes),
-            }
-          : unavailable(['structured_cause_primary_required']),
+        resolution: reviewRequired(candidateCode, reasons),
         causeBenchmarkEligible: false,
         confirmedPrimaryCause: null as ConfirmedTaskPrimaryCause | null,
       }
@@ -204,16 +282,12 @@ export async function readTaskStructuredCauseAuthority(
 
     const primary = confirmedPrimaryRows[0]
     const causeCode = primary.cause_code as StructuredCauseCode
-    const conflictingCandidate = candidatePrimaryRows.some((row) => row.cause_code !== causeCode)
-    if (conflictingCandidate) {
+    if (candidatePrimaryRows.length > 0) {
+      const reasons = ['structured_cause_candidate_primary_conflict']
       return {
+        authority: authority('review_required', causeCode, reasons),
         snapshot,
-        resolution: {
-          availability: 'review_required' as const,
-          causeCode,
-          taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-          reviewReasonCodes: ['structured_cause_candidate_primary_conflict'],
-        },
+        resolution: reviewRequired(causeCode, reasons),
         causeBenchmarkEligible: false,
         confirmedPrimaryCause: null as ConfirmedTaskPrimaryCause | null,
       }
@@ -222,6 +296,7 @@ export async function readTaskStructuredCauseAuthority(
     const confirmedAt = timestamp(primary.confirmed_at) as string
     const eventType = text(primary.event_type) as 'delay' | 'completion'
     return {
+      authority: authority('confirmed', causeCode, []),
       snapshot,
       resolution: {
         availability: 'available' as const,
@@ -239,9 +314,11 @@ export async function readTaskStructuredCauseAuthority(
       } satisfies ConfirmedTaskPrimaryCause,
     }
   } catch {
+    const reasons = ['structured_cause_read_failed']
     return {
+      authority: authority('unavailable', null, reasons),
       snapshot: emptySnapshot(),
-      resolution: unavailable(['structured_cause_read_failed']),
+      resolution: unavailable(reasons),
       causeBenchmarkEligible: false,
       confirmedPrimaryCause: null as ConfirmedTaskPrimaryCause | null,
     }

@@ -318,6 +318,7 @@ describe('durationContextSampleReadModelService', () => {
     expect(builder.order).toHaveBeenCalledWith('completed_at', { ascending: true })
     expect(builder.order).toHaveBeenCalledWith('id', { ascending: true })
     expect(builder.range).toHaveBeenCalledWith(0, 999)
+    expect(builder.select).toHaveBeenCalledWith(expect.stringContaining('updated_at'))
   })
 
   it('pages through more than one thousand governed samples instead of starving older projects forever', async () => {

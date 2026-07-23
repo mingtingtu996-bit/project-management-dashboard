@@ -176,6 +176,7 @@ const {
   getTaskDurationSuggestion,
   recordCommittedDurationSuggestionPredictionEvidence,
   recordDurationSuggestionRuntimeConsumption,
+  selectCauseAwareBenchmarkCandidates,
 } = await import('../services/durationSuggestionService.js')
 
 function createRecordingQueryExec() {
@@ -2812,6 +2813,54 @@ describe('durationSuggestionService', () => {
     expect(suggestion.businessReasonParams?.benchmarkCauseFallback).toBe('all_cause')
     expect(suggestion.businessReasonParams?.benchmarkCauseSelection).toBe('all_cause_fallback')
     expect(suggestion.businessReasonParams?.benchmarkP50).toBe(8)
+  })
+
+  it.each([
+    {
+      authority: { state: 'confirmed', causeCode: 'material_shortage', taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+      selection: 'all_cause_fallback', candidateCount: 1, segmentReads: 1,
+    },
+    {
+      authority: { state: 'no_cause', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+      selection: 'no_confirmed_cause', candidateCount: 1, segmentReads: 0,
+    },
+    {
+      authority: { state: 'review_required', causeCode: 'quality_rework', taxonomyVersion: 'v1.0.0', reasonCodes: ['manual_review'] },
+      selection: 'cause_authority_review_required', candidateCount: 0, segmentReads: 0,
+    },
+    {
+      authority: { state: 'unavailable', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: ['structured_cause_read_failed'] },
+      selection: 'cause_authority_unavailable', candidateCount: 0, segmentReads: 0,
+    },
+  ])('applies the $authority.state authority state without converting it to no-cause history', async ({
+    authority,
+    selection,
+    candidateCount,
+    segmentReads,
+  }) => {
+    mocks.loadCurrentCauseSegment.mockResolvedValue(null)
+    const candidate = {
+      benchmark: {
+        id: 'benchmark-company-1', company_id: 'company-1', project_id: null,
+        p50_days: 8, p75_days: 9, p80_days: 11, mean_days: 8.5, sample_count: 30,
+        variance: 2.25, coefficient_of_variation: 0.176471,
+        duration_day_basis: 'construction_production_day' as const,
+      },
+      scope: 'company' as const,
+      benchKey: 'SW-1:process:all',
+      contextKey: 'all',
+      sampleSize: 30,
+      specificity: 'all' as const,
+    }
+
+    const result = await selectCauseAwareBenchmarkCandidates([candidate], authority as any)
+
+    expect(result.selection).toBe(selection)
+    expect(result.candidates).toHaveLength(candidateCount)
+    expect(mocks.loadCurrentCauseSegment).toHaveBeenCalledTimes(segmentReads)
+    if (authority.state === 'review_required' || authority.state === 'unavailable') {
+      expect(result.fallback).toBeNull()
+    }
   })
 
   it('fails closed without all-cause blending when exact cause segment reading fails', async () => {

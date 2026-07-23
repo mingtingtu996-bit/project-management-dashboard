@@ -1563,9 +1563,10 @@ describe('durationLearningRuntimeLifecycleService', () => {
     proposals.forEach((proposal, index) => {
       proposal.sampleCount = projectSamples[index].length
       proposal.runtimePayload = {
+        ...proposal.runtimePayload,
         p50Days: index === 3 ? 100 : 2,
         p80Days: 100,
-        durationDayBasis: 'construction_production_day',
+        sampleCount: projectSamples[index].length,
       }
       ;(proposal as any).productionDaySamples = projectSamples[index]
     })
@@ -1576,9 +1577,30 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(industry).toEqual(expect.objectContaining({
       sampleCount: 12,
       runtimePayload: {
+        benchmarkKind: 'aggregate_all_cause',
+        causeApplicability: 'all_cause',
         p50Days: 2,
+        p75Days: 100,
         p80Days: 100,
+        meanDays: 50.75,
+        variance: expect.any(Number),
+        coefficientOfVariation: expect.any(Number),
+        sampleCount: 12,
+        confidenceLevel: 'high',
+        confidenceScore: 88,
         durationDayBasis: 'construction_production_day',
+        generatedAt: '2026-07-21T00:00:00.000Z',
+        sourceWindowStart: '2026-04-22T00:00:00.000Z',
+        sourceAsOf: '2026-07-20T00:00:00.000Z',
+        aggregateProvenance: {
+          schemaVersion: 'duration-benchmark-aggregate/v1',
+          scopeLevel: 'industry',
+          sourceBenchmarkIds: ['benchmark-p1', 'benchmark-p2', 'benchmark-p3', 'benchmark-p4'],
+          sourceProjectIds: ['p1', 'p2', 'p3', 'p4'],
+          sourceCompanyIds: ['c1', 'c2'],
+          sourceIndustryKeys: ['general_civil'],
+          calendarIdentities: [{ calendarRef: 'cn-work-calendar', calendarVersion: '2026.07' }],
+        },
       },
     }))
   })
@@ -2126,7 +2148,12 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(new Set(persistPublication.mock.calls.map(([input]) => input.publicationKey)).size).toBe(2)
   })
 
-  it('promotes a measured canary after its monitoring window', async () => {
+  it.each([
+    { name: 'project', scope: { level: 'project' as const, companyId: 'company-1', projectId: 'project-1' }, projectAtomic: true },
+    { name: 'company', scope: { level: 'company' as const, companyId: 'company-1' }, projectAtomic: false },
+    { name: 'industry', scope: { level: 'industry' as const, industryKey: 'general_civil' }, projectAtomic: false },
+    { name: 'global', scope: { level: 'global' as const }, projectAtomic: false },
+  ])('promotes a measured $name base-benchmark canary through its compatible path', async ({ scope, projectAtomic }) => {
     const recordImpact = vi.fn(async () => ({ status: 'impact_recorded', reasons: [] }))
     const promoteCanary = vi.fn(async () => ({
       status: 'stable_promoted',
@@ -2147,7 +2174,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
         assetKey: 'base_duration_benchmark',
         artifactKey: 'SW-CONCRETE:process:all',
         publicationStage: 'canary',
-        scope: { level: 'company', companyId: 'company-1' },
+        scope,
         monitoringWindowHours: 72,
         monitoringElapsedHours: 80,
         observedCount: 20,
@@ -2162,13 +2189,15 @@ describe('durationLearningRuntimeLifecycleService', () => {
           experienceTier: 'T2',
           factSource: 'actual_outcome',
           observed: {
-            validChangeCount: 220,
-            distinctTaskCount: 120,
-            distinctProjectCount: 45,
-            distinctCompanyCount: 1,
-            realOutcomeCount: 110,
-            replayCaseCount: 220,
-            observationWindowDays: 60,
+            validChangeCount: 1000,
+            distinctTaskCount: 500,
+            distinctProjectCount: 250,
+            distinctCompanyCount: 20,
+            distinctIndustryCount: 2,
+            realOutcomeCount: 500,
+            replayCaseCount: 1000,
+            observationWindowDays: 120,
+            holdoutSampleCount: 500,
             overcompensationRate: 0,
             rollbackReady: true,
             tenantScopeValid: true,
@@ -2176,6 +2205,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
         },
       }],
       recordImpact: recordImpact as any,
+      promoteCanary: promoteCanary as any,
       promoteBenchmarkCanary: promoteBenchmarkCanary as any,
       rollbackPublication: rollbackPublication as any,
       observedAt: '2026-07-17T00:00:00.000Z',
@@ -2187,8 +2217,8 @@ describe('durationLearningRuntimeLifecycleService', () => {
       monitoringStatus: 'passed',
       metrics: expect.objectContaining({ accuracySampleCount: 20, maeBefore: 8, maeAfter: 6 }),
     }))
-    expect(promoteBenchmarkCanary).toHaveBeenCalledOnce()
-    expect(promoteCanary).not.toHaveBeenCalled()
+    expect(promoteBenchmarkCanary).toHaveBeenCalledTimes(projectAtomic ? 1 : 0)
+    expect(promoteCanary).toHaveBeenCalledTimes(projectAtomic ? 0 : 1)
     expect(rollbackPublication).not.toHaveBeenCalled()
   })
 
@@ -2339,13 +2369,13 @@ describe('durationLearningRuntimeLifecycleService', () => {
       candidateProvider: async () => [],
       monitoringProvider: async () => [monitoringCandidate],
       recordImpact: recordImpact as any,
-      promoteBenchmarkCanary: promoteCanary as any,
+      promoteCanary: promoteCanary as any,
     })
     const retry = await runDurationLearningRuntimeLifecycleSweep({
       candidateProvider: async () => [],
       monitoringProvider: async () => [monitoringCandidate],
       recordImpact: recordImpact as any,
-      promoteBenchmarkCanary: promoteCanary as any,
+      promoteCanary: promoteCanary as any,
     })
 
     expect(first.failed).toBe(1)

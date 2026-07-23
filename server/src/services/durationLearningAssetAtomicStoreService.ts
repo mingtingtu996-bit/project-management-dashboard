@@ -227,9 +227,9 @@ async function assertDurationBenchmarkScopeAuthority(
   if (!companyId) throw new Error('company_id is required for project-scoped duration benchmark')
   const result = await client.query<{ company_id?: unknown }>(
     `select company_id
-       from public.projects
+      from public.projects
       where id = $1::uuid
-      for key share`,
+      for no key update`,
     [projectId],
   )
   const projectCompanyId = normalizeText(result.rows[0]?.company_id)
@@ -258,23 +258,33 @@ export async function stageDurationBenchmarkCandidateAtomically(row: Persistence
 
   return withTransaction(async (client) => {
     await assertDurationBenchmarkScopeAuthority(client, companyId, projectId)
-    const existing = await client.query<{ id: string }>(
-      `select id
+    await client.query(
+      `select pg_advisory_xact_lock(hashtextextended($1::text, 0))`,
+      [`duration-benchmark-candidate:${companyId ?? 'global'}:${projectId ?? 'all'}:${benchmarkKey}:${candidateOperationId}`],
+    )
+    const existing = await client.query<PersistenceRow>(
+      `select *
          from public.duration_benchmarks
         where benchmark_key = $1
           and company_id is not distinct from $2::uuid
           and project_id is not distinct from $3::uuid
           and metadata ->> 'candidate_operation_id' = $4
-          and is_current = false
           and is_active = true
         limit 1
         for update`,
       [benchmarkKey, companyId, projectId, candidateOperationId],
     )
-    const existingId = existing.rows[0]?.id ?? null
-    return existingId
-      ? updateAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, existingId, candidateRow)
-      : insertAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, candidateRow)
+    const existingRow = existing.rows[0]
+    if (existingRow) {
+      const existingMetadata = readRecord(existingRow.metadata)
+      const existingContractHash = normalizeText(existingMetadata.evidence_contract_hash)
+      const incomingContractHash = normalizeText(metadata.evidence_contract_hash)
+      if (!existingContractHash || !incomingContractHash || existingContractHash !== incomingContractHash) {
+        throw new Error('duration benchmark candidate operation contract mismatch')
+      }
+      return existingRow
+    }
+    return insertAllowedRow(client, 'duration_benchmarks', DURATION_BENCHMARK_COLUMNS, candidateRow)
   })
 }
 

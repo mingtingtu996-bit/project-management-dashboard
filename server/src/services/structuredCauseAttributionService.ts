@@ -701,8 +701,34 @@ export async function persistStructuredCauseCandidates(
   return withTransaction(async () => {
     await assertProjectTenant(queryExec, input.companyId, input.projectId)
     const candidates = buildStructuredCauseCandidates(input)
+    if (candidates.some((candidate) => (
+      candidate.subjectType === 'task'
+      && candidate.causeRole === 'primary'
+      && ['delay', 'completion'].includes(candidate.eventType)
+    ))) {
+      await lockTaskPrimaryAuthority(queryExec, input.subjectId, input.projectId)
+    }
     const rows: Record<string, unknown>[] = []
     for (const candidate of candidates) {
+      if (
+        candidate.subjectType === 'task'
+        && candidate.causeRole === 'primary'
+        && ['delay', 'completion'].includes(candidate.eventType)
+      ) {
+        await queryExec(
+          `UPDATE public.structured_cause_attributions
+              SET status = 'superseded', updated_at = NOW()
+            WHERE company_id = $1
+              AND project_id = $2
+              AND subject_type = 'task'
+              AND subject_id = $3
+              AND event_type IN ('delay', 'completion')
+              AND cause_role = 'primary'
+              AND status IN ('candidate', 'confirmed')
+              AND dedupe_key <> $4`,
+          [candidate.companyId, candidate.projectId, candidate.subjectId, candidate.dedupeKey],
+        )
+      }
       const result = await queryExec(
          `INSERT INTO public.structured_cause_attributions (
            company_id, project_id, subject_type, subject_id, event_type,
@@ -857,6 +883,28 @@ async function assertCauseSubjectProject(
   }
 }
 
+async function lockTaskPrimaryAuthority(
+  queryExec: QueryExec,
+  taskId: string,
+  projectId: string,
+) {
+  const result = await queryExec(
+    `SELECT id
+       FROM public.tasks
+      WHERE id = $1
+        AND project_id = $2
+      FOR UPDATE`,
+    [taskId, projectId],
+  )
+  if (!result.rows[0]) {
+    throw new StructuredCauseAttributionError(
+      'CAUSE_ATTRIBUTION_SUBJECT_NOT_FOUND',
+      'The cause attribution subject was not found in the requested project.',
+      404,
+    )
+  }
+}
+
 export async function recordUserConfirmedStructuredCauseAttribution(
   input: UserConfirmedStructuredCauseInput,
   dependencyOverrides?: StructuredCauseDependencies,
@@ -896,7 +944,11 @@ export async function recordUserConfirmedStructuredCauseAttribution(
 
   return withTransaction(async () => {
     await assertProjectTenant(queryExec, input.companyId, input.projectId)
-    await assertCauseSubjectProject(queryExec, input.subjectType, input.subjectId, input.projectId)
+    if (causeRole === 'primary' && input.subjectType === 'task') {
+      await lockTaskPrimaryAuthority(queryExec, input.subjectId, input.projectId)
+    } else {
+      await assertCauseSubjectProject(queryExec, input.subjectType, input.subjectId, input.projectId)
+    }
 
     if (causeRole === 'primary' && input.subjectType === 'task') {
       await queryExec(
@@ -1098,6 +1150,23 @@ export async function confirmStructuredCauseAttribution(input: {
     rebuildTaskDurationExperienceSample,
   } = dependencies(dependencyOverrides)
   return withTransaction(async () => {
+    const identityResult = await queryExec(
+      `SELECT subject_type, subject_id, cause_role, event_type
+         FROM public.structured_cause_attributions
+        WHERE id = $1 AND company_id = $2 AND project_id = $3`,
+      [input.attributionId, input.companyId, input.projectId],
+    )
+    const identity = identityResult.rows[0]
+    if (!identity) {
+      throw new StructuredCauseAttributionError('CAUSE_ATTRIBUTION_NOT_FOUND', 'Cause attribution was not found.', 404)
+    }
+    const identityIsSupportedTaskPrimary = text(identity.subject_type) === 'task'
+      && text(identity.cause_role) === 'primary'
+      && ['delay', 'completion'].includes(text(identity.event_type))
+    if (identityIsSupportedTaskPrimary) {
+      await lockTaskPrimaryAuthority(queryExec, text(identity.subject_id), input.projectId)
+    }
+
     const currentResult = await queryExec(
       `SELECT *
          FROM public.structured_cause_attributions
@@ -1108,6 +1177,18 @@ export async function confirmStructuredCauseAttribution(input: {
     const current = currentResult.rows[0]
     if (!current) {
       throw new StructuredCauseAttributionError('CAUSE_ATTRIBUTION_NOT_FOUND', 'Cause attribution was not found.', 404)
+    }
+    if (
+      text(current.subject_type) !== text(identity.subject_type)
+      || text(current.subject_id) !== text(identity.subject_id)
+      || text(current.cause_role) !== text(identity.cause_role)
+      || text(current.event_type) !== text(identity.event_type)
+    ) {
+      throw new StructuredCauseAttributionError(
+        'CAUSE_ATTRIBUTION_IDENTITY_CHANGED',
+        'Cause attribution identity changed while confirmation was being serialized.',
+        409,
+      )
     }
     if (text(current.status) === 'rejected' || text(current.status) === 'superseded') {
       throw new StructuredCauseAttributionError('CAUSE_ATTRIBUTION_NOT_CONFIRMABLE', 'Rejected or superseded attribution cannot be confirmed.', 409)

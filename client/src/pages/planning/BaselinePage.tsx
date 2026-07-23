@@ -42,6 +42,7 @@ import { usePlanningPresence, type PlanningPresenceCell } from '@/hooks/usePlann
 import { usePlanningFieldRegistry } from '@/hooks/usePlanningFieldRegistry'
 import { usePlanningValidation, type ValidationIssue, type ValidationInput } from '@/hooks/usePlanningValidation'
 import { usePlanningViewMode } from '@/hooks/usePlanningViewMode'
+import { useStructuredCauseTaxonomy } from '@/hooks/useStructuredCauseTaxonomy'
 import { useStore } from '@/hooks/useStore'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import { inclusiveDurationDays } from '@/lib/durationDays'
@@ -73,40 +74,7 @@ type BaselineDetail = BaselineVersion & {
   items: BaselineItem[]
 }
 
-type BaselinePublishCauseCode =
-  | 'predecessor_delay'
-  | 'material_shortage'
-  | 'labor_shortage'
-  | 'equipment_unavailable'
-  | 'design_change'
-  | 'drawing_delay'
-  | 'quality_rework'
-  | 'weather_impact'
-  | 'owner_decision'
-  | 'government_inspection'
-  | 'site_capacity_pressure'
-  | 'workflow_sequence'
-  | 'external_readiness'
-  | 'other'
-
-const BASELINE_PUBLISH_CAUSE_OPTIONS: Array<{ value: BaselinePublishCauseCode; label: string }> = [
-  { value: 'predecessor_delay', label: '前置工作传导' },
-  { value: 'material_shortage', label: '材料短缺或晚到' },
-  { value: 'labor_shortage', label: '劳动力不足' },
-  { value: 'equipment_unavailable', label: '设备机械不可用' },
-  { value: 'design_change', label: '设计变更' },
-  { value: 'drawing_delay', label: '图纸或审批延误' },
-  { value: 'quality_rework', label: '质量返工' },
-  { value: 'weather_impact', label: '天气影响' },
-  { value: 'owner_decision', label: '业主决策等待' },
-  { value: 'government_inspection', label: '政府检查审批' },
-  { value: 'site_capacity_pressure', label: '现场承载不足' },
-  { value: 'workflow_sequence', label: '工序顺序调整' },
-  { value: 'external_readiness', label: '外部条件未就绪' },
-  { value: 'other', label: '其他' },
-]
-
-export function inferBaselinePublishCauseCode(baseline: BaselineVersion | null): BaselinePublishCauseCode {
+export function inferBaselinePublishCauseCode(baseline: BaselineVersion | null): string {
   const token = [
     baseline?.description,
     baseline?.source_type,
@@ -756,6 +724,7 @@ export default function BaselinePage() {
   const lastRealtimeEvent = useStore((state) => state.lastRealtimeEvent)
   const projectId = currentProject?.id ?? routeProjectId ?? ''
   const projectName = currentProject?.name ?? '当前项目'
+  const causeTaxonomy = useStructuredCauseTaxonomy()
   const fieldConfigStorageKey = useMemo(
     () => getPlanningFieldConfigStorageKey(projectId, 'baseline', currentUser?.id),
     [currentUser?.id, projectId],
@@ -785,7 +754,7 @@ export default function BaselinePage() {
   const [candidateDetailsOpen, setCandidateDetailsOpen] = useState(false)
   const [dismissedCandidateBaselineId, setDismissedCandidateBaselineId] = useState<string | null>(null)
   const [publishOpen, setPublishOpen] = useState(false)
-  const [publishCauseCode, setPublishCauseCode] = useState<BaselinePublishCauseCode>('workflow_sequence')
+  const [publishCauseCode, setPublishCauseCode] = useState('')
   const [publishChangeReason, setPublishChangeReason] = useState('')
   const [exportOpen, setExportOpen] = useState(false)
   const [templateGenerateOpen, setTemplateGenerateOpen] = useState(false)
@@ -797,6 +766,11 @@ export default function BaselinePage() {
   const historyCursorRef = useRef(-1)
   const lastHandledRealtimeEventKeyRef = useRef('')
   const [, forceHistoryRender] = useState(0)
+  const selectedPublishCause = causeTaxonomy.resolveCode(publishCauseCode)
+
+  useEffect(() => {
+    if (publishCauseCode && !selectedPublishCause) setPublishCauseCode('')
+  }, [publishCauseCode, selectedPublishCause])
 
   const rows = useMemo(() => buildBaselineRows(items), [items])
   const baselineValidationInputs = useMemo<ValidationInput[]>(() => {
@@ -1463,6 +1437,8 @@ export default function BaselinePage() {
   const handlePublishBaseline = useCallback(async () => {
     const normalizedChangeReason = publishChangeReason.trim()
     if (!projectId || !activeBaseline || publishing || isEditable || !normalizedChangeReason) return
+    const confirmedTaxonomyCause = causeTaxonomy.resolveCode(publishCauseCode)
+    if (!confirmedTaxonomyCause) return
     setPublishing(true)
     setError(null)
     setPublishValidity(null)
@@ -1471,7 +1447,7 @@ export default function BaselinePage() {
         `/api/task-baselines/${activeBaseline.id}/publish`,
         {
           project_id: projectId,
-          cause_code: publishCauseCode,
+          cause_code: confirmedTaxonomyCause.code,
           change_reason: normalizedChangeReason,
         },
       )
@@ -1509,6 +1485,7 @@ export default function BaselinePage() {
     }
   }, [
     activeBaseline,
+    causeTaxonomy,
     isEditable,
     projectId,
     publishCauseCode,
@@ -1682,7 +1659,7 @@ export default function BaselinePage() {
           disabled={isEditable}
           title={isEditable ? '请先保存或取消当前编辑' : '发布已保存的项目基线草稿'}
           onClick={() => {
-            setPublishCauseCode(inferBaselinePublishCauseCode(activeBaseline))
+            setPublishCauseCode(causeTaxonomy.resolveCode(inferBaselinePublishCauseCode(activeBaseline))?.code ?? '')
             setPublishChangeReason('')
             setPublishOpen(true)
           }}
@@ -2305,16 +2282,17 @@ export default function BaselinePage() {
             <div className="space-y-2">
               <Label htmlFor="baseline-publish-cause-code">变更原因分类</Label>
               <Select
-                value={publishCauseCode}
-                onValueChange={(value) => setPublishCauseCode(value as BaselinePublishCauseCode)}
+                value={publishCauseCode || undefined}
+                onValueChange={setPublishCauseCode}
+                disabled={causeTaxonomy.status !== 'ready'}
               >
                 <SelectTrigger id="baseline-publish-cause-code" aria-label="变更原因分类">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent side="bottom" align="start">
-                  {BASELINE_PUBLISH_CAUSE_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
+                  {causeTaxonomy.entries.map((entry) => (
+                    <SelectItem key={entry.code} value={entry.code}>
+                      {entry.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -2338,7 +2316,7 @@ export default function BaselinePage() {
               <Button
                 type="button"
                 loading={publishing}
-                disabled={publishing || !publishChangeReason.trim()}
+                disabled={publishing || !publishChangeReason.trim() || !selectedPublishCause}
                 title={!publishChangeReason.trim() ? '请填写原因原话' : '确认发布项目基线'}
                 onClick={handlePublishBaseline}
               >

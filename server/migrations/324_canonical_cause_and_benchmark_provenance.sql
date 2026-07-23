@@ -23,6 +23,74 @@ ALTER TABLE public.duration_benchmarks
   ALTER COLUMN generated_at SET DEFAULT NOW(),
   ALTER COLUMN generated_at SET NOT NULL;
 
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM public.duration_benchmarks
+     WHERE is_active = TRUE
+       AND metadata ->> 'candidate_operation_id' IS NOT NULL
+     GROUP BY company_id, project_id, benchmark_key, metadata ->> 'candidate_operation_id'
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'migration 324 blocked: duplicate active duration benchmark candidate operations exist';
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmarks_candidate_operation
+  ON public.duration_benchmarks (
+    company_id,
+    project_id,
+    benchmark_key,
+    (metadata ->> 'candidate_operation_id')
+  ) NULLS NOT DISTINCT
+  WHERE is_active = TRUE AND metadata ->> 'candidate_operation_id' IS NOT NULL;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM public.structured_cause_attributions
+     WHERE subject_type = 'task'
+       AND event_type IN ('delay', 'completion')
+       AND status IN ('candidate', 'confirmed')
+       AND cause_role = 'primary'
+     GROUP BY company_id, project_id, subject_type, subject_id
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'migration 324 blocked: duplicate active task primary causes exist';
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_structured_cause_task_active_primary
+  ON public.structured_cause_attributions (company_id, project_id, subject_type, subject_id)
+  WHERE subject_type = 'task'
+    AND event_type IN ('delay', 'completion')
+    AND status IN ('candidate', 'confirmed')
+    AND cause_role = 'primary';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_id_company_id_for_duration_benchmarks
+  ON public.projects (id, company_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conrelid = 'public.duration_benchmarks'::regclass
+       AND conname = 'duration_benchmarks_project_company_fk'
+  ) THEN
+    ALTER TABLE public.duration_benchmarks
+      ADD CONSTRAINT duration_benchmarks_project_company_fk
+      FOREIGN KEY (project_id, company_id)
+      REFERENCES public.projects(id, company_id)
+      ON UPDATE RESTRICT;
+  END IF;
+END
+$$;
+
 CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_scope()
 RETURNS TRIGGER
 LANGUAGE plpgsql

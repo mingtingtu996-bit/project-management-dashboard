@@ -39,6 +39,7 @@ describe('taskStructuredCauseAuthorityService', () => {
     const { result, queryExec } = await read([])
 
     expect(result).toMatchObject({
+      authority: { state: 'no_cause', causeCode: null, reasonCodes: [] },
       causeBenchmarkEligible: true,
       confirmedPrimaryCause: null,
       resolution: { availability: 'unavailable', causeCode: null, reviewReasonCodes: [] },
@@ -46,6 +47,50 @@ describe('taskStructuredCauseAuthorityService', () => {
     })
     expect(queryExec.mock.calls[0]?.[0]).toContain('event_type')
     expect(queryExec.mock.calls[0]?.[0]).toContain('confirmed_at')
+    expect(queryExec.mock.calls[0]?.[0]).toMatch(/WHERE subject_id = \$1/)
+    expect(queryExec.mock.calls[0]?.[0]).not.toContain('company_id = $1')
+    expect(queryExec.mock.calls[0]?.[0]).not.toContain("event_type IN ('delay', 'completion')")
+    expect(queryExec.mock.calls[0]?.[0]).not.toContain("status IN ('confirmed', 'candidate')")
+    expect(queryExec.mock.calls[0]?.[1]).toEqual([scope.taskId])
+  })
+
+  it('returns malformed subject rows through the production-shaped query and marks them for review', async () => {
+    const malformed = confirmedPrimary({ event_type: 'closure' })
+    const queryExec = vi.fn(async (sql: string) => ({
+      rows: sql.includes("event_type IN ('delay', 'completion')") ? [] : [malformed],
+    }))
+
+    const result = await readTaskStructuredCauseAuthority(scope, { queryExec })
+
+    expect(result.authority).toEqual({
+      state: 'review_required',
+      causeCode: null,
+      taxonomyVersion: 'v1.0.0',
+      reasonCodes: ['structured_cause_event_invalid'],
+    })
+    expect(result.causeBenchmarkEligible).toBe(false)
+  })
+
+  it('keeps valid rejected and superseded history non-active and non-benchmarkable', async () => {
+    const { result } = await read([
+      confirmedPrimary({ status: 'superseded' }),
+      confirmedPrimary({
+        id: '99999999-9999-4999-8999-999999999999',
+        status: 'rejected',
+        confirmation_source: 'candidate',
+        confirmed_at: null,
+      }),
+    ])
+
+    expect(result.authority).toEqual({
+      state: 'review_required',
+      causeCode: null,
+      taxonomyVersion: 'v1.0.0',
+      reasonCodes: ['structured_cause_no_active_authority'],
+    })
+    expect(result.confirmedPrimaryCause).toBeNull()
+    expect(result.causeBenchmarkEligible).toBe(false)
+    expect(result.snapshot.confirmed_causes).toEqual([])
   })
 
   it('selects exactly one valid confirmed primary while preserving contributing evidence', async () => {
@@ -65,6 +110,12 @@ describe('taskStructuredCauseAuthorityService', () => {
       confirmedAt: '2026-07-20T00:00:00.000Z',
       eventType: 'completion',
     })
+    expect(result.authority).toEqual({
+      state: 'confirmed',
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      reasonCodes: [],
+    })
     expect(result.snapshot.confirmed_causes).toHaveLength(2)
   })
 
@@ -82,10 +133,10 @@ describe('taskStructuredCauseAuthorityService', () => {
 
     expect(result.causeBenchmarkEligible).toBe(false)
     expect(result.confirmedPrimaryCause).toBeNull()
-    expect(result.resolution).toEqual(expect.objectContaining({
-      availability: 'unavailable',
+    expect(result.authority).toEqual(expect.objectContaining({
+      state: 'review_required',
       causeCode: null,
-      reviewReasonCodes: [reason],
+      reasonCodes: [reason],
     }))
   })
 
@@ -96,7 +147,10 @@ describe('taskStructuredCauseAuthorityService', () => {
     ])
 
     expect(result.causeBenchmarkEligible).toBe(false)
-    expect(result.resolution.reviewReasonCodes).toContain('structured_cause_primary_ambiguous')
+    expect(result.authority).toEqual(expect.objectContaining({
+      state: 'review_required',
+      reasonCodes: ['structured_cause_primary_ambiguous'],
+    }))
   })
 
   it('fails closed when an active candidate primary conflicts with confirmed authority', async () => {
@@ -112,6 +166,10 @@ describe('taskStructuredCauseAuthorityService', () => {
     ])
 
     expect(result.causeBenchmarkEligible).toBe(false)
+    expect(result.authority).toEqual(expect.objectContaining({
+      state: 'review_required',
+      reasonCodes: ['structured_cause_candidate_primary_conflict'],
+    }))
     expect(result.resolution).toEqual(expect.objectContaining({
       availability: 'review_required',
       reviewReasonCodes: ['structured_cause_candidate_primary_conflict'],
@@ -124,6 +182,12 @@ describe('taskStructuredCauseAuthorityService', () => {
     })
 
     expect(result.causeBenchmarkEligible).toBe(false)
+    expect(result.authority).toEqual({
+      state: 'unavailable',
+      causeCode: null,
+      taxonomyVersion: 'v1.0.0',
+      reasonCodes: ['structured_cause_read_failed'],
+    })
     expect(result.resolution.reviewReasonCodes).toEqual(['structured_cause_read_failed'])
   })
 })

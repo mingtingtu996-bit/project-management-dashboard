@@ -32,6 +32,54 @@ const benchmarkId = '33333333-3333-4333-8333-333333333333'
 const publicationKey = 'duration-learning:benchmark:production-chain'
 
 describe('duration benchmark production chain', () => {
+  it.each([
+    { scopeLevel: 'company', companyId, projectId: null },
+    { scopeLevel: 'industry', companyId: null, projectId: null },
+    { scopeLevel: 'global', companyId: null, projectId: null },
+  ])('consumes a $scopeLevel aggregate as all-cause history without querying an exact segment', async ({
+    scopeLevel,
+    companyId: aggregateCompanyId,
+    projectId: aggregateProjectId,
+  }) => {
+    const payload = {
+      benchmarkKind: 'aggregate_all_cause',
+      causeApplicability: 'all_cause',
+      p50Days: 8, p75Days: 10, p80Days: 11, meanDays: 8.5, variance: 2.25,
+      coefficientOfVariation: 0.176471, sampleCount: 100, confidenceLevel: 'high', confidenceScore: 88,
+      durationDayBasis: 'construction_production_day', generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-04-22T00:00:00.000Z', sourceAsOf: '2026-07-20T00:00:00.000Z',
+      aggregateProvenance: {
+        schemaVersion: 'duration-benchmark-aggregate/v1', scopeLevel,
+        sourceBenchmarkIds: [benchmarkId], sourceProjectIds: [projectId], sourceCompanyIds: [companyId],
+        sourceIndustryKeys: ['general_civil'],
+        calendarIdentities: [{ calendarRef: 'cn-work-calendar', calendarVersion: '2026.07' }],
+      },
+    }
+    const benchmark = buildDurationBenchmarkRowFromRuntimePublication({
+      publicationKey: `aggregate-${scopeLevel}`,
+      selectionBasis: `${scopeLevel}_stable`,
+      publication: {
+        runtimePayload: payload,
+        companyId: aggregateCompanyId,
+        projectId: aggregateProjectId,
+        publicationStage: 'stable',
+        scopeLevel,
+      },
+    })
+    expect(benchmark).toMatchObject({
+      sample_count: 100,
+      metadata: expect.objectContaining({ benchmark_provenance: 'aggregate_all_cause' }),
+    })
+    const segmentQuery = vi.fn()
+    const selection = await selectCauseAwareBenchmarkCandidates([{
+      benchmark: benchmark!, scope: scopeLevel === 'company' ? 'company' : 'system',
+      benchKey: 'SW-CHAIN:process:all', contextKey: 'all', sampleSize: 100, specificity: 'all',
+    }], 'material_shortage', segmentQuery)
+
+    expect(selection).toMatchObject({ selection: 'all_cause_fallback', fallback: 'all_cause' })
+    expect(segmentQuery).not.toHaveBeenCalled()
+  })
+
   it('carries exact producer identity through publication and activation into cause-aware suggestion selection', async () => {
     const samples = Array.from({ length: 20 }, (_, index): DurationExperienceSampleRow => ({
       id: `sample-${index + 1}`,

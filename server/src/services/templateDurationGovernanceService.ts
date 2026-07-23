@@ -35,7 +35,29 @@ export interface DurationExperienceSampleRow {
   duration_calibration_source?: string | null
   completed_at?: string | Date | null
   created_at?: string | Date | null
+  updated_at?: string | Date | null
+  evidence_fingerprint?: string | null
+  source_lineage?: Record<string, unknown> | null
   metadata?: Record<string, unknown> | null
+}
+
+type StructuredCauseAttributionLineage = {
+  attributionId: string
+  causeCode: string
+  taxonomyVersion: string
+  eventType: 'delay' | 'completion'
+  confirmedAt: string
+}
+
+type DurationBenchmarkSampleLineage = {
+  sampleId: string | null
+  taskId: string | null
+  completedAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
+  evidenceFingerprint: string | null
+  sourceLineage: unknown
+  structuredCauseAttributions: StructuredCauseAttributionLineage[]
 }
 
 export interface DurationBenchmarkCandidate {
@@ -61,7 +83,10 @@ export interface DurationBenchmarkCandidate {
   taskIds: string[]
   observationStartedAt: string | null
   observationEndedAt: string | null
+  sourceAsOf: string
   observationWindowDays: number
+  sampleLineage: DurationBenchmarkSampleLineage[]
+  structuredCauseAttributionLineage: StructuredCauseAttributionLineage[]
   productionDaySamples: number[]
   durationDayBasis: 'construction_production_day'
   calendarRef: string
@@ -83,6 +108,7 @@ export interface TemplateDurationGovernanceOptions {
   minOverrideSampleCount?: number
   minOverrideDeviationRatio?: number
   maxSamples?: number
+  generatedAt?: string
 }
 
 export interface TemplateDurationGovernanceResult {
@@ -170,6 +196,88 @@ function observationWindow(rows: DurationExperienceSampleRow[]) {
     ? inclusiveDurationDays(startedAt, endedAt) ?? 0
     : 0
   return { startedAt, endedAt, windowDays }
+}
+
+function readRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.toISOString() : null
+  if (Array.isArray(value)) return value.map(canonicalValue)
+  if (!value || typeof value !== 'object') return value ?? null
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, canonicalValue(entry)]),
+  )
+}
+
+function readStructuredCauseAttributionLineage(sample: DurationExperienceSampleRow) {
+  const snapshot = readRecord(sample.metadata?.structured_cause_snapshot)
+  if (!Object.prototype.hasOwnProperty.call(snapshot, 'confirmed_causes')) {
+    return { valid: true, lineage: [] as StructuredCauseAttributionLineage[] }
+  }
+  if (!Array.isArray(snapshot.confirmed_causes)) {
+    return { valid: false, lineage: [] as StructuredCauseAttributionLineage[] }
+  }
+
+  const lineage: StructuredCauseAttributionLineage[] = []
+  for (const value of snapshot.confirmed_causes) {
+    const cause = readRecord(value)
+    const attributionId = normalizeText(cause.attribution_id)
+    const causeCode = normalizeText(cause.cause_code)
+    const taxonomyVersion = normalizeText(cause.taxonomy_version)
+    const eventType = normalizeText(cause.event_type)
+    const confirmedAt = normalizeTimestamp(cause.confirmed_at)
+    if (
+      !attributionId
+      || !causeCode
+      || !taxonomyVersion
+      || !confirmedAt
+      || (eventType !== 'delay' && eventType !== 'completion')
+    ) {
+      return { valid: false, lineage: [] as StructuredCauseAttributionLineage[] }
+    }
+    lineage.push({
+      attributionId,
+      causeCode,
+      taxonomyVersion,
+      eventType,
+      confirmedAt,
+    })
+  }
+  return {
+    valid: true,
+    lineage: lineage.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+  }
+}
+
+function buildSampleLineage(sample: DurationExperienceSampleRow) {
+  const causes = readStructuredCauseAttributionLineage(sample)
+  const lineage: DurationBenchmarkSampleLineage = {
+    sampleId: normalizeText(sample.id),
+    taskId: normalizeText(sample.task_id),
+    completedAt: normalizeTimestamp(sample.completed_at),
+    createdAt: normalizeTimestamp(sample.created_at),
+    updatedAt: normalizeTimestamp(sample.updated_at),
+    evidenceFingerprint: normalizeText(sample.evidence_fingerprint),
+    sourceLineage: canonicalValue(sample.source_lineage ?? null),
+    structuredCauseAttributions: causes.lineage,
+  }
+  return {
+    valid: causes.valid,
+    lineage,
+    evidenceTimestamps: [
+      lineage.completedAt,
+      lineage.createdAt,
+      lineage.updatedAt,
+      ...lineage.structuredCauseAttributions.map((cause) => cause.confirmedAt),
+    ].filter((value): value is string => Boolean(value)),
+  }
 }
 
 function readConstructionCalendarIdentity(sample: DurationExperienceSampleRow) {
@@ -323,10 +431,17 @@ export function buildDurationBenchmarkCandidates(
 ): DurationBenchmarkCandidate[] {
   const minSampleCount = options.minSampleCount ?? DEFAULT_MIN_SAMPLE_COUNT
   const includeActivitySteps = options.includeActivitySteps === true
+  const generatedAt = normalizeTimestamp(options.generatedAt) ?? new Date().toISOString()
+  const generatedAtMs = Date.parse(generatedAt)
   const groups = new Map<string, DurationExperienceSampleRow[]>()
 
   for (const sample of samples) {
     if (!isUsableSample(sample, { includeActivitySteps })) continue
+    const sampleLineage = buildSampleLineage(sample)
+    if (
+      !sampleLineage.valid
+      || sampleLineage.evidenceTimestamps.some((timestamp) => Date.parse(timestamp) > generatedAtMs)
+    ) continue
     const companyId = readCompanyId(sample)
     const projectId = readProjectId(sample)
     if (!companyId || !projectId) continue
@@ -355,6 +470,24 @@ export function buildDurationBenchmarkCandidates(
       const variance = roundedPopulationVariance(days, meanDays)
       const confidence = confidenceForSampleCount(days.length)
       const observed = observationWindow(rows)
+      const sampleLineage = rows
+        .map((sample) => buildSampleLineage(sample).lineage)
+        .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+      const sourceAsOf = sampleLineage
+        .flatMap((sample) => [
+          sample.completedAt,
+          sample.createdAt,
+          sample.updatedAt,
+          ...sample.structuredCauseAttributions.map((cause) => cause.confirmedAt),
+        ])
+        .filter((value): value is string => Boolean(value))
+        .sort()
+        .at(-1) as string
+      const structuredCauseAttributionLineage = Array.from(new Map(
+        sampleLineage
+          .flatMap((sample) => sample.structuredCauseAttributions)
+          .map((cause) => [JSON.stringify(cause), cause] as const),
+      ).values()).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
       const automationQualityEvidence = buildNumericHoldoutEvidence(rows)
 
       return {
@@ -380,7 +513,10 @@ export function buildDurationBenchmarkCandidates(
         taskIds: rows.map((sample) => normalizeText(sample.task_id)).filter((value): value is string => value !== null),
         observationStartedAt: observed.startedAt,
         observationEndedAt: observed.endedAt,
+        sourceAsOf,
         observationWindowDays: observed.windowDays,
+        sampleLineage,
+        structuredCauseAttributionLineage,
         productionDaySamples: days,
         durationDayBasis: 'construction_production_day' as const,
         calendarRef: readConstructionCalendarIdentity(first).calendarRef as string,
@@ -403,12 +539,13 @@ export function buildDurationBenchmarkCandidatePersistenceRow(
   candidate: DurationBenchmarkCandidate,
   nowIso: string,
 ) {
-  const candidateOperationId = createHash('sha256').update(JSON.stringify({
+  const evidenceContract = canonicalValue({
+    schemaVersion: 'duration-benchmark-evidence-contract/v2',
     companyId: candidate.companyId,
     projectId: candidate.projectId,
     benchmarkKey: candidate.benchmarkKey,
     durationDayBasis: candidate.durationDayBasis,
-    sampleIds: [...candidate.sampleIds].sort(),
+    sampleLineage: candidate.sampleLineage,
     p50Days: candidate.p50Days,
     p75Days: candidate.p75Days,
     p80Days: candidate.p80Days,
@@ -419,10 +556,14 @@ export function buildDurationBenchmarkCandidatePersistenceRow(
     confidenceLevel: candidate.confidenceLevel,
     confidenceScore: candidate.confidenceScore,
     sourceWindowStart: candidate.observationStartedAt,
-    sourceAsOf: candidate.observationEndedAt,
+    sourceAsOf: candidate.sourceAsOf,
     calendarRef: candidate.calendarRef,
     calendarVersion: candidate.calendarVersion,
-  })).digest('hex')
+  })
+  const evidenceContractHash = createHash('sha256')
+    .update(JSON.stringify(evidenceContract))
+    .digest('hex')
+  const candidateOperationId = evidenceContractHash
   return {
       company_id: candidate.companyId,
       project_id: candidate.projectId,
@@ -449,9 +590,13 @@ export function buildDurationBenchmarkCandidatePersistenceRow(
         generated_by: 'templateDurationGovernanceService',
         runtime_publication_status: 'candidate',
         candidate_operation_id: candidateOperationId,
+        evidence_contract_hash: evidenceContractHash,
+        evidence_contract: evidenceContract,
         benchmark_context_key: candidate.benchmarkContextKey,
         sample_ids: candidate.sampleIds,
         task_ids: candidate.taskIds,
+        sample_mutation_lineage: candidate.sampleLineage,
+        structured_cause_attribution_lineage: candidate.structuredCauseAttributionLineage,
         source_evidence_refs: candidate.sampleIds.map((sampleId) => `duration_experience_samples:${sampleId}`),
         observation_started_at: candidate.observationStartedAt,
         observation_ended_at: candidate.observationEndedAt,
@@ -477,7 +622,7 @@ export function buildDurationBenchmarkCandidatePersistenceRow(
       },
       generated_at: nowIso,
       source_window_start: candidate.observationStartedAt,
-      source_as_of: candidate.observationEndedAt,
+      source_as_of: candidate.sourceAsOf,
       created_at: nowIso,
       updated_at: nowIso,
   }
@@ -568,8 +713,8 @@ export async function runTemplateDurationGovernance(
   options: TemplateDurationGovernanceOptions = {},
 ): Promise<TemplateDurationGovernanceResult> {
   const samples = await loadGovernanceSamples(options)
-  const candidates = buildDurationBenchmarkCandidates(samples, options)
   const nowIso = new Date().toISOString()
+  const candidates = buildDurationBenchmarkCandidates(samples, { ...options, generatedAt: nowIso })
   let benchmarksWritten = 0
   let overrideCandidatesWritten = 0
 

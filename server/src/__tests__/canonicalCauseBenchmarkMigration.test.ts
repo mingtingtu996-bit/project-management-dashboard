@@ -172,6 +172,38 @@ describe('canonical cause benchmark migration', () => {
     expect(clean).toContain('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_scope()')
   })
 
+  it('enforces immutable candidate operations, one active task primary, and composite project ownership', () => {
+    const forward = readSql('migrations', migrationName)
+    const rollback = readSql('migrations', 'rollback', migrationName)
+    const clean = readSql('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain("metadata ->> 'candidate_operation_id'")
+    expect(forward).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmarks_candidate_operation')
+    expect(forward).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmarks_candidate_operation\s+ON public\.duration_benchmarks \(\s*company_id,\s*project_id,\s*benchmark_key,\s*\(metadata ->> 'candidate_operation_id'\)\s*\) NULLS NOT DISTINCT/,
+    )
+    expect(forward).toContain("WHERE is_active = TRUE AND metadata ->> 'candidate_operation_id' IS NOT NULL")
+    expect(forward).toContain("RAISE EXCEPTION 'migration 324 blocked: duplicate active duration benchmark candidate operations exist'")
+
+    expect(forward).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_structured_cause_task_active_primary')
+    expect(forward).toContain("subject_type = 'task'")
+    expect(forward).toContain("event_type IN ('delay', 'completion')")
+    expect(forward).toContain("status IN ('candidate', 'confirmed')")
+    expect(forward).toContain("cause_role = 'primary'")
+    expect(forward).toContain("RAISE EXCEPTION 'migration 324 blocked: duplicate active task primary causes exist'")
+
+    expect(forward).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_id_company_id_for_duration_benchmarks')
+    expect(forward).toContain('ADD CONSTRAINT duration_benchmarks_project_company_fk')
+    expect(forward).toContain('FOREIGN KEY (project_id, company_id)')
+    expect(forward).toContain('REFERENCES public.projects(id, company_id)')
+    expect(forward).toContain('ON UPDATE RESTRICT')
+    expect(rollback).toContain('DROP CONSTRAINT IF EXISTS duration_benchmarks_project_company_fk')
+    expect(rollback).toContain('DROP INDEX IF EXISTS public.uq_duration_benchmarks_candidate_operation')
+    expect(rollback).toContain('DROP INDEX IF EXISTS public.uq_structured_cause_task_active_primary')
+    expect(rollback).toContain('DROP INDEX IF EXISTS public.uq_projects_id_company_id_for_duration_benchmarks')
+    expect(clean).toContain('CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmarks_candidate_operation')
+  })
+
   it('provides an exact rollback limited to migration 324 objects', () => {
     const rollbackPath = resolve(serverRoot, 'migrations', 'rollback', migrationName)
 
@@ -198,7 +230,7 @@ describe('canonical cause benchmark migration', () => {
     const parentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_change_with_segments()')
     const segmentFunctionDrop = rollback.indexOf('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope()')
     const tableDrop = rollback.indexOf('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
-    const columnDrop = rollback.indexOf('ALTER TABLE IF EXISTS public.duration_benchmarks')
+    const columnDrop = rollback.indexOf('ALTER TABLE IF EXISTS public.duration_benchmarks', tableDrop)
 
     expect(parentTriggerDrop).toBeGreaterThan(-1)
     expect(segmentTriggerDrop).toBeGreaterThan(-1)
