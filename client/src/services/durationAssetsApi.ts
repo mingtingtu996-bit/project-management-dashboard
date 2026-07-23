@@ -71,7 +71,7 @@ export interface DurationAssetReviewReadModel {
 export interface DurationAccuracySummary {
   generatedAt: string | null
   dataStatus: 'ok' | 'partial' | 'unavailable'
-  sourceErrors: Record<string, string>
+  sourceErrors: Array<{ source: string; code: string }>
   metrics: Array<Record<string, unknown> & { engineCode: string; sampleCount: number; status: string }>
 }
 
@@ -111,13 +111,23 @@ function stringRecord(value: unknown): Record<string, string> {
     .filter(([, entry]) => Boolean(entry)))
 }
 
+function summarySourceErrors(value: unknown): DurationAccuracySummary['sourceErrors'] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const raw = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {}
+    const source = text(raw.source)
+    const code = text(raw.code)
+    return source && code ? [{ source, code }] : []
+  })
+}
+
 function governanceSourceStatus(value: unknown): DurationAccuracyGovernanceReadModel['sourceStatus'] {
   const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {}
   return {
-    samples: raw.samples === 'unavailable' ? 'unavailable' : 'available',
-    publications: raw.publications === 'unavailable' ? 'unavailable' : 'available',
-    runtimeCalls: raw.runtimeCalls === 'unavailable' ? 'unavailable' : 'available',
-    observations: raw.observations === 'unavailable' ? 'unavailable' : 'available',
+    samples: raw.samples === 'available' || raw.samples === 'unavailable' ? raw.samples : 'unavailable',
+    publications: raw.publications === 'available' || raw.publications === 'unavailable' ? raw.publications : 'unavailable',
+    runtimeCalls: raw.runtimeCalls === 'available' || raw.runtimeCalls === 'unavailable' ? raw.runtimeCalls : 'unavailable',
+    observations: raw.observations === 'available' || raw.observations === 'unavailable' ? raw.observations : 'unavailable',
   }
 }
 
@@ -182,8 +192,9 @@ export async function getDurationAccuracySummary(projectId?: string | null): Pro
   const model = await apiGet<any>(`/api/admin/duration-accuracy/summary${params.size ? `?${params}` : ''}`, { runtimeCache: 'off' })
   return {
     generatedAt: nullableText(model?.generatedAt),
-    dataStatus: model?.dataStatus === 'partial' || model?.dataStatus === 'unavailable' ? model.dataStatus : 'ok',
-    sourceErrors: stringRecord(model?.sourceErrors),
+    dataStatus: model?.dataStatus === 'ok' || model?.dataStatus === 'partial' || model?.dataStatus === 'unavailable'
+      ? model.dataStatus : 'unavailable',
+    sourceErrors: summarySourceErrors(model?.sourceErrors),
     metrics: Array.isArray(model?.metrics) ? model.metrics.map((metric: any) => ({
       ...metric, engineCode: text(metric?.engineCode), sampleCount: number(metric?.sampleCount), status: text(metric?.status),
     })) : [],

@@ -76,21 +76,25 @@ describe('durationAssetsApi', () => {
     mocks.apiGet
       .mockResolvedValueOnce({
         generatedAt: '2026-07-23T08:00:00.000Z', dataStatus: 'partial',
-        sourceErrors: { duration_accuracy_metrics: 'duration_accuracy_metrics_unavailable' },
+        sourceErrors: [{ source: 'duration_algorithm_accuracy_events', code: 'duration_accuracy_metrics_unavailable' }],
         metrics: [{ engineCode: 'critical_path_cpm', sampleCount: 2, status: 'backtested' }],
       })
       .mockResolvedValueOnce({
         generatedAt: '2026-07-23T08:00:00.000Z', samples: [], publications: [], runtimeCalls: [], observations: [],
-        sourceStatus: { samples: 'available', publications: 'unavailable', runtimeCalls: 'available', observations: 'unavailable' },
+        sourceStatus: { samples: 'available', publications: 'unavailable', runtimeCalls: 'malformed' },
         sourceErrors: { publications: 'publication_source_unavailable', observations: 'observation_source_unavailable' },
       })
+      .mockResolvedValueOnce({ generatedAt: '2026-07-23T08:00:00.000Z', sourceErrors: [], metrics: [] })
+      .mockResolvedValueOnce({ generatedAt: '2026-07-23T08:00:00.000Z', dataStatus: 'malformed', sourceErrors: [], metrics: [] })
 
     await expect(getDurationAccuracySummary()).resolves.toMatchObject({
-      dataStatus: 'partial', sourceErrors: { duration_accuracy_metrics: 'duration_accuracy_metrics_unavailable' },
+      dataStatus: 'partial', sourceErrors: [{ source: 'duration_algorithm_accuracy_events', code: 'duration_accuracy_metrics_unavailable' }],
     })
     await expect(getDurationAccuracyGovernanceReadModel()).resolves.toMatchObject({
-      sourceStatus: { publications: 'unavailable', observations: 'unavailable' },
+      sourceStatus: { publications: 'unavailable', runtimeCalls: 'unavailable', observations: 'unavailable' },
       sourceErrors: { publications: 'publication_source_unavailable', observations: 'observation_source_unavailable' },
     })
+    await expect(getDurationAccuracySummary()).resolves.toMatchObject({ dataStatus: 'unavailable', sourceErrors: [] })
+    await expect(getDurationAccuracySummary()).resolves.toMatchObject({ dataStatus: 'unavailable', sourceErrors: [] })
   })
 })

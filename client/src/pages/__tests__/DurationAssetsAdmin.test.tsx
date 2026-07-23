@@ -81,7 +81,7 @@ describe('DurationAssetsAdmin', () => {
       if (mocks.accuracyState === 'loading') return new Promise(() => {})
       return {
         generatedAt: mocks.accuracyState === 'stale' ? '2026-07-23T00:00:00.000Z' : mocks.generatedAt,
-        dataStatus: 'ok', sourceErrors: {},
+        dataStatus: 'ok', sourceErrors: [],
         metrics: [{ engineCode: 'critical_path_cpm', sampleCount: 2, status: 'backtested' }],
       }
     })
@@ -142,16 +142,16 @@ describe('DurationAssetsAdmin', () => {
   it('keeps partial and unavailable backend sources distinct from empty tables', async () => {
     mocks.getDurationAccuracySummary.mockResolvedValueOnce({
       generatedAt: new Date().toISOString(), dataStatus: 'partial',
-      sourceErrors: { duration_accuracy_metrics: 'metrics_unavailable' }, metrics: [],
+      sourceErrors: [{ source: 'duration_algorithm_accuracy_events', code: 'metrics_unavailable' }], metrics: [],
     })
     const accuracyView = renderAdmin('/admin/duration-assets?tab=accuracy')
-    expect(await screen.findByTestId('duration-assets-partial')).toBeInTheDocument()
+    expect(await screen.findByTestId('duration-assets-partial')).toHaveTextContent('duration_algorithm_accuracy_events:metrics_unavailable')
     expect(screen.queryByText('暂无后端准确度读模型。')).not.toBeInTheDocument()
     accuracyView.unmount()
 
     mocks.getDurationAccuracySummary.mockResolvedValueOnce({
       generatedAt: new Date().toISOString(), dataStatus: 'unavailable',
-      sourceErrors: { duration_accuracy_metrics: 'metrics_unavailable' }, metrics: [],
+      sourceErrors: [{ source: 'duration_algorithm_accuracy_events', code: 'metrics_unavailable' }], metrics: [],
     })
     const unavailableAccuracyView = renderAdmin('/admin/duration-assets?tab=accuracy')
     expect(await screen.findByTestId('duration-assets-unavailable')).toBeInTheDocument()
@@ -191,6 +191,33 @@ describe('DurationAssetsAdmin', () => {
     mocks.getDurationAssetReviewItems.mockReturnValueOnce(pendingQueue.promise)
     renderAdmin('/admin/duration-assets?tab=published')
     expect(await screen.findByText('pub-1')).toBeInTheDocument()
+  })
+
+  it('keeps source errors visible when stale supersedes a partial accuracy model', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-23T08:00:00.000Z'))
+    mocks.getDurationAccuracySummary.mockResolvedValueOnce({
+      generatedAt: '2026-07-23T08:00:00.000Z', dataStatus: 'partial',
+      sourceErrors: [{ source: 'duration_algorithm_accuracy_events', code: 'metrics_unavailable' }],
+      metrics: [{ engineCode: 'critical_path_cpm', sampleCount: 2, status: 'backtested' }],
+    })
+    renderAdmin('/admin/duration-assets?tab=accuracy')
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByTestId('duration-assets-partial')).toHaveTextContent('duration_algorithm_accuracy_events:metrics_unavailable')
+    act(() => { vi.advanceTimersByTime(5 * 60 * 1000) })
+    expect(screen.getByTestId('duration-assets-stale')).toHaveTextContent('duration_algorithm_accuracy_events:metrics_unavailable')
+    expect(screen.queryByTestId('duration-assets-partial')).not.toBeInTheDocument()
+  })
+
+  it('allows refresh to supersede an unrelated hung loader generation', async () => {
+    const pendingAccuracy = deferred<unknown>()
+    mocks.getDurationAccuracySummary.mockReturnValueOnce(pendingAccuracy.promise)
+    renderAdmin('/admin/duration-assets?tab=queue')
+    expect(await screen.findAllByText('asset-1')).toHaveLength(2)
+    const refresh = screen.getByRole('button', { name: '刷新' })
+    expect(refresh).not.toBeDisabled()
+    fireEvent.click(refresh)
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenCalledTimes(2))
   })
 
   it('marks a queue stale at five minutes and refuses a decision opened while it was fresh', async () => {

@@ -195,6 +195,7 @@ export default function DurationAssetsAdmin() {
   const summaryDisplayState: LoadState = !isReadableModel(summaryState) || !summary
     ? summaryState
     : summary.dataStatus === 'unavailable' ? 'unavailable'
+      : summaryState === 'stale' ? 'stale'
       : summary.dataStatus === 'partial' ? 'partial'
         : summaryState
   const publishedDisplayState: LoadState = !isReadableModel(governanceState) || !governance
@@ -208,13 +209,14 @@ export default function DurationAssetsAdmin() {
   const monitoringDisplayState: LoadState = !isReadableModel(governanceState) || !governance
     ? governanceState
     : monitoringUnavailable === 2 ? 'unavailable'
-      : monitoringUnavailable > 0 ? 'partial'
+      : governanceState === 'stale' ? 'stale'
+        : monitoringUnavailable > 0 ? 'partial'
         : governanceState === 'ready' && observations.length === 0 && runtimeCalls.length === 0 ? 'empty'
           : governanceState
   const activeState = tab === 'queue' ? queueState : tab === 'accuracy' ? summaryDisplayState : tab === 'published' ? publishedDisplayState : monitoringDisplayState
   const activeModelName = tab === 'queue' ? '工期资产队列' : tab === 'accuracy' ? '准确度读模型' : tab === 'published' ? '发布读模型' : '监控读模型'
   const activeSourceErrors = tab === 'accuracy'
-    ? Object.values(summary?.sourceErrors ?? {}).join('，')
+    ? summary?.sourceErrors.slice(0, 3).map((error) => `${error.source}:${error.code}`).join('，')
     : tab === 'published'
       ? governance?.sourceErrors.publications
       : tab === 'monitoring'
@@ -277,7 +279,7 @@ export default function DurationAssetsAdmin() {
           <h1 className="mt-2 text-2xl font-semibold text-slate-950">工期资产治理</h1>
           <p className="mt-1 text-sm text-slate-600">后端已治理工期资产的队列、发布、监控与准确度读模型。</p>
         </div>
-        <Button type="button" variant="outline" onClick={() => load(appliedFilters)} disabled={anyLoading}><RefreshCw className="h-4 w-4" />刷新</Button>
+        <Button type="button" variant="outline" onClick={() => load(appliedFilters)} aria-busy={anyLoading}><RefreshCw className={anyLoading ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />刷新</Button>
       </header>
       <div data-testid="rule-asset-action-readiness" data-state={activeState}>
         {activeState !== 'ready' ? <StateNotice state={activeState} modelName={activeModelName} details={activeSourceErrors} onRetry={() => load(appliedFilters)} /> : null}
