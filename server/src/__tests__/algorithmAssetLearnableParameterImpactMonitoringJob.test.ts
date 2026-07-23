@@ -120,6 +120,9 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       stablePromotionReused: 0,
       rollbackExecuted: 0,
       rollbackReused: 0,
+      reviewItemsOpened: 0,
+      reviewItemsReused: 0,
+      reviewItemsResolved: 0,
       failed: 1,
       failureRefs: [{
         phase: 'candidate_publication',
@@ -132,6 +135,9 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       ...partial,
       canaryPublished: 1,
       candidateCheckpointReused: 1,
+      reviewItemsOpened: 0,
+      reviewItemsReused: 0,
+      reviewItemsResolved: 0,
       failed: 0,
       failureRefs: [],
     }

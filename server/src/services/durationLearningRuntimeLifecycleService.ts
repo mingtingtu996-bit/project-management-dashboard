@@ -2393,6 +2393,7 @@ export async function collectDurationLearningRuntimeCandidateProposals(
 export async function findDurationLearningRuntimeProposalForReview(input: {
   queryExec: DurationLearningRuntimePublicationQueryExec
   sourceKey: string
+  reasonCodes: readonly string[]
   maxBatches?: number
 }): Promise<DurationLearningRuntimeCandidateProposal | null> {
   const sourceKey = text(input.sourceKey)
@@ -2401,8 +2402,7 @@ export async function findDurationLearningRuntimeProposalForReview(input: {
   for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
     const batch = await collectDurationLearningRuntimeCandidateBatch(input.queryExec, cursorState)
     for (const proposal of expandDurationLearningRuntimeCandidateScopes(batch.candidates)) {
-      if (proposalCanEnterCanary(proposal)) continue
-      if (candidateReviewSourceKey(proposal) === sourceKey) return proposal
+      if (candidateReviewSourceKey(proposal, input.reasonCodes) === sourceKey) return proposal
     }
     if (cursorOutputHash(batch.nextCursorState) === cursorOutputHash(cursorState)) break
     cursorState = batch.nextCursorState
@@ -3068,8 +3068,11 @@ export function reviewRequirementForProposal(
   }
 }
 
-function candidateReviewSourceKey(proposal: DurationLearningRuntimeCandidateProposal) {
-  const requirement = reviewRequirementForProposal(proposal)
+function candidateReviewSourceKey(
+  proposal: DurationLearningRuntimeCandidateProposal,
+  reviewReasonCodes: readonly unknown[] = [],
+) {
+  const requirement = reviewRequirementForProposal(proposal, reviewReasonCodes)
   return buildDurationAssetReviewSourceKey({
     reviewKind: requirement.reviewKind,
     assetKey: proposal.assetKey,
@@ -3335,6 +3338,19 @@ function stableAutomationDecision(
 
 export type DurationLearningRuntimeStableDecision = ReturnType<typeof stableAutomationDecision>
 
+function monitoringMetricsForReviewIdentity(
+  candidate: DurationLearningRuntimeMonitoringCandidate,
+  evaluation: DurationLearningRuntimeMonitoringEvaluation,
+) {
+  const monitoringWindowHours = Math.max(0, finiteNumber(candidate.monitoringWindowHours))
+  const monitoringElapsedHours = Math.max(0, finiteNumber(candidate.monitoringElapsedHours))
+  return {
+    ...evaluation.metrics,
+    monitoringWindowHours,
+    monitoringElapsedHours: Math.min(monitoringElapsedHours, monitoringWindowHours),
+  }
+}
+
 export function reviewRequirementForMonitoringCandidate(
   candidate: DurationLearningRuntimeMonitoringCandidate,
   evaluation: DurationLearningRuntimeMonitoringEvaluation,
@@ -3373,7 +3389,7 @@ export function reviewRequirementForMonitoringCandidate(
       monitoringEvidence: {
         publicationKey: candidate.publicationKey,
         monitoringStatus: evaluation.status,
-        monitoringMetrics: evaluation.metrics,
+        monitoringMetrics: monitoringMetricsForReviewIdentity(candidate, evaluation),
         stableDecision: record(stableDecision),
       },
     }),

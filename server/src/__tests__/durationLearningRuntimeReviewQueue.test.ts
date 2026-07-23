@@ -412,10 +412,11 @@ describe('duration learning lifecycle review queue integration', () => {
       .not.toBe(lifecycleModule.reviewRequirementForMonitoringCandidate(candidate, changedEvaluation, decision).decisionFingerprint)
   })
 
-  it('includes complete monitoring timing evidence in metrics and decision fingerprints', () => {
+  it('keeps stable-review source identity idempotent after the policy window while preserving material timing states', () => {
     const candidate = monitoringCandidate({ assetKey: 'base_duration_benchmark' })
-    const changedWindow = { ...candidate, monitoringWindowHours: candidate.monitoringWindowHours + 1 }
-    const changedElapsed = { ...candidate, monitoringElapsedHours: candidate.monitoringElapsedHours + 1 }
+    const equivalentElapsed = { ...candidate, monitoringElapsedHours: candidate.monitoringElapsedHours + 1 }
+    const changedWindow = { ...candidate, monitoringWindowHours: 168, monitoringElapsedHours: 200 }
+    const preThreshold = { ...candidate, monitoringElapsedHours: 71 }
     const evaluate = (value: DurationLearningRuntimeMonitoringCandidate) => (
       lifecycleModule.evaluateDurationLearningRuntimeMonitoringCandidate(
         value,
@@ -423,20 +424,34 @@ describe('duration learning lifecycle review queue integration', () => {
       ).evaluation
     )
     const baseEvaluation = evaluate(candidate)
+    const equivalentEvaluation = evaluate(equivalentElapsed)
     const windowEvaluation = evaluate(changedWindow)
-    const elapsedEvaluation = evaluate(changedElapsed)
+    const preThresholdEvaluation = evaluate(preThreshold)
     const decision = stableDecision()
-    const fingerprint = (
+    const sourceKey = (
       value: DurationLearningRuntimeMonitoringCandidate,
       evaluation: Record<string, any>,
-    ) => lifecycleModule.reviewRequirementForMonitoringCandidate(value, evaluation, decision).decisionFingerprint
+    ) => {
+      const requirement = lifecycleModule.reviewRequirementForMonitoringCandidate(value, evaluation, decision)
+      return buildDurationAssetReviewSourceKey({
+        reviewKind: requirement.reviewKind,
+        assetKey: value.assetKey,
+        artifactKey: value.artifactKey,
+        proposalKey: null,
+        publicationKey: value.publicationKey,
+        decisionFingerprint: requirement.decisionFingerprint,
+        scope: value.scope,
+      })
+    }
 
     expect(baseEvaluation.metrics).toMatchObject({
       monitoringWindowHours: 72,
       monitoringElapsedHours: 96,
     })
-    expect(fingerprint(candidate, baseEvaluation)).not.toBe(fingerprint(changedWindow, windowEvaluation))
-    expect(fingerprint(candidate, baseEvaluation)).not.toBe(fingerprint(changedElapsed, elapsedEvaluation))
+    expect(equivalentEvaluation.metrics).toMatchObject({ monitoringElapsedHours: 97 })
+    expect(sourceKey(candidate, baseEvaluation)).toBe(sourceKey(equivalentElapsed, equivalentEvaluation))
+    expect(sourceKey(candidate, baseEvaluation)).not.toBe(sourceKey(changedWindow, windowEvaluation))
+    expect(sourceKey(candidate, baseEvaluation)).not.toBe(sourceKey(preThreshold, preThresholdEvaluation))
   })
 
   it('reuses a content checkpoint and resolves a later proposal-lineage review atomically', async () => {
@@ -738,6 +753,7 @@ describe('duration learning lifecycle review queue integration', () => {
     await expect(lifecycleModule.findDurationLearningRuntimeProposalForReview({
       queryExec,
       sourceKey,
+      reasonCodes: requirement.reasonCodes,
       maxBatches: 1,
     })).resolves.toMatchObject({
       proposalKey: candidate.proposalKey,
@@ -745,6 +761,85 @@ describe('duration learning lifecycle review queue integration', () => {
       artifactKey: 'SW-REVIEW:process:all',
       scope: candidate.scope,
     })
+  })
+
+  it('reconstructs an auto-eligible blocked-publication proposal only with the locked review reasons', async () => {
+    const taskIds = Array.from({ length: 20 }, (_, index) => `task-${index + 1}`)
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      if (sql.includes('duration-learning-collector:discover:benchmark:base_duration_benchmark')) {
+        return [{ collector_group_key: 'SW-BLOCKED:process:all' }] as T[]
+      }
+      if (sql.includes('duration-learning-collector:history:benchmark:base_duration_benchmark')) {
+        return [{
+          id: 'benchmark-blocked-1',
+          benchmark_key: 'SW-BLOCKED:process:all',
+          collector_group_key: 'SW-BLOCKED:process:all',
+          company_id: 'company-1',
+          project_id: 'project-1',
+          source_company_id: 'company-1',
+          project_company_id: 'company-1',
+          business_type: 'general_civil',
+          sample_count: 20,
+          p50_days: 8,
+          p75_days: 10,
+          p80_days: 11,
+          mean_days: 8.5,
+          variance: 2.25,
+          coefficient_of_variation: 0.176471,
+          confidence_level: 'high',
+          confidence_score: 88,
+          duration_day_basis: 'construction_production_day',
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-04-22T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
+          metadata: {
+            task_ids: taskIds,
+            source_evidence_refs: taskIds.map((taskId) => `tasks:${taskId}:actual_duration`),
+            real_outcome_count: 20,
+            replay_case_count: 20,
+            observation_window_days: 90,
+            quality_model: 'numeric_holdout',
+            holdout_sample_count: 20,
+            mae_before: 8,
+            mae_after: 6,
+            conflict_rate: 0,
+            overcompensation_rate: 0,
+            rollback_ready: true,
+            tenant_scope_valid: true,
+            calendar_ref: 'cn-work-calendar',
+            calendar_version: '2026.07',
+            sample_ids: taskIds.map((_, index) => `sample-${index + 1}`),
+          },
+        }] as T[]
+      }
+      return [] as T[]
+    }
+    const [candidate] = await lifecycleExports.collectDurationLearningRuntimeCandidateProposals(queryExec)
+    expect(candidate.automationDecision).toMatchObject({ autoPromotionAllowed: true })
+    const blockedReasons = ['payload_contract_invalid', 'project_scope_company_mismatch']
+    const requirement = lifecycleModule.reviewRequirementForProposal(candidate, blockedReasons)
+    const sourceKey = buildDurationAssetReviewSourceKey({
+      reviewKind: requirement.reviewKind,
+      assetKey: candidate.assetKey,
+      artifactKey: candidate.artifactKey,
+      proposalKey: candidate.proposalKey,
+      publicationKey: null,
+      decisionFingerprint: requirement.decisionFingerprint,
+      scope: candidate.scope,
+    })
+    const find = (reasonCodes: string[]) => lifecycleModule.findDurationLearningRuntimeProposalForReview({
+      queryExec,
+      sourceKey,
+      reasonCodes,
+      maxBatches: 1,
+    })
+
+    await expect(find([...requirement.reasonCodes].reverse())).resolves.toMatchObject({
+      proposalKey: candidate.proposalKey,
+      automationDecision: expect.objectContaining({ autoPromotionAllowed: true }),
+    })
+    await expect(find(['payload_contract_invalid'])).resolves.toBeNull()
+    await expect(find([...requirement.reasonCodes, 'runtime_publication_not_published'])).resolves.toBeNull()
   })
 
   it('exports one production monitoring evaluator and a manual-canary safety classifier', () => {
