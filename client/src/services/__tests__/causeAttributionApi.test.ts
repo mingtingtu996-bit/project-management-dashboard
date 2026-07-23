@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiGet, apiPost } from '@/lib/apiClient'
-import { confirmTaskCause, listCauseTaxonomy } from '../causeAttributionApi'
+import { confirmTaskCause, listCauseAttributions, listCauseTaxonomy } from '../causeAttributionApi'
 
 vi.mock('@/lib/apiClient', () => ({
   apiGet: vi.fn(),
@@ -48,6 +48,33 @@ describe('causeAttributionApi', () => {
         eventType: 'delay',
         rawText: 'Material has not arrived',
       },
+    )
+  })
+
+  it('lists one exact cause authority slice and forwards cancellation', async () => {
+    const controller = new AbortController()
+    const response = [{
+      id: 'cause-new',
+      subject_id: 'task-1',
+      cause_code: 'material_shortage',
+      cause_role: 'primary',
+      event_type: 'delay',
+      raw_text: 'Material has not arrived',
+      status: 'confirmed',
+    }]
+    mockedApiGet.mockResolvedValue(response)
+
+    await expect(listCauseAttributions({
+      projectId: 'project / 1',
+      subjectType: 'task',
+      status: 'confirmed',
+      eventType: 'delay',
+      causeRole: 'primary',
+    }, controller.signal)).resolves.toEqual(response)
+
+    expect(mockedApiGet).toHaveBeenCalledWith(
+      '/api/cause-attributions/projects/project%20%2F%201?subjectType=task&status=confirmed&eventType=delay&causeRole=primary',
+      { signal: controller.signal },
     )
   })
 })

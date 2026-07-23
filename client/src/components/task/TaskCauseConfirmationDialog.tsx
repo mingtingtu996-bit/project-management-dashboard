@@ -41,6 +41,7 @@ export function TaskCauseConfirmationDialog({
   const [entries, setEntries] = useState<StructuredCauseTaxonomyEntry[]>([])
   const [causeCode, setCauseCode] = useState('')
   const [loadingTaxonomy, setLoadingTaxonomy] = useState(false)
+  const [taxonomyLoaded, setTaxonomyLoaded] = useState(false)
   const [taxonomyError, setTaxonomyError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -50,6 +51,7 @@ export function TaskCauseConfirmationDialog({
     let active = true
     setCauseCode('')
     setEntries([])
+    setTaxonomyLoaded(false)
     setTaxonomyError(null)
     setLoadingTaxonomy(true)
 
@@ -68,7 +70,10 @@ export function TaskCauseConfirmationDialog({
         })
       })
       .finally(() => {
-        if (active) setLoadingTaxonomy(false)
+        if (active) {
+          setLoadingTaxonomy(false)
+          setTaxonomyLoaded(true)
+        }
       })
 
     return () => {
@@ -116,7 +121,7 @@ export function TaskCauseConfirmationDialog({
           <div className="space-y-2">
             <Label htmlFor="task-cause-code">延误原因分类</Label>
             <Select value={causeCode} onValueChange={setCauseCode} disabled={loadingTaxonomy || Boolean(taxonomyError) || submitting}>
-              <SelectTrigger id="task-cause-code" aria-label="延误原因分类">
+              <SelectTrigger id="task-cause-code" aria-label="延误原因分类" aria-required="true">
                 <SelectValue placeholder={loadingTaxonomy ? '正在加载分类...' : '请选择原因分类'} />
               </SelectTrigger>
               <SelectContent align="start" side="bottom">
@@ -126,6 +131,9 @@ export function TaskCauseConfirmationDialog({
               </SelectContent>
             </Select>
           </div>
+          {taxonomyLoaded && !taxonomyError && entries.length === 0 ? (
+            <p role="status" className="text-sm text-slate-500">暂无可用的延误原因分类</p>
+          ) : null}
           <div className="space-y-2">
             <Label htmlFor="task-cause-raw-text">原始说明</Label>
             <textarea

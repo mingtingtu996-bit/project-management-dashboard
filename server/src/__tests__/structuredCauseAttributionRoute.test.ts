@@ -110,7 +110,7 @@ describe('cause attribution routes', () => {
 
   it('exposes tenant-scoped list, confirmation, and rejection commands', async () => {
     const listResponse = await supertest(buildApp())
-      .get('/api/cause-attributions/projects/project-1?subjectType=task&subjectId=task-1')
+      .get('/api/cause-attributions/projects/project-1?subjectType=task&subjectId=task-1&status=confirmed&eventType=delay&causeRole=primary')
     const confirmResponse = await supertest(buildApp())
       .post('/api/cause-attributions/projects/project-1/cause-1/confirm')
       .send({
@@ -130,11 +130,29 @@ describe('cause attribution routes', () => {
       actorId: 'user-1',
       responsibilityClass: 'contractor_attributable',
     }))
+    expect(mocks.listStructuredCauseAttributions).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: 'task',
+      subjectId: 'task-1',
+      status: 'confirmed',
+      eventType: 'delay',
+      causeRole: 'primary',
+    }))
     expect(mocks.rejectStructuredCauseAttribution).toHaveBeenCalledWith(expect.objectContaining({
       companyId: 'company-1',
       projectId: 'project-1',
       actorId: 'user-1',
     }))
+  })
+
+  it('rejects unsupported list event and role filters', async () => {
+    const eventResponse = await supertest(buildApp())
+      .get('/api/cause-attributions/projects/project-1?eventType=all')
+    const roleResponse = await supertest(buildApp())
+      .get('/api/cause-attributions/projects/project-1?causeRole=all')
+
+    expect(eventResponse.status).toBe(400)
+    expect(roleResponse.status).toBe(400)
+    expect(mocks.listStructuredCauseAttributions).not.toHaveBeenCalled()
   })
 
   it('exposes project-scoped cause-quality metrics to project members', async () => {

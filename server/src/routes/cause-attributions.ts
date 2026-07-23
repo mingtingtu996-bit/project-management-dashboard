@@ -46,10 +46,15 @@ const inferBodySchema = z.object({
   rawText: z.string().trim().max(4000).optional().nullable(),
 })
 
+const eventTypeSchema = z.enum(['delay', 'completion', 'closure', 'baseline_change'])
+const causeRoleSchema = z.enum(['primary', 'contributing', 'transmitted'])
+
 const listQuerySchema = z.object({
   subjectType: z.enum(['task', 'risk', 'issue', 'baseline_change']).optional(),
   subjectId: z.string().trim().min(1).optional(),
   status: z.enum(['candidate', 'confirmed', 'rejected', 'superseded']).optional(),
+  eventType: eventTypeSchema.optional(),
+  causeRole: causeRoleSchema.optional(),
 })
 
 const responsibilityClassSchema = z.enum([
@@ -64,7 +69,7 @@ const causeCodeSchema = z.enum(CANONICAL_STRUCTURED_CAUSE_CODES)
 
 const userConfirmedCauseBodySchema = z.object({
   causeCode: causeCodeSchema,
-  causeRole: z.enum(['primary', 'contributing', 'transmitted']).default('primary'),
+  causeRole: causeRoleSchema.default('primary'),
   eventType: z.enum(['delay', 'completion']).optional(),
   rawText: z.string().trim().min(1).max(4000),
   responsibilityClass: responsibilityClassSchema.optional().nullable(),
@@ -163,6 +168,8 @@ router.get(
       subjectType: req.query.subjectType as 'task' | 'risk' | 'issue' | 'baseline_change' | undefined,
       subjectId: String(req.query.subjectId ?? '').trim() || null,
       status: req.query.status as 'candidate' | 'confirmed' | 'rejected' | 'superseded' | undefined,
+      eventType: req.query.eventType as 'delay' | 'completion' | 'closure' | 'baseline_change' | undefined,
+      causeRole: req.query.causeRole as 'primary' | 'contributing' | 'transmitted' | undefined,
     })
     res.json({ success: true, data: rows, timestamp: new Date().toISOString() })
   }),

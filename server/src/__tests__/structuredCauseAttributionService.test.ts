@@ -6,6 +6,7 @@ import {
   confirmStructuredCauseAttribution,
   getStructuredCauseAttributionQualityMetrics,
   inferAndPersistTaskStructuredCauseAttributions,
+  listStructuredCauseAttributions,
   loadTaskStructuredCauseEvidence,
   persistStructuredCauseCandidates,
   recordBaselinePublicationStructuredCause,
@@ -14,6 +15,72 @@ import {
 import { getMetricDefinition } from '../services/metricRegistryService.js'
 
 describe('structuredCauseAttributionService', () => {
+  it('parameterizes event and role filters while preserving backend newest-first order', async () => {
+    const newestPrimaryDelay = {
+      id: 'cause-new',
+      event_type: 'delay',
+      cause_role: 'primary',
+      created_at: '2026-07-23T02:00:00.000Z',
+    }
+    const oldestPrimaryDelay = {
+      id: 'cause-old',
+      event_type: 'delay',
+      cause_role: 'primary',
+      created_at: '2026-07-22T02:00:00.000Z',
+    }
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM public.projects')) {
+        return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+
+      expect(sql).toContain('($6::text IS NULL OR event_type = $6)')
+      expect(sql).toContain('($7::text IS NULL OR cause_role = $7)')
+      expect(sql).toContain('ORDER BY created_at DESC, id DESC')
+      if (params[5] === 'delay' && params[6] === 'primary') {
+        return { rows: [newestPrimaryDelay, oldestPrimaryDelay], rowCount: 2 }
+      }
+      if (params[5] === 'completion' && params[6] === 'contributing') {
+        return {
+          rows: [{ id: 'cause-completion', event_type: 'completion', cause_role: 'contributing' }],
+          rowCount: 1,
+        }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const primaryDelayRows = await listStructuredCauseAttributions({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      status: 'confirmed',
+      eventType: 'delay',
+      causeRole: 'primary',
+    }, { queryExec })
+    const contributingCompletionRows = await listStructuredCauseAttributions({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      status: 'confirmed',
+      eventType: 'completion',
+      causeRole: 'contributing',
+    }, { queryExec })
+    await listStructuredCauseAttributions({
+      companyId: 'company-1',
+      projectId: 'project-1',
+    }, { queryExec })
+
+    expect(primaryDelayRows).toEqual([newestPrimaryDelay, oldestPrimaryDelay])
+    expect(contributingCompletionRows).toEqual([
+      expect.objectContaining({ id: 'cause-completion', event_type: 'completion', cause_role: 'contributing' }),
+    ])
+    const listCalls = queryExec.mock.calls.filter(([sql]) => String(sql).includes('FROM public.structured_cause_attributions'))
+    expect(listCalls.map(([, params]) => params)).toEqual([
+      ['company-1', 'project-1', 'task', null, 'confirmed', 'delay', 'primary'],
+      ['company-1', 'project-1', 'task', null, 'confirmed', 'completion', 'contributing'],
+      ['company-1', 'project-1', null, null, null, null, null],
+    ])
+  })
+
   it('records a baseline publication change log and its confirmed cause in one supplied transaction boundary', async () => {
     let changeLogId = ''
     const queryExec = vi.fn(async (sql: string, params?: unknown[]) => {

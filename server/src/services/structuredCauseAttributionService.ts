@@ -1264,6 +1264,8 @@ export async function listStructuredCauseAttributions(input: {
   subjectType?: StructuredCauseCandidateInput['subjectType'] | null
   subjectId?: string | null
   status?: CauseStatus | null
+  eventType?: StructuredCauseCandidateInput['eventType'] | null
+  causeRole?: CauseRole | null
 }, dependencyOverrides?: Pick<StructuredCauseDependencies, 'queryExec'>) {
   const { queryExec } = dependencies(dependencyOverrides)
   await assertProjectTenant(queryExec, input.companyId, input.projectId)
@@ -1275,8 +1277,18 @@ export async function listStructuredCauseAttributions(input: {
         AND ($3::text IS NULL OR subject_type = $3)
         AND ($4::text IS NULL OR subject_id = $4)
         AND ($5::text IS NULL OR status = $5)
+        AND ($6::text IS NULL OR event_type = $6)
+        AND ($7::text IS NULL OR cause_role = $7)
       ORDER BY created_at DESC, id DESC`,
-    [input.companyId, input.projectId, input.subjectType ?? null, text(input.subjectId) || null, input.status ?? null],
+    [
+      input.companyId,
+      input.projectId,
+      input.subjectType ?? null,
+      text(input.subjectId) || null,
+      input.status ?? null,
+      input.eventType ?? null,
+      input.causeRole ?? null,
+    ],
   )
   return result.rows
 }

@@ -222,7 +222,13 @@ describe('TaskSummary page contract', () => {
   let forecastMode: 'success' | 'error' | 'pending' = 'success'
   let summaryMode: 'default' | 'empty' = 'default'
   let resolvePendingForecast: (() => void) | null = null
-  let confirmedTaskCause: Record<string, unknown> | null = null
+  let causeListModes: Record<string, 'success' | 'error' | 'pending'> = {}
+  let confirmedTaskCauses: Record<string, Array<Record<string, unknown>>> = {}
+  let pendingCauseRequests: Array<{
+    projectId: string
+    signal: AbortSignal | null | undefined
+    resolve: (value: unknown) => void
+  }> = []
 
   beforeEach(() => {
     container = document.createElement('div')
@@ -246,7 +252,9 @@ describe('TaskSummary page contract', () => {
     summaryMode = 'default'
     resolvePendingForecast = null
     permissionState.canEdit = true
-    confirmedTaskCause = null
+    causeListModes = { 'project-1': 'success' }
+    confirmedTaskCauses = { 'project-1': [] }
+    pendingCauseRequests = []
 
     mockedUseNavigate.mockReturnValue(vi.fn())
 
@@ -264,27 +272,58 @@ describe('TaskSummary page contract', () => {
               category: 'resource',
               linkedDeviationReasonTypes: [],
               priority: 90,
+            }, {
+              code: 'weather_impact',
+              label: 'Weather impact',
+              category: 'external',
+              linkedDeviationReasonTypes: [],
+              priority: 82,
             }],
           },
         })
       }
 
-      if (url === `/api/cause-attributions/projects/${projectId}?subjectType=task&status=confirmed`) {
-        return jsonResponse({ success: true, data: confirmedTaskCause ? [confirmedTaskCause] : [] })
+      const causeListMatch = url.match(/^\/api\/cause-attributions\/projects\/([^?]+)\?/)
+      if (causeListMatch) {
+        const requestedProjectId = decodeURIComponent(causeListMatch[1])
+        const mode = causeListModes[requestedProjectId] ?? 'success'
+        if (mode === 'error') {
+          return jsonErrorResponse(503, {
+            success: false,
+            error: { code: 'CAUSE_LIST_UNAVAILABLE', message: '已确认延误原因暂不可用' },
+          })
+        }
+        if (mode === 'pending') {
+          return new Promise((resolve) => {
+            pendingCauseRequests.push({
+              projectId: requestedProjectId,
+              signal: init?.signal,
+              resolve,
+            })
+          })
+        }
+        return jsonResponse({ success: true, data: confirmedTaskCauses[requestedProjectId] ?? [] })
       }
 
-      if (url === `/api/cause-attributions/projects/${projectId}/subjects/task/task-1/confirm` && init?.method === 'POST') {
-        confirmedTaskCause = {
+      const causeConfirmMatch = url.match(/^\/api\/cause-attributions\/projects\/([^/]+)\/subjects\/task\/task-1\/confirm$/)
+      if (causeConfirmMatch && init?.method === 'POST') {
+        const requestedProjectId = decodeURIComponent(causeConfirmMatch[1])
+        const confirmedTaskCause = {
           id: 'cause-1',
           subject_id: 'task-1',
           cause_code: 'material_shortage',
+          cause_role: 'primary',
+          event_type: 'delay',
           status: 'confirmed',
           raw_text: '材料到场延后',
         }
+        confirmedTaskCauses[requestedProjectId] = [confirmedTaskCause]
         return jsonResponse({ success: true, data: confirmedTaskCause })
       }
 
-      if (url === `/api/task-summaries/projects/${projectId}/task-summary` && summaryMode === 'empty') {
+      const summaryProjectMatch = url.match(/^\/api\/task-summaries\/projects\/([^/]+)\/task-summary$/)
+      const requestedSummaryProjectId = summaryProjectMatch ? decodeURIComponent(summaryProjectMatch[1]) : null
+      if (requestedSummaryProjectId && summaryMode === 'empty') {
         return jsonResponse({
           success: true,
           data: {
@@ -303,7 +342,7 @@ describe('TaskSummary page contract', () => {
         })
       }
 
-      if (url === `/api/task-summaries/projects/${projectId}/task-summary`) {
+      if (requestedSummaryProjectId) {
         return jsonResponse({
           success: true,
           data: {
@@ -664,7 +703,8 @@ describe('TaskSummary page contract', () => {
         })
       }
 
-      if (url === `/api/task-summaries/projects/${projectId}/task-summary/trend`) {
+      const trendProjectMatch = url.match(/^\/api\/task-summaries\/projects\/([^/]+)\/task-summary\/trend$/)
+      if (trendProjectMatch) {
         return jsonResponse({
           success: true,
           data: [
@@ -674,7 +714,9 @@ describe('TaskSummary page contract', () => {
         })
       }
 
-      if (url === `/api/task-summaries/projects/${projectId}/duration-forecasts`) {
+      const forecastProjectMatch = url.match(/^\/api\/task-summaries\/projects\/([^/]+)\/duration-forecasts$/)
+      if (forecastProjectMatch) {
+        const requestedForecastProjectId = decodeURIComponent(forecastProjectMatch[1])
         if (forecastMode === 'error') {
           return jsonErrorResponse(500, {
             success: false,
@@ -683,13 +725,13 @@ describe('TaskSummary page contract', () => {
         }
         if (forecastMode === 'pending') {
           return new Promise((resolve) => {
-            resolvePendingForecast = () => resolve(jsonResponse(scopedForecastResponse(projectId)))
+            resolvePendingForecast = () => resolve(jsonResponse(scopedForecastResponse(requestedForecastProjectId)))
           })
         }
-        return jsonResponse(scopedForecastResponse(projectId))
+        return jsonResponse(scopedForecastResponse(requestedForecastProjectId))
       }
 
-      if (url.includes(`/api/task-summaries/projects/${projectId}/daily-progress?date=`)) {
+      if (/^\/api\/task-summaries\/projects\/[^/]+\/daily-progress\?date=/.test(url)) {
         return jsonResponse({
           success: true,
           data: null,
@@ -742,6 +784,10 @@ describe('TaskSummary page contract', () => {
       expect.objectContaining({
         signal: expect.any(AbortSignal),
       }),
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/cause-attributions/projects/${projectId}?subjectType=task&status=confirmed&eventType=delay&causeRole=primary`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     )
     expect(container.textContent).toContain('预计完成')
     expect(container.textContent).toContain('2026-07-20')
@@ -976,13 +1022,25 @@ describe('TaskSummary page contract', () => {
 
   it('does not expose a confirmation command to read-only users while retaining the confirmed label', async () => {
     permissionState.canEdit = false
-    confirmedTaskCause = {
-      id: 'cause-1',
+    confirmedTaskCauses['project-1'] = [{
+      id: 'cause-new',
       subject_id: 'task-1',
       cause_code: 'material_shortage',
+      cause_role: 'primary',
+      event_type: 'delay',
       status: 'confirmed',
       raw_text: '材料到场延后',
-    }
+      created_at: '2026-07-23T02:00:00.000Z',
+    }, {
+      id: 'cause-old',
+      subject_id: 'task-1',
+      cause_code: 'weather_impact',
+      cause_role: 'primary',
+      event_type: 'delay',
+      status: 'confirmed',
+      raw_text: '旧原因',
+      created_at: '2026-07-22T02:00:00.000Z',
+    }]
     act(() => {
       root?.render(
         <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
@@ -1007,6 +1065,159 @@ describe('TaskSummary page contract', () => {
 
     await waitForSelector(container, '[data-testid="task-cause-confirmed-label-task-1"]')
     expect(container.textContent).toContain('材料到场延后')
+    expect(container.textContent).toContain('Material shortage or late arrival')
+    expect(container.textContent).not.toContain('Weather impact')
     expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('确认延误原因'))).toBe(false)
+  })
+
+  it('fails closed while the confirmed-cause authority is loading', async () => {
+    causeListModes['project-1'] = 'pending'
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+          <Routes>
+            <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+
+    await waitForSelector(container, '[data-testid="task-cause-surface-loading-task-1"]')
+    expect(container.textContent).toContain('延误原因确认状态加载中')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('确认延误原因'))).toBe(false)
+  })
+
+  it('fails closed and shows an unavailable state when the cause authority errors', async () => {
+    causeListModes['project-1'] = 'error'
+    act(() => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+          <Routes>
+            <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+
+    await waitForSelector(container, '[data-testid="task-cause-surface-error-task-1"]')
+    expect(container.textContent).toContain('延误原因确认暂不可用')
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.includes('确认延误原因'))).toBe(false)
+  })
+
+  it('aborts a stale project request, closes its dialog, and ignores its late response', async () => {
+    const renderProject = (nextProjectId: string) => {
+      act(() => {
+        root?.render(
+          <MemoryRouter initialEntries={[`/projects/${projectId}/task-summary`]}>
+            <Routes location={`/projects/${nextProjectId}/task-summary`}>
+              <Route path="/projects/:id/task-summary" element={<TaskSummary />} />
+            </Routes>
+          </MemoryRouter>,
+        )
+      })
+    }
+
+    renderProject('project-1')
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+      await flush()
+    })
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+      await flush()
+    })
+    const openConfirmation = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('确认延误原因'))
+    await act(async () => {
+      openConfirmation?.click()
+      await flush()
+    })
+    expect(document.querySelector('[role="dialog"]')).toBeTruthy()
+
+    causeListModes['project-1'] = 'pending'
+    clearApiClientRuntimeCache()
+    const refresh = container.querySelector<HTMLButtonElement>('[data-testid="task-summary-header-actions"] button')
+    expect(refresh).toBeTruthy()
+    await act(async () => {
+      refresh?.click()
+      await flush()
+    })
+    expect(pendingCauseRequests).toHaveLength(1)
+
+    confirmedTaskCauses['project-2'] = [{
+      id: 'cause-project-2',
+      subject_id: 'task-1',
+      cause_code: 'material_shortage',
+      cause_role: 'primary',
+      event_type: 'delay',
+      status: 'confirmed',
+      raw_text: 'project-2 raw',
+      created_at: '2026-07-23T03:00:00.000Z',
+    }]
+    causeListModes['project-2'] = 'success'
+    renderProject('project-2')
+
+    await waitForSelector(container, '[data-testid="task-summary-page"]')
+    await waitForSelector(container, '[data-testid="task-summary-attribution-row-division-division-main"]')
+    if (!container.querySelector('[data-testid="task-summary-row-task-1"]')) {
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="task-summary-attribution-row-division-division-main"]')?.click()
+        await flush()
+      })
+    }
+    await waitForSelector(container, '[data-testid="task-summary-row-task-1"]')
+    if (!container.querySelector('[data-testid="task-summary-row-task-1-detail"]')) {
+      await act(async () => {
+        container.querySelector<HTMLElement>('[data-testid="task-summary-row-task-1"]')?.click()
+        await flush()
+      })
+    }
+    await waitForSelector(container, '[data-testid="task-cause-confirmed-label-task-1"]')
+    expect(document.querySelector('[role="dialog"]')).toBeFalsy()
+    expect(pendingCauseRequests[0].signal?.aborted).toBe(true)
+    expect(container.textContent).toContain('Material shortage or late arrival')
+
+    await act(async () => {
+      pendingCauseRequests[0].resolve(jsonResponse({
+        success: true,
+        data: [{
+          id: 'cause-stale-project-1',
+          subject_id: 'task-1',
+          cause_code: 'weather_impact',
+          cause_role: 'primary',
+          event_type: 'delay',
+          status: 'confirmed',
+          created_at: '2026-07-23T04:00:00.000Z',
+        }],
+      }))
+      await flush()
+    })
+
+    expect(container.textContent).toContain('Material shortage or late arrival')
+    expect(container.textContent).not.toContain('Weather impact')
   })
 })

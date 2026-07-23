@@ -62,6 +62,7 @@ describe('TaskCauseConfirmationDialog', () => {
 
     const submit = await screen.findByRole('button', { name: '确认原因' })
     expect(submit).toBeDisabled()
+    expect(screen.getByLabelText('延误原因分类')).toBeRequired()
     expect(screen.getByLabelText('原始说明')).toHaveValue(task.rawText)
 
     await user.click(screen.getByLabelText('延误原因分类'))
@@ -95,5 +96,22 @@ describe('TaskCauseConfirmationDialog', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('taxonomy unavailable')
     expect(screen.getByRole('button', { name: '确认原因' })).toBeDisabled()
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'destructive' }))
+  })
+
+  it('keeps confirmation disabled and explains an empty canonical taxonomy', async () => {
+    mockedListCauseTaxonomy.mockResolvedValue({ version: 'v1.0.0', entries: [] })
+
+    render(
+      <TaskCauseConfirmationDialog
+        open
+        projectId="project-1"
+        task={task}
+        onOpenChange={vi.fn()}
+        onConfirmed={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByRole('status')).toHaveTextContent('暂无可用的延误原因分类')
+    expect(screen.getByRole('button', { name: '确认原因' })).toBeDisabled()
   })
 })

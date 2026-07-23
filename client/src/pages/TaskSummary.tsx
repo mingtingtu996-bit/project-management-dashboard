@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { useParams } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
@@ -184,6 +184,11 @@ type TaskSummaryLedgerRow = TaskSummaryTaskRow & {
   groupId: string
   groupName: string
 }
+
+type TaskCauseSurfaceState =
+  | { status: 'loading'; confirmedCauses: Record<string, CauseAttributionRecord>; causeLabels: Record<string, string> }
+  | { status: 'ready'; confirmedCauses: Record<string, CauseAttributionRecord>; causeLabels: Record<string, string> }
+  | { status: 'error'; confirmedCauses: Record<string, CauseAttributionRecord>; causeLabels: Record<string, string> }
 
 type NarrativeSegment = { text: string; className?: string }
 
@@ -1018,6 +1023,7 @@ function TaskProcessReplay({
   timelineEvents,
   confirmedCause,
   confirmedCauseLabel,
+  causeSurfaceStatus,
   canEdit,
   onConfirmCause,
 }: {
@@ -1025,6 +1031,7 @@ function TaskProcessReplay({
   timelineEvents: TaskTimelineEvent[]
   confirmedCause: CauseAttributionRecord | null
   confirmedCauseLabel: string | null
+  causeSurfaceStatus: TaskCauseSurfaceState['status']
   canEdit: boolean
   onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
@@ -1065,13 +1072,23 @@ function TaskProcessReplay({
                 <span className="text-slate-500">{delayReason}</span>
               </div>
             ) : null}
-            {confirmedCause && confirmedCauseLabel ? (
+            {delayReason && causeSurfaceStatus === 'loading' ? (
+              <div data-testid={`task-cause-surface-loading-${task.id}`} role="status" className="text-slate-500">
+                延误原因确认状态加载中
+              </div>
+            ) : null}
+            {delayReason && causeSurfaceStatus === 'error' ? (
+              <div data-testid={`task-cause-surface-error-${task.id}`} role="status" className="text-amber-700">
+                延误原因确认暂不可用
+              </div>
+            ) : null}
+            {causeSurfaceStatus === 'ready' && confirmedCause && confirmedCauseLabel ? (
               <div className="flex min-h-5 items-baseline">
                 <span className="mr-2 min-w-16 text-slate-400">确认原因</span>
                 <span data-testid={`task-cause-confirmed-label-${task.id}`} className="text-slate-700">{confirmedCauseLabel}</span>
               </div>
             ) : null}
-            {delayReason && !confirmedCause && canEdit ? (
+            {delayReason && causeSurfaceStatus === 'ready' && !confirmedCause && canEdit ? (
               <Button
                 type="button"
                 variant="outline"
@@ -1318,6 +1335,7 @@ function TaskSummaryLedgerRow({
   timelineEvents,
   confirmedCauses,
   causeLabels,
+  causeSurfaceStatus,
   canEdit,
   onConfirmCause,
 }: {
@@ -1328,6 +1346,7 @@ function TaskSummaryLedgerRow({
   timelineEvents: TaskTimelineEvent[]
   confirmedCauses: Record<string, CauseAttributionRecord>
   causeLabels: Record<string, string>
+  causeSurfaceStatus: TaskCauseSurfaceState['status']
   canEdit: boolean
   onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
@@ -1389,6 +1408,7 @@ function TaskSummaryLedgerRow({
               timelineEvents={timelineEvents}
               confirmedCause={confirmedCauses[task.id] ?? null}
               confirmedCauseLabel={confirmedCauses[task.id] ? causeLabels[confirmedCauses[task.id].cause_code] ?? null : null}
+              causeSurfaceStatus={causeSurfaceStatus}
               canEdit={canEdit}
               onConfirmCause={onConfirmCause}
             />
@@ -1406,6 +1426,7 @@ function TaskSummaryTaskLedgerTable({
   onSelectTask,
   confirmedCauses,
   causeLabels,
+  causeSurfaceStatus,
   canEdit,
   onConfirmCause,
 }: {
@@ -1415,6 +1436,7 @@ function TaskSummaryTaskLedgerTable({
   onSelectTask: (taskId: string) => void
   confirmedCauses: Record<string, CauseAttributionRecord>
   causeLabels: Record<string, string>
+  causeSurfaceStatus: TaskCauseSurfaceState['status']
   canEdit: boolean
   onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
@@ -1463,6 +1485,7 @@ function TaskSummaryTaskLedgerTable({
               timelineEvents={timelineEvents}
               confirmedCauses={confirmedCauses}
               causeLabels={causeLabels}
+              causeSurfaceStatus={causeSurfaceStatus}
               canEdit={canEdit}
               onConfirmCause={onConfirmCause}
             />
@@ -1640,6 +1663,7 @@ function AttributionLedgerCard({
   timelineEvents,
   confirmedCauses,
   causeLabels,
+  causeSurfaceStatus,
   canEdit,
   onConfirmCause,
 }: {
@@ -1655,6 +1679,7 @@ function AttributionLedgerCard({
   timelineEvents: TaskTimelineEvent[]
   confirmedCauses: Record<string, CauseAttributionRecord>
   causeLabels: Record<string, string>
+  causeSurfaceStatus: TaskCauseSurfaceState['status']
   canEdit: boolean
   onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
@@ -1733,6 +1758,7 @@ function AttributionLedgerCard({
               timelineEvents={timelineEvents}
               confirmedCauses={confirmedCauses}
               causeLabels={causeLabels}
+              causeSurfaceStatus={causeSurfaceStatus}
               canEdit={canEdit}
               onConfirmCause={onConfirmCause}
             />
@@ -1754,6 +1780,7 @@ function TaskSummaryLedgerSection({
   onRetryForecast,
   confirmedCauses,
   causeLabels,
+  causeSurfaceStatus,
   canEdit,
   onConfirmCause,
 }: {
@@ -1767,6 +1794,7 @@ function TaskSummaryLedgerSection({
   onRetryForecast: () => void
   confirmedCauses: Record<string, CauseAttributionRecord>
   causeLabels: Record<string, string>
+  causeSurfaceStatus: TaskCauseSurfaceState['status']
   canEdit: boolean
   onConfirmCause: (task: TaskSummaryLedgerRow, rawText: string) => void
 }) {
@@ -1934,6 +1962,7 @@ function TaskSummaryLedgerSection({
                         timelineEvents={timelineEvents}
                         confirmedCauses={confirmedCauses}
                         causeLabels={causeLabels}
+                        causeSurfaceStatus={causeSurfaceStatus}
                         canEdit={canEdit}
                         onConfirmCause={onConfirmCause}
                       />
@@ -2004,31 +2033,56 @@ export default function TaskSummary() {
   const [forecastError, setForecastError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [confirmedCauses, setConfirmedCauses] = useState<Record<string, CauseAttributionRecord>>({})
-  const [causeLabels, setCauseLabels] = useState<Record<string, string>>({})
+  const [causeSurface, setCauseSurface] = useState<TaskCauseSurfaceState>({
+    status: 'loading',
+    confirmedCauses: {},
+    causeLabels: {},
+  })
   const [causeConfirmationTask, setCauseConfirmationTask] = useState<{ id: string; title: string; rawText: string } | null>(null)
+  const causeRequestSequence = useRef(0)
+  const causeRequestController = useRef<AbortController | null>(null)
 
   const loadTaskCauseSurface = useCallback(async () => {
     if (!projectId) return
 
+    causeRequestController.current?.abort()
+    const controller = new AbortController()
+    const requestSequence = causeRequestSequence.current + 1
+    causeRequestSequence.current = requestSequence
+    causeRequestController.current = controller
+    setCauseSurface({ status: 'loading', confirmedCauses: {}, causeLabels: {} })
+
     try {
       const [attributions, taxonomy] = await Promise.all([
-        listCauseAttributions({ projectId, subjectType: 'task', status: 'confirmed' }),
+        listCauseAttributions({
+          projectId,
+          subjectType: 'task',
+          status: 'confirmed',
+          eventType: 'delay',
+          causeRole: 'primary',
+        }, controller.signal),
         listCauseTaxonomy(),
       ])
+      if (controller.signal.aborted || requestSequence !== causeRequestSequence.current) return
+
       const nextConfirmedCauses: Record<string, CauseAttributionRecord> = {}
       for (const attribution of attributions) {
-        if (attribution.subject_id) nextConfirmedCauses[attribution.subject_id] = attribution
+        if (attribution.subject_id && !nextConfirmedCauses[attribution.subject_id]) {
+          nextConfirmedCauses[attribution.subject_id] = attribution
+        }
       }
       const nextCauseLabels: Record<string, string> = {}
       for (const entry of taxonomy.entries) {
         nextCauseLabels[entry.code] = entry.label
       }
-      setConfirmedCauses(nextConfirmedCauses)
-      setCauseLabels(nextCauseLabels)
+      setCauseSurface({
+        status: 'ready',
+        confirmedCauses: nextConfirmedCauses,
+        causeLabels: nextCauseLabels,
+      })
     } catch (error) {
-      setConfirmedCauses({})
-      setCauseLabels({})
+      if (controller.signal.aborted || requestSequence !== causeRequestSequence.current || isAbortError(error)) return
+      setCauseSurface({ status: 'error', confirmedCauses: {}, causeLabels: {} })
       toast({
         title: '加载失败',
         description: getApiErrorMessage(error, '无法加载已确认延误原因'),
@@ -2113,10 +2167,19 @@ export default function TaskSummary() {
     const controller = new AbortController()
     void loadData(controller.signal)
     void loadDurationForecasts(controller.signal)
-    void loadTaskCauseSurface()
 
     return () => controller.abort()
-  }, [loadData, loadDurationForecasts, loadTaskCauseSurface])
+  }, [loadData, loadDurationForecasts])
+
+  useEffect(() => {
+    setCauseConfirmationTask(null)
+    void loadTaskCauseSurface()
+
+    return () => {
+      causeRequestSequence.current += 1
+      causeRequestController.current?.abort()
+    }
+  }, [loadTaskCauseSurface])
 
   const exportTaskSummary = useCallback(() => {
     if (!stats) {
@@ -2221,8 +2284,9 @@ export default function TaskSummary() {
         forecastLoading={forecastLoading}
         forecastError={forecastError}
         onRetryForecast={() => void loadDurationForecasts()}
-        confirmedCauses={confirmedCauses}
-        causeLabels={causeLabels}
+        confirmedCauses={causeSurface.confirmedCauses}
+        causeLabels={causeSurface.causeLabels}
+        causeSurfaceStatus={causeSurface.status}
         canEdit={canEdit === true}
         onConfirmCause={(task, rawText) => {
           setCauseConfirmationTask({ id: task.id, title: task.title, rawText })
