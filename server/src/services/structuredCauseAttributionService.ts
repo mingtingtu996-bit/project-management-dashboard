@@ -418,12 +418,16 @@ type TaskDurationExperienceRebuildInput = {
   actorId: string
   trigger: 'structured_cause_user_confirmation'
 }
+type DurationExperienceRebuildGeneration = {
+  id: string
+  generationToken: string
+}
 type StructuredCauseDependencies = {
   queryExec?: QueryExec
   withTransaction?: WithTransaction
   registerPostCommitEffect?: typeof registerDatabasePostCommitEffect
-  enqueueDurationExperienceRebuild?: (input: TaskDurationExperienceRebuildInput) => Promise<{ id: string }>
-  completeDurationExperienceRebuild?: (id: string) => Promise<unknown>
+  enqueueDurationExperienceRebuild?: (input: TaskDurationExperienceRebuildInput) => Promise<DurationExperienceRebuildGeneration>
+  completeDurationExperienceRebuild?: (generation: DurationExperienceRebuildGeneration) => Promise<unknown>
   rebuildTaskDurationExperienceSample?: (input: TaskDurationExperienceRebuildInput) => Promise<unknown>
 }
 
@@ -432,9 +436,12 @@ async function enqueueDurationExperienceRebuild(input: TaskDurationExperienceReb
   return service.enqueueDurationExperienceRebuild(input, { queryExec })
 }
 
-async function completeDurationExperienceRebuild(id: string, queryExec: QueryExec) {
+async function completeDurationExperienceRebuild(
+  generation: DurationExperienceRebuildGeneration,
+  queryExec: QueryExec,
+) {
   const service = await import('./durationExperienceReconciliationService.js')
-  return service.completeDurationExperienceRebuild(id, { queryExec })
+  return service.completeDurationExperienceRebuild(generation, { queryExec })
 }
 
 async function rebuildTaskDurationExperienceSample(input: TaskDurationExperienceRebuildInput) {
@@ -451,7 +458,7 @@ function dependencies(input?: StructuredCauseDependencies) {
     enqueueDurationExperienceRebuild: input?.enqueueDurationExperienceRebuild
       ?? ((rebuildInput: TaskDurationExperienceRebuildInput) => enqueueDurationExperienceRebuild(rebuildInput, queryExec)),
     completeDurationExperienceRebuild: input?.completeDurationExperienceRebuild
-      ?? ((id: string) => completeDurationExperienceRebuild(id, queryExec)),
+      ?? ((generation: DurationExperienceRebuildGeneration) => completeDurationExperienceRebuild(generation, queryExec)),
     rebuildTaskDurationExperienceSample:
       input?.rebuildTaskDurationExperienceSample ?? rebuildTaskDurationExperienceSample,
   }
@@ -467,13 +474,15 @@ async function registerDurableDurationExperienceRebuild(
 ) {
   const queued = await services.enqueueDurationExperienceRebuild(input)
   const queueId = text(queued.id)
-  if (!queueId) throw new Error('Structured cause duration rebuild queue identity is required.')
+  const generationToken = text(queued.generationToken)
+  if (!queueId || !generationToken) throw new Error('Structured cause duration rebuild queue generation is required.')
+  const generation = { id: queueId, generationToken }
   await services.registerPostCommitEffect(
     `rebuild-duration-experience-sample:${input.projectId}:${input.taskId}`,
     async () => {
       const rebuilt = await services.rebuildTaskDurationExperienceSample(input)
       if (rebuilt !== true) throw new Error('Structured cause duration experience sample rebuild was not completed.')
-      await services.completeDurationExperienceRebuild(queueId)
+      await services.completeDurationExperienceRebuild(generation)
     },
   )
 }

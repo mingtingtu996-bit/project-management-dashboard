@@ -14,6 +14,9 @@ import {
 } from '../services/structuredCauseAttributionService.js'
 import { getMetricDefinition } from '../services/metricRegistryService.js'
 
+const rebuildGenerationA = '2026-07-23 08:00:00.000001+00'
+const rebuildGenerationB = '2026-07-23 08:00:00.000002+00'
+
 describe('structuredCauseAttributionService', () => {
   it('parameterizes event and role filters while preserving backend newest-first order', async () => {
     const newestPrimaryDelay = {
@@ -672,7 +675,7 @@ describe('structuredCauseAttributionService', () => {
     const registeredEffects: Array<() => Promise<void>> = []
     const enqueueDurationExperienceRebuild = vi.fn(async () => {
       lifecycle.push('enqueue')
-      return { id: 'queue-confirm-1' }
+      return { id: 'queue-confirm-1', generationToken: rebuildGenerationA }
     })
     const completeDurationExperienceRebuild = vi.fn(async () => {
       lifecycle.push('complete')
@@ -765,7 +768,9 @@ describe('structuredCauseAttributionService', () => {
       companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
       trigger: 'structured_cause_user_confirmation',
     })
-    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith('queue-confirm-1')
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith({
+      id: 'queue-confirm-1', generationToken: rebuildGenerationA,
+    })
     expect(lifecycle).toEqual(['confirm', 'enqueue', 'register', 'rebuild', 'complete'])
   })
 
@@ -818,7 +823,9 @@ describe('structuredCauseAttributionService', () => {
       queryExec,
       withTransaction: async (work) => work(),
       registerPostCommitEffect: async () => undefined,
-      enqueueDurationExperienceRebuild: async () => ({ id: 'queue-prefill-1' }),
+      enqueueDurationExperienceRebuild: async () => ({
+        id: 'queue-prefill-1', generationToken: rebuildGenerationA,
+      }),
       completeDurationExperienceRebuild: async () => undefined,
       rebuildTaskDurationExperienceSample: async () => true,
     })
@@ -954,7 +961,7 @@ describe('structuredCauseAttributionService', () => {
     const registeredEffects: Array<() => Promise<void>> = []
     const enqueueDurationExperienceRebuild = vi.fn(async () => {
       lifecycle.push('enqueue')
-      return { id: 'queue-record-1' }
+      return { id: 'queue-record-1', generationToken: rebuildGenerationA }
     })
     const completeDurationExperienceRebuild = vi.fn(async () => {
       lifecycle.push('complete')
@@ -1023,7 +1030,9 @@ describe('structuredCauseAttributionService', () => {
       actorId: 'user-1',
       trigger: 'structured_cause_user_confirmation',
     })
-    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith('queue-record-1')
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith({
+      id: 'queue-record-1', generationToken: rebuildGenerationA,
+    })
     expect(lifecycle).toEqual(['confirm', 'enqueue', 'register', 'rebuild', 'complete'])
   })
 
@@ -1059,7 +1068,9 @@ describe('structuredCauseAttributionService', () => {
 
   it('retains durable rebuild work when the post-commit rebuild fails', async () => {
     const registeredEffects: Array<() => Promise<void>> = []
-    const enqueueDurationExperienceRebuild = vi.fn(async () => ({ id: 'queue-failed-rebuild' }))
+    const enqueueDurationExperienceRebuild = vi.fn(async () => ({
+      id: 'queue-failed-rebuild', generationToken: rebuildGenerationA,
+    }))
     const completeDurationExperienceRebuild = vi.fn(async () => undefined)
     const rebuildTaskDurationExperienceSample = vi.fn(async () => {
       throw new Error('rebuild unavailable')
@@ -1090,6 +1101,67 @@ describe('structuredCauseAttributionService', () => {
     expect(registeredEffects).toHaveLength(1)
     await expect(registeredEffects[0]()).rejects.toThrow('rebuild unavailable')
     expect(completeDurationExperienceRebuild).not.toHaveBeenCalled()
+  })
+
+  it('lets post-commit closures complete only the generation they enqueued', async () => {
+    const registeredEffects: Array<() => Promise<void>> = []
+    const generations = [rebuildGenerationA, rebuildGenerationB]
+    let currentGeneration = ''
+    let queueStatus: 'pending' | 'completed' = 'pending'
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      const generationToken = generations.shift() as string
+      currentGeneration = generationToken
+      queueStatus = 'pending'
+      return { id: 'queue-shared-1', generationToken }
+    })
+    const completeDurationExperienceRebuild = vi.fn(async (generation: {
+      id: string
+      generationToken: string
+    }) => {
+      if (generation.generationToken !== currentGeneration) return false
+      queueStatus = 'completed'
+      return true
+    })
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+    const dependencies = {
+      queryExec,
+      withTransaction: async <T>(work: () => Promise<T>) => work(),
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
+      registerPostCommitEffect: async (_label: string, effect: () => Promise<void>) => {
+        registeredEffects.push(effect)
+      },
+      rebuildTaskDurationExperienceSample: async () => true,
+    }
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmation generation A.', actorId: 'user-1',
+    }, dependencies)
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmation generation B.', actorId: 'user-1',
+    }, dependencies)
+
+    await registeredEffects[0]()
+    expect(queueStatus).toBe('pending')
+    await registeredEffects[1]()
+    expect(queueStatus).toBe('completed')
+    expect(completeDurationExperienceRebuild).toHaveBeenNthCalledWith(1, {
+      id: 'queue-shared-1', generationToken: rebuildGenerationA,
+    })
+    expect(completeDurationExperienceRebuild).toHaveBeenNthCalledWith(2, {
+      id: 'queue-shared-1', generationToken: rebuildGenerationB,
+    })
   })
 
   it('rolls back confirmation and registers no effect when durable enqueue fails', async () => {

@@ -8,6 +8,13 @@ export type DurationExperienceReconciliationSourceType =
   | 'task_completion'
   | 'structured_cause_confirmation'
 
+export type DurationExperienceRebuildGeneration = {
+  id: string
+  generationToken: string
+}
+
+type DurationExperienceQueueTransitionStatus = 'pending' | 'retrying'
+
 export type DurationExperienceReconciliationQueueItem = {
   id: string
   companyId: string
@@ -16,6 +23,7 @@ export type DurationExperienceReconciliationQueueItem = {
   actorId: string | null
   trigger: string
   sourceType: DurationExperienceReconciliationSourceType
+  generationToken: string
   attemptCount: number
   maxAttempts: number
   task: Task
@@ -31,17 +39,27 @@ export interface DurationExperienceReconciliationStore {
     sourceType: DurationExperienceReconciliationSourceType
     lastError: string | null
     maxAttempts: number
-  }): Promise<Record<string, unknown> | null>
+  }): Promise<DurationExperienceRebuildGeneration | null>
   registerMissingCompletedTasks(input: { projectIds: string[]; maxAttempts: number }): Promise<number>
   listDue(input: { projectIds: string[]; limit: number }): Promise<DurationExperienceReconciliationQueueItem[]>
-  markCompleted(id: string): Promise<void>
-  markDeferred(id: string, input: { reason: string; nextAttemptAt: string }): Promise<void>
+  markCompleted(id: string, input: {
+    generationToken: string
+    expectedStatus: DurationExperienceQueueTransitionStatus
+  }): Promise<boolean>
+  markDeferred(id: string, input: {
+    generationToken: string
+    expectedStatus: 'retrying'
+    reason: string
+    nextAttemptAt: string
+  }): Promise<boolean>
   markFailed(id: string, input: {
+    generationToken: string
+    expectedStatus: 'retrying'
     error: string
     attemptCount: number
     deadLetter: boolean
     nextAttemptAt: string | null
-  }): Promise<void>
+  }): Promise<boolean>
 }
 
 type QueryExecutor = (text: string, params?: unknown[]) => Promise<{ rows?: unknown[]; rowCount?: number | null }>
@@ -63,6 +81,19 @@ function isReconciliationSourceType(value: string): value is DurationExperienceR
   return value === 'task_completion' || value === 'structured_cause_confirmation'
 }
 
+function mapQueueGeneration(value: unknown): DurationExperienceRebuildGeneration | null {
+  const record = value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+  const id = normalizeText(record.id)
+  const generationToken = normalizeText(record.generation_token ?? record.generationToken)
+  return id && generationToken ? { id, generationToken } : null
+}
+
+function transitionApplied(result: { rows?: unknown[]; rowCount?: number | null }) {
+  return (result.rowCount ?? result.rows?.length ?? 0) === 1
+}
+
 function retryAt(attemptCount: number) {
   const delayMs = Math.min(calendarDaysToMilliseconds(1), 5 * 60 * 1000 * (2 ** Math.max(0, attemptCount - 1)))
   return new Date(Date.now() + delayMs).toISOString()
@@ -78,24 +109,51 @@ function createDatabaseDurationExperienceReconciliationStore(
            company_id, project_id, task_id, actor_id, trigger, source_type,
            status, attempt_count, max_attempts, next_attempt_at, last_error,
            created_at, updated_at
-         ) values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, 'pending', 0, $7, now(), $8, now(), now())
+         ) values (
+           $1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6,
+           'pending', 0, $7, clock_timestamp(), $8, clock_timestamp(), clock_timestamp()
+         )
          on conflict (company_id, task_id, source_type) do update
            set actor_id = coalesce(excluded.actor_id, duration_experience_collection_queue.actor_id),
                trigger = excluded.trigger,
                status = case
+                 when excluded.source_type = 'structured_cause_confirmation' then 'pending'
                  when duration_experience_collection_queue.status = 'dead_letter' then 'dead_letter'
                  else 'pending'
                end,
-               next_attempt_at = case
-                 when duration_experience_collection_queue.status = 'dead_letter' then duration_experience_collection_queue.next_attempt_at
-                 else now()
+               attempt_count = case
+                 when excluded.source_type = 'structured_cause_confirmation' then 0
+                 else duration_experience_collection_queue.attempt_count
                end,
-               last_error = excluded.last_error,
-               updated_at = now()
-         returning *`,
+               max_attempts = case
+                 when excluded.source_type = 'structured_cause_confirmation' then excluded.max_attempts
+                 else duration_experience_collection_queue.max_attempts
+               end,
+               next_attempt_at = case
+                 when excluded.source_type = 'structured_cause_confirmation' then clock_timestamp()
+                 when duration_experience_collection_queue.status = 'dead_letter' then duration_experience_collection_queue.next_attempt_at
+                 else clock_timestamp()
+               end,
+               last_error = case
+                 when excluded.source_type = 'structured_cause_confirmation' then null
+                 else excluded.last_error
+               end,
+               completed_at = case
+                 when excluded.source_type = 'structured_cause_confirmation' then null
+                 else duration_experience_collection_queue.completed_at
+               end,
+               dead_lettered_at = case
+                 when excluded.source_type = 'structured_cause_confirmation' then null
+                 else duration_experience_collection_queue.dead_lettered_at
+               end,
+               updated_at = GREATEST(
+                 clock_timestamp(),
+                 duration_experience_collection_queue.updated_at + interval '1 microsecond'
+               )
+         returning id, updated_at::text as generation_token`,
         [record.companyId, record.projectId, record.taskId, record.actorId, record.trigger, record.sourceType, record.maxAttempts, record.lastError],
       )
-      return (result.rows?.[0] as Record<string, unknown> | undefined) ?? null
+      return mapQueueGeneration(result.rows?.[0])
     },
 
     async registerMissingCompletedTasks(input) {
@@ -107,7 +165,8 @@ function createDatabaseDurationExperienceReconciliationStore(
            created_at, updated_at
          )
          select p.company_id, t.project_id, t.id, null, 'missing_completed_sample_scan', 'task_completion',
-                'pending', 0, $2, now(), 'completed task has no active duration experience sample', now(), now()
+                'pending', 0, $2, clock_timestamp(),
+                'completed task has no active duration experience sample', clock_timestamp(), clock_timestamp()
            from public.tasks t
            join public.projects p on p.id = t.project_id
       left join public.duration_experience_samples s
@@ -131,7 +190,10 @@ function createDatabaseDurationExperienceReconciliationStore(
                  when duration_experience_collection_queue.status = 'dead_letter' then duration_experience_collection_queue.next_attempt_at
                  else least(coalesce(duration_experience_collection_queue.next_attempt_at, now()), now())
                end,
-               updated_at = now()
+               updated_at = GREATEST(
+                 clock_timestamp(),
+                 duration_experience_collection_queue.updated_at + interval '1 microsecond'
+               )
          returning id`,
         [input.projectIds, input.maxAttempts],
       )
@@ -155,7 +217,7 @@ function createDatabaseDurationExperienceReconciliationStore(
          update public.duration_experience_collection_queue q
             set status = 'retrying',
                 next_attempt_at = now() + interval '15 minutes',
-                updated_at = now()
+                updated_at = GREATEST(clock_timestamp(), q.updated_at + interval '1 microsecond')
            from due, public.tasks t
           where q.id = due.id
             and t.id = q.task_id
@@ -167,6 +229,7 @@ function createDatabaseDurationExperienceReconciliationStore(
                    q.actor_id,
                    q.trigger,
                    q.source_type,
+                   q.updated_at::text AS generation_token,
                    q.attempt_count,
                    q.max_attempts,
                    to_jsonb(t) as task`,
@@ -184,47 +247,70 @@ function createDatabaseDurationExperienceReconciliationStore(
           actorId: normalizeText(record.actor_id) || null,
           trigger: normalizeText(record.trigger) || 'duration_experience_reconciliation',
           sourceType,
+          generationToken: normalizeText(record.generation_token),
           attemptCount: Math.max(0, Number(record.attempt_count) || 0),
           maxAttempts: positiveInteger(record.max_attempts, 5),
           task: record.task as Task,
         } satisfies DurationExperienceReconciliationQueueItem
       }).filter((row): row is DurationExperienceReconciliationQueueItem => Boolean(
-        row?.id && row.companyId && row.projectId && row.taskId && row.task,
+        row?.id && row.companyId && row.projectId && row.taskId && row.generationToken && row.task,
       ))
     },
 
-    async markCompleted(id) {
-      await queryExec(
+    async markCompleted(id, input) {
+      const result = await queryExec(
         `update public.duration_experience_collection_queue
-            set status = 'completed', completed_at = now(), next_attempt_at = null,
-                last_error = null, updated_at = now()
-          where id = $1::uuid`,
-        [id],
+            set status = 'completed', completed_at = clock_timestamp(), next_attempt_at = null,
+                last_error = null,
+                updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond')
+          where id = $1::uuid
+            and updated_at = $2::timestamptz
+            and status = $3
+          returning id`,
+        [id, input.generationToken, input.expectedStatus],
       )
+      return transitionApplied(result)
     },
 
     async markDeferred(id, input) {
-      await queryExec(
+      const result = await queryExec(
         `update public.duration_experience_collection_queue
-            set status = 'waiting_for_facts', next_attempt_at = $2::timestamptz,
-                last_error = $3, updated_at = now()
-          where id = $1::uuid`,
-        [id, input.nextAttemptAt, input.reason],
+            set status = 'waiting_for_facts', next_attempt_at = $4::timestamptz,
+                last_error = $5,
+                updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond')
+          where id = $1::uuid
+            and updated_at = $2::timestamptz
+            and status = $3
+          returning id`,
+        [id, input.generationToken, input.expectedStatus, input.nextAttemptAt, input.reason],
       )
+      return transitionApplied(result)
     },
 
     async markFailed(id, input) {
-      await queryExec(
+      const result = await queryExec(
         `update public.duration_experience_collection_queue
-            set status = $2,
-                attempt_count = $3,
-                next_attempt_at = $4::timestamptz,
-                last_error = $5,
-                dead_lettered_at = case when $2 = 'dead_letter' then now() else null end,
-                updated_at = now()
-          where id = $1::uuid`,
-        [id, input.deadLetter ? 'dead_letter' : 'retrying', input.attemptCount, input.nextAttemptAt, input.error],
+            set status = $4,
+                attempt_count = $5,
+                next_attempt_at = $6::timestamptz,
+                last_error = $7,
+                dead_lettered_at = case when $4 = 'dead_letter' then clock_timestamp() else null end,
+                updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond')
+          where id = $1::uuid
+            and updated_at = $2::timestamptz
+            and status = $3
+          returning id`,
+        [
+          id,
+          input.generationToken,
+          input.expectedStatus,
+          input.deadLetter ? 'dead_letter' : 'retrying',
+          input.attemptCount,
+          input.nextAttemptAt,
+          input.error,
+        ],
       )
+      return transitionApplied(result)
     },
   }
 }
@@ -293,23 +379,25 @@ export async function enqueueDurationExperienceRebuild(input: {
     lastError: null,
     maxAttempts: Math.min(20, positiveInteger(input.maxAttempts, 5)),
   })
-  const id = normalizeText(queued?.id)
-  if (!id) throw new Error('Structured cause duration rebuild queue readback required.')
-  return { id }
+  if (!queued) throw new Error('Structured cause duration rebuild queue readback required.')
+  return queued
 }
 
 export async function completeDurationExperienceRebuild(
-  id: string,
+  generation: DurationExperienceRebuildGeneration,
   dependencies: {
     store?: DurationExperienceReconciliationStore
     queryExec?: QueryExecutor
   } = {},
 ) {
-  const queueId = normalizeText(id)
-  if (!queueId) throw new Error('Structured cause duration rebuild queue identity is required.')
+  const queueId = normalizeText(generation.id)
+  const generationToken = normalizeText(generation.generationToken)
+  if (!queueId || !generationToken) {
+    throw new Error('Structured cause duration rebuild queue generation is required.')
+  }
   const store = dependencies.store
     ?? (dependencies.queryExec ? createDatabaseDurationExperienceReconciliationStore(dependencies.queryExec) : databaseStore)
-  await store.markCompleted(queueId)
+  return store.markCompleted(queueId, { generationToken, expectedStatus: 'pending' })
 }
 
 export async function reconcileDurationExperienceSamples(input: {
@@ -343,27 +431,36 @@ export async function reconcileDurationExperienceSamples(input: {
         trigger: item.trigger,
       })
       if (!collected) {
-        summary.deferred += 1
-        await store.markDeferred(item.id, {
+        const applied = await store.markDeferred(item.id, {
+          generationToken: item.generationToken,
+          expectedStatus: 'retrying',
           reason: 'completed_task_duration_facts_not_collectable',
           nextAttemptAt: new Date(Date.now() + calendarDaysToMilliseconds(1)).toISOString(),
         })
+        if (applied) summary.deferred += 1
         continue
       }
-      summary.recovered += 1
-      await store.markCompleted(item.id)
+      const applied = await store.markCompleted(item.id, {
+        generationToken: item.generationToken,
+        expectedStatus: 'retrying',
+      })
+      if (applied) summary.recovered += 1
     } catch (error) {
       const attemptCount = item.attemptCount + 1
       const itemMaxAttempts = positiveInteger(item.maxAttempts, maxAttempts)
       const deadLetter = attemptCount >= itemMaxAttempts
-      if (deadLetter) summary.deadLettered += 1
-      else summary.retrying += 1
-      await store.markFailed(item.id, {
+      const applied = await store.markFailed(item.id, {
+        generationToken: item.generationToken,
+        expectedStatus: 'retrying',
         error: errorMessage(error),
         attemptCount,
         deadLetter,
         nextAttemptAt: deadLetter ? null : retryAt(attemptCount),
       })
+      if (applied) {
+        if (deadLetter) summary.deadLettered += 1
+        else summary.retrying += 1
+      }
     }
   }
 

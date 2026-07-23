@@ -71,7 +71,10 @@ describe('structured cause duration eligibility contract', () => {
 
     let rebuiltSample: Record<string, any> | null = null
     const pendingEffects: Array<() => Promise<void>> = []
-    const enqueueDurationExperienceRebuild = vi.fn(async () => ({ id: 'queue-confirmed-cause-1' }))
+    const queueGeneration = '2026-07-23 08:00:00.000001+00'
+    const enqueueDurationExperienceRebuild = vi.fn(async () => ({
+      id: 'queue-confirmed-cause-1', generationToken: queueGeneration,
+    }))
     const completeDurationExperienceRebuild = vi.fn(async () => undefined)
     const rebuild = vi.fn(async () => {
       const authority = await readTaskStructuredCauseAuthority(scope, { queryExec })
@@ -108,7 +111,9 @@ describe('structured cause duration eligibility contract', () => {
     expect(rows[0].status).toBe('superseded')
     expect(enqueueDurationExperienceRebuild).toHaveBeenCalledOnce()
     expect(rebuild).toHaveBeenCalledOnce()
-    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith('queue-confirmed-cause-1')
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith({
+      id: 'queue-confirmed-cause-1', generationToken: queueGeneration,
+    })
     expect(rebuiltSample).toMatchObject({
       includedInBenchmark: true,
       authority: { resolution: { availability: 'available', causeCode: 'material_shortage' } },

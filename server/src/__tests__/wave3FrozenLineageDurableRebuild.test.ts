@@ -37,6 +37,8 @@ const benchmarkId = '66666666-6666-4666-8666-666666666666'
 const queueId = '77777777-7777-4777-8777-777777777777'
 const canarySampleId = '88888888-8888-4888-8888-888888888888'
 const publicationKey = 'duration-learning:wave-3:frozen-lineage'
+const queueGenerationA = '2026-07-23 08:00:00.000001+00'
+const queueGenerationB = '2026-07-23 08:00:00.000002+00'
 
 function sample(input: Partial<DurationExperienceSampleRow> & Pick<DurationExperienceSampleRow, 'id' | 'task_id'>) {
   return {
@@ -92,8 +94,12 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
     ]
     let queueStatus: 'pending' | 'completed' | null = null
     let queuedItem: DurationExperienceReconciliationQueueItem | null = null
+    let currentQueueGeneration = ''
+    let enqueueCount = 0
     const postCommitEffects: Array<() => Promise<void>> = []
     const enqueueDurationExperienceRebuild = vi.fn(async (input: Record<string, unknown>) => {
+      const generationToken = enqueueCount++ === 0 ? queueGenerationA : queueGenerationB
+      currentQueueGeneration = generationToken
       queueStatus = 'pending'
       queuedItem = {
         id: queueId,
@@ -103,15 +109,21 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
         actorId: String(input.actorId),
         trigger: String(input.trigger),
         sourceType: 'structured_cause_confirmation',
+        generationToken,
         attemptCount: 0,
         maxAttempts: 5,
         task: { id: taskId, project_id: projectId, status: 'completed' } as DurationExperienceReconciliationQueueItem['task'],
       }
-      return { id: queueId }
+      return { id: queueId, generationToken }
     })
-    const completeDurationExperienceRebuild = vi.fn(async (id: string) => {
-      expect(id).toBe(queueId)
+    const completeDurationExperienceRebuild = vi.fn(async (generation: {
+      id: string
+      generationToken: string
+    }) => {
+      expect(generation.id).toBe(queueId)
+      if (generation.generationToken !== currentQueueGeneration) return false
       queueStatus = 'completed'
+      return true
     })
     const confirmationQuery = vi.fn(async (sql: string) => {
       if (sql.includes('FROM public.projects')) return { rows: [{ company_id: companyId }], rowCount: 1 }
@@ -154,20 +166,35 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
     expect(queueStatus).toBe('pending')
     expect(completeDurationExperienceRebuild).not.toHaveBeenCalled()
 
+    const generationB = await enqueueDurationExperienceRebuild({
+      actorId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(generationB).toEqual({ id: queueId, generationToken: queueGenerationB })
+    await expect(completeDurationExperienceRebuild({
+      id: queueId, generationToken: queueGenerationA,
+    })).resolves.toBe(false)
+    expect(queueStatus).toBe('pending')
+
     const workerStore = {
       enqueue: vi.fn(),
       registerMissingCompletedTasks: vi.fn(async () => 0),
       listDue: vi.fn(async () => queuedItem ? [queuedItem] : []),
-      markCompleted: vi.fn(async (id: string) => {
+      markCompleted: vi.fn(async (id: string, generation) => {
         expect(id).toBe(queueId)
+        expect(generation).toEqual({
+          generationToken: queueGenerationB,
+          expectedStatus: 'retrying',
+        })
         queueStatus = 'completed'
+        return true
       }),
-      markDeferred: vi.fn(),
-      markFailed: vi.fn(),
+      markDeferred: vi.fn(async () => true),
+      markFailed: vi.fn(async () => true),
     } satisfies DurationExperienceReconciliationStore
     const recoveryCollect = vi.fn(async (_task, options) => {
       expect(options).toEqual({
-        actorId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        actorId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
         trigger: 'structured_cause_user_confirmation',
       })
       completionSample = sample({
