@@ -62,6 +62,9 @@ type ProjectSummaryStats = {
 type TaskSummaryDelayRecord = {
   delay?: DurationMetricDto | null
   reason?: string | null
+  reason_source?: string | null
+  display_reason?: string | null
+  display_reason_source?: string | null
   recorded_at?: string | null
 }
 
@@ -634,15 +637,26 @@ function getProcessEventLabel(kind: TaskTimelineEventKind) {
   }
 }
 
+function getDelayRecordDisplayText(record: TaskSummaryDelayRecord) {
+  return String(record.reason ?? '').trim()
+    || String(record.display_reason ?? '').trim()
+}
+
 function getDelayReasonSummary(task: TaskSummaryTaskRow) {
-  const reasons = (task.delay_records ?? [])
-    .map((record) => String(record.reason ?? '').trim())
+  const displayReasons = (task.delay_records ?? [])
+    .map(getDelayRecordDisplayText)
     .filter(Boolean)
+  const confirmableSourceText = (task.delay_records ?? [])
+    .find((record) => (
+      record.reason_source === 'tasks.delay_reason'
+      && String(record.reason ?? '').trim().length > 0
+    ))?.reason?.trim() ?? ''
+
   return {
-    displayText: reasons.length > 0
-      ? reasons.slice(0, 2).join('；')
+    displayText: displayReasons.length > 0
+      ? displayReasons.slice(0, 2).join('；')
       : isTaskDelayed(task) ? '延期原因待补齐' : '',
-    confirmableSourceText: reasons[0] ?? '',
+    confirmableSourceText,
   }
 }
 
@@ -666,7 +680,7 @@ function getTaskProcessEvents(task: TaskSummaryTaskRow, timelineEvents: TaskTime
       kind: 'obstacle',
       label: getProcessEventLabel('obstacle'),
       title: '延期记录',
-      description: String(record.reason ?? '').trim() || '延期原因待补齐',
+      description: getDelayRecordDisplayText(record) || '延期原因待补齐',
       occurredAt: record.recorded_at || task.completed_at || task.planned_end_date || '',
       statusLabel: delayValue !== null && delayValue > 0
         ? `延期 ${formatDurationMetric(record.delay, { absolute: true })}`

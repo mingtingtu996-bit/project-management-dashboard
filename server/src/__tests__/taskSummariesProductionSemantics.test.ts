@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import {
+  buildTaskSummaryDelayRecords,
   getTaskActualEndDate,
   getTaskPlannedEndDate,
   isTaskDelayedByPeriodEnd,
   resolveTaskSummaryDurationAsOf,
 } from '../routes/task-summaries.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
+import type { DurationMetricDto } from '../services/durationMetricService.js'
 
 const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
   ? process.cwd()
@@ -25,7 +27,56 @@ const SPRING_FESTIVAL_SHUTDOWN: ConstructionCalendarContext = {
   }],
 }
 
+const AVAILABLE_DELAY_METRIC: DurationMetricDto = {
+  value: 2,
+  unit: 'construction_production_day',
+  calendarRef: 'official-construction-calendar',
+  calendarVersion: '2026.1',
+  timezone: 'Asia/Shanghai',
+  asOf: '2026-04-12',
+  availability: 'available',
+  unavailableReason: null,
+}
+
 describe('task-summary production delay semantics', () => {
+  it('keeps derived delay text display-only and exposes only tasks.delay_reason as confirmable raw evidence', () => {
+    expect(buildTaskSummaryDelayRecords({
+      isDelayed: true,
+      delayDays: 2,
+      delayMetric: AVAILABLE_DELAY_METRIC,
+      recordedAt: '2026-04-12T00:00:00.000Z',
+      rawDelayReason: null,
+    })).toEqual([{
+      delay_days: 2,
+      delay: AVAILABLE_DELAY_METRIC,
+      reason: null,
+      reason_source: null,
+      display_reason: '实际完成时间晚于计划完成时间',
+      display_reason_source: 'derived_completion_variance',
+      recorded_at: '2026-04-12T00:00:00.000Z',
+    }])
+
+    expect(buildTaskSummaryDelayRecords({
+      isDelayed: true,
+      delayDays: 2,
+      delayMetric: AVAILABLE_DELAY_METRIC,
+      recordedAt: '2026-04-12T00:00:00.000Z',
+      rawDelayReason: '材料到场延后',
+    })[0]).toEqual(expect.objectContaining({
+      reason: '材料到场延后',
+      reason_source: 'tasks.delay_reason',
+      display_reason: '实际完成时间晚于计划完成时间',
+      display_reason_source: 'derived_completion_variance',
+    }))
+  })
+
+  it('loads the authoritative task delay_reason and passes it into the response mapper', () => {
+    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+
+    expect(source).toMatch(/\.select\('[^']*delay_reason[^']*'\)/)
+    expect(source).toContain('rawDelayReason: t.delay_reason')
+  })
+
   it('uses the shared task attribution projection instead of a route-local WBS resolver', () => {
     const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
 

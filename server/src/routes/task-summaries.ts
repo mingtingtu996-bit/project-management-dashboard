@@ -27,7 +27,7 @@ import {
 } from '../services/projectExecutionSummaryService.js'
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
-import { businessDateKey } from '../services/durationMetricService.js'
+import { businessDateKey, type DurationMetricDto } from '../services/durationMetricService.js'
 import { executeSQLOne, supabase } from '../services/dbService.js'
 import {
   buildDailyTaskProgressSummary,
@@ -104,6 +104,27 @@ const scopedDurationForecastQuerySchema = z.object({
 
 function normalizeText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+export function buildTaskSummaryDelayRecords(input: {
+  isDelayed: boolean
+  delayDays: number | null
+  delayMetric: DurationMetricDto
+  recordedAt: string | null
+  rawDelayReason?: unknown
+}) {
+  if (!input.isDelayed) return []
+
+  const rawReason = normalizeText(input.rawDelayReason) || null
+  return [{
+    delay_days: input.delayDays,
+    delay: input.delayMetric,
+    reason: rawReason,
+    reason_source: rawReason ? 'tasks.delay_reason' as const : null,
+    display_reason: '实际完成时间晚于计划完成时间',
+    display_reason_source: 'derived_completion_variance' as const,
+    recorded_at: input.recordedAt,
+  }]
 }
 
 function getCachedTaskSummaryResponse<T>(key: string): T | null {
@@ -240,7 +261,7 @@ async function loadTaskSummaryMilestones(projectId: string, milestoneId?: string
 async function loadTaskSummaryTaskRows(projectId: string, dateFrom?: string | null, dateTo?: string | null) {
   let tasksQuery = supabase
     .from('tasks')
-    .select('id, parent_id, title, participant_unit_id, assignee_user_id, status, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, is_milestone, specialty_type, engineering_category_id, wbs_code, wbs_level, sort_order, updated_at, engineering_object_id, building_object_id, basement_object_id, physical_zone_object_id, functional_area_object_id, phase_object_id, section_object_id, floor_object_id')
+    .select('id, parent_id, title, participant_unit_id, assignee_user_id, status, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, delay_reason, is_milestone, specialty_type, engineering_category_id, wbs_code, wbs_level, sort_order, updated_at, engineering_object_id, building_object_id, basement_object_id, physical_zone_object_id, functional_area_object_id, phase_object_id, section_object_id, floor_object_id')
     .eq('project_id', projectId)
     .order('updated_at', { ascending: false })
 
@@ -524,14 +545,13 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
       planned_duration_metric: durationStats.plannedDurationMetric,
       delay_total: completionDelay.delayDurationMetric,
       delay_total_days: delayTotal,
-      delay_records: isDelayed
-        ? [{
-            delay_days: delayTotal,
-            delay: completionDelay.delayDurationMetric,
-            reason: '实际完成时间晚于计划完成时间',
-            recorded_at: completedAt,
-          }]
-        : [],
+      delay_records: buildTaskSummaryDelayRecords({
+        isDelayed,
+        delayDays: delayTotal,
+        delayMetric: completionDelay.delayDurationMetric,
+        recordedAt: completedAt,
+        rawDelayReason: t.delay_reason,
+      }),
       status_label: taskCompleted ? (isDelayed ? 'delayed' : 'on_time') : (normalizeText(t.status) || 'pending'),
     }
   }
