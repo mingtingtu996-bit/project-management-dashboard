@@ -2,6 +2,7 @@ import { act } from 'react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -27,7 +28,11 @@ vi.mock('@/services/v14231ReadinessApi', async () => {
   }
 })
 
-const { default: RuleAssetGovernanceWorkbenchAdmin } = await import('../RuleAssetGovernanceWorkbenchAdmin')
+const { default: RuleAssetGovernanceWorkbenchAdminPage } = await import('../RuleAssetGovernanceWorkbenchAdmin')
+
+function RuleAssetGovernanceWorkbenchAdmin() {
+  return <MemoryRouter><RuleAssetGovernanceWorkbenchAdminPage /></MemoryRouter>
+}
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))

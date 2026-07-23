@@ -12,12 +12,16 @@ const mocks = vi.hoisted(() => ({
   toast: vi.fn(),
 }))
 
-vi.mock('@/services/durationAssetsApi', () => ({
-  getDurationAssetReviewItems: mocks.getDurationAssetReviewItems,
-  getDurationAccuracySummary: mocks.getDurationAccuracySummary,
-  getDurationAccuracyGovernanceReadModel: mocks.getDurationAccuracyGovernanceReadModel,
-  decideDurationAssetReviewItem: mocks.decideDurationAssetReviewItem,
-}))
+vi.mock('@/services/durationAssetsApi', async () => {
+  const actual = await vi.importActual<typeof import('@/services/durationAssetsApi')>('@/services/durationAssetsApi')
+  return {
+    ...actual,
+    getDurationAssetReviewItems: mocks.getDurationAssetReviewItems,
+    getDurationAccuracySummary: mocks.getDurationAccuracySummary,
+    getDurationAccuracyGovernanceReadModel: mocks.getDurationAccuracyGovernanceReadModel,
+    decideDurationAssetReviewItem: mocks.decideDurationAssetReviewItem,
+  }
+})
 vi.mock('@/hooks/use-toast', () => ({ useToast: () => ({ toast: mocks.toast }) }))
 
 const { default: DurationAssetsAdmin } = await import('../DurationAssetsAdmin')
@@ -59,7 +63,7 @@ describe('DurationAssetsAdmin', () => {
     renderAdmin('/admin/duration-assets?tab=queue')
     expect(await screen.findByRole('heading', { name: '\u5de5\u671f\u8d44\u4ea7\u6cbb\u7406' })).toBeInTheDocument()
     expect(screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByText('base_duration_benchmark')).toBeInTheDocument()
+    expect(screen.getAllByText('base_duration_benchmark')).toHaveLength(2)
     for (const tab of ['\u5df2\u53d1\u5e03', '\u76d1\u63a7', '\u51c6\u786e\u5ea6']) expect(screen.getByRole('tab', { name: tab })).toBeInTheDocument()
   })
 
@@ -77,21 +81,27 @@ describe('DurationAssetsAdmin', () => {
 
   it('applies filters, confirms decisions, disables commands, retries failures, refreshes success, supports keyboard tabs, and preserves mobile table overflow', async () => {
     renderAdmin('/admin/duration-assets?tab=queue')
-    const approve = await screen.findByRole('button', { name: '\u6279\u51c6' })
+    await screen.findByRole('button', { name: '\u6279\u51c6' })
     expect(screen.getByTestId('duration-assets-table-overflow')).toHaveClass('overflow-x-auto')
-    fireEvent.keyDown(screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' }), { key: 'ArrowRight' })
-    expect(screen.getByRole('tab', { name: '\u5df2\u53d1\u5e03' })).toHaveAttribute('aria-selected', 'true')
-    fireEvent.click(screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' }))
+    const queueTab = screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' })
+    queueTab.focus()
+    fireEvent.keyDown(queueTab, { key: 'ArrowRight' })
+    await waitFor(() => expect(screen.getByRole('tab', { name: '\u5df2\u53d1\u5e03' })).toHaveAttribute('aria-selected', 'true'))
+    const publishedTab = screen.getByRole('tab', { name: '\u5df2\u53d1\u5e03' })
+    publishedTab.focus()
+    fireEvent.keyDown(publishedTab, { key: 'ArrowLeft' })
+    await waitFor(() => expect(screen.getByRole('tab', { name: '\u5ba1\u6838\u961f\u5217' })).toHaveAttribute('aria-selected', 'true'))
     fireEvent.change(screen.getByLabelText('\u539f\u56e0\u7b5b\u9009'), { target: { value: 'replay_required' } })
     await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenLastCalledWith(expect.objectContaining({ reason: 'replay_required' })))
-    fireEvent.click(approve)
-    expect(screen.getByTestId('duration-assets-decision-dialog')).toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: '\u6279\u51c6' }))
+    expect(await screen.findByTestId('duration-assets-decision-dialog')).toBeInTheDocument()
     mocks.decideDurationAssetReviewItem.mockRejectedValueOnce(new Error('decision failed'))
     fireEvent.click(screen.getByRole('button', { name: '\u786e\u8ba4\u6279\u51c6' }))
     await waitFor(() => expect(mocks.toast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'destructive' })))
+    const queueCallsBeforeSuccess = mocks.getDurationAssetReviewItems.mock.calls.length
     fireEvent.click(screen.getByRole('button', { name: '\u6279\u51c6' }))
     mocks.decideDurationAssetReviewItem.mockResolvedValueOnce({ status: 'operation_delegated' })
     fireEvent.click(screen.getByRole('button', { name: '\u786e\u8ba4\u6279\u51c6' }))
-    await waitFor(() => expect(mocks.getDurationAssetReviewItems).toHaveBeenCalledTimes(expect.any(Number)))
+    await waitFor(() => expect(mocks.getDurationAssetReviewItems.mock.calls.length).toBeGreaterThan(queueCallsBeforeSuccess))
   })
 })

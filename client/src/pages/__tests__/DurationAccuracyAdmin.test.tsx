@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -21,7 +22,11 @@ vi.mock('@/services/v14231ReadinessApi', async () => {
   }
 })
 
-const { default: DurationAccuracyAdmin } = await import('../DurationAccuracyAdmin')
+const { default: DurationAccuracyAdminPage } = await import('../DurationAccuracyAdmin')
+
+function DurationAccuracyAdmin() {
+  return <MemoryRouter><DurationAccuracyAdminPage /></MemoryRouter>
+}
 
 function readClientSource(relativePath: string) {
   for (const candidate of [join(process.cwd(), relativePath), join(process.cwd(), 'client', relativePath)]) {
