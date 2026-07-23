@@ -233,6 +233,6 @@ describe('duration learning runtime evidence outbox migration', () => {
     expect(clean.slice(migration322Index + migration322Header.length, sourceIndex).trim()).toBe(migration322)
     expect(migration324Index).toBeGreaterThan(sourceIndex)
     expect(clean.slice(sourceIndex + sourceHeader.length, migration324Index).trim()).toBe(migration)
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 324')
+    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 325')
   })
 })

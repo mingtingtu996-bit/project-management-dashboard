@@ -241,7 +241,7 @@ describe('canonical cause benchmark migration', () => {
     expect(columnDrop).toBeGreaterThan(tableDrop)
   })
 
-  it('is the exact migration 324 block at CLEAN EOF', () => {
+  it('keeps the exact migration 324 block immediately before migration 325', () => {
     const standaloneBody = readSql('migrations', migrationName).trim()
     const clean = readSql('migrations', 'CLEAN_MIGRATION_V4.sql')
     const sourceHeader = [
@@ -251,11 +251,17 @@ describe('canonical cause benchmark migration', () => {
     ].join('\n')
     const sourceIndex = clean.indexOf(sourceHeader)
     const migration323Index = clean.indexOf('Source: 323_duration_learning_runtime_evidence_outbox.sql')
-    const cleanTailBody = clean.slice(sourceIndex + sourceHeader.length).trim()
+    const migration325Header = [
+      '-- ============================================================',
+      '-- Source: 325_duration_asset_review_queue.sql',
+      '-- ============================================================',
+    ].join('\n')
+    const migration325Index = clean.indexOf(migration325Header, sourceIndex)
+    const cleanMigration324Body = clean.slice(sourceIndex + sourceHeader.length, migration325Index).trim()
 
     expect(sourceIndex).toBeGreaterThan(migration323Index)
-    expect(standaloneBody).toBe(cleanTailBody)
-    expect(clean.trimEnd().endsWith(standaloneBody)).toBe(true)
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 324')
+    expect(migration325Index).toBeGreaterThan(sourceIndex)
+    expect(standaloneBody).toBe(cleanMigration324Body)
+    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 325')
   })
 })
