@@ -529,6 +529,7 @@ router.post('/rule-assets/governance-workbench/operations', requireCurrentCompan
     companyId,
     requestedByUserId: req.user?.id ?? null,
     authorizedProjectIds,
+    executedAt: new Date().toISOString(),
     queryExec: executeSQL,
   })
 

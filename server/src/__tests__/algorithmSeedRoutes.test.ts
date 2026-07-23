@@ -1,6 +1,6 @@
 import express from 'express'
 import request from 'supertest'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { errorHandler } from '../middleware/errorHandler.js'
 
@@ -595,6 +595,10 @@ function readPlanNetworkCandidateQueryArgs(params: unknown[] = []) {
 }
 
 describe('algorithm seed routes', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     vi.stubEnv('WORKBUDDY_RULE_ASSET_RUNTIME_ACTIONS_ENABLED', 'true')
     mocks.membershipRole = 'company_admin'
@@ -4325,7 +4329,7 @@ describe('algorithm seed routes', () => {
       draftNetworkKey: 'draft-hospital',
       releaseRecordTarget: 'option-hospital',
       rollbackTarget: 'draft-hospital',
-      executedAt: '2026-06-24T12:00:00.000Z',
+      executedAt: expect.any(String),
       consumerVerificationRefs: [
         'constructionOrganizationProductOutcomeCloseoutMatrixService.nextEvidenceWorkPackages',
       ],
@@ -4334,6 +4338,9 @@ describe('algorithm seed routes', () => {
       selectedScenarioIds: ['pile_before_excavation', 'tower_early_release'],
       queryExec: mocks.executeSQL,
     }))
+    const delegated = mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mock.calls.at(-1)?.[0]
+    expect(delegated.executedAt).not.toBe('2026-06-24T12:00:00.000Z')
+    expect(Number.isFinite(Date.parse(delegated.executedAt))).toBe(true)
   })
 
   it('preserves construction organization recommendation adoption payload through the controlled operation route', async () => {
@@ -4914,6 +4921,42 @@ describe('algorithm seed routes', () => {
     }))
     const delegated = mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mock.calls.at(-1)?.[0]
     expect(delegated.authorizedProjectIds).not.toEqual(['project-attacker'])
+  })
+
+  it('overrides caller executedAt with the server current time after the request-body spread', async () => {
+    const serverTime = '2026-07-24T10:15:00.000Z'
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(serverTime))
+    mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mockResolvedValueOnce({
+      status: 'operation_delegated',
+      operationAction: 'duration_asset_review_decision',
+      assetType: 'duration_learning_runtime',
+      writesRuntimeDirectly: false,
+      workbenchDoesNotGrantPublishRights: true,
+      delegatedToDomainWriter: true,
+      domainWriterKey: 'duration_asset_review_decision_service',
+      reasons: [],
+      domainResult: { status: 'rejected' },
+      boundaryPolicy: [],
+    })
+
+    await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'duration_asset_review_decision',
+        assetType: 'duration_learning_runtime',
+        evidenceToken: 'duration-review-time-override',
+        domainWriterKey: 'duration_asset_review_decision_service',
+        reviewItemId: 'review-time-override',
+        reviewDecision: 'reject',
+        decisionNotes: 'server time must win',
+        executedAt: '2099-01-01T00:00:00.000Z',
+      })
+      .expect(200)
+
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).toHaveBeenCalledWith(expect.objectContaining({
+      executedAt: serverTime,
+    }))
   })
 
   it('does not treat legacy JWT globalRole company_admin as current-company authority', async () => {

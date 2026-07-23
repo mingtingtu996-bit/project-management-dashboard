@@ -56,17 +56,49 @@ export interface DecideDurationAssetReviewItemResult {
   item: DurationAssetReviewItem
 }
 
-type DurationAssetReviewDecisionError = Error & {
-  code: string
-  status: number
-  statusCode: number
+export class DurationAssetReviewDecisionError extends Error {
+  readonly statusCode: number
+
+  constructor(
+    readonly code: string,
+    readonly status: number,
+    message: string,
+    readonly decisionCause?: unknown,
+  ) {
+    super(message)
+    this.name = 'DurationAssetReviewDecisionError'
+    this.statusCode = status
+  }
 }
 
 const STRUCTURAL_ASSET_KEYS = new Set(['dependency_rule_candidate', 'critical_path_rule_candidate'])
 const MAX_DECISION_REASON_LENGTH = 1000
 
 function decisionError(code: string, status: number, message: string): DurationAssetReviewDecisionError {
-  return Object.assign(new Error(message), { code, status, statusCode: status })
+  return new DurationAssetReviewDecisionError(code, status, message)
+}
+
+function isDurationAssetReviewDecisionError(error: unknown): error is DurationAssetReviewDecisionError {
+  if (error instanceof DurationAssetReviewDecisionError) return true
+  if (!error || typeof error !== 'object') return false
+  const candidate = error as { code?: unknown; status?: unknown; statusCode?: unknown }
+  return typeof candidate.code === 'string'
+    && candidate.code.startsWith('DURATION_ASSET_REVIEW_')
+    && candidate.status === candidate.statusCode
+    && typeof candidate.status === 'number'
+}
+
+async function runDecisionPhase<T>(input: {
+  work: () => Promise<T>
+  code: string
+  message: string
+}): Promise<T> {
+  try {
+    return await input.work()
+  } catch (error) {
+    if (isDurationAssetReviewDecisionError(error)) throw error
+    throw new DurationAssetReviewDecisionError(input.code, 409, input.message, error)
+  }
 }
 
 function normalizeRequiredText(value: unknown, code: string, fieldName: string) {
@@ -175,11 +207,11 @@ function isIdenticalPriorApproval(input: {
   authority: ReturnType<typeof normalizeAuthority>
   decisionReason: string
 }) {
-  return (input.item.status === 'approved' || input.item.status === 'resolved_by_publication')
+  return input.item.status === 'resolved_by_publication'
     && input.item.resolutionSource === 'manual_approval'
     && input.item.reviewedByUserId === input.authority.reviewerUserId
     && input.item.decisionReason === input.decisionReason
-    && Boolean(input.item.resolvedPublicationKey ?? input.item.publicationKey)
+    && Boolean(input.item.resolvedPublicationKey)
 }
 
 function assertCurrentItemIdentity(input: {
@@ -259,33 +291,37 @@ async function approveCandidate(input: {
   }
 
   const publicationKey = publicationKeyForProposal(proposal)
-  const publication = await input.persistPublication({
-    queryExec: input.queryExec,
-    publicationKey,
-    assetKey: proposal.assetKey,
-    artifactKey: proposal.artifactKey,
-    scope: proposal.scope,
-    stage: 'canary',
-    runtimePayload: proposal.runtimePayload,
-    sourceCandidateRefs: proposal.sourceCandidateRefs,
-    sourceEvidenceRefs: proposal.sourceEvidenceRefs,
-    automationDecision: {
-      ...(proposal.automationDecision ?? {}),
-      sourceAutomationEvidence: proposal.automationEvidence ?? null,
-      decision: 'manual_canary',
-      reviewItemId: input.item.id,
-      reviewerUserId: input.authority.reviewerUserId,
-      decisionReason: input.decisionReason,
-      proposalKey: proposal.proposalKey,
-      sampleCount: proposal.sampleCount,
-      projectIds: proposal.projectIds,
-      companyIds: proposal.companyIds,
-      industryKeys: proposal.industryKeys,
-      replayPassed: proposal.replayPassed,
-    },
-    trafficPercent: proposal.scope.level === 'project' ? 20 : 5,
-    monitoringWindowHours: STRUCTURAL_ASSET_KEYS.has(proposal.assetKey) ? 168 : 72,
-    publishedAt: input.observedAt,
+  const publication = await runDecisionPhase({
+    code: 'DURATION_ASSET_REVIEW_PUBLICATION_FAILED',
+    message: 'Duration asset candidate publication failed.',
+    work: () => input.persistPublication({
+      queryExec: input.queryExec,
+      publicationKey,
+      assetKey: proposal.assetKey,
+      artifactKey: proposal.artifactKey,
+      scope: proposal.scope,
+      stage: 'canary',
+      runtimePayload: proposal.runtimePayload,
+      sourceCandidateRefs: proposal.sourceCandidateRefs,
+      sourceEvidenceRefs: proposal.sourceEvidenceRefs,
+      automationDecision: {
+        ...(proposal.automationDecision ?? {}),
+        sourceAutomationEvidence: proposal.automationEvidence ?? null,
+        decision: 'manual_canary',
+        reviewItemId: input.item.id,
+        reviewerUserId: input.authority.reviewerUserId,
+        decisionReason: input.decisionReason,
+        proposalKey: proposal.proposalKey,
+        sampleCount: proposal.sampleCount,
+        projectIds: proposal.projectIds,
+        companyIds: proposal.companyIds,
+        industryKeys: proposal.industryKeys,
+        replayPassed: proposal.replayPassed,
+      },
+      trafficPercent: proposal.scope.level === 'project' ? 20 : 5,
+      monitoringWindowHours: STRUCTURAL_ASSET_KEYS.has(proposal.assetKey) ? 168 : 72,
+      publishedAt: input.observedAt,
+    }),
   })
   if (publication.status !== 'published') {
     throw decisionError(
@@ -294,13 +330,17 @@ async function approveCandidate(input: {
       `Duration asset publication was blocked: ${publication.reasons.join(',') || 'unknown reason'}.`,
     )
   }
-  const resolution = await input.queueStore.resolveByPublication({
-    sourceKey: input.item.sourceKey,
-    publicationKey: publication.publication.publicationKey,
-    reviewedAt: input.observedAt,
-    resolutionSource: 'manual_approval',
-    reviewerUserId: input.authority.reviewerUserId,
-    decisionReason: input.decisionReason,
+  const resolution = await runDecisionPhase({
+    code: 'DURATION_ASSET_REVIEW_QUEUE_RESOLUTION_FAILED',
+    message: 'Duration asset review queue resolution failed.',
+    work: () => input.queueStore.resolveByPublication({
+      sourceKey: input.item.sourceKey,
+      publicationKey: publication.publication.publicationKey,
+      reviewedAt: input.observedAt,
+      resolutionSource: 'manual_approval',
+      reviewerUserId: input.authority.reviewerUserId,
+      decisionReason: input.decisionReason,
+    }),
   })
   return resultFromItem(resolution.item, {
     publicationKey: publication.publication.publicationKey,
@@ -366,22 +406,26 @@ async function approveStable(input: {
     )
   }
 
-  const impact = await input.recordImpact({
-    queryExec: input.queryExec,
-    publicationKey: candidate.publicationKey,
-    monitoringStatus: 'passed',
-    metrics: {
-      ...monitoring.evaluation.metrics,
-      reasonCodes: monitoring.evaluation.reasons,
-      stableAutomationDecision: monitoring.stableDecision,
-      manualApproval: {
-        reviewItemId: input.item.id,
-        reviewerUserId: input.authority.reviewerUserId,
-        decisionReason: input.decisionReason,
-        observedAt: input.observedAt,
+  const impact = await runDecisionPhase({
+    code: 'DURATION_ASSET_REVIEW_IMPACT_WRITE_FAILED',
+    message: 'Duration asset monitoring impact persistence failed.',
+    work: () => input.recordImpact({
+      queryExec: input.queryExec,
+      publicationKey: candidate.publicationKey,
+      monitoringStatus: 'passed',
+      metrics: {
+        ...monitoring.evaluation.metrics,
+        reasonCodes: monitoring.evaluation.reasons,
+        stableAutomationDecision: monitoring.stableDecision,
+        manualApproval: {
+          reviewItemId: input.item.id,
+          reviewerUserId: input.authority.reviewerUserId,
+          decisionReason: input.decisionReason,
+          observedAt: input.observedAt,
+        },
       },
-    },
-    observedAt: input.observedAt,
+      observedAt: input.observedAt,
+    }),
   })
   if (impact.status !== 'impact_recorded') {
     throw decisionError(
@@ -391,16 +435,20 @@ async function approveStable(input: {
     )
   }
 
-  const promotion = candidate.assetKey === 'base_duration_benchmark' && candidate.scope.level === 'project'
-    ? await input.promoteBenchmarkCanary({
-        publicationKey: candidate.publicationKey,
-        promotedAt: input.observedAt,
-      })
-    : await input.promoteCanary({
-        queryExec: input.queryExec,
-        publicationKey: candidate.publicationKey,
-        promotedAt: input.observedAt,
-      })
+  const promotion = await runDecisionPhase({
+    code: 'DURATION_ASSET_REVIEW_PROMOTION_FAILED',
+    message: 'Duration asset stable promotion failed.',
+    work: () => candidate.assetKey === 'base_duration_benchmark' && candidate.scope.level === 'project'
+      ? input.promoteBenchmarkCanary({
+          publicationKey: candidate.publicationKey,
+          promotedAt: input.observedAt,
+        })
+      : input.promoteCanary({
+          queryExec: input.queryExec,
+          publicationKey: candidate.publicationKey,
+          promotedAt: input.observedAt,
+        }),
+  })
   if (promotion.status !== 'stable_promoted' && promotion.status !== 'stable_already_promoted') {
     throw decisionError(
       'DURATION_ASSET_REVIEW_PROMOTION_FAILED',
@@ -409,13 +457,17 @@ async function approveStable(input: {
     )
   }
 
-  const resolution = await input.queueStore.resolveByPublication({
-    sourceKey: input.item.sourceKey,
-    publicationKey: candidate.publicationKey,
-    reviewedAt: input.observedAt,
-    resolutionSource: 'manual_approval',
-    reviewerUserId: input.authority.reviewerUserId,
-    decisionReason: input.decisionReason,
+  const resolution = await runDecisionPhase({
+    code: 'DURATION_ASSET_REVIEW_QUEUE_RESOLUTION_FAILED',
+    message: 'Duration asset review queue resolution failed.',
+    work: () => input.queueStore.resolveByPublication({
+      sourceKey: input.item.sourceKey,
+      publicationKey: candidate.publicationKey,
+      reviewedAt: input.observedAt,
+      resolutionSource: 'manual_approval',
+      reviewerUserId: input.authority.reviewerUserId,
+      decisionReason: input.decisionReason,
+    }),
   })
   return resultFromItem(resolution.item, {
     publicationKey: candidate.publicationKey,
@@ -465,13 +517,17 @@ export async function decideDurationAssetReviewItem(
     }
 
     if (decision === 'reject' || decision === 'supersede') {
-      const projection = await queueStore.decide({
-        id: item.id,
-        status: decision === 'reject' ? 'rejected' : 'superseded',
-        reviewerUserId: authority.reviewerUserId,
-        reviewedAt: observedAt,
-        decisionReason,
-        resolutionSource: decision === 'reject' ? 'manual_rejection' : 'manual_supersession',
+      const projection = await runDecisionPhase({
+        code: 'DURATION_ASSET_REVIEW_QUEUE_DECISION_FAILED',
+        message: 'Duration asset review queue decision persistence failed.',
+        work: () => queueStore.decide({
+          id: item.id,
+          status: decision === 'reject' ? 'rejected' : 'superseded',
+          reviewerUserId: authority.reviewerUserId,
+          reviewedAt: observedAt,
+          decisionReason,
+          resolutionSource: decision === 'reject' ? 'manual_rejection' : 'manual_supersession',
+        }),
       })
       return resultFromItem(projection.item, { idempotent: projection.disposition === 'terminal_reused' })
     }

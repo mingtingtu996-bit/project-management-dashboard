@@ -693,7 +693,11 @@ describe('duration asset stable approval with current locked evidence', () => {
   it('rolls back impact, promotion, cause activation, and queue resolution when the final queue update fails', async () => {
     const harness = benchmarkHarness({ failQueueUpdate: true })
 
-    await expect(harness.decision()).rejects.toThrow('final queue update failed')
+    await expect(harness.decision()).rejects.toMatchObject({
+      code: 'DURATION_ASSET_REVIEW_QUEUE_RESOLUTION_FAILED',
+      status: 409,
+      statusCode: 409,
+    })
 
     expect(harness.events.at(-1)).toBe('transaction:rollback')
     expect(harness.publication).toMatchObject({

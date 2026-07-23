@@ -43,6 +43,7 @@ vi.mock('../services/durationAssetReviewQueueService.js', async (importOriginal)
 })
 
 import { errorHandler } from '../middleware/errorHandler.js'
+import { createDatabaseDurationAssetReviewQueueStore } from '../services/durationAssetReviewQueueService.js'
 
 const { default: router } = await import('../routes/duration-assets.js')
 
@@ -159,21 +160,99 @@ describe('duration assets admin read route', () => {
   })
 
   it('serializes industry and global rows as read-only without source references or payloads', async () => {
+    const rawSharedRows = [
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        source_key: 'raw-global-source',
+        decision_fingerprint: 'a'.repeat(64),
+        review_kind: 'candidate_publication',
+        asset_key: 'standard_work_duration_seed',
+        artifact_key: 'shared-global-standard-work',
+        scope_level: 'global',
+        company_id: null,
+        project_id: null,
+        industry_key: null,
+        proposal_key: 'sensitive-global-proposal',
+        candidate_event_ref: 'sensitive-global-candidate-ref',
+        conflict_ref: 'sensitive-global-conflict-ref',
+        publication_key: null,
+        resolved_publication_key: null,
+        reason_codes: ['manual_review_required'],
+        review_payload: { stableKeys: { proposalKey: 'sensitive-global-proposal' } },
+        status: 'open',
+        assigned_to_user_id: '55555555-5555-4555-8555-555555555555',
+        reviewed_by_user_id: '66666666-6666-4666-8666-666666666666',
+        reviewed_at: null,
+        decision_reason: null,
+        resolution_source: null,
+        created_at: '2026-07-23T00:00:00.000Z',
+        updated_at: '2026-07-23T00:00:00.000Z',
+        total_count: 2,
+      },
+      {
+        id: '77777777-7777-4777-8777-777777777777',
+        source_key: 'raw-industry-source',
+        decision_fingerprint: 'b'.repeat(64),
+        review_kind: 'stable_promotion',
+        asset_key: 'dependency_rule_candidate',
+        artifact_key: 'shared-industry-dependency-rule',
+        scope_level: 'industry',
+        company_id: null,
+        project_id: null,
+        industry_key: 'general_civil',
+        proposal_key: 'sensitive-industry-proposal',
+        candidate_event_ref: 'sensitive-industry-candidate-ref',
+        conflict_ref: 'sensitive-industry-conflict-ref',
+        publication_key: 'sensitive-industry-publication',
+        resolved_publication_key: null,
+        reason_codes: ['structural_mutation_requires_exception_review'],
+        review_payload: { stableKeys: { publicationKey: 'sensitive-industry-publication' } },
+        status: 'open',
+        assigned_to_user_id: '88888888-8888-4888-8888-888888888888',
+        reviewed_by_user_id: null,
+        reviewed_at: null,
+        decision_reason: null,
+        resolution_source: null,
+        created_at: '2026-07-23T00:00:00.000Z',
+        updated_at: '2026-07-23T00:00:00.000Z',
+        total_count: 2,
+      },
+    ]
+    const queryExec = vi.fn(async <T = Record<string, unknown>>() => rawSharedRows as T[])
+    const realQueueStore = createDatabaseDurationAssetReviewQueueStore(
+      queryExec as Parameters<typeof createDatabaseDurationAssetReviewQueueStore>[0],
+    )
+    const serialized = await realQueueStore.list({
+      companyId: '11111111-1111-4111-8111-111111111111',
+      projectIds: [projectId],
+    })
+    mocks.listDurationAssetReviewItems.mockResolvedValueOnce(serialized)
+
     const response = await request(buildApp())
       .get('/api/admin/duration-assets/review-items')
       .expect(200)
 
-    expect(response.body.data.items[0]).toMatchObject({
-      scope: { level: 'global' },
-      canReview: false,
-      approvalReady: false,
-      proposalKey: null,
-      candidateEventRef: null,
-      conflictRef: null,
-      reviewPayload: null,
-    })
-    expect(response.body.data.items[0]).not.toHaveProperty('sourceCandidateRefs')
-    expect(response.body.data.items[0]).not.toHaveProperty('sourceEvidenceRefs')
+    expect(queryExec).toHaveBeenCalledWith(expect.stringContaining('from public.duration_asset_review_items'), expect.any(Array))
+    expect(response.body.data.total).toBe(2)
+    expect(response.body.data.items).toHaveLength(2)
+    for (const item of response.body.data.items) {
+      expect(item).toMatchObject({
+        canReview: false,
+        approvalReady: false,
+        proposalKey: null,
+        candidateEventRef: null,
+        conflictRef: null,
+        reviewPayload: null,
+        assignedToUserId: null,
+        reviewedByUserId: null,
+      })
+      expect(item).not.toHaveProperty('sourceCandidateRefs')
+      expect(item).not.toHaveProperty('sourceEvidenceRefs')
+    }
+    expect(response.body.data.items.map((item: any) => item.scope)).toEqual([
+      { level: 'global' },
+      { level: 'industry', industryKey: 'general_civil' },
+    ])
   })
 
   it('validates only the governed queue filter vocabulary', async () => {

@@ -360,6 +360,105 @@ describe('duration asset review decision service', () => {
   })
 
   it.each([
+    ['approved', null],
+    ['resolved_by_publication', null],
+  ] as const)('does not treat %s without a resolved publication key as completed approval', async (status, resolvedPublicationKey) => {
+    vi.mocked(queueStore.loadForUpdate).mockResolvedValueOnce(reviewItem({
+      reviewKind: 'stable_promotion',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'artifact-benchmark',
+      proposalKey: null,
+      publicationKey: 'publication-1',
+      resolvedPublicationKey,
+      status,
+      resolutionSource: 'manual_approval',
+      reviewedByUserId: 'user-1',
+      decisionReason: 'validated by governed reviewer',
+      reviewedAt: observedAt,
+    }))
+
+    await expect(decideDurationAssetReviewItem(approveInput)).rejects.toMatchObject({
+      code: 'DURATION_ASSET_REVIEW_ALREADY_DECIDED',
+      status: 409,
+    })
+    expect(findMonitoringCandidate).not.toHaveBeenCalled()
+    expect(recordImpact).not.toHaveBeenCalled()
+    expect(promoteBenchmarkCanary).not.toHaveBeenCalled()
+    expect(queueStore.resolveByPublication).not.toHaveBeenCalled()
+  })
+
+  it('maps thrown candidate publication failures to a stable domain conflict', async () => {
+    persistPublication.mockRejectedValueOnce(new Error('publication database unavailable'))
+
+    await expect(decideDurationAssetReviewItem(approveInput)).rejects.toMatchObject({
+      code: 'DURATION_ASSET_REVIEW_PUBLICATION_FAILED',
+      status: 409,
+      statusCode: 409,
+    })
+    expect(queueStore.resolveByPublication).not.toHaveBeenCalled()
+  })
+
+  it('maps thrown stable impact failures to a stable domain conflict', async () => {
+    vi.mocked(queueStore.loadForUpdate).mockResolvedValueOnce(reviewItem({
+      reviewKind: 'stable_promotion',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'artifact-benchmark',
+      proposalKey: null,
+      publicationKey: 'publication-1',
+      decisionFingerprint: 'a'.repeat(64),
+    }))
+    recordImpact.mockRejectedValueOnce(new Error('impact update failed'))
+
+    await expect(decideDurationAssetReviewItem(approveInput)).rejects.toMatchObject({
+      code: 'DURATION_ASSET_REVIEW_IMPACT_WRITE_FAILED',
+      status: 409,
+      statusCode: 409,
+    })
+    expect(promoteBenchmarkCanary).not.toHaveBeenCalled()
+    expect(queueStore.resolveByPublication).not.toHaveBeenCalled()
+  })
+
+  it('maps thrown stable promotion failures to a stable domain conflict', async () => {
+    vi.mocked(queueStore.loadForUpdate).mockResolvedValueOnce(reviewItem({
+      reviewKind: 'stable_promotion',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'artifact-benchmark',
+      proposalKey: null,
+      publicationKey: 'publication-1',
+      decisionFingerprint: 'a'.repeat(64),
+    }))
+    promoteBenchmarkCanary.mockRejectedValueOnce(new Error('atomic promotion failed'))
+
+    await expect(decideDurationAssetReviewItem(approveInput)).rejects.toMatchObject({
+      code: 'DURATION_ASSET_REVIEW_PROMOTION_FAILED',
+      status: 409,
+      statusCode: 409,
+    })
+    expect(queueStore.resolveByPublication).not.toHaveBeenCalled()
+  })
+
+  it('maps thrown final queue resolution failures to a stable domain conflict', async () => {
+    vi.mocked(queueStore.resolveByPublication).mockRejectedValueOnce(new Error('queue update failed'))
+
+    await expect(decideDurationAssetReviewItem(approveInput)).rejects.toMatchObject({
+      code: 'DURATION_ASSET_REVIEW_QUEUE_RESOLUTION_FAILED',
+      status: 409,
+      statusCode: 409,
+    })
+  })
+
+  it('preserves an existing duration review domain error thrown by a delegated writer', async () => {
+    const existing = Object.assign(new Error('current fingerprint changed'), {
+      code: 'DURATION_ASSET_REVIEW_STALE',
+      status: 409,
+      statusCode: 409,
+    })
+    persistPublication.mockRejectedValueOnce(existing)
+
+    await expect(decideDurationAssetReviewItem(approveInput)).rejects.toBe(existing)
+  })
+
+  it.each([
     ['reject', 'rejected', 'manual_rejection'],
     ['supersede', 'superseded', 'manual_supersession'],
   ] as const)('keeps %s as a queue-only decision', async (decision, status, resolutionSource) => {

@@ -2751,6 +2751,8 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
   })
 
   it('delegates duration asset review decisions exactly once with server authority and no direct runtime write', async () => {
+    const serverTime = '2026-07-24T09:30:00.000Z'
+    const getCurrentTime = vi.fn(() => serverTime)
     const decideDurationAssetReviewItem = vi.fn(async (): Promise<any> => ({
       status: 'rejected',
       reviewItemId: 'review-1',
@@ -2777,9 +2779,11 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
         reviewerUserId: 'operator-attacker',
       },
       visibleProjectIds: ['project-attacker'],
+      executedAt: '2099-01-01T00:00:00.000Z',
       queryExec,
       dependencies: {
         decideDurationAssetReviewItem,
+        getCurrentTime,
       },
     } as any)
 
@@ -2795,8 +2799,9 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
         reviewerUserId: 'user-1',
       },
       queryExec,
-      observedAt: undefined,
+      observedAt: serverTime,
     })
+    expect(getCurrentTime).toHaveBeenCalledTimes(1)
     expect(result).toEqual(expect.objectContaining({
       status: 'operation_delegated',
       operationAction: 'duration_asset_review_decision',

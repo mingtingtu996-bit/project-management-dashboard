@@ -212,6 +212,7 @@ export type AlgorithmAssetGovernanceWorkbenchOperationDependencies = {
   recordConstructionOrganizationPlanNetworkRecommendationDecision?: (input: RecordConstructionOrganizationPlanNetworkRecommendationDecisionInput) =>
     Promise<RecordConstructionOrganizationPlanNetworkRecommendationDecisionResult>
   decideDurationAssetReviewItem?: typeof decideDurationAssetReviewItem
+  getCurrentTime?: () => string
 }
 
 export type AlgorithmAssetGovernanceWorkbenchOperationInput = {
@@ -450,6 +451,7 @@ function durationAssetReviewDecisionReasons(input: AlgorithmAssetGovernanceWorkb
 
 async function delegateDurationAssetReviewDecision(input: AlgorithmAssetGovernanceWorkbenchOperationInput) {
   const writer = input.dependencies?.decideDurationAssetReviewItem ?? decideDurationAssetReviewItem
+  const observedAt = (input.dependencies?.getCurrentTime ?? (() => new Date().toISOString()))()
   return writer({
     reviewItemId: normalizeText(input.reviewItemId),
     decision: normalizeDurationAssetReviewDecision(input.reviewDecision)!,
@@ -463,7 +465,7 @@ async function delegateDurationAssetReviewDecision(input: AlgorithmAssetGovernan
       reviewerUserId: normalizeText(input.requestedByUserId),
     },
     queryExec: input.queryExec as DurationLearningRuntimePublicationQueryExec | undefined,
-    observedAt: input.executedAt,
+    observedAt,
   })
 }
 
