@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
+import type {
+  BuildDurationAssetReviewDecisionFingerprintInput,
+  BuildDurationAssetReviewPayloadInput,
+  BuildDurationAssetReviewSourceKeyInput,
+  DurationAssetReviewQueryExec,
+  DurationAssetReviewTransactionRunner,
+  UpsertDurationAssetReviewItemInput,
+} from '../services/durationAssetReviewQueueService.js'
+
+type QueryExecMock = DurationAssetReviewQueryExec & ReturnType<typeof vi.fn>
+type TransactionRunnerMock = DurationAssetReviewTransactionRunner & ReturnType<typeof vi.fn>
 
 const moduleMocks = vi.hoisted(() => ({
-  executeSQL: vi.fn(),
-  withDatabaseTransaction: vi.fn(),
+  executeSQL: vi.fn() as QueryExecMock,
+  withDatabaseTransaction: vi.fn() as TransactionRunnerMock,
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -22,14 +33,13 @@ import {
   listDurationAssetReviewItems,
   requireDurationAssetReviewKey,
   type DurationAssetReviewItem,
-  type DurationAssetReviewQueueStore,
 } from '../services/durationAssetReviewQueueService.js'
 
 const companyId = '22222222-2222-4222-8222-222222222222'
 const projectId = '11111111-1111-4111-8111-111111111111'
 const otherCompanyId = '33333333-3333-4333-8333-333333333333'
 
-const fingerprintInput = {
+const fingerprintInput: BuildDurationAssetReviewDecisionFingerprintInput = {
   runtimePayload: { p50Days: 12, benchmarkVersion: 'v7' },
   sourceCandidateRefs: ['candidate:b', 'candidate:a'],
   sourceEvidenceRefs: ['evidence:2', 'evidence:1'],
@@ -45,17 +55,17 @@ const fingerprintInput = {
   },
   reasonCodes: ['manual_review_required'],
   monitoringEvidence: null,
-} as const
+}
 
 const decisionFingerprint = buildDurationAssetReviewDecisionFingerprint(fingerprintInput)
-const sourceInput = {
-  reviewKind: 'candidate_publication' as const,
-  assetKey: 'base_duration_benchmark' as const,
+const sourceInput: BuildDurationAssetReviewSourceKeyInput = {
+  reviewKind: 'candidate_publication',
+  assetKey: 'base_duration_benchmark',
   artifactKey: 'benchmark:task:process:all',
   proposalKey: 'proposal-1',
   publicationKey: null,
   decisionFingerprint,
-  scope: { level: 'project' as const, companyId, projectId },
+  scope: { level: 'project', companyId, projectId },
 }
 
 function reviewPayload() {
@@ -71,19 +81,23 @@ function reviewPayload() {
   })
 }
 
-function upsertInput(overrides: Record<string, unknown> = {}) {
+function upsertInput(overrides: Record<string, unknown> = {}): UpsertDurationAssetReviewItemInput {
   return {
     ...sourceInput,
     reasonCodes: ['manual_review_required', 'manual_review_required'],
     reviewPayload: reviewPayload(),
     ...overrides,
-  }
+  } as UpsertDurationAssetReviewItemInput
 }
 
 type Row = Record<string, unknown>
 
-function rowForInput(input: ReturnType<typeof upsertInput>, id: string): Row {
-  const scope = input.scope as typeof sourceInput.scope
+function asQueryExecMock(mock: ReturnType<typeof vi.fn>): QueryExecMock {
+  return mock as QueryExecMock
+}
+
+function rowForInput(input: UpsertDurationAssetReviewItemInput, id: string): Row {
+  const scope = input.scope
   return {
     id,
     source_key: buildDurationAssetReviewSourceKey(input),
@@ -92,9 +106,9 @@ function rowForInput(input: ReturnType<typeof upsertInput>, id: string): Row {
     asset_key: input.assetKey,
     artifact_key: input.artifactKey,
     scope_level: scope.level,
-    company_id: scope.companyId,
-    project_id: scope.projectId,
-    industry_key: null,
+    company_id: 'companyId' in scope ? scope.companyId : null,
+    project_id: scope.level === 'project' ? scope.projectId : null,
+    industry_key: scope.level === 'industry' ? scope.industryKey : null,
     proposal_key: input.proposalKey,
     candidate_event_ref: input.candidateEventRef ?? null,
     conflict_ref: input.conflictRef ?? null,
@@ -127,8 +141,8 @@ function createHarness(initialRows: Row[] = [], options: {
     } finally {
       transactionEvents.push('transaction:end')
     }
-  })
-  const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+  }) as TransactionRunnerMock
+  const queryExec = asQueryExecMock(vi.fn(async (sql: string, params: unknown[] = []): Promise<Row[]> => {
     if (sql.includes('from public.projects project')) return [{ scope_authorized: true }]
     if (sql.includes('insert into public.duration_asset_review_items')) {
       const sourceKey = String(params[8])
@@ -212,7 +226,7 @@ function createHarness(initialRows: Row[] = [], options: {
     }
     if (sql.includes('from public.duration_asset_review_items')) return Array.from(rows.values())
     return []
-  })
+  }))
   return {
     queryExec,
     rows,
@@ -335,7 +349,7 @@ describe('durationAssetReviewQueueService', () => {
       events.push('transaction:end')
       return result
     })
-    moduleMocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    moduleMocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []): Promise<Row[]> => {
       if (sql.includes('for update')) {
         events.push('lock')
         return [openRow]
@@ -363,7 +377,7 @@ describe('durationAssetReviewQueueService', () => {
   })
 
   it('requires a transaction runner before custom-adapter locking mutations', async () => {
-    const queryExec = vi.fn(async () => [])
+    const queryExec = asQueryExecMock(vi.fn(async (): Promise<Row[]> => []))
     const store = createDatabaseDurationAssetReviewQueueStore(queryExec)
 
     await expect(store.resolveByPublication({
@@ -395,15 +409,15 @@ describe('durationAssetReviewQueueService', () => {
 
   it('keeps custom-adapter list and single-statement upsert usable without a transaction runner', async () => {
     const companyInput = upsertInput({ scope: { level: 'company', companyId }, reviewPayload: {} })
-    const insertedRow = {
+    const insertedRow: Row = {
       ...rowForInput(companyInput, 'review-custom-nonlocking'),
       scope_level: 'company', project_id: null, was_created: true,
     }
-    const queryExec = vi.fn(async (sql: string) => {
+    const queryExec = asQueryExecMock(vi.fn(async (sql: string): Promise<Row[]> => {
       if (sql.includes('insert into public.duration_asset_review_items')) return [insertedRow]
       if (sql.includes('from public.duration_asset_review_items')) return [insertedRow]
       return []
-    })
+    }))
     const store = createDatabaseDurationAssetReviewQueueStore(queryExec)
 
     await expect(store.upsertOpen(companyInput)).resolves.toMatchObject({ disposition: 'created' })
@@ -453,7 +467,7 @@ describe('durationAssetReviewQueueService', () => {
     })
     const stableNext = upsertInput({ ...stableBase, decisionFingerprint: 'e'.repeat(64) })
     const otherPublication = upsertInput({ ...stableBase, publicationKey: 'publication-other', decisionFingerprint: 'f'.repeat(64) })
-    const stableRows = [
+    const stableRows: Row[] = [
       { ...rowForInput(stableBase, 'review-stable-1'), scope_level: 'company', project_id: null },
       { ...rowForInput(stableNext, 'review-stable-2'), scope_level: 'company', project_id: null },
       { ...rowForInput(otherPublication, 'review-stable-other'), scope_level: 'company', project_id: null },
@@ -486,7 +500,7 @@ describe('durationAssetReviewQueueService', () => {
   })
 
   it('sanitizes industry and global rows for company-admin reads', async () => {
-    const sharedRows = [
+    const sharedRows: Row[] = [
       {
         ...rowForInput(upsertInput(), 'review-company'), scope_level: 'company', project_id: null,
         source_key: 'review-company', status: 'open',
@@ -532,7 +546,9 @@ describe('durationAssetReviewQueueService', () => {
   it('normalizes reasons and rejects unsafe or oversized bounded payloads', () => {
     expect(reviewPayload().reasonCodes).toEqual(['manual_review_required'])
     expect(reviewPayload()).not.toHaveProperty('runtimePayload')
-    expect(() => buildDurationAssetReviewPayload({ runtimePayload: { p50Days: 12 } })).toThrow('duration_asset_review_payload_key_forbidden')
+    expect(() => buildDurationAssetReviewPayload({
+      runtimePayload: { p50Days: 12 },
+    } as unknown as BuildDurationAssetReviewPayloadInput)).toThrow('duration_asset_review_payload_key_forbidden')
     expect(() => buildDurationAssetReviewPayload({ stableKeys: { artifact: { raw: 'payload' } } }))
       .toThrow('duration_asset_review_payload_stable_key_invalid')
     expect(() => buildDurationAssetReviewPayload({ stableKeys: { source: 'x'.repeat(32769) } }))
@@ -575,7 +591,7 @@ describe('durationAssetReviewQueueService', () => {
     ['number', 1],
     ['boolean', true],
   ])('rejects a %s queue payload at the top level', async (_name, reviewPayload) => {
-    const queryExec = vi.fn(async () => [])
+    const queryExec = asQueryExecMock(vi.fn(async (): Promise<Row[]> => []))
     const store = createDatabaseDurationAssetReviewQueueStore(queryExec)
     await expect(store.upsertOpen({
       ...upsertInput({ scope: { level: 'company', companyId } }),
