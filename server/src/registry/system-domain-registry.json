@@ -3213,6 +3213,13 @@
     },
     {
       "kind": "migration",
+      "id": "324_canonical_cause_and_benchmark_provenance",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "adds persisted benchmark provenance and tenant-scoped canonical cause segments with exact RLS, scope validation, and rollback authority"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
@@ -5162,6 +5169,13 @@
       "runtimeScope": "business_core",
       "assignmentReason": "C-19.06 L3 unified duration input assembler for read-only T2 package, production capacity evidence, candidate network, phase-1 evaluation, live replay standard-library trust gate, source lineage, mutation boundary, and C-19.15a assembly gate before C-19.13 automatic selection",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "durationBenchmarkCauseSegmentService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "aggregates confirmed canonical task-completion causes into tenant and calendar scoped benchmark segments and resolves exact cause segments without blending all-cause evidence"
     },
     {
       "kind": "service",
