@@ -23,4 +23,11 @@ describe('migration helper entrypoints', () => {
       expect(source).not.toContain("'CLEAN_MIGRATION.sql'")
     }
   })
+  it('includes the duration asset review queue in both forward and rollback migration entrypoints', () => {
+    const forward = readServerFile('migrations', '325_duration_asset_review_queue.sql')
+    const rollback = readServerFile('migrations', 'rollback', '325_duration_asset_review_queue.sql')
+
+    expect(forward).toContain('public.duration_asset_review_items')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_asset_review_items')
+  })
 })
