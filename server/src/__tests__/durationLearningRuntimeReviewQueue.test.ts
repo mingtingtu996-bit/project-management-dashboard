@@ -454,6 +454,44 @@ describe('duration learning lifecycle review queue integration', () => {
     expect(sourceKey(candidate, baseEvaluation)).not.toBe(sourceKey(preThreshold, preThresholdEvaluation))
   })
 
+  it('keeps default stable policy identity fixed after the monitoring window threshold', () => {
+    const at96Hours = monitoringCandidate({ assetKey: 'base_duration_benchmark' })
+    const at120Hours = { ...at96Hours, monitoringElapsedHours: 120 }
+    const widerWindow = { ...at96Hours, monitoringWindowHours: 168, monitoringElapsedHours: 200 }
+    const evaluate = (candidate: DurationLearningRuntimeMonitoringCandidate) => (
+      lifecycleModule.evaluateDurationLearningRuntimeMonitoringCandidate(candidate)
+    )
+    const sourceKey = (
+      candidate: DurationLearningRuntimeMonitoringCandidate,
+      result: Record<string, any>,
+    ) => {
+      expect(result.stableDecision).not.toBeNull()
+      const requirement = lifecycleModule.reviewRequirementForMonitoringCandidate(
+        candidate,
+        result.evaluation,
+        result.stableDecision,
+      )
+      return buildDurationAssetReviewSourceKey({
+        reviewKind: requirement.reviewKind,
+        assetKey: candidate.assetKey,
+        artifactKey: candidate.artifactKey,
+        proposalKey: null,
+        publicationKey: candidate.publicationKey,
+        decisionFingerprint: requirement.decisionFingerprint,
+        scope: candidate.scope,
+      })
+    }
+    const result96 = evaluate(at96Hours)
+    const result120 = evaluate(at120Hours)
+    const widerResult = evaluate(widerWindow)
+
+    expect(result96.stableDecision.observed.observationWindowDays).toBe(
+      result120.stableDecision.observed.observationWindowDays,
+    )
+    expect(sourceKey(at96Hours, result96)).toBe(sourceKey(at120Hours, result120))
+    expect(sourceKey(at96Hours, result96)).not.toBe(sourceKey(widerWindow, widerResult))
+  })
+
   it('reuses a content checkpoint and resolves a later proposal-lineage review atomically', async () => {
     const checkpointStore = createInMemoryDurationContextPolicyLearningCheckpointStore()
     const events: string[] = []

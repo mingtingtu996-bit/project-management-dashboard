@@ -3220,6 +3220,12 @@ function evaluateMonitoring(candidate: DurationLearningRuntimeMonitoringCandidat
 
 export type DurationLearningRuntimeMonitoringEvaluation = ReturnType<typeof evaluateMonitoring>
 
+function policyEffectiveMonitoringElapsedHours(candidate: DurationLearningRuntimeMonitoringCandidate) {
+  const monitoringWindowHours = Math.max(0, finiteNumber(candidate.monitoringWindowHours))
+  const monitoringElapsedHours = Math.max(0, finiteNumber(candidate.monitoringElapsedHours))
+  return Math.min(monitoringElapsedHours, monitoringWindowHours)
+}
+
 function stableAutomationDecision(
   candidate: DurationLearningRuntimeMonitoringCandidate,
   monitoringMetrics: Record<string, unknown>,
@@ -3255,7 +3261,7 @@ function stableAutomationDecision(
   const sourceObservationWindowDays = nonNegativeInteger(
     sourceObserved.observationWindowDays ?? sourceObserved.observation_window_days,
   )
-  const postPublicationObservationDays = Math.floor(candidate.monitoringElapsedHours / 24)
+  const postPublicationObservationDays = Math.floor(policyEffectiveMonitoringElapsedHours(candidate) / 24)
 
   return evaluateDurationLearningAssetAutomationPolicy({
     experienceTier,
@@ -3343,11 +3349,10 @@ function monitoringMetricsForReviewIdentity(
   evaluation: DurationLearningRuntimeMonitoringEvaluation,
 ) {
   const monitoringWindowHours = Math.max(0, finiteNumber(candidate.monitoringWindowHours))
-  const monitoringElapsedHours = Math.max(0, finiteNumber(candidate.monitoringElapsedHours))
   return {
     ...evaluation.metrics,
     monitoringWindowHours,
-    monitoringElapsedHours: Math.min(monitoringElapsedHours, monitoringWindowHours),
+    monitoringElapsedHours: policyEffectiveMonitoringElapsedHours(candidate),
   }
 }
 

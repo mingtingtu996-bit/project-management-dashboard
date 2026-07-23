@@ -2312,7 +2312,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
             distinctCompanyCount: 1,
             realOutcomeCount: 0,
             replayCaseCount: 500,
-            observationWindowDays: 0,
+            observationWindowDays: 57,
             replayPassRate: 1,
             outcomeAcceptanceRate: 1,
             qualityConsistencyRate: 1,
