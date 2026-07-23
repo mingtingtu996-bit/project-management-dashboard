@@ -50,6 +50,57 @@ function createAsyncMutex() {
   }
 }
 
+type TaskRowLockMode = 'key_share' | 'no_key_update' | 'update'
+
+function taskRowLocksConflict(left: TaskRowLockMode, right: TaskRowLockMode) {
+  if (left === 'update' || right === 'update') return true
+  return left === 'no_key_update' && right === 'no_key_update'
+}
+
+function createPostgresTaskRowLockModel() {
+  const held: Array<{ owner: string; mode: TaskRowLockMode }> = []
+  const waiting = new Set<string>()
+  const events: string[] = []
+  let changed = deferred()
+  const notifyChanged = () => {
+    const previous = changed
+    changed = deferred()
+    previous.resolve()
+  }
+  const releaseOwner = (owner: string) => {
+    const index = held.findIndex((lock) => lock.owner === owner)
+    if (index < 0) return
+    const [released] = held.splice(index, 1)
+    events.push(`${owner}:${released.mode}:released`)
+    notifyChanged()
+  }
+  return {
+    events,
+    isWaiting(owner: string) {
+      return waiting.has(owner)
+    },
+    releaseOwner,
+    record(event: string) {
+      events.push(event)
+    },
+    async acquire(owner: string, mode: TaskRowLockMode) {
+      while (held.some((lock) => taskRowLocksConflict(lock.mode, mode))) {
+        waiting.add(owner)
+        await changed.promise
+      }
+      waiting.delete(owner)
+      held.push({ owner, mode })
+      events.push(`${owner}:${mode}:acquired`)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        releaseOwner(owner)
+      }
+    },
+  }
+}
+
 function createTaskTransactionHarness(input: {
   label: string
   mutex: ReturnType<typeof createAsyncMutex>
@@ -80,7 +131,7 @@ function createTaskTransactionHarness(input: {
   }
   const queryExec = async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
-    if (normalized.includes('from public.tasks') && normalized.includes('for update')) {
+    if (normalized.includes('from public.tasks') && /for (?:no key )?update/.test(normalized)) {
       if (!releases) throw new Error(`${input.label} task lock was attempted outside a transaction`)
       input.onTaskLockAttempt?.()
       const release = await input.mutex.acquire()
@@ -180,6 +231,67 @@ describe('durationExperienceReconciliationService', () => {
       resolveCompanyId: async () => null,
     })).rejects.toThrow('tenant ownership')
     expect(store.enqueue).not.toHaveBeenCalled()
+  })
+
+  it('keeps the coordinator task lock compatible with the independent FK key-share insert', async () => {
+    const lockModel = createPostgresTaskRowLockModel()
+    const fkInsertAttempted = deferred()
+    let releaseCoordinatorLock = () => undefined
+    let taskLockSql = ''
+    const collection = rebuildDurationExperienceSampleForTask({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      actorId: 'actor-a',
+      trigger: 'structured_cause_user_confirmation',
+    }, {
+      withTransaction: async (work) => {
+        try {
+          return await work()
+        } finally {
+          releaseCoordinatorLock()
+        }
+      },
+      queryExec: async (sql) => {
+        taskLockSql = sql.replace(/\s+/g, ' ').trim()
+        const normalized = taskLockSql.toLowerCase()
+        const mode: TaskRowLockMode = normalized.includes('for no key update of task')
+          ? 'no_key_update'
+          : normalized.includes('for update of task')
+            ? 'update'
+            : (() => { throw new Error(`unexpected task lock SQL: ${taskLockSql}`) })()
+        releaseCoordinatorLock = await lockModel.acquire('coordinator', mode)
+        return {
+          rows: [{
+            id: 'task-1', project_id: 'project-1', status: 'completed', progress: 100,
+            actual_start_date: '2026-07-01', actual_end_date: '2026-07-10',
+          }],
+          rowCount: 1,
+        }
+      },
+      collectSample: async () => {
+        fkInsertAttempted.resolve()
+        const releaseForeignKeyLock = await lockModel.acquire('rest-fk', 'key_share')
+        releaseForeignKeyLock()
+        lockModel.record('collector:settled')
+        return true
+      },
+    })
+
+    await fkInsertAttempted.promise
+    const foreignKeyInsertWasBlocked = lockModel.isWaiting('rest-fk')
+    if (foreignKeyInsertWasBlocked) lockModel.releaseOwner('coordinator')
+    await expect(collection).resolves.toBe(true)
+
+    expect(foreignKeyInsertWasBlocked).toBe(false)
+    expect(taskLockSql).toContain('FOR NO KEY UPDATE OF task')
+    expect(lockModel.events).toEqual([
+      'coordinator:no_key_update:acquired',
+      'rest-fk:key_share:acquired',
+      'rest-fk:key_share:released',
+      'collector:settled',
+      'coordinator:no_key_update:released',
+    ])
   })
 
   it('serializes a paused rebuild against task-primary confirmation and leaves the final sample at authority B', async () => {
@@ -340,7 +452,7 @@ describe('durationExperienceReconciliationService', () => {
     expect(observedAuthorities).toEqual(['B', 'B'])
     expect(queryExec).toHaveBeenCalledTimes(2)
     for (const [sql] of queryExec.mock.calls) {
-      expect(String(sql).replace(/\s+/g, ' ')).toContain('FOR UPDATE OF task')
+      expect(String(sql).replace(/\s+/g, ' ')).toContain('FOR NO KEY UPDATE OF task')
     }
     expect(queryExec.mock.calls.map(([, params]) => params)).toEqual([
       ['task-1', 'project-1', 'company-1'],

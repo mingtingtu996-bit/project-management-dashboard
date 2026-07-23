@@ -361,7 +361,7 @@ export async function collectDurationExperienceSampleWithTaskLock(
         WHERE task.id = $1
           AND task.project_id = $2
           AND project.company_id = $3
-        FOR UPDATE OF task`,
+        FOR NO KEY UPDATE OF task`,
       [taskId, projectId, companyId],
     )
     const task = result.rows?.[0] as Task | undefined
