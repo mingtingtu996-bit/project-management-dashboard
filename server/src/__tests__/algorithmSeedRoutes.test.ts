@@ -4266,7 +4266,7 @@ describe('algorithm seed routes', () => {
     }))
   })
 
-  it('preserves construction organization workbench suggestion attribution payload through the controlled operation route', async () => {
+  it('preserves construction organization workbench suggestion attribution and caller event chronology', async () => {
     mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mockResolvedValueOnce({
       status: 'operation_delegated',
       operationAction: 'runtime_consumer_observation',
@@ -4329,7 +4329,7 @@ describe('algorithm seed routes', () => {
       draftNetworkKey: 'draft-hospital',
       releaseRecordTarget: 'option-hospital',
       rollbackTarget: 'draft-hospital',
-      executedAt: expect.any(String),
+      executedAt: '2026-06-24T12:00:00.000Z',
       consumerVerificationRefs: [
         'constructionOrganizationProductOutcomeCloseoutMatrixService.nextEvidenceWorkPackages',
       ],
@@ -4339,8 +4339,7 @@ describe('algorithm seed routes', () => {
       queryExec: mocks.executeSQL,
     }))
     const delegated = mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mock.calls.at(-1)?.[0]
-    expect(delegated.executedAt).not.toBe('2026-06-24T12:00:00.000Z')
-    expect(Number.isFinite(Date.parse(delegated.executedAt))).toBe(true)
+    expect(delegated.executedAt).toBe('2026-06-24T12:00:00.000Z')
   })
 
   it('preserves construction organization recommendation adoption payload through the controlled operation route', async () => {
