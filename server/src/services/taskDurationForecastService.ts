@@ -9,6 +9,7 @@ import { assembleDurationInput } from './durationInputAssemblerService.js'
 import type { DurationAlgorithmHydratableInput } from './durationAlgorithmInputHydrationService.js'
 import { supabase } from './dbService.js'
 import { query as rawQuery } from '../database.js'
+import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
 import {
   detectProgressAnomalySignals,
   type ProgressAnomalySignal,
@@ -2534,6 +2535,17 @@ async function loadProjectCompanyId(projectId: string | null): Promise<string | 
     logger.warn('[taskDurationForecastService] failed to load project company for residual overlay', { projectId, error })
     return null
   }
+}
+
+async function loadConfirmedTaskPrimaryCause(taskId: string, projectId: string) {
+  const companyId = await loadProjectCompanyId(projectId)
+  if (!companyId) return null
+  const authority = await readTaskStructuredCauseAuthority({ companyId, projectId, taskId })
+  return authority.resolution.availability === 'available'
+    && authority.confirmedPrimaryCause
+    && authority.confirmedPrimaryCause.causeCode === authority.resolution.causeCode
+    ? authority.confirmedPrimaryCause.causeCode
+    : null
 }
 
 async function queryForecastResidualOverlays(filters: {
@@ -5490,6 +5502,7 @@ async function refreshTaskDurationForecast(
     projectTypeCode: factInput.projectTypeCode,
     structureTypeCode: factInput.structureTypeCode,
     methodVariantCodes: factInput.methodVariantCodes,
+    confirmedCauseCode: null as Awaited<ReturnType<typeof loadConfirmedTaskPrimaryCause>>,
     runtimeExecutionFacts: buildForecastRuntimeExecutionFacts(task),
   }
 
@@ -5508,9 +5521,15 @@ async function refreshTaskDurationForecast(
   const modelProfilePromise = loadForecastModelProfile(task)
   const earliestStartRulePromise = loadEarliestStartRule(task)
   const currentForecastPromise = loadCurrentForecast(taskId, { projectId })
-  const [snapshots, obstacles] = await Promise.all([snapshotsPromise, obstaclesPromise])
+  const confirmedCausePromise = loadConfirmedTaskPrimaryCause(taskId, projectId)
+  const [snapshots, obstacles, confirmedCauseCode] = await Promise.all([
+    snapshotsPromise,
+    obstaclesPromise,
+    confirmedCausePromise,
+  ])
   input = {
     ...input,
+    confirmedCauseCode,
     runtimeExecutionFacts: buildForecastRuntimeExecutionFacts(task, snapshots, obstacles),
   }
   const [suggestion, dependencyContext, externalReadiness, workCalendar, velocityLearning, modelProfile, earliestStartRule, currentForecast] = await Promise.all([

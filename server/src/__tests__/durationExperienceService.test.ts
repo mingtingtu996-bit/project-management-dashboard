@@ -99,6 +99,25 @@ function completedTask(overrides: Record<string, unknown> = {}) {
   } as any
 }
 
+function structuredCauseRow(overrides: Record<string, unknown> = {}) {
+  const status = String(overrides.status ?? 'confirmed')
+  return {
+    id: '00000000-0000-4000-8000-000000000001',
+    company_id: 'company-1',
+    project_id: 'project-1',
+    subject_type: 'task',
+    subject_id: 'task-cause-snapshot',
+    event_type: 'completion',
+    status,
+    cause_code: 'material_shortage',
+    cause_role: 'primary',
+    taxonomy_version: 'v1.0.0',
+    confirmation_source: status === 'candidate' ? 'candidate' : 'user_confirmed',
+    confirmed_at: status === 'candidate' ? null : '2026-05-05T07:00:00.000Z',
+    ...overrides,
+  }
+}
+
 describe('durationExperienceService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -337,18 +356,11 @@ describe('durationExperienceService', () => {
   })
 
   it('keeps a manual cause candidate out of benchmarks until confirmation', async () => {
-    mocks.structuredCauseRows = [{
-      id: 'manual-candidate-1',
-      company_id: 'company-1',
-      project_id: 'project-1',
-      subject_type: 'task',
-      subject_id: 'task-cause-snapshot',
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000011',
       status: 'candidate',
       cause_code: 'other',
-      cause_role: 'primary',
-      taxonomy_version: 'v1.0.0',
-      confirmation_source: 'candidate',
-    }]
+    })]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
 
@@ -363,31 +375,17 @@ describe('durationExperienceService', () => {
 
   it('does not let another confirmed cause bypass a manual review candidate', async () => {
     mocks.structuredCauseRows = [
-      {
-        id: 'canonical-confirmed-1',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000021',
         cause_code: 'material_shortage',
         cause_role: 'contributing',
-        taxonomy_version: 'v1.0.0',
-        confirmation_source: 'user_confirmed',
-      },
-      {
-        id: 'manual-candidate-1',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000022',
         status: 'candidate',
         cause_code: 'other',
-        cause_role: 'primary',
-        taxonomy_version: 'v1.0.0',
-        confirmation_source: 'candidate',
         review_reason_codes: ['manual_text_requires_user_confirmation'],
-      },
+      }),
     ]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
@@ -402,18 +400,11 @@ describe('durationExperienceService', () => {
   })
 
   it('requires a confirmed canonical cause before cause-linked evidence is benchmark eligible', async () => {
-    mocks.structuredCauseRows = [{
-      id: 'legacy-confirmed-1',
-      company_id: 'company-1',
-      project_id: 'project-1',
-      subject_type: 'task',
-      subject_id: 'task-cause-snapshot',
-      status: 'confirmed',
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000031',
       cause_code: 'legacy_weather_delay',
-      cause_role: 'primary',
       taxonomy_version: 'legacy/v1',
-      confirmation_source: 'user_confirmed',
-    }]
+    })]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
 
@@ -447,18 +438,10 @@ describe('durationExperienceService', () => {
   })
 
   it('marks confirmed canonical cause evidence available for benchmark use', async () => {
-    mocks.structuredCauseRows = [{
-      id: 'canonical-confirmed-1',
-      company_id: 'company-1',
-      project_id: 'project-1',
-      subject_type: 'task',
-      subject_id: 'task-cause-snapshot',
-      status: 'confirmed',
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000041',
       cause_code: 'weather_impact',
-      cause_role: 'primary',
-      taxonomy_version: 'v1.0.0',
-      confirmation_source: 'user_confirmed',
-    }]
+    })]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
 
@@ -472,21 +455,12 @@ describe('durationExperienceService', () => {
   })
 
   it('stores only confirmed cause fields and keeps responsibility as user-confirmed context', async () => {
-    mocks.structuredCauseRows = [{
-      id: 'attribution-1',
-      company_id: 'company-1',
-      project_id: 'project-1',
-      subject_type: 'task',
-      subject_id: 'task-cause-snapshot',
-      status: 'confirmed',
-      cause_code: 'material_shortage',
-      cause_role: 'primary',
-      taxonomy_version: 'construction-cause/v1',
-      confirmation_source: 'user_confirmed',
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000051',
       responsibility_class: 'contractor_attributable',
       raw_text: 'must not enter duration metadata',
       confidence: 0.99,
-    }]
+    })]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
 
@@ -496,11 +470,13 @@ describe('durationExperienceService', () => {
       confirmed_count: 1,
       candidate_count: 0,
       confirmed_causes: [{
-        attribution_id: 'attribution-1',
+        attribution_id: '00000000-0000-4000-8000-000000000051',
         cause_code: 'material_shortage',
         cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
+        taxonomy_version: 'v1.0.0',
+        event_type: 'completion',
         confirmation_source: 'user_confirmed',
+        confirmed_at: '2026-05-05T07:00:00.000Z',
         user_confirmed_context: {
           responsibility_class: 'contractor_attributable',
         },
@@ -512,43 +488,21 @@ describe('durationExperienceService', () => {
 
   it('keeps multiple confirmed causes deterministic while candidate causes remain count-only', async () => {
     mocks.structuredCauseRows = [
-      {
-        id: 'candidate-1',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000061',
         status: 'candidate',
-        cause_code: 'candidate_must_not_group',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: null,
-      },
-      {
-        id: 'confirmed-2',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
+        cause_code: 'other',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000062',
         cause_code: 'weather_impact',
         cause_role: 'contributing',
-        taxonomy_version: 'construction-cause/v1',
         confirmation_source: 'deterministic_policy',
         responsibility_class: 'owner_attributable',
-      },
-      {
-        id: 'confirmed-1',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
-        cause_code: 'material_shortage',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: 'user_confirmed',
-      },
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000063',
+      }),
     ]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
@@ -558,16 +512,16 @@ describe('durationExperienceService', () => {
       confirmed_count: 2,
       candidate_count: 1,
       confirmed_causes: [
-        { attribution_id: 'confirmed-1', cause_code: 'material_shortage', cause_role: 'primary' },
-        { attribution_id: 'confirmed-2', cause_code: 'weather_impact', cause_role: 'contributing' },
+        { attribution_id: '00000000-0000-4000-8000-000000000063', cause_code: 'material_shortage', cause_role: 'primary' },
+        { attribution_id: '00000000-0000-4000-8000-000000000062', cause_code: 'weather_impact', cause_role: 'contributing' },
       ],
     })
-    expect(JSON.stringify(metadata.structured_cause_snapshot)).not.toContain('candidate_must_not_group')
+    expect(JSON.stringify(metadata.structured_cause_snapshot)).not.toContain('"other"')
     expect(metadata.benchmark_context_key).not.toContain('cause=')
     expect(JSON.stringify(metadata.structured_cause_snapshot)).not.toContain('owner_attributable')
     expect(metadata).toEqual(expect.objectContaining({
-      structuredCauseAvailability: 'unavailable',
-      structuredCauseCode: null,
+      structuredCauseAvailability: 'review_required',
+      structuredCauseCode: 'material_shortage',
       structuredCauseTaxonomyVersion: 'v1.0.0',
     }))
     expect(mocks.insert.mock.calls.at(-1)?.[0].included_in_benchmark).toBe(false)
@@ -575,39 +529,22 @@ describe('durationExperienceService', () => {
 
   it('defensively excludes structured causes returned from another company or project', async () => {
     mocks.structuredCauseRows = [
-      {
-        id: 'cross-project',
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000071',
         company_id: 'company-1',
         project_id: 'project-2',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
-        cause_code: 'cross_project_cause',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: 'user_confirmed',
-      },
-      {
-        id: 'cross-company',
+        cause_code: 'weather_impact',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000072',
         company_id: 'company-2',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
         status: 'candidate',
-        cause_code: 'cross_company_candidate',
-      },
-      {
-        id: 'same-scope',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
+        cause_code: 'other',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000073',
         cause_code: 'quality_rework',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: 'user_confirmed',
-      },
+      }),
     ]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
@@ -616,10 +553,10 @@ describe('durationExperienceService', () => {
     expect(snapshot.confirmed_count).toBe(1)
     expect(snapshot.candidate_count).toBe(0)
     expect(snapshot.confirmed_causes).toEqual([
-      expect.objectContaining({ attribution_id: 'same-scope', cause_code: 'quality_rework' }),
+      expect.objectContaining({ attribution_id: '00000000-0000-4000-8000-000000000073', cause_code: 'quality_rework' }),
     ])
-    expect(JSON.stringify(snapshot)).not.toContain('cross_project_cause')
-    expect(JSON.stringify(snapshot)).not.toContain('cross_company_candidate')
+    expect(JSON.stringify(snapshot)).not.toContain('weather_impact')
+    expect(JSON.stringify(snapshot)).not.toContain('"other"')
   })
 
   it('collects an actual-end completion fact even when status and progress synchronization lag', async () => {

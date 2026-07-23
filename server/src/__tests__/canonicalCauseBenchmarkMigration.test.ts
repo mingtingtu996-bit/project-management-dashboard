@@ -3,6 +3,8 @@ import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { CANONICAL_STRUCTURED_CAUSE_CODES } from '../domain/structuredCauseTaxonomy.js'
+
 const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
   ? process.cwd()
   : resolve(process.cwd(), 'server')
@@ -27,6 +29,15 @@ describe('canonical cause benchmark migration', () => {
     expect(forward).toContain('WHERE is_current = TRUE')
     expect(forward).toContain('CREATE INDEX IF NOT EXISTS idx_duration_benchmark_cause_segments_benchmark_id')
     expect(forward).toContain('ON public.duration_benchmark_cause_segments (benchmark_id)')
+  })
+
+  it('keeps the migration cause-code check exactly equal to the canonical taxonomy', () => {
+    const forward = readSql('migrations', migrationName)
+    const check = forward.match(/CHECK \(cause_code IN \(([\s\S]*?)\)\)/)
+    const migrationCodes = Array.from(check?.[1].matchAll(/'([^']+)'/g) ?? [], (match) => match[1]).sort()
+
+    expect(check).not.toBeNull()
+    expect(migrationCodes).toEqual([...CANONICAL_STRUCTURED_CAUSE_CODES].sort())
   })
 
   it('fails closed on missing runtime role and limits direct mutation authority', () => {
@@ -146,6 +157,21 @@ describe('canonical cause benchmark migration', () => {
     expect(forward).not.toMatch(/GRANT EXECUTE ON FUNCTION public\.prevent_duration_benchmark_scope_change_with_segments\(\)/)
   })
 
+  it('enforces project/company authority on parent duration benchmarks with rollback parity', () => {
+    const forward = readSql('migrations', migrationName)
+    const rollback = readSql('migrations', 'rollback', migrationName)
+    const clean = readSql('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_scope()')
+    expect(forward).toContain("RAISE EXCEPTION 'duration benchmark company is required for project scope'")
+    expect(forward).toContain("RAISE EXCEPTION 'duration benchmark project not found'")
+    expect(forward).toContain("RAISE EXCEPTION 'duration benchmark project/company mismatch'")
+    expect(forward).toMatch(/CREATE TRIGGER ensure_duration_benchmark_scope_trigger\s+BEFORE INSERT OR UPDATE OF company_id, project_id\s+ON public\.duration_benchmarks/)
+    expect(rollback).toContain('DROP TRIGGER IF EXISTS ensure_duration_benchmark_scope_trigger ON public.duration_benchmarks')
+    expect(rollback).toContain('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_scope()')
+    expect(clean).toContain('CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_scope()')
+  })
+
   it('provides an exact rollback limited to migration 324 objects', () => {
     const rollbackPath = resolve(serverRoot, 'migrations', 'rollback', migrationName)
 
@@ -155,7 +181,7 @@ describe('canonical cause benchmark migration', () => {
       /IF to_regclass\('public\.duration_benchmark_cause_segments'\) IS NOT NULL THEN[\s\S]*EXECUTE 'DROP POLICY IF EXISTS duration_benchmark_cause_segments_member_read ON public\.duration_benchmark_cause_segments'[\s\S]*EXECUTE 'DROP POLICY IF EXISTS duration_benchmark_cause_segments_backend_runtime ON public\.duration_benchmark_cause_segments'[\s\S]*EXECUTE 'DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger ON public\.duration_benchmark_cause_segments'[\s\S]*END IF/,
     )
     expect(rollback).toMatch(
-      /IF to_regclass\('public\.duration_benchmarks'\) IS NOT NULL THEN\s+EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger ON public\.duration_benchmarks';\s+END IF/,
+      /IF to_regclass\('public\.duration_benchmarks'\) IS NOT NULL THEN\s+EXECUTE 'DROP TRIGGER IF EXISTS ensure_duration_benchmark_scope_trigger ON public\.duration_benchmarks';\s+EXECUTE 'DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger ON public\.duration_benchmarks';\s+END IF/,
     )
     expect(rollback).toContain('DROP FUNCTION IF EXISTS public.ensure_duration_benchmark_cause_segment_scope()')
     expect(rollback).toContain('DROP FUNCTION IF EXISTS public.prevent_duration_benchmark_scope_change_with_segments()')

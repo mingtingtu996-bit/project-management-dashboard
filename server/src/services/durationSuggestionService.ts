@@ -96,6 +96,7 @@ import type { ConstructionOrganizationScenarioSelection } from './constructionOr
 import {
   loadCurrentCauseSegment,
   type DurationBenchmarkCauseSegment,
+  type DurationBenchmarkCauseSegmentQueryExec,
 } from './durationBenchmarkCauseSegmentService.js'
 import {
   mergeConstructionOrganizationLineageIntoContext,
@@ -208,6 +209,7 @@ export interface DurationSuggestion {
     sourceAsOf: string
     sampleCount: number
   } | null
+  benchmarkCauseSelection?: 'exact_cause' | 'all_cause_fallback' | 'no_confirmed_cause' | 'cause_segment_read_failed'
 }
 
 export interface DurationSuggestionInput {
@@ -331,7 +333,7 @@ const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
   'special_work_duration_seed',
 ])
 
-type DurationBenchmarkRow = {
+export type DurationBenchmarkRow = {
   id?: string | null
   p50_days?: number | null
   p75_days?: number | null
@@ -364,7 +366,7 @@ type DurationOverrideRow = {
 
 type BenchmarkScope = 'project' | 'company' | 'system'
 
-type DurationBenchmarkCandidate = {
+export type DurationBenchmarkCandidate = {
   benchmark: DurationBenchmarkRow
   scope: BenchmarkScope
   benchKey: string
@@ -1748,6 +1750,78 @@ function isBenchmarkCandidateScopeConsistent(
   return isTemplateUsableForContext(benchmark, input, companyId)
 }
 
+function readRuntimeTimestamp(value: unknown) {
+  const normalized = normalizeId(value)
+  return normalized && Number.isFinite(Date.parse(normalized))
+    ? new Date(normalized).toISOString()
+    : null
+}
+
+export function buildDurationBenchmarkRowFromRuntimePublication(input: {
+  publicationKey: string
+  selectionBasis: string
+  publication: {
+    runtimePayload: Record<string, unknown>
+    companyId: string | null
+    projectId: string | null
+    publicationStage: string
+  }
+}): DurationBenchmarkRow | null {
+  const payload = input.publication.runtimePayload
+  const benchmarkId = normalizeId(payload.benchmarkId ?? payload.benchmark_id)
+  const p50Days = readPositiveRawNumber(payload.p50Days ?? payload.p50_days)
+  const p75Days = readPositiveRawNumber(payload.p75Days ?? payload.p75_days)
+  const p80Days = readPositiveRawNumber(payload.p80Days ?? payload.p80_days)
+  const meanDays = readPositiveRawNumber(payload.meanDays ?? payload.mean_days)
+  const sampleCount = readPositiveNumber(payload.sampleCount ?? payload.sample_count)
+  const variance = readOptionalNonNegativeNumber(payload.variance)
+  const coefficientOfVariation = readOptionalNonNegativeNumber(
+    payload.coefficientOfVariation ?? payload.coefficient_of_variation,
+  )
+  const confidenceLevel = normalizeId(payload.confidenceLevel ?? payload.confidence_level)
+  const confidenceScore = readOptionalNonNegativeNumber(payload.confidenceScore ?? payload.confidence_score)
+  const durationDayBasis = normalizeId(payload.durationDayBasis ?? payload.duration_day_basis)
+  const calendarRef = normalizeId(payload.calendarRef ?? payload.calendar_ref)
+  const calendarVersion = normalizeId(payload.calendarVersion ?? payload.calendar_version)
+  const generatedAt = readRuntimeTimestamp(payload.generatedAt ?? payload.generated_at)
+  const sourceWindowStart = readRuntimeTimestamp(payload.sourceWindowStart ?? payload.source_window_start)
+  const sourceAsOf = readRuntimeTimestamp(payload.sourceAsOf ?? payload.source_as_of)
+  if (
+    !benchmarkId || !p50Days || !p75Days || !p80Days || !meanDays || !sampleCount
+    || variance === null || coefficientOfVariation === null
+    || !confidenceLevel || confidenceScore === null
+    || durationDayBasis !== 'construction_production_day'
+    || !calendarRef || !calendarVersion || !generatedAt || !sourceWindowStart || !sourceAsOf
+  ) return null
+  return {
+    id: benchmarkId,
+    p50_days: p50Days,
+    p75_days: p75Days,
+    p80_days: p80Days,
+    mean_days: meanDays,
+    sample_count: sampleCount,
+    variance,
+    coefficient_of_variation: coefficientOfVariation,
+    confidence_level: confidenceLevel as DurationBenchmarkRow['confidence_level'],
+    confidence_score: confidenceScore,
+    company_id: input.publication.companyId,
+    project_id: input.publication.projectId,
+    generated_at: generatedAt,
+    source_window_start: sourceWindowStart,
+    source_as_of: sourceAsOf,
+    duration_day_basis: 'construction_production_day',
+    metadata: {
+      source: 'duration_learning_runtime_publication',
+      publication_key: input.publicationKey,
+      calendar_ref: calendarRef,
+      calendar_version: calendarVersion,
+    },
+    __durationLearningPublicationKey: input.publicationKey,
+    __durationLearningPublicationStage: input.publication.publicationStage,
+    __durationLearningSelectionBasis: input.selectionBasis,
+  }
+}
+
 async function collectBenchmarkCandidates(params: {
   benchmarkIdentity: string
   wbsNodeType: string
@@ -1787,33 +1861,16 @@ async function collectBenchmarkCandidates(params: {
         industryKey: params.input.projectTypeCode,
       })
       if (resolution.runtimeConsumable && resolution.publication) {
-        const payload = resolution.publication.runtimePayload
         const scope: BenchmarkScope = resolution.publication.scopeLevel === 'project'
           ? 'project'
           : resolution.publication.scopeLevel === 'company'
             ? 'company'
             : 'system'
-        addCandidate({
-          p50_days: readPositiveNumber(payload.p50Days ?? payload.p50_days),
-          p75_days: readPositiveNumber(payload.p75Days ?? payload.p75_days),
-          p80_days: readPositiveNumber(payload.p80Days ?? payload.p80_days),
-          mean_days: readPositiveNumber(payload.meanDays ?? payload.mean_days),
-          sample_count: Number(payload.sampleCount ?? payload.sample_count ?? 0),
-          variance: Number(payload.variance ?? payload.coefficientOfVariation ?? payload.coefficient_of_variation ?? 0),
-          coefficient_of_variation: Number(payload.coefficientOfVariation ?? payload.coefficient_of_variation ?? payload.variance ?? 0),
-          confidence_level: (normalizeId(payload.confidenceLevel ?? payload.confidence_level) || 'medium') as DurationBenchmarkRow['confidence_level'],
-          confidence_score: Number(payload.confidenceScore ?? payload.confidence_score ?? 0),
-          company_id: resolution.publication.companyId,
-          project_id: resolution.publication.projectId,
-          duration_day_basis: 'construction_production_day',
-          metadata: {
-            source: 'duration_learning_runtime_publication',
-            publication_key: resolution.publicationKey,
-          },
-          __durationLearningPublicationKey: resolution.publicationKey,
-          __durationLearningPublicationStage: resolution.publication.publicationStage,
-          __durationLearningSelectionBasis: resolution.selectionBasis,
-        }, scope)
+        addCandidate(buildDurationBenchmarkRowFromRuntimePublication({
+          publicationKey: resolution.publicationKey,
+          selectionBasis: resolution.selectionBasis,
+          publication: resolution.publication,
+        }), scope)
       }
     }
 
@@ -1864,9 +1921,10 @@ function benchmarkRowFromCauseSegment(
   }
 }
 
-async function selectCauseAwareBenchmarkCandidates(
+export async function selectCauseAwareBenchmarkCandidates(
   candidates: DurationBenchmarkCandidate[],
   confirmedCauseCode: StructuredCauseCode | null | undefined,
+  queryExec: DurationBenchmarkCauseSegmentQueryExec = executeDurationLearningRuntimePublicationQuery,
 ) {
   const primary = candidates[0] ?? null
   if (!confirmedCauseCode || !primary) {
@@ -1874,12 +1932,18 @@ async function selectCauseAwareBenchmarkCandidates(
       candidates,
       segment: null as DurationBenchmarkCauseSegment | null,
       fallback: null as 'all_cause' | null,
+      selection: confirmedCauseCode ? 'all_cause_fallback' as const : 'no_confirmed_cause' as const,
     }
   }
 
   const benchmarkId = normalizeId(primary.benchmark.id)
   if (!benchmarkId) {
-    return { candidates, segment: null, fallback: 'all_cause' as const }
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null,
+      fallback: null,
+      selection: 'cause_segment_read_failed' as const,
+    }
   }
 
   try {
@@ -1888,27 +1952,32 @@ async function selectCauseAwareBenchmarkCandidates(
       causeCode: confirmedCauseCode,
       companyId: normalizeId(primary.benchmark.company_id) || null,
       projectId: normalizeId(primary.benchmark.project_id) || null,
-    }, executeDurationLearningRuntimePublicationQuery)
+    }, queryExec)
     if (
       !segment
       || !readPositiveNumber(segment.p50Days)
       || !isBenchmarkCandidateUsable(primary.scope, segment.sampleCount, primary.specificity)
     ) {
-      return { candidates, segment: null, fallback: 'all_cause' as const }
+      return { candidates, segment: null, fallback: 'all_cause' as const, selection: 'all_cause_fallback' as const }
     }
     const exactCandidate: DurationBenchmarkCandidate = {
       ...primary,
       benchmark: benchmarkRowFromCauseSegment(primary.benchmark, segment),
       sampleSize: segment.sampleCount,
     }
-    return { candidates: [exactCandidate], segment, fallback: null }
+    return { candidates: [exactCandidate], segment, fallback: null, selection: 'exact_cause' as const }
   } catch (error) {
     logger.warn('[durationSuggestionService] failed to load exact benchmark cause segment', {
       benchmarkId,
       confirmedCauseCode,
       error,
     })
-    return { candidates, segment: null, fallback: 'all_cause' as const }
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null,
+      fallback: null,
+      selection: 'cause_segment_read_failed' as const,
+    }
   }
 }
 
@@ -5071,6 +5140,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
     const benchmarkCandidates = causeAwareBenchmarkSelection.candidates
     const benchmarkCauseSegment = causeAwareBenchmarkSelection.segment
     const benchmarkCauseFallback = causeAwareBenchmarkSelection.fallback
+    const benchmarkCauseSelection = causeAwareBenchmarkSelection.selection
     const primaryBenchmarkCandidate = benchmarkCandidates[0] ?? null
     const companyBenchmarkCandidate = benchmarkCandidates.find((candidate) => candidate.scope === 'company') ?? null
     const benchmark = primaryBenchmarkCandidate?.benchmark ?? null
@@ -5397,7 +5467,9 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           benchmarkBlendWeightSource: benchmarkMetadataCandidate?.weightSource,
           benchmarkGeneralizationSkipped,
           benchmarkCauseFallback,
+          benchmarkCauseSelection,
         },
+        benchmarkCauseSelection,
         benchmarkCauseSegment: benchmarkCauseSegment
           ? {
               causeCode: benchmarkCauseSegment.causeCode,
@@ -5435,7 +5507,9 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       businessReasonParams: {
         ...noSeedReason.params,
         benchmarkCauseFallback,
+        benchmarkCauseSelection,
       },
+      benchmarkCauseSelection,
       benchmarkCauseSegment: benchmarkCauseSegment
         ? {
             causeCode: benchmarkCauseSegment.causeCode,

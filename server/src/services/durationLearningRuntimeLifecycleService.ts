@@ -9,6 +9,7 @@ import {
   type DurationLearningRuntimeScope,
   type PersistDurationLearningRuntimePublicationInput,
 } from './durationLearningRuntimePublicationService.js'
+import { promoteDurationBenchmarkRuntimeCanaryAtomically } from './durationLearningAssetAtomicStoreService.js'
 import {
   buildDurationContextPolicyLearningOperationIdentity,
   createDatabaseDurationContextPolicyLearningCheckpointStore,
@@ -176,6 +177,7 @@ export interface RunDurationLearningRuntimeLifecycleSweepInput {
   collectionCursorStore?: DurationLearningRuntimeCollectionCursorStore | null
   recordImpact?: typeof recordDurationLearningRuntimeImpact
   promoteCanary?: typeof promoteDurationLearningRuntimeCanary
+  promoteBenchmarkCanary?: typeof promoteDurationBenchmarkRuntimeCanaryAtomically
   rollbackPublication?: typeof rollbackDurationLearningRuntimePublication
   evidenceOutboxProcessor?: ((input: {
     queryExec: DurationLearningRuntimePublicationQueryExec
@@ -544,6 +546,12 @@ function nonNegativeInteger(value: unknown) {
 function positiveNumber(value: unknown) {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+function timestamp(value: unknown) {
+  const normalized = text(value)
+  const parsed = Date.parse(normalized)
+  return normalized && Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
 }
 
 function uniqueTexts(values: readonly unknown[]) {
@@ -1040,7 +1048,36 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
   const scope = scopeFromRow(row, industryKey)
   const p50Days = positiveNumber(row.p50_days)
   if (!id || !artifactKey || !scope || !p50Days) return null
-  const p80Days = positiveNumber(row.p80_days) ?? p50Days
+  const p75Days = positiveNumber(row.p75_days)
+  const p80Days = positiveNumber(row.p80_days)
+  const meanDays = positiveNumber(row.mean_days)
+  const variance = optionalNumber(row.variance)
+  const coefficientOfVariation = optionalNumber(row.coefficient_of_variation)
+  const sampleCount = nonNegativeInteger(row.sample_count)
+  const confidenceLevel = text(row.confidence_level)
+  const confidenceScore = optionalNumber(row.confidence_score)
+  const durationDayBasis = text(row.duration_day_basis)
+  const generatedAt = timestamp(row.generated_at)
+  const sourceWindowStart = timestamp(row.source_window_start)
+  const sourceAsOf = timestamp(row.source_as_of)
+  const calendarRef = text(metadata.calendar_ref ?? metadata.calendarRef)
+  const calendarVersion = text(metadata.calendar_version ?? metadata.calendarVersion)
+  const identityBlockingReasons = [
+    ...(durationDayBasis === 'construction_production_day' ? [] : ['benchmark_production_day_basis_required']),
+    ...(p75Days ? [] : ['benchmark_p75_days_required']),
+    ...(p80Days ? [] : ['benchmark_p80_days_required']),
+    ...(meanDays ? [] : ['benchmark_mean_days_required']),
+    ...(variance !== null && variance >= 0 ? [] : ['benchmark_variance_required']),
+    ...(coefficientOfVariation !== null && coefficientOfVariation >= 0 ? [] : ['benchmark_coefficient_of_variation_required']),
+    ...(sampleCount > 0 ? [] : ['benchmark_sample_count_required']),
+    ...(confidenceLevel ? [] : ['benchmark_confidence_level_required']),
+    ...(confidenceScore !== null && confidenceScore >= 0 ? [] : ['benchmark_confidence_score_required']),
+    ...(generatedAt ? [] : ['benchmark_generated_at_required']),
+    ...(sourceWindowStart ? [] : ['benchmark_source_window_start_required']),
+    ...(sourceAsOf ? [] : ['benchmark_source_as_of_required']),
+    ...(calendarRef ? [] : ['benchmark_calendar_ref_required']),
+    ...(calendarVersion ? [] : ['benchmark_calendar_version_required']),
+  ]
   const projectId = text(row.project_id)
   const companyId = text(row.company_id)
   return withAutomationDecision({
@@ -1049,13 +1086,26 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
     artifactKey,
     scope,
     runtimePayload: {
+      benchmarkId: id,
       p50Days,
+      p75Days,
       p80Days,
-      durationDayBasis: text(row.duration_day_basis),
+      meanDays,
+      variance,
+      coefficientOfVariation,
+      sampleCount,
+      confidenceLevel,
+      confidenceScore,
+      durationDayBasis,
+      calendarRef,
+      calendarVersion,
+      generatedAt,
+      sourceWindowStart,
+      sourceAsOf,
     },
     sourceCandidateRefs: [`duration_benchmarks:${id}`],
     sourceEvidenceRefs: evidenceRefs(metadata, `duration_benchmarks:${id}:metadata`),
-    sampleCount: nonNegativeInteger(row.sample_count),
+    sampleCount,
     projectIds: uniqueTexts([projectId]),
     companyIds: uniqueTexts([companyId]),
     industryKeys: uniqueTexts([industryKey]),
@@ -1069,9 +1119,7 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
     conflictCount: nonNegativeInteger(metadata.conflictCount ?? metadata.conflict_count),
     replayPassed: metadata.replayPassed !== false && metadata.replay_passed !== false,
     qualityModel: producerQualityModel('base_duration_benchmark', metadata),
-    blockingReasons: text(row.duration_day_basis) === 'construction_production_day'
-      ? []
-      : ['benchmark_production_day_basis_required'],
+    blockingReasons: identityBlockingReasons,
     policyEvaluationRequired: true,
     automationEvidence: automationEvidenceFrom(metadata),
   })
@@ -3005,6 +3053,7 @@ export async function runDurationLearningRuntimeLifecycleSweep(
     || `duration-learning-runtime-lifecycle:${process.env.HOSTNAME ?? 'local'}:${process.pid}`
   const recordImpact = input.recordImpact ?? recordDurationLearningRuntimeImpact
   const promoteCanary = input.promoteCanary ?? promoteDurationLearningRuntimeCanary
+  const promoteBenchmarkCanary = input.promoteBenchmarkCanary ?? promoteDurationBenchmarkRuntimeCanaryAtomically
   const rollbackPublication = input.rollbackPublication ?? rollbackDurationLearningRuntimePublication
   const observedAt = input.observedAt ?? new Date().toISOString()
   const result = emptySweepResult()
@@ -3306,11 +3355,16 @@ export async function runDurationLearningRuntimeLifecycleSweep(
       })
       if (impact.status !== 'impact_recorded') throw operationBlockedError('duration_learning_runtime_impact', impact)
       if (candidate.publicationStage === 'canary') {
-        const promotion = await promoteCanary({
-          queryExec,
-          publicationKey: candidate.publicationKey,
-          promotedAt: observedAt,
-        })
+        const promotion = candidate.assetKey === 'base_duration_benchmark'
+          ? await promoteBenchmarkCanary({
+              publicationKey: candidate.publicationKey,
+              promotedAt: observedAt,
+            })
+          : await promoteCanary({
+              queryExec,
+              publicationKey: candidate.publicationKey,
+              promotedAt: observedAt,
+            })
         if (promotion.status === 'stable_promoted') result.stablePromoted += 1
         else if (promotion.status === 'stable_already_promoted') result.stablePromotionReused += 1
         else throw operationBlockedError('duration_learning_runtime_promotion', promotion)

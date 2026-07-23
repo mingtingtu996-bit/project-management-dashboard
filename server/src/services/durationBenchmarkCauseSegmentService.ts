@@ -3,6 +3,7 @@ import type { PoolClient } from 'pg'
 import {
   CANONICAL_STRUCTURED_CAUSE_CODES,
   isStructuredCauseCode,
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
   type StructuredCauseCode,
 } from '../domain/structuredCauseTaxonomy.js'
 
@@ -62,6 +63,8 @@ type ConfirmedCauseSampleRow = {
   snapshot_attribution_id?: unknown
   snapshot_cause_code?: unknown
   snapshot_taxonomy_version?: unknown
+  snapshot_event_type?: unknown
+  snapshot_confirmed_at?: unknown
   snapshot_primary_count?: unknown
   included_in_benchmark?: unknown
   sample_strength?: unknown
@@ -111,6 +114,8 @@ const CONFIRMED_CAUSE_SAMPLE_SQL = `
     confirmed_cause ->> 'attribution_id' AS snapshot_attribution_id,
     confirmed_cause ->> 'cause_code' AS snapshot_cause_code,
     confirmed_cause ->> 'taxonomy_version' AS snapshot_taxonomy_version,
+    confirmed_cause ->> 'event_type' AS snapshot_event_type,
+    confirmed_cause ->> 'confirmed_at' AS snapshot_confirmed_at,
     (
       SELECT COUNT(*)
       FROM jsonb_array_elements(
@@ -139,6 +144,8 @@ const CONFIRMED_CAUSE_SAMPLE_SQL = `
     ON confirmed_cause ->> 'attribution_id' = attribution.id::text
    AND confirmed_cause ->> 'cause_code' = attribution.cause_code
    AND confirmed_cause ->> 'taxonomy_version' = attribution.taxonomy_version
+   AND confirmed_cause ->> 'event_type' = attribution.event_type
+   AND (confirmed_cause ->> 'confirmed_at')::timestamptz = attribution.confirmed_at
    AND confirmed_cause ->> 'cause_role' = 'primary'
    AND attribution.subject_type = 'task'
    AND attribution.subject_id = sample.task_id::text
@@ -163,7 +170,7 @@ const CONFIRMED_CAUSE_SAMPLE_SQL = `
     AND sample.duration_day_basis = 'construction_production_day'
     AND sample.actual_duration_production_days > 0
     AND attribution.status = 'confirmed'
-    AND attribution.event_type = 'completion'
+    AND attribution.event_type IN ('delay', 'completion')
     AND attribution.cause_role = 'primary'
     AND attribution.confirmed_at <= $4::timestamptz
     AND attribution.cause_code = ANY($5::text[])
@@ -265,15 +272,21 @@ function isTimestampAtOrBefore(value: unknown, upperBound: string) {
     && timestampValue <= upperBoundValue
 }
 
+function isSameTimestamp(left: unknown, right: unknown) {
+  const leftValue = Date.parse(timestamp(left))
+  const rightValue = Date.parse(timestamp(right))
+  return Number.isFinite(leftValue) && leftValue === rightValue
+}
+
 function isCompatibleSample(row: ConfirmedCauseSampleRow, input: PersistCurrentCauseSegmentsInput) {
   const causeCode = text(row.cause_code)
   const taxonomyVersion = text(row.taxonomy_version)
   return isStructuredCauseCode(causeCode)
     && Boolean(text(row.sample_id))
     && Boolean(text(row.attribution_id))
-    && Boolean(taxonomyVersion)
+    && taxonomyVersion === STRUCTURED_CAUSE_TAXONOMY_VERSION
     && text(row.attribution_status) === 'confirmed'
-    && text(row.attribution_event_type) === 'completion'
+    && ['delay', 'completion'].includes(text(row.attribution_event_type))
     && text(row.cause_role) === 'primary'
     && text(row.source_type) === 'task_completion'
     && isTimestampAtOrBefore(row.confirmed_at, input.sourceAsOf)
@@ -281,6 +294,8 @@ function isCompatibleSample(row: ConfirmedCauseSampleRow, input: PersistCurrentC
     && text(row.snapshot_attribution_id) === text(row.attribution_id)
     && text(row.snapshot_cause_code) === causeCode
     && text(row.snapshot_taxonomy_version) === taxonomyVersion
+    && text(row.snapshot_event_type) === text(row.attribution_event_type)
+    && isSameTimestamp(row.snapshot_confirmed_at, row.confirmed_at)
     && row.included_in_benchmark === true
     && !['weak', 'unusable'].includes(text(row.sample_strength))
     && text(row.duration_day_basis) === 'construction_production_day'
@@ -297,6 +312,12 @@ function aggregateConfirmedCauseSamples(
   rows: readonly ConfirmedCauseSampleRow[],
   input: PersistCurrentCauseSegmentsInput,
 ) {
+  const observedTaxonomyVersions = [...new Set(rows.map((row) => text(row.taxonomy_version)).filter(Boolean))]
+  if (observedTaxonomyVersions.length > 1) throw new Error('Mixed taxonomy versions for benchmark')
+  if (observedTaxonomyVersions.some((version) => version !== STRUCTURED_CAUSE_TAXONOMY_VERSION)) {
+    throw new Error('Unsupported taxonomy version for benchmark')
+  }
+
   const compatibleRows = rows.filter((row) => isCompatibleSample(row, input))
   const taxonomyVersions = [...new Set(compatibleRows.map((row) => text(row.taxonomy_version)))]
   if (taxonomyVersions.length > 1) throw new Error('Mixed taxonomy versions for benchmark')
@@ -308,6 +329,8 @@ function aggregateConfirmedCauseSamples(
       text(row.attribution_id),
       text(row.cause_code),
       text(row.taxonomy_version),
+      text(row.attribution_event_type),
+      timestamp(row.confirmed_at),
     ].join(':')
     const existingIdentity = canonicalIdentityBySample.get(sampleId)
     if (existingIdentity && existingIdentity !== canonicalIdentity) {
@@ -536,13 +559,17 @@ export async function loadCurrentCauseSegment(
     input.companyId,
     input.projectId,
   ])
-  const segment = mapSegmentRow(rows[0] ?? {})
-  if (!segment) return null
+  if (rows.length === 0) return null
+  if (rows.length !== 1) throw new Error('cause segment readback mismatch')
+  const segment = mapSegmentRow(rows[0])
+  if (!segment || segment.taxonomyVersion !== STRUCTURED_CAUSE_TAXONOMY_VERSION) {
+    throw new Error('cause segment readback mismatch')
+  }
   if (
     segment.benchmarkId !== input.benchmarkId
     || segment.causeCode !== input.causeCode
     || segment.companyId !== input.companyId
     || segment.projectId !== input.projectId
-  ) return null
+  ) throw new Error('cause segment readback mismatch')
   return segment
 }

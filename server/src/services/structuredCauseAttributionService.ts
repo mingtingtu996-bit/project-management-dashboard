@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { query as rawQuery, withDatabaseTransaction } from '../database.js'
+import {
+  query as rawQuery,
+  registerDatabasePostCommitEffect,
+  withDatabaseTransaction,
+} from '../database.js'
 import {
   CANONICAL_STRUCTURED_CAUSE_CODES,
   isStructuredCauseCode,
@@ -410,12 +414,34 @@ type WithTransaction = <T>(work: () => Promise<T>) => Promise<T>
 type StructuredCauseDependencies = {
   queryExec?: QueryExec
   withTransaction?: WithTransaction
+  registerPostCommitEffect?: typeof registerDatabasePostCommitEffect
+  rebuildTaskDurationExperienceSample?: (input: {
+    companyId: string
+    projectId: string
+    taskId: string
+    actorId: string
+    trigger: 'structured_cause_user_confirmation'
+  }) => Promise<unknown>
+}
+
+async function rebuildTaskDurationExperienceSample(input: {
+  companyId: string
+  projectId: string
+  taskId: string
+  actorId: string
+  trigger: 'structured_cause_user_confirmation'
+}) {
+  const { rebuildDurationExperienceSampleForTask } = await import('./durationExperienceReconciliationService.js')
+  return rebuildDurationExperienceSampleForTask(input)
 }
 
 function dependencies(input?: StructuredCauseDependencies) {
   return {
     queryExec: input?.queryExec ?? (rawQuery as QueryExec),
     withTransaction: input?.withTransaction ?? withDatabaseTransaction,
+    registerPostCommitEffect: input?.registerPostCommitEffect ?? registerDatabasePostCommitEffect,
+    rebuildTaskDurationExperienceSample:
+      input?.rebuildTaskDurationExperienceSample ?? rebuildTaskDurationExperienceSample,
   }
 }
 
@@ -835,7 +861,12 @@ export async function recordUserConfirmedStructuredCauseAttribution(
   input: UserConfirmedStructuredCauseInput,
   dependencyOverrides?: StructuredCauseDependencies,
 ) {
-  const { queryExec, withTransaction } = dependencies(dependencyOverrides)
+  const {
+    queryExec,
+    withTransaction,
+    registerPostCommitEffect,
+    rebuildTaskDurationExperienceSample,
+  } = dependencies(dependencyOverrides)
   const causeRole = input.causeRole ?? 'primary'
   const rawText = text(input.rawText)
   const actorId = text(input.actorId)
@@ -853,11 +884,35 @@ export async function recordUserConfirmedStructuredCauseAttribution(
     )
   }
 
+  const dedupeKey = buildDedupeKey({
+    companyId: input.companyId,
+    projectId: input.projectId,
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+    eventType: input.eventType,
+    rawText,
+    evidence: [],
+  }, input.causeCode, causeRole)
+
   return withTransaction(async () => {
     await assertProjectTenant(queryExec, input.companyId, input.projectId)
     await assertCauseSubjectProject(queryExec, input.subjectType, input.subjectId, input.projectId)
 
-    if (causeRole === 'primary') {
+    if (causeRole === 'primary' && input.subjectType === 'task') {
+      await queryExec(
+        `UPDATE public.structured_cause_attributions
+            SET status = 'superseded', updated_at = NOW()
+          WHERE company_id = $1
+            AND project_id = $2
+            AND subject_type = 'task'
+            AND subject_id = $3
+            AND event_type IN ('delay', 'completion')
+            AND cause_role = 'primary'
+            AND status IN ('candidate', 'confirmed')
+            AND dedupe_key <> $4`,
+        [input.companyId, input.projectId, input.subjectId, dedupeKey],
+      )
+    } else if (causeRole === 'primary') {
       await queryExec(
         `UPDATE public.structured_cause_attributions
             SET status = 'superseded', updated_at = NOW()
@@ -871,16 +926,6 @@ export async function recordUserConfirmedStructuredCauseAttribution(
         [input.companyId, input.projectId, input.subjectType, input.subjectId, input.eventType],
       )
     }
-
-    const dedupeKey = buildDedupeKey({
-      companyId: input.companyId,
-      projectId: input.projectId,
-      subjectType: input.subjectType,
-      subjectId: input.subjectId,
-      eventType: input.eventType,
-      rawText,
-      evidence: [],
-    }, input.causeCode, causeRole)
     const result = await queryExec(
        `INSERT INTO public.structured_cause_attributions (
          company_id, project_id, subject_type, subject_id, event_type,
@@ -940,6 +985,21 @@ export async function recordUserConfirmedStructuredCauseAttribution(
         dedupeKey,
       ],
     )
+
+    if (causeRole === 'primary' && input.subjectType === 'task') {
+      await registerPostCommitEffect(
+        `rebuild-duration-experience-sample:${input.projectId}:${input.subjectId}`,
+        async () => {
+          await rebuildTaskDurationExperienceSample({
+            companyId: input.companyId,
+            projectId: input.projectId,
+            taskId: input.subjectId,
+            actorId,
+            trigger: 'structured_cause_user_confirmation',
+          })
+        },
+      )
+    }
     return result.rows[0]
   })
 }
@@ -1031,7 +1091,12 @@ export async function confirmStructuredCauseAttribution(input: {
   responsibilityBasis?: string | null
   rawText?: string | null
 }, dependencyOverrides?: StructuredCauseDependencies) {
-  const { queryExec, withTransaction } = dependencies(dependencyOverrides)
+  const {
+    queryExec,
+    withTransaction,
+    registerPostCommitEffect,
+    rebuildTaskDurationExperienceSample,
+  } = dependencies(dependencyOverrides)
   return withTransaction(async () => {
     const currentResult = await queryExec(
       `SELECT *
@@ -1055,7 +1120,24 @@ export async function confirmStructuredCauseAttribution(input: {
       )
     }
 
-    if (text(current.cause_role) === 'primary') {
+    const isSupportedTaskPrimary = text(current.subject_type) === 'task'
+      && text(current.cause_role) === 'primary'
+      && ['delay', 'completion'].includes(text(current.event_type))
+    if (isSupportedTaskPrimary) {
+      await queryExec(
+        `UPDATE public.structured_cause_attributions
+            SET status = 'superseded', updated_at = NOW()
+          WHERE company_id = $1
+            AND project_id = $2
+            AND subject_type = 'task'
+            AND subject_id = $3
+            AND event_type IN ('delay', 'completion')
+            AND cause_role = 'primary'
+            AND status IN ('candidate', 'confirmed')
+            AND id <> $4`,
+        [input.companyId, input.projectId, current.subject_id, input.attributionId],
+      )
+    } else if (text(current.cause_role) === 'primary') {
       await queryExec(
         `UPDATE public.structured_cause_attributions
             SET status = 'superseded', updated_at = NOW()
@@ -1107,6 +1189,21 @@ export async function confirmStructuredCauseAttribution(input: {
         confirmedCauseCode,
       ],
     )
+    if (isSupportedTaskPrimary) {
+      const taskId = text(current.subject_id)
+      await registerPostCommitEffect(
+        `rebuild-duration-experience-sample:${input.projectId}:${taskId}`,
+        async () => {
+          await rebuildTaskDurationExperienceSample({
+            companyId: input.companyId,
+            projectId: input.projectId,
+            taskId,
+            actorId: input.actorId,
+            trigger: 'structured_cause_user_confirmation',
+          })
+        },
+      )
+    }
     return updated.rows[0]
   })
 }

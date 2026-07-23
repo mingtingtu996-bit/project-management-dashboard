@@ -172,7 +172,7 @@ describe('projectHealthDeviationSummaryService', () => {
     expect(causes.map((cause) => cause.code)).toEqual([
       'site_capacity_pressure',
       'external_readiness',
-      'calendar_productivity',
+      'weather_impact',
       'unavailable:unregistered_factor',
     ])
     expect(causes[0]).toEqual(expect.objectContaining({
@@ -204,6 +204,36 @@ describe('projectHealthDeviationSummaryService', () => {
       responsibilityBasis: null,
       confidenceWeight: 0,
       reasons: ['must not create a parallel cause code'],
+    }))
+  })
+
+  it('merges different legacy reason types into one canonical cause row', async () => {
+    mocks.tables.task_duration_forecasts.push({
+      project_id: 'project-1',
+      task_id: 'task-1',
+      is_current: true,
+      generated_at: '2026-05-20T08:00:00.000Z',
+      forecast_delay_days: 4,
+      factor_summary: {
+        factors: [
+          { key: 'workflow_sequence', reason: 'sequence drift' },
+          { key: 'process_constraint', reason: 'inspection hold point' },
+        ],
+      },
+    })
+
+    const summary = await buildProjectHealthDeviationSummary('project-1')
+    const causes = summary.deviationSummary.durationDeviationCauses as Array<Record<string, unknown>>
+
+    expect(causes).toHaveLength(1)
+    expect(causes[0]).toEqual(expect.objectContaining({
+      code: 'workflow_sequence',
+      canonicalCauseCode: 'workflow_sequence',
+      canonicalCauseTaxonomyVersion: 'v1.0.0',
+      count: 1,
+      factorKeys: ['workflow_sequence', 'process_constraint'],
+      sourceReasonTypes: ['workflow_sequence', 'process_constraint'],
+      reasons: ['sequence drift', 'inspection hold point'],
     }))
   })
 

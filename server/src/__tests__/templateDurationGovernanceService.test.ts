@@ -30,9 +30,15 @@ import {
 function asProductionSample(sample: DurationExperienceSampleRow): DurationExperienceSampleRow {
   return {
     ...sample,
+    completed_at: sample.completed_at ?? '2026-01-01T00:00:00.000Z',
     duration_day_basis: 'construction_production_day',
     actual_duration_production_days: sample.actual_duration ?? null,
     planned_duration_production_days: sample.planned_duration ?? null,
+    metadata: {
+      ...sample.metadata,
+      construction_calendar_ref: sample.metadata?.construction_calendar_ref ?? 'cn-work-calendar',
+      construction_calendar_version: sample.metadata?.construction_calendar_version ?? '2026.01',
+    },
   }
 }
 
@@ -64,7 +70,7 @@ describe('templateDurationGovernanceService', () => {
       p50Days: 6,
       p75Days: 8,
       p80Days: 8,
-      variance: 0.272,
+      variance: 2.666667,
       coefficientOfVariation: 0.272,
       confidenceLevel: 'medium',
       confidenceScore: 55,
@@ -74,6 +80,8 @@ describe('templateDurationGovernanceService', () => {
       observationEndedAt: '2026-01-10T00:00:00.000Z',
       observationWindowDays: 10,
       productionDaySamples: [4, 6, 8],
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.01',
     })
   })
 
@@ -194,18 +202,48 @@ describe('templateDurationGovernanceService', () => {
       p75_days: 8,
       p80_days: 8,
       mean_days: 6,
-      variance: 0.272,
+      variance: 2.666667,
       coefficient_of_variation: 0.272,
+      generated_at: expect.any(String),
+      source_window_start: '2026-01-01T00:00:00.000Z',
+      source_as_of: '2026-01-01T00:00:00.000Z',
       is_current: false,
       metadata: expect.objectContaining({
         runtime_publication_status: 'candidate',
         candidate_operation_id: expect.any(String),
-        variance: 0.272,
+        variance: 2.666667,
         coefficientOfVariation: 0.272,
+        calendar_ref: 'cn-work-calendar',
+        calendar_version: '2026.01',
       }),
     })
     expect(learningAssetMocks.loadGovernanceSamples).toHaveBeenCalledWith({ limit: 1000 })
     expect(learningAssetMocks.stageBenchmark).toHaveBeenCalledOnce()
+  })
+
+  it('keeps candidate operation identity stable when identical evidence is replayed later', async () => {
+    const payloads: Array<Record<string, any>> = []
+    learningAssetMocks.loadGovernanceSamples.mockResolvedValue([
+      asProductionSample({ id: 'stable-1', company_id: 'company-1', project_id: 'project-1', task_id: 'task-1', standard_work_code: 'SW-STABLE', wbs_node_type: 'process', actual_duration: 5 }),
+      asProductionSample({ id: 'stable-2', company_id: 'company-1', project_id: 'project-1', task_id: 'task-2', standard_work_code: 'SW-STABLE', wbs_node_type: 'process', actual_duration: 7 }),
+      asProductionSample({ id: 'stable-3', company_id: 'company-1', project_id: 'project-1', task_id: 'task-3', standard_work_code: 'SW-STABLE', wbs_node_type: 'process', actual_duration: 9 }),
+    ])
+    learningAssetMocks.stageBenchmark.mockImplementation(async (payload: Record<string, unknown>) => {
+      payloads.push(payload)
+      return { id: 'benchmark-stable' }
+    })
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-07-20T00:00:00.000Z'))
+      await runTemplateDurationGovernance()
+      vi.setSystemTime(new Date('2026-07-22T00:00:00.000Z'))
+      await runTemplateDurationGovernance()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(payloads).toHaveLength(2)
+    expect(payloads[0].metadata.candidate_operation_id).toBe(payloads[1].metadata.candidate_operation_id)
   })
 
   it('persists every source sample and task without a fifty-row lineage truncation', async () => {

@@ -25,6 +25,28 @@ function queryCalls(queryMock: ReturnType<typeof vi.fn>): Array<[string, unknown
   return queryMock.mock.calls as unknown as Array<[string, unknown[]]>
 }
 
+function benchmarkRuntimePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    benchmarkId: '44444444-4444-4444-8444-444444444444',
+    p50Days: 12,
+    p75Days: 14,
+    p80Days: 16,
+    meanDays: 13,
+    variance: 4,
+    coefficientOfVariation: 0.153846,
+    sampleCount: 30,
+    confidenceLevel: 'high',
+    confidenceScore: 88,
+    durationDayBasis: 'construction_production_day',
+    calendarRef: 'cn-work-calendar',
+    calendarVersion: '2026.07',
+    generatedAt: '2026-07-17T00:00:00.000Z',
+    sourceWindowStart: '2026-07-01T00:00:00.000Z',
+    sourceAsOf: '2026-07-16T23:59:59.000Z',
+    ...overrides,
+  }
+}
+
 describe('durationLearningRuntimePublicationService', () => {
   it('resolves the complete publication identity without trusting caller metadata', async () => {
     const queryMock = vi.fn(async () => ([{
@@ -73,11 +95,7 @@ describe('durationLearningRuntimePublicationService', () => {
           project_id: null,
           industry_key: null,
           publication_stage: 'canary',
-          runtime_payload: {
-            p50Days: 12,
-            p80Days: 16,
-            durationDayBasis: 'construction_production_day',
-          },
+          runtime_payload: benchmarkRuntimePayload(),
           source_candidate_refs: ['duration_benchmarks:candidate-1'],
           source_evidence_refs: ['duration_experience_samples:sample-1'],
           automation_decision: {},
@@ -99,11 +117,7 @@ describe('durationLearningRuntimePublicationService', () => {
       artifactKey: 'STD-001:process:all',
       scope: { level: 'company', companyId },
       stage: 'canary',
-      runtimePayload: {
-        p50Days: 12,
-        p80Days: 16,
-        durationDayBasis: 'construction_production_day',
-      },
+      runtimePayload: benchmarkRuntimePayload(),
       sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
       sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
       trafficPercent: 10,
@@ -128,11 +142,7 @@ describe('durationLearningRuntimePublicationService', () => {
           project_id: null,
           industry_key: null,
           publication_stage: 'canary',
-          runtime_payload: {
-            p50Days: 12,
-            p80Days: 16,
-            durationDayBasis: 'construction_production_day',
-          },
+          runtime_payload: benchmarkRuntimePayload(),
           source_candidate_refs: ['duration_benchmarks:candidate-1'],
           source_evidence_refs: ['duration_experience_samples:sample-1'],
           automation_decision: {},
@@ -154,11 +164,7 @@ describe('durationLearningRuntimePublicationService', () => {
       artifactKey: 'STD-001:process:all',
       scope: { level: 'company', companyId },
       stage: 'canary',
-      runtimePayload: {
-        p50Days: 13,
-        p80Days: 17,
-        durationDayBasis: 'construction_production_day',
-      },
+      runtimePayload: benchmarkRuntimePayload({ p50Days: 13, p80Days: 17 }),
       sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
       sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
       trafficPercent: 10,

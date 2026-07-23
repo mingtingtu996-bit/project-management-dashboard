@@ -582,6 +582,8 @@ describe('structuredCauseAttributionService', () => {
   })
 
   it('requires explicit confirmation before assigning contractual responsibility', async () => {
+    const registeredEffects: Array<() => Promise<void>> = []
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
     const queryExec = vi.fn(async (sql: string) => {
       if (sql.includes('FOR UPDATE')) {
         return {
@@ -622,6 +624,8 @@ describe('structuredCauseAttributionService', () => {
     }, {
       queryExec,
       withTransaction: async (work) => work(),
+      registerPostCommitEffect: async (_label, effect) => { registeredEffects.push(effect) },
+      rebuildTaskDurationExperienceSample,
     })
 
     expect(result).toEqual(expect.objectContaining({
@@ -629,6 +633,16 @@ describe('structuredCauseAttributionService', () => {
       responsibility_class: 'contractor_attributable',
     }))
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes("confirmation_source = 'user_confirmed'"))).toBe(true)
+    const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
+    expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
+    expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
+    expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
+    expect(registeredEffects).toHaveLength(1)
+    await registeredEffects[0]()
+    expect(rebuildTaskDurationExperienceSample).toHaveBeenCalledWith({
+      companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
   })
 
   it('keeps the inferred prefill and records whether a user changed it during confirmation', async () => {
@@ -676,6 +690,8 @@ describe('structuredCauseAttributionService', () => {
     }, {
       queryExec,
       withTransaction: async (work) => work(),
+      registerPostCommitEffect: async () => undefined,
+      rebuildTaskDurationExperienceSample: async () => true,
     })
 
     expect(result).toEqual(expect.objectContaining({
@@ -802,6 +818,85 @@ describe('structuredCauseAttributionService', () => {
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes('FROM public.risks'))).toBe(true)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes("status = 'superseded'"))).toBe(true)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.structured_cause_attributions'))).toBe(true)
+  })
+
+  it('supersedes stale task primaries across delay/completion and rebuilds duration evidence after commit', async () => {
+    const registeredEffects: Array<() => Promise<void>> = []
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed', cause_code: 'material_shortage' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      subjectId: 'task-1',
+      eventType: 'delay',
+      causeCode: 'material_shortage',
+      causeRole: 'primary',
+      rawText: 'Original material delay wording.',
+      actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => work(),
+      registerPostCommitEffect: async (_label, effect) => { registeredEffects.push(effect) },
+      rebuildTaskDurationExperienceSample,
+    })
+
+    const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
+    expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
+    expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
+    expect(supersede?.[0]).toContain('dedupe_key <>')
+    expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
+    expect(registeredEffects).toHaveLength(1)
+
+    await registeredEffects[0]()
+    expect(rebuildTaskDurationExperienceSample).toHaveBeenCalledOnce()
+    expect(rebuildTaskDurationExperienceSample).toHaveBeenCalledWith({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+  })
+
+  it('discards the task sample rebuild effect when confirmation rolls back', async () => {
+    let pendingEffects: Array<() => Promise<void>> = []
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) throw new Error('confirmation write failed')
+      return { rows: [], rowCount: 0 }
+    })
+
+    await expect(recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Original material delay wording.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => {
+        try {
+          return await work()
+        } catch (error) {
+          pendingEffects = []
+          throw error
+        }
+      },
+      registerPostCommitEffect: async (_label, effect) => { pendingEffects.push(effect) },
+      rebuildTaskDurationExperienceSample,
+    })).rejects.toThrow('confirmation write failed')
+
+    expect(pendingEffects).toHaveLength(0)
+    expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
   })
 
   it('fails closed without an unscoped subject lookup when the subject is outside the project', async () => {

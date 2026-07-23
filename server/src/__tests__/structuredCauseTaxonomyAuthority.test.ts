@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CANONICAL_STRUCTURED_CAUSE_CODES,
+  LEGACY_PROGRESS_FACTOR_TRANSLATION_ENTRIES,
   translateLegacyProgressFactor,
 } from '../domain/structuredCauseTaxonomy.js'
 import {
@@ -52,6 +53,16 @@ describe('structuredCauseTaxonomy authority', () => {
         })
       }
     }
+  })
+
+  it('keeps translator and legacy registry factor keys exactly bidirectional', () => {
+    const registryFactors = PROGRESS_DEVIATION_CAUSE_RULES.flatMap((rule) => rule.factorKeys).sort()
+    const translationFactors = LEGACY_PROGRESS_FACTOR_TRANSLATION_ENTRIES.map((entry) => entry.factorKey).sort()
+
+    expect(translationFactors).toEqual(registryFactors)
+    expect(LEGACY_PROGRESS_FACTOR_TRANSLATION_ENTRIES.every((entry) => (
+      CANONICAL_STRUCTURED_CAUSE_CODES.includes(entry.causeCode)
+    ))).toBe(true)
   })
 
   it('fails closed for an unknown legacy factor', () => {

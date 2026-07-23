@@ -29,33 +29,9 @@ import {
 } from './constructionCalendar.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
 import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './durationLearningRuntimeConsumptionService.js'
-import {
-  isStructuredCauseCode,
-  STRUCTURED_CAUSE_TAXONOMY_VERSION,
-  type StructuredCauseCode,
-} from '../domain/structuredCauseTaxonomy.js'
-import type { CanonicalCauseResolution } from './structuredCauseAttributionService.js'
+import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
 
 type SampleStrength = 'strong' | 'medium' | 'weak' | 'unusable'
-
-type StructuredCauseAttributionSnapshotRow = {
-  id?: unknown
-  company_id?: unknown
-  project_id?: unknown
-  subject_type?: unknown
-  subject_id?: unknown
-  status?: unknown
-  cause_code?: unknown
-  cause_role?: unknown
-  taxonomy_version?: unknown
-  confirmation_source?: unknown
-  responsibility_class?: unknown
-  review_reason_codes?: unknown
-}
-
-type CanonicalStructuredCauseAttributionSnapshotRow = StructuredCauseAttributionSnapshotRow & {
-  cause_code: StructuredCauseCode
-}
 
 export interface DurationExperienceCollectionOptions {
   previousTask?: Task | null
@@ -83,150 +59,6 @@ function readRecord(value: unknown): Record<string, unknown> {
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
-}
-
-function emptyStructuredCauseSnapshot() {
-  return {
-    schema_version: 'structured_cause_snapshot/v1',
-    confirmed_count: 0,
-    candidate_count: 0,
-    confirmed_causes: [] as Array<Record<string, unknown>>,
-  }
-}
-
-function readReviewReasonCodes(value: unknown): string[] {
-  if (typeof value === 'string') {
-    try {
-      return readReviewReasonCodes(JSON.parse(value))
-    } catch {
-      return []
-    }
-  }
-  return Array.isArray(value)
-    ? [...new Set(value.map(normalizeText).filter(Boolean))]
-    : []
-}
-
-function unavailableStructuredCauseResolution(reviewReasonCodes: string[] = []): CanonicalCauseResolution {
-  return {
-    availability: 'unavailable',
-    causeCode: null,
-    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-    reviewReasonCodes,
-  }
-}
-
-async function readTaskStructuredCauseSnapshot(params: {
-  companyId: string
-  projectId: string
-  taskId: string
-}) {
-  try {
-    const result = await query(
-      `SELECT id, company_id, project_id, subject_type, subject_id, status,
-              cause_code, cause_role, taxonomy_version, confirmation_source,
-              responsibility_class, review_reason_codes
-         FROM public.structured_cause_attributions
-        WHERE company_id = $1
-          AND project_id = $2
-          AND subject_type = 'task'
-          AND subject_id = $3
-          AND status IN ('confirmed', 'candidate')
-        ORDER BY CASE WHEN cause_role = 'primary' THEN 0 ELSE 1 END,
-                 cause_role ASC,
-                 id ASC`,
-      [params.companyId, params.projectId, params.taskId],
-    )
-    const rows = (Array.isArray(result) ? result : result?.rows ?? []) as StructuredCauseAttributionSnapshotRow[]
-    const scopedRows = rows.filter((row) => (
-      normalizeText(row.company_id) === params.companyId
-      && normalizeText(row.project_id) === params.projectId
-      && normalizeText(row.subject_type) === 'task'
-      && normalizeText(row.subject_id) === params.taskId
-    ))
-    const canonicalRows = scopedRows.filter(
-      (row): row is CanonicalStructuredCauseAttributionSnapshotRow => isStructuredCauseCode(row.cause_code),
-    )
-    const invalidCauseRows = scopedRows.filter((row) => !isStructuredCauseCode(row.cause_code))
-    const confirmedCanonicalRows = canonicalRows.filter((row) => normalizeText(row.status) === 'confirmed')
-    const candidateCanonicalRows = canonicalRows.filter((row) => normalizeText(row.status) === 'candidate')
-    const selectedConfirmedRow = confirmedCanonicalRows[0]
-    const selectedCandidateRow = candidateCanonicalRows[0]
-    let resolution = unavailableStructuredCauseResolution()
-    if (invalidCauseRows.length > 0) {
-      resolution = unavailableStructuredCauseResolution(['structured_cause_code_invalid'])
-    } else if (selectedCandidateRow) {
-      resolution = {
-        availability: 'review_required',
-        causeCode: selectedCandidateRow.cause_code,
-        taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-        reviewReasonCodes: readReviewReasonCodes(selectedCandidateRow.review_reason_codes),
-      }
-    } else if (selectedConfirmedRow) {
-      resolution = {
-        availability: 'available',
-        causeCode: selectedConfirmedRow.cause_code,
-        taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-        reviewReasonCodes: [],
-      }
-    }
-    const confirmedCauses = confirmedCanonicalRows
-      .map((row) => {
-        const confirmationSource = normalizeText(row.confirmation_source) || null
-        const responsibilityClass = normalizeText(row.responsibility_class) || null
-        return {
-          attribution_id: normalizeText(row.id) || null,
-          cause_code: normalizeText(row.cause_code) || null,
-          cause_role: normalizeText(row.cause_role) || null,
-          taxonomy_version: normalizeText(row.taxonomy_version) || null,
-          confirmation_source: confirmationSource,
-          ...(confirmationSource === 'user_confirmed' && responsibilityClass
-            ? {
-                user_confirmed_context: {
-                  responsibility_class: responsibilityClass,
-                },
-              }
-            : {}),
-        }
-      })
-      .filter((row) => Boolean(
-        row.attribution_id
-        && row.cause_code
-        && row.cause_role
-        && row.taxonomy_version,
-      ))
-      .sort((left, right) => {
-        const leftPrimary = left.cause_role === 'primary' ? 0 : 1
-        const rightPrimary = right.cause_role === 'primary' ? 0 : 1
-        return leftPrimary - rightPrimary
-          || String(left.cause_role).localeCompare(String(right.cause_role))
-          || String(left.cause_code).localeCompare(String(right.cause_code))
-          || String(left.attribution_id).localeCompare(String(right.attribution_id))
-      })
-
-    return {
-      snapshot: {
-        schema_version: 'structured_cause_snapshot/v1',
-        confirmed_count: confirmedCauses.length,
-        candidate_count: scopedRows.filter((row) => normalizeText(row.status) === 'candidate').length,
-        confirmed_causes: confirmedCauses,
-      },
-      resolution,
-      causeBenchmarkEligible: scopedRows.length === 0 || resolution.availability === 'available',
-    }
-  } catch (error) {
-    logger.warn('[durationExperienceService] failed to read structured causes for duration sample', {
-      companyId: params.companyId,
-      projectId: params.projectId,
-      taskId: params.taskId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-    return {
-      snapshot: emptyStructuredCauseSnapshot(),
-      resolution: unavailableStructuredCauseResolution(['structured_cause_read_failed']),
-      causeBenchmarkEligible: false,
-    }
-  }
 }
 
 function buildDurationExperienceEvidenceFingerprint(input: {
@@ -852,7 +684,7 @@ export async function collectDurationExperienceSampleFromTask(
   if (!companyId) {
     throw new Error('Duration experience sample tenant ownership could not be resolved.')
   }
-  const structuredCauseRead = await readTaskStructuredCauseSnapshot({
+  const structuredCauseRead = await readTaskStructuredCauseAuthority({
     companyId,
     projectId: String(task.project_id),
     taskId: String(task.id),

@@ -22,6 +22,14 @@ const LEGACY_FACTOR_CAUSE = Object.freeze({
   external_readiness: 'external_readiness',
 } satisfies Record<string, StructuredCauseCode>)
 
+export const LEGACY_PROGRESS_FACTOR_TRANSLATION_ENTRIES: ReadonlyArray<{
+  readonly factorKey: keyof typeof LEGACY_FACTOR_CAUSE
+  readonly causeCode: StructuredCauseCode
+}> = Object.freeze(Object.entries(LEGACY_FACTOR_CAUSE).map(([factorKey, causeCode]) => Object.freeze({
+  factorKey: factorKey as keyof typeof LEGACY_FACTOR_CAUSE,
+  causeCode,
+})))
+
 export function isStructuredCauseCode(value: unknown): value is StructuredCauseCode {
   return typeof value === 'string'
     && (CANONICAL_STRUCTURED_CAUSE_CODES as readonly string[]).includes(value)

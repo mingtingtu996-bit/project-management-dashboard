@@ -27,9 +27,22 @@ function benchmarkProposal(input: {
       projectId: input.projectId,
     },
     runtimePayload: {
+      benchmarkId: `benchmark-${input.projectId}`,
       p50Days: 8,
+      p75Days: 10,
       p80Days: 11,
+      meanDays: 8.5,
+      variance: 2.25,
+      coefficientOfVariation: 0.176471,
+      sampleCount: input.sampleCount ?? 5,
+      confidenceLevel: 'high',
+      confidenceScore: 88,
       durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-04-22T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
     },
     sourceCandidateRefs: [`duration_benchmarks:${input.projectId}`],
     sourceEvidenceRefs: [`duration_experience_samples:${input.projectId}`],
@@ -406,9 +419,23 @@ describe('durationLearningRuntimeLifecycleService', () => {
         benchmark_key: 'benchmark-artifact',
         sample_count: 20,
         p50_days: 8,
+        p75_days: 10,
         p80_days: 11,
+        mean_days: 8.5,
+        variance: 2.25,
+        coefficient_of_variation: 0.176471,
+        confidence_level: 'high',
+        confidence_score: 88,
         duration_day_basis: 'construction_production_day',
-        metadata: numericHoldoutEvidence,
+        generated_at: '2026-07-21T00:00:00.000Z',
+        source_window_start: '2026-04-22T00:00:00.000Z',
+        source_as_of: '2026-07-20T00:00:00.000Z',
+        metadata: {
+          ...numericHoldoutEvidence,
+          calendar_ref: 'cn-work-calendar',
+          calendar_version: '2026.07',
+          sample_ids: taskIds.map((_, index) => `sample-${index + 1}`),
+        },
       }],
       ['seed:standard_work_duration_seed', {
         ...common,
@@ -556,6 +583,24 @@ describe('durationLearningRuntimeLifecycleService', () => {
     const projectProposals = proposals.filter((proposal) => proposal.scope.level === 'project')
 
     expect(projectProposals).toHaveLength(6)
+    expect(projectProposals.find((proposal) => proposal.assetKey === 'base_duration_benchmark')?.runtimePayload).toEqual({
+      benchmarkId: 'benchmark-1',
+      p50Days: 8,
+      p75Days: 10,
+      p80Days: 11,
+      meanDays: 8.5,
+      variance: 2.25,
+      coefficientOfVariation: 0.176471,
+      sampleCount: 20,
+      confidenceLevel: 'high',
+      confidenceScore: 88,
+      durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-04-22T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+    })
     expect(Object.fromEntries(projectProposals.map((proposal) => [
       proposal.assetKey,
       {
@@ -1965,9 +2010,20 @@ describe('durationLearningRuntimeLifecycleService', () => {
           business_type: 'general_civil',
           sample_count: 220,
           p50_days: 8,
+          p75_days: 10,
           p80_days: 11,
+          mean_days: 8.5,
+          variance: 2.25,
+          coefficient_of_variation: 0.176471,
+          confidence_level: 'high',
+          confidence_score: 88,
           duration_day_basis: 'construction_production_day',
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-04-22T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
           metadata: {
+            calendar_ref: 'cn-work-calendar',
+            calendar_version: '2026.07',
             task_ids: Array.from({ length: 120 }, (_, index) => `task-${index}`),
             real_outcome_count: 110,
             replay_case_count: 220,
@@ -2077,6 +2133,11 @@ describe('durationLearningRuntimeLifecycleService', () => {
       previousPublicationKey: 'stable-0',
       reasons: [],
     }))
+    const promoteBenchmarkCanary = vi.fn(async () => ({
+      status: 'stable_promoted',
+      previousPublicationKey: 'stable-0',
+      reasons: [],
+    }))
     const rollbackPublication = vi.fn()
 
     const result = await runDurationLearningRuntimeLifecycleSweep({
@@ -2115,7 +2176,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
         },
       }],
       recordImpact: recordImpact as any,
-      promoteCanary: promoteCanary as any,
+      promoteBenchmarkCanary: promoteBenchmarkCanary as any,
       rollbackPublication: rollbackPublication as any,
       observedAt: '2026-07-17T00:00:00.000Z',
     })
@@ -2126,7 +2187,8 @@ describe('durationLearningRuntimeLifecycleService', () => {
       monitoringStatus: 'passed',
       metrics: expect.objectContaining({ accuracySampleCount: 20, maeBefore: 8, maeAfter: 6 }),
     }))
-    expect(promoteCanary).toHaveBeenCalledOnce()
+    expect(promoteBenchmarkCanary).toHaveBeenCalledOnce()
+    expect(promoteCanary).not.toHaveBeenCalled()
     expect(rollbackPublication).not.toHaveBeenCalled()
   })
 
@@ -2277,13 +2339,13 @@ describe('durationLearningRuntimeLifecycleService', () => {
       candidateProvider: async () => [],
       monitoringProvider: async () => [monitoringCandidate],
       recordImpact: recordImpact as any,
-      promoteCanary: promoteCanary as any,
+      promoteBenchmarkCanary: promoteCanary as any,
     })
     const retry = await runDurationLearningRuntimeLifecycleSweep({
       candidateProvider: async () => [],
       monitoringProvider: async () => [monitoringCandidate],
       recordImpact: recordImpact as any,
-      promoteCanary: promoteCanary as any,
+      promoteBenchmarkCanary: promoteCanary as any,
     })
 
     expect(first.failed).toBe(1)

@@ -4,6 +4,7 @@ import {
   loadCurrentCauseSegment,
   persistCurrentCauseSegments,
 } from '../services/durationBenchmarkCauseSegmentService.js'
+import { STRUCTURED_CAUSE_TAXONOMY_VERSION } from '../domain/structuredCauseTaxonomy.js'
 
 const input = {
   benchmarkId: 'benchmark-1',
@@ -21,7 +22,9 @@ function confirmedSample(overrides: Record<string, unknown> = {}) {
   const sampleId = String(overrides.sample_id ?? 'sample-default')
   const attributionId = String(overrides.attribution_id ?? `attribution-${sampleId}`)
   const causeCode = String(overrides.cause_code ?? 'material_shortage')
-  const taxonomyVersion = String(overrides.taxonomy_version ?? 'structured-cause-taxonomy/v1')
+  const taxonomyVersion = String(overrides.taxonomy_version ?? STRUCTURED_CAUSE_TAXONOMY_VERSION)
+  const eventType = String(overrides.attribution_event_type ?? 'completion')
+  const confirmedAt = String(overrides.confirmed_at ?? '2026-07-19T00:00:00.000Z')
   return {
     sample_id: sampleId,
     attribution_id: attributionId,
@@ -33,13 +36,15 @@ function confirmedSample(overrides: Record<string, unknown> = {}) {
     attribution_company_id: 'company-1',
     attribution_project_id: 'project-1',
     attribution_status: 'confirmed',
-    attribution_event_type: 'completion',
+    attribution_event_type: eventType,
     cause_role: 'primary',
-    confirmed_at: '2026-07-19T00:00:00.000Z',
+    confirmed_at: confirmedAt,
     source_type: 'task_completion',
     snapshot_attribution_id: attributionId,
     snapshot_cause_code: causeCode,
     snapshot_taxonomy_version: taxonomyVersion,
+    snapshot_event_type: eventType,
+    snapshot_confirmed_at: confirmedAt,
     snapshot_primary_count: 1,
     included_in_benchmark: true,
     duration_day_basis: 'construction_production_day',
@@ -95,10 +100,13 @@ describe('durationBenchmarkCauseSegmentService', () => {
               confirmedSample({ sample_id: 'wrong-tenant', sample_company_id: 'company-2' }),
               confirmedSample({ sample_id: 'wrong-calendar', calendar_version: '2026.06' }),
               confirmedSample({ sample_id: 'wrong-source', source_type: 'manual_import' }),
-              confirmedSample({ sample_id: 'wrong-event', attribution_event_type: 'delay' }),
+              confirmedSample({ sample_id: 'delay-event', attribution_event_type: 'delay' }),
+              confirmedSample({ sample_id: 'wrong-event', attribution_event_type: 'closure' }),
               confirmedSample({ sample_id: 'wrong-role', cause_role: 'contributing' }),
               confirmedSample({ sample_id: 'post-window', confirmed_at: '2026-07-21T00:00:00.000Z' }),
               confirmedSample({ sample_id: 'snapshot-mismatch', snapshot_attribution_id: 'other-attribution' }),
+              confirmedSample({ sample_id: 'snapshot-event-mismatch', snapshot_event_type: 'completion', attribution_event_type: 'delay' }),
+              confirmedSample({ sample_id: 'snapshot-time-mismatch', snapshot_confirmed_at: '2026-07-18T00:00:00.000Z' }),
               confirmedSample({ sample_id: 'multiple-primary', snapshot_primary_count: 2 }),
             ],
           }
@@ -112,7 +120,7 @@ describe('durationBenchmarkCauseSegmentService', () => {
     }
 
     await expect(persistCurrentCauseSegments(input, client as never)).resolves.toEqual([
-      expect.objectContaining({ causeCode: 'material_shortage', sampleCount: 3 }),
+      expect.objectContaining({ causeCode: 'material_shortage', sampleCount: 4 }),
       expect.objectContaining({ causeCode: 'quality_rework', sampleCount: 2 }),
     ])
 
@@ -123,8 +131,10 @@ describe('durationBenchmarkCauseSegmentService', () => {
     expect(executedSql.join('\n')).toContain("sample.metadata -> 'structured_cause_snapshot'")
     expect(executedSql.join('\n')).toContain('jsonb_array_elements')
     expect(executedSql.join('\n')).toContain("confirmed_cause ->> 'attribution_id' = attribution.id::text")
+    expect(executedSql.join('\n')).toContain("confirmed_cause ->> 'event_type' = attribution.event_type")
+    expect(executedSql.join('\n')).toContain("attribution.event_type IN ('delay', 'completion')")
     expect(executedSql.join('\n')).toContain("sample.source_type = 'task_completion'")
-    expect(executedSql.join('\n')).toContain("attribution.event_type = 'completion'")
+    expect(executedSql.join('\n')).toContain("attribution.event_type IN ('delay', 'completion')")
     expect(executedSql.join('\n')).toContain("attribution.cause_role = 'primary'")
     expect(executedSql.join('\n')).toContain('attribution.confirmed_at <= $4::timestamptz')
     expect(executedSql.join('\n')).toContain("sample.duration_day_basis = 'construction_production_day'")
@@ -318,7 +328,7 @@ describe('durationBenchmarkCauseSegmentService', () => {
         company_id: 'company-1',
         project_id: 'project-1',
         cause_code: 'material_shortage',
-        taxonomy_version: 'structured-cause-taxonomy/v1',
+        taxonomy_version: STRUCTURED_CAUSE_TAXONOMY_VERSION,
         sample_count: 3,
         p50_days: 6,
         p75_days: 7,
@@ -342,5 +352,30 @@ describe('durationBenchmarkCauseSegmentService', () => {
       sourceAsOf: '2026-07-20T00:00:00.000Z',
       projectId: 'project-1',
     }))
+  })
+
+  it('distinguishes a clean no-row lookup from malformed persisted segment identity', async () => {
+    const scope = {
+      benchmarkId: 'benchmark-1',
+      causeCode: 'material_shortage' as const,
+      companyId: 'company-1',
+      projectId: 'project-1',
+    }
+    await expect(loadCurrentCauseSegment(scope, vi.fn(async () => []) as never)).resolves.toBeNull()
+    await expect(loadCurrentCauseSegment(scope, vi.fn(async () => [{
+      id: 'segment-1',
+      benchmark_id: 'different-benchmark',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      cause_code: 'material_shortage',
+      taxonomy_version: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+      sample_count: 3,
+      p50_days: 6,
+      generated_at: '2026-07-21T00:00:00.000Z',
+      source_as_of: '2026-07-20T00:00:00.000Z',
+      duration_day_basis: 'construction_production_day',
+      calendar_ref: 'cn-work-calendar',
+      calendar_version: '2026.07',
+    }]) as never)).rejects.toThrow('cause segment readback mismatch')
   })
 })

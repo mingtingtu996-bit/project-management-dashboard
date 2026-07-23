@@ -33,7 +33,7 @@ const mocks = vi.hoisted(() => ({
   loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
   readPlanningReplayCalibrationReadback: vi.fn(),
   from: vi.fn(),
-  rawQuery: vi.fn(async () => ({ rows: [] })),
+  rawQuery: vi.fn(async (_sql?: string, _params?: unknown[]) => ({ rows: [] })),
 }))
 
 vi.mock('../database.js', () => ({
@@ -1355,6 +1355,45 @@ describe('taskDurationForecastService', () => {
         hardBlockerCount: 1,
         evidenceCodes: expect.arrayContaining(['progress_snapshots', 'open_obstacles']),
       }),
+    }))
+  })
+
+  it('passes the one exact confirmed canonical task primary into the duration suggestion caller', async () => {
+    state.tasks = [{
+      id: 'task-confirmed-cause',
+      project_id: 'project-1',
+      title: 'Confirmed material delay task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 45,
+    }]
+    state.projects = [{ id: 'project-1', company_id: 'company-1' }]
+    mocks.rawQuery.mockImplementation(async (sql = '') => {
+      if (sql.includes('FROM public.structured_cause_attributions')) {
+        return { rows: [{
+          id: '00000000-0000-4000-8000-000000000091',
+          company_id: 'company-1',
+          project_id: 'project-1',
+          subject_type: 'task',
+          subject_id: 'task-confirmed-cause',
+          event_type: 'delay',
+          status: 'confirmed',
+          cause_code: 'material_shortage',
+          cause_role: 'primary',
+          taxonomy_version: 'v1.0.0',
+          confirmation_source: 'user_confirmed',
+          confirmed_at: '2026-05-18T08:00:00.000Z',
+        }] }
+      }
+      return { rows: [] }
+    })
+
+    await forecastTaskDuration('task-confirmed-cause')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      confirmedCauseCode: 'material_shortage',
     }))
   })
 

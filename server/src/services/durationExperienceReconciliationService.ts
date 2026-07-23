@@ -305,4 +305,44 @@ export async function reconcileDurationExperienceSamples(input: {
   return summary
 }
 
+export async function rebuildDurationExperienceSampleForTask(input: {
+  companyId: string
+  projectId: string
+  taskId: string
+  actorId?: string | null
+  trigger?: string | null
+}, dependencies: {
+  queryExec?: typeof databaseQuery
+  collectSample?: typeof collectDurationExperienceSampleFromTask
+} = {}) {
+  const companyId = normalizeText(input.companyId)
+  const projectId = normalizeText(input.projectId)
+  const taskId = normalizeText(input.taskId)
+  if (!companyId || !projectId || !taskId) {
+    throw new Error('Duration experience sample rebuild requires exact tenant, project, and task identity.')
+  }
+
+  const queryExec = dependencies.queryExec ?? databaseQuery
+  const result = await queryExec(
+    `SELECT task.*
+       FROM public.tasks task
+       JOIN public.projects project ON project.id = task.project_id
+      WHERE task.id = $1
+        AND task.project_id = $2
+        AND project.company_id = $3
+      LIMIT 1`,
+    [taskId, projectId, companyId],
+  )
+  const task = result.rows[0] as Task | undefined
+  if (!task) {
+    throw new Error('Duration experience sample rebuild task was not found in the requested tenant scope.')
+  }
+
+  const collectSample = dependencies.collectSample ?? collectDurationExperienceSampleFromTask
+  return collectSample(task, {
+    actorId: normalizeText(input.actorId) || null,
+    trigger: normalizeText(input.trigger) || 'structured_cause_user_confirmation',
+  })
+}
+
 export { createDatabaseDurationExperienceReconciliationStore }

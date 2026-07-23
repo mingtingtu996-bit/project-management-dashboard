@@ -124,6 +124,7 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
     maxDelayDays: number
     reasons: string[]
     factorKeys: string[]
+    sourceReasonTypes: string[]
     canonicalCauseAvailability: 'available' | 'unavailable'
     canonicalCauseCode: string | null
     canonicalCauseTaxonomyVersion: string | null
@@ -159,6 +160,7 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
           maxDelayDays: 0,
           reasons: [],
           factorKeys: [],
+          sourceReasonTypes: [],
           canonicalCauseAvailability: 'unavailable' as const,
           canonicalCauseCode: null,
           canonicalCauseTaxonomyVersion: null,
@@ -176,13 +178,15 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
         continue
       }
       const reason = normalizeText(factor.reason) || summary.businessReasons[0] || '现场承载压力影响当前工期预测。'
-      const existing = causes.get(rule.reasonType) ?? {
-        code: rule.reasonType,
+      const canonicalKey = `${rule.causeCode}:${rule.taxonomyVersion}`
+      const existing = causes.get(canonicalKey) ?? {
+        code: rule.causeCode,
         label: '现场承载压力',
         count: 0,
         maxDelayDays: 0,
         reasons: [],
         factorKeys: [],
+        sourceReasonTypes: [],
         canonicalCauseAvailability: 'available' as const,
         canonicalCauseCode: rule.causeCode,
         canonicalCauseTaxonomyVersion: rule.taxonomyVersion,
@@ -190,12 +194,13 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
         confidenceWeight: rule.confidenceWeight,
       }
       existing.label = rule.reason
-      if (!countedReasonTypes.has(rule.reasonType)) {
+      if (!countedReasonTypes.has(canonicalKey)) {
         existing.count += 1
-        countedReasonTypes.add(rule.reasonType)
+        countedReasonTypes.add(canonicalKey)
       }
       existing.maxDelayDays = Math.max(existing.maxDelayDays, delayDays)
       existing.factorKeys = Array.from(new Set([...existing.factorKeys, key]))
+      existing.sourceReasonTypes = Array.from(new Set([...existing.sourceReasonTypes, rule.reasonType]))
       existing.reasons = Array.from(new Set([
         ...existing.reasons,
         reason,
@@ -203,7 +208,7 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
         Number(metadata.overdueMaterialCount ?? 0) > 0 ? '关联材料到货逾期' : '',
         Number(metadata.sameResponsibleUnitCount ?? 0) > 0 ? '同责任单位任务集中' : '',
       ].filter(Boolean))).slice(0, 5)
-      causes.set(rule.reasonType, existing)
+      causes.set(canonicalKey, existing)
     }
   }
 

@@ -21913,6 +21913,47 @@ ALTER TABLE public.duration_benchmarks
   ALTER COLUMN generated_at SET DEFAULT NOW(),
   ALTER COLUMN generated_at SET NOT NULL;
 
+CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  project_company_id UUID;
+BEGIN
+  IF NEW.project_id IS NOT NULL THEN
+    IF NEW.company_id IS NULL THEN
+      RAISE EXCEPTION 'duration benchmark company is required for project scope';
+    END IF;
+
+    SELECT project.company_id
+      INTO project_company_id
+      FROM public.projects project
+     WHERE project.id = NEW.project_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'duration benchmark project not found';
+    END IF;
+
+    IF project_company_id IS DISTINCT FROM NEW.company_id THEN
+      RAISE EXCEPTION 'duration benchmark project/company mismatch';
+    END IF;
+  END IF;
+
+  NEW.updated_at := pg_catalog.now();
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS ensure_duration_benchmark_scope_trigger
+  ON public.duration_benchmarks;
+CREATE TRIGGER ensure_duration_benchmark_scope_trigger
+  BEFORE INSERT OR UPDATE OF company_id, project_id
+  ON public.duration_benchmarks
+  FOR EACH ROW
+  EXECUTE FUNCTION public.ensure_duration_benchmark_scope();
+
 CREATE TABLE IF NOT EXISTS public.duration_benchmark_cause_segments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   benchmark_id UUID NOT NULL REFERENCES public.duration_benchmarks(id) ON DELETE CASCADE,
@@ -22052,6 +22093,8 @@ CREATE TRIGGER prevent_duration_benchmark_scope_change_with_segments_trigger
 
 REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
   FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_scope()
+  FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()
   FROM PUBLIC, anon, authenticated;
 
@@ -22067,6 +22110,7 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM service_role';
     EXECUTE 'REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope() FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_scope() FROM service_role';
     EXECUTE 'REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_change_with_segments() FROM service_role';
   END IF;
 END

@@ -211,6 +211,16 @@ function readPositiveNumber(value: unknown) {
   return Number.isFinite(number) && number > 0 ? number : null
 }
 
+function readNonNegativeNumber(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : null
+}
+
+function readTimestamp(value: unknown) {
+  const normalized = normalizeText(value)
+  return normalized && Number.isFinite(Date.parse(normalized)) ? normalized : null
+}
+
 function uniqueText(values: readonly unknown[]) {
   return Array.from(new Set(values.map(normalizeText).filter(Boolean)))
 }
@@ -266,7 +276,25 @@ function payloadReasons(assetKey: DurationLearningRuntimeAssetKey, payload: Reco
   if (assetKey === 'base_duration_benchmark') {
     const basis = normalizeText(payload.durationDayBasis ?? payload.duration_day_basis)
     if (basis !== 'construction_production_day') reasons.push('benchmark_production_day_basis_required')
+    if (!normalizeText(payload.benchmarkId ?? payload.benchmark_id)) reasons.push('benchmark_id_required')
     if (!readPositiveNumber(payload.p50Days ?? payload.p50_days)) reasons.push('benchmark_p50_days_required')
+    if (!readPositiveNumber(payload.p75Days ?? payload.p75_days)) reasons.push('benchmark_p75_days_required')
+    if (!readPositiveNumber(payload.p80Days ?? payload.p80_days)) reasons.push('benchmark_p80_days_required')
+    if (!readPositiveNumber(payload.meanDays ?? payload.mean_days)) reasons.push('benchmark_mean_days_required')
+    if (!readPositiveNumber(payload.sampleCount ?? payload.sample_count)) reasons.push('benchmark_sample_count_required')
+    if (readNonNegativeNumber(payload.variance) === null) reasons.push('benchmark_variance_required')
+    if (readNonNegativeNumber(
+      payload.coefficientOfVariation ?? payload.coefficient_of_variation,
+    ) === null) reasons.push('benchmark_coefficient_of_variation_required')
+    if (!normalizeText(payload.confidenceLevel ?? payload.confidence_level)) reasons.push('benchmark_confidence_level_required')
+    if (readNonNegativeNumber(payload.confidenceScore ?? payload.confidence_score) === null) {
+      reasons.push('benchmark_confidence_score_required')
+    }
+    if (!readTimestamp(payload.generatedAt ?? payload.generated_at)) reasons.push('benchmark_generated_at_required')
+    if (!readTimestamp(payload.sourceWindowStart ?? payload.source_window_start)) reasons.push('benchmark_source_window_start_required')
+    if (!readTimestamp(payload.sourceAsOf ?? payload.source_as_of)) reasons.push('benchmark_source_as_of_required')
+    if (!normalizeText(payload.calendarRef ?? payload.calendar_ref)) reasons.push('benchmark_calendar_ref_required')
+    if (!normalizeText(payload.calendarVersion ?? payload.calendar_version)) reasons.push('benchmark_calendar_version_required')
   }
   if (assetKey === 'standard_work_duration_seed') {
     if (!normalizeText(payload.stableCode ?? payload.stable_code)) reasons.push('standard_seed_stable_code_required')

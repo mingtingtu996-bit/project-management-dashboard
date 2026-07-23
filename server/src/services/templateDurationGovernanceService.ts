@@ -64,6 +64,8 @@ export interface DurationBenchmarkCandidate {
   observationWindowDays: number
   productionDaySamples: number[]
   durationDayBasis: 'construction_production_day'
+  calendarRef: string
+  calendarVersion: string
   automationQualityEvidence: {
     qualityModel: 'numeric_holdout'
     holdoutSampleCount: number
@@ -170,6 +172,13 @@ function observationWindow(rows: DurationExperienceSampleRow[]) {
   return { startedAt, endedAt, windowDays }
 }
 
+function readConstructionCalendarIdentity(sample: DurationExperienceSampleRow) {
+  return {
+    calendarRef: normalizeText(sample.metadata?.construction_calendar_ref),
+    calendarVersion: normalizeText(sample.metadata?.construction_calendar_version),
+  }
+}
+
 function readCodeArray(value: unknown): string[] {
   const raw = Array.isArray(value)
     ? value
@@ -202,7 +211,10 @@ function isUsableSample(sample: DurationExperienceSampleRow, options: Required<P
   const wbsNodeType = normalizeWbsNodeType(sample.wbs_node_type)
   if (wbsNodeType === 'activity_step' && !options.includeActivitySteps) return false
   if (normalizeText(sample.sample_strength) === 'unusable') return false
+  const calendar = readConstructionCalendarIdentity(sample)
   return readProductionDurationDays(sample as Record<string, unknown>, 'actual') !== null
+    && Boolean(calendar.calendarRef && calendar.calendarVersion)
+    && Boolean(normalizeTimestamp(sample.completed_at ?? sample.created_at))
 }
 
 function percentile(sortedValues: number[], percentileValue: number) {
@@ -288,6 +300,11 @@ function roundedCoefficientOfVariation(values: number[], mean: number) {
   return Math.round((Math.sqrt(Math.max(0, variance)) / mean) * 1000) / 1000
 }
 
+function roundedPopulationVariance(values: number[], mean: number) {
+  if (values.length === 0) return 0
+  return roundMetric(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length)
+}
+
 function buildBenchmarkKey(sample: DurationExperienceSampleRow) {
   const identity = normalizeText(sample.template_node_id)
     ?? normalizeText(sample.standard_work_code)
@@ -318,7 +335,8 @@ export function buildDurationBenchmarkCandidates(
     const benchmarkKey = buildBenchmarkKey(sample)
     if (!benchmarkKey) continue
 
-    const key = `${companyId}::${projectId}::${benchmarkKey}`
+    const calendar = readConstructionCalendarIdentity(sample)
+    const key = `${companyId}::${projectId}::${benchmarkKey}::${calendar.calendarRef}::${calendar.calendarVersion}`
     const rows = groups.get(key) ?? []
     rows.push(sample)
     groups.set(key, rows)
@@ -334,6 +352,7 @@ export function buildDurationBenchmarkCandidates(
         .sort((left, right) => left - right)
       const meanDays = days.reduce((sum, value) => sum + value, 0) / Math.max(days.length, 1)
       const coefficientOfVariation = roundedCoefficientOfVariation(days, meanDays)
+      const variance = roundedPopulationVariance(days, meanDays)
       const confidence = confidenceForSampleCount(days.length)
       const observed = observationWindow(rows)
       const automationQualityEvidence = buildNumericHoldoutEvidence(rows)
@@ -353,7 +372,7 @@ export function buildDurationBenchmarkCandidates(
         p75Days: percentile(days, 0.75),
         p80Days: percentile(days, 0.8),
         meanDays: Math.round(meanDays * 10) / 10,
-        variance: coefficientOfVariation,
+        variance,
         coefficientOfVariation,
         confidenceLevel: confidence.level,
         confidenceScore: confidence.score,
@@ -364,6 +383,8 @@ export function buildDurationBenchmarkCandidates(
         observationWindowDays: observed.windowDays,
         productionDaySamples: days,
         durationDayBasis: 'construction_production_day' as const,
+        calendarRef: readConstructionCalendarIdentity(first).calendarRef as string,
+        calendarVersion: readConstructionCalendarIdentity(first).calendarVersion as string,
         automationQualityEvidence,
       }
     })
@@ -378,7 +399,10 @@ async function loadGovernanceSamples(options: TemplateDurationGovernanceOptions)
   }) as Promise<DurationExperienceSampleRow[]>
 }
 
-async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: string) {
+export function buildDurationBenchmarkCandidatePersistenceRow(
+  candidate: DurationBenchmarkCandidate,
+  nowIso: string,
+) {
   const candidateOperationId = createHash('sha256').update(JSON.stringify({
     companyId: candidate.companyId,
     projectId: candidate.projectId,
@@ -386,9 +410,20 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
     durationDayBasis: candidate.durationDayBasis,
     sampleIds: [...candidate.sampleIds].sort(),
     p50Days: candidate.p50Days,
+    p75Days: candidate.p75Days,
     p80Days: candidate.p80Days,
+    meanDays: candidate.meanDays,
+    variance: candidate.variance,
+    coefficientOfVariation: candidate.coefficientOfVariation,
+    sampleCount: candidate.sampleCount,
+    confidenceLevel: candidate.confidenceLevel,
+    confidenceScore: candidate.confidenceScore,
+    sourceWindowStart: candidate.observationStartedAt,
+    sourceAsOf: candidate.observationEndedAt,
+    calendarRef: candidate.calendarRef,
+    calendarVersion: candidate.calendarVersion,
   })).digest('hex')
-  await stageDurationBenchmarkCandidateAtomically({
+  return {
       company_id: candidate.companyId,
       project_id: candidate.projectId,
       benchmark_key: candidate.benchmarkKey,
@@ -423,6 +458,8 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
         observation_window_days: candidate.observationWindowDays,
         production_day_samples: candidate.productionDaySamples,
         duration_day_basis: candidate.durationDayBasis,
+        calendar_ref: candidate.calendarRef,
+        calendar_version: candidate.calendarVersion,
         standard_work_code: candidate.standardWorkCode,
         standard_work_name: candidate.standardWorkName,
         variance: candidate.variance,
@@ -438,9 +475,18 @@ async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: str
         writes_runtime_directly: false,
         writes_fact_directly: false,
       },
+      generated_at: nowIso,
+      source_window_start: candidate.observationStartedAt,
+      source_as_of: candidate.observationEndedAt,
       created_at: nowIso,
       updated_at: nowIso,
-    })
+  }
+}
+
+async function writeBenchmark(candidate: DurationBenchmarkCandidate, nowIso: string) {
+  await stageDurationBenchmarkCandidateAtomically(
+    buildDurationBenchmarkCandidatePersistenceRow(candidate, nowIso),
+  )
 }
 
 async function readTemplateReferenceDays(templateNodeId: string) {
