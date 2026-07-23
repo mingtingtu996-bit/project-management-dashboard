@@ -1,4 +1,5 @@
 import { executeSQL } from './dbService.js'
+import { withDatabaseTransaction } from '../database.js'
 import type {
   DurationLearningRuntimeAssetKey,
   DurationLearningRuntimeScope,
@@ -374,7 +375,10 @@ function normalizeOptionalTextList(value: unknown, error: string) {
 
 function validateQueuePayload(value: unknown) {
   assertNoForbiddenPayloadKeys(value)
-  const payload = asRecord(value)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('duration_asset_review_payload_invalid')
+  }
+  const payload = value as Record<string, unknown>
   const allowed = new Set([
     'stableKeys', 'counts', 'stage', 'scope', 'reasonCodes', 'sourceCandidateRefCount',
     'sourceEvidenceRefCount', 'monitoringEvidenceDigest',
@@ -541,10 +545,6 @@ async function assertProjectScopeAuthorized(
   if (rows[0]?.scope_authorized !== true) throw new Error('project_scope_company_mismatch')
 }
 
-function defaultTransactionRunner<T>(work: () => Promise<T>) {
-  return work()
-}
-
 function normalizeDecisionReason(value: unknown) {
   return requireNonEmpty(value, 'duration_asset_review_decision_reason_required')
 }
@@ -558,9 +558,17 @@ function normalizeOptionalId(value: unknown) {
 }
 
 export function createDatabaseDurationAssetReviewQueueStore(
-  queryExec: DurationAssetReviewQueryExec = executeSQL,
-  transactionRunner: DurationAssetReviewTransactionRunner = defaultTransactionRunner,
+  providedQueryExec?: DurationAssetReviewQueryExec,
+  providedTransactionRunner?: DurationAssetReviewTransactionRunner,
 ): DurationAssetReviewQueueStore {
+  const queryExec = providedQueryExec ?? executeSQL
+  const transactionRunner: DurationAssetReviewTransactionRunner | null = providedTransactionRunner
+    ?? (providedQueryExec === undefined ? withDatabaseTransaction : null)
+  const runLockingMutation = <T>(work: () => Promise<T>) => {
+    if (!transactionRunner) throw new Error('duration_asset_review_transaction_runner_required')
+    return transactionRunner(work)
+  }
+
   const loadBySourceKeyForUpdate = async (sourceKey: string) => {
     const rows = await queryExec<QueueRow>(
       'select * from public.duration_asset_review_items where source_key = $1 for update',
@@ -637,7 +645,7 @@ export function createDatabaseDurationAssetReviewQueueStore(
       if (resolutionSource === 'manual_approval' && !reviewerUserId) {
         throw new Error('manual_approval_reviewer_required')
       }
-      return transactionRunner(async () => {
+      return runLockingMutation(async () => {
         const locked = await loadBySourceKeyForUpdate(sourceKey)
         if (!locked) throw new Error('duration_asset_review_item_not_found')
         if (locked.status !== 'open') return { item: locked, disposition: 'terminal_reused' }
@@ -724,7 +732,7 @@ export function createDatabaseDurationAssetReviewQueueStore(
       const decisionReason = normalizeDecisionReason(input.decisionReason)
       const source = status === 'rejected' ? 'manual_rejection' : 'manual_supersession'
       if (input.resolutionSource !== source) throw new Error('duration_asset_review_resolution_source_invalid')
-      return transactionRunner(async () => {
+      return runLockingMutation(async () => {
         const locked = await loadForUpdate(id)
         if (!locked) throw new Error('duration_asset_review_item_not_found')
         if (locked.status !== 'open') return { item: locked, disposition: 'terminal_reused' }

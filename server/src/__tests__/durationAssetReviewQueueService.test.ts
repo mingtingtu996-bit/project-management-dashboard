@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 
+const moduleMocks = vi.hoisted(() => ({
+  executeSQL: vi.fn(),
+  withDatabaseTransaction: vi.fn(),
+}))
+
+vi.mock('../services/dbService.js', () => ({
+  executeSQL: moduleMocks.executeSQL,
+}))
+
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: moduleMocks.withDatabaseTransaction,
+}))
+
 import {
   DURATION_ASSET_REVIEW_KEYS,
   buildDurationAssetReviewDecisionFingerprint,
@@ -106,6 +119,15 @@ function createHarness(initialRows: Row[] = [], options: {
 } = {}) {
   const rows = new Map(initialRows.map((row) => [String(row.source_key), row]))
   let nextId = initialRows.length + 1
+  const transactionEvents: string[] = []
+  const transactionRunner = vi.fn(async <T>(work: () => Promise<T>) => {
+    transactionEvents.push('transaction:start')
+    try {
+      return await work()
+    } finally {
+      transactionEvents.push('transaction:end')
+    }
+  })
   const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
     if (sql.includes('from public.projects project')) return [{ scope_authorized: true }]
     if (sql.includes('insert into public.duration_asset_review_items')) {
@@ -134,14 +156,17 @@ function createHarness(initialRows: Row[] = [], options: {
       return [{ ...row, was_created: true }]
     }
     if (sql.includes('where source_key = $1') && sql.includes('for update')) {
+      transactionEvents.push('lock:source')
       const row = rows.get(String(params[0]))
       return row ? [row] : []
     }
     if (sql.includes('where id = $1') && sql.includes('for update')) {
+      transactionEvents.push('lock:id')
       const row = Array.from(rows.values()).find((item) => item.id === params[0])
       return row ? [row] : []
     }
     if (sql.includes('where source_key = $1') && sql.includes("status = 'open'") && sql.includes('resolved_publication_key')) {
+      transactionEvents.push('update:source')
       const row = rows.get(String(params[0]))
       if (!row || row.status !== 'open') return []
       if (options.leaveSourceOpenAfterUpdate) return []
@@ -175,6 +200,7 @@ function createHarness(initialRows: Row[] = [], options: {
       return [{ resolved_count: matches.length }]
     }
     if (sql.includes('where id = $1') && sql.includes("status = 'open'") && sql.includes('resolution_source')) {
+      transactionEvents.push('update:id')
       const row = Array.from(rows.values()).find((item) => item.id === params[0])
       if (!row || row.status !== 'open') return []
       if (options.leaveDecisionOpenAfterUpdate) return []
@@ -187,7 +213,13 @@ function createHarness(initialRows: Row[] = [], options: {
     if (sql.includes('from public.duration_asset_review_items')) return Array.from(rows.values())
     return []
   })
-  return { queryExec, rows, store: createDatabaseDurationAssetReviewQueueStore(queryExec) }
+  return {
+    queryExec,
+    rows,
+    store: createDatabaseDurationAssetReviewQueueStore(queryExec, transactionRunner),
+    transactionEvents,
+    transactionRunner,
+  }
 }
 
 describe('durationAssetReviewQueueService', () => {
@@ -290,6 +322,94 @@ describe('durationAssetReviewQueueService', () => {
     const updateSql = queryExec.mock.calls.map(([sql]) => String(sql)).find((sql) => sql.includes('update public.duration_asset_review_items'))
     expect(updateSql).toContain('where source_key = $1')
     expect(updateSql).not.toContain('where review_kind = $1')
+  })
+
+  it('uses withDatabaseTransaction for default executeSQL locking mutations', async () => {
+    const events: string[] = []
+    const openRow = rowForInput(upsertInput(), 'review-default-transaction')
+    moduleMocks.executeSQL.mockReset()
+    moduleMocks.withDatabaseTransaction.mockReset()
+    moduleMocks.withDatabaseTransaction.mockImplementation(async (work: () => Promise<unknown>) => {
+      events.push('transaction:start')
+      const result = await work()
+      events.push('transaction:end')
+      return result
+    })
+    moduleMocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('for update')) {
+        events.push('lock')
+        return [openRow]
+      }
+      if (sql.includes('update public.duration_asset_review_items')) {
+        events.push('update')
+        return [{
+          ...openRow,
+          status: 'resolved_by_publication', resolved_publication_key: params[1], reviewed_at: params[2],
+          resolution_source: params[3], reviewed_by_user_id: params[4], decision_reason: params[5],
+        }]
+      }
+      return []
+    })
+
+    const store = createDatabaseDurationAssetReviewQueueStore()
+    await expect(store.resolveByPublication({
+      sourceKey: String(openRow.source_key), publicationKey: 'publication-default-transaction',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_policy_approved',
+    })).resolves.toMatchObject({ disposition: 'resolved' })
+
+    expect(moduleMocks.withDatabaseTransaction).toHaveBeenCalledOnce()
+    expect(events).toEqual(['transaction:start', 'lock', 'update', 'transaction:end'])
+  })
+
+  it('requires a transaction runner before custom-adapter locking mutations', async () => {
+    const queryExec = vi.fn(async () => [])
+    const store = createDatabaseDurationAssetReviewQueueStore(queryExec)
+
+    await expect(store.resolveByPublication({
+      sourceKey: buildDurationAssetReviewSourceKey(sourceInput), publicationKey: 'publication-custom',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_policy_approved',
+    })).rejects.toThrow('duration_asset_review_transaction_runner_required')
+    await expect(store.decide({
+      id: 'review-custom', status: 'rejected', reviewerUserId: 'user-1',
+      reviewedAt: '2026-07-23T08:00:00.000Z', decisionReason: 'not applicable',
+      resolutionSource: 'manual_rejection',
+    })).rejects.toThrow('duration_asset_review_transaction_runner_required')
+    expect(queryExec).not.toHaveBeenCalled()
+  })
+
+  it('wraps lock then update in the injected transaction runner', async () => {
+    const openRow = rowForInput(upsertInput(), 'review-injected-transaction')
+    const { store, transactionEvents, transactionRunner } = createHarness([openRow])
+
+    await store.resolveByPublication({
+      sourceKey: String(openRow.source_key), publicationKey: 'publication-injected',
+      reviewedAt: '2026-07-23T08:00:00.000Z', resolutionSource: 'automatic_publication',
+      reviewerUserId: null, decisionReason: 'automatic_policy_approved',
+    })
+
+    expect(transactionRunner).toHaveBeenCalledOnce()
+    expect(transactionEvents).toEqual(['transaction:start', 'lock:source', 'update:source', 'transaction:end'])
+  })
+
+  it('keeps custom-adapter list and single-statement upsert usable without a transaction runner', async () => {
+    const companyInput = upsertInput({ scope: { level: 'company', companyId }, reviewPayload: {} })
+    const insertedRow = {
+      ...rowForInput(companyInput, 'review-custom-nonlocking'),
+      scope_level: 'company', project_id: null, was_created: true,
+    }
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('insert into public.duration_asset_review_items')) return [insertedRow]
+      if (sql.includes('from public.duration_asset_review_items')) return [insertedRow]
+      return []
+    })
+    const store = createDatabaseDurationAssetReviewQueueStore(queryExec)
+
+    await expect(store.upsertOpen(companyInput)).resolves.toMatchObject({ disposition: 'created' })
+    await expect(store.list({ companyId, projectIds: null })).resolves.toMatchObject({
+      items: [expect.objectContaining({ id: 'review-custom-nonlocking' })],
+    })
   })
 
   it('records the real reviewer and reason for manual approval', async () => {
@@ -446,6 +566,22 @@ describe('durationAssetReviewQueueService', () => {
     expect(() => buildDurationAssetReviewPayload({ counts: { candidateCount: value } })).toThrow(
       'duration_asset_review_payload_count_invalid',
     )
+  })
+
+  it.each([
+    ['null', null],
+    ['array', []],
+    ['string', 'payload'],
+    ['number', 1],
+    ['boolean', true],
+  ])('rejects a %s queue payload at the top level', async (_name, reviewPayload) => {
+    const queryExec = vi.fn(async () => [])
+    const store = createDatabaseDurationAssetReviewQueueStore(queryExec)
+    await expect(store.upsertOpen({
+      ...upsertInput({ scope: { level: 'company', companyId } }),
+      reviewPayload,
+    } as never)).rejects.toThrow('duration_asset_review_payload_invalid')
+    expect(queryExec).not.toHaveBeenCalled()
   })
 
   it('rejects invalid manual and automatic resolutions before mutation', async () => {
