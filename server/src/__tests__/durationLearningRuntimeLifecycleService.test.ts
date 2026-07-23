@@ -5,11 +5,28 @@ import {
   collectDurationLearningRuntimeMonitoringCandidates,
   createInMemoryDurationLearningRuntimeCollectionCursorStore,
   expandDurationLearningRuntimeCandidateScopes,
-  runDurationLearningRuntimeLifecycleSweep,
+  runDurationLearningRuntimeLifecycleSweep as runDurationLearningRuntimeLifecycleSweepActual,
   type DurationLearningRuntimeCandidateProposal,
 } from '../services/durationLearningRuntimeLifecycleService.js'
 import { evaluateDurationLearningAssetAutomationPolicy } from '../services/durationLearningAssetAutomationPolicyService.js'
 import { createInMemoryDurationContextPolicyLearningCheckpointStore } from '../services/durationContextPolicyLearningCheckpointService.js'
+
+const lifecycleReviewQueueStore = {
+  upsertOpen: vi.fn(async () => ({ disposition: 'created', item: {} })),
+  loadForUpdate: vi.fn(async () => null),
+  resolveByPublication: vi.fn(),
+  resolveOpenByPublicationIdentity: vi.fn(async () => 0),
+  decide: vi.fn(),
+  list: vi.fn(),
+}
+
+function runDurationLearningRuntimeLifecycleSweep(input: Record<string, unknown> = {}) {
+  return runDurationLearningRuntimeLifecycleSweepActual({
+    reviewQueueStore: lifecycleReviewQueueStore as any,
+    transactionRunner: <T>(work: () => Promise<T>) => work(),
+    ...input,
+  })
+}
 
 function benchmarkProposal(input: {
   projectId: string

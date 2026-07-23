@@ -2,15 +2,25 @@ import { describe, expect, it, vi } from 'vitest'
 
 const databaseMocks = vi.hoisted(() => ({
   getClient: vi.fn(),
+  actualGetClient: null as null | (() => Promise<unknown>),
 }))
 
-vi.mock('../database.js', () => ({
-  getClient: databaseMocks.getClient,
-  query: vi.fn(async () => ({ rows: [] })),
-}))
+vi.mock('../database.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../database.js')>()
+  databaseMocks.actualGetClient = actual.getClient
+  return {
+    ...actual,
+    getClient: databaseMocks.getClient,
+    query: vi.fn(async () => ({ rows: [] })),
+  }
+})
 
+import { runWithDatabaseTransactionClient } from '../database.js'
 import { promoteDurationBenchmarkRuntimeCanaryAtomically } from '../services/durationLearningAssetAtomicStoreService.js'
-import { collectDurationLearningRuntimeCandidateProposals } from '../services/durationLearningRuntimeLifecycleService.js'
+import {
+  collectDurationLearningRuntimeCandidateProposals,
+  runDurationLearningRuntimeLifecycleSweep,
+} from '../services/durationLearningRuntimeLifecycleService.js'
 import {
   persistDurationLearningRuntimePublication,
   resolveDurationLearningRuntimePublication,
@@ -174,17 +184,50 @@ describe('duration benchmark production chain', () => {
     expect(published.status).toBe('published')
 
     let persistedSegment: Record<string, any> | null = null
+    let benchmarkCurrent = false
+    let causeSegmentsCurrent = false
+    let transactionSnapshot: null | {
+      publicationStage: string
+      monitoringStatus: string
+      benchmarkCurrent: boolean
+      causeSegmentsCurrent: boolean
+      persistedSegment: Record<string, any> | null
+    } = null
     const client = {
       release: vi.fn(),
       query: vi.fn(async (sql: string, params: unknown[] = []) => {
         const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
-        if (['begin', 'commit', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+        if (normalized === 'begin') {
+          transactionSnapshot = {
+            publicationStage: String(publication!.publication_stage),
+            monitoringStatus: String(publication!.monitoring_status),
+            benchmarkCurrent,
+            causeSegmentsCurrent,
+            persistedSegment,
+          }
+          return { rows: [], rowCount: 0 }
+        }
+        if (normalized === 'commit') {
+          transactionSnapshot = null
+          return { rows: [], rowCount: 0 }
+        }
+        if (normalized === 'rollback') {
+          if (transactionSnapshot) {
+            publication!.publication_stage = transactionSnapshot.publicationStage
+            publication!.monitoring_status = transactionSnapshot.monitoringStatus
+            benchmarkCurrent = transactionSnapshot.benchmarkCurrent
+            causeSegmentsCurrent = transactionSnapshot.causeSegmentsCurrent
+            persistedSegment = transactionSnapshot.persistedSegment
+          }
+          transactionSnapshot = null
+          return { rows: [], rowCount: 0 }
+        }
         if (normalized.includes('from public.duration_learning_runtime_publications')) {
           return { rows: [publication], rowCount: 1 }
         }
         if (normalized.includes('from public.projects')) return { rows: [{ company_id: companyId }], rowCount: 1 }
         if (normalized.includes('from public.duration_benchmarks') && normalized.includes('for update')) {
-          return { rows: [{ ...persistenceRow, is_current: false, is_active: true }], rowCount: 1 }
+          return { rows: [{ ...persistenceRow, is_current: benchmarkCurrent, is_active: true }], rowCount: 1 }
         }
         if (normalized.includes('promote_duration_learning_runtime_canary')) {
           publication!.publication_stage = 'stable'
@@ -195,6 +238,7 @@ describe('duration benchmark production chain', () => {
           return { rows: [], rowCount: 0 }
         }
         if (normalized.includes('update public.duration_benchmarks') && normalized.includes('runtime_publication_status')) {
+          benchmarkCurrent = true
           return { rows: [{ ...persistenceRow, is_current: true }], rowCount: 1 }
         }
         if (normalized.includes('from public.duration_experience_samples sample')) {
@@ -243,6 +287,7 @@ describe('duration benchmark production chain', () => {
         }
         if (normalized.includes('update public.duration_benchmark_cause_segments')) return { rows: [], rowCount: 0 }
         if (normalized.includes('insert into public.duration_benchmark_cause_segments')) {
+          causeSegmentsCurrent = true
           persistedSegment = {
             id: '55555555-5555-4555-8555-555555555555', benchmark_id: params[0], company_id: params[1],
             project_id: params[2], cause_code: params[3], taxonomy_version: params[4], sample_count: params[5],
@@ -257,10 +302,79 @@ describe('duration benchmark production chain', () => {
         throw new Error(`Unexpected chain SQL: ${normalized}`)
       }),
     }
-    databaseMocks.getClient.mockResolvedValue(client)
-    await expect(promoteDurationBenchmarkRuntimeCanaryAtomically({ publicationKey }))
-      .resolves.toMatchObject({ status: 'stable_promoted' })
-    expect(client.query.mock.calls.some(([sql]) => String(sql).trim().toLowerCase() === 'commit')).toBe(true)
+    databaseMocks.getClient.mockImplementation(async () => {
+      if (!databaseMocks.actualGetClient) throw new Error('actual database getClient unavailable')
+      return databaseMocks.actualGetClient()
+    })
+    const reviewQueueStore = {
+      upsertOpen: vi.fn(),
+      loadForUpdate: vi.fn(),
+      resolveByPublication: vi.fn(),
+      resolveOpenByPublicationIdentity: vi.fn()
+        .mockRejectedValueOnce(new Error('queue unavailable'))
+        .mockResolvedValueOnce(1),
+      decide: vi.fn(),
+      list: vi.fn(),
+    }
+    const lifecycleInput = {
+      candidateProvider: async () => [],
+      monitoringProvider: async () => [{
+        publicationKey,
+        assetKey: 'base_duration_benchmark' as const,
+        artifactKey: proposal.artifactKey,
+        publicationStage: 'canary' as const,
+        scope: proposal.scope,
+        monitoringWindowHours: 72,
+        monitoringElapsedHours: 96,
+        observedCount: 20,
+        rejectedObservationCount: 0,
+        acceptedOutcomeCount: 0,
+        weakOrRejectedOutcomeCount: 0,
+        accuracySampleCount: 20,
+        maeBefore: 8,
+        maeAfter: 6,
+        regressionRate: 0,
+        sourceAutomationDecision: { observed: { conflictCount: 0, replayPassed: true } },
+        runtimePayload: proposal.runtimePayload,
+        sourceCandidateRefs: proposal.sourceCandidateRefs,
+        sourceEvidenceRefs: proposal.sourceEvidenceRefs,
+      }],
+      stableDecisionEvaluator: () => ({
+        targetStage: 'stable',
+        stage: 'auto_stable',
+        autoPromotionAllowed: true,
+        manualReviewRequired: false,
+        retainPreviousStable: false,
+        reasonCodes: [],
+      }),
+      reviewQueueStore: reviewQueueStore as any,
+      transactionRunner: <T>(work: () => Promise<T>) => runWithDatabaseTransactionClient(client, work),
+      recordImpact: async () => ({ status: 'impact_recorded' as const, reasons: [] }),
+      promoteBenchmarkCanary: promoteDurationBenchmarkRuntimeCanaryAtomically,
+      observedAt: '2026-07-22T00:00:00.000Z',
+    }
+
+    const failedPromotion = await runDurationLearningRuntimeLifecycleSweep(lifecycleInput as any)
+    expect(failedPromotion).toMatchObject({ stablePromoted: 0, reviewItemsResolved: 0, failed: 1 })
+    expect(publication!.publication_stage).toBe('canary')
+    expect(benchmarkCurrent).toBe(false)
+    expect(causeSegmentsCurrent).toBe(false)
+    expect(persistedSegment).toBeNull()
+    let transactionSql = client.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase())
+    expect(transactionSql.filter((sql) => sql === 'begin')).toHaveLength(1)
+    expect(transactionSql.filter((sql) => sql === 'rollback')).toHaveLength(1)
+    expect(transactionSql.filter((sql) => sql === 'commit')).toHaveLength(0)
+
+    client.query.mockClear()
+    const promoted = await runDurationLearningRuntimeLifecycleSweep(lifecycleInput as any)
+    expect(promoted).toMatchObject({ stablePromoted: 1, reviewItemsResolved: 1, failed: 0 })
+    expect(publication!.publication_stage).toBe('stable')
+    expect(benchmarkCurrent).toBe(true)
+    expect(causeSegmentsCurrent).toBe(true)
+    transactionSql = client.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase())
+    expect(transactionSql.filter((sql) => sql === 'begin')).toHaveLength(1)
+    expect(transactionSql.filter((sql) => sql === 'commit')).toHaveLength(1)
+    expect(transactionSql.filter((sql) => sql === 'rollback')).toHaveLength(0)
 
     const resolution = await resolveDurationLearningRuntimePublication({
       queryExec: async <T = Record<string, unknown>>(sql: string): Promise<T[]> => (

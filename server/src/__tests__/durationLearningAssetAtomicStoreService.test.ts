@@ -596,7 +596,11 @@ describe('durationLearningAssetAtomicStoreService', () => {
         structuredCauseAttributionLineage: [frozenAttribution],
       },
     }, expect.anything())
-    expect(mocks.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase()).at(-1)).toBe('commit')
+    const transactionSql = mocks.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase())
+    expect(transactionSql.filter((sql) => sql === 'begin')).toHaveLength(1)
+    expect(transactionSql.filter((sql) => sql === 'commit')).toHaveLength(1)
+    expect(transactionSql.filter((sql) => sql === 'rollback')).toHaveLength(0)
+    expect(transactionSql.at(-1)).toBe('commit')
   })
 
   it('rolls back stable promotion when exact benchmark activation fails', async () => {
