@@ -1,6 +1,6 @@
 import { Router } from 'express'
 
-import { getCurrentCompanyMembership, getProjectCompanyId } from '../auth/access.js'
+import { getCurrentCompanyMembership, getProjectCompanyId, getVisibleProjectIds } from '../auth/access.js'
 import { getRequestCompanyId } from '../auth/companyContext.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
@@ -80,6 +80,15 @@ const HIGH_RISK_RULE_ASSET_ACTIONS = new Set([
   'runtime_rollback_execution',
   'runtime_rollback',
 ])
+
+function isHighRiskRuleAssetOperation(body: Record<string, unknown>) {
+  const operationAction = normalizeText(body.action)
+  return HIGH_RISK_RULE_ASSET_ACTIONS.has(operationAction)
+    || (
+      operationAction === 'duration_asset_review_decision'
+      && normalizeText(body.reviewDecision) === 'approve'
+    )
+}
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -494,8 +503,7 @@ router.post('/rule-assets/governance-workbench/operations', requireCurrentCompan
   if (projectCompanyId && membership?.companyId && projectCompanyId !== membership.companyId) {
     return forbiddenCompanyResponse(res)
   }
-  const operationAction = normalizeText(req.body?.action)
-  if (HIGH_RISK_RULE_ASSET_ACTIONS.has(operationAction) && !areRuleAssetRuntimeActionsEnabled()) {
+  if (isHighRiskRuleAssetOperation(req.body ?? {}) && !areRuleAssetRuntimeActionsEnabled()) {
     return res.status(409).json({
       success: false,
       error: {
@@ -511,10 +519,16 @@ router.post('/rule-assets/governance-workbench/operations', requireCurrentCompan
     projectId,
   })
   if (!durationRuntimeRollbackAuthorized) return forbiddenCompanyResponse(res)
+  const authorizedProjectIds = await getVisibleProjectIds(
+    req.user.id,
+    req.user.globalRole,
+    companyId,
+  )
   const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
     ...req.body,
     companyId,
     requestedByUserId: req.user?.id ?? null,
+    authorizedProjectIds,
     queryExec: executeSQL,
   })
 

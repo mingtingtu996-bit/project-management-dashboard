@@ -137,6 +137,7 @@ import wbsTemplateGovernanceRouter from './routes/wbs-template-governance.js'
 import algorithmSeedsRouter from './routes/algorithm-seeds.js'
 import durationContextGovernanceRouter from './routes/duration-context-governance.js'
 import durationAccuracyRouter from './routes/duration-accuracy.js'
+import durationAssetsRouter from './routes/duration-assets.js'
 import workspaceRouter from './routes/workspace.js'
 import commercialRouter from './routes/commercial.js'
 import demoProjectsRouter from './routes/demo-projects.js'
@@ -539,6 +540,7 @@ app.use('/api/admin/certificate-template-governance', certificateTemplateGoverna
 app.use('/api/admin/drawing-package-template-governance', drawingPackageTemplateGovernanceRouter)
 app.use('/api/admin/duration-context-governance', durationContextGovernanceRouter)
 app.use('/api/admin/duration-accuracy', durationAccuracyRouter)
+app.use('/api/admin/duration-assets', durationAssetsRouter)
 app.use('/api/workspace', workspaceRouter)
 app.use('/api/commercial', commercialRouter)
 app.use('/api/demo-projects', demoProjectsRouter)

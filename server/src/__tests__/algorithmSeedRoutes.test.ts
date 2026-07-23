@@ -2,9 +2,14 @@ import express from 'express'
 import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { errorHandler } from '../middleware/errorHandler.js'
+
 const mocks = vi.hoisted(() => ({
   membershipRole: 'company_admin',
+  globalRole: 'member',
   projectCompanyId: 'company-1',
+  visibleProjectIds: ['project-1'],
+  getVisibleProjectIds: vi.fn(),
   validateV1474AlgorithmSeeds: vi.fn(),
   importV1474AlgorithmSeeds: vi.fn(),
   previewAlgorithmSeedImport: vi.fn(),
@@ -28,7 +33,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: (req: any, _res: any, next: any) => {
-    req.user = { id: 'user-1' }
+    req.user = { id: 'user-1', globalRole: mocks.globalRole }
     next()
   },
 }))
@@ -40,6 +45,7 @@ vi.mock('../auth/companyContext.js', () => ({
 vi.mock('../auth/access.js', () => ({
   getCurrentCompanyMembership: vi.fn(async () => ({ companyId: 'company-1', role: mocks.membershipRole })),
   getProjectCompanyId: vi.fn(async () => mocks.projectCompanyId),
+  getVisibleProjectIds: mocks.getVisibleProjectIds,
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -153,6 +159,7 @@ function buildApp() {
   const app = express()
   app.use(express.json())
   app.use('/api/planning/algorithm-seeds', algorithmSeedsRouter)
+  app.use(errorHandler)
   return app
 }
 
@@ -591,7 +598,11 @@ describe('algorithm seed routes', () => {
   beforeEach(() => {
     vi.stubEnv('WORKBUDDY_RULE_ASSET_RUNTIME_ACTIONS_ENABLED', 'true')
     mocks.membershipRole = 'company_admin'
+    mocks.globalRole = 'member'
     mocks.projectCompanyId = 'company-1'
+    mocks.visibleProjectIds = ['project-1']
+    mocks.getVisibleProjectIds.mockReset()
+    mocks.getVisibleProjectIds.mockImplementation(async () => mocks.visibleProjectIds)
     mocks.validateV1474AlgorithmSeeds.mockReset()
     mocks.importV1474AlgorithmSeeds.mockReset()
     mocks.previewAlgorithmSeedImport.mockReset()
@@ -4804,5 +4815,156 @@ describe('algorithm seed routes', () => {
 
     expect(response.body.success).toBe(false)
     expect(mocks.listConstructionDependencySeedPromotionReviewPackageReport).not.toHaveBeenCalled()
+  })
+
+  it('feature-gates only duration review approval while leaving reject and supersede queue decisions available', async () => {
+    vi.stubEnv('WORKBUDDY_RULE_ASSET_RUNTIME_ACTIONS_ENABLED', 'false')
+
+    const approval = await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'duration_asset_review_decision',
+        assetType: 'duration_learning_runtime',
+        evidenceToken: 'duration-review-approve',
+        domainWriterKey: 'duration_asset_review_decision_service',
+        reviewItemId: 'review-approve',
+        reviewDecision: 'approve',
+        decisionNotes: 'approve current evidence',
+      })
+      .expect(409)
+
+    expect(approval.body.error.code).toBe('ACTION_READINESS_GATED')
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
+
+    for (const reviewDecision of ['reject', 'supersede'] as const) {
+      mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mockResolvedValueOnce({
+        status: 'operation_delegated',
+        operationAction: 'duration_asset_review_decision',
+        assetType: 'duration_learning_runtime',
+        writesRuntimeDirectly: false,
+        workbenchDoesNotGrantPublishRights: true,
+        delegatedToDomainWriter: true,
+        domainWriterKey: 'duration_asset_review_decision_service',
+        reasons: [],
+        domainResult: { status: reviewDecision === 'reject' ? 'rejected' : 'superseded' },
+        boundaryPolicy: [],
+      })
+
+      const response = await request(buildApp())
+        .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+        .send({
+          action: 'duration_asset_review_decision',
+          assetType: 'duration_learning_runtime',
+          evidenceToken: `duration-review-${reviewDecision}`,
+          domainWriterKey: 'duration_asset_review_decision_service',
+          reviewItemId: `review-${reviewDecision}`,
+          reviewDecision,
+          decisionNotes: `${reviewDecision} queue item`,
+        })
+        .expect(200)
+
+      expect(response.body.data.domainResult.status).toBe(reviewDecision === 'reject' ? 'rejected' : 'superseded')
+    }
+  })
+
+  it('overrides request-body authority and project visibility with current membership authority', async () => {
+    mocks.visibleProjectIds = ['project-server-authorized']
+    mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mockResolvedValueOnce({
+      status: 'operation_delegated',
+      operationAction: 'duration_asset_review_decision',
+      assetType: 'duration_learning_runtime',
+      writesRuntimeDirectly: false,
+      workbenchDoesNotGrantPublishRights: true,
+      delegatedToDomainWriter: true,
+      domainWriterKey: 'duration_asset_review_decision_service',
+      reasons: [],
+      domainResult: { status: 'rejected' },
+      boundaryPolicy: [],
+    })
+
+    await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'duration_asset_review_decision',
+        assetType: 'duration_learning_runtime',
+        evidenceToken: 'duration-review-body-override',
+        domainWriterKey: 'duration_asset_review_decision_service',
+        reviewItemId: 'review-body-override',
+        reviewDecision: 'reject',
+        decisionNotes: 'server authority must win',
+        companyId: 'company-attacker',
+        requestedByUserId: 'user-attacker',
+        authority: {
+          kind: 'operator',
+          companyId: 'company-attacker',
+          authorizedProjectIds: ['project-attacker'],
+          reviewerUserId: 'user-attacker',
+        },
+        visibleProjectIds: ['project-attacker'],
+        authorizedProjectIds: ['project-attacker'],
+      })
+      .expect(200)
+
+    expect(mocks.getVisibleProjectIds).toHaveBeenCalledWith('user-1', 'member', 'company-1')
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).toHaveBeenCalledWith(expect.objectContaining({
+      companyId: 'company-1',
+      requestedByUserId: 'user-1',
+      authorizedProjectIds: ['project-server-authorized'],
+      queryExec: mocks.executeSQL,
+    }))
+    const delegated = mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mock.calls.at(-1)?.[0]
+    expect(delegated.authorizedProjectIds).not.toEqual(['project-attacker'])
+  })
+
+  it('does not treat legacy JWT globalRole company_admin as current-company authority', async () => {
+    mocks.globalRole = 'company_admin'
+    mocks.membershipRole = 'regular'
+
+    const response = await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'duration_asset_review_decision',
+        assetType: 'duration_learning_runtime',
+        evidenceToken: 'duration-review-legacy-global-role',
+        domainWriterKey: 'duration_asset_review_decision_service',
+        reviewItemId: 'review-legacy-role',
+        reviewDecision: 'reject',
+        decisionNotes: 'must be denied',
+      })
+      .expect(403)
+
+    expect(response.body.error.code).toBe('FORBIDDEN')
+    expect(mocks.getVisibleProjectIds).not.toHaveBeenCalled()
+    expect(mocks.executeAlgorithmAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['DURATION_ASSET_REVIEW_SHARED_SCOPE_READ_ONLY', 403, 'Shared review items are read-only.'],
+    ['DURATION_ASSET_REVIEW_STALE', 409, 'The current evidence fingerprint no longer matches the locked review item.'],
+    ['DURATION_ASSET_REVIEW_PUBLICATION_FAILED', 409, 'The governed publication writer rejected the candidate.'],
+  ] as const)('propagates decision-service %s failures instead of returning empty success', async (code, status, message) => {
+    mocks.executeAlgorithmAssetGovernanceWorkbenchOperation.mockRejectedValueOnce(Object.assign(
+      new Error(message),
+      { code, status, statusCode: status },
+    ))
+
+    const response = await request(buildApp())
+      .post('/api/planning/algorithm-seeds/rule-assets/governance-workbench/operations')
+      .send({
+        action: 'duration_asset_review_decision',
+        assetType: 'duration_learning_runtime',
+        evidenceToken: 'duration-review-stale',
+        domainWriterKey: 'duration_asset_review_decision_service',
+        reviewItemId: 'review-stale',
+        reviewDecision: 'reject',
+        decisionNotes: 'stale evidence',
+      })
+      .expect(status)
+
+    expect(response.body).toMatchObject({
+      success: false,
+      error: { code },
+    })
+    expect(response.body.data).toBeUndefined()
   })
 })
