@@ -81,12 +81,17 @@ describe('duration benchmark production chain', () => {
   })
 
   it('carries exact producer identity through publication and activation into cause-aware suggestion selection', async () => {
+    const confirmedAt = '2026-07-20T00:00:00.000Z'
     const samples = Array.from({ length: 20 }, (_, index): DurationExperienceSampleRow => ({
-      id: `sample-${index + 1}`,
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-${String(index + 1).padStart(12, '0')}`,
       company_id: companyId,
       project_id: projectId,
-      task_id: `task-${index + 1}`,
+      task_id: `bbbbbbbb-bbbb-4bbb-8bbb-${String(index + 1).padStart(12, '0')}`,
       completed_at: new Date(Date.UTC(2026, 6, index + 1)).toISOString(),
+      created_at: new Date(Date.UTC(2026, 6, index + 1, 1)).toISOString(),
+      updated_at: new Date(Date.UTC(2026, 6, index + 1, 2)).toISOString(),
+      evidence_fingerprint: `fingerprint-chain-${index + 1}`,
+      source_lineage: { schemaVersion: 'duration-experience-sample/v1', completionId: `completion-${index + 1}` },
       standard_work_code: 'SW-CHAIN',
       wbs_node_type: 'process',
       actual_duration_production_days: 6 + (index % 3),
@@ -94,6 +99,16 @@ describe('duration benchmark production chain', () => {
       metadata: {
         construction_calendar_ref: 'cn-work-calendar',
         construction_calendar_version: '2026.07',
+        structured_cause_snapshot: {
+          confirmed_causes: index < 6 ? [{
+            attribution_id: `cccccccc-cccc-4ccc-8ccc-${String(index + 1).padStart(12, '0')}`,
+            cause_code: 'material_shortage',
+            taxonomy_version: 'v1.0.0',
+            event_type: 'delay',
+            cause_role: 'primary',
+            confirmed_at: confirmedAt,
+          }] : [],
+        },
       },
     }))
     const [candidate] = buildDurationBenchmarkCandidates(samples)
@@ -183,19 +198,48 @@ describe('duration benchmark production chain', () => {
           return { rows: [{ ...persistenceRow, is_current: true }], rowCount: 1 }
         }
         if (normalized.includes('from public.duration_experience_samples sample')) {
-          return { rows: Array.from({ length: 6 }, (_, index) => ({
-            sample_id: `cause-sample-${index + 1}`,
-            attribution_id: `44444444-4444-4444-8444-44444444444${index}`,
-            cause_code: 'material_shortage', taxonomy_version: 'v1.0.0', actual_duration_production_days: 5 + index,
-            sample_company_id: companyId, sample_project_id: projectId, attribution_company_id: companyId,
-            attribution_project_id: projectId, attribution_status: 'confirmed', attribution_event_type: 'delay',
-            cause_role: 'primary', confirmed_at: '2026-07-20T00:00:00.000Z', source_type: 'task_completion',
-            snapshot_attribution_id: `44444444-4444-4444-8444-44444444444${index}`,
-            snapshot_cause_code: 'material_shortage', snapshot_taxonomy_version: 'v1.0.0',
-            snapshot_event_type: 'delay', snapshot_confirmed_at: '2026-07-20T00:00:00.000Z', snapshot_primary_count: 1,
-            included_in_benchmark: true, sample_strength: 'strong', duration_day_basis: 'construction_production_day',
-            calendar_ref: 'cn-work-calendar', calendar_version: '2026.07',
-          })), rowCount: 6 }
+          const rows = samples.map((sample) => {
+            const cause = (sample.metadata?.structured_cause_snapshot as {
+              confirmed_causes: Array<Record<string, unknown>>
+            }).confirmed_causes[0]
+            return {
+              sample_id: sample.id,
+              sample_task_id: sample.task_id,
+              sample_completed_at: sample.completed_at,
+              sample_created_at: sample.created_at,
+              sample_updated_at: sample.updated_at,
+              sample_evidence_fingerprint: sample.evidence_fingerprint,
+              sample_source_lineage: sample.source_lineage,
+              attribution_id: cause?.attribution_id ?? null,
+              cause_code: cause?.cause_code ?? null,
+              taxonomy_version: cause?.taxonomy_version ?? null,
+              actual_duration_production_days: sample.actual_duration_production_days,
+              sample_company_id: companyId,
+              sample_project_id: projectId,
+              attribution_company_id: cause ? companyId : null,
+              attribution_project_id: cause ? projectId : null,
+              attribution_status: cause ? 'confirmed' : null,
+              attribution_event_type: cause?.event_type ?? null,
+              cause_role: cause?.cause_role ?? null,
+              attribution_subject_type: cause ? 'task' : null,
+              attribution_subject_id: cause ? sample.task_id : null,
+              confirmed_at: cause?.confirmed_at ?? null,
+              source_type: 'task_completion',
+              snapshot_attribution_id: cause?.attribution_id ?? null,
+              snapshot_cause_code: cause?.cause_code ?? null,
+              snapshot_taxonomy_version: cause?.taxonomy_version ?? null,
+              snapshot_event_type: cause?.event_type ?? null,
+              snapshot_cause_role: cause?.cause_role ?? null,
+              snapshot_confirmed_at: cause?.confirmed_at ?? null,
+              snapshot_primary_count: cause ? 1 : 0,
+              included_in_benchmark: true,
+              sample_strength: 'strong',
+              duration_day_basis: 'construction_production_day',
+              calendar_ref: 'cn-work-calendar',
+              calendar_version: '2026.07',
+            }
+          })
+          return { rows, rowCount: rows.length }
         }
         if (normalized.includes('update public.duration_benchmark_cause_segments')) return { rows: [], rowCount: 0 }
         if (normalized.includes('insert into public.duration_benchmark_cause_segments')) {

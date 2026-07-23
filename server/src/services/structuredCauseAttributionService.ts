@@ -411,38 +411,71 @@ export class StructuredCauseAttributionError extends Error {
 type QueryResult = { rows: any[]; rowCount?: number | null }
 type QueryExec = (sql: string, params?: unknown[]) => Promise<QueryResult>
 type WithTransaction = <T>(work: () => Promise<T>) => Promise<T>
-type StructuredCauseDependencies = {
-  queryExec?: QueryExec
-  withTransaction?: WithTransaction
-  registerPostCommitEffect?: typeof registerDatabasePostCommitEffect
-  rebuildTaskDurationExperienceSample?: (input: {
-    companyId: string
-    projectId: string
-    taskId: string
-    actorId: string
-    trigger: 'structured_cause_user_confirmation'
-  }) => Promise<unknown>
-}
-
-async function rebuildTaskDurationExperienceSample(input: {
+type TaskDurationExperienceRebuildInput = {
   companyId: string
   projectId: string
   taskId: string
   actorId: string
   trigger: 'structured_cause_user_confirmation'
-}) {
+}
+type StructuredCauseDependencies = {
+  queryExec?: QueryExec
+  withTransaction?: WithTransaction
+  registerPostCommitEffect?: typeof registerDatabasePostCommitEffect
+  enqueueDurationExperienceRebuild?: (input: TaskDurationExperienceRebuildInput) => Promise<{ id: string }>
+  completeDurationExperienceRebuild?: (id: string) => Promise<unknown>
+  rebuildTaskDurationExperienceSample?: (input: TaskDurationExperienceRebuildInput) => Promise<unknown>
+}
+
+async function enqueueDurationExperienceRebuild(input: TaskDurationExperienceRebuildInput, queryExec: QueryExec) {
+  const service = await import('./durationExperienceReconciliationService.js')
+  return service.enqueueDurationExperienceRebuild(input, { queryExec })
+}
+
+async function completeDurationExperienceRebuild(id: string, queryExec: QueryExec) {
+  const service = await import('./durationExperienceReconciliationService.js')
+  return service.completeDurationExperienceRebuild(id, { queryExec })
+}
+
+async function rebuildTaskDurationExperienceSample(input: TaskDurationExperienceRebuildInput) {
   const { rebuildDurationExperienceSampleForTask } = await import('./durationExperienceReconciliationService.js')
   return rebuildDurationExperienceSampleForTask(input)
 }
 
 function dependencies(input?: StructuredCauseDependencies) {
+  const queryExec = input?.queryExec ?? (rawQuery as QueryExec)
   return {
-    queryExec: input?.queryExec ?? (rawQuery as QueryExec),
+    queryExec,
     withTransaction: input?.withTransaction ?? withDatabaseTransaction,
     registerPostCommitEffect: input?.registerPostCommitEffect ?? registerDatabasePostCommitEffect,
+    enqueueDurationExperienceRebuild: input?.enqueueDurationExperienceRebuild
+      ?? ((rebuildInput: TaskDurationExperienceRebuildInput) => enqueueDurationExperienceRebuild(rebuildInput, queryExec)),
+    completeDurationExperienceRebuild: input?.completeDurationExperienceRebuild
+      ?? ((id: string) => completeDurationExperienceRebuild(id, queryExec)),
     rebuildTaskDurationExperienceSample:
       input?.rebuildTaskDurationExperienceSample ?? rebuildTaskDurationExperienceSample,
   }
+}
+
+async function registerDurableDurationExperienceRebuild(
+  input: TaskDurationExperienceRebuildInput,
+  services: Pick<ReturnType<typeof dependencies>,
+    | 'enqueueDurationExperienceRebuild'
+    | 'completeDurationExperienceRebuild'
+    | 'registerPostCommitEffect'
+    | 'rebuildTaskDurationExperienceSample'>,
+) {
+  const queued = await services.enqueueDurationExperienceRebuild(input)
+  const queueId = text(queued.id)
+  if (!queueId) throw new Error('Structured cause duration rebuild queue identity is required.')
+  await services.registerPostCommitEffect(
+    `rebuild-duration-experience-sample:${input.projectId}:${input.taskId}`,
+    async () => {
+      const rebuilt = await services.rebuildTaskDurationExperienceSample(input)
+      if (rebuilt !== true) throw new Error('Structured cause duration experience sample rebuild was not completed.')
+      await services.completeDurationExperienceRebuild(queueId)
+    },
+  )
 }
 
 async function assertProjectTenant(queryExec: QueryExec, companyId: string, projectId: string) {
@@ -913,6 +946,8 @@ export async function recordUserConfirmedStructuredCauseAttribution(
     queryExec,
     withTransaction,
     registerPostCommitEffect,
+    enqueueDurationExperienceRebuild,
+    completeDurationExperienceRebuild,
     rebuildTaskDurationExperienceSample,
   } = dependencies(dependencyOverrides)
   const causeRole = input.causeRole ?? 'primary'
@@ -1039,18 +1074,18 @@ export async function recordUserConfirmedStructuredCauseAttribution(
     )
 
     if (causeRole === 'primary' && input.subjectType === 'task') {
-      await registerPostCommitEffect(
-        `rebuild-duration-experience-sample:${input.projectId}:${input.subjectId}`,
-        async () => {
-          await rebuildTaskDurationExperienceSample({
-            companyId: input.companyId,
-            projectId: input.projectId,
-            taskId: input.subjectId,
-            actorId,
-            trigger: 'structured_cause_user_confirmation',
-          })
-        },
-      )
+      await registerDurableDurationExperienceRebuild({
+        companyId: input.companyId,
+        projectId: input.projectId,
+        taskId: input.subjectId,
+        actorId,
+        trigger: 'structured_cause_user_confirmation',
+      }, {
+        enqueueDurationExperienceRebuild,
+        completeDurationExperienceRebuild,
+        registerPostCommitEffect,
+        rebuildTaskDurationExperienceSample,
+      })
     }
     return result.rows[0]
   })
@@ -1147,6 +1182,8 @@ export async function confirmStructuredCauseAttribution(input: {
     queryExec,
     withTransaction,
     registerPostCommitEffect,
+    enqueueDurationExperienceRebuild,
+    completeDurationExperienceRebuild,
     rebuildTaskDurationExperienceSample,
   } = dependencies(dependencyOverrides)
   return withTransaction(async () => {
@@ -1272,18 +1309,18 @@ export async function confirmStructuredCauseAttribution(input: {
     )
     if (isSupportedTaskPrimary) {
       const taskId = text(current.subject_id)
-      await registerPostCommitEffect(
-        `rebuild-duration-experience-sample:${input.projectId}:${taskId}`,
-        async () => {
-          await rebuildTaskDurationExperienceSample({
-            companyId: input.companyId,
-            projectId: input.projectId,
-            taskId,
-            actorId: input.actorId,
-            trigger: 'structured_cause_user_confirmation',
-          })
-        },
-      )
+      await registerDurableDurationExperienceRebuild({
+        companyId: input.companyId,
+        projectId: input.projectId,
+        taskId,
+        actorId: input.actorId,
+        trigger: 'structured_cause_user_confirmation',
+      }, {
+        enqueueDurationExperienceRebuild,
+        completeDurationExperienceRebuild,
+        registerPostCommitEffect,
+        rebuildTaskDurationExperienceSample,
+      })
     }
     return updated.rows[0]
   })

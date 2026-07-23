@@ -46,6 +46,7 @@ type StructuredCauseAttributionLineage = {
   causeCode: string
   taxonomyVersion: string
   eventType: 'delay' | 'completion'
+  causeRole: 'primary' | 'contributing' | 'transmitted'
   confirmedAt: string
 }
 
@@ -232,6 +233,7 @@ function readStructuredCauseAttributionLineage(sample: DurationExperienceSampleR
     const causeCode = normalizeText(cause.cause_code)
     const taxonomyVersion = normalizeText(cause.taxonomy_version)
     const eventType = normalizeText(cause.event_type)
+    const causeRole = normalizeText(cause.cause_role)
     const confirmedAt = normalizeTimestamp(cause.confirmed_at)
     if (
       !attributionId
@@ -239,6 +241,7 @@ function readStructuredCauseAttributionLineage(sample: DurationExperienceSampleR
       || !taxonomyVersion
       || !confirmedAt
       || (eventType !== 'delay' && eventType !== 'completion')
+      || !['primary', 'contributing', 'transmitted'].includes(causeRole)
     ) {
       return { valid: false, lineage: [] as StructuredCauseAttributionLineage[] }
     }
@@ -247,6 +250,7 @@ function readStructuredCauseAttributionLineage(sample: DurationExperienceSampleR
       causeCode,
       taxonomyVersion,
       eventType,
+      causeRole: causeRole as StructuredCauseAttributionLineage['causeRole'],
       confirmedAt,
     })
   }

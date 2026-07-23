@@ -481,6 +481,18 @@ describe('durationLearningAssetAtomicStoreService', () => {
   })
 
   it('promotes a runtime canary, activates its exact candidate, and writes segments in one transaction', async () => {
+    const frozenAttribution = {
+      attributionId: '44444444-4444-4444-8444-444444444444',
+      causeCode: 'material_shortage', taxonomyVersion: 'v1.0.0', eventType: 'completion',
+      causeRole: 'primary', confirmedAt: '2026-07-20T00:00:00.000Z',
+    }
+    const frozenSample = {
+      sampleId: '55555555-5555-4555-8555-555555555555',
+      taskId: '66666666-6666-4666-8666-666666666666',
+      completedAt: '2026-07-19T00:00:00.000Z', createdAt: '2026-07-19T01:00:00.000Z',
+      updatedAt: '2026-07-20T01:00:00.000Z', evidenceFingerprint: 'fingerprint-1',
+      sourceLineage: { completionId: 'completion-1' }, structuredCauseAttributions: [frozenAttribution],
+    }
     const candidate = {
       id: '11111111-1111-4111-8111-111111111111',
       company_id: '22222222-2222-4222-8222-222222222222',
@@ -501,7 +513,12 @@ describe('durationLearningAssetAtomicStoreService', () => {
       confidence_score: 88,
       is_current: false,
       is_active: true,
-      metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07', runtime_publication_status: 'candidate' },
+      metadata: {
+        calendar_ref: 'cn-work-calendar', calendar_version: '2026.07', runtime_publication_status: 'candidate',
+        evidence_contract_hash: 'a'.repeat(64),
+        sample_mutation_lineage: [frozenSample],
+        structured_cause_attribution_lineage: [frozenAttribution],
+      },
     }
     mocks.query.mockImplementation(async (sql: string) => {
       const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
@@ -563,7 +580,22 @@ describe('durationLearningAssetAtomicStoreService', () => {
       publicationKey: 'publication-1',
       queryExec: expect.any(Function),
     }))
-    expect(mocks.persistCurrentCauseSegments).toHaveBeenCalledOnce()
+    expect(mocks.persistCurrentCauseSegments).toHaveBeenCalledWith({
+      benchmarkId: candidate.id,
+      companyId: candidate.company_id,
+      projectId: candidate.project_id,
+      benchmarkKey: candidate.benchmark_key,
+      generatedAt: candidate.generated_at,
+      sourceWindowStart: candidate.source_window_start,
+      sourceAsOf: candidate.source_as_of,
+      calendarRef: candidate.metadata.calendar_ref,
+      calendarVersion: candidate.metadata.calendar_version,
+      frozenEvidence: {
+        evidenceContractHash: candidate.metadata.evidence_contract_hash,
+        sampleMutationLineage: [frozenSample],
+        structuredCauseAttributionLineage: [frozenAttribution],
+      },
+    }, expect.anything())
     expect(mocks.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase()).at(-1)).toBe('commit')
   })
 

@@ -668,8 +668,19 @@ describe('structuredCauseAttributionService', () => {
   })
 
   it('requires explicit confirmation before assigning contractual responsibility', async () => {
+    const lifecycle: string[] = []
     const registeredEffects: Array<() => Promise<void>> = []
-    const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('enqueue')
+      return { id: 'queue-confirm-1' }
+    })
+    const completeDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('complete')
+    })
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => {
+      lifecycle.push('rebuild')
+      return true
+    })
     const queryExec = vi.fn(async (sql: string) => {
       if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
         return { rows: [{ id: 'task-1' }], rowCount: 1 }
@@ -691,6 +702,7 @@ describe('structuredCauseAttributionService', () => {
         }
       }
       if (sql.includes('UPDATE public.structured_cause_attributions') && sql.includes('RETURNING')) {
+        lifecycle.push('confirm')
         return {
           rows: [{
             id: 'attribution-1',
@@ -713,7 +725,12 @@ describe('structuredCauseAttributionService', () => {
     }, {
       queryExec,
       withTransaction: async (work) => work(),
-      registerPostCommitEffect: async (_label, effect) => { registeredEffects.push(effect) },
+      registerPostCommitEffect: async (_label, effect) => {
+        lifecycle.push('register')
+        registeredEffects.push(effect)
+      },
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
       rebuildTaskDurationExperienceSample,
     })
 
@@ -736,6 +753,11 @@ describe('structuredCauseAttributionService', () => {
     const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
     expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
     expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
+    expect(enqueueDurationExperienceRebuild).toHaveBeenCalledWith({
+      companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register'])
     expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
     expect(registeredEffects).toHaveLength(1)
     await registeredEffects[0]()
@@ -743,6 +765,8 @@ describe('structuredCauseAttributionService', () => {
       companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
       trigger: 'structured_cause_user_confirmation',
     })
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith('queue-confirm-1')
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register', 'rebuild', 'complete'])
   })
 
   it('keeps the inferred prefill and records whether a user changed it during confirmation', async () => {
@@ -794,6 +818,8 @@ describe('structuredCauseAttributionService', () => {
       queryExec,
       withTransaction: async (work) => work(),
       registerPostCommitEffect: async () => undefined,
+      enqueueDurationExperienceRebuild: async () => ({ id: 'queue-prefill-1' }),
+      completeDurationExperienceRebuild: async () => undefined,
       rebuildTaskDurationExperienceSample: async () => true,
     })
 
@@ -924,12 +950,24 @@ describe('structuredCauseAttributionService', () => {
   })
 
   it('supersedes stale task primaries across delay/completion and rebuilds duration evidence after commit', async () => {
+    const lifecycle: string[] = []
     const registeredEffects: Array<() => Promise<void>> = []
-    const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('enqueue')
+      return { id: 'queue-record-1' }
+    })
+    const completeDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('complete')
+    })
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => {
+      lifecycle.push('rebuild')
+      return true
+    })
     const queryExec = vi.fn(async (sql: string) => {
       if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
       if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
       if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        lifecycle.push('confirm')
         return { rows: [{ id: 'confirmed-1', status: 'confirmed', cause_code: 'material_shortage' }], rowCount: 1 }
       }
       return { rows: [], rowCount: 0 }
@@ -948,7 +986,12 @@ describe('structuredCauseAttributionService', () => {
     }, {
       queryExec,
       withTransaction: async (work) => work(),
-      registerPostCommitEffect: async (_label, effect) => { registeredEffects.push(effect) },
+      registerPostCommitEffect: async (_label, effect) => {
+        lifecycle.push('register')
+        registeredEffects.push(effect)
+      },
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
       rebuildTaskDurationExperienceSample,
     })
 
@@ -963,6 +1006,11 @@ describe('structuredCauseAttributionService', () => {
     expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
     expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
     expect(supersede?.[0]).toContain('dedupe_key <>')
+    expect(enqueueDurationExperienceRebuild).toHaveBeenCalledWith({
+      companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register'])
     expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
     expect(registeredEffects).toHaveLength(1)
 
@@ -975,9 +1023,13 @@ describe('structuredCauseAttributionService', () => {
       actorId: 'user-1',
       trigger: 'structured_cause_user_confirmation',
     })
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith('queue-record-1')
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register', 'rebuild', 'complete'])
   })
 
   it('does not take the task-primary lock or supersede authority for a contributing task cause', async () => {
+    const enqueueDurationExperienceRebuild = vi.fn()
+    const registerPostCommitEffect = vi.fn()
     const queryExec = vi.fn(async (sql: string) => {
       if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
       if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
@@ -991,11 +1043,90 @@ describe('structuredCauseAttributionService', () => {
       companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
       eventType: 'delay', causeCode: 'weather_impact', causeRole: 'contributing',
       rawText: 'Weather contributed to delay.', actorId: 'user-1',
-    }, { queryExec, withTransaction: async (work) => work() })
+    }, {
+      queryExec,
+      withTransaction: async (work) => work(),
+      enqueueDurationExperienceRebuild,
+      registerPostCommitEffect,
+    })
 
     const statements = queryExec.mock.calls.map(([sql]) => String(sql))
     expect(statements.some((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))).toBe(false)
     expect(statements.some((sql) => sql.includes("SET status = 'superseded'"))).toBe(false)
+    expect(enqueueDurationExperienceRebuild).not.toHaveBeenCalled()
+    expect(registerPostCommitEffect).not.toHaveBeenCalled()
+  })
+
+  it('retains durable rebuild work when the post-commit rebuild fails', async () => {
+    const registeredEffects: Array<() => Promise<void>> = []
+    const enqueueDurationExperienceRebuild = vi.fn(async () => ({ id: 'queue-failed-rebuild' }))
+    const completeDurationExperienceRebuild = vi.fn(async () => undefined)
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => {
+      throw new Error('rebuild unavailable')
+    })
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmed after completion.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => work(),
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
+      registerPostCommitEffect: async (_label, effect) => { registeredEffects.push(effect) },
+      rebuildTaskDurationExperienceSample,
+    })
+
+    expect(enqueueDurationExperienceRebuild).toHaveBeenCalledOnce()
+    expect(registeredEffects).toHaveLength(1)
+    await expect(registeredEffects[0]()).rejects.toThrow('rebuild unavailable')
+    expect(completeDurationExperienceRebuild).not.toHaveBeenCalled()
+  })
+
+  it('rolls back confirmation and registers no effect when durable enqueue fails', async () => {
+    let rolledBack = false
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      throw new Error('queue unavailable')
+    })
+    const registerPostCommitEffect = vi.fn()
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await expect(recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmed after completion.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => {
+        try {
+          return await work()
+        } catch (error) {
+          rolledBack = true
+          throw error
+        }
+      },
+      enqueueDurationExperienceRebuild,
+      registerPostCommitEffect,
+    })).rejects.toThrow('queue unavailable')
+
+    expect(rolledBack).toBe(true)
+    expect(registerPostCommitEffect).not.toHaveBeenCalled()
   })
 
   it('discards the task sample rebuild effect when confirmation rolls back', async () => {

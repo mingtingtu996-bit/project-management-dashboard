@@ -265,6 +265,7 @@ describe('templateDurationGovernanceService', () => {
             cause_code: 'material_shortage',
             taxonomy_version: 'v1.0.0',
             event_type: 'delay',
+            cause_role: 'primary',
             confirmed_at: '2026-07-05T09:00:00.000Z',
           }] : [],
         },
@@ -286,6 +287,7 @@ describe('templateDurationGovernanceService', () => {
       causeCode: 'material_shortage',
       taxonomyVersion: 'v1.0.0',
       eventType: 'delay',
+      causeRole: 'primary',
       confirmedAt: '2026-07-05T09:00:00.000Z',
     }])
   })
@@ -299,7 +301,7 @@ describe('templateDurationGovernanceService', () => {
         standard_work_code: 'SW-REBUILT', wbs_node_type: 'process', actual_duration: duration,
         metadata: { structured_cause_snapshot: { confirmed_causes: index === 0 ? [{
           attribution_id: attributionId, cause_code: 'material_shortage', taxonomy_version: 'v1.0.0',
-          event_type: 'delay', confirmed_at: confirmedAt,
+          event_type: 'delay', cause_role: 'primary', confirmed_at: confirmedAt,
         }] : [] } },
       })), { generatedAt: '2026-07-03T00:00:00.000Z' })
       return buildDurationBenchmarkCandidatePersistenceRow(candidate, '2026-07-03T00:00:00.000Z')
@@ -318,7 +320,8 @@ describe('templateDurationGovernanceService', () => {
       wbs_node_type: 'process', actual_duration: duration,
       metadata: { structured_cause_snapshot: { confirmed_causes: index === 0 ? [{
         attribution_id: '11111111-1111-4111-8111-111111111111', cause_code: 'material_shortage',
-        taxonomy_version: 'v1.0.0', event_type: 'delay', confirmed_at: '2026-07-04T00:00:00.000Z',
+        taxonomy_version: 'v1.0.0', event_type: 'delay', cause_role: 'primary',
+        confirmed_at: '2026-07-04T00:00:00.000Z',
       }] : [] } },
     }))
 

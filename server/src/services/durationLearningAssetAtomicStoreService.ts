@@ -440,6 +440,11 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
       sourceAsOf,
       calendarRef,
       calendarVersion,
+      frozenEvidence: {
+        evidenceContractHash: candidateMetadata.evidence_contract_hash,
+        sampleMutationLineage: candidateMetadata.sample_mutation_lineage,
+        structuredCauseAttributionLineage: candidateMetadata.structured_cause_attribution_lineage,
+      },
     }, client)
     const markerResult = await client.query<PersistenceRow>(
       `update public.duration_benchmarks

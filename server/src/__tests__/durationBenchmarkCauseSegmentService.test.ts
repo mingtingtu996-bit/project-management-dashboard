@@ -18,6 +18,34 @@ const input = {
   calendarVersion: '2026.07',
 } as const
 
+const frozenSampleId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const frozenTaskId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const frozenAttributionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+const frozenAttribution = {
+  attributionId: frozenAttributionId,
+  causeCode: 'material_shortage',
+  taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  eventType: 'completion',
+  causeRole: 'primary',
+  confirmedAt: '2026-07-19T00:00:00.000Z',
+} as const
+const frozenSample = {
+  sampleId: frozenSampleId,
+  taskId: frozenTaskId,
+  completedAt: '2026-07-18T00:00:00.000Z',
+  createdAt: '2026-07-18T01:00:00.000Z',
+  updatedAt: '2026-07-19T01:00:00.000Z',
+  evidenceFingerprint: 'fingerprint-frozen-1',
+  sourceLineage: { schemaVersion: 'duration-experience-sample/v1', completionId: 'completion-1' },
+  structuredCauseAttributions: [frozenAttribution],
+} as const
+const frozenEvidence = {
+  evidenceContractHash: 'a'.repeat(64),
+  sampleMutationLineage: [frozenSample],
+  structuredCauseAttributionLineage: [frozenAttribution],
+}
+const frozenInput = { ...input, frozenEvidence }
+
 function confirmedSample(overrides: Record<string, unknown> = {}) {
   const sampleId = String(overrides.sample_id ?? 'sample-default')
   const attributionId = String(overrides.attribution_id ?? `attribution-${sampleId}`)
@@ -27,6 +55,12 @@ function confirmedSample(overrides: Record<string, unknown> = {}) {
   const confirmedAt = String(overrides.confirmed_at ?? '2026-07-19T00:00:00.000Z')
   return {
     sample_id: sampleId,
+    sample_task_id: frozenTaskId,
+    sample_completed_at: '2026-07-18T00:00:00.000Z',
+    sample_created_at: '2026-07-18T01:00:00.000Z',
+    sample_updated_at: '2026-07-19T01:00:00.000Z',
+    sample_evidence_fingerprint: 'fingerprint-frozen-1',
+    sample_source_lineage: { schemaVersion: 'duration-experience-sample/v1', completionId: 'completion-1' },
     attribution_id: attributionId,
     cause_code: causeCode,
     taxonomy_version: taxonomyVersion,
@@ -38,12 +72,15 @@ function confirmedSample(overrides: Record<string, unknown> = {}) {
     attribution_status: 'confirmed',
     attribution_event_type: eventType,
     cause_role: 'primary',
+    attribution_subject_type: 'task',
+    attribution_subject_id: frozenTaskId,
     confirmed_at: confirmedAt,
     source_type: 'task_completion',
     snapshot_attribution_id: attributionId,
     snapshot_cause_code: causeCode,
     snapshot_taxonomy_version: taxonomyVersion,
     snapshot_event_type: eventType,
+    snapshot_cause_role: 'primary',
     snapshot_confirmed_at: confirmedAt,
     snapshot_primary_count: 1,
     included_in_benchmark: true,
@@ -52,6 +89,26 @@ function confirmedSample(overrides: Record<string, unknown> = {}) {
     calendar_version: '2026.07',
     ...overrides,
   }
+}
+
+function frozenCurrentSample(overrides: Record<string, unknown> = {}) {
+  return confirmedSample({
+    sample_id: frozenSampleId,
+    sample_task_id: frozenTaskId,
+    attribution_id: frozenAttributionId,
+    cause_code: frozenAttribution.causeCode,
+    taxonomy_version: frozenAttribution.taxonomyVersion,
+    attribution_event_type: frozenAttribution.eventType,
+    cause_role: frozenAttribution.causeRole,
+    confirmed_at: frozenAttribution.confirmedAt,
+    snapshot_attribution_id: frozenAttributionId,
+    snapshot_cause_code: frozenAttribution.causeCode,
+    snapshot_taxonomy_version: frozenAttribution.taxonomyVersion,
+    snapshot_event_type: frozenAttribution.eventType,
+    snapshot_cause_role: frozenAttribution.causeRole,
+    snapshot_confirmed_at: frozenAttribution.confirmedAt,
+    ...overrides,
+  })
 }
 
 function persistedSegmentRow(params: unknown[], overrides: Record<string, unknown> = {}) {
@@ -315,6 +372,107 @@ describe('durationBenchmarkCauseSegmentService', () => {
 
     await expect(persistCurrentCauseSegments(input, client as never))
       .rejects.toThrow('cause segment INSERT readback mismatch')
+  })
+
+  it('persists a promotion segment only from the exact frozen evidence contract', async () => {
+    const client = {
+      query: vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM public.duration_experience_samples sample')) {
+          return { rows: [frozenCurrentSample()] }
+        }
+        if (sql.includes('UPDATE public.duration_benchmark_cause_segments')) return { rows: [] }
+        if (sql.includes('INSERT INTO public.duration_benchmark_cause_segments')) {
+          return { rows: [persistedSegmentRow(params)] }
+        }
+        throw new Error(`Unexpected SQL: ${sql}`)
+      }),
+    }
+
+    await expect(persistCurrentCauseSegments(frozenInput, client as never)).resolves.toEqual([
+      expect.objectContaining({ causeCode: 'material_shortage', sampleCount: 1 }),
+    ])
+
+    const sourceCall = client.query.mock.calls.find(([sql]) => String(sql).includes('FROM public.duration_experience_samples sample'))
+    expect(sourceCall?.[0]).toContain('sample.id = ANY')
+    expect(sourceCall?.[1]).toContainEqual([frozenSampleId])
+    const insertCall = client.query.mock.calls.find(([sql]) => String(sql).includes('INSERT INTO public.duration_benchmark_cause_segments'))
+    expect(JSON.parse(String(insertCall?.[1]?.[16]))).toEqual({
+      schemaVersion: 'duration-benchmark-cause-segment-lineage/v2',
+      evidenceContractHash: frozenEvidence.evidenceContractHash,
+      samples: [{
+        sampleId: frozenSampleId,
+        taskId: frozenTaskId,
+        evidenceFingerprint: frozenSample.evidenceFingerprint,
+        completedAt: frozenSample.completedAt,
+        createdAt: frozenSample.createdAt,
+        updatedAt: frozenSample.updatedAt,
+        attribution: frozenAttribution,
+      }],
+    })
+  })
+
+  async function expectFrozenMismatch(
+    rows: Record<string, unknown>[],
+    evidence: Record<string, unknown> = frozenEvidence,
+  ) {
+    const client = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes('FROM public.duration_experience_samples sample')) return { rows }
+        if (sql.includes('UPDATE public.duration_benchmark_cause_segments')) return { rows: [] }
+        throw new Error(`Unexpected SQL: ${sql}`)
+      }),
+    }
+
+    await expect(persistCurrentCauseSegments({ ...input, frozenEvidence: evidence }, client as never)).rejects.toThrow()
+    expect(client.query.mock.calls.some(([sql]) => String(sql).includes('UPDATE public.duration_benchmark_cause_segments')))
+      .toBe(false)
+    expect(client.query.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.duration_benchmark_cause_segments')))
+      .toBe(false)
+  }
+
+  it('rejects missing, extra, and duplicate sample IDs before replacing current segments', async () => {
+    await expectFrozenMismatch([])
+    await expectFrozenMismatch([
+      frozenCurrentSample(),
+      frozenCurrentSample({
+        sample_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        attribution_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        snapshot_attribution_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      }),
+    ])
+    await expectFrozenMismatch([frozenCurrentSample(), frozenCurrentSample()])
+  })
+
+  it.each([
+    ['fingerprint', { sample_evidence_fingerprint: 'fingerprint-mutated' }],
+    ['updated timestamp', { sample_updated_at: '2026-07-20T01:00:00.000Z' }],
+    ['completion timestamp', { sample_completed_at: '2026-07-17T00:00:00.000Z' }],
+  ])('rejects a changed frozen sample %s before replacing current segments', async (_label, overrides) => {
+    await expectFrozenMismatch([frozenCurrentSample(overrides)])
+  })
+
+  it.each([
+    ['identity', { attribution_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', snapshot_attribution_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' }],
+    ['code', { cause_code: 'quality_rework', snapshot_cause_code: 'quality_rework' }],
+    ['version', { taxonomy_version: 'v2.0.0', snapshot_taxonomy_version: 'v2.0.0' }],
+    ['event', { attribution_event_type: 'delay', snapshot_event_type: 'delay' }],
+    ['role', { cause_role: 'contributing', snapshot_cause_role: 'contributing', snapshot_primary_count: 0 }],
+    ['confirmed-at', { confirmed_at: '2026-07-19T02:00:00.000Z', snapshot_confirmed_at: '2026-07-19T02:00:00.000Z' }],
+  ])('rejects a changed frozen attribution %s before replacing current segments', async (_label, overrides) => {
+    await expectFrozenMismatch([frozenCurrentSample(overrides)])
+  })
+
+  it('rejects duplicate or malformed frozen candidate lineage before source reads', async () => {
+    await expectFrozenMismatch([frozenCurrentSample()], {
+      ...frozenEvidence,
+      sampleMutationLineage: [frozenSample, frozenSample],
+    })
+    const { causeRole: _causeRole, ...malformedAttribution } = frozenAttribution
+    await expectFrozenMismatch([frozenCurrentSample()], {
+      ...frozenEvidence,
+      sampleMutationLineage: [{ ...frozenSample, structuredCauseAttributions: [malformedAttribution] }],
+      structuredCauseAttributionLineage: [malformedAttribution],
+    })
   })
 
   it('loads an exact current segment only for its null-safe benchmark scope', async () => {

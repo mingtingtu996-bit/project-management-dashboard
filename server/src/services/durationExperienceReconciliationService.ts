@@ -4,6 +4,10 @@ import { query as databaseQuery } from '../database.js'
 import { calendarDaysToMilliseconds } from '../utils/durationDays.js'
 import { collectDurationExperienceSampleFromTask } from './durationExperienceService.js'
 
+export type DurationExperienceReconciliationSourceType =
+  | 'task_completion'
+  | 'structured_cause_confirmation'
+
 export type DurationExperienceReconciliationQueueItem = {
   id: string
   companyId: string
@@ -11,6 +15,7 @@ export type DurationExperienceReconciliationQueueItem = {
   taskId: string
   actorId: string | null
   trigger: string
+  sourceType: DurationExperienceReconciliationSourceType
   attemptCount: number
   maxAttempts: number
   task: Task
@@ -23,10 +28,10 @@ export interface DurationExperienceReconciliationStore {
     taskId: string
     actorId: string | null
     trigger: string
-    sourceType: 'task_completion'
-    lastError: string
+    sourceType: DurationExperienceReconciliationSourceType
+    lastError: string | null
     maxAttempts: number
-  }): Promise<unknown>
+  }): Promise<Record<string, unknown> | null>
   registerMissingCompletedTasks(input: { projectIds: string[]; maxAttempts: number }): Promise<number>
   listDue(input: { projectIds: string[]; limit: number }): Promise<DurationExperienceReconciliationQueueItem[]>
   markCompleted(id: string): Promise<void>
@@ -52,6 +57,10 @@ function errorMessage(error: unknown) {
 function positiveInteger(value: unknown, fallback: number) {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
+}
+
+function isReconciliationSourceType(value: string): value is DurationExperienceReconciliationSourceType {
+  return value === 'task_completion' || value === 'structured_cause_confirmation'
 }
 
 function retryAt(attemptCount: number) {
@@ -86,7 +95,7 @@ function createDatabaseDurationExperienceReconciliationStore(
          returning *`,
         [record.companyId, record.projectId, record.taskId, record.actorId, record.trigger, record.sourceType, record.maxAttempts, record.lastError],
       )
-      return result.rows?.[0] ?? null
+      return (result.rows?.[0] as Record<string, unknown> | undefined) ?? null
     },
 
     async registerMissingCompletedTasks(input) {
@@ -136,6 +145,7 @@ function createDatabaseDurationExperienceReconciliationStore(
            select q.id
              from public.duration_experience_collection_queue q
             where q.project_id = any($1::uuid[])
+              and q.source_type in ('task_completion', 'structured_cause_confirmation')
               and q.status in ('pending', 'retrying', 'waiting_for_facts')
               and q.next_attempt_at <= now()
             order by q.next_attempt_at asc, q.created_at asc
@@ -156,6 +166,7 @@ function createDatabaseDurationExperienceReconciliationStore(
                    q.task_id,
                    q.actor_id,
                    q.trigger,
+                   q.source_type,
                    q.attempt_count,
                    q.max_attempts,
                    to_jsonb(t) as task`,
@@ -163,6 +174,8 @@ function createDatabaseDurationExperienceReconciliationStore(
       )
       return (result.rows ?? []).map((row) => {
         const record = row as Record<string, unknown>
+        const sourceType = normalizeText(record.source_type)
+        if (!isReconciliationSourceType(sourceType)) return null
         return {
           id: normalizeText(record.id),
           companyId: normalizeText(record.company_id),
@@ -170,11 +183,14 @@ function createDatabaseDurationExperienceReconciliationStore(
           taskId: normalizeText(record.task_id),
           actorId: normalizeText(record.actor_id) || null,
           trigger: normalizeText(record.trigger) || 'duration_experience_reconciliation',
+          sourceType,
           attemptCount: Math.max(0, Number(record.attempt_count) || 0),
           maxAttempts: positiveInteger(record.max_attempts, 5),
           task: record.task as Task,
-        }
-      }).filter((row) => row.id && row.companyId && row.projectId && row.taskId && row.task)
+        } satisfies DurationExperienceReconciliationQueueItem
+      }).filter((row): row is DurationExperienceReconciliationQueueItem => Boolean(
+        row?.id && row.companyId && row.projectId && row.taskId && row.task,
+      ))
     },
 
     async markCompleted(id) {
@@ -247,6 +263,55 @@ export async function enqueueDurationExperienceCollectionFailure(input: {
   return record
 }
 
+export async function enqueueDurationExperienceRebuild(input: {
+  companyId: string
+  projectId: string
+  taskId: string
+  actorId: string
+  trigger: 'structured_cause_user_confirmation'
+  maxAttempts?: number | null
+}, dependencies: {
+  store?: DurationExperienceReconciliationStore
+  queryExec?: QueryExecutor
+} = {}) {
+  const companyId = normalizeText(input.companyId)
+  const projectId = normalizeText(input.projectId)
+  const taskId = normalizeText(input.taskId)
+  const actorId = normalizeText(input.actorId)
+  if (!companyId || !projectId || !taskId || !actorId) {
+    throw new Error('Structured cause duration rebuild requires exact tenant, project, task, and actor identity.')
+  }
+  const store = dependencies.store
+    ?? (dependencies.queryExec ? createDatabaseDurationExperienceReconciliationStore(dependencies.queryExec) : databaseStore)
+  const queued = await store.enqueue({
+    companyId,
+    projectId,
+    taskId,
+    actorId,
+    trigger: input.trigger,
+    sourceType: 'structured_cause_confirmation',
+    lastError: null,
+    maxAttempts: Math.min(20, positiveInteger(input.maxAttempts, 5)),
+  })
+  const id = normalizeText(queued?.id)
+  if (!id) throw new Error('Structured cause duration rebuild queue readback required.')
+  return { id }
+}
+
+export async function completeDurationExperienceRebuild(
+  id: string,
+  dependencies: {
+    store?: DurationExperienceReconciliationStore
+    queryExec?: QueryExecutor
+  } = {},
+) {
+  const queueId = normalizeText(id)
+  if (!queueId) throw new Error('Structured cause duration rebuild queue identity is required.')
+  const store = dependencies.store
+    ?? (dependencies.queryExec ? createDatabaseDurationExperienceReconciliationStore(dependencies.queryExec) : databaseStore)
+  await store.markCompleted(queueId)
+}
+
 export async function reconcileDurationExperienceSamples(input: {
   projectIds?: readonly string[] | null
   limit?: number | null
@@ -275,7 +340,7 @@ export async function reconcileDurationExperienceSamples(input: {
     try {
       const collected = await collectSample(item.task, {
         actorId: item.actorId,
-        trigger: 'duration_experience_reconciliation',
+        trigger: item.trigger,
       })
       if (!collected) {
         summary.deferred += 1
