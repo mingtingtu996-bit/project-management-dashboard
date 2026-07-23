@@ -520,7 +520,7 @@ git commit -m "feat(causes): add task cause confirmation"
 
 - [ ] **Step 1: Run clean-checkout guards**
 
-Run: `node server/scripts/check-tracked-relative-imports.mjs`
+Run: `node server/scripts/guard-tracked-relative-import-closure.mjs`
 
 Run: `node server/scripts/run-workflow-contract-gate.mjs`
 
