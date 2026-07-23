@@ -22325,24 +22325,28 @@ CREATE TABLE IF NOT EXISTS public.duration_asset_review_items (
     )
     OR (
       status = 'approved' AND resolution_source = 'manual_approval'
+      AND resolution_source IS NOT NULL
       AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
       AND resolved_publication_key IS NULL
     )
     OR (
       status = 'rejected' AND resolution_source = 'manual_rejection'
+      AND resolution_source IS NOT NULL
       AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
       AND resolved_publication_key IS NULL
     )
     OR (
       status = 'superseded' AND resolution_source = 'manual_supersession'
+      AND resolution_source IS NOT NULL
       AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
       AND resolved_publication_key IS NULL
     )
     OR (
       status = 'resolved_by_publication'
+      AND resolution_source IS NOT NULL
       AND resolution_source IN ('automatic_publication','manual_approval')
       AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
