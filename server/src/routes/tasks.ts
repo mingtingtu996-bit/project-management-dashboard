@@ -19,6 +19,7 @@ import type { Task } from '../types/db.js'
 import { executeSQL, supabase as db } from '../services/dbService.js'
 import {
   getClient,
+  isDatabaseTransactionActive,
   query as rawQuery,
   registerDatabasePostCommitEffect,
   withDatabaseTransaction,
@@ -26,6 +27,7 @@ import {
 import { buildStandardDTO } from '../services/taskStandardModelService.js'
 import { sanitizeTaskForClient } from '../services/taskDtoService.js'
 import { rejectTaskCodeFields } from '../services/taskCodeTransactionService.js'
+import { recordAcceptancePlanExecutionFacts } from '../services/acceptancePlanExecutionFactService.js'
 import {
   replaceTaskDependencies,
   replaceWizardGeneratedTaskDependenciesBatch,
@@ -1355,39 +1357,57 @@ async function insertGeneratedTemplateTaskCondition(row: GeneratedTemplateTaskCo
 }
 
 async function insertGeneratedTemplateAcceptancePlan(row: GeneratedTemplateAcceptancePlanInsert) {
-  await executeSQL(
-    `INSERT INTO acceptance_plans (
-       id, project_id, plan_name, acceptance_name, acceptance_type,
-       building_object_id, scope_level, participant_unit_id, description,
-       planned_date, status, is_custom, created_by, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      row.id,
-      row.projectId,
-      row.planName,
-      row.acceptanceName,
-      row.acceptanceType,
-      row.buildingObjectId ?? null,
-      row.scopeLevel ?? null,
-      row.participantUnitId ?? null,
-      row.description,
-      row.plannedDate ?? null,
-      row.status,
-      row.isCustom,
-      row.createdBy,
-      row.createdAt,
-      row.updatedAt,
-    ],
-  )
+  const write = async () => {
+    await executeSQL(
+      `INSERT INTO acceptance_plans (
+         id, project_id, plan_name, acceptance_name, acceptance_type,
+         building_object_id, scope_level, participant_unit_id, description,
+         planned_date, status, is_custom, created_by, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.id,
+        row.projectId,
+        row.planName,
+        row.acceptanceName,
+        row.acceptanceType,
+        row.buildingObjectId ?? null,
+        row.scopeLevel ?? null,
+        row.participantUnitId ?? null,
+        row.description,
+        row.plannedDate ?? null,
+        row.status,
+        row.isCustom,
+        row.createdBy,
+        row.createdAt,
+        row.updatedAt,
+      ],
+    )
 
-  await executeSQL(
-    `INSERT INTO project_entity_links (
-       project_id, source_entity_type, source_entity_id, target_entity_type,
-       target_entity_id, relation_type, relation_strength, status, created_at, updated_at
-     ) VALUES (?, 'acceptance_plan', ?, 'task', ?, 'covers_task', 'explicit', 'active', ?, ?)`,
-    [row.projectId, row.id, row.taskId, row.createdAt, row.updatedAt],
-  )
-  return true
+    await executeSQL(
+      `INSERT INTO project_entity_links (
+         project_id, source_entity_type, source_entity_id, target_entity_type,
+         target_entity_id, relation_type, relation_strength, status, created_at, updated_at
+       ) VALUES (?, 'acceptance_plan', ?, 'task', ?, 'covers_task', 'explicit', 'active', ?, ?)`,
+      [row.projectId, row.id, row.taskId, row.createdAt, row.updatedAt],
+    )
+    await recordAcceptancePlanExecutionFacts({
+      projectId: row.projectId,
+      planId: row.id,
+      previous: null,
+      next: {
+        status: row.status,
+        actual_date: null,
+      },
+      sourceModule: 'tasks',
+      sourceMutationId: `tasks:template-acceptance-plan:${row.id}:create`,
+      observedAt: row.createdAt,
+      actorUserId: row.createdBy,
+      forceInitial: true,
+    })
+    return true
+  }
+  if (isDatabaseTransactionActive()) return write()
+  return withDatabaseTransaction(write)
 }
 
 function readGeneratedTemplateMetadata(row: GeneratedTemplateRow) {
@@ -3006,6 +3026,7 @@ router.post('/:id/actual-time-correction', validateIdParam, requireProjectEditor
   const result = await updateTaskInMainChain(id, patch as Partial<Task>, body.version, {
     executionFactIntent: ExecutionFactIntent.SystemBackfill,
     executionFactEventDate: eventDate,
+    executionFactCorrectionReason: body.reason ?? null,
     allowManualActualDates: true,
   })
   const task = result?.task ?? null

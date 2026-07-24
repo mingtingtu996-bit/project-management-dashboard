@@ -119,6 +119,7 @@ const db = vi.hoisted(() => {
     run: <T>(store: TestTransaction, work: () => T) => T
   }
   let transactionStorage: TransactionStorage | null = null
+  let transactionActive = false
   let serializePackageLocks = false
   let nextTransactionId = 1
   const packageLockOwners = new Map<string, TestTransaction>()
@@ -140,6 +141,12 @@ const db = vi.hoisted(() => {
   const getMembers = vi.fn(async () => ([
     { id: 'member-1', project_id: 'project-1', user_id: 'owner-1', role: 'owner', joined_at: '2026-04-15T00:00:00.000Z' },
   ]))
+  const factTransactionStates: boolean[] = []
+  const recordDrawingVersionCurrentFactChanges = vi.fn(async () => {
+    factTransactionStates.push(serializePackageLocks
+      ? Boolean(transactionStorage?.getStore())
+      : transactionActive)
+  })
 
   const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase()
   const isCurrent = (value: unknown) => value === true || value === 1 || value === '1' || value === 'true'
@@ -954,6 +961,20 @@ const db = vi.hoisted(() => {
       return []
     }
 
+    if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where package_id = ? and project_id = ? and id <> ?') {
+      const nextCurrent = isCurrent(params[0])
+      const packageId = String(params[1] ?? '')
+      const projectId = String(params[2] ?? '')
+      const excludedId = String(params[3] ?? '')
+      for (const row of versions) {
+        if (row.package_id === packageId && row.project_id === projectId && row.id !== excludedId) {
+          row.is_current_version = nextCurrent
+          row.superseded_at = nextCurrent ? null : '2026-04-16 00:00:00'
+        }
+      }
+      return []
+    }
+
     if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where package_id = ? and id <> ?') {
       const nextCurrent = isCurrent(params[0])
       const packageId = String(params[1] ?? '')
@@ -1282,10 +1303,18 @@ const db = vi.hoisted(() => {
     resolvePauseRelease = null
     resolveContention = null
     lockEvents.splice(0)
+    factTransactionStates.splice(0)
   }
 
   const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
-    if (!serializePackageLocks) return work()
+    if (!serializePackageLocks) {
+      transactionActive = true
+      try {
+        return await work()
+      } finally {
+        transactionActive = false
+      }
+    }
     if (!transactionStorage) throw new Error('Transaction storage was not configured')
     if (transactionStorage.getStore()) {
       lockEvents.push(`nested:tx-${transactionStorage.getStore()?.id}`)
@@ -1317,6 +1346,8 @@ const db = vi.hoisted(() => {
     enforceRetentionOrBlock,
     persistNotification,
     getMembers,
+    recordDrawingVersionCurrentFactChanges,
+    factTransactionStates,
     executeSQL,
     executeSQLOne,
     withDatabaseTransaction,
@@ -1376,6 +1407,10 @@ vi.mock('../database.js', () => ({
 
 vi.mock('../auth/access.js', () => ({
   getProjectCompanyId: vi.fn(async (projectId: string) => (projectId ? 'company-1' : null)),
+}))
+
+vi.mock('../services/drawingVersionExecutionFactService.js', () => ({
+  recordDrawingVersionCurrentFactChanges: db.recordDrawingVersionCurrentFactChanges,
 }))
 
 vi.mock('../services/warningChainService.js', () => ({
@@ -1539,6 +1574,19 @@ describe('construction drawing current-version write path', () => {
     expect(db.drawings.find((row) => row.id === 'draw-1')?.is_current_version).toBe(false)
     expect(db.drawings.find((row) => row.id === 'draw-2')?.is_current_version).toBe(true)
     expect(db.drawings.find((row) => row.id === 'draw-2')?.lock_version).toBe(2)
+    expect(db.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      sourceModule: 'construction-drawings',
+      before: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: true }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: false }),
+      ]),
+      after: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: false }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: true }),
+      ]),
+    }))
+    expect(db.factTransactionStates).toEqual([true])
   })
 
   it('rejects stale drawing updates when lock_version is outdated', async () => {
@@ -1638,6 +1686,19 @@ describe('construction drawing current-version write path', () => {
     expect(db.packages[0]?.current_version_drawing_id).toBe('draw-2')
     expect(db.versions.find((row) => row.id === 'ver-2')?.is_current_version).toBe(true)
     expect(db.versions.find((row) => row.id === 'ver-1')?.is_current_version).toBe(false)
+    expect(db.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      sourceModule: 'drawing-packages',
+      before: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: true }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: false }),
+      ]),
+      after: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: false }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: true }),
+      ]),
+    }))
+    expect(db.factTransactionStates).toEqual([true])
   })
 
   it('records drawing current-version changes as sample health evidence without publishing runtime assets', async () => {
@@ -1750,6 +1811,16 @@ describe('construction drawing current-version write path', () => {
       effective_date: '2026-04-18',
       is_current_version: true,
     })
+    expect(db.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledWith(expect.objectContaining({
+      projectId,
+      sourceModule: 'construction-drawings',
+      before: [],
+      after: [expect.objectContaining({
+        id: expect.any(String),
+        is_current_version: true,
+      })],
+    }))
+    expect(db.factTransactionStates).toEqual([true])
     expect(db.packages.find((row) => row.id === packageId)?.current_version_drawing_id).toBe(response.body.data.id)
     expect(db.persistNotification).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -35,6 +35,7 @@ import {
   buildAndPersistBusinessCompletionSampleHealthReport,
   buildQualityRectificationCompletionSamples,
 } from '../services/businessCompletionSampleHealthAdapterService.js'
+import { recordAcceptancePlanExecutionFacts } from '../services/acceptancePlanExecutionFactService.js'
 
 const router = Router()
 router.use(authenticate)
@@ -924,6 +925,20 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
       String(normalizedBody.project_id ?? req.body.project_id),
       coveredTaskIds,
     )
+
+    await recordAcceptancePlanExecutionFacts({
+      projectId: String(normalizedBody.project_id ?? req.body.project_id),
+      planId: id,
+      previous: null,
+      next: {
+        status: normalizedBody.status ?? 'draft',
+        actual_date: normalizedBody.actual_date ?? null,
+      },
+      sourceMutationId: `acceptance_plan:${id}:create`,
+      observedAt: now,
+      actorUserId: createdBy,
+      forceInitial: true,
+    })
   })
   clearAcceptanceFlowSnapshotCache(String(normalizedBody.project_id || req.body.project_id || ''))
 
@@ -1174,6 +1189,26 @@ router.put('/:id', requireProjectEditor(async (req) => {
       if (coveredTaskIds) {
         await syncAcceptanceCoveredTaskLinks(id, currentProjectId, coveredTaskIds)
       }
+
+      const observedAt = new Date().toISOString()
+      const nextForFacts = {
+        status: nextValue('status'),
+        actual_date: nextValue('actual_date'),
+      }
+      if (
+        nextForFacts.status !== (current as any).status
+        || nextForFacts.actual_date !== ((current as any).actual_date ?? null)
+      ) {
+        await recordAcceptancePlanExecutionFacts({
+          projectId: currentProjectId,
+          planId: id,
+          previous: current as Record<string, any>,
+          next: nextForFacts,
+          sourceMutationId: `acceptance_plan:${id}:update:${observedAt}`,
+          observedAt,
+          actorUserId: req.user?.id ?? null,
+        })
+      }
     })
   } catch (error) {
     if (!(error instanceof AcceptanceStatusConflictError)) throw error
@@ -1305,11 +1340,29 @@ router.patch('/:id/status', requireProjectEditor(async (req) => {
 
   const currentProjectId = String((current as any)?.project_id ?? '')
   const nextActualDate = actual_date !== undefined ? actual_date || null : ((current as any)?.actual_date ?? null)
-  const updateRows = await executeSQL(
-    'UPDATE acceptance_plans SET status = ?, actual_date = ?, updated_at = ? WHERE id = ? AND project_id = ? AND status = ? RETURNING id',
-    [statusValidation.normalizedStatus, nextActualDate, new Date().toISOString(), id, currentProjectId, current.status]
-  )
-  if (updateRows.length === 0) {
+  const observedAt = new Date().toISOString()
+  const mutation = await withDatabaseTransaction(async () => {
+    const updateRows = await executeSQL(
+      'UPDATE acceptance_plans SET status = ?, actual_date = ?, updated_at = ? WHERE id = ? AND project_id = ? AND status = ? RETURNING id',
+      [statusValidation.normalizedStatus, nextActualDate, observedAt, id, currentProjectId, current.status]
+    )
+    if (updateRows.length === 0) return { kind: 'conflict' as const }
+
+    await recordAcceptancePlanExecutionFacts({
+      projectId: currentProjectId,
+      planId: id,
+      previous: current as Record<string, any>,
+      next: {
+        status: statusValidation.normalizedStatus,
+        actual_date: nextActualDate,
+      },
+      sourceMutationId: `acceptance_plan:${id}:status:${observedAt}`,
+      observedAt,
+      actorUserId: req.user?.id ?? null,
+    })
+    return { kind: 'ok' as const }
+  })
+  if (mutation.kind === 'conflict') {
     return res.status(409).json({
       success: false,
       error: {

@@ -11,6 +11,7 @@ import { getClient, query as rawQuery } from '../database.js'
 import { createTasksInWizardBatch } from '../services/taskWriteChainService.js'
 import { executeProjectCreationUnderCommercialGuard } from '../services/commercialTransactionService.js'
 import { createDurationRuntimeConsumerObservationQueryExec } from '../services/durationRuntimeConsumerObservationService.js'
+import { recordAcceptancePlanExecutionFacts } from '../services/acceptancePlanExecutionFactService.js'
 import { deriveWbsFlags, type WbsNodeType } from '../services/wbsSemanticService.js'
 import { replaceWizardGeneratedTaskDependenciesBatch } from '../services/taskStandardModelService.js'
 import {
@@ -3078,6 +3079,35 @@ function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<s
     } => Boolean(item))
 }
 
+async function recordWizardAcceptancePlanFacts(input: {
+  projectId: string
+  planId: string
+  previous?: Record<string, any> | null
+  next: Record<string, any>
+  sourceMutationId: string
+  observedAt: string
+  actorUserId?: string | null
+  forceInitial?: boolean
+  transactionClient: TransactionClientLike
+}) {
+  await recordAcceptancePlanExecutionFacts({
+    projectId: input.projectId,
+    planId: input.planId,
+    previous: input.previous ?? null,
+    next: input.next,
+    sourceMutationId: input.sourceMutationId,
+    observedAt: input.observedAt,
+    actorUserId: input.actorUserId ?? null,
+    forceInitial: input.forceInitial,
+    sourceModule: 'projectWizard',
+    queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+      const result = await input.transactionClient.query(sql, params)
+      return (result.rows ?? []) as T[]
+    },
+    isTransactionActive: () => true,
+  })
+}
+
 async function writePassedMilestones(params: {
   projectId: string
   payload: z.infer<typeof wizardPayloadSchema>
@@ -3093,6 +3123,9 @@ async function writePassedMilestones(params: {
   let count = 0
   const ids: string[] = []
   for (const code of milestones) {
+    if (!params.transactionClient) {
+      throw new Error('Wizard acceptance plan facts require a transaction client')
+    }
     const id = uuidv4()
     const exec = params.transactionClient
       ? params.transactionClient.query.bind(params.transactionClient)
@@ -3115,6 +3148,19 @@ async function writePassedMilestones(params: {
         ts,
       ],
     )
+    await recordWizardAcceptancePlanFacts({
+      projectId,
+      planId: id,
+      next: {
+        status: 'passed',
+        actual_date: normalizeDate(payload.actualStartDate) ?? ts.slice(0, 10),
+      },
+      sourceMutationId: `wizard:acceptance-plan:${id}:create`,
+      observedAt: ts,
+      actorUserId: actorId,
+      forceInitial: true,
+      transactionClient: params.transactionClient,
+    })
     // eslint-disable-next-line -- route-level-aggregation-approved
     count += 1
     ids.push(id)
@@ -6085,6 +6131,16 @@ async function writeWizardGeneratedAcceptancePlans(params: {
         ts,
       ],
     )
+    await recordWizardAcceptancePlanFacts({
+      projectId: params.projectId,
+      planId: id,
+      next: { status: 'draft', actual_date: null },
+      sourceMutationId: `wizard:acceptance-plan:${id}:create`,
+      observedAt: ts,
+      actorUserId: params.actorId,
+      forceInitial: true,
+      transactionClient: params.transactionClient,
+    })
     ids.push(id)
     materializations.push({
       clientRowId: row.clientRowId,
@@ -6125,6 +6181,16 @@ async function writeWizardGeneratedAcceptancePlans(params: {
           ts,
         ],
       )
+      await recordWizardAcceptancePlanFacts({
+        projectId: params.projectId,
+        planId: id,
+        next: { status: 'draft', actual_date: null },
+        sourceMutationId: `wizard:acceptance-plan:${id}:create`,
+        observedAt: ts,
+        actorUserId: params.actorId,
+        forceInitial: true,
+        transactionClient: params.transactionClient,
+      })
       ids.push(id)
       materializations.push({
         clientRowId,

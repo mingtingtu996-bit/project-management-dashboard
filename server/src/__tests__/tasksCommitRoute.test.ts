@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   replaceTaskDependencies: vi.fn(),
   replaceWizardGeneratedTaskDependenciesBatch: vi.fn(),
   transactionEvents: [] as string[],
+  transactionActive: false,
   transactionClient: {
     query: vi.fn(async (sql: string) => {
       const normalized = String(sql).trim().toUpperCase()
@@ -68,6 +69,7 @@ const mocks = vi.hoisted(() => ({
   buildTaskCommitRequestHash: vi.fn(() => 'commit-request-hash'),
   reserveTaskCommitRequest: vi.fn(),
   completeTaskCommitRequest: vi.fn(),
+  recordAcceptancePlanExecutionFacts: vi.fn(),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -124,6 +126,10 @@ vi.mock('../services/taskWriteChainService.js', () => ({
   updateTaskInMainChain: mocks.updateTaskInMainChain,
 }))
 
+vi.mock('../services/acceptancePlanExecutionFactService.js', () => ({
+  recordAcceptancePlanExecutionFacts: mocks.recordAcceptancePlanExecutionFacts,
+}))
+
 vi.mock('../services/taskStandardModelService.js', () => ({
   buildStandardDTO: vi.fn(async (task: Record<string, unknown>) => task),
   replaceTaskDependencies: mocks.replaceTaskDependencies,
@@ -135,7 +141,7 @@ vi.mock('../database.js', () => ({
   query: mocks.rawQuery,
   withDatabaseTransaction: mocks.withDatabaseTransaction,
   registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => effect()),
-  isDatabaseTransactionActive: vi.fn(() => false),
+  isDatabaseTransactionActive: vi.fn(() => mocks.transactionActive),
 }))
 
 vi.mock('../services/taskDtoService.js', () => ({
@@ -267,9 +273,11 @@ describe('tasks commit route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.transactionEvents.length = 0
+    mocks.transactionActive = false
     mocks.getClient.mockResolvedValue(mocks.transactionClient)
     mocks.withDatabaseTransaction.mockImplementation(async (work: () => Promise<unknown>) => {
       await mocks.transactionClient.query('BEGIN')
+      mocks.transactionActive = true
       try {
         const result = await work()
         await mocks.transactionClient.query('COMMIT')
@@ -277,6 +285,8 @@ describe('tasks commit route', () => {
       } catch (error) {
         await mocks.transactionClient.query('ROLLBACK')
         throw error
+      } finally {
+        mocks.transactionActive = false
       }
     })
     mocks.rawQuery.mockResolvedValue({ rows: [], rowCount: 0 })
@@ -1312,6 +1322,13 @@ describe('tasks commit route', () => {
       acceptancePlanInserts[0]?.[1]?.[0],
       'major-acceptance-task',
     ]))
+    expect(mocks.recordAcceptancePlanExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ID,
+      planId: acceptancePlanInserts[0]?.[1]?.[0],
+      sourceModule: 'tasks',
+      next: { status: 'draft', actual_date: null },
+      forceInitial: true,
+    }))
   })
 
   it('resolves draft-created task ids before saving predecessor links in the same commit', async () => {
@@ -1790,6 +1807,7 @@ describe('tasks commit route', () => {
         executionFactIntent: 'system_backfill',
         executionFactEventDate: '2026-05-04',
         allowManualActualDates: true,
+        executionFactCorrectionReason: 'Backfill verified site record',
       }),
     )
   })

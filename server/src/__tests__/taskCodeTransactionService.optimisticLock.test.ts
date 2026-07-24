@@ -65,6 +65,13 @@ const state = vi.hoisted(() => {
     }),
     release: vi.fn(),
   }
+  const recordChangedExecutionFacts = vi.fn(async (
+    _input: Record<string, unknown>,
+    dependencies: { queryExec?: (sql: string, params?: unknown[]) => Promise<unknown[]> },
+  ) => {
+    await dependencies.queryExec?.('SELECT execution_fact_writer_marker', [])
+    return []
+  })
   return {
     client,
     queries,
@@ -73,6 +80,7 @@ const state = vi.hoisted(() => {
     recordLineageInTransaction: vi.fn(),
     createLineageBatchInTransaction: vi.fn(async () => ({ batchId: 'lineage-batch-1', linkCount: 0 })),
     shouldRegenerateTaskCode: vi.fn(() => false),
+    recordChangedExecutionFacts,
     currentTaskRow,
   }
 })
@@ -126,6 +134,10 @@ vi.mock('../services/wbsTaskStructureGovernancePipelineService.js', () => ({
   mergeWbsTaskStructureGovernanceMetadata: vi.fn((_existing, patch) => patch),
 }))
 
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: state.recordChangedExecutionFacts,
+}))
+
 describe('task code transaction optimistic locking', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -137,6 +149,13 @@ describe('task code transaction optimistic locking', () => {
     state.createLineageBatchInTransaction.mockClear()
     state.createLineageBatchInTransaction.mockResolvedValue({ batchId: 'lineage-batch-1', linkCount: 0 })
     state.shouldRegenerateTaskCode.mockReturnValue(false)
+    state.recordChangedExecutionFacts.mockImplementation(async (
+      _input: Record<string, unknown>,
+      dependencies: { queryExec?: (sql: string, params?: unknown[]) => Promise<unknown[]> },
+    ) => {
+      await dependencies.queryExec?.('SELECT execution_fact_writer_marker', [])
+      return []
+    })
     Object.assign(state.currentTaskRow, {
       id: 'task-1',
       project_id: 'project-1',
@@ -149,7 +168,9 @@ describe('task code transaction optimistic locking', () => {
       task_code_rule_id: 'rule-1',
       standard_task_metadata: {},
       building_object_id: 'building-1',
+      actual_start_date: null,
       actual_end_date: null,
+      first_progress_at: null,
     })
   })
 
@@ -209,6 +230,86 @@ describe('task code transaction optimistic locking', () => {
     expect(changeLogInserts.every((entry) => entry.sql.includes('task_update'))).toBe(true)
   })
 
+  it('records changed task execution facts through the same client before commit', async () => {
+    const { updateTaskWithCodeInTransaction } = await import('../services/taskCodeTransactionService.js')
+
+    await updateTaskWithCodeInTransaction(
+      'task-1',
+      { progress: 20, actual_start_date: '2026-06-01' },
+      3,
+      'user-1',
+      'project-1',
+    )
+
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'project-1',
+        entityType: 'task',
+        entityId: 'task-1',
+        sourceModule: 'taskCodeTransactionService',
+        sourceMutationId: 'task:task-1:version:4',
+        actorUserId: 'user-1',
+        changes: expect.arrayContaining([
+          expect.objectContaining({
+            factType: 'task.actual_start_date',
+            previousValue: null,
+            nextValue: '2026-06-01',
+            effectiveAt: '2026-06-01T00:00:00.000Z',
+          }),
+          expect.objectContaining({
+            factType: 'task.progress',
+            previousValue: 10,
+            nextValue: 20,
+          }),
+        ]),
+      }),
+      expect.objectContaining({
+        queryExec: expect.any(Function),
+        isTransactionActive: expect.any(Function),
+      }),
+    )
+    const sql = state.queries.map((entry) => entry.sql)
+    expect(sql.indexOf('SELECT execution_fact_writer_marker')).toBeGreaterThan(sql.indexOf('BEGIN'))
+    expect(sql.indexOf('SELECT execution_fact_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
+  })
+
+  it('rolls back the task projection when execution fact persistence fails', async () => {
+    const { updateTaskWithCodeInTransaction } = await import('../services/taskCodeTransactionService.js')
+    state.recordChangedExecutionFacts.mockRejectedValueOnce(new Error('execution fact persistence failed'))
+
+    await expect(updateTaskWithCodeInTransaction(
+      'task-1',
+      { progress: 20 },
+      3,
+      'user-1',
+      'project-1',
+    )).rejects.toThrow('execution fact persistence failed')
+
+    expect(state.queries.map((entry) => entry.sql)).toContain('ROLLBACK')
+    expect(state.queries.map((entry) => entry.sql)).not.toContain('COMMIT')
+    expect(state.invalidateTaskReadCache).not.toHaveBeenCalled()
+  })
+
+  it('passes an actual-time correction reason to changed execution facts', async () => {
+    const { updateTaskWithCodeInTransaction } = await import('../services/taskCodeTransactionService.js')
+
+    await updateTaskWithCodeInTransaction(
+      'task-1',
+      { actual_end_date: '2026-06-03' },
+      3,
+      'user-1',
+      'project-1',
+      { correctionReason: 'Verified against signed site record' },
+    )
+
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correctionReason: 'Verified against signed site record',
+      }),
+      expect.anything(),
+    )
+  })
+
   it('rejects invalid progress before writing through the transaction service', async () => {
     const { updateTaskWithCodeInTransaction } = await import('../services/taskCodeTransactionService.js')
 
@@ -249,6 +350,36 @@ describe('task code transaction optimistic locking', () => {
       '2026-06-03',
       '2026-06-01T08:00:00.000Z',
     ]))
+  })
+
+  it('records five forced initial execution facts before committing a created task', async () => {
+    const { createTaskWithCodeInTransaction } = await import('../services/taskCodeTransactionService.js')
+
+    await createTaskWithCodeInTransaction({
+      id: 'task-created',
+      project_id: 'project-1',
+      title: 'initial governed facts',
+      building_object_id: 'building-1',
+    } as any, 'user-1')
+
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'project-1',
+        entityType: 'task',
+        entityId: 'task-created',
+        sourceMutationId: 'task:task-created:version:1',
+        changes: expect.arrayContaining([
+          expect.objectContaining({ factType: 'task.actual_start_date', nextValue: null, force: true }),
+          expect.objectContaining({ factType: 'task.actual_end_date', nextValue: null, force: true }),
+          expect.objectContaining({ factType: 'task.first_progress_at', nextValue: null, force: true }),
+          expect.objectContaining({ factType: 'task.progress', nextValue: 0, force: true }),
+          expect.objectContaining({ factType: 'task.status', nextValue: 'todo', force: true }),
+        ]),
+      }),
+      expect.anything(),
+    )
+    const sql = state.queries.map((entry) => entry.sql)
+    expect(sql.indexOf('SELECT execution_fact_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
   })
 
   it('rejects implicit reopen writes on completed tasks inside the transactional update path', async () => {
@@ -329,6 +460,64 @@ describe('task code transaction optimistic locking', () => {
     expect(historyInsert?.sql).toMatch(
       /VALUES\s*\(\$\d+::uuid,\s*\$\d+::uuid,\s*\$\d+::uuid,\s*\$\d+::text,\s*\$\d+::text,\s*\$\d+::text,\s*\$\d+::uuid,\s*\$\d+::timestamptz,\s*\$\d+::jsonb\)/i,
     )
+  })
+
+  it('records five forced initial execution facts per wizard task before the single commit', async () => {
+    const { createTasksWithCodeInWizardBatchTransaction } = await import('../services/taskCodeTransactionService.js')
+
+    await createTasksWithCodeInWizardBatchTransaction([
+      {
+        id: 'batch-task-1', project_id: 'project-1', title: 'batch root', progress: 0,
+        status: 'todo', building_object_id: 'building-1', standard_work_code: 'WORK',
+      } as any,
+      {
+        id: 'batch-task-2', project_id: 'project-1', title: 'batch child', progress: 0,
+        status: 'todo', building_object_id: 'building-1', standard_work_code: 'WORK',
+      } as any,
+    ], 'user-1')
+
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(2)
+    for (const [taskId, call] of ['batch-task-1', 'batch-task-2'].map((id, index) => [id, state.recordChangedExecutionFacts.mock.calls[index]] as const)) {
+      expect(call?.[0]).toEqual(expect.objectContaining({
+        entityId: taskId,
+        sourceMutationId: `task:${taskId}:version:1`,
+        changes: expect.arrayContaining([
+          expect.objectContaining({ factType: 'task.actual_start_date', force: true }),
+          expect.objectContaining({ factType: 'task.actual_end_date', force: true }),
+          expect.objectContaining({ factType: 'task.first_progress_at', force: true }),
+          expect.objectContaining({ factType: 'task.progress', force: true }),
+          expect.objectContaining({ factType: 'task.status', force: true }),
+        ]),
+      }))
+    }
+    expect(state.queries.filter((entry) => entry.sql === 'COMMIT')).toHaveLength(1)
+    const sql = state.queries.map((entry) => entry.sql)
+    expect(sql.lastIndexOf('SELECT execution_fact_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
+  })
+
+  it('records reopen execution facts atomically before commit', async () => {
+    const { reopenTaskWithCodeInTransaction } = await import('../services/taskCodeTransactionService.js')
+    Object.assign(state.currentTaskRow, {
+      progress: 100,
+      status: 'completed',
+      actual_end_date: '2026-06-05',
+    })
+
+    await reopenTaskWithCodeInTransaction('task-1', 80, 3, 'user-1', 'project-1')
+
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceMutationId: 'task:task-1:version:4',
+        changes: expect.arrayContaining([
+          expect.objectContaining({ factType: 'task.progress', previousValue: 100, nextValue: 80 }),
+          expect.objectContaining({ factType: 'task.status', previousValue: 'completed', nextValue: 'in_progress' }),
+          expect.objectContaining({ factType: 'task.actual_end_date', previousValue: '2026-06-05', nextValue: null }),
+        ]),
+      }),
+      expect.anything(),
+    )
+    const sql = state.queries.map((entry) => entry.sql)
+    expect(sql.indexOf('SELECT execution_fact_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
   })
 
   it('reserves multiple wizard task code sequence keys with one lock query and one update query', async () => {

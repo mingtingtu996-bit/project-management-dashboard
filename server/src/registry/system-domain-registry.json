@@ -3275,6 +3275,14 @@
     },
     {
       "kind": "migration",
+      "id": "326_execution_fact_governance",
+      "architectureUnit": "主执行环：行动闭环",
+      "runtimeScope": "business_core",
+      "assignmentReason": "adds append-only, tenant-scoped execution fact history and current-head projection for governed task, risk, issue, material, drawing, certificate, and acceptance mutations without replacing their domain write authorities",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
@@ -5429,6 +5437,30 @@
       "architectureUnit": "主执行环：建模",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "executionFactGovernanceService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "cross-domain transaction-only authority that appends tenant-scoped execution facts atomically with existing compatibility projections; it is infrastructure and does not grant route, migration, deployment, or runtime publication authority",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "acceptancePlanExecutionFactService",
+      "architectureUnit": "主执行环：行动闭环",
+      "runtimeScope": "business_core",
+      "assignmentReason": "acceptance-plan execution fact adapter keeps status and actual-date facts in the caller transaction without creating a parallel acceptance write authority",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "drawingVersionExecutionFactService",
+      "architectureUnit": "横切履约",
+      "runtimeScope": "business_core",
+      "assignmentReason": "drawing-version execution fact adapter keeps immutable before-and-after version facts in the drawing mutation transaction",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {

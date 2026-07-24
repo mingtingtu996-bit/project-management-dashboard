@@ -14,7 +14,12 @@ import type {
   Invitation,
   TaskProgressSnapshot,
 } from '../types/db.js'
-import { isDatabaseTransactionActive, query as rawQuery } from '../database.js'
+import {
+  isDatabaseTransactionActive,
+  query as rawQuery,
+  registerDatabasePostCommitEffect,
+  withDatabaseTransaction,
+} from '../database.js'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
 import { isCompletedTask, isCompletedTaskStatus } from '../utils/taskStatus.js'
@@ -42,6 +47,10 @@ import { classifyProgressSnapshotSource, normalizeProgressSnapshotSource } from 
 import { shouldRecordTaskProgressSnapshot } from '../utils/taskProgressSnapshotPolicy.js'
 import { resolveSupabaseRuntimeKey } from './runtimeCredentialBoundary.js'
 import { createJobLeaseFencedFetch } from './jobLeaseFenceContext.js'
+import {
+  recordChangedExecutionFacts,
+  type ExecutionFactProjectionChange,
+} from './executionFactGovernanceService.js'
 
 export interface DbServiceBusinessSideEffectAdapters {
   writeLog?: (params: WriteLogParams) => Promise<unknown> | unknown
@@ -1116,6 +1125,15 @@ function enqueueProjectHealthRefresh(projectId: unknown, trigger: string) {
   )
 }
 
+async function enqueueProjectHealthRefreshAfterCommit(projectId: unknown, trigger: string) {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) return
+  await registerDatabasePostCommitEffect(
+    `dbService.projectHealth:${trigger}:${normalizedProjectId}`,
+    async () => enqueueProjectHealthRefresh(normalizedProjectId, trigger),
+  )
+}
+
 type ChangeSource =
   | 'system_auto'
   | 'manual_adjusted'
@@ -1227,6 +1245,73 @@ function normalizeRiskStatus(value?: string | null): Risk['status'] {
 function normalizeIssueStatus(value?: string | null): Issue['status'] {
   if (value === 'investigating' || value === 'resolved' || value === 'closed') return value
   return 'open'
+}
+
+function buildRiskIssueClosureFact(row: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries({
+    status: row.status,
+    resultCode: row.closure_result_code,
+    resultSummary: row.closure_result_summary,
+    effectiveness: row.closure_effectiveness,
+    evidenceRefs: row.closure_evidence_refs,
+    causeAttributionId: row.closure_cause_attribution_id,
+    closedBy: row.closed_by,
+    recordedAt: row.closure_recorded_at,
+  }).filter(([, value]) => value !== undefined && value !== null))
+}
+
+async function recordRiskIssueExecutionFacts(input: {
+  entityType: 'risk' | 'issue'
+  entityId: string
+  projectId: string
+  previous: Record<string, unknown> | null
+  next: Record<string, unknown>
+  sourceMutationId: string
+  observedAt: string
+  actorUserId?: string | null
+  forceInitialStatus?: boolean
+}) {
+  const statusFactType = `${input.entityType}.status` as 'risk.status' | 'issue.status'
+  const closureFactType = `${input.entityType}.closure` as 'risk.closure' | 'issue.closure'
+  const changes: ExecutionFactProjectionChange[] = [{
+    factType: statusFactType,
+    previousValue: input.previous?.status ?? null,
+    nextValue: input.next.status,
+    force: input.forceInitialStatus === true,
+    effectiveAt: input.observedAt,
+  }]
+  if (input.next.status === 'closed') {
+    changes.push({
+      factType: closureFactType,
+      previousValue: input.previous?.status === 'closed'
+        ? buildRiskIssueClosureFact(input.previous)
+        : null,
+      nextValue: buildRiskIssueClosureFact(input.next),
+      effectiveAt: String(
+        input.next.closure_recorded_at
+        ?? input.next.closed_at
+        ?? input.next.resolved_at
+        ?? input.observedAt,
+      ),
+    })
+  }
+
+  const changed = changes.filter((change) => (
+    change.force === true
+    || JSON.stringify(change.previousValue) !== JSON.stringify(change.nextValue)
+  ))
+  if (changed.length === 0) return
+
+  await recordChangedExecutionFacts({
+    projectId: input.projectId,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    sourceModule: 'dbService',
+    sourceMutationId: input.sourceMutationId,
+    actorUserId: input.actorUserId ?? null,
+    observedAt: input.observedAt,
+    changes: changed,
+  })
 }
 
 function validateRiskStatusTransition(
@@ -2729,6 +2814,12 @@ export async function getRisk(id: string): Promise<Risk | null> {
 export async function createRisk(
   risk: RiskWriteInput
 ): Promise<Risk> {
+  return withDatabaseTransaction(() => createRiskInTransaction(risk))
+}
+
+async function createRiskInTransaction(
+  risk: RiskWriteInput,
+): Promise<Risk> {
   const id = uuidv4()
   const ts = now()
   const requestedStatus = String(risk.status ?? '')
@@ -2827,7 +2918,18 @@ export async function createRisk(
     ],
   )
   const created = (await getRisk(id))!
-  enqueueProjectHealthRefresh(created.project_id, 'risk_created')
+  await recordRiskIssueExecutionFacts({
+    entityType: 'risk',
+    entityId: id,
+    projectId: created.project_id,
+    previous: null,
+    next: created as unknown as Record<string, unknown>,
+    sourceMutationId: `risk:${id}:version:${Number(created.version ?? 1)}`,
+    observedAt: ts,
+    actorUserId: risk.created_by ?? null,
+    forceInitialStatus: true,
+  })
+  await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'risk_created')
   return created
 }
 
@@ -2837,7 +2939,16 @@ export async function updateRisk(
   expectedVersion?: number,
   changeSource: ChangeSource = 'manual_adjusted',
 ): Promise<Risk | null> {
-  const oldRisk = await getRisk(id)
+  return withDatabaseTransaction(() => updateRiskInTransaction(id, updates, expectedVersion, changeSource))
+}
+
+async function updateRiskInTransaction(
+  id: string,
+  updates: RiskUpdateInput,
+  expectedVersion?: number,
+  changeSource: ChangeSource = 'manual_adjusted',
+): Promise<Risk | null> {
+  const oldRisk = await executeSQLOne<Risk>('SELECT * FROM risks WHERE id = ? FOR UPDATE', [id])
   if (!oldRisk) return null
   const { version: _v, id: _id, created_at: _ca, updated_at: _ua, risk_category, ...restFields } = updates
   const fields: Omit<RiskUpdateInput, 'id' | 'created_at' | 'updated_at' | 'version'> = {
@@ -2877,57 +2988,40 @@ export async function updateRisk(
     }
   }
   
-  // 乐观锁：原子性更新
+  const updatePayload = {
+    ...fields,
+    updated_at: now(),
+    version: expectedVersion !== undefined ? expectedVersion + 1 : Number(oldRisk.version ?? 1) + 1,
+  }
+  const mutableColumns = new Set([
+    'task_id', 'title', 'description', 'level', 'status', 'risk_category',
+    'risk_type', 'impact_description', 'owner_id', 'owner_name', 'due_date',
+    'resolved_at', 'source_type', 'source_id', 'source_entity_type',
+    'source_entity_id', 'chain_id', 'pending_manual_close', 'linked_issue_id',
+    'closed_reason', 'closed_at', 'closure_result_code', 'closure_result_summary',
+    'closure_effectiveness', 'closure_evidence_refs', 'closure_cause_attribution_id',
+    'closed_by', 'closure_recorded_at', 'updated_at', 'version',
+  ])
+  const entries = Object.entries(updatePayload).filter(([column, value]) => (
+    value !== undefined && mutableColumns.has(column)
+  ))
+  const where = ['id = ?', 'project_id = ?']
+  const values = entries.map(([, value]) => value)
+  values.push(id, oldRisk.project_id)
   if (expectedVersion !== undefined) {
-    const { data, error } = await supabase
-      .from('risks')
-      .update({ ...fields, version: expectedVersion + 1, updated_at: now() })
-      .eq('id', id)
-      .eq('project_id', oldRisk.project_id)
-      .eq('version', expectedVersion)
-      .select('id')
-    
-    if (error) throw new Error(error.message)
-    
-    if (!data || data.length === 0) {
+    where.push('version = ?')
+    values.push(expectedVersion)
+  }
+  const rows = await executeSQL<{ id: string }>(
+    `UPDATE risks SET ${entries.map(([column]) => `${column} = ?`).join(', ')} WHERE ${where.join(' AND ')} RETURNING id`,
+    values,
+  )
+  if (rows.length === 0) {
+    if (expectedVersion !== undefined) {
       throw createBusinessError('VERSION_MISMATCH', '该风险已被他人修改，请刷新后重试', 409)
     }
-    const updated = await getRisk(id)
-    if (updated) {
-      if (oldRisk.status !== updated.status) {
-        await writeChangeLog({
-          project_id: oldRisk.project_id ?? null,
-          entity_type: 'risk',
-          entity_id: id,
-          field_name: 'status',
-          old_value: oldRisk.status ?? null,
-          new_value: updated.status ?? null,
-          change_source: changeSource,
-        })
-      }
-      if (Boolean(oldRisk.pending_manual_close) !== Boolean(updated.pending_manual_close)) {
-        await writeChangeLog({
-          project_id: oldRisk.project_id ?? null,
-          entity_type: 'risk',
-          entity_id: id,
-          field_name: 'pending_manual_close',
-          old_value: Boolean(oldRisk.pending_manual_close),
-          new_value: Boolean(updated.pending_manual_close),
-          change_source: changeSource,
-        })
-      }
-    }
-    enqueueProjectHealthRefresh(updated?.project_id ?? oldRisk.project_id, 'risk_updated')
-    return updated
+    throw createBusinessError('RISK_UPDATE_FAILED', '风险更新未写入任何记录', 500)
   }
-
-  // 无乐观锁：普通更新
-  const { error } = await supabase
-    .from('risks')
-    .update({ ...fields, updated_at: now() })
-    .eq('id', id)
-    .eq('project_id', oldRisk.project_id)
-  if (error) throw new Error(error.message)
   const updated = await getRisk(id)
   if (updated) {
     if (oldRisk.status !== updated.status) {
@@ -2953,7 +3047,19 @@ export async function updateRisk(
       })
     }
   }
-  enqueueProjectHealthRefresh(updated?.project_id ?? oldRisk.project_id, 'risk_updated')
+  if (updated) {
+    await recordRiskIssueExecutionFacts({
+      entityType: 'risk',
+      entityId: id,
+      projectId: updated.project_id,
+      previous: oldRisk as unknown as Record<string, unknown>,
+      next: updated as unknown as Record<string, unknown>,
+      sourceMutationId: `risk:${id}:version:${Number(updated.version ?? updatePayload.version)}`,
+      observedAt: String(updated.updated_at ?? updatePayload.updated_at),
+      actorUserId: String(updated.closed_by ?? '').trim() || null,
+    })
+  }
+  await enqueueProjectHealthRefreshAfterCommit(updated?.project_id ?? oldRisk.project_id, 'risk_updated')
   return updated
 }
 
@@ -3270,6 +3376,12 @@ export async function getIssue(id: string): Promise<Issue | null> {
 export async function createIssue(
   issue: IssueWriteInput
 ): Promise<Issue> {
+  return withDatabaseTransaction(() => createIssueInTransaction(issue))
+}
+
+async function createIssueInTransaction(
+  issue: IssueWriteInput,
+): Promise<Issue> {
   const id = uuidv4()
   const ts = now()
   const requestedStatus = String(issue.status ?? '')
@@ -3289,6 +3401,21 @@ export async function createIssue(
     && typeof sourceRiskId === 'string'
     && sourceRiskId
   ) {
+    const previousRisk = await executeSQLOne<Risk>(
+      'SELECT * FROM risks WHERE id = ? FOR UPDATE',
+      [sourceRiskId],
+    )
+    const previousIssue = previousRisk?.linked_issue_id
+      ? await executeSQLOne<Issue>('SELECT * FROM issues WHERE id = ? FOR UPDATE', [previousRisk.linked_issue_id])
+      : await executeSQLOne<Issue>(
+        `SELECT * FROM issues
+          WHERE source_entity_type = 'risk'
+            AND (source_id = ? OR source_entity_id = ?)
+          ORDER BY created_at DESC
+          LIMIT 1
+          FOR UPDATE`,
+        [sourceRiskId, sourceRiskId],
+      )
     const issueId = await runRpc<string | null>('create_issue_from_risk_atomic', {
       p_risk_id: sourceRiskId,
       p_issue_source_type: sourceType,
@@ -3301,7 +3428,29 @@ export async function createIssue(
       throw new Error('create_issue_from_risk_atomic returned empty issue id')
     }
     const created = (await getIssue(issueId))!
-    enqueueProjectHealthRefresh(created.project_id, 'issue_created')
+    const updatedRisk = previousRisk ? await getRisk(previousRisk.id) : null
+    await recordRiskIssueExecutionFacts({
+      entityType: 'issue',
+      entityId: issueId,
+      projectId: created.project_id,
+      previous: previousIssue as unknown as Record<string, unknown> | null,
+      next: created as unknown as Record<string, unknown>,
+      sourceMutationId: `issue:${issueId}:version:${Number(created.version ?? 1)}`,
+      observedAt: String(created.updated_at ?? created.created_at ?? ts),
+      forceInitialStatus: !previousIssue,
+    })
+    if (previousRisk && updatedRisk) {
+      await recordRiskIssueExecutionFacts({
+        entityType: 'risk',
+        entityId: previousRisk.id,
+        projectId: updatedRisk.project_id,
+        previous: previousRisk as unknown as Record<string, unknown>,
+        next: updatedRisk as unknown as Record<string, unknown>,
+        sourceMutationId: `risk:${previousRisk.id}:conversion:${issueId}`,
+        observedAt: String(updatedRisk.updated_at ?? ts),
+      })
+    }
+    await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'issue_created')
     return created
   }
 
@@ -3346,8 +3495,24 @@ export async function createIssue(
     created_at: ts,
     updated_at: ts,
   }
-  const { error } = await supabase.from('issues').insert(row)
-  if (error) throw new Error(error.message)
+  await executeSQL(
+    `INSERT INTO issues (
+       id, project_id, task_id, title, description, source_type, source_id,
+       source_entity_type, source_entity_id, chain_id, severity, priority,
+       pending_manual_close, status, closed_reason, closed_at,
+       closure_result_code, closure_result_summary, closure_effectiveness,
+       closure_evidence_refs, closure_cause_attribution_id, closed_by,
+       closure_recorded_at, version, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.id, row.project_id, row.task_id, row.title, row.description,
+      row.source_type, row.source_id, row.source_entity_type, row.source_entity_id,
+      row.chain_id, row.severity, row.priority, row.pending_manual_close, row.status,
+      row.closed_reason, row.closed_at, row.closure_result_code, row.closure_result_summary,
+      row.closure_effectiveness, row.closure_evidence_refs, row.closure_cause_attribution_id,
+      row.closed_by, row.closure_recorded_at, row.version, row.created_at, row.updated_at,
+    ],
+  )
   if (requestedPriority !== undefined && requestedPriority !== basePriority) {
     await writeChangeLog({
       project_id: row.project_id,
@@ -3360,7 +3525,18 @@ export async function createIssue(
     })
   }
   const created = (await getIssue(id))!
-  enqueueProjectHealthRefresh(created.project_id, 'issue_created')
+  await recordRiskIssueExecutionFacts({
+    entityType: 'issue',
+    entityId: id,
+    projectId: created.project_id,
+    previous: null,
+    next: created as unknown as Record<string, unknown>,
+    sourceMutationId: `issue:${id}:version:${Number(created.version ?? 1)}`,
+    observedAt: ts,
+    actorUserId: String((issue as Record<string, unknown>).created_by ?? '').trim() || null,
+    forceInitialStatus: true,
+  })
+  await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'issue_created')
   return created
 }
 
@@ -3370,7 +3546,16 @@ export async function updateIssue(
   expectedVersion?: number,
   changeSource: ChangeSource = 'manual_adjusted',
 ): Promise<Issue | null> {
-  const oldIssue = await getIssue(id)
+  return withDatabaseTransaction(() => updateIssueInTransaction(id, updates, expectedVersion, changeSource))
+}
+
+async function updateIssueInTransaction(
+  id: string,
+  updates: IssueUpdateInput,
+  expectedVersion?: number,
+  changeSource: ChangeSource = 'manual_adjusted',
+): Promise<Issue | null> {
+  const oldIssue = await executeSQLOne<Issue>('SELECT * FROM issues WHERE id = ? FOR UPDATE', [id])
   if (!oldIssue) return null
   const { id: _id, created_at: _ca, ...fields } = updates
   const nextStatus = fields.status !== undefined ? normalizeIssueStatus(fields.status) : oldIssue.status
@@ -3490,8 +3675,18 @@ export async function updateIssue(
         change_source: changeSource,
       })
     }
+    await recordRiskIssueExecutionFacts({
+      entityType: 'issue',
+      entityId: id,
+      projectId: updated.project_id,
+      previous: oldIssue as unknown as Record<string, unknown>,
+      next: updated as unknown as Record<string, unknown>,
+      sourceMutationId: `issue:${id}:version:${Number(updated.version ?? updatePayload.version)}`,
+      observedAt: String(updated.updated_at ?? updatePayload.updated_at),
+      actorUserId: String(updated.closed_by ?? '').trim() || null,
+    })
   }
-  enqueueProjectHealthRefresh(updated?.project_id ?? oldIssue.project_id, 'issue_updated')
+  await enqueueProjectHealthRefreshAfterCommit(updated?.project_id ?? oldIssue.project_id, 'issue_updated')
   return updated
 }
 

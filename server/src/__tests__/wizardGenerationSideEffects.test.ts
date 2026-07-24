@@ -45,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   resolveConstructionCalendarContext: vi.fn(),
   executeProjectCreationUnderCommercialGuard: vi.fn(),
   commercialTransactionQuery: vi.fn(),
+  recordAcceptancePlanExecutionFacts: vi.fn(async () => []),
 }))
 
 vi.mock('../middleware/auth.js', () => ({
@@ -149,6 +150,10 @@ vi.mock('../services/constructionCalendar.js', async (importOriginal) => {
 
 vi.mock('../services/commercialTransactionService.js', () => ({
   executeProjectCreationUnderCommercialGuard: mocks.executeProjectCreationUnderCommercialGuard,
+}))
+
+vi.mock('../services/acceptancePlanExecutionFactService.js', () => ({
+  recordAcceptancePlanExecutionFacts: mocks.recordAcceptancePlanExecutionFacts,
 }))
 
 const { default: projectWizardRouter } = await import('../routes/projectWizard.js')

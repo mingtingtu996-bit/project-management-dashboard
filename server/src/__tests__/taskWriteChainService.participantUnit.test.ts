@@ -657,6 +657,40 @@ describe('taskWriteChainService participant unit lookup', () => {
       .toBeLessThan(state.collectDurationExperienceSampleWithTaskLock.mock.invocationCallOrder[0])
   })
 
+  it('passes the controlled correction reason into the transactional task writer', async () => {
+    state.getTask.mockResolvedValue({
+      id: 'task-1',
+      project_id: 'project-1',
+      title: 'corrected task',
+      status: 'in_progress',
+      progress: 40,
+      actual_start_date: '2026-06-01',
+      actual_end_date: null,
+      first_progress_at: '2026-06-01T08:00:00.000Z',
+      building_object_id: 'building-1',
+      version: 3,
+    })
+
+    await updateTaskInMainChain(
+      'task-1',
+      { actual_end_date: '2026-06-05', updated_by: 'user-1' },
+      3,
+      {
+        allowManualActualDates: true,
+        executionFactCorrectionReason: 'Verified against signed site record',
+      },
+    )
+
+    expect(state.updateTaskWithCodeInTransaction).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ actual_end_date: '2026-06-05' }),
+      3,
+      'user-1',
+      'project-1',
+      { correctionReason: 'Verified against signed site record' },
+    )
+  })
+
   it('rejects disabled participant units before creating the task row', async () => {
     state.setParticipantUnitRow({
       id: 'unit-1',

@@ -115,6 +115,7 @@ type TaskWritePatch = Partial<Task> & {
 type TaskWriteOptions = {
   executionFactIntent?: ExecutionFactIntent
   executionFactEventDate?: string | null
+  executionFactCorrectionReason?: string | null
   allowManualActualDates?: boolean
 }
 
@@ -1444,6 +1445,7 @@ export async function updateTaskInMainChain(
     expectedVersion,
     updates.updated_by ?? null,
     String(previousTask.project_id ?? ''),
+    { correctionReason: options.executionFactCorrectionReason ?? null },
   )
   const task = taskData as unknown as Task
   if (!task) return null

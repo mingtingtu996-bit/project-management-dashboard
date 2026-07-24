@@ -319,6 +319,9 @@ function inferPageAssignment(page) {
 
 function inferTableAssignment(table) {
   const id = table.id.toLowerCase()
+  if (/^(execution_fact_events|current_execution_facts)$/.test(id)) {
+    return assignment(UNIT_EXECUTION_FACT, "business_core", "execution fact authority surface")
+  }
   if (/^(algorithm|duration_context|duration_experience|duration_benchmarks|progress_asset|progress_knowledge|regional_climate|construction_dependency_replay|t2_|policy_template|acceptance_template_policy_auto_publish|certificate_template_policy_auto_publish)/.test(id)) {
     return assignment("学习治理环", "governance", "governed learning or policy table surface")
   }
