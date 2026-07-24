@@ -41,6 +41,7 @@ import { planningGovernanceService } from './services/planningGovernanceService.
 import { scanAllProjectBaselineValidity } from './services/baselineGovernanceService.js'
 import { scanStableDurationPublicationBaselineImpacts } from './services/durationAssetBaselineRevisionBridgeService.js'
 import { materialArrivalReminderService } from './services/materialArrivalReminderService.js'
+import { syncAllProjectStartReadinessNotifications } from './services/projectStartReadinessNotificationService.js'
 import { recordProjectDailySnapshots } from './services/projectDailySnapshotService.js'
 import { runScheduledProjectDailySnapshotCycle } from './services/scheduledDurationJobResultPolicyService.js'
 import { SystemAnomalyService } from './services/systemAnomalyService.js'
@@ -141,6 +142,8 @@ class ConditionAlertJob {
               lease.assertActive()
               const autoEscalatedIssues = await this.warningService.autoEscalateRisksToIssues()
               lease.assertActive()
+              const startReadinessNotifications = await syncAllProjectStartReadinessNotifications()
+              lease.assertActive()
 
               return {
                 warnings: warnings.length,
@@ -149,6 +152,7 @@ class ConditionAlertJob {
                 acceptanceExpiredIssues: acceptanceExpiredIssues.length,
                 autoEscalatedRisks: autoEscalatedRisks.length,
                 autoEscalatedIssues: autoEscalatedIssues.length,
+                startReadinessNotifications,
               }
             },
           )

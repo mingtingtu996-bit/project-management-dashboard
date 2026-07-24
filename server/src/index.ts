@@ -88,6 +88,7 @@ import dataQualityRouter, { warmDataQualityProjectSummaryCache } from './routes/
 import taskConditionsRouter from './routes/task-conditions.js'
 import taskObstaclesRouter from './routes/task-obstacles.js'
 import taskSummariesRouter from './routes/task-summaries.js'
+import projectStartReadinessRouter from './routes/project-start-readiness.js'
 import causeAttributionsRouter from './routes/cause-attributions.js'
 import changeLogsRouter from './routes/change-logs.js'
 import deletionRetentionRouter from './routes/deletion-retention.js'
@@ -484,6 +485,7 @@ app.use('/api/client-errors', clientErrorsRouter)
 app.use('/api/projects/:projectId/materials', projectMaterialsRouter)
 app.use('/api/performance-reports', performanceReportsRouter)
 app.use('/api', metricsRouter)
+app.use('/api/projects', projectStartReadinessRouter)
 app.use('/api/projects', projectsRouter)
 app.use('/api/projects', projectClimateRouter)
 // v1.4.22.1: Wizard, templates, reconcile, milestone presets
