@@ -28,6 +28,7 @@ import {
   type DurationLearningRuntimeMonitoringCandidate,
 } from '../services/durationLearningRuntimeLifecycleService.js'
 import {
+  durationLearningBenchmarkRuntimeVersionReasons,
   promoteDurationLearningRuntimeCanary,
   recordDurationLearningRuntimeImpact,
   type DurationLearningRuntimeAssetKey,
@@ -358,6 +359,7 @@ function benchmarkHarness(input: { failQueueUpdate?: boolean } = {}) {
   const artifactKey = String(persistenceRow.benchmark_key)
   const runtimePayload = {
     benchmarkId,
+    benchmarkVersion: persistenceRow.benchmark_version,
     p50Days: persistenceRow.p50_days,
     p75Days: persistenceRow.p75_days,
     p80Days: persistenceRow.p80_days,
@@ -599,6 +601,8 @@ function benchmarkHarness(input: { failQueueUpdate?: boolean } = {}) {
     events,
     row,
     publication,
+    runtimePayload,
+    persistedBenchmarkVersion: persistenceRow.benchmark_version,
     state: () => ({ benchmarkCurrent, causeSegmentsCurrent, persistedSegment }),
   }
 }
@@ -667,6 +671,19 @@ describe('duration asset stable approval with current locked evidence', () => {
     ])
     expect(harness.state().impactMetrics).toBeNull()
     expect(harness.row.status).toBe('open')
+  })
+
+  it('builds a valid project benchmark runtime payload from the persisted fixture version', () => {
+    const harness = benchmarkHarness()
+
+    expect(harness.runtimePayload).toMatchObject({
+      benchmarkId,
+      benchmarkVersion: harness.persistedBenchmarkVersion,
+    })
+    expect(durationLearningBenchmarkRuntimeVersionReasons(
+      harness.runtimePayload,
+      { level: 'project', companyId, projectId },
+    )).toEqual([])
   })
 
   it('uses the project benchmark atomic writer and activates frozen cause segments', async () => {

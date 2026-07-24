@@ -60,6 +60,35 @@ describe('system surface ownership guard', () => {
     ]))
   })
 
+  it('assigns DurationAssetsAdmin to learning governance without accepting unrelated admin pages', async () => {
+    const { evaluateSystemSurfaceOwnershipGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-system-surface-duration-assets-'))
+
+    writeFixtureFile(fixtureRoot, 'client/src/App.tsx', [
+      "const DurationAssetsAdmin = lazy(() => import('@/pages/DurationAssetsAdmin'))",
+      "const UnownedAdminPortal = lazy(() => import('@/pages/UnownedAdminPortal'))",
+    ].join('\n'))
+    writeFixtureFile(fixtureRoot, 'client/src/pages/DurationAssetsAdmin.tsx', 'export default function DurationAssetsAdmin() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/UnownedAdminPortal.tsx', 'export default function UnownedAdminPortal() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'server/migrations/001_fixture.sql', 'CREATE TABLE IF NOT EXISTS tasks (id uuid);\n')
+
+    const result = evaluateSystemSurfaceOwnershipGuard(fixtureRoot)
+
+    expect(result.assignments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'page',
+        id: 'DurationAssetsAdmin',
+        assignment: expect.objectContaining({
+          architectureUnit: '学习治理环',
+          runtimeScope: 'governance',
+        }),
+      }),
+    ]))
+    expect(result.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'UnownedAdminPortal' }),
+    ]))
+  })
+
   it('assigns all current client page and migration table surfaces', async () => {
     const { evaluateSystemSurfaceOwnershipGuard } = await import(pathToFileURL(guardPath).href)
 

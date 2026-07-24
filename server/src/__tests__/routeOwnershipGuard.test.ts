@@ -91,6 +91,7 @@ describe('route ownership guard', () => {
     expect(result.routeRoots).toContain('/api/auth/register')
     expect(result.routeRoots).toContain('/api/company/dashboard')
     expect(result.routeRoots).toContain('/api/duration-suggestions')
+    expect(result.routeRoots).toContain('/api/admin/duration-assets')
     expect(result.routeRoots).toContain('/api/issues')
     expect(result.routeRoots).toContain('/api/wbs-template-governance')
   })

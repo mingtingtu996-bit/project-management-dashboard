@@ -9,6 +9,14 @@ const DEFAULT_ALLOWED_WRITERS = new Set([
 ])
 const FORBIDDEN_WRITER_IMPORT_PATTERN =
   /(?:RuntimePublicationService|DomainWriter|PublicationService|EvidenceWriterService)\.js$/i
+// Task 4 requires these existing publication writers inside one outer review-decision transaction.
+// Keep the exception bound to the decision adapter and its exact writer module.
+const TASK_4_REVIEW_WRITER_IMPORT_ALLOWLIST = new Map([
+  [
+    'src/services/durationAssetReviewDecisionService.ts',
+    new Set(['./durationLearningRuntimePublicationService.js']),
+  ],
+])
 const SCAN_DIRS = [
   'src/services',
   'src/jobs',
@@ -59,6 +67,10 @@ function isCandidateOrReviewService(relativePath) {
   return /^src\/services\/.*(?:candidate|review).*\.ts$/i.test(relativePath)
 }
 
+function isAllowedTask4ReviewWriterImport(relativePath, specifier) {
+  return TASK_4_REVIEW_WRITER_IMPORT_ALLOWLIST.get(relativePath)?.has(specifier) ?? false
+}
+
 function collectSqlWriteViolations(source, filePath) {
   const normalized = normalizeSqlLikeText(source)
   const violations = []
@@ -97,15 +109,25 @@ function collectCandidateReviewWriterImportViolations(source, filePath, relative
   const stripped = stripComments(source)
   const violations = []
   const importPatterns = [
-    /\bfrom\s+['"`]([^'"`]+)['"`]/g,
-    /\bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
+    {
+      pattern: /\bimport\s+(type\s+)?[\s\w{},*]+?\s+from\s+['"`]([^'"`]+)['"`]/g,
+      specifierIndex: 2,
+      typeOnlyIndex: 1,
+    },
+    {
+      pattern: /\bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
+      specifierIndex: 1,
+      typeOnlyIndex: null,
+    },
   ]
 
-  for (const importPattern of importPatterns) {
+  for (const { pattern, specifierIndex, typeOnlyIndex } of importPatterns) {
     let match
-    while ((match = importPattern.exec(stripped)) !== null) {
-      const specifier = match[1] ?? ''
+    while ((match = pattern.exec(stripped)) !== null) {
+      if (typeOnlyIndex !== null && match[typeOnlyIndex]) continue
+      const specifier = match[specifierIndex] ?? ''
       if (!FORBIDDEN_WRITER_IMPORT_PATTERN.test(specifier)) continue
+      if (isAllowedTask4ReviewWriterImport(relativePath, specifier)) continue
       violations.push({
         filePath,
         line: lineFor(stripped, match.index),
