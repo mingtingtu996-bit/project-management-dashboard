@@ -117,14 +117,33 @@ jobs:
             local expected_project_ref="$3"
             local headers="$RUNNER_TEMP/$host.headers"
             local body="$RUNNER_TEMP/$host.readyz.json"
-            local result status location https_status
-            result="$(curl --silent --show-error --max-time 20 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "http://$host/api/readyz")"
-            status="${result%% *}"
-            location="${result#* }"
-            [ "$status" = 308 ]
-            [ "$location" = "https://$host/api/readyz" ]
-            https_status="$(curl --silent --show-error --max-time 30 --dump-header "$headers" --output "$body" --write-out '%{http_code}' "https://$host/api/readyz")"
-            tr -d '\r' < "$headers" | grep -qi '^Strict-Transport-Security:'
+            local result status location https_status attempt
+            echo "Probing $host from the public runner"
+            getent ahostsv4 "$host" || true
+            for attempt in $(seq 1 12); do
+              result="$(curl --silent --show-error --connect-timeout 5 --max-time 20 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "http://$host/api/readyz" 2>&1)" || true
+              status="${result%% *}"
+              location="${result#* }"
+              if [ "$status" = 308 ] && [ "$location" = "https://$host/api/readyz" ]; then
+                break
+              fi
+              echo "HTTP probe attempt $attempt for $host: status=$status location=$location"
+              if [ "$attempt" -eq 12 ]; then
+                return 1
+              fi
+              sleep 5
+            done
+            for attempt in $(seq 1 12); do
+              https_status="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --dump-header "$headers" --output "$body" --write-out '%{http_code}' "https://$host/api/readyz" 2>&1)" || true
+              if tr -d '\r' < "$headers" 2>/dev/null | grep -qi '^Strict-Transport-Security:'; then
+                break
+              fi
+              echo "HTTPS probe attempt $attempt for $host: status=$https_status"
+              if [ "$attempt" -eq 12 ]; then
+                return 1
+              fi
+              sleep 5
+            done
             if [ "$https_status" = 200 ]; then
               node --input-type=module - "$body" "$expected_target" "$expected_project_ref" <<'NODE'
           import { readFileSync } from 'node:fs';

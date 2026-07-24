@@ -175,6 +175,18 @@ test('public ingress probe workflow is valid Bash after YAML block scalar decodi
   assert.equal(result.status, 0, result.stderr)
 })
 
+test('public ingress probe retries transient network readiness and reports target status', async () => {
+  const workflow = await source('.github/workflows/provision-domain-ingress.yml')
+  const publicProbe = yamlStepRun(workflow, 'public-probe')
+
+  assert.match(publicProbe, /getent ahostsv4/u)
+  assert.match(publicProbe, /for attempt in \$\(seq 1 12\)/u)
+  assert.match(publicProbe, /--connect-timeout 5/u)
+  assert.match(publicProbe, /HTTP probe attempt \$attempt for \$host/u)
+  assert.match(publicProbe, /HTTPS probe attempt \$attempt for \$host/u)
+  assert.match(publicProbe, /sleep 5/u)
+})
+
 test('local HTTPS probe rejects wrong runtime identity and missing HSTS', async () => {
   const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
   const match = script.match(/(probe_https\(\) \{[\s\S]*?\n\})\n\nprobe_ingress_pair/u)
