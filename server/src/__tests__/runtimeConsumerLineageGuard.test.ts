@@ -203,6 +203,155 @@ describe('runtime consumer lineage guard', () => {
     ])
   })
 
+  it('uses syntax-aware import classification for comments, dollar bindings, and type-only imports', async () => {
+    const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-ast-imports-'))
+    const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
+    mkdirSync(servicesDir, { recursive: true })
+
+    writeFileSync(
+      join(servicesDir, 'durationCandidateTypeOnlyService.ts'),
+      `
+        import type { WriterShape } from './otherRuntimePublicationService.js'
+        import { type RuntimeScope, type RuntimeAssetKey as LocalAssetKey } from './durationLearningRuntimePublicationService.js'
+
+        export type CandidateInput = WriterShape & { scope: RuntimeScope; key: LocalAssetKey }
+      `,
+    )
+    writeFileSync(
+      join(servicesDir, 'durationCandidateCommentedWriterService.ts'),
+      `
+        import { /* a value import cannot hide in a comment */ publish as $writer } from './otherRuntimePublicationService.js'
+
+        export const bypass = $writer
+      `,
+    )
+
+    const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
+    const violationsByFile = new Map(result.violations.map((violation) => [violation.filePath, violation]))
+
+    expect(violationsByFile.has(join(servicesDir, 'durationCandidateTypeOnlyService.ts'))).toBe(false)
+    expect(violationsByFile.get(join(servicesDir, 'durationCandidateCommentedWriterService.ts'))).toEqual(
+      expect.objectContaining({ reason: 'candidate_review_direct_writer_import' }),
+    )
+  })
+
+  it('allows type-only re-exports while blocking runtime re-exports', async () => {
+    const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-type-re-export-'))
+    const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
+    mkdirSync(servicesDir, { recursive: true })
+
+    writeFileSync(
+      join(servicesDir, 'durationCandidateTypeReExportService.ts'),
+      `
+        export type { WriterShape } from './otherRuntimePublicationService.js'
+        export { type RuntimeScope, type RuntimeAssetKey as LocalAssetKey } from './durationLearningRuntimePublicationService.js'
+      `,
+    )
+    writeFileSync(
+      join(servicesDir, 'durationCandidateRuntimeReExportService.ts'),
+      "export { publish } from './otherRuntimePublicationService.js'\n",
+    )
+
+    const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
+    const violationsByFile = new Map(result.violations.map((violation) => [violation.filePath, violation]))
+
+    expect(violationsByFile.has(join(servicesDir, 'durationCandidateTypeReExportService.ts'))).toBe(false)
+    expect(violationsByFile.get(join(servicesDir, 'durationCandidateRuntimeReExportService.ts'))).toEqual(
+      expect.objectContaining({ reason: 'candidate_review_direct_writer_import' }),
+    )
+  })
+
+  it('allows only normalized approved named value imports in the Task 4 decision service', async () => {
+    const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-approved-names-'))
+    const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
+    mkdirSync(servicesDir, { recursive: true })
+
+    writeFileSync(
+      join(servicesDir, 'durationAssetReviewDecisionService.ts'),
+      `
+        import {
+          durationLearningRuntimePublicationScopesMatch,
+          executeDurationLearningRuntimePublicationQuery,
+          persistDurationLearningRuntimePublication,
+          promoteDurationLearningRuntimeCanary,
+          recordDurationLearningRuntimeImpact,
+          type DurationLearningRuntimePublicationQueryExec,
+        } from './nested/../durationLearningRuntimePublicationService.js'
+
+        export const approved = [
+          durationLearningRuntimePublicationScopesMatch,
+          executeDurationLearningRuntimePublicationQuery,
+          persistDurationLearningRuntimePublication,
+          promoteDurationLearningRuntimeCanary,
+          recordDurationLearningRuntimeImpact,
+        ] as const
+        export type QueryExec = DurationLearningRuntimePublicationQueryExec
+      `,
+    )
+
+    const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
+
+    expect(result.violations).toEqual([])
+  })
+
+  it('blocks unauthorized value import forms and names even in the Task 4 decision service', async () => {
+    const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-unapproved-forms-'))
+    const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
+    mkdirSync(servicesDir, { recursive: true })
+
+    writeFileSync(
+      join(servicesDir, 'durationAssetReviewDecisionService.ts'),
+      `
+        import defaultWriter from './durationLearningRuntimePublicationService.js'
+        import * as namespaceWriter from './durationLearningRuntimePublicationService.js'
+        import { unexpectedWriter } from './durationLearningRuntimePublicationService.js'
+
+        export const bypass = [defaultWriter, namespaceWriter, unexpectedWriter]
+      `,
+    )
+
+    const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
+
+    expect(result.violations).toHaveLength(3)
+    expect(result.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'candidate_review_direct_writer_import' }),
+    ]))
+  })
+
+  it('blocks side-effect imports, re-exports, literal dynamic imports, and unproven computed dynamic imports', async () => {
+    const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-dynamic-'))
+    const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
+    mkdirSync(servicesDir, { recursive: true })
+
+    writeFileSync(
+      join(servicesDir, 'durationCandidateSideEffectService.ts'),
+      "import './otherRuntimePublicationService.js'\nexport const sideEffect = true\n",
+    )
+    writeFileSync(
+      join(servicesDir, 'durationCandidateReExportService.ts'),
+      "export { publish } from './otherRuntimePublicationService.js'\nexport * from './durationLearningRuntimePublicationService.js'\n",
+    )
+    writeFileSync(
+      join(servicesDir, 'durationAssetReviewDecisionService.ts'),
+      "export const literal = () => import(`./durationLearningRuntimePublicationService.js`)\n",
+    )
+    writeFileSync(
+      join(servicesDir, 'durationCandidateComputedDynamicService.ts'),
+      "const writerPath = './otherRuntimePublicationService.js'\nexport const computed = () => import(writerPath)\n",
+    )
+
+    const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
+    const reasons = result.violations.map((violation) => violation.reason)
+
+    expect(reasons.filter((reason) => reason === 'candidate_review_direct_writer_import')).toHaveLength(4)
+    expect(reasons).toContain('candidate_review_unproven_dynamic_import')
+  })
+
   it('keeps the current server source free of direct observation writes outside the helper', async () => {
     const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
 

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import ts from 'typescript'
 
 const DEFAULT_ROOT = fs.existsSync(path.resolve(process.cwd(), 'server', 'src'))
   ? path.resolve(process.cwd(), 'server')
@@ -11,11 +12,14 @@ const FORBIDDEN_WRITER_IMPORT_PATTERN =
   /(?:RuntimePublicationService|DomainWriter|PublicationService|EvidenceWriterService)\.js$/i
 // Task 4 requires these existing publication writers inside one outer review-decision transaction.
 // Keep the exception bound to the decision adapter and its exact writer module.
-const TASK_4_REVIEW_WRITER_IMPORT_ALLOWLIST = new Map([
-  [
-    'src/services/durationAssetReviewDecisionService.ts',
-    new Set(['./durationLearningRuntimePublicationService.js']),
-  ],
+const TASK_4_REVIEW_DECISION_SERVICE = 'src/services/durationAssetReviewDecisionService.ts'
+const TASK_4_REVIEW_WRITER_MODULE = './durationLearningRuntimePublicationService.js'
+const TASK_4_REVIEW_WRITER_VALUE_IMPORTS = new Set([
+  'durationLearningRuntimePublicationScopesMatch',
+  'executeDurationLearningRuntimePublicationQuery',
+  'persistDurationLearningRuntimePublication',
+  'promoteDurationLearningRuntimeCanary',
+  'recordDurationLearningRuntimeImpact',
 ])
 const SCAN_DIRS = [
   'src/services',
@@ -67,8 +71,64 @@ function isCandidateOrReviewService(relativePath) {
   return /^src\/services\/.*(?:candidate|review).*\.ts$/i.test(relativePath)
 }
 
-function isAllowedTask4ReviewWriterImport(relativePath, specifier) {
-  return TASK_4_REVIEW_WRITER_IMPORT_ALLOWLIST.get(relativePath)?.has(specifier) ?? false
+function normalizeModuleSpecifier(specifier) {
+  const raw = String(specifier ?? '').trim().replace(/\\/g, '/')
+  const withoutQueryOrHash = raw.replace(/[?#].*$/, '')
+  if (!withoutQueryOrHash) return ''
+
+  const normalized = path.posix.normalize(withoutQueryOrHash)
+  return withoutQueryOrHash.startsWith('./') && !normalized.startsWith('.')
+    ? `./${normalized}`
+    : normalized
+}
+
+function isWriterModuleSpecifier(specifier) {
+  return FORBIDDEN_WRITER_IMPORT_PATTERN.test(normalizeModuleSpecifier(specifier))
+}
+
+function violationForNode(sourceFile, node, filePath, reason) {
+  return {
+    filePath,
+    line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+    reason,
+  }
+}
+
+function isRuntimeImportDeclaration(importDeclaration) {
+  const importClause = importDeclaration.importClause
+  if (!importClause) return true
+  if (importClause.isTypeOnly) return false
+  if (importClause.name) return true
+  if (!importClause.namedBindings) return false
+  if (ts.isNamespaceImport(importClause.namedBindings)) return true
+  return importClause.namedBindings.elements.some((element) => !element.isTypeOnly)
+}
+
+function importedName(importSpecifier) {
+  return (importSpecifier.propertyName ?? importSpecifier.name).text
+}
+
+function isRuntimeExportDeclaration(exportDeclaration) {
+  if (exportDeclaration.isTypeOnly) return false
+  if (!exportDeclaration.exportClause || !ts.isNamedExports(exportDeclaration.exportClause)) return true
+  return exportDeclaration.exportClause.elements.some((element) => !element.isTypeOnly)
+}
+
+function isAllowedTask4ReviewWriterImport(relativePath, specifier, importDeclaration) {
+  if (
+    relativePath !== TASK_4_REVIEW_DECISION_SERVICE
+    || normalizeModuleSpecifier(specifier) !== TASK_4_REVIEW_WRITER_MODULE
+  ) {
+    return false
+  }
+
+  const importClause = importDeclaration.importClause
+  if (!importClause || importClause.isTypeOnly || importClause.name || !importClause.namedBindings) return false
+  if (!ts.isNamedImports(importClause.namedBindings)) return false
+
+  const valueImports = importClause.namedBindings.elements.filter((element) => !element.isTypeOnly)
+  return valueImports.length > 0
+    && valueImports.every((element) => TASK_4_REVIEW_WRITER_VALUE_IMPORTS.has(importedName(element)))
 }
 
 function collectSqlWriteViolations(source, filePath) {
@@ -106,35 +166,63 @@ function collectSupabaseMutationViolations(source, filePath) {
 function collectCandidateReviewWriterImportViolations(source, filePath, relativePath) {
   if (!isCandidateOrReviewService(relativePath)) return []
 
-  const stripped = stripComments(source)
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  )
   const violations = []
-  const importPatterns = [
-    {
-      pattern: /\bimport\s+(type\s+)?[\s\w{},*]+?\s+from\s+['"`]([^'"`]+)['"`]/g,
-      specifierIndex: 2,
-      typeOnlyIndex: 1,
-    },
-    {
-      pattern: /\bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)/g,
-      specifierIndex: 1,
-      typeOnlyIndex: null,
-    },
-  ]
-
-  for (const { pattern, specifierIndex, typeOnlyIndex } of importPatterns) {
-    let match
-    while ((match = pattern.exec(stripped)) !== null) {
-      if (typeOnlyIndex !== null && match[typeOnlyIndex]) continue
-      const specifier = match[specifierIndex] ?? ''
-      if (!FORBIDDEN_WRITER_IMPORT_PATTERN.test(specifier)) continue
-      if (isAllowedTask4ReviewWriterImport(relativePath, specifier)) continue
-      violations.push({
-        filePath,
-        line: lineFor(stripped, match.index),
-        reason: 'candidate_review_direct_writer_import',
-      })
-    }
+  const checkWriterDependency = (node, specifier, allowed) => {
+    if (!isWriterModuleSpecifier(specifier) || allowed) return
+    violations.push(violationForNode(
+      sourceFile,
+      node,
+      filePath,
+      'candidate_review_direct_writer_import',
+    ))
   }
+
+  const visit = (node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      if (isRuntimeImportDeclaration(node)) {
+        checkWriterDependency(
+          node,
+          node.moduleSpecifier.text,
+          isAllowedTask4ReviewWriterImport(relativePath, node.moduleSpecifier.text, node),
+        )
+      }
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      const moduleExpression = node.moduleReference.expression
+      if (moduleExpression && ts.isStringLiteralLike(moduleExpression)) {
+        checkWriterDependency(node, moduleExpression.text, false)
+      }
+    } else if (
+      ts.isExportDeclaration(node)
+      && isRuntimeExportDeclaration(node)
+      && node.moduleSpecifier
+      && ts.isStringLiteralLike(node.moduleSpecifier)
+    ) {
+      checkWriterDependency(node, node.moduleSpecifier.text, false)
+    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const [argument] = node.arguments
+      if (!argument || !ts.isStringLiteralLike(argument)) {
+        violations.push(violationForNode(
+          sourceFile,
+          node,
+          filePath,
+          'candidate_review_unproven_dynamic_import',
+        ))
+      } else {
+        checkWriterDependency(node, argument.text, false)
+      }
+    }
+
+    ts.forEachChild(node, visit)
+  }
+
+  visit(sourceFile)
 
   return violations
 }

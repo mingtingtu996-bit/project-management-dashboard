@@ -89,6 +89,42 @@ describe('system surface ownership guard', () => {
     ]))
   })
 
+  it('requires the exact DurationAssetsAdmin page id and import path before assigning governance ownership', async () => {
+    const { evaluateSystemSurfaceOwnershipGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-system-surface-duration-assets-exact-'))
+
+    writeFixtureFile(fixtureRoot, 'client/src/App.tsx', [
+      "const DurationAssetsAdmin = lazy(() => import('@/pages/DurationAssetsAdmin'))",
+      "const LegacyDurationAssetsAdmin = lazy(() => import('@/pages/LegacyDurationAssetsAdmin'))",
+      "const PrefixedDurationAssetsAdmin = lazy(() => import('@/pages/PrefixedDurationAssetsAdmin'))",
+      "const DurationAssetsAdminLegacyPath = lazy(() => import('@/pages/LegacyDurationAssetsAdminPath'))",
+      "const UnownedAdminPortal = lazy(() => import('@/pages/UnownedAdminPortal'))",
+    ].join('\n'))
+    writeFixtureFile(fixtureRoot, 'client/src/pages/DurationAssetsAdmin.tsx', 'export default function DurationAssetsAdmin() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/LegacyDurationAssetsAdmin.tsx', 'export default function LegacyDurationAssetsAdmin() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/PrefixedDurationAssetsAdmin.tsx', 'export default function PrefixedDurationAssetsAdmin() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/LegacyDurationAssetsAdminPath.tsx', 'export default function DurationAssetsAdminLegacyPath() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/UnownedAdminPortal.tsx', 'export default function UnownedAdminPortal() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'server/migrations/001_fixture.sql', 'CREATE TABLE IF NOT EXISTS tasks (id uuid);\n')
+
+    const result = evaluateSystemSurfaceOwnershipGuard(fixtureRoot)
+
+    expect(result.assignments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'page',
+        id: 'DurationAssetsAdmin',
+        importPath: '@/pages/DurationAssetsAdmin',
+        assignment: expect.objectContaining({ runtimeScope: 'governance' }),
+      }),
+    ]))
+    expect(result.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'LegacyDurationAssetsAdmin' }),
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'PrefixedDurationAssetsAdmin' }),
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'DurationAssetsAdminLegacyPath' }),
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'UnownedAdminPortal' }),
+    ]))
+  })
+
   it('assigns all current client page and migration table surfaces', async () => {
     const { evaluateSystemSurfaceOwnershipGuard } = await import(pathToFileURL(guardPath).href)
 

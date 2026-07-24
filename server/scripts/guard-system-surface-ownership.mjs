@@ -215,11 +215,14 @@ function assignment(architectureUnit, runtimeScope, reason) {
 }
 
 function inferPageAssignment(page) {
+  if (page.id === "DurationAssetsAdmin" && page.importPath === "@/pages/DurationAssetsAdmin") {
+    return assignment(UNIT_LEARNING_GOVERNANCE, "governance", "admin governance page surface")
+  }
   const text = `${page.id} ${page.importPath}`.toLowerCase()
   if (/billingsettings|billing settings/.test(text)) {
     return assignment("底座：组织权限", "commercial_foundation", "commercial admission and billing page surface")
   }
-  if (/durationaccuracy|durationassets|ruleasset|business type|custombusinesstype/.test(text)) {
+  if (/durationaccuracy|ruleasset|business type|custombusinesstype/.test(text)) {
     return assignment("学习治理环", "governance", "admin governance page surface")
   }
   if (/companycockpit|dashboard|reports|tasksummary|responsibility|monitoring/.test(text)) {
