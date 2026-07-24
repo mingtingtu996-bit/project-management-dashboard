@@ -816,6 +816,54 @@
     },
     {
       "kind": "metric",
+      "id": "start_readiness_attention_task_count_14d",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "start_readiness_blocked_task_count_14d",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "start_readiness_production_date_count_14d",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "start_readiness_ready_rate_14d",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "start_readiness_ready_task_count_14d",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
+      "id": "start_readiness_task_count_14d",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_from_metric_registry_service_business_truth_definition",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "metric",
       "id": "structured_cause_other_rate",
       "architectureUnit": "主执行环：描述分析",
       "runtimeScope": "business_core",
@@ -3751,6 +3799,14 @@
     },
     {
       "kind": "route",
+      "id": "project-start-readiness",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "project-scoped 14-day start-readiness read endpoint backed by the authoritative service; exposes calendar-aware blockers and registered metrics without route-local aggregation or business-fact mutation",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "route",
       "id": "projects",
       "architectureUnit": "主执行环：建模",
       "runtimeScope": "business_core",
@@ -6155,6 +6211,22 @@
       "architectureUnit": "主执行环：执行事实",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "projectStartReadinessNotificationService",
+      "architectureUnit": "主执行环：行动闭环",
+      "runtimeScope": "business_core",
+      "assignmentReason": "consumes the authoritative 14-day start-readiness read model through the existing notification touchpoint dedupe and resolution path without mutating schedules, conditions, or execution facts",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "projectStartReadinessService",
+      "architectureUnit": "主执行环：描述分析",
+      "runtimeScope": "business_core",
+      "assignmentReason": "authoritative project-scoped 14-day start-readiness read model; aggregates governed source facts and fails production-day metrics closed when calendar identity is unavailable without writing business facts",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
