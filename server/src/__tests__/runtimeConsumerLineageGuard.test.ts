@@ -360,6 +360,36 @@ describe('runtime consumer lineage guard', () => {
     expect(reasons.filter((reason) => reason === 'candidate_review_unproven_dynamic_import')).toHaveLength(2)
   })
 
+  it('fails closed when a candidate or review service introduces an indirect CommonJS loader', async () => {
+    const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-commonjs-loader-'))
+    const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
+    mkdirSync(servicesDir, { recursive: true })
+
+    writeFileSync(
+      join(servicesDir, 'durationCandidateCommonJsLoaderService.ts'),
+      `
+        import { createRequire } from 'node:module'
+
+        const load = createRequire(import.meta.url)
+        const requireAlias = require
+        export const viaCreateRequire = () => load('./otherRuntimePublicationService.js')
+        export const viaRequireAlias = () => requireAlias('./otherRuntimePublicationService.js')
+        export const viaModuleRequire = () => module.require('./otherRuntimePublicationService.js')
+        export const viaDynamicNodeModule = async () => {
+          const { createRequire: resolveLoader } = await import('node:module')
+          return resolveLoader(import.meta.url)('./otherRuntimePublicationService.js')
+        }
+      `,
+    )
+
+    const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
+    const reasons = result.violations.map((violation) => violation.reason)
+
+    expect(reasons.filter((reason) => reason === 'candidate_review_unproven_commonjs_loader')).toHaveLength(3)
+    expect(reasons.filter((reason) => reason === 'candidate_review_direct_writer_import')).toHaveLength(4)
+  })
+
   it('keeps the current server source free of direct observation writes outside the helper', async () => {
     const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
 

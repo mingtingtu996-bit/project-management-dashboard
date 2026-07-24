@@ -118,6 +118,34 @@ function isDirectRequireCall(callExpression) {
   return ts.isIdentifier(callExpression.expression) && callExpression.expression.text === 'require'
 }
 
+function isModuleRequireCall(callExpression) {
+  const expression = callExpression.expression
+  return ts.isPropertyAccessExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && expression.expression.text === 'module'
+    && expression.name.text === 'require'
+}
+
+function isNodeModuleSpecifier(specifier) {
+  return specifier === 'node:module' || specifier === 'module'
+}
+
+function isRuntimeNodeModuleImportDeclaration(importDeclaration) {
+  if (!ts.isStringLiteralLike(importDeclaration.moduleSpecifier)) return false
+  return isNodeModuleSpecifier(importDeclaration.moduleSpecifier.text)
+    && isRuntimeImportDeclaration(importDeclaration)
+}
+
+function isRequireAliasDeclaration(variableDeclaration) {
+  const initializer = variableDeclaration.initializer
+  if (!initializer) return false
+  if (ts.isIdentifier(initializer)) return initializer.text === 'require'
+  return ts.isPropertyAccessExpression(initializer)
+    && ts.isIdentifier(initializer.expression)
+    && initializer.expression.text === 'module'
+    && initializer.name.text === 'require'
+}
+
 function isAllowedTask4ReviewWriterImport(relativePath, specifier, importDeclaration) {
   if (
     relativePath !== TASK_4_REVIEW_DECISION_SERVICE
@@ -178,6 +206,14 @@ function collectCandidateReviewWriterImportViolations(source, filePath, relative
     ts.ScriptKind.TS,
   )
   const violations = []
+  const addUnprovenCommonJsLoader = (node) => {
+    violations.push(violationForNode(
+      sourceFile,
+      node,
+      filePath,
+      'candidate_review_unproven_commonjs_loader',
+    ))
+  }
   const checkWriterDependency = (node, specifier, allowed) => {
     if (!isWriterModuleSpecifier(specifier) || allowed) return
     violations.push(violationForNode(
@@ -190,6 +226,7 @@ function collectCandidateReviewWriterImportViolations(source, filePath, relative
 
   const visit = (node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      if (isRuntimeNodeModuleImportDeclaration(node)) addUnprovenCommonJsLoader(node)
       if (isRuntimeImportDeclaration(node)) {
         checkWriterDependency(
           node,
@@ -197,9 +234,12 @@ function collectCandidateReviewWriterImportViolations(source, filePath, relative
           isAllowedTask4ReviewWriterImport(relativePath, node.moduleSpecifier.text, node),
         )
       }
+    } else if (ts.isVariableDeclaration(node) && isRequireAliasDeclaration(node)) {
+      addUnprovenCommonJsLoader(node)
     } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
       const moduleExpression = node.moduleReference.expression
       if (moduleExpression && ts.isStringLiteralLike(moduleExpression)) {
+        if (isNodeModuleSpecifier(moduleExpression.text)) addUnprovenCommonJsLoader(node)
         checkWriterDependency(node, moduleExpression.text, false)
       }
     } else if (
@@ -208,21 +248,23 @@ function collectCandidateReviewWriterImportViolations(source, filePath, relative
       && node.moduleSpecifier
       && ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
+      if (isNodeModuleSpecifier(node.moduleSpecifier.text)) addUnprovenCommonJsLoader(node)
       checkWriterDependency(node, node.moduleSpecifier.text, false)
-    } else if (
-      ts.isCallExpression(node)
-      && (node.expression.kind === ts.SyntaxKind.ImportKeyword || isDirectRequireCall(node))
-    ) {
+    } else if (ts.isCallExpression(node)) {
       const [argument] = node.arguments
-      if (!argument || !ts.isStringLiteralLike(argument)) {
+      const isExplicitModuleLoad = node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || isDirectRequireCall(node)
+        || isModuleRequireCall(node)
+      if (argument && ts.isStringLiteralLike(argument)) {
+        if (isExplicitModuleLoad && isNodeModuleSpecifier(argument.text)) addUnprovenCommonJsLoader(node)
+        checkWriterDependency(node, argument.text, false)
+      } else if (isExplicitModuleLoad) {
         violations.push(violationForNode(
           sourceFile,
           node,
           filePath,
           'candidate_review_unproven_dynamic_import',
         ))
-      } else {
-        checkWriterDependency(node, argument.text, false)
       }
     }
 

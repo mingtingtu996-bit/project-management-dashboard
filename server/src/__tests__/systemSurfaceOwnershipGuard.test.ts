@@ -125,6 +125,48 @@ describe('system surface ownership guard', () => {
     ]))
   })
 
+  it('collects multiline lazy modules, mapped lazy modules, and named page imports as page surfaces', async () => {
+    const { evaluateSystemSurfaceOwnershipGuard } = await import(pathToFileURL(guardPath).href)
+    const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-system-surface-ast-pages-'))
+
+    writeFixtureFile(fixtureRoot, 'client/src/App.tsx', [
+      'const DurationAssetsAdmin = lazy(',
+      '  () => import(',
+      "    '@/pages/DurationAssetsAdmin'",
+      '  ).then((module) => ({ default: module.default })),',
+      ')',
+      "const UnownedThenPortal = lazy(() => import('@/pages/UnownedThenPortal').then((module) => ({ default: module.default })))",
+      'const UnownedMultilinePortal = lazy(',
+      '  () =>',
+      '    import(',
+      "      '@/pages/UnownedMultilinePortal'",
+      '    ),',
+      ')',
+      "import { UnownedNamedPortal as NamedPortal } from '@/pages/UnownedNamedPortal'",
+    ].join('\n'))
+    writeFixtureFile(fixtureRoot, 'client/src/pages/DurationAssetsAdmin.tsx', 'export default function DurationAssetsAdmin() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/UnownedThenPortal.tsx', 'export default function UnownedThenPortal() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/UnownedMultilinePortal.tsx', 'export default function UnownedMultilinePortal() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'client/src/pages/UnownedNamedPortal.tsx', 'export function UnownedNamedPortal() { return null }\n')
+    writeFixtureFile(fixtureRoot, 'server/migrations/001_fixture.sql', 'CREATE TABLE IF NOT EXISTS tasks (id uuid);\n')
+
+    const result = evaluateSystemSurfaceOwnershipGuard(fixtureRoot)
+
+    expect(result.assignments).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'page',
+        id: 'DurationAssetsAdmin',
+        importPath: '@/pages/DurationAssetsAdmin',
+        assignment: expect.objectContaining({ runtimeScope: 'governance' }),
+      }),
+    ]))
+    expect(result.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'UnownedThenPortal' }),
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'UnownedMultilinePortal' }),
+      expect.objectContaining({ reason: 'unassigned_surface', kind: 'page', id: 'NamedPortal' }),
+    ]))
+  })
+
   it('assigns all current client page and migration table surfaces', async () => {
     const { evaluateSystemSurfaceOwnershipGuard } = await import(pathToFileURL(guardPath).href)
 
