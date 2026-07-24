@@ -114,6 +114,10 @@ function isRuntimeExportDeclaration(exportDeclaration) {
   return exportDeclaration.exportClause.elements.some((element) => !element.isTypeOnly)
 }
 
+function isDirectRequireCall(callExpression) {
+  return ts.isIdentifier(callExpression.expression) && callExpression.expression.text === 'require'
+}
+
 function isAllowedTask4ReviewWriterImport(relativePath, specifier, importDeclaration) {
   if (
     relativePath !== TASK_4_REVIEW_DECISION_SERVICE
@@ -205,7 +209,10 @@ function collectCandidateReviewWriterImportViolations(source, filePath, relative
       && ts.isStringLiteralLike(node.moduleSpecifier)
     ) {
       checkWriterDependency(node, node.moduleSpecifier.text, false)
-    } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    } else if (
+      ts.isCallExpression(node)
+      && (node.expression.kind === ts.SyntaxKind.ImportKeyword || isDirectRequireCall(node))
+    ) {
       const [argument] = node.arguments
       if (!argument || !ts.isStringLiteralLike(argument)) {
         violations.push(violationForNode(

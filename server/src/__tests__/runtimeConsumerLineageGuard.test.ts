@@ -322,7 +322,7 @@ describe('runtime consumer lineage guard', () => {
     ]))
   })
 
-  it('blocks side-effect imports, re-exports, literal dynamic imports, and unproven computed dynamic imports', async () => {
+  it('blocks side-effect imports, re-exports, runtime require calls, and unproven dynamic module loads', async () => {
     const { evaluateRuntimeConsumerLineageGuard } = await import(pathToFileURL(guardPath).href)
     const fixtureRoot = mkdtempSync(join(tmpdir(), 'workbuddy-runtime-consumer-lineage-dynamic-'))
     const servicesDir = join(fixtureRoot, 'server', 'src', 'services')
@@ -341,15 +341,23 @@ describe('runtime consumer lineage guard', () => {
       "export const literal = () => import(`./durationLearningRuntimePublicationService.js`)\n",
     )
     writeFileSync(
+      join(servicesDir, 'durationCandidateRequireWriterService.ts'),
+      "const writer = require('./otherRuntimePublicationService.js')\nexport const bypass = writer\n",
+    )
+    writeFileSync(
       join(servicesDir, 'durationCandidateComputedDynamicService.ts'),
       "const writerPath = './otherRuntimePublicationService.js'\nexport const computed = () => import(writerPath)\n",
+    )
+    writeFileSync(
+      join(servicesDir, 'durationCandidateComputedRequireService.ts'),
+      "const writerPath = './otherRuntimePublicationService.js'\nexport const computed = () => require(writerPath)\n",
     )
 
     const result = evaluateRuntimeConsumerLineageGuard(fixtureRoot)
     const reasons = result.violations.map((violation) => violation.reason)
 
-    expect(reasons.filter((reason) => reason === 'candidate_review_direct_writer_import')).toHaveLength(4)
-    expect(reasons).toContain('candidate_review_unproven_dynamic_import')
+    expect(reasons.filter((reason) => reason === 'candidate_review_direct_writer_import')).toHaveLength(5)
+    expect(reasons.filter((reason) => reason === 'candidate_review_unproven_dynamic_import')).toHaveLength(2)
   })
 
   it('keeps the current server source free of direct observation writes outside the helper', async () => {
