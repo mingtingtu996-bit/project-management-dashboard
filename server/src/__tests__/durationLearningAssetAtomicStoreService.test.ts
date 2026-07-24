@@ -495,6 +495,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
     }
     const candidate = {
       id: '11111111-1111-4111-8111-111111111111',
+      benchmark_version: 'candidate:2026-07-21:abc123',
       company_id: '22222222-2222-4222-8222-222222222222',
       project_id: '33333333-3333-4333-8333-333333333333',
       benchmark_key: 'SW-1:process:all',
@@ -536,6 +537,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
             monitoring_status: 'passed',
             runtime_payload: {
               benchmarkId: candidate.id,
+              benchmarkVersion: candidate.benchmark_version,
               p50Days: candidate.p50_days,
               p75Days: candidate.p75_days,
               p80Days: candidate.p80_days,
@@ -603,6 +605,83 @@ describe('durationLearningAssetAtomicStoreService', () => {
     expect(transactionSql.at(-1)).toBe('commit')
   })
 
+  it('rejects a runtime benchmark version mismatch before publication or benchmark mutation', async () => {
+    const candidate = {
+      id: '11111111-1111-4111-8111-111111111111',
+      benchmark_version: 'candidate:2026-07-21:locked',
+      company_id: '22222222-2222-4222-8222-222222222222',
+      project_id: '33333333-3333-4333-8333-333333333333',
+      benchmark_key: 'SW-1:process:all',
+      duration_day_basis: 'construction_production_day',
+      generated_at: '2026-07-21T00:00:00.000Z',
+      source_window_start: '2026-04-22T00:00:00.000Z',
+      source_as_of: '2026-07-20T00:00:00.000Z',
+      p50_days: 8,
+      p75_days: 10,
+      p80_days: 11,
+      mean_days: 8.5,
+      variance: 2.25,
+      coefficient_of_variation: 0.176471,
+      sample_count: 20,
+      confidence_level: 'high',
+      confidence_score: 88,
+      is_current: false,
+      is_active: true,
+      metadata: { calendar_ref: 'cn-work-calendar', calendar_version: '2026.07' },
+    }
+    mocks.query.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (['begin', 'rollback'].includes(normalized)) return { rows: [], rowCount: 0 }
+      if (normalized.includes('from public.duration_learning_runtime_publications')) {
+        return {
+          rows: [{
+            publication_key: 'publication-1',
+            asset_key: 'base_duration_benchmark',
+            artifact_key: candidate.benchmark_key,
+            scope_level: 'project',
+            company_id: candidate.company_id,
+            project_id: candidate.project_id,
+            publication_stage: 'canary',
+            monitoring_status: 'passed',
+            runtime_payload: {
+              benchmarkId: candidate.id,
+              benchmarkVersion: 'candidate:2026-07-21:other',
+              p50Days: candidate.p50_days,
+              p75Days: candidate.p75_days,
+              p80Days: candidate.p80_days,
+              meanDays: candidate.mean_days,
+              variance: candidate.variance,
+              coefficientOfVariation: candidate.coefficient_of_variation,
+              sampleCount: candidate.sample_count,
+              confidenceLevel: candidate.confidence_level,
+              confidenceScore: candidate.confidence_score,
+              durationDayBasis: candidate.duration_day_basis,
+              generatedAt: candidate.generated_at,
+              sourceWindowStart: candidate.source_window_start,
+              sourceAsOf: candidate.source_as_of,
+              calendarRef: candidate.metadata.calendar_ref,
+              calendarVersion: candidate.metadata.calendar_version,
+            },
+          }],
+          rowCount: 1,
+        }
+      }
+      if (normalized.includes('from public.projects')) return { rows: [{ company_id: candidate.company_id }], rowCount: 1 }
+      if (normalized.includes('from public.duration_benchmarks') && normalized.includes('for update')) {
+        return { rows: [candidate], rowCount: 1 }
+      }
+      throw new Error(`Unexpected SQL: ${normalized}`)
+    })
+
+    await expect(promoteDurationBenchmarkRuntimeCanaryAtomically({
+      publicationKey: 'publication-1',
+    })).rejects.toThrow('duration benchmark activation version mismatch')
+
+    expect(mocks.promoteCanary).not.toHaveBeenCalled()
+    expect(mocks.persistCurrentCauseSegments).not.toHaveBeenCalled()
+    expect(mocks.query.mock.calls.map(([sql]) => String(sql).trim().toLowerCase())).toContain('rollback')
+  })
+
   it('rolls back stable promotion when exact benchmark activation fails', async () => {
     mocks.promoteCanary.mockResolvedValue({ status: 'stable_promoted', previousPublicationKey: null, reasons: [] })
     mocks.query.mockImplementation(async (sql: string) => {
@@ -621,6 +700,7 @@ describe('durationLearningAssetAtomicStoreService', () => {
             monitoring_status: 'passed',
             runtime_payload: {
               benchmarkId: '11111111-1111-4111-8111-111111111111',
+              benchmarkVersion: 'candidate:2026-07-21:abc123',
               p50Days: 8,
               p75Days: 10,
               p80Days: 11,

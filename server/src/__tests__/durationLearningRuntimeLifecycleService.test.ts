@@ -45,6 +45,7 @@ function benchmarkProposal(input: {
     },
     runtimePayload: {
       benchmarkId: `benchmark-${input.projectId}`,
+      benchmarkVersion: `candidate:2026-07-01:${input.projectId}`,
       p50Days: 8,
       p75Days: 10,
       p80Days: 11,
@@ -432,6 +433,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       ['benchmark:base_duration_benchmark', {
         ...common,
         id: 'benchmark-1',
+        benchmark_version: 'candidate:2026-07-01:abc123',
         collector_group_key: 'benchmark-artifact',
         benchmark_key: 'benchmark-artifact',
         sample_count: 20,
@@ -602,6 +604,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(projectProposals).toHaveLength(6)
     expect(projectProposals.find((proposal) => proposal.assetKey === 'base_duration_benchmark')?.runtimePayload).toEqual({
       benchmarkId: 'benchmark-1',
+      benchmarkVersion: 'candidate:2026-07-01:abc123',
       p50Days: 8,
       p75Days: 10,
       p80Days: 11,
@@ -1596,6 +1599,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       runtimePayload: {
         benchmarkKind: 'aggregate_all_cause',
         causeApplicability: 'all_cause',
+        benchmarkVersion: expect.stringMatching(/^aggregate:industry:[a-f0-9]{16}$/),
         p50Days: 2,
         p75Days: 100,
         p80Days: 100,
@@ -1613,6 +1617,12 @@ describe('durationLearningRuntimeLifecycleService', () => {
           schemaVersion: 'duration-benchmark-aggregate/v1',
           scopeLevel: 'industry',
           sourceBenchmarkIds: ['benchmark-p1', 'benchmark-p2', 'benchmark-p3', 'benchmark-p4'],
+          sourceBenchmarkVersions: [
+            'candidate:2026-07-01:p1',
+            'candidate:2026-07-01:p2',
+            'candidate:2026-07-01:p3',
+            'candidate:2026-07-01:p4',
+          ],
           sourceProjectIds: ['p1', 'p2', 'p3', 'p4'],
           sourceCompanyIds: ['c1', 'c2'],
           sourceIndustryKeys: ['general_civil'],
@@ -2043,6 +2053,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       if (sql.includes('duration-learning-collector:history:benchmark:base_duration_benchmark')) {
         return [{
           id: 'benchmark-retry-row',
+          benchmark_version: 'candidate:2026-07-21:retry',
           benchmark_key: 'benchmark-retry-cursor',
           company_id: 'c1',
           project_id: 'p1',

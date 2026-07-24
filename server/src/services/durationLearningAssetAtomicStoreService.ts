@@ -319,6 +319,10 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
 
     const runtimePayload = readRecord(publication.runtime_payload)
     const benchmarkId = requireText(runtimePayload.benchmarkId ?? runtimePayload.benchmark_id, 'benchmarkId')
+    const benchmarkVersion = requireText(
+      runtimePayload.benchmarkVersion ?? runtimePayload.benchmark_version,
+      'benchmarkVersion',
+    )
     const companyId = requireText(publication.company_id, 'publication company_id')
     const projectId = requireText(publication.project_id, 'publication project_id')
     const artifactKey = requireText(publication.artifact_key, 'publication artifact_key')
@@ -363,6 +367,9 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
     )
     const candidate = candidateResult.rows[0]
     if (!candidate) throw new Error('duration benchmark candidate not found')
+    if (normalizeText(candidate.benchmark_version) !== benchmarkVersion) {
+      throw new Error('duration benchmark activation version mismatch')
+    }
     const candidateMetadata = readRecord(candidate.metadata)
     const exactCandidate = normalizeText(candidate.duration_day_basis) === durationDayBasis
       && normalizeTimestamp(candidate.generated_at) === generatedAt

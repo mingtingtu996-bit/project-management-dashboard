@@ -56,6 +56,7 @@ describe('duration benchmark production chain', () => {
     const payload = {
       benchmarkKind: 'aggregate_all_cause',
       causeApplicability: 'all_cause',
+      benchmarkVersion: `aggregate:${scopeLevel}:0123456789abcdef`,
       p50Days: 8, p75Days: 10, p80Days: 11, meanDays: 8.5, variance: 2.25,
       coefficientOfVariation: 0.176471, sampleCount: 100, confidenceLevel: 'high', confidenceScore: 88,
       durationDayBasis: 'construction_production_day', generatedAt: '2026-07-21T00:00:00.000Z',
@@ -63,6 +64,7 @@ describe('duration benchmark production chain', () => {
       aggregateProvenance: {
         schemaVersion: 'duration-benchmark-aggregate/v1', scopeLevel,
         sourceBenchmarkIds: [benchmarkId], sourceProjectIds: [projectId], sourceCompanyIds: [companyId],
+        sourceBenchmarkVersions: ['candidate:2026-07-21:production-chain'],
         sourceIndustryKeys: ['general_civil'],
         calendarIdentities: [{ calendarRef: 'cn-work-calendar', calendarVersion: '2026.07' }],
       },
@@ -79,12 +81,13 @@ describe('duration benchmark production chain', () => {
       },
     })
     expect(benchmark).toMatchObject({
+      benchmark_version: `aggregate:${scopeLevel}:0123456789abcdef`,
       sample_count: 100,
       metadata: expect.objectContaining({ benchmark_provenance: 'aggregate_all_cause' }),
     })
     const segmentQuery = vi.fn()
     const selection = await selectCauseAwareBenchmarkCandidates([{
-      benchmark: benchmark!, scope: scopeLevel === 'company' ? 'company' : 'system',
+      benchmark: benchmark!, scope: scopeLevel as 'company' | 'industry' | 'global',
       benchKey: 'SW-CHAIN:process:all', contextKey: 'all', sampleSize: 100, specificity: 'all',
     }], 'material_shortage', segmentQuery)
 
@@ -143,6 +146,7 @@ describe('duration benchmark production chain', () => {
       .find((item) => item.assetKey === 'base_duration_benchmark')
     expect(proposal?.runtimePayload).toMatchObject({
       benchmarkId,
+      benchmarkVersion: persistenceRow.benchmark_version,
       variance: candidate.variance,
       coefficientOfVariation: candidate.coefficientOfVariation,
       calendarRef: 'cn-work-calendar',

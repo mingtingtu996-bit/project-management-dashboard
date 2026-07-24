@@ -28,6 +28,7 @@ function queryCalls(queryMock: ReturnType<typeof vi.fn>): Array<[string, unknown
 function benchmarkRuntimePayload(overrides: Record<string, unknown> = {}) {
   return {
     benchmarkId: '44444444-4444-4444-8444-444444444444',
+    benchmarkVersion: 'candidate:2026-07-17:benchmark-1',
     p50Days: 12,
     p75Days: 14,
     p80Days: 16,
@@ -54,6 +55,7 @@ function aggregateBenchmarkRuntimePayload(
   return {
     benchmarkKind: 'aggregate_all_cause',
     causeApplicability: 'all_cause',
+    benchmarkVersion: `aggregate:${scopeLevel}:0123456789abcdef`,
     p50Days: 12,
     p75Days: 14,
     p80Days: 16,
@@ -71,6 +73,7 @@ function aggregateBenchmarkRuntimePayload(
       schemaVersion: 'duration-benchmark-aggregate/v1',
       scopeLevel,
       sourceBenchmarkIds: ['44444444-4444-4444-8444-444444444444'],
+      sourceBenchmarkVersions: ['candidate:2026-07-17:benchmark-1'],
       sourceProjectIds: [projectId],
       sourceCompanyIds: [companyId],
       sourceIndustryKeys: ['general_civil'],
@@ -297,6 +300,7 @@ describe('durationLearningRuntimePublicationService', () => {
     expect(first.status).toBe('published')
     expect(replay.status).toBe('published')
     expect(insertCount).toBe(1)
+    expect(first.publication?.runtimePayload).toMatchObject({ benchmarkVersion: expect.any(String) })
   })
 
   it('rejects an upper-scope benchmark that masquerades as an exact project candidate', async () => {

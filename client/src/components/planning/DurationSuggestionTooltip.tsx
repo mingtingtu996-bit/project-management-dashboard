@@ -130,6 +130,55 @@ function buildMutationBoundaryLabel(suggestion: DurationSuggestion | null) {
   return null
 }
 
+function formatBenchmarkDate(value: string | null | undefined) {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  return parsed.toISOString().slice(0, 10).replace(/-/g, '/')
+}
+
+function benchmarkScopeLabel(scope: string | null | undefined) {
+  if (scope === 'project') return '项目基准'
+  if (scope === 'company') return '公司基准'
+  if (scope === 'industry') return '行业基准'
+  if (scope === 'global') return '全局基准'
+  return '基准来源'
+}
+
+function benchmarkDayBasisLabel(dayBasis: string | null | undefined) {
+  return dayBasis === 'construction_production_day' ? '施工生产日' : '生产日口径不可用'
+}
+
+function buildBenchmarkProvenanceLines(suggestion: DurationSuggestion | null) {
+  const provenance = suggestion?.benchmarkProvenance
+  if (!provenance) return null
+  const lines: Array<{ kind: 'summary' | 'source' | 'reason'; text: string }> = []
+  const generatedAt = formatBenchmarkDate(suggestion?.benchmarkGeneratedAt)
+  const asOf = formatBenchmarkDate(suggestion?.benchmarkAsOf)
+  const windowStart = formatBenchmarkDate(suggestion?.benchmarkWindowStart)
+  if (generatedAt) lines.push({ kind: 'summary', text: `基准生成于 ${generatedAt}` })
+  if (asOf) lines.push({ kind: 'summary', text: `数据截至 ${asOf}` })
+  if (windowStart) lines.push({ kind: 'summary', text: `统计窗口自 ${windowStart}` })
+  if (suggestion?.benchmarkProvenanceAvailability === 'partial') {
+    lines.push({ kind: 'reason', text: '基准数据来源不完整' })
+  } else if (suggestion?.benchmarkProvenanceAvailability === 'unavailable') {
+    lines.push({ kind: 'reason', text: '基准数据时间不可用' })
+  }
+  for (const entry of provenance.entries) {
+    const sampleText = entry.sampleCount == null ? '样本数不可用' : `${entry.sampleCount} 个样本`
+    const versionText = entry.benchmarkVersion ?? '版本不可用'
+    const weightText = entry.blendWeight == null ? '' : ` · ${Math.round(entry.blendWeight * 100)}%`
+    const causeText = entry.causeSegment
+      ? ` · ${entry.causeSegment.causeCode} ${entry.causeSegment.taxonomyVersion}`
+      : ''
+    lines.push({
+      kind: 'source',
+      text: `${benchmarkScopeLabel(entry.scope)} · ${sampleText} · ${versionText} · ${benchmarkDayBasisLabel(entry.dayBasis)}${weightText}${causeText}`,
+    })
+  }
+  return lines
+}
+
 export interface DurationSuggestionTooltipProps {
   suggestion?: DurationSuggestion | null
   query?: DurationSuggestionQuery | null
@@ -181,6 +230,7 @@ export function DurationSuggestionTooltip({
   const businessSummary = buildBusinessSummary(resolved ?? null, days, referenceKind)
   const riskRangeLabel = buildRiskRangeLabel(resolved ?? null)
   const mutationBoundaryLabel = buildMutationBoundaryLabel(resolved ?? null)
+  const benchmarkProvenanceLines = buildBenchmarkProvenanceLines(resolved ?? null)
   const canFetchRemote = Boolean(query && (query.taskId || query.templateNodeId || query.standardWorkCode || query.taskTitle))
   const basis = isMonthlyCommitmentWindow
     ? 'production'
@@ -226,6 +276,11 @@ export function DurationSuggestionTooltip({
             <div>{businessSummary}</div>
             {riskRangeLabel ? <div>工期风险 {riskRangeLabel}</div> : null}
             {mutationBoundaryLabel ? <div>{mutationBoundaryLabel}</div> : null}
+            {benchmarkProvenanceLines?.map((line, index) => (
+              <div key={`${line.kind}-${index}`} className={line.kind === 'reason' ? 'text-amber-200' : undefined}>
+                {line.text}
+              </div>
+            ))}
           </div>
         ) : (
           <div className="text-xs">{failed ? '工期智能参考暂不可用，请稍后再试。' : '正在读取工期智能参考...'}</div>

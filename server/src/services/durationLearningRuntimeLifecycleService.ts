@@ -900,6 +900,19 @@ function aggregateRuntimePayload(
       const provenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
       return [direct, ...list(provenance.sourceBenchmarkIds ?? provenance.source_benchmark_ids).map(text)]
     }))
+    const sourceBenchmarkVersions = uniqueTexts(proposals.flatMap((proposal) => {
+      const payload = proposal.runtimePayload
+      const direct = text(payload.benchmarkVersion ?? payload.benchmark_version)
+      const provenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
+      return [direct, ...list(provenance.sourceBenchmarkVersions ?? provenance.source_benchmark_versions).map(text)]
+    }))
+    const sourceAsOf = aggregatePayloadTimestamp(proposals, ['sourceAsOf', 'source_as_of'], 'latest')
+    const benchmarkVersion = `aggregate:${scope.level}:${hashDurationContextPolicyLearningValue({
+      scope,
+      sourceBenchmarkIds,
+      sourceBenchmarkVersions,
+      sourceAsOf,
+    }).slice(0, 16)}`
     const confidenceLevels = proposals.map((proposal) => text(
       proposal.runtimePayload.confidenceLevel ?? proposal.runtimePayload.confidence_level,
     ))
@@ -913,6 +926,7 @@ function aggregateRuntimePayload(
     return {
       benchmarkKind: 'aggregate_all_cause',
       causeApplicability: 'all_cause',
+      benchmarkVersion,
       p50Days: pooledPercentile(productionDaySamples, 0.5)
         ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
       p75Days: pooledPercentile(productionDaySamples, 0.75)
@@ -932,11 +946,12 @@ function aggregateRuntimePayload(
       durationDayBasis: 'construction_production_day',
       generatedAt: aggregatePayloadTimestamp(proposals, ['generatedAt', 'generated_at'], 'latest'),
       sourceWindowStart: aggregatePayloadTimestamp(proposals, ['sourceWindowStart', 'source_window_start'], 'earliest'),
-      sourceAsOf: aggregatePayloadTimestamp(proposals, ['sourceAsOf', 'source_as_of'], 'latest'),
+      sourceAsOf,
       aggregateProvenance: {
         schemaVersion: 'duration-benchmark-aggregate/v1',
         scopeLevel: scope.level,
         sourceBenchmarkIds,
+        sourceBenchmarkVersions,
         sourceProjectIds: uniqueTexts(proposals.flatMap((proposal) => proposal.projectIds)),
         sourceCompanyIds: uniqueTexts(proposals.flatMap((proposal) => proposal.companyIds)),
         sourceIndustryKeys: canonicalIndustryKeys(proposals.flatMap((proposal) => proposal.industryKeys)),
@@ -1179,6 +1194,7 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
   const scope = scopeFromRow(row, industryKey)
   const p50Days = positiveNumber(row.p50_days)
   if (!id || !artifactKey || !scope || !p50Days) return null
+  const benchmarkVersion = text(row.benchmark_version)
   const p75Days = positiveNumber(row.p75_days)
   const p80Days = positiveNumber(row.p80_days)
   const meanDays = positiveNumber(row.mean_days)
@@ -1194,6 +1210,7 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
   const calendarRef = text(metadata.calendar_ref ?? metadata.calendarRef)
   const calendarVersion = text(metadata.calendar_version ?? metadata.calendarVersion)
   const identityBlockingReasons = [
+    ...(benchmarkVersion ? [] : ['benchmark_version_required']),
     ...(durationDayBasis === 'construction_production_day' ? [] : ['benchmark_production_day_basis_required']),
     ...(p75Days ? [] : ['benchmark_p75_days_required']),
     ...(p80Days ? [] : ['benchmark_p80_days_required']),
@@ -1218,6 +1235,7 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
     scope,
     runtimePayload: {
       benchmarkId: id,
+      benchmarkVersion,
       p50Days,
       p75Days,
       p80Days,

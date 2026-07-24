@@ -12,6 +12,46 @@ export type DurationQuantitySource =
   | string
 export type DurationQuantityConfidence = 'high' | 'medium' | 'low' | 'unavailable' | string
 
+export type BenchmarkScope = 'project' | 'company' | 'industry' | 'global' | 'mixed'
+export type BenchmarkProvenanceReasonCode =
+  | 'benchmark_provenance_missing'
+  | 'benchmark_version_missing'
+  | 'benchmark_generated_at_missing'
+  | 'benchmark_source_as_of_missing'
+  | 'benchmark_source_window_start_missing'
+  | 'benchmark_sample_count_invalid'
+  | 'benchmark_day_basis_unavailable'
+  | 'benchmark_scope_unavailable'
+  | 'benchmark_calendar_identity_missing'
+  | 'benchmark_runtime_publication_key_missing'
+  | 'benchmark_cause_identity_missing'
+  | 'benchmark_blend_weight_invalid'
+
+export interface BenchmarkProvenanceEntry {
+  source: 'persisted_benchmark' | 'runtime_publication' | 'cause_segment'
+  benchmarkId: string | null
+  publicationKey: string | null
+  benchmarkVersion: string | null
+  scope: Exclude<BenchmarkScope, 'mixed'> | null
+  'generatedAt': string | null
+  sourceAsOf: string | null
+  sourceWindowStart: string | null
+  sampleCount: number | null
+  dayBasis: 'construction_production_day' | null
+  calendarRef: string | null
+  calendarVersion: string | null
+  aggregateCalendarIdentities: Array<{ calendarRef: string; calendarVersion: string }>
+  causeSegment: { causeCode: string; taxonomyVersion: string } | null
+  blendWeight: number | null
+  availability: 'available' | 'unavailable'
+  reasonCodes: BenchmarkProvenanceReasonCode[]
+}
+
+export interface BenchmarkProvenanceSet {
+  mode: 'single' | 'blended'
+  entries: BenchmarkProvenanceEntry[]
+}
+
 export interface TaskDurationForecast {
   taskId?: string | null
   durationOutputCode?: string | null
@@ -143,6 +183,17 @@ export interface DurationSuggestion {
   packageChildRhythmWindowRole?: string | null
   planDurationTruthSource?: string | null
   sampleSize?: number | null
+  benchmarkGeneratedAt?: string | null
+  benchmarkAsOf?: string | null
+  benchmarkWindowStart?: string | null
+  benchmarkVersion?: string | null
+  benchmarkSampleCount?: number | null
+  benchmarkDayBasis?: 'construction_production_day' | null
+  benchmarkScope?: BenchmarkScope | null
+  benchmarkProvenance?: BenchmarkProvenanceSet | null
+  benchmarkProvenanceAvailability?: 'available' | 'partial' | 'unavailable' | null
+  benchmarkProvenanceReasonCodes?: BenchmarkProvenanceReasonCode[]
+  benchmarkProvenanceUnavailableReason?: BenchmarkProvenanceReasonCode | null
   sourceBreakdown?: Record<string, unknown> | null
   dataMaturity?: DurationDataMaturityLevel | null
   dataMaturityReasons?: string[] | null
@@ -151,6 +202,226 @@ export interface DurationSuggestion {
   factorAvailability?: Record<string, boolean> | null
   quantitySource?: DurationQuantitySource | null
   quantityConfidence?: DurationQuantityConfidence | null
+}
+
+const BENCHMARK_PROVENANCE_REASON_CODES = new Set<BenchmarkProvenanceReasonCode>([
+  'benchmark_provenance_missing',
+  'benchmark_version_missing',
+  'benchmark_generated_at_missing',
+  'benchmark_source_as_of_missing',
+  'benchmark_source_window_start_missing',
+  'benchmark_sample_count_invalid',
+  'benchmark_day_basis_unavailable',
+  'benchmark_scope_unavailable',
+  'benchmark_calendar_identity_missing',
+  'benchmark_runtime_publication_key_missing',
+  'benchmark_cause_identity_missing',
+  'benchmark_blend_weight_invalid',
+])
+
+const BENCHMARK_SCOPES = new Set<BenchmarkScope>(['project', 'company', 'industry', 'global', 'mixed'])
+
+function nullableString(value: unknown) {
+  return value == null ? null : typeof value === 'string' ? value : undefined
+}
+
+function nullableTimestamp(value: unknown) {
+  const normalized = nullableString(value)
+  return normalized === null || normalized === undefined
+    ? normalized
+    : Number.isFinite(Date.parse(normalized)) ? normalized : undefined
+}
+
+function normalizeBenchmarkProvenanceEntry(raw: unknown): BenchmarkProvenanceEntry | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const value = raw as Record<string, unknown>
+  const source = value.source
+  if (source !== 'persisted_benchmark' && source !== 'runtime_publication' && source !== 'cause_segment') return null
+  const scope = value.scope == null ? null : value.scope
+  if (scope !== null && (typeof scope !== 'string' || !BENCHMARK_SCOPES.has(scope as BenchmarkScope) || scope === 'mixed')) return null
+  const availability = value.availability
+  if (availability !== 'available' && availability !== 'unavailable') return null
+  if (!Array.isArray(value.aggregateCalendarIdentities)) return null
+  const aggregateCalendarIdentities: Array<{ calendarRef: string; calendarVersion: string }> = []
+  for (const rawIdentity of value.aggregateCalendarIdentities) {
+    if (!rawIdentity || typeof rawIdentity !== 'object' || Array.isArray(rawIdentity)) return null
+    const identity = rawIdentity as Record<string, unknown>
+    if (typeof identity.calendarRef !== 'string' || !identity.calendarRef.trim()) return null
+    if (typeof identity.calendarVersion !== 'string' || !identity.calendarVersion.trim()) return null
+    aggregateCalendarIdentities.push({
+      calendarRef: identity.calendarRef,
+      calendarVersion: identity.calendarVersion,
+    })
+  }
+  if (!Array.isArray(value.reasonCodes) || value.reasonCodes.some((reason) => (
+    typeof reason !== 'string' || !BENCHMARK_PROVENANCE_REASON_CODES.has(reason as BenchmarkProvenanceReasonCode)
+  ))) return null
+  const causeSegment = value.causeSegment
+  let normalizedCauseSegment: BenchmarkProvenanceEntry['causeSegment'] = null
+  if (causeSegment != null) {
+    if (typeof causeSegment !== 'object' || Array.isArray(causeSegment)) return null
+    const cause = causeSegment as Record<string, unknown>
+    if (typeof cause.causeCode !== 'string' || !cause.causeCode.trim()) return null
+    if (typeof cause.taxonomyVersion !== 'string' || !cause.taxonomyVersion.trim()) return null
+    normalizedCauseSegment = {
+      causeCode: cause.causeCode,
+      taxonomyVersion: cause.taxonomyVersion,
+    }
+  }
+  const benchmarkId = nullableString(value.benchmarkId)
+  const publicationKey = nullableString(value.publicationKey)
+  const benchmarkVersion = nullableString(value.benchmarkVersion)
+  const generatedAt = nullableTimestamp(value['generatedAt'])
+  const sourceAsOf = nullableTimestamp(value.sourceAsOf)
+  const sourceWindowStart = nullableTimestamp(value.sourceWindowStart)
+  const dayBasis = value.dayBasis == null ? null : value.dayBasis === 'construction_production_day' ? value.dayBasis : undefined
+  const calendarRef = nullableString(value.calendarRef)
+  const calendarVersion = nullableString(value.calendarVersion)
+  const sampleCount = value.sampleCount == null
+    ? null
+    : typeof value.sampleCount === 'number' && Number.isInteger(value.sampleCount) && value.sampleCount > 0
+      ? value.sampleCount
+      : undefined
+  const blendWeight = value.blendWeight == null
+    ? null
+    : typeof value.blendWeight === 'number' && Number.isFinite(value.blendWeight) && value.blendWeight > 0 && value.blendWeight <= 1
+      ? value.blendWeight
+      : undefined
+  if (
+    benchmarkId === undefined
+    || publicationKey === undefined
+    || benchmarkVersion === undefined
+    || generatedAt === undefined
+    || sourceAsOf === undefined
+    || sourceWindowStart === undefined
+    || dayBasis === undefined
+    || calendarRef === undefined
+    || calendarVersion === undefined
+    || sampleCount === undefined
+    || blendWeight === undefined
+  ) return null
+  return {
+    source,
+    benchmarkId,
+    publicationKey,
+    benchmarkVersion,
+    scope: scope as BenchmarkProvenanceEntry['scope'],
+    'generatedAt': generatedAt,
+    sourceAsOf,
+    sourceWindowStart,
+    sampleCount,
+    dayBasis,
+    calendarRef,
+    calendarVersion,
+    aggregateCalendarIdentities,
+    causeSegment: normalizedCauseSegment,
+    blendWeight,
+    availability,
+    reasonCodes: [...value.reasonCodes] as BenchmarkProvenanceReasonCode[],
+  }
+}
+
+function normalizeBenchmarkProvenance(raw: any) {
+  const rawSet = raw?.benchmarkProvenance
+  const availability = raw?.benchmarkProvenanceAvailability
+  const reasonCodes = raw?.benchmarkProvenanceReasonCodes
+  const unavailableReason = raw?.benchmarkProvenanceUnavailableReason
+  if (
+    !rawSet
+    || typeof rawSet !== 'object'
+    || (rawSet.mode !== 'single' && rawSet.mode !== 'blended')
+    || !Array.isArray(rawSet.entries)
+    || (availability !== 'available' && availability !== 'partial' && availability !== 'unavailable')
+    || !Array.isArray(reasonCodes)
+    || reasonCodes.some((reason: unknown) => typeof reason !== 'string' || !BENCHMARK_PROVENANCE_REASON_CODES.has(reason as BenchmarkProvenanceReasonCode))
+    || (unavailableReason != null && !BENCHMARK_PROVENANCE_REASON_CODES.has(unavailableReason as BenchmarkProvenanceReasonCode))
+  ) {
+    return {
+      benchmarkGeneratedAt: null,
+      benchmarkAsOf: null,
+      benchmarkWindowStart: null,
+      benchmarkVersion: null,
+      benchmarkSampleCount: null,
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: null,
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: null,
+    }
+  }
+  const entries = rawSet.entries.map(normalizeBenchmarkProvenanceEntry)
+  if (entries.some((entry: BenchmarkProvenanceEntry | null) => !entry)) {
+    return {
+      benchmarkGeneratedAt: null,
+      benchmarkAsOf: null,
+      benchmarkWindowStart: null,
+      benchmarkVersion: null,
+      benchmarkSampleCount: null,
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: null,
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: null,
+    }
+  }
+  const benchmarkGeneratedAt = nullableTimestamp(raw?.benchmarkGeneratedAt)
+  const benchmarkAsOf = nullableTimestamp(raw?.benchmarkAsOf)
+  const benchmarkWindowStart = nullableTimestamp(raw?.benchmarkWindowStart)
+  const benchmarkVersion = nullableString(raw?.benchmarkVersion)
+  const benchmarkSampleCount = raw?.benchmarkSampleCount == null
+    ? null
+    : typeof raw.benchmarkSampleCount === 'number' && Number.isInteger(raw.benchmarkSampleCount) && raw.benchmarkSampleCount > 0
+      ? raw.benchmarkSampleCount
+      : undefined
+  const benchmarkDayBasis = raw?.benchmarkDayBasis == null
+    ? null
+    : raw.benchmarkDayBasis === 'construction_production_day' ? raw.benchmarkDayBasis : undefined
+  const benchmarkScope = raw?.benchmarkScope == null
+    ? null
+    : typeof raw.benchmarkScope === 'string' && BENCHMARK_SCOPES.has(raw.benchmarkScope as BenchmarkScope)
+      ? raw.benchmarkScope
+      : undefined
+  if (
+    benchmarkGeneratedAt === undefined
+    || benchmarkAsOf === undefined
+    || benchmarkWindowStart === undefined
+    || benchmarkVersion === undefined
+    || benchmarkSampleCount === undefined
+    || benchmarkDayBasis === undefined
+    || benchmarkScope === undefined
+  ) {
+    return {
+      benchmarkGeneratedAt: null,
+      benchmarkAsOf: null,
+      benchmarkWindowStart: null,
+      benchmarkVersion: null,
+      benchmarkSampleCount: null,
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: null,
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: null,
+    }
+  }
+  return {
+    benchmarkGeneratedAt,
+    benchmarkAsOf,
+    benchmarkWindowStart,
+    benchmarkVersion,
+    benchmarkSampleCount,
+    benchmarkDayBasis,
+    benchmarkScope: benchmarkScope as BenchmarkScope | null,
+    benchmarkProvenanceAvailability: availability,
+    benchmarkProvenanceReasonCodes: [...reasonCodes] as BenchmarkProvenanceReasonCode[],
+    benchmarkProvenanceUnavailableReason: unavailableReason ?? null,
+    benchmarkProvenance: {
+      mode: rawSet.mode,
+      entries: entries as BenchmarkProvenanceEntry[],
+    },
+  }
 }
 
 export interface DurationSuggestionQuery {
@@ -233,6 +504,7 @@ function normalizeDurationSuggestion(raw: any): DurationSuggestion {
     packageChildRhythmWindowRole: raw?.packageChildRhythmWindowRole ?? raw?.businessReasonParams?.rhythmWindowRole ?? null,
     planDurationTruthSource: raw?.planDurationTruthSource ?? raw?.businessReasonParams?.planDurationTruthSource ?? null,
     sampleSize: raw?.sampleSize ?? null,
+    ...normalizeBenchmarkProvenance(raw),
     sourceBreakdown: raw?.sourceBreakdown ?? null,
     dataMaturity: raw?.dataMaturity ?? null,
     dataMaturityReasons: raw?.dataMaturityReasons ?? null,

@@ -101,6 +101,112 @@ describe('durationSuggestionsApi governed duration outputs', () => {
     })
   })
 
+  it('normalizes complete camelCase benchmark provenance without reviving retired aliases', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      durationOutputCode: 'contextual_reference',
+      durationOutputSemanticFieldName: 'contextualReferenceDays',
+      contextualReferenceDays: 7,
+      conservativeDurationDays: 9,
+      confidenceLevel: 'medium',
+      confidenceScore: 70,
+      benchmarkGeneratedAt: '2026-07-01T08:00:00.000Z',
+      benchmarkAsOf: '2026-06-30T23:59:59.000Z',
+      benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+      benchmarkVersion: 'v7',
+      benchmarkSampleCount: 24,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'company',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [{
+          source: 'persisted_benchmark',
+          benchmarkId: 'benchmark-1',
+          publicationKey: null,
+          benchmarkVersion: 'v7',
+          scope: 'company',
+          generatedAt: '2026-07-01T08:00:00.000Z',
+          sourceAsOf: '2026-06-30T23:59:59.000Z',
+          sourceWindowStart: '2026-04-01T00:00:00.000Z',
+          sampleCount: 24,
+          dayBasis: 'construction_production_day',
+          calendarRef: 'calendar-1',
+          calendarVersion: 'calendar-v3',
+          aggregateCalendarIdentities: [],
+          causeSegment: null,
+          blendWeight: null,
+          availability: 'available',
+          reasonCodes: [],
+        }],
+      },
+      generatedAt: '2035-01-02T03:04:05.000Z',
+      benchmark_generated_at: '2035-01-02T03:04:05.000Z',
+      referenceFrozenAt: '2035-01-02T03:04:05.000Z',
+      isReferenceFrozen: true,
+    })
+
+    const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: '2026-07-01T08:00:00.000Z',
+      benchmarkAsOf: '2026-06-30T23:59:59.000Z',
+      benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+      benchmarkVersion: 'v7',
+      benchmarkSampleCount: 24,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'company',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [expect.objectContaining({
+          source: 'persisted_benchmark',
+          benchmarkVersion: 'v7',
+          scope: 'company',
+          aggregateCalendarIdentities: [],
+          availability: 'available',
+          reasonCodes: [],
+        })],
+      },
+    })
+    expect(suggestion).not.toHaveProperty('generatedAt')
+    expect(suggestion).not.toHaveProperty('benchmark_generated_at')
+    expect(suggestion).not.toHaveProperty('referenceFrozenAt')
+    expect(suggestion).not.toHaveProperty('isReferenceFrozen')
+  })
+
+  it('fails closed instead of passing malformed benchmark provenance JSON through', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      durationOutputCode: 'contextual_reference',
+      contextualReferenceDays: 7,
+      conservativeDurationDays: 9,
+      confidenceLevel: 'medium',
+      confidenceScore: 70,
+      benchmarkScope: 'system',
+      benchmarkDayBasis: 'calendar_day',
+      benchmarkProvenanceAvailability: 'sometimes',
+      benchmarkProvenanceReasonCodes: ['benchmark_version_missing', 'unknown_reason'],
+      benchmarkProvenanceUnavailableReason: 'unknown_reason',
+      benchmarkProvenance: {
+        mode: 'combined',
+        entries: [{ scope: 'system', aggregateCalendarIdentities: {} }],
+      },
+    })
+
+    const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+    expect(suggestion).toMatchObject({
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: null,
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: null,
+    })
+  })
+
   it('does not expose or derive user-facing reference days from template fast estimates', async () => {
     mocks.apiGet.mockResolvedValueOnce({
       durationOutputCode: 'template_fast_estimate',
