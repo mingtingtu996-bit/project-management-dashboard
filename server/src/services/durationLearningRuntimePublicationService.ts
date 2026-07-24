@@ -1,4 +1,5 @@
 import { executeSQL } from './dbService.js'
+import { hashDurationContextPolicyLearningValue } from './durationContextPolicyLearningCheckpointService.js'
 
 export type DurationLearningRuntimeAssetKey =
   | 'base_duration_benchmark'
@@ -225,6 +226,50 @@ function uniqueText(values: readonly unknown[]) {
   return Array.from(new Set(values.map(normalizeText).filter(Boolean)))
 }
 
+function canonicalTextList(value: unknown) {
+  if (!Array.isArray(value) || value.length === 0) return null
+  const normalized = value.map((item) => typeof item === 'string' ? item.trim() : '')
+  if (normalized.some((item) => !item)) return null
+  const canonical = [...new Set(normalized)].sort()
+  return canonical.length === normalized.length
+    && canonical.every((item, index) => item === normalized[index])
+    ? canonical
+    : null
+}
+
+export function durationLearningBenchmarkRuntimeVersionReasons(
+  payload: Record<string, unknown>,
+  scope: DurationLearningRuntimeScope,
+) {
+  const benchmarkVersion = normalizeText(payload.benchmarkVersion ?? payload.benchmark_version)
+  if (!benchmarkVersion) return ['benchmark_version_required']
+  if (scope.level === 'project') return []
+
+  const aggregateProvenance = readRecord(payload.aggregateProvenance ?? payload.aggregate_provenance)
+  const sourceBenchmarkIds = canonicalTextList(
+    aggregateProvenance.sourceBenchmarkIds ?? aggregateProvenance.source_benchmark_ids,
+  )
+  const sourceBenchmarkVersions = canonicalTextList(
+    aggregateProvenance.sourceBenchmarkVersions ?? aggregateProvenance.source_benchmark_versions,
+  )
+  const sourceAsOf = readTimestamp(payload.sourceAsOf ?? payload.source_as_of)
+  const reasons = [
+    ...(sourceBenchmarkIds ? [] : ['benchmark_aggregate_source_ids_canonical_required']),
+    ...(sourceBenchmarkVersions ? [] : ['benchmark_aggregate_source_versions_canonical_required']),
+  ]
+  if (!sourceBenchmarkIds || !sourceBenchmarkVersions || !sourceAsOf) return reasons
+
+  const expectedVersion = `aggregate:${scope.level}:${hashDurationContextPolicyLearningValue({
+    scope,
+    sourceBenchmarkIds,
+    sourceBenchmarkVersions,
+    sourceAsOf,
+  }).slice(0, 16)}`
+  return benchmarkVersion === expectedVersion
+    ? reasons
+    : [...reasons, 'benchmark_aggregate_version_mismatch']
+}
+
 function canonicalJson(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalJson)
   if (!value || typeof value !== 'object') return value
@@ -285,6 +330,7 @@ function payloadReasons(
     const benchmarkKind = normalizeText(payload.benchmarkKind ?? payload.benchmark_kind)
     const causeApplicability = normalizeText(payload.causeApplicability ?? payload.cause_applicability)
     const aggregateProvenance = readRecord(payload.aggregateProvenance ?? payload.aggregate_provenance)
+    reasons.push(...durationLearningBenchmarkRuntimeVersionReasons(payload, scope))
     if (!aggregate && !benchmarkId) reasons.push('benchmark_id_required')
     if (!aggregate && (benchmarkKind === 'aggregate_all_cause' || Object.keys(aggregateProvenance).length > 0)) {
       reasons.push('benchmark_project_exact_provenance_required')
@@ -299,6 +345,9 @@ function payloadReasons(
       const sourceBenchmarkIds = uniqueText(readList(
         aggregateProvenance.sourceBenchmarkIds ?? aggregateProvenance.source_benchmark_ids,
       ))
+      const sourceBenchmarkVersions = uniqueText(readList(
+        aggregateProvenance.sourceBenchmarkVersions ?? aggregateProvenance.source_benchmark_versions,
+      ))
       const sourceProjectIds = uniqueText(readList(
         aggregateProvenance.sourceProjectIds ?? aggregateProvenance.source_project_ids,
       ))
@@ -309,6 +358,7 @@ function payloadReasons(
         schemaVersion !== 'duration-benchmark-aggregate/v1'
         || scopeLevel !== scope.level
         || sourceBenchmarkIds.length === 0
+        || sourceBenchmarkVersions.length === 0
         || sourceProjectIds.length === 0
       ) reasons.push('benchmark_aggregate_provenance_required')
       if (

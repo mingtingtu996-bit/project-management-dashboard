@@ -77,6 +77,7 @@ import {
   type DurationPlausibilityWarning,
 } from './durationEngineeringPlausibilityGuardrailService.js'
 import {
+  durationLearningBenchmarkRuntimeVersionReasons,
   executeDurationLearningRuntimePublicationQuery,
   resolveDurationLearningRuntimePublication,
   type DurationLearningRuntimePublicationQueryExec,
@@ -1848,6 +1849,7 @@ export function buildDurationBenchmarkRowFromRuntimePublication(input: {
     runtimePayload: Record<string, unknown>
     companyId: string | null
     projectId: string | null
+    industryKey?: string | null
     publicationStage: string
     scopeLevel?: string
   }
@@ -1882,6 +1884,24 @@ export function buildDurationBenchmarkRowFromRuntimePublication(input: {
   const aggregateCalendarIdentities = readRuntimeList(
     aggregateProvenance.calendarIdentities ?? aggregateProvenance.calendar_identities,
   ).map(readMetadataObject)
+  const companyId = normalizeId(input.publication.companyId)
+  const projectId = normalizeId(input.publication.projectId)
+  const industryKey = normalizeId(input.publication.industryKey)
+  const runtimeScope: DurationLearningRuntimeScope | null = scopeLevel === 'project'
+    ? companyId && projectId && !industryKey
+      ? { level: 'project', companyId, projectId }
+      : null
+    : scopeLevel === 'company'
+      ? companyId && !projectId && !industryKey
+        ? { level: 'company', companyId }
+        : null
+      : scopeLevel === 'industry'
+        ? industryKey && !companyId && !projectId
+          ? { level: 'industry', industryKey }
+          : null
+        : scopeLevel === 'global' && !companyId && !projectId && !industryKey
+          ? { level: 'global' }
+          : null
   const aggregateContractValid = isAggregate
     && DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(scopeLevel as DurationLearningRuntimeScope['level'])
     && normalizeId(aggregateProvenance.schemaVersion ?? aggregateProvenance.schema_version) === 'duration-benchmark-aggregate/v1'
@@ -1895,7 +1915,8 @@ export function buildDurationBenchmarkRowFromRuntimePublication(input: {
       && Boolean(normalizeId(identity.calendarVersion ?? identity.calendar_version))
     ))
   if (
-    !DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(scopeLevel as DurationLearningRuntimeScope['level'])
+    !runtimeScope
+    || durationLearningBenchmarkRuntimeVersionReasons(payload, runtimeScope).length > 0
     || !benchmarkVersion
     || (!benchmarkId && !aggregateContractValid) || !p50Days || !p75Days || !p80Days || !meanDays || !sampleCount
     || variance === null || coefficientOfVariation === null
@@ -1906,7 +1927,7 @@ export function buildDurationBenchmarkRowFromRuntimePublication(input: {
     || (aggregateContractValid && Boolean(benchmarkId))
   ) return null
   return {
-    id: benchmarkId || `runtime-aggregate:${input.publicationKey}`,
+    id: aggregateContractValid ? null : benchmarkId,
     benchmark_version: benchmarkVersion,
     p50_days: p50Days,
     p75_days: p75Days,
@@ -1917,8 +1938,8 @@ export function buildDurationBenchmarkRowFromRuntimePublication(input: {
     coefficient_of_variation: coefficientOfVariation,
     confidence_level: confidenceLevel as DurationBenchmarkRow['confidence_level'],
     confidence_score: confidenceScore,
-    company_id: input.publication.companyId,
-    project_id: input.publication.projectId,
+    company_id: companyId || null,
+    project_id: projectId || null,
     generated_at: generatedAt,
     source_window_start: sourceWindowStart,
     source_as_of: sourceAsOf,
@@ -3271,8 +3292,11 @@ function buildBenchmarkProvenanceEntry(
         taxonomyVersion: normalizedTaxonomyVersion,
       }
     : null
+  const sourceIdentityAvailable = source === 'runtime_publication'
+    ? Boolean(publicationKey)
+    : Boolean(benchmarkId)
   const reasonCodes = [
-    ...(benchmarkId ? [] : ['benchmark_provenance_missing']),
+    ...(sourceIdentityAvailable ? [] : ['benchmark_provenance_missing']),
     ...(benchmarkVersion ? [] : ['benchmark_version_missing']),
     ...(generatedAt ? [] : ['benchmark_generated_at_missing']),
     ...(sourceAsOf ? [] : ['benchmark_source_as_of_missing']),
@@ -5642,7 +5666,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         ? blendBenchmarkCandidates(coldStartBaseDays, coldStartP80, benchmarkCandidates, benchmarkBlendRuntimeParameter)
         : null
       const benchmarkProvenance = buildBenchmarkProvenance(
-        benchmarkBlend?.candidates ?? (primaryBenchmarkCandidate ? [primaryBenchmarkCandidate] : []),
+        benchmarkBlend?.candidates ?? [],
       )
       const benchmarkBlendScopeLabel = benchmarkBlend?.scopes.length
         ? benchmarkBlend.scopes.map((scope) => (

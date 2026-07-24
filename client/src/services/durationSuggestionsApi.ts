@@ -321,6 +321,132 @@ function normalizeBenchmarkProvenanceEntry(raw: unknown): BenchmarkProvenanceEnt
   }
 }
 
+function failedBenchmarkProvenance() {
+  return {
+    benchmarkGeneratedAt: null,
+    benchmarkAsOf: null,
+    benchmarkWindowStart: null,
+    benchmarkVersion: null,
+    benchmarkSampleCount: null,
+    benchmarkDayBasis: null,
+    benchmarkScope: null,
+    benchmarkProvenanceAvailability: null,
+    benchmarkProvenanceReasonCodes: [],
+    benchmarkProvenanceUnavailableReason: null,
+    benchmarkProvenance: null,
+  }
+}
+
+function sameReasonCodes(
+  actual: readonly BenchmarkProvenanceReasonCode[],
+  expected: readonly BenchmarkProvenanceReasonCode[],
+) {
+  return actual.length === expected.length && actual.every((reason, index) => reason === expected[index])
+}
+
+function semanticBenchmarkEntryReasonCodes(
+  entry: BenchmarkProvenanceEntry,
+  blendWeightRequired: boolean,
+) {
+  const reasons: BenchmarkProvenanceReasonCode[] = []
+  const sourceIdentityAvailable = entry.source === 'runtime_publication'
+    ? Boolean(entry.publicationKey?.trim())
+    : Boolean(entry.benchmarkId?.trim())
+  if (!sourceIdentityAvailable) reasons.push('benchmark_provenance_missing')
+  if (!entry.benchmarkVersion?.trim()) reasons.push('benchmark_version_missing')
+  if (!entry.generatedAt) reasons.push('benchmark_generated_at_missing')
+  if (!entry.sourceAsOf) reasons.push('benchmark_source_as_of_missing')
+  if (!entry.sourceWindowStart) reasons.push('benchmark_source_window_start_missing')
+  if (!entry.sampleCount) reasons.push('benchmark_sample_count_invalid')
+  if (entry.dayBasis !== 'construction_production_day') reasons.push('benchmark_day_basis_unavailable')
+  if (!entry.scope) reasons.push('benchmark_scope_unavailable')
+  const exactCalendarIdentity = Boolean(entry.calendarRef?.trim() && entry.calendarVersion?.trim())
+  if (!exactCalendarIdentity && entry.aggregateCalendarIdentities.length === 0) {
+    reasons.push('benchmark_calendar_identity_missing')
+  }
+  if (entry.source === 'runtime_publication' && !entry.publicationKey?.trim()) {
+    reasons.push('benchmark_runtime_publication_key_missing')
+  }
+  if (entry.source === 'cause_segment' && !entry.causeSegment) {
+    reasons.push('benchmark_cause_identity_missing')
+  }
+  const validBlendWeight = entry.blendWeight !== null
+    && Number.isFinite(entry.blendWeight)
+    && entry.blendWeight > 0
+    && entry.blendWeight <= 1
+  if (blendWeightRequired ? !validBlendWeight : entry.blendWeight !== null) {
+    reasons.push('benchmark_blend_weight_invalid')
+  }
+  return [...new Set(reasons)].sort() as BenchmarkProvenanceReasonCode[]
+}
+
+function benchmarkProvenanceSemanticsMatch(input: {
+  mode: BenchmarkProvenanceSet['mode']
+  entries: BenchmarkProvenanceEntry[]
+  availability: 'available' | 'partial' | 'unavailable'
+  reasonCodes: BenchmarkProvenanceReasonCode[]
+  unavailableReason: BenchmarkProvenanceReasonCode | null
+  benchmarkGeneratedAt: string | null
+  benchmarkAsOf: string | null
+  benchmarkWindowStart: string | null
+  benchmarkVersion: string | null
+  benchmarkSampleCount: number | null
+  benchmarkDayBasis: 'construction_production_day' | null
+  benchmarkScope: BenchmarkScope | null
+}) {
+  const blended = input.mode === 'blended'
+  if (blended ? input.entries.length < 2 : input.entries.length > 1) return false
+  if (blended) {
+    const totalWeight = input.entries.reduce((sum, entry) => sum + Number(entry.blendWeight ?? 0), 0)
+    if (!Number.isFinite(totalWeight) || Math.abs(totalWeight - 1) > 1e-9) return false
+  }
+
+  for (const entry of input.entries) {
+    const expectedReasons = semanticBenchmarkEntryReasonCodes(entry, blended)
+    if (!sameReasonCodes(entry.reasonCodes, expectedReasons)) return false
+    if (entry.availability !== (expectedReasons.length === 0 ? 'available' : 'unavailable')) return false
+  }
+
+  const expectedReasonCodes = input.entries.length === 0
+    ? ['benchmark_provenance_missing'] as BenchmarkProvenanceReasonCode[]
+    : [...new Set(input.entries.flatMap((entry) => entry.reasonCodes))].sort() as BenchmarkProvenanceReasonCode[]
+  const availableCount = input.entries.filter((entry) => entry.availability === 'available').length
+  const expectedAvailability = input.entries.length === 0 || availableCount === 0
+    ? 'unavailable'
+    : availableCount === input.entries.length
+      ? 'available'
+      : 'partial'
+  if (input.availability !== expectedAvailability) return false
+  if (!sameReasonCodes(input.reasonCodes, expectedReasonCodes)) return false
+  if (input.unavailableReason !== (expectedReasonCodes[0] ?? null)) return false
+
+  if (expectedAvailability !== 'available') {
+    return input.benchmarkGeneratedAt === null
+      && input.benchmarkAsOf === null
+      && input.benchmarkWindowStart === null
+      && input.benchmarkVersion === null
+      && input.benchmarkSampleCount === null
+      && input.benchmarkDayBasis === null
+      && input.benchmarkScope === null
+  }
+
+  const generatedAt = input.entries.map((entry) => entry.generatedAt as string)
+    .sort((left, right) => Date.parse(left) - Date.parse(right))
+  const sourceAsOf = input.entries.map((entry) => entry.sourceAsOf as string)
+    .sort((left, right) => Date.parse(left) - Date.parse(right))
+  const sourceWindowStart = input.entries.map((entry) => entry.sourceWindowStart as string)
+    .sort((left, right) => Date.parse(left) - Date.parse(right))
+  const scopes = [...new Set(input.entries.map((entry) => entry.scope as Exclude<BenchmarkScope, 'mixed'>))]
+  const expectedScope: BenchmarkScope = scopes.length === 1 ? scopes[0] : 'mixed'
+  return input.benchmarkGeneratedAt === generatedAt.at(-1)
+    && input.benchmarkAsOf === sourceAsOf[0]
+    && input.benchmarkWindowStart === sourceWindowStart[0]
+    && input.benchmarkVersion === (blended ? null : input.entries[0].benchmarkVersion)
+    && input.benchmarkSampleCount === input.entries.reduce((sum, entry) => sum + Number(entry.sampleCount), 0)
+    && input.benchmarkDayBasis === 'construction_production_day'
+    && input.benchmarkScope === expectedScope
+}
+
 function normalizeBenchmarkProvenance(raw: any) {
   const rawSet = raw?.benchmarkProvenance
   const availability = raw?.benchmarkProvenanceAvailability
@@ -336,35 +462,11 @@ function normalizeBenchmarkProvenance(raw: any) {
     || reasonCodes.some((reason: unknown) => typeof reason !== 'string' || !BENCHMARK_PROVENANCE_REASON_CODES.has(reason as BenchmarkProvenanceReasonCode))
     || (unavailableReason != null && !BENCHMARK_PROVENANCE_REASON_CODES.has(unavailableReason as BenchmarkProvenanceReasonCode))
   ) {
-    return {
-      benchmarkGeneratedAt: null,
-      benchmarkAsOf: null,
-      benchmarkWindowStart: null,
-      benchmarkVersion: null,
-      benchmarkSampleCount: null,
-      benchmarkDayBasis: null,
-      benchmarkScope: null,
-      benchmarkProvenanceAvailability: null,
-      benchmarkProvenanceReasonCodes: [],
-      benchmarkProvenanceUnavailableReason: null,
-      benchmarkProvenance: null,
-    }
+    return failedBenchmarkProvenance()
   }
   const entries = rawSet.entries.map(normalizeBenchmarkProvenanceEntry)
   if (entries.some((entry: BenchmarkProvenanceEntry | null) => !entry)) {
-    return {
-      benchmarkGeneratedAt: null,
-      benchmarkAsOf: null,
-      benchmarkWindowStart: null,
-      benchmarkVersion: null,
-      benchmarkSampleCount: null,
-      benchmarkDayBasis: null,
-      benchmarkScope: null,
-      benchmarkProvenanceAvailability: null,
-      benchmarkProvenanceReasonCodes: [],
-      benchmarkProvenanceUnavailableReason: null,
-      benchmarkProvenance: null,
-    }
+    return failedBenchmarkProvenance()
   }
   const benchmarkGeneratedAt = nullableTimestamp(raw?.benchmarkGeneratedAt)
   const benchmarkAsOf = nullableTimestamp(raw?.benchmarkAsOf)
@@ -392,20 +494,27 @@ function normalizeBenchmarkProvenance(raw: any) {
     || benchmarkDayBasis === undefined
     || benchmarkScope === undefined
   ) {
-    return {
-      benchmarkGeneratedAt: null,
-      benchmarkAsOf: null,
-      benchmarkWindowStart: null,
-      benchmarkVersion: null,
-      benchmarkSampleCount: null,
-      benchmarkDayBasis: null,
-      benchmarkScope: null,
-      benchmarkProvenanceAvailability: null,
-      benchmarkProvenanceReasonCodes: [],
-      benchmarkProvenanceUnavailableReason: null,
-      benchmarkProvenance: null,
-    }
+    return failedBenchmarkProvenance()
   }
+  const normalizedEntries = entries as BenchmarkProvenanceEntry[]
+  const normalizedReasonCodes = [...reasonCodes] as BenchmarkProvenanceReasonCode[]
+  const normalizedUnavailableReason = unavailableReason == null
+    ? null
+    : unavailableReason as BenchmarkProvenanceReasonCode
+  if (!benchmarkProvenanceSemanticsMatch({
+    mode: rawSet.mode,
+    entries: normalizedEntries,
+    availability,
+    reasonCodes: normalizedReasonCodes,
+    unavailableReason: normalizedUnavailableReason,
+    benchmarkGeneratedAt,
+    benchmarkAsOf,
+    benchmarkWindowStart,
+    benchmarkVersion,
+    benchmarkSampleCount,
+    benchmarkDayBasis,
+    benchmarkScope: benchmarkScope as BenchmarkScope | null,
+  })) return failedBenchmarkProvenance()
   return {
     benchmarkGeneratedAt,
     benchmarkAsOf,
@@ -415,11 +524,11 @@ function normalizeBenchmarkProvenance(raw: any) {
     benchmarkDayBasis,
     benchmarkScope: benchmarkScope as BenchmarkScope | null,
     benchmarkProvenanceAvailability: availability,
-    benchmarkProvenanceReasonCodes: [...reasonCodes] as BenchmarkProvenanceReasonCode[],
-    benchmarkProvenanceUnavailableReason: unavailableReason ?? null,
+    benchmarkProvenanceReasonCodes: normalizedReasonCodes,
+    benchmarkProvenanceUnavailableReason: normalizedUnavailableReason,
     benchmarkProvenance: {
       mode: rawSet.mode,
-      entries: entries as BenchmarkProvenanceEntry[],
+      entries: normalizedEntries,
     },
   }
 }

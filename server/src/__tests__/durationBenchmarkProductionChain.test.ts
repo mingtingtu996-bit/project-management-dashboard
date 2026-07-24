@@ -18,6 +18,7 @@ vi.mock('../database.js', async (importOriginal) => {
 import { runWithDatabaseTransactionClient } from '../database.js'
 import { createDatabaseDurationAssetReviewQueueStore } from '../services/durationAssetReviewQueueService.js'
 import { promoteDurationBenchmarkRuntimeCanaryAtomically } from '../services/durationLearningAssetAtomicStoreService.js'
+import { hashDurationContextPolicyLearningValue } from '../services/durationContextPolicyLearningCheckpointService.js'
 import {
   collectDurationLearningRuntimeCandidateProposals,
   runDurationLearningRuntimeLifecycleSweep,
@@ -45,26 +46,55 @@ const publicationKey = 'duration-learning:benchmark:production-chain'
 
 describe('duration benchmark production chain', () => {
   it.each([
-    { scopeLevel: 'company', companyId, projectId: null },
-    { scopeLevel: 'industry', companyId: null, projectId: null },
-    { scopeLevel: 'global', companyId: null, projectId: null },
+    {
+      scopeLevel: 'company' as const,
+      companyId,
+      projectId: null,
+      industryKey: null,
+      scope: { level: 'company' as const, companyId },
+    },
+    {
+      scopeLevel: 'industry' as const,
+      companyId: null,
+      projectId: null,
+      industryKey: 'general_civil',
+      scope: { level: 'industry' as const, industryKey: 'general_civil' },
+    },
+    {
+      scopeLevel: 'global' as const,
+      companyId: null,
+      projectId: null,
+      industryKey: null,
+      scope: { level: 'global' as const },
+    },
   ])('consumes a $scopeLevel aggregate as all-cause history without querying an exact segment', async ({
     scopeLevel,
     companyId: aggregateCompanyId,
     projectId: aggregateProjectId,
+    industryKey,
+    scope,
   }) => {
+    const sourceBenchmarkIds = [benchmarkId]
+    const sourceBenchmarkVersions = ['candidate:2026-07-21:production-chain']
+    const sourceAsOf = '2026-07-20T00:00:00.000Z'
+    const benchmarkVersion = `aggregate:${scopeLevel}:${hashDurationContextPolicyLearningValue({
+      scope,
+      sourceBenchmarkIds,
+      sourceBenchmarkVersions,
+      sourceAsOf,
+    }).slice(0, 16)}`
     const payload = {
       benchmarkKind: 'aggregate_all_cause',
       causeApplicability: 'all_cause',
-      benchmarkVersion: `aggregate:${scopeLevel}:0123456789abcdef`,
+      benchmarkVersion,
       p50Days: 8, p75Days: 10, p80Days: 11, meanDays: 8.5, variance: 2.25,
       coefficientOfVariation: 0.176471, sampleCount: 100, confidenceLevel: 'high', confidenceScore: 88,
       durationDayBasis: 'construction_production_day', generatedAt: '2026-07-21T00:00:00.000Z',
-      sourceWindowStart: '2026-04-22T00:00:00.000Z', sourceAsOf: '2026-07-20T00:00:00.000Z',
+      sourceWindowStart: '2026-04-22T00:00:00.000Z', sourceAsOf,
       aggregateProvenance: {
         schemaVersion: 'duration-benchmark-aggregate/v1', scopeLevel,
-        sourceBenchmarkIds: [benchmarkId], sourceProjectIds: [projectId], sourceCompanyIds: [companyId],
-        sourceBenchmarkVersions: ['candidate:2026-07-21:production-chain'],
+        sourceBenchmarkIds, sourceProjectIds: [projectId], sourceCompanyIds: [companyId],
+        sourceBenchmarkVersions,
         sourceIndustryKeys: ['general_civil'],
         calendarIdentities: [{ calendarRef: 'cn-work-calendar', calendarVersion: '2026.07' }],
       },
@@ -76,12 +106,14 @@ describe('duration benchmark production chain', () => {
         runtimePayload: payload,
         companyId: aggregateCompanyId,
         projectId: aggregateProjectId,
+        industryKey,
         publicationStage: 'stable',
         scopeLevel,
       },
     })
     expect(benchmark).toMatchObject({
-      benchmark_version: `aggregate:${scopeLevel}:0123456789abcdef`,
+      id: null,
+      benchmark_version: benchmarkVersion,
       sample_count: 100,
       metadata: expect.objectContaining({ benchmark_provenance: 'aggregate_all_cause' }),
     })

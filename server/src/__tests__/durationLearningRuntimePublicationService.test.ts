@@ -10,6 +10,7 @@ import {
   rollbackDurationLearningRuntimePublication,
   type DurationLearningRuntimePublicationQueryExec,
 } from '../services/durationLearningRuntimePublicationService.js'
+import { hashDurationContextPolicyLearningValue } from '../services/durationContextPolicyLearningCheckpointService.js'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
 const companyId = '22222222-2222-4222-8222-222222222222'
@@ -52,10 +53,14 @@ function aggregateBenchmarkRuntimePayload(
   scopeLevel: 'company' | 'industry' | 'global',
   overrides: Record<string, unknown> = {},
 ) {
-  return {
+  const scope = scopeLevel === 'company'
+    ? { level: 'company' as const, companyId }
+    : scopeLevel === 'industry'
+      ? { level: 'industry' as const, industryKey: 'general_civil' }
+      : { level: 'global' as const }
+  const payload = {
     benchmarkKind: 'aggregate_all_cause',
     causeApplicability: 'all_cause',
-    benchmarkVersion: `aggregate:${scopeLevel}:0123456789abcdef`,
     p50Days: 12,
     p75Days: 14,
     p80Days: 16,
@@ -81,6 +86,16 @@ function aggregateBenchmarkRuntimePayload(
     },
     ...overrides,
   }
+  const provenance = payload.aggregateProvenance as Record<string, unknown>
+  const benchmarkVersion = Object.prototype.hasOwnProperty.call(overrides, 'benchmarkVersion')
+    ? overrides.benchmarkVersion
+    : `aggregate:${scopeLevel}:${hashDurationContextPolicyLearningValue({
+        scope,
+        sourceBenchmarkIds: provenance.sourceBenchmarkIds,
+        sourceBenchmarkVersions: provenance.sourceBenchmarkVersions,
+        sourceAsOf: payload.sourceAsOf,
+      }).slice(0, 16)}`
+  return { ...payload, benchmarkVersion }
 }
 
 describe('durationLearningRuntimePublicationService', () => {
@@ -235,6 +250,71 @@ describe('durationLearningRuntimePublicationService', () => {
 
     expect(result.status).toBe('blocked')
     expect(result.reasons).toContain('benchmark_production_day_basis_required')
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a versionless exact project benchmark before querying', async () => {
+    const queryMock = vi.fn(async () => [])
+
+    const result = await persistDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration-learning:benchmark:missing-version',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'STD-001:process:all',
+      scope: { level: 'project', companyId, projectId },
+      stage: 'canary',
+      runtimePayload: benchmarkRuntimePayload({ benchmarkVersion: undefined }),
+      sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reasons: expect.arrayContaining(['benchmark_version_required']),
+    })
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: 'tampered deterministic version',
+      payload: aggregateBenchmarkRuntimePayload('company', {
+        benchmarkVersion: 'aggregate:company:tampered000000',
+      }),
+      reason: 'benchmark_aggregate_version_mismatch',
+    },
+    {
+      name: 'non-canonical source benchmark versions',
+      payload: (() => {
+        const valid = aggregateBenchmarkRuntimePayload('company')
+        return aggregateBenchmarkRuntimePayload('company', {
+          aggregateProvenance: {
+            ...(valid.aggregateProvenance as Record<string, unknown>),
+            sourceBenchmarkVersions: ['candidate:2026-07-17:z', 'candidate:2026-07-17:a'],
+          },
+        })
+      })(),
+      reason: 'benchmark_aggregate_source_versions_canonical_required',
+    },
+  ])('rejects an aggregate benchmark with $name before querying', async ({ payload, reason }) => {
+    const queryMock = vi.fn(async () => [])
+
+    const result = await persistDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: `duration-learning:benchmark:${reason}`,
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'STD-001:process:all',
+      scope: { level: 'company', companyId },
+      stage: 'canary',
+      runtimePayload: payload,
+      sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reasons: expect.arrayContaining([reason]),
+    })
     expect(queryMock).not.toHaveBeenCalled()
   })
 

@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { hashDurationContextPolicyLearningValue } from '../services/durationContextPolicyLearningCheckpointService.js'
+
 const mocks = vi.hoisted(() => {
   let currentTable = ''
   const state = {
@@ -349,6 +351,20 @@ function completeRuntimeBenchmarkPayload(overrides: Record<string, unknown> = {}
     calendarVersion: 'calendar-v3',
     ...overrides,
   }
+}
+
+function deterministicAggregateBenchmarkVersion(input: {
+  scope: { level: 'company'; companyId: string } | { level: 'industry'; industryKey: string } | { level: 'global' }
+  sourceBenchmarkIds: string[]
+  sourceBenchmarkVersions: string[]
+  sourceAsOf: string
+}) {
+  return `aggregate:${input.scope.level}:${hashDurationContextPolicyLearningValue({
+    scope: input.scope,
+    sourceBenchmarkIds: input.sourceBenchmarkIds,
+    sourceBenchmarkVersions: input.sourceBenchmarkVersions,
+    sourceAsOf: input.sourceAsOf,
+  }).slice(0, 16)}`
 }
 
 const serviceSourcePath = fileURLToPath(new URL('../services/durationSuggestionService.ts', import.meta.url))
@@ -2361,7 +2377,73 @@ describe('durationSuggestionService', () => {
     }
   })
 
+  it('accepts only canonical deterministic aggregate runtime identity and keeps its public benchmark id null', () => {
+    const aggregateProvenance = {
+      schemaVersion: 'duration-benchmark-aggregate/v1',
+      scopeLevel: 'industry',
+      sourceBenchmarkIds: ['benchmark-industry-source-1'],
+      sourceBenchmarkVersions: ['industry-v2'],
+      sourceProjectIds: ['industry-project-1'],
+      sourceCompanyIds: ['industry-company-1'],
+      sourceIndustryKeys: ['general_civil'],
+      calendarIdentities: [{ calendarRef: 'industry-calendar', calendarVersion: 'industry-v4' }],
+    }
+    const benchmarkVersion = deterministicAggregateBenchmarkVersion({
+      scope: { level: 'industry', industryKey: 'general_civil' },
+      sourceBenchmarkIds: aggregateProvenance.sourceBenchmarkIds,
+      sourceBenchmarkVersions: aggregateProvenance.sourceBenchmarkVersions,
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    })
+    const validPayload = {
+      ...completeRuntimeBenchmarkPayload({
+        benchmarkId: undefined,
+        benchmarkVersion,
+        sampleCount: 100,
+      }),
+      benchmarkKind: 'aggregate_all_cause',
+      causeApplicability: 'all_cause',
+      calendarRef: undefined,
+      calendarVersion: undefined,
+      aggregateProvenance,
+    }
+    const publication = {
+      companyId: null,
+      projectId: null,
+      industryKey: 'general_civil',
+      publicationStage: 'stable',
+      scopeLevel: 'industry',
+    }
+    const build = (runtimePayload: Record<string, unknown>) => buildDurationBenchmarkRowFromRuntimePublication({
+      publicationKey: 'runtime-industry-identity',
+      selectionBasis: 'industry_stable',
+      publication: { ...publication, runtimePayload },
+    })
+
+    expect(build(validPayload)).toMatchObject({
+      id: null,
+      benchmark_version: benchmarkVersion,
+      __durationLearningPublicationKey: 'runtime-industry-identity',
+    })
+    expect(build({
+      ...validPayload,
+      benchmarkVersion: 'aggregate:industry:tampered000000',
+    })).toBeNull()
+    expect(build({
+      ...validPayload,
+      aggregateProvenance: {
+        ...aggregateProvenance,
+        sourceBenchmarkVersions: ['industry-v2', 'industry-v1'],
+      },
+    })).toBeNull()
+  })
+
   it('preserves an industry runtime benchmark as industry provenance', async () => {
+    const aggregateBenchmarkVersion = deterministicAggregateBenchmarkVersion({
+      scope: { level: 'industry', industryKey: 'general_civil' },
+      sourceBenchmarkIds: ['benchmark-industry-source-1'],
+      sourceBenchmarkVersions: ['v6'],
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    })
     const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
       if (!sql.includes('from public.duration_learning_runtime_publications')) return [] as T[]
       return [{
@@ -2376,7 +2458,7 @@ describe('durationSuggestionService', () => {
         runtime_payload: {
           ...completeRuntimeBenchmarkPayload({
             benchmarkId: undefined,
-            benchmarkVersion: 'aggregate:industry:0123456789abcdef',
+            benchmarkVersion: aggregateBenchmarkVersion,
             sampleCount: 100,
           }),
           benchmarkKind: 'aggregate_all_cause',
@@ -2421,7 +2503,7 @@ describe('durationSuggestionService', () => {
 
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+industry_history_sample')
     expect(suggestion).toMatchObject({
-      benchmarkVersion: 'aggregate:industry:0123456789abcdef',
+      benchmarkVersion: aggregateBenchmarkVersion,
       benchmarkSampleCount: 100,
       benchmarkScope: 'industry',
       benchmarkProvenanceAvailability: 'available',
@@ -2429,8 +2511,9 @@ describe('durationSuggestionService', () => {
         mode: 'single',
         entries: [expect.objectContaining({
           source: 'runtime_publication',
+          benchmarkId: null,
           publicationKey: 'runtime-industry-1',
-          benchmarkVersion: 'aggregate:industry:0123456789abcdef',
+          benchmarkVersion: aggregateBenchmarkVersion,
           scope: 'industry',
           aggregateCalendarIdentities: [{ calendarRef: 'calendar-1', calendarVersion: 'calendar-v3' }],
           blendWeight: null,
@@ -3402,6 +3485,12 @@ describe('durationSuggestionService', () => {
   })
 
   it('publishes complete normalized provenance for a project and industry mixed blend', async () => {
+    const aggregateBenchmarkVersion = deterministicAggregateBenchmarkVersion({
+      scope: { level: 'industry', industryKey: 'general_civil' },
+      sourceBenchmarkIds: ['benchmark-industry-source-1'],
+      sourceBenchmarkVersions: ['industry-v2'],
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    })
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isProjectBenchmarkScope('project-1')) {
@@ -3436,7 +3525,7 @@ describe('durationSuggestionService', () => {
         runtime_payload: {
           ...completeRuntimeBenchmarkPayload({
             benchmarkId: undefined,
-            benchmarkVersion: 'aggregate:industry:fedcba9876543210',
+            benchmarkVersion: aggregateBenchmarkVersion,
             sampleCount: 100,
             generatedAt: '2026-07-03T08:00:00.000Z',
           }),
@@ -3503,8 +3592,9 @@ describe('durationSuggestionService', () => {
           }),
           expect.objectContaining({
             source: 'runtime_publication',
+            benchmarkId: null,
             publicationKey: 'runtime-industry-mixed',
-            benchmarkVersion: 'aggregate:industry:fedcba9876543210',
+            benchmarkVersion: aggregateBenchmarkVersion,
             scope: 'industry',
             blendWeight: 0.5,
           }),
@@ -5483,6 +5573,54 @@ describe('durationSuggestionService', () => {
     }))
   })
 
+  it('does not publish an unused benchmark candidate for a monthly commitment window', async () => {
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.query.maybeSingle.mockImplementation(async () => (
+      isCompanyBenchmarkScope('company-1')
+        ? {
+            data: completePersistedBenchmark({ id: 'benchmark-unused-monthly', p50_days: 2 }),
+            error: null,
+          }
+        : { data: null, error: null }
+    ))
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+      benchmarkBasis: 'Rebar installation default per work face.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'monthly_commitment_window',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      wbsNodeType: 'process',
+      currentProgress: 0,
+      targetProgress: 50,
+      plannedStartDate: '2026-05-29',
+      plannedEndDate: '2026-05-31',
+    })
+
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: null,
+      benchmarkAsOf: null,
+      benchmarkWindowStart: null,
+      benchmarkVersion: null,
+      benchmarkSampleCount: null,
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: 'unavailable',
+      benchmarkProvenanceReasonCodes: ['benchmark_provenance_missing'],
+      benchmarkProvenance: { mode: 'single', entries: [] },
+    })
+    expect(JSON.stringify(suggestion.benchmarkProvenance)).not.toContain('benchmark-unused-monthly')
+  })
+
   it('records runtime consumer evidence from getTaskDurationSuggestion when published artifacts are consumed', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
     mocks.query.maybeSingle.mockImplementation(async () => {
@@ -5684,17 +5822,17 @@ describe('durationSuggestionService', () => {
         && params[0] === 'base_duration_benchmark'
       ) {
         return [{
-          publication_key: 'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
+          publication_key: 'duration_learning_runtime:base_duration_benchmark:rebar-project-canary',
           asset_key: 'base_duration_benchmark',
           artifact_key: 'rebar_installation:process:all',
-          scope_level: 'company',
+          scope_level: 'project',
           company_id: 'company-1',
-          project_id: null,
+          project_id: 'project-1',
           industry_key: null,
           publication_stage: 'canary',
           runtime_payload: {
             benchmarkId: '44444444-4444-4444-8444-444444444444',
-            benchmarkVersion: 'runtime-company-v2',
+            benchmarkVersion: 'runtime-project-v2',
             p50Days: 6,
             p75Days: 8,
             p80Days: 9,
@@ -5732,7 +5870,7 @@ describe('durationSuggestionService', () => {
       id: 'segment-material-runtime',
       benchmarkId: '44444444-4444-4444-8444-444444444444',
       companyId: 'company-1',
-      projectId: null,
+      projectId: 'project-1',
       causeCode: 'material_shortage',
       taxonomyVersion: 'v1.0.0',
       sampleCount: 6,
@@ -5768,16 +5906,16 @@ describe('durationSuggestionService', () => {
       benchmarkCauseSelection: 'exact_cause',
     }))
     expect(suggestion).toMatchObject({
-      benchmarkVersion: 'runtime-company-v2',
-      benchmarkScope: 'company',
+      benchmarkVersion: 'runtime-project-v2',
+      benchmarkScope: 'project',
       benchmarkProvenanceAvailability: 'available',
       benchmarkProvenance: {
         mode: 'single',
         entries: [expect.objectContaining({
           source: 'cause_segment',
-          publicationKey: 'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
-          benchmarkVersion: 'runtime-company-v2',
-          scope: 'company',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:rebar-project-canary',
+          benchmarkVersion: 'runtime-project-v2',
+          scope: 'project',
           causeSegment: { causeCode: 'material_shortage', taxonomyVersion: 'v1.0.0' },
           calendarRef: 'cn-work-calendar',
           calendarVersion: '2026.07',
@@ -5791,7 +5929,7 @@ describe('durationSuggestionService', () => {
     }), expect.any(Function))
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toContainEqual([
       'base_duration_benchmark',
-      'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
+      'duration_learning_runtime:base_duration_benchmark:rebar-project-canary',
       'durationSuggestionService',
       'duration_suggestion',
     ])

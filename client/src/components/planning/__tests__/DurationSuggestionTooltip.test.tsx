@@ -208,7 +208,7 @@ describe('DurationSuggestionTooltip', () => {
               reasonCodes: [],
             }, {
               source: 'runtime_publication',
-              benchmarkId: 'runtime-aggregate:runtime-industry-mixed',
+              benchmarkId: null,
               publicationKey: 'runtime-industry-mixed',
               benchmarkVersion: 'aggregate:industry:fedcba9876543210',
               scope: 'industry',
@@ -243,14 +243,27 @@ describe('DurationSuggestionTooltip', () => {
     {
       availability: 'partial' as const,
       reasonCodes: ['benchmark_calendar_identity_missing'] as const,
-      message: '基准数据来源不完整',
+      statusMessage: '基准数据来源不完整',
+      reasonMessage: '基准日历身份不可用',
     },
     {
       availability: 'unavailable' as const,
       reasonCodes: ['benchmark_source_as_of_missing'] as const,
-      message: '基准数据时间不可用',
+      statusMessage: null,
+      reasonMessage: '基准数据截止时间不可用',
     },
-  ])('keeps used source rows visible when provenance is $availability', async ({ availability, reasonCodes, message }) => {
+    {
+      availability: 'unavailable' as const,
+      reasonCodes: ['benchmark_version_missing'] as const,
+      statusMessage: null,
+      reasonMessage: '基准版本不可用',
+    },
+  ])('keeps used source rows visible with a reason-specific $availability message', async ({
+    availability,
+    reasonCodes,
+    statusMessage,
+    reasonMessage,
+  }) => {
     render(
       <DurationSuggestionTooltip
         suggestion={{
@@ -323,7 +336,8 @@ describe('DurationSuggestionTooltip', () => {
     fireEvent.pointerMove(trigger)
 
     await waitFor(() => {
-      expect(screen.getAllByText(message).length).toBeGreaterThan(0)
+      if (statusMessage) expect(screen.getAllByText(statusMessage).length).toBeGreaterThan(0)
+      expect(screen.getAllByText(reasonMessage).length).toBeGreaterThan(0)
       expect(screen.getAllByText((content) => content.includes('公司基准 · 24 个样本 · v7 · 施工生产日')).length).toBeGreaterThan(0)
       if (availability === 'partial') {
         expect(screen.getAllByText((content) => content.includes('行业基准 · 40 个样本 · industry-v2 · 施工生产日 · 30%')).length).toBeGreaterThan(0)
