@@ -3,6 +3,7 @@ import type { TaskDurationForecast } from './taskDurationForecastService.js'
 import type { ProjectTaskAttribution } from './taskAttributionProjectionService.js'
 import {
   calendarDateText,
+  isAuthoritativeConstructionCalendar,
   isConstructionProductionDay,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
@@ -785,9 +786,7 @@ export function buildScopedDurationForecasts(
   const globalDegradationReasons = unique([
     ...(input.globalDegradationReasons ?? []),
     ...(!input.constructionCalendar ? ['construction_calendar_fallback'] : []),
-    ...(input.constructionCalendar?.availability === 'available'
-      && input.constructionCalendar.calendarRef
-      && input.constructionCalendar.calendarVersion
+    ...(isAuthoritativeConstructionCalendar(input.constructionCalendar)
       ? []
       : ['construction_calendar_identity_missing']),
   ])

@@ -20,6 +20,7 @@ import {
 import { assembleDurationInput } from './durationInputAssemblerService.js'
 import { buildDownstreamDurationAssetConsumption } from './durationAssetDownstreamConsumptionService.js'
 import {
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -754,7 +755,7 @@ function cpmSpanDays(
   const startDate = typeof start === 'string' ? parseDate(start) : start ?? null
   const endDate = typeof end === 'string' ? parseDate(end) : end ?? null
   if (!startDate || !endDate) return null
-  if (calendar?.windows?.length) {
+  if (isAuthoritativeConstructionCalendar(calendar)) {
     return Math.max(1, productionDaysBetweenInclusive(startDate, endDate, calendar))
   }
   return inclusiveDurationDays(startDate, endDate)

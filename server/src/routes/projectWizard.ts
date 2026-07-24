@@ -3286,8 +3286,39 @@ function readWizardConstructionCalendarEvidence(row: GeneratedTemplateRow) {
       ?? metadata.constructionCalendarWindowCount
       ?? metadata.construction_calendar_window_count,
   ) ?? 0
-  const consumed = Boolean((calendarBasis && calendarBasis !== 'calendar_day') || constructionCalendarWindowCount > 0)
-  return { consumed, calendarBasis: calendarBasis || null, constructionCalendarWindowCount }
+  const calendarRef = firstText(
+    values.construction_calendar_ref,
+    values.constructionCalendarRef,
+    metadata.constructionCalendarRef,
+    metadata.construction_calendar_ref,
+  )
+  const calendarVersion = firstText(
+    values.construction_calendar_version,
+    values.constructionCalendarVersion,
+    metadata.constructionCalendarVersion,
+    metadata.construction_calendar_version,
+  )
+  const timezone = firstText(
+    values.construction_calendar_timezone,
+    values.constructionCalendarTimezone,
+    metadata.constructionCalendarTimezone,
+    metadata.construction_calendar_timezone,
+  )
+  const availability = firstText(
+    values.construction_calendar_availability,
+    values.constructionCalendarAvailability,
+    metadata.constructionCalendarAvailability,
+    metadata.construction_calendar_availability,
+  )
+  const consumed = calendarBasis === 'official_construction_calendar_seed'
+    && constructionCalendarWindowCount > 0
+    && Boolean(calendarRef && calendarVersion && timezone)
+    && availability === 'available'
+  return {
+    consumed,
+    calendarBasis: consumed ? calendarBasis : 'calendar_day',
+    constructionCalendarWindowCount: consumed ? constructionCalendarWindowCount : 0,
+  }
 }
 
 function buildWizardDurationAssetAppliedPlanEndDate(

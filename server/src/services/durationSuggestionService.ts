@@ -48,6 +48,7 @@ import {
 import { resolveProjectFactDurationScaling } from './durationProjectFactScaleService.js'
 import {
   addConstructionProductionDays,
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -3971,12 +3972,13 @@ function withEstimatedPlannedEndDate(input: DurationSuggestionInput, baseDays: n
 }
 
 function calendarContextSummary(calendar?: ConstructionCalendarContext | null) {
-  const hasOfficialCalendar = calendar?.basis === 'official_construction_calendar_seed'
+  const hasOfficialCalendar = isAuthoritativeConstructionCalendar(calendar)
+  const windows = hasOfficialCalendar ? calendar.windows : []
   return {
     basis: hasOfficialCalendar ? 'official_construction_calendar_seed' : 'calendar_day_no_shutdown_context',
     rawBasis: calendar?.basis ?? 'calendar_day',
-    windowCount: calendar?.windows.length ?? 0,
-    shutdownWindowCount: calendar?.windows.filter((window) => {
+    windowCount: windows.length,
+    shutdownWindowCount: windows.filter((window) => {
       const flag = String(
         (window as Record<string, unknown>).countsAsConstructionShutdown
           ?? (window as Record<string, unknown>).counts_as_construction_shutdown

@@ -233,6 +233,11 @@ describe('scopedDurationForecastService', () => {
           start_date: '2026-07-18',
           end_date: '2026-07-20',
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 

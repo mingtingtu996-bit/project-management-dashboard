@@ -506,6 +506,11 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
             countsAsConstructionShutdown: true,
           },
         ],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
       durationSuggestionByTaskId: new Map([
         ['task-e1-calendar', {
@@ -1110,6 +1115,11 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
           countsAsConstructionShutdown: true,
         },
       ],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     } satisfies ConstructionCalendarContext
     const items = await __baselineGenerationV1474TestHooks.rescheduleBaselineItemsWithE3NetworkOrder({
       projectId: 'project-1',

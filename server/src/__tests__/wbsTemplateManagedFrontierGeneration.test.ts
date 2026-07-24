@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
 
 const dbServiceMocks = vi.hoisted(() => {
   process.env.LOG_LEVEL = process.env.LOG_LEVEL || 'warn'
@@ -113,7 +114,10 @@ vi.mock('../middleware/logger.js', () => ({
 }))
 
 const constructionCalendarMocks = vi.hoisted(() => ({
-  resolveConstructionCalendarContext: vi.fn(async () => ({ basis: 'calendar_day', windows: [] })),
+  resolveConstructionCalendarContext: vi.fn(async (): Promise<ConstructionCalendarContext> => ({
+    basis: 'calendar_day',
+    windows: [],
+  })),
 }))
 
 vi.mock('../services/constructionCalendar.js', async (importOriginal) => {
@@ -5205,6 +5209,11 @@ describe('managed-frontier WBS generation', () => {
           endDate: '2026-07-10',
           countsAsConstructionShutdown: true,
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
@@ -5234,6 +5243,11 @@ describe('managed-frontier WBS generation', () => {
         endDate: '2026-07-10',
         countsAsConstructionShutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     })
 
     const generated = await generateDefaultMasterPlanForProbe(schoolProbe!)

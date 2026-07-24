@@ -1906,6 +1906,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-02-23',
       adjustedWorkDates: ['2026-02-14', '2026-02-28'],
       productivity: 0.45,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-spring',
@@ -1939,6 +1940,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-05-03',
       counts_as_construction_shutdown: true,
       productivity: 0,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-explicit-shutdown',
@@ -1971,6 +1973,7 @@ describe('taskDurationForecastService', () => {
       startDate: '2026-06-01',
       endDate: '2026-06-10',
       productivity: 0.8,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-climate-window',
@@ -2000,6 +2003,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-02-23',
       calendarKind: 'statutory_holiday',
       productivity: 0.45,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-spring-unstarted',

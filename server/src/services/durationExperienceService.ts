@@ -24,6 +24,9 @@ import {
   readConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
 import {
+  effectiveConstructionCalendarBasis,
+  effectiveConstructionCalendarWindowCount,
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
 } from './constructionCalendar.js'
@@ -654,17 +657,14 @@ export async function collectDurationExperienceSampleFromTask(
       error: error instanceof Error ? error.message : String(error),
     }),
   })
-  const hasAuthoritativeConstructionCalendar = constructionCalendar.availability === 'available'
-    && constructionCalendar.basis === 'official_construction_calendar_seed'
-    && Boolean(normalizeText(constructionCalendar.calendarRef))
-    && Boolean(normalizeText(constructionCalendar.calendarVersion))
-  const durationDayBasis = hasAuthoritativeConstructionCalendar
+  const hasAuthoritativeCalendar = isAuthoritativeConstructionCalendar(constructionCalendar)
+  const durationDayBasis = hasAuthoritativeCalendar
     ? 'construction_production_day' as const
     : 'calendar_day' as const
-  const actualDurationProductionDays = hasAuthoritativeConstructionCalendar
+  const actualDurationProductionDays = hasAuthoritativeCalendar
     ? Math.max(1, productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar))
     : null
-  const plannedDurationProductionDays = hasAuthoritativeConstructionCalendar
+  const plannedDurationProductionDays = hasAuthoritativeCalendar
     ? plannedStartDate && plannedEndDate
       ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
       : actualDurationProductionDays
@@ -676,7 +676,7 @@ export async function collectDurationExperienceSampleFromTask(
   const measuredSampleStrength = progressQuality.sampleStrength
     ? weakerSampleStrength(dateSampleStrength, progressQuality.sampleStrength)
     : dateSampleStrength
-  const finalSampleStrength: SampleStrength = hasAuthoritativeConstructionCalendar
+  const finalSampleStrength: SampleStrength = hasAuthoritativeCalendar
     ? measuredSampleStrength
     : 'unusable'
   const confidence = confidenceForStrength(finalSampleStrength)
@@ -790,8 +790,8 @@ export async function collectDurationExperienceSampleFromTask(
     actual_duration_production_days: actualDurationProductionDays,
     planned_duration_calendar_days: plannedDurationCalendarDays,
     planned_duration_production_days: plannedDurationProductionDays,
-    construction_calendar_basis: constructionCalendar.basis,
-    construction_calendar_window_count: constructionCalendar.windows.length,
+    construction_calendar_basis: effectiveConstructionCalendarBasis(constructionCalendar),
+    construction_calendar_window_count: effectiveConstructionCalendarWindowCount(constructionCalendar),
     construction_calendar_ref: constructionCalendar.calendarRef ?? null,
     construction_calendar_version: constructionCalendar.calendarVersion ?? null,
     construction_calendar_timezone: constructionCalendar.timezone ?? null,
@@ -887,7 +887,7 @@ export async function collectDurationExperienceSampleFromTask(
     actual_duration_production_days: actualDurationProductionDays,
     planned_duration_calendar_days: plannedDurationCalendarDays,
     planned_duration_production_days: plannedDurationProductionDays,
-    construction_calendar_basis: constructionCalendar.basis,
+    construction_calendar_basis: effectiveConstructionCalendarBasis(constructionCalendar),
     planned_duration: plannedDuration,
     actual_duration: actualDuration,
     started_at: actualStartDate.toISOString(),
@@ -916,8 +916,8 @@ export async function collectDurationExperienceSampleFromTask(
       actualStartSource: actualStart.source,
       actualEndSource: actualEnd.source,
       durationDayBasis,
-      constructionCalendarBasis: constructionCalendar.basis,
-      constructionCalendarWindowCount: constructionCalendar.windows.length,
+      constructionCalendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
+      constructionCalendarWindowCount: effectiveConstructionCalendarWindowCount(constructionCalendar),
       constructionCalendarRef: constructionCalendar.calendarRef ?? null,
       constructionCalendarVersion: constructionCalendar.calendarVersion ?? null,
       constructionCalendarTimezone: constructionCalendar.timezone ?? null,

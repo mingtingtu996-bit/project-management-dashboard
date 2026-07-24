@@ -23,6 +23,7 @@ import type {
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
 import {
   addConstructionProductionDays,
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
@@ -211,7 +212,7 @@ function addCalendarDays(date: string | null | undefined, days: number) {
 }
 
 function hasConstructionCalendarRules(calendar?: ConstructionCalendarContext | null) {
-  return Boolean(calendar?.windows?.length)
+  return isAuthoritativeConstructionCalendar(calendar)
 }
 
 function addProductionDays(

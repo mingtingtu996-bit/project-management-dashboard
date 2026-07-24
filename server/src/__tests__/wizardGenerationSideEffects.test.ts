@@ -248,6 +248,10 @@ function withCandidatePlanQualityAssets<T extends Array<Record<string, any>>>(ro
           ...metadata,
           calendarBasis: metadata.calendarBasis ?? 'official_construction_calendar_seed',
           constructionCalendarWindowCount: metadata.constructionCalendarWindowCount ?? 1,
+          constructionCalendarRef: metadata.constructionCalendarRef ?? 'work_calendar',
+          constructionCalendarVersion: metadata.constructionCalendarVersion ?? 'calendar-v1',
+          constructionCalendarTimezone: metadata.constructionCalendarTimezone ?? 'Asia/Shanghai',
+          constructionCalendarAvailability: metadata.constructionCalendarAvailability ?? 'available',
           durationAssetCalculation: {
             selectedDurationDays: p50Days,
             baseSelectedDurationDays: durationAssetCalculation.baseSelectedDurationDays ?? p50Days,
@@ -470,6 +474,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               durationAssetCalculation: {
                 selectedDurationDays: 12,
                 baseSelectedDurationDays: 10,
@@ -813,6 +821,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               durationAssetCalculation: {
                 selectedDurationDays: 5,
                 baseSelectedDurationDays: 5,
@@ -1749,6 +1761,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               durationAssetCalculation: {
                 selectedDurationDays: 12,
                 baseSelectedDurationDays: 10,
@@ -1875,6 +1891,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               durationAssetCalculation: {
                 selectedDurationDays: 12,
                 baseSelectedDurationDays: 10,
@@ -2791,6 +2811,11 @@ describe('v1.4.22.1 project wizard route side effects', () => {
         type: 'holiday_shutdown',
         reason: 'official_test_shutdown',
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     })
     mocks.rawQuery.mockImplementation(async (sql: string, params: unknown[] = []) => {
       const text = String(sql)
@@ -7002,6 +7027,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
               },
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
             }
           : {},
       },
@@ -7164,6 +7193,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               durationAssetMapping: {
                 standardWorkDurationSeedStableCode: 'bored_cast_in_place_pile_foundation',
                 t2RhythmTemplateId: 't2-foundation-pit-pile-v1',
@@ -7438,6 +7471,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               durationAssetCalculation: {
                 selectedDurationDays: 10,
                 baseSelectedDurationDays: 10,
@@ -7532,6 +7569,10 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             standard_task_metadata: {
               calendarBasis: 'official_construction_calendar_seed',
               constructionCalendarWindowCount: 1,
+              constructionCalendarRef: 'work_calendar',
+              constructionCalendarVersion: 'calendar-v1',
+              constructionCalendarTimezone: 'Asia/Shanghai',
+              constructionCalendarAvailability: 'available',
               businessTypeMasterPlan: {
                 businessType: 'school',
                 profileSourceType: 'business_type_master_plan_profile_v1',
@@ -8434,6 +8475,11 @@ describe('v1.4.22.1 project wizard route side effects', () => {
         endDate: '2026-05-04',
         counts_as_construction_shutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     })
 
     const response = await request(buildApp())
@@ -8573,12 +8619,12 @@ describe('v1.4.22.1 project wizard route side effects', () => {
       includeActivitySteps: false,
     }))
     expect(previewGenerationCall.operation.clientContext).toEqual(expect.objectContaining({
-      constructionCalendar: {
+      constructionCalendar: expect.objectContaining({
         basis: 'official_construction_calendar_seed',
         windows: [expect.objectContaining({
           holidayCode: 'project_shutdown_2026',
         })],
-      },
+      }),
     }))
     expect(mocks.createTaskInMainChain).not.toHaveBeenCalled()
     expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()

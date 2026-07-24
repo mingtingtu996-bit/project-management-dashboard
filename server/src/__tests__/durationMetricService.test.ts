@@ -38,6 +38,26 @@ describe('durationMetricService', () => {
     }))
   })
 
+  it('rejects a calendar-day basis even when identity-shaped fields are present', () => {
+    expect(buildConstructionProductionDayDurationMetric(4, {
+      asOf: '2026-07-20',
+      calendar: {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    })).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }))
+  })
+
   it('preserves production-day calendar identity when the metric is available', () => {
     expect(buildConstructionProductionDayDurationMetric(-3, {
       asOf: '2026-07-20',

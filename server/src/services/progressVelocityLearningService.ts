@@ -12,6 +12,8 @@ import {
   loadProgressVelocityProjectDurationExperienceSamples,
 } from './durationContextSampleReadModelService.js'
 import {
+  effectiveConstructionCalendarBasis,
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -267,6 +269,7 @@ function buildRatioSample(
   learningWindowDays = LEARNING_WINDOW_DAYS,
   constructionCalendar?: ConstructionCalendarContext | null,
 ): RatioSample | null {
+  if (!isAuthoritativeConstructionCalendar(constructionCalendar)) return null
   const actualStart = parseDate(row.actual_start_date)
   const actualEnd = completedSampleEndDate(row)
   const plannedStart = parseDate(row.planned_start_date ?? row.start_date)
@@ -826,7 +829,9 @@ export async function buildProjectProgressVelocityLearning(
       })),
       learningWindowDays,
       rawTaskDurationDayBasis: 'construction_production_day',
-      constructionCalendarBasis: constructionCalendar?.basis ?? 'duration_experience_sample_basis',
+      constructionCalendarBasis: constructionCalendar
+        ? effectiveConstructionCalendarBasis(constructionCalendar)
+        : 'duration_experience_sample_basis',
       learningScope: companyFallbackRows.length > 0 ? 'project_plus_company' : 'project',
       experienceTier: PROGRESS_VELOCITY_EXPECTED_EXPERIENCE_TIER,
       learningBucketValidation: 'duration_context_policy_state_bucket_T1_only',

@@ -486,6 +486,11 @@ describe('duration consistency contract scaffold', () => {
         endDate: '2026-05-05',
         counts_as_construction_shutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     }
 
     expect(productionDaysBetweenInclusive(date('2026-05-01'), date('2026-05-03'), calendar)).toBe(3)

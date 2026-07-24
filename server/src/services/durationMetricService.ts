@@ -1,4 +1,7 @@
-import type { ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  isAuthoritativeConstructionCalendar,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 
 export type DurationMetricUnit = 'calendar_day' | 'construction_production_day'
 export type DurationMetricAvailability = 'available' | 'unavailable'
@@ -93,10 +96,7 @@ export function buildCalendarDayDurationMetric(
 export function hasIdentifiedConstructionCalendar(
   calendar: ConstructionCalendarContext | null | undefined,
 ): boolean {
-  return calendar?.availability === 'available'
-    && Boolean(normalizeText(calendar.calendarRef))
-    && Boolean(normalizeText(calendar.calendarVersion))
-    && Boolean(normalizeText(calendar.timezone))
+  return isAuthoritativeConstructionCalendar(calendar)
 }
 
 export function buildConstructionProductionDayDurationMetric(

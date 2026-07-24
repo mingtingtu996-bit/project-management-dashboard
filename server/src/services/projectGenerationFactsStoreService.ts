@@ -15,7 +15,10 @@ import type { T2RhythmScheduleCandidateNetwork } from './t2RhythmScheduleCandida
 import type { T2RhythmScheduleCandidateNetworkPhase1Evaluation } from './t2RhythmScheduleCandidateNetworkEvaluationService.js'
 import type { T2RhythmSchedulePhase1Selection } from './t2RhythmSchedulePhase1SelectionService.js'
 import type { T2RhythmStandardLibraryTrustGate } from './t2RhythmStandardLibraryTrustGateService.js'
-import type { ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  normalizeConstructionCalendarForConsumption,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 
 const FORECAST_LIVE_REREAD_FIELDS = new Set([
   'businessType',
@@ -502,12 +505,17 @@ function readProjectRowConstructionCalendar(row: Record<string, unknown>): Const
   )
   const basis = normalizeText(calendar.basis)
   if (!basis) return null
-  return {
+  return normalizeConstructionCalendarForConsumption({
     basis: basis === 'official_construction_calendar_seed'
       ? 'official_construction_calendar_seed'
       : 'calendar_day',
     windows: readArray(calendar.windows) as ConstructionCalendarContext['windows'],
-  }
+    calendarRef: normalizeText(calendar.calendarRef ?? calendar.calendar_ref) || null,
+    calendarVersion: normalizeText(calendar.calendarVersion ?? calendar.calendar_version) || null,
+    timezone: normalizeText(calendar.timezone) || null,
+    availability: normalizeText(calendar.availability) === 'available' ? 'available' : 'unavailable',
+    unavailableReason: normalizeText(calendar.unavailableReason ?? calendar.unavailable_reason) || null,
+  })
 }
 
 function deriveProjectRowT2RhythmProductionCapacityEvidence(

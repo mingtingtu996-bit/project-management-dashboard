@@ -37,8 +37,12 @@ function asProductionSample(sample: DurationExperienceSampleRow): DurationExperi
     planned_duration_production_days: sample.planned_duration ?? null,
     metadata: {
       ...sample.metadata,
+      construction_calendar_basis: sample.metadata?.construction_calendar_basis ?? 'official_construction_calendar_seed',
       construction_calendar_ref: sample.metadata?.construction_calendar_ref ?? 'cn-work-calendar',
       construction_calendar_version: sample.metadata?.construction_calendar_version ?? '2026.01',
+      construction_calendar_timezone: sample.metadata?.construction_calendar_timezone ?? 'Asia/Shanghai',
+      construction_calendar_availability: sample.metadata?.construction_calendar_availability ?? 'available',
+      construction_calendar_unavailable_reason: sample.metadata?.construction_calendar_unavailable_reason ?? null,
     },
   }
 }

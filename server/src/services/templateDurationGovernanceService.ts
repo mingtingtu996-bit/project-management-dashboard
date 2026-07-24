@@ -10,6 +10,10 @@ import { loadTemplateDurationGovernanceSamples } from './durationContextSampleRe
 import { stageDurationBenchmarkCandidateAtomically } from './durationLearningAssetAtomicStoreService.js'
 import { readProductionDurationDays } from '../utils/durationDayBasis.js'
 import { inclusiveDurationDays } from '../utils/durationDays.js'
+import {
+  isAuthoritativeConstructionCalendar,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 
 type ConfidenceLevel = 'high' | 'medium' | 'low'
 
@@ -284,10 +288,19 @@ function buildSampleLineage(sample: DurationExperienceSampleRow) {
   }
 }
 
-function readConstructionCalendarIdentity(sample: DurationExperienceSampleRow) {
+function readConstructionCalendarIdentity(sample: DurationExperienceSampleRow): ConstructionCalendarContext {
   return {
+    basis: normalizeText(sample.metadata?.construction_calendar_basis) === 'official_construction_calendar_seed'
+      ? 'official_construction_calendar_seed'
+      : 'calendar_day',
+    windows: [],
     calendarRef: normalizeText(sample.metadata?.construction_calendar_ref),
     calendarVersion: normalizeText(sample.metadata?.construction_calendar_version),
+    timezone: normalizeText(sample.metadata?.construction_calendar_timezone),
+    availability: normalizeText(sample.metadata?.construction_calendar_availability) === 'available'
+      ? 'available'
+      : 'unavailable',
+    unavailableReason: normalizeText(sample.metadata?.construction_calendar_unavailable_reason),
   }
 }
 
@@ -325,7 +338,7 @@ function isUsableSample(sample: DurationExperienceSampleRow, options: Required<P
   if (normalizeText(sample.sample_strength) === 'unusable') return false
   const calendar = readConstructionCalendarIdentity(sample)
   return readProductionDurationDays(sample as Record<string, unknown>, 'actual') !== null
-    && Boolean(calendar.calendarRef && calendar.calendarVersion)
+    && isAuthoritativeConstructionCalendar(calendar)
     && Boolean(normalizeTimestamp(sample.completed_at ?? sample.created_at))
 }
 

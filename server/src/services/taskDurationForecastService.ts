@@ -30,6 +30,9 @@ import type { AlgorithmSeedRecordPayload } from './algorithmSeedRegistry.js'
 import {
   addConstructionProductionDays,
   dateInConstructionCalendarWindow,
+  effectiveConstructionCalendarBasis,
+  effectiveConstructionCalendarWindowCount,
+  isAuthoritativeConstructionCalendar,
   isSpringFestivalWindow,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -994,6 +997,9 @@ function springFestivalPenaltyDecay(params: {
       reason: null as string | null,
       windowCode: null as string | null,
     }
+  }
+  if (!isAuthoritativeConstructionCalendar(params.calendar)) {
+    return { applied: false, ratio: 1, reason: null as string | null, windowCode: null as string | null }
   }
 
   const springWindow = params.calendar.windows.find((window) => (
@@ -4832,7 +4838,7 @@ function computeForecastConfidenceScore(params: {
   score -= Math.min(8, Number(params.externalImpact.confidenceOnlyCount ?? 0) * 2)
   score += params.contextImpact.confidenceDelta
   score += params.planRisk.confidenceDelta
-  score += params.workCalendar.basis === 'official_construction_calendar_seed' ? 2 : -3
+  score += isAuthoritativeConstructionCalendar(params.workCalendar) ? 2 : -3
   score = 50 + ((score - 50) * params.modelProfile.confidenceWeight)
 
   return Math.round(clamp(score, 5, 95))
@@ -4910,7 +4916,7 @@ async function buildRemainingForecastModel(params: {
       forecastSources: {
         candidates: [],
         completed: true,
-        calendarBasis: params.workCalendar.basis,
+        calendarBasis: effectiveConstructionCalendarBasis(params.workCalendar),
         forecastOptions: params.forecastOptions,
         modelProfile: {
           id: modelProfile.id,
@@ -5366,8 +5372,8 @@ async function buildRemainingForecastModel(params: {
         groupKey: params.velocityLearning.groupKey,
       }
       : null,
-    calendarBasis: params.workCalendar.basis,
-    calendarWindowCount: params.workCalendar.windows.length,
+    calendarBasis: effectiveConstructionCalendarBasis(params.workCalendar),
+    calendarWindowCount: effectiveConstructionCalendarWindowCount(params.workCalendar),
     forecastOptions: params.forecastOptions,
     impactSignals: impactSignalSummary.signals,
     impactSignalSummary: {

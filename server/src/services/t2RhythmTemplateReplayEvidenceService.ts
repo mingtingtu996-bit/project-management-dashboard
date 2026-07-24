@@ -4,6 +4,7 @@ import {
 } from './t2RhythmTemplateReplayAcceptanceService.js'
 import type { T2RhythmScheduleCandidatePackage } from './t2DivisionRhythmTemplateRegistryService.js'
 import {
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
@@ -149,6 +150,7 @@ function actualWindowDurationDays(
   sample: T2RhythmTemplateReplayEvidenceSample,
   calendar?: ConstructionCalendarContext | null,
 ) {
+  if (calendar && !isAuthoritativeConstructionCalendar(calendar)) return null
   const start = normalizeDurationDateUtc(sample.actualStartDate)
   const end = normalizeDurationDateUtc(sample.actualEndDate)
   if (!start || !end) return null
@@ -161,6 +163,7 @@ function plannedWindowDurationDays(
   endValue: string | Date | null | undefined,
   calendar?: ConstructionCalendarContext | null,
 ) {
+  if (calendar && !isAuthoritativeConstructionCalendar(calendar)) return null
   const start = normalizeDurationDateUtc(startValue)
   const end = normalizeDurationDateUtc(endValue)
   if (!start || !end || end.getTime() < start.getTime()) return null

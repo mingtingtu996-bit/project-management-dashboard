@@ -132,7 +132,11 @@ import {
   addConstructionProductionDays,
   calendarDateText,
   countsAsConstructionShutdown,
+  effectiveConstructionCalendarBasis,
+  effectiveConstructionCalendarWindowCount,
+  isAuthoritativeConstructionCalendar,
   isConstructionProductionDay,
+  normalizeConstructionCalendarForConsumption,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -1638,7 +1642,7 @@ function readConstructionCalendarContext(value: unknown): ConstructionCalendarCo
   const availability = normalizeText(record.availability) === 'available'
     ? 'available'
     : 'unavailable'
-  return {
+  return normalizeConstructionCalendarForConsumption({
     basis,
     windows: windows.map((window) => readRecord(window)),
     calendarRef: normalizeText(record.calendarRef ?? record.calendar_ref) || null,
@@ -1646,7 +1650,7 @@ function readConstructionCalendarContext(value: unknown): ConstructionCalendarCo
     timezone: normalizeText(record.timezone) || null,
     availability,
     unavailableReason: normalizeText(record.unavailableReason ?? record.unavailable_reason) || null,
-  }
+  })
 }
 
 function readOperationConstructionCalendar(operation: PlanningTableOperation): ConstructionCalendarContext | null {
@@ -1660,14 +1664,15 @@ function readOperationConstructionCalendar(operation: PlanningTableOperation): C
 
 function sanitizeGeneratedConstructionCalendarContext(constructionCalendar?: ConstructionCalendarContext | null) {
   if (!constructionCalendar) return null
+  const normalizedCalendar = normalizeConstructionCalendarForConsumption(constructionCalendar)
   return {
-    basis: constructionCalendar.basis,
-    calendarRef: constructionCalendar.calendarRef ?? null,
-    calendarVersion: constructionCalendar.calendarVersion ?? null,
-    timezone: constructionCalendar.timezone ?? null,
-    availability: constructionCalendar.availability ?? 'unavailable',
-    unavailableReason: constructionCalendar.unavailableReason ?? null,
-    windows: constructionCalendar.windows.map((window) => ({
+    basis: normalizedCalendar.basis,
+    calendarRef: normalizedCalendar.calendarRef ?? null,
+    calendarVersion: normalizedCalendar.calendarVersion ?? null,
+    timezone: normalizedCalendar.timezone ?? null,
+    availability: normalizedCalendar.availability ?? 'unavailable',
+    unavailableReason: normalizedCalendar.unavailableReason ?? null,
+    windows: normalizedCalendar.windows.map((window) => ({
       stableCode: normalizeText(window.stableCode ?? window.holidayCode ?? window.holiday_code),
       holidayName: normalizeText(window.holidayName ?? window.holiday_name),
       startDate: normalizeDate(window.startDate ?? window.start_date),
@@ -1693,7 +1698,7 @@ function addTemplateProductionDays(
   days: number,
   constructionCalendar?: ConstructionCalendarContext | null,
 ) {
-  if (!constructionCalendar || constructionCalendar.windows.length === 0) return addDays(dateText, days)
+  if (!isAuthoritativeConstructionCalendar(constructionCalendar)) return addDays(dateText, days)
   const parsed = parseConstructionCalendarDate(dateText)
   if (!parsed) return addDays(dateText, days)
   if (days >= 0) return addConstructionProductionDays(parsed, days + 1, constructionCalendar)
@@ -1705,7 +1710,7 @@ function subtractTemplateProductionDays(
   days: number,
   constructionCalendar?: ConstructionCalendarContext | null,
 ) {
-  if (!constructionCalendar || constructionCalendar.windows.length === 0) return addDays(dateText, -days)
+  if (!isAuthoritativeConstructionCalendar(constructionCalendar)) return addDays(dateText, -days)
   const parsed = parseConstructionCalendarDate(dateText)
   if (!parsed) return addDays(dateText, -days)
 
@@ -8813,8 +8818,21 @@ function buildGeneratedRowsForNode(params: {
     params.suggestionByNodeKey.get(getDurationSuggestionKey(params.scopeIndex, params.node, elementVariant)) ?? null,
   )
   const standardTaskMetadata = buildGeneratedStandardTaskMetadata(params.node, durationSuggestion, featureProfile, elementVariant, params.scope)
-  ;(standardTaskMetadata as Record<string, unknown>).calendarBasis = params.constructionCalendar?.basis ?? 'calendar_day'
-  ;(standardTaskMetadata as Record<string, unknown>).constructionCalendarWindowCount = params.constructionCalendar?.windows.length ?? 0
+  const authoritativeConstructionCalendar = isAuthoritativeConstructionCalendar(params.constructionCalendar)
+  ;(standardTaskMetadata as Record<string, unknown>).calendarBasis = effectiveConstructionCalendarBasis(params.constructionCalendar)
+  ;(standardTaskMetadata as Record<string, unknown>).constructionCalendarWindowCount = effectiveConstructionCalendarWindowCount(params.constructionCalendar)
+  ;(standardTaskMetadata as Record<string, unknown>).constructionCalendarRef = authoritativeConstructionCalendar
+    ? params.constructionCalendar.calendarRef
+    : null
+  ;(standardTaskMetadata as Record<string, unknown>).constructionCalendarVersion = authoritativeConstructionCalendar
+    ? params.constructionCalendar.calendarVersion
+    : null
+  ;(standardTaskMetadata as Record<string, unknown>).constructionCalendarTimezone = authoritativeConstructionCalendar
+    ? params.constructionCalendar.timezone
+    : params.constructionCalendar?.timezone ?? 'Asia/Shanghai'
+  ;(standardTaskMetadata as Record<string, unknown>).constructionCalendarAvailability = authoritativeConstructionCalendar
+    ? 'available'
+    : 'unavailable'
   if (params.scope.project_organization_policy_id) {
     const organizationPolicy = resolveProjectConstructionOrganizationPolicy(
       featureProfile.businessType,
@@ -11732,7 +11750,7 @@ function readGeneratedRowPlanScheduleDurationDays(
   row: GeneratedTemplateRow,
   constructionCalendar?: ConstructionCalendarContext | null,
 ) {
-  if (!constructionCalendar || constructionCalendar.windows.length === 0) return readGeneratedRowPlanDurationDays(row)
+  if (!isAuthoritativeConstructionCalendar(constructionCalendar)) return readGeneratedRowPlanDurationDays(row)
   const start = readGeneratedRowPlanStart(row)
   const end = readGeneratedRowPlanEnd(row)
   const parsedStart = parseConstructionCalendarDate(start)
@@ -11752,11 +11770,12 @@ function shiftGeneratedRowPlanDates(
   const start = readGeneratedRowPlanStart(row)
   const end = readGeneratedRowPlanEnd(row)
   if (!start || !end) return
-  const nextStart = constructionCalendar?.windows.length
+  const hasAuthoritativeCalendar = isAuthoritativeConstructionCalendar(constructionCalendar)
+  const nextStart = hasAuthoritativeCalendar
     ? addTemplateProductionDays(addDays(start, shiftDays), 0, constructionCalendar)
     : addDays(start, shiftDays)
   const durationDays = readGeneratedRowPlanScheduleDurationDays(row, constructionCalendar)
-  const nextEnd = constructionCalendar?.windows.length
+  const nextEnd = hasAuthoritativeCalendar
     ? addTemplateProductionDays(nextStart, Math.max(1, durationDays) - 1, constructionCalendar)
     : addDays(end, shiftDays)
   row.values = {
@@ -11949,6 +11968,7 @@ function applyGeneratedDependencySchedule(
     const metadata = readRowMetadata(row)
     const previousDependencySchedule = readRecord(metadata.dependencySchedule)
     const previousMaxShiftDays = readOptionalNumber(previousDependencySchedule.maxShiftDays) ?? 0
+    const authoritativeConstructionCalendar = isAuthoritativeConstructionCalendar(constructionCalendar)
     row.values = {
       ...row.values,
       standard_task_metadata: {
@@ -11956,9 +11976,15 @@ function applyGeneratedDependencySchedule(
         dependencySchedule: {
           source: 'generated_dependency_network',
           adjusted: stat.adjusted || previousDependencySchedule.adjusted === true,
-          calendarBasis: constructionCalendar?.basis ?? 'calendar_day',
-          constructionCalendarWindowCount: constructionCalendar?.windows.length ?? 0,
-          durationBasis: constructionCalendar?.windows.length ? 'production_day' : 'calendar_day',
+          calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
+          constructionCalendarWindowCount: effectiveConstructionCalendarWindowCount(constructionCalendar),
+          constructionCalendarRef: authoritativeConstructionCalendar ? constructionCalendar.calendarRef : null,
+          constructionCalendarVersion: authoritativeConstructionCalendar ? constructionCalendar.calendarVersion : null,
+          constructionCalendarTimezone: authoritativeConstructionCalendar
+            ? constructionCalendar.timezone
+            : constructionCalendar?.timezone ?? 'Asia/Shanghai',
+          constructionCalendarAvailability: authoritativeConstructionCalendar ? 'available' : 'unavailable',
+          durationBasis: authoritativeConstructionCalendar ? 'production_day' : 'calendar_day',
           predecessorCount: stat.predecessorCount,
           invalidPredecessorCount: stat.invalidPredecessorCount,
           appliedDependencyTypes: [...stat.appliedDependencyTypes],
@@ -17365,8 +17391,9 @@ async function buildResidentialMasterPlanRow(params: {
   seedResolveContext?: AlgorithmSeedResolveContext
   organizationContext?: ResidentialMasterPlanOrganizationContext | null
 }): Promise<GeneratedTemplateRow> {
-  const calendarBasis = params.constructionCalendar?.basis ?? 'calendar_day'
-  const constructionCalendarWindowCount = params.constructionCalendar?.windows.length ?? 0
+  const authoritativeConstructionCalendar = isAuthoritativeConstructionCalendar(params.constructionCalendar)
+  const calendarBasis = effectiveConstructionCalendarBasis(params.constructionCalendar)
+  const constructionCalendarWindowCount = effectiveConstructionCalendarWindowCount(params.constructionCalendar)
   const planItemKind = params.activity.planItemKind ?? 'work_task'
   const isMilestone = planItemKind === 'milestone'
   const start = addTemplateProductionDays(params.startDate, params.activity.startOffsetDays, params.constructionCalendar)
@@ -17557,6 +17584,12 @@ async function buildResidentialMasterPlanRow(params: {
     executionNature,
     calendarBasis,
     constructionCalendarWindowCount,
+    constructionCalendarRef: authoritativeConstructionCalendar ? params.constructionCalendar.calendarRef : null,
+    constructionCalendarVersion: authoritativeConstructionCalendar ? params.constructionCalendar.calendarVersion : null,
+    constructionCalendarTimezone: authoritativeConstructionCalendar
+      ? params.constructionCalendar.timezone
+      : params.constructionCalendar?.timezone ?? 'Asia/Shanghai',
+    constructionCalendarAvailability: authoritativeConstructionCalendar ? 'available' : 'unavailable',
     executionSortKey: ((EXECUTION_PHASE_ORDER[params.activity.executionPhase] ?? 999) * 1_000_000) + params.index,
   }
   const durationRiskRange = isMilestone
@@ -17754,6 +17787,12 @@ async function buildResidentialMasterPlanRow(params: {
       execution_nature: executionNature,
       calendar_basis: calendarBasis,
       construction_calendar_window_count: constructionCalendarWindowCount,
+      construction_calendar_ref: authoritativeConstructionCalendar ? params.constructionCalendar.calendarRef : null,
+      construction_calendar_version: authoritativeConstructionCalendar ? params.constructionCalendar.calendarVersion : null,
+      construction_calendar_timezone: authoritativeConstructionCalendar
+        ? params.constructionCalendar.timezone
+        : params.constructionCalendar?.timezone ?? 'Asia/Shanghai',
+      construction_calendar_availability: authoritativeConstructionCalendar ? 'available' : 'unavailable',
       workface_id: params.activity.executionLane,
       plan_item_kind: planItemKind,
       progress_mode: progressMode,
@@ -17817,8 +17856,9 @@ async function buildBusinessTypeMasterPlanRow(params: {
     ? 1
     : calculateAssetBackedMasterPlanDuration(activity, params.seedLookup, params.runtimeReferenceDays, params.t2Lookup)
   const runtimeReferenceDay = findRuntimeReferenceDayForActivity(activity, params.runtimeReferenceDays)
-  const calendarBasis = params.constructionCalendar?.basis ?? 'calendar_day'
-  const constructionCalendarWindowCount = params.constructionCalendar?.windows.length ?? 0
+  const authoritativeConstructionCalendar = isAuthoritativeConstructionCalendar(params.constructionCalendar)
+  const calendarBasis = effectiveConstructionCalendarBasis(params.constructionCalendar)
+  const constructionCalendarWindowCount = effectiveConstructionCalendarWindowCount(params.constructionCalendar)
   const start = addTemplateProductionDays(params.startDate, activity.startOffsetDays, params.constructionCalendar)
   const processSeasonalAdjustment = await calculateDefaultMasterPlanProcessSeasonalDurationAdjustment({
     activity,
@@ -17963,6 +18003,12 @@ async function buildBusinessTypeMasterPlanRow(params: {
     executionLane: activity.executionLane,
     calendarBasis,
     constructionCalendarWindowCount,
+    constructionCalendarRef: authoritativeConstructionCalendar ? params.constructionCalendar.calendarRef : null,
+    constructionCalendarVersion: authoritativeConstructionCalendar ? params.constructionCalendar.calendarVersion : null,
+    constructionCalendarTimezone: authoritativeConstructionCalendar
+      ? params.constructionCalendar.timezone
+      : params.constructionCalendar?.timezone ?? 'Asia/Shanghai',
+    constructionCalendarAvailability: authoritativeConstructionCalendar ? 'available' : 'unavailable',
     executionSortKey: ((EXECUTION_PHASE_ORDER[activity.executionPhase] ?? 999) * 1_000_000) + 500_000 + params.index,
   }
   const durationRiskRange = buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, assetBackedDurationDays)
@@ -18152,6 +18198,12 @@ async function buildBusinessTypeMasterPlanRow(params: {
       execution_sort_key: ((EXECUTION_PHASE_ORDER[activity.executionPhase] ?? 999) * 1_000_000) + 500_000 + params.index,
       calendar_basis: calendarBasis,
       construction_calendar_window_count: constructionCalendarWindowCount,
+      construction_calendar_ref: authoritativeConstructionCalendar ? params.constructionCalendar.calendarRef : null,
+      construction_calendar_version: authoritativeConstructionCalendar ? params.constructionCalendar.calendarVersion : null,
+      construction_calendar_timezone: authoritativeConstructionCalendar
+        ? params.constructionCalendar.timezone
+        : params.constructionCalendar?.timezone ?? 'Asia/Shanghai',
+      construction_calendar_availability: authoritativeConstructionCalendar ? 'available' : 'unavailable',
       workface_id: activity.executionLane,
       duration_suggestion: buildGeneratedDurationSuggestionValue(durationSuggestion, durationContributionMode),
       standard_task_metadata: metadata,
@@ -19489,7 +19541,30 @@ function generatedRowConsumedOfficialConstructionCalendar(
       ?? metadata.constructionCalendarWindowCount
       ?? metadata.construction_calendar_window_count,
   ) ?? 0
-  return basis === 'official_construction_calendar_seed' && windowCount > 0
+  const calendarRef = normalizeText(
+    row.values.construction_calendar_ref
+      ?? metadata.constructionCalendarRef
+      ?? metadata.construction_calendar_ref,
+  )
+  const calendarVersion = normalizeText(
+    row.values.construction_calendar_version
+      ?? metadata.constructionCalendarVersion
+      ?? metadata.construction_calendar_version,
+  )
+  const timezone = normalizeText(
+    row.values.construction_calendar_timezone
+      ?? metadata.constructionCalendarTimezone
+      ?? metadata.construction_calendar_timezone,
+  )
+  const availability = normalizeText(
+    row.values.construction_calendar_availability
+      ?? metadata.constructionCalendarAvailability
+      ?? metadata.construction_calendar_availability,
+  )
+  return basis === 'official_construction_calendar_seed'
+    && windowCount > 0
+    && Boolean(calendarRef && calendarVersion && timezone)
+    && availability === 'available'
 }
 
 function getBusinessTypeDurationAssetCoverageAccumulator(

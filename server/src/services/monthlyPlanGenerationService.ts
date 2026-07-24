@@ -62,6 +62,7 @@ import {
   type PlanningReplayCalibrationReadback,
 } from './planningReplayCalibrationService.js'
 import {
+  effectiveConstructionCalendarBasis,
   isConstructionProductionDay,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -1372,7 +1373,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
       effectiveCapacityFactor: 1,
       basis: 'estimated_workday_default_capacity_ceiling',
       realCapacityPolicy: 'default_capacity_not_real_field_capacity',
-      calendarBasis: constructionCalendar?.basis ?? 'calendar_day',
+      calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
       calendarSource: 'resolveConstructionCalendarContext',
       calendarShutdownDeductedDays,
     }
@@ -1389,7 +1390,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
     effectiveCapacityFactor,
     basis: 'workday_default_capacity_with_calendar_factor_ceiling',
     realCapacityPolicy: 'default_capacity_not_real_field_capacity',
-    calendarBasis: constructionCalendar?.basis ?? 'calendar_day',
+    calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
     calendarSource: 'resolveConstructionCalendarContext',
     calendarShutdownDeductedDays,
   }
