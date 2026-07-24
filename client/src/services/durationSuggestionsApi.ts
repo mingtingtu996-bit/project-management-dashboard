@@ -402,6 +402,9 @@ function benchmarkProvenanceSemanticsMatch(input: {
   }
 
   for (const entry of input.entries) {
+    const runtimeAggregate = entry.source === 'runtime_publication'
+      && (entry.scope === 'company' || entry.scope === 'industry' || entry.scope === 'global')
+    if (runtimeAggregate && entry.benchmarkId !== null) return false
     const expectedReasons = semanticBenchmarkEntryReasonCodes(entry, blended)
     if (!sameReasonCodes(entry.reasonCodes, expectedReasons)) return false
     if (entry.availability !== (expectedReasons.length === 0 ? 'available' : 'unavailable')) return false

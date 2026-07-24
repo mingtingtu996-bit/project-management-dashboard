@@ -379,6 +379,46 @@ describe('durationSuggestionsApi governed duration outputs', () => {
     })
   })
 
+  it.each(['company', 'industry', 'global'] as const)(
+    'fails closed when malformed runtime %s aggregate JSON includes a benchmark id',
+    async (scope) => {
+      const payload: any = completeAvailableBenchmarkResponse()
+      Object.assign(payload, {
+        benchmarkVersion: `aggregate:${scope}:0123456789abcdef`,
+        benchmarkScope: scope,
+        benchmarkSampleCount: 100,
+      })
+      Object.assign(payload.benchmarkProvenance.entries[0], {
+        source: 'runtime_publication',
+        benchmarkId: 'forbidden-aggregate-id',
+        publicationKey: `runtime-${scope}-1`,
+        benchmarkVersion: `aggregate:${scope}:0123456789abcdef`,
+        scope,
+        sampleCount: 100,
+        calendarRef: null,
+        calendarVersion: null,
+        aggregateCalendarIdentities: [{ calendarRef: 'calendar-1', calendarVersion: 'calendar-v3' }],
+      })
+      mocks.apiGet.mockResolvedValueOnce(payload)
+
+      const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+      expect(suggestion).toMatchObject({
+        benchmarkGeneratedAt: null,
+        benchmarkAsOf: null,
+        benchmarkWindowStart: null,
+        benchmarkVersion: null,
+        benchmarkSampleCount: null,
+        benchmarkDayBasis: null,
+        benchmarkScope: null,
+        benchmarkProvenanceAvailability: null,
+        benchmarkProvenanceReasonCodes: [],
+        benchmarkProvenanceUnavailableReason: null,
+        benchmarkProvenance: null,
+      })
+    },
+  )
+
   it('does not expose or derive user-facing reference days from template fast estimates', async () => {
     mocks.apiGet.mockResolvedValueOnce({
       durationOutputCode: 'template_fast_estimate',
