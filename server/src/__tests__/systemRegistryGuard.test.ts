@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -389,5 +389,57 @@ describe('system registry guard', () => {
     }))
     expect(routeEntries.get('duration-accuracy')?.assignmentReason).toContain('five-engine duration accuracy read endpoint')
     expect(routeEntries.get('duration-accuracy')?.assignmentReason).toContain('does not mutate learning governance candidates')
+  })
+
+  it('registers every duration asset review workstream surface without environment readiness claims', async () => {
+    const { evaluateSystemRegistryGuard } = await import(pathToFileURL(guardPath).href)
+    const workspaceRoot = resolve(serverRoot, '..')
+    const result = evaluateSystemRegistryGuard(serverRoot)
+    const declaredEntries = new Map<string, DeclaredRegistryEntry & { production_readiness_source?: string }>(
+      result.registry.declaredEntries.map((entry: DeclaredRegistryEntry & { production_readiness_source?: string }) => [
+        `${entry.kind}:${entry.id}`,
+        entry,
+      ]),
+    )
+    const ownedBackendSurfaces = [
+      {
+        key: 'migration:325_duration_asset_review_queue',
+        sourcePath: 'server/migrations/325_duration_asset_review_queue.sql',
+      },
+      {
+        key: 'service:durationAssetReviewQueueService',
+        sourcePath: 'server/src/services/durationAssetReviewQueueService.ts',
+      },
+      {
+        key: 'service:durationAssetReviewDecisionService',
+        sourcePath: 'server/src/services/durationAssetReviewDecisionService.ts',
+      },
+      {
+        key: 'route:duration-assets',
+        sourcePath: 'server/src/routes/duration-assets.ts',
+      },
+    ] as const
+    const supportingSurfaces = [
+      'client/src/services/durationAssetsApi.ts',
+      'client/src/pages/DurationAssetsAdmin.tsx',
+      'project-testing/tools/verify-duration-assets-admin-ui.mjs',
+    ] as const
+
+    for (const { key, sourcePath } of ownedBackendSurfaces) {
+      const entry = declaredEntries.get(key)
+      expect(existsSync(resolve(workspaceRoot, sourcePath)), `${sourcePath} must exist`).toBe(true)
+      expect(entry, `${key} must be registered`).toEqual(expect.objectContaining({
+        architectureUnit: '学习治理环',
+        runtimeScope: 'governance',
+        assignmentReason: expect.stringContaining(sourcePath),
+      }))
+      expect(entry, `${key} must not claim environment readiness`).not.toHaveProperty('production_readiness_source')
+    }
+
+    const routeOwner = declaredEntries.get('route:duration-assets')
+    for (const sourcePath of supportingSurfaces) {
+      expect(existsSync(resolve(workspaceRoot, sourcePath)), `${sourcePath} must exist`).toBe(true)
+      expect(routeOwner?.assignmentReason).toContain(sourcePath)
+    }
   })
 })

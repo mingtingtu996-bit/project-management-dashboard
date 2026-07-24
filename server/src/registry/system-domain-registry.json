@@ -3220,6 +3220,13 @@
     },
     {
       "kind": "migration",
+      "id": "325_duration_asset_review_queue",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "server/migrations/325_duration_asset_review_queue.sql adds the durable tenant-scoped duration asset review projection, replay identity, review constraints, and RLS without granting release authority"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
@@ -3549,6 +3556,13 @@
       "runtimeScope": "business_core",
       "assignmentReason": "C-19.11 five-engine duration accuracy read endpoint; exposes prediction-bridge accuracy summaries for company-admin diagnostics and does not mutate learning governance candidates, seeds, runtime parameters, plan dates, or facts",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "route",
+      "id": "duration-assets",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "server/src/routes/duration-assets.ts owns the company-admin queue/read HTTP surface consumed by client/src/services/durationAssetsApi.ts and client/src/pages/DurationAssetsAdmin.tsx; project-testing/tools/verify-duration-assets-admin-ui.mjs supplies local-only browser evidence and does not grant release authority"
     },
     {
       "kind": "route",
@@ -4888,6 +4902,20 @@
       "runtimeScope": "business_core",
       "assignmentReason": "propagates effective duration-asset receipts into critical-path, remaining-forecast and acceleration outputs while blocking candidate-only assets from official outputs",
       "production_readiness_source": "docs/superpowers/plans/2026-07-11-v14231-runtime-consumption-learning-autonomy.md#implementation-integrity-audit-mapping"
+    },
+    {
+      "kind": "service",
+      "id": "durationAssetReviewDecisionService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "server/src/services/durationAssetReviewDecisionService.ts owns manual duration asset review decisions through the existing governed writer and preserves reviewer identity, evidence revalidation, atomic impact recording, and rollback authority"
+    },
+    {
+      "kind": "service",
+      "id": "durationAssetReviewQueueService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "server/src/services/durationAssetReviewQueueService.ts owns the durable duration asset review projection, canonical decision fingerprints, tenant-safe visibility, and read-only shared-scope sanitization"
     },
     {
       "kind": "service",
