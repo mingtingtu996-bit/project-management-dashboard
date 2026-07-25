@@ -23,6 +23,22 @@ const state = vi.hoisted(() => {
 
   const rawQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalized.includes('confirm_warning_as_risk_atomic')) {
+      risk = {
+        id: '11111111-1111-4111-8111-111111111114',
+        project_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        title: 'Warning-promoted risk',
+        status: 'identified',
+        source_type: String(params[1] ?? 'warning_converted'),
+        source_entity_type: 'warning',
+        source_entity_id: String(params[0]),
+        source_id: String(params[0]),
+        version: 1,
+        created_at: '2026-07-24T00:00:00.000Z',
+        updated_at: '2026-07-24T00:00:00.000Z',
+      }
+      return { rows: [{ result: risk.id }], rowCount: 1 }
+    }
     if (normalized.includes('create_issue_from_risk_atomic')) {
       if (!risk) return { rows: [{ result: null }], rowCount: 1 }
       if (!issue) {
@@ -225,6 +241,32 @@ describe('risk and issue execution fact governance', () => {
         changes: [expect.objectContaining({ factType: 'risk.status', nextValue: 'identified', force: true })],
       }),
     )
+    expect(state.transactionEvents).toEqual(['BEGIN', 'FACTS', 'COMMIT'])
+  })
+
+  it('records warning-to-risk promotion in the same transaction as the atomic warning mutation', async () => {
+    const created = await createRisk({
+      project_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      title: 'Warning-promoted risk',
+      status: 'identified',
+      source_type: 'warning_auto_escalated',
+      source_id: '33333333-3333-4333-8333-333333333333',
+      source_entity_type: 'warning',
+      source_entity_id: '33333333-3333-4333-8333-333333333333',
+    } as any)
+
+    expect(created.id).toBe('11111111-1111-4111-8111-111111111114')
+    expect(state.rawQuery).toHaveBeenCalledWith(
+      expect.stringContaining('confirm_warning_as_risk_atomic'),
+      ['33333333-3333-4333-8333-333333333333', 'warning_auto_escalated'],
+    )
+    expect(state.rawQuery.mock.calls.some(([sql]) => String(sql).trim().toLowerCase().startsWith('insert into risks'))).toBe(false)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'risk',
+      entityId: created.id,
+      sourceMutationId: `risk:${created.id}:warning:33333333-3333-4333-8333-333333333333`,
+      changes: [expect.objectContaining({ factType: 'risk.status', nextValue: 'identified', force: true })],
+    }))
     expect(state.transactionEvents).toEqual(['BEGIN', 'FACTS', 'COMMIT'])
   })
 

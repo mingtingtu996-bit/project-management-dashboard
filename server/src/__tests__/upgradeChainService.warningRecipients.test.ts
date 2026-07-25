@@ -8,6 +8,17 @@ const state = vi.hoisted(() => {
   const tasks: TableRow[] = []
   const participantUnitMembers: TableRow[] = []
   const getMembers = vi.fn(async () => [] as Array<{ user_id: string; permission_level: string }>)
+  const createRisk = vi.fn(async (input: TableRow) => {
+    const created = {
+      id: `risk-${risks.length + 1}`,
+      status: 'identified',
+      created_at: '2026-04-23T08:00:00.000Z',
+      updated_at: '2026-04-23T08:00:00.000Z',
+      ...input,
+    }
+    risks.push(created)
+    return created
+  })
   const notificationWriteProbe = {
     delayMs: 0,
     active: 0,
@@ -277,6 +288,7 @@ const state = vi.hoisted(() => {
     tasks,
     participantUnitMembers,
     getMembers,
+    createRisk,
     executeSQL,
     executeSQLOne,
     notificationWriteProbe,
@@ -306,6 +318,7 @@ const state = vi.hoisted(() => {
 
 vi.mock('../services/dbService.js', () => ({
   createIssue: vi.fn(),
+  createRisk: state.createRisk,
   getIssue: vi.fn(),
   getMembers: state.getMembers,
   getRisk: vi.fn(),
@@ -414,6 +427,13 @@ describe('upgradeChainService critical path delay recipients', () => {
     const risk = await confirmWarningAsRisk('project-1', warningId, 'user-1')
 
     expect(risk).toMatchObject({ project_id: 'project-1' })
+    expect(state.createRisk).toHaveBeenCalledWith(expect.objectContaining({
+      project_id: 'project-1',
+      source_type: 'warning_converted',
+      source_entity_type: 'warning',
+      source_entity_id: warningId,
+    }))
+    expect(state.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('routes warning-level critical path delay warnings to project owners instead of the task assignee', async () => {

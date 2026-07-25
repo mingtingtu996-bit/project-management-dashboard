@@ -2830,6 +2830,41 @@ async function createRiskInTransaction(
     throw createBusinessError('INVALID_RISK_STATUS_TRANSITION', '风险创建时不能直接进入 closed 状态')
   }
 
+  if (sourceType === 'warning_converted' || sourceType === 'warning_auto_escalated') {
+    const sourceWarningId = String(
+      risk.source_entity_type === 'warning'
+        ? risk.source_entity_id ?? risk.source_id ?? ''
+        : risk.source_id ?? '',
+    ).trim()
+    if (!sourceWarningId) {
+      throw createBusinessError('RISK_WARNING_SOURCE_REQUIRED', '预警升级风险必须绑定来源预警')
+    }
+    const riskId = await runRpc<string | null>('confirm_warning_as_risk_atomic', {
+      p_warning_id: sourceWarningId,
+      p_source_type: sourceType,
+    })
+    if (!riskId) {
+      throw new Error('confirm_warning_as_risk_atomic returned empty risk id')
+    }
+    const created = await getRisk(riskId)
+    if (!created || created.project_id !== risk.project_id) {
+      throw createBusinessError('PROJECT_SCOPE_MISMATCH', '预警升级风险不属于请求项目', 403)
+    }
+    await recordRiskIssueExecutionFacts({
+      entityType: 'risk',
+      entityId: riskId,
+      projectId: created.project_id,
+      previous: null,
+      next: created as unknown as Record<string, unknown>,
+      sourceMutationId: `risk:${riskId}:warning:${sourceWarningId}`,
+      observedAt: String(created.updated_at ?? created.created_at ?? ts),
+      actorUserId: risk.created_by ?? null,
+      forceInitialStatus: true,
+    })
+    await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'risk_created')
+    return created
+  }
+
   const row = {
     id,
     project_id: risk.project_id,

@@ -3,7 +3,7 @@
 // Does NOT replace existing warningService/upgradeChainService/issueWriteChainService.
 // Wraps them with unified entry points.
 
-import { supabase } from './dbService.js'
+import { createIssue as dbCreateIssue, supabase } from './dbService.js'
 import { notificationTouchpointService } from './notificationTouchpointService.js'
 import { randomUUID } from 'crypto'
 import { logger } from '../middleware/logger.js'
@@ -609,14 +609,10 @@ export async function ensureIssueFromExpiredCondition(condition: Record<string, 
 
   if (existing) return existing.id
 
-  const now = new Date().toISOString()
-  const issueId = randomUUID()
-
-  const { error } = await (supabase as any)
-    .from('issues')
-    .insert({
-      id: issueId,
-      project_id: condition.project_id,
+  try {
+    const created = await dbCreateIssue({
+      project_id: projectId,
+      task_id: String(condition.task_id ?? '').trim() || null,
       title: `开工条件过期：${condition.name ?? condition.condition_name ?? '未命名条件'}`,
       description: String(condition.description ?? '开工条件已过期仍未满足'),
       severity: 'medium',
@@ -626,16 +622,17 @@ export async function ensureIssueFromExpiredCondition(condition: Record<string, 
       source_entity_type: 'task_condition',
       source_entity_id: conditionId,
       chain_id: randomUUID(),
-      priority: 'medium',
-      created_at: now,
-      updated_at: now,
+      priority: 30,
+      pending_manual_close: false,
+      closed_reason: null,
+      closed_at: null,
+      version: 1,
     })
-
-  if (error) {
+    return created.id
+  } catch (error) {
     logger.error('Failed to create issue from condition', { error, conditionId })
     return null
   }
-  return issueId
 }
 
 export async function ensureIssueFromExpiredAcceptance(acceptance: Record<string, unknown>): Promise<string | null> {
@@ -652,14 +649,10 @@ export async function ensureIssueFromExpiredAcceptance(acceptance: Record<string
 
   if (existing) return existing.id
 
-  const now = new Date().toISOString()
-  const issueId = randomUUID()
-
-  const { error } = await (supabase as any)
-    .from('issues')
-    .insert({
-      id: issueId,
-      project_id: acceptance.project_id,
+  try {
+    const created = await dbCreateIssue({
+      project_id: projectId,
+      task_id: String(acceptance.task_id ?? '').trim() || null,
       title: `验收逾期：${acceptance.acceptance_name ?? acceptance.name ?? '未命名验收'}`,
       description: String(acceptance.description ?? '验收逾期未完成'),
       severity: 'medium',
@@ -669,16 +662,17 @@ export async function ensureIssueFromExpiredAcceptance(acceptance: Record<string
       source_entity_type: 'acceptance_plan',
       source_entity_id: planId,
       chain_id: randomUUID(),
-      priority: 'medium',
-      created_at: now,
-      updated_at: now,
+      priority: 30,
+      pending_manual_close: false,
+      closed_reason: null,
+      closed_at: null,
+      version: 1,
     })
-
-  if (error) {
+    return created.id
+  } catch (error) {
     logger.error('Failed to create issue from acceptance', { error, planId })
     return null
   }
-  return issueId
 }
 
 // ============================================================
