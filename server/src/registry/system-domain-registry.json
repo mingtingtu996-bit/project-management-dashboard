@@ -98,16 +98,9 @@
     {
       "kind": "job",
       "id": "durationLearningRuntimeEvidenceOutboxDrainJob",
-      "architectureUnit": "\u5b66\u4e60\u6cbb\u7406\u73af",
+      "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
       "assignmentReason": "Runs only the durable duration-learning evidence outbox drain every five minutes under an independent distributed lease; it does not execute publication lifecycle, auto-promotion or rollback logic."
-    },
-    {
-      "kind": "job",
-      "id": "taskWriteFinalizationOutboxJob",
-      "architectureUnit": "底座：平台运行观测",
-      "runtimeScope": "platform_foundation",
-      "assignmentReason": "Retries the durable task-write finalization outbox every minute under an independent distributed lease; company-admin HTTP manual execution is intentionally unavailable."
     },
     {
       "kind": "job",
@@ -198,6 +191,13 @@
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
+    },
+    {
+      "kind": "job",
+      "id": "taskWriteFinalizationOutboxJob",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "Retries the durable task-write finalization outbox every minute under an independent distributed lease; company-admin HTTP manual execution is intentionally unavailable."
     },
     {
       "kind": "job",
@@ -3297,6 +3297,20 @@
     },
     {
       "kind": "migration",
+      "id": "328_duration_asset_platform_operator",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "generated_from_server_migration_inventory_platform_schema_change"
+    },
+    {
+      "kind": "migration",
+      "id": "329_algorithm_intervention_evaluations",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "generated_from_server_migration_inventory_platform_schema_change"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
@@ -4024,6 +4038,14 @@
     },
     {
       "kind": "service",
+      "id": "acceptancePlanExecutionFactService",
+      "architectureUnit": "主执行环：行动闭环",
+      "runtimeScope": "business_core",
+      "assignmentReason": "acceptance-plan execution fact adapter keeps status and actual-date facts in the caller transaction without creating a parallel acceptance write authority",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
       "id": "acceptancePlanTaskLinkService",
       "architectureUnit": "验收事实子通道",
       "runtimeScope": "business_core",
@@ -4226,6 +4248,13 @@
     {
       "kind": "service",
       "id": "algorithmFactContextService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
+    },
+    {
+      "kind": "service",
+      "id": "algorithmInterventionEvaluationService",
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
@@ -4865,18 +4894,18 @@
     },
     {
       "kind": "service",
+      "id": "deletionRetentionGovernanceService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
+    },
+    {
+      "kind": "service",
       "id": "dependencyAuthorityService",
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
       "assignmentReason": "central fail-closed classifier that keeps unconfirmed heuristic dependency proposals out of authoritative task dependency and CPM consumption",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
-    },
-    {
-      "kind": "service",
-      "id": "deletionRetentionGovernanceService",
-      "architectureUnit": "学习治理环",
-      "runtimeScope": "governance",
-      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
     },
     {
       "kind": "service",
@@ -4916,6 +4945,14 @@
       "architectureUnit": "横切履约",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "drawingVersionExecutionFactService",
+      "architectureUnit": "横切履约",
+      "runtimeScope": "business_core",
+      "assignmentReason": "drawing-version execution fact adapter keeps immutable before-and-after version facts in the drawing mutation transaction",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
@@ -4991,6 +5028,14 @@
     },
     {
       "kind": "service",
+      "id": "durationAssetPlatformOperatorService",
+      "architectureUnit": "主执行环：建模",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
+    },
+    {
+      "kind": "service",
       "id": "durationAssetReviewDecisionService",
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
@@ -5009,6 +5054,13 @@
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
       "assignmentReason": "defines duration asset roles, precedence, runtime-consumability and rollback lineage used by wizard and downstream consumers"
+    },
+    {
+      "kind": "service",
+      "id": "durationBenchmarkCauseSegmentService",
+      "architectureUnit": "学习治理环",
+      "runtimeScope": "governance",
+      "assignmentReason": "aggregates confirmed canonical task-completion causes into tenant and calendar scoped benchmark segments and resolves exact cause segments without blending all-cause evidence"
     },
     {
       "kind": "service",
@@ -5286,13 +5338,6 @@
     },
     {
       "kind": "service",
-      "id": "durationBenchmarkCauseSegmentService",
-      "architectureUnit": "学习治理环",
-      "runtimeScope": "governance",
-      "assignmentReason": "aggregates confirmed canonical task-completion causes into tenant and calendar scoped benchmark segments and resolves exact cause segments without blending all-cause evidence"
-    },
-    {
-      "kind": "service",
       "id": "durationLearningAssetAtomicStoreService",
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
@@ -5467,22 +5512,6 @@
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "cross-domain transaction-only authority that appends tenant-scoped execution facts atomically with existing compatibility projections; it is infrastructure and does not grant route, migration, deployment, or runtime publication authority",
-      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
-    },
-    {
-      "kind": "service",
-      "id": "acceptancePlanExecutionFactService",
-      "architectureUnit": "主执行环：行动闭环",
-      "runtimeScope": "business_core",
-      "assignmentReason": "acceptance-plan execution fact adapter keeps status and actual-date facts in the caller transaction without creating a parallel acceptance write authority",
-      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
-    },
-    {
-      "kind": "service",
-      "id": "drawingVersionExecutionFactService",
-      "architectureUnit": "横切履约",
-      "runtimeScope": "business_core",
-      "assignmentReason": "drawing-version execution fact adapter keeps immutable before-and-after version facts in the drawing mutation transaction",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
@@ -6093,6 +6122,14 @@
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "projectBusinessDateService",
+      "architectureUnit": "主执行环：建模",
+      "runtimeScope": "business_core",
+      "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#C-13"
     },
     {
       "kind": "service",
@@ -6946,18 +6983,18 @@
     },
     {
       "kind": "service",
-      "id": "taskWriteFinalizationOutboxService",
-      "architectureUnit": "底座：平台运行观测",
-      "runtimeScope": "platform_foundation",
-      "assignmentReason": "claims task-write finalization events in per-task order, persists retry state and exposes bounded backlog health without redefining task business finalization"
-    },
-    {
-      "kind": "service",
       "id": "taskWriteChainService",
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "taskWriteFinalizationOutboxService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "claims task-write finalization events in per-task order, persists retry state and exposes bounded backlog health without redefining task business finalization"
     },
     {
       "kind": "service",
