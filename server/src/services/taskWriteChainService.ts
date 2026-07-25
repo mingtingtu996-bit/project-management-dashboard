@@ -1516,9 +1516,6 @@ export async function updateTaskInMainChain(
     })
   }
 
-  await runPostCommitTaskSideEffect('finalize_task_write', task.id, async () => {
-    await finalizeTaskWrite(task, previousTask, updates.updated_by ?? null)
-  })
   clearTaskCriticalPathReadCaches(task.project_id ?? previousTask.project_id)
   return { task, participantUnit }
 }
@@ -1723,8 +1720,5 @@ export async function reopenTaskInMainChain(
     })
   }
 
-  await runPostCommitTaskSideEffect('finalize_reopen_task_write', task.id, async () => {
-    await finalizeTaskWrite(task, previousTask, actorId ?? null)
-  })
   return { task, participantUnit: null }
 }

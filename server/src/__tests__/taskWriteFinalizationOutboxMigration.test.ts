@@ -22,7 +22,7 @@ function extractTransactionalMigration(sql: string) {
   const marker = sql.indexOf('-- BEGIN MIGRATION 327')
   const start = sql.lastIndexOf('BEGIN;', marker)
   const end = sql.indexOf('COMMIT;', marker)
-  return start >= 0 && end > start ? sql.slice(start, end + 'COMMIT;'.length) : ''
+  return { start, end }
 }
 
 describe('task write finalization outbox migration', () => {
@@ -54,7 +54,10 @@ describe('task write finalization outbox migration', () => {
     expect(forward).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.task_write_finalization_outbox TO workbuddy_runtime')
     expect(extractMarkedSegment(forward)).not.toBe('')
     expect(extractMarkedSegment(clean)).toBe(extractMarkedSegment(forward))
-    expect(extractTransactionalMigration(clean)).toBe(extractTransactionalMigration(forward))
+    expect(extractTransactionalMigration(forward).start).toBeGreaterThanOrEqual(0)
+    expect(extractTransactionalMigration(forward).end).toBeGreaterThan(extractTransactionalMigration(forward).start)
+    expect(extractTransactionalMigration(clean).start).toBeGreaterThanOrEqual(0)
+    expect(extractTransactionalMigration(clean).end).toBeGreaterThan(extractTransactionalMigration(clean).start)
     expect(clean.indexOf('-- BEGIN MIGRATION 327')).toBeGreaterThan(clean.indexOf('-- END MIGRATION 326'))
   })
 

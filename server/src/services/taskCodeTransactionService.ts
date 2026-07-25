@@ -829,7 +829,6 @@ export async function updateTaskWithCodeInTransaction(
   const client = await getClient()
   try {
     await client.query('BEGIN')
-    await client.query("SELECT set_config('workbuddy.task_finalization_outbox_mode', 'canonical_inline', TRUE)")
 
     // Lock and read previous task
     const { rows: prevRows } = await client.query(
@@ -964,7 +963,6 @@ export async function reopenTaskWithCodeInTransaction(
   const client = await getClient()
   try {
     await client.query('BEGIN')
-    await client.query("SELECT set_config('workbuddy.task_finalization_outbox_mode', 'canonical_inline', TRUE)")
 
     const { rows: prevRows } = await client.query(
       'SELECT * FROM tasks WHERE id = $1 AND project_id = $2 FOR UPDATE',
