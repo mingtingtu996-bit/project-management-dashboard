@@ -158,6 +158,39 @@ function createHarness(options: {
 }
 
 describe('execution fact governance service', () => {
+  it('reads current facts from the scoped authority view', async () => {
+    const listCurrentExecutionFacts = (executionFactGovernance as any).listCurrentExecutionFacts
+    expect(listCurrentExecutionFacts).toBeTypeOf('function')
+    if (typeof listCurrentExecutionFacts !== 'function') return
+
+    const input = baseInput({
+      factType: 'task.status',
+      value: 'completed',
+    })
+    const queryExec = vi.fn(async () => [eventRow(input)])
+
+    const facts = await listCurrentExecutionFacts({
+      projectId,
+      entityType: 'task',
+      entityIds: [taskId],
+      factTypes: ['task.status'],
+    }, { queryExec })
+
+    expect(queryExec).toHaveBeenCalledWith(
+      expect.stringContaining('FROM public.current_execution_facts event'),
+      [projectId, 'task', [taskId], ['task.status']],
+    )
+    expect(facts).toEqual([
+      expect.objectContaining({
+        projectId,
+        entityType: 'task',
+        entityId: taskId,
+        factType: 'task.status',
+        value: 'completed',
+      }),
+    ])
+  })
+
   it('builds deterministic fact inputs only for changed compatibility projections', () => {
     const buildChangedExecutionFactInputs = (executionFactGovernance as any).buildChangedExecutionFactInputs
     expect(buildChangedExecutionFactInputs).toBeTypeOf('function')

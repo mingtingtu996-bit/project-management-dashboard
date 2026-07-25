@@ -207,6 +207,7 @@ const mocks = vi.hoisted(() => {
     recordDurationAccuracyPrediction: vi.fn(),
     recordDurationAccuracyBacktest: vi.fn(),
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
+    listCurrentExecutionFacts: vi.fn(async () => []),
     listCurrentTaskDurationForecasts: vi.fn(),
     resolveConstructionCalendarContext: vi.fn(),
     readLiveProjectGenerationFacts: vi.fn(),
@@ -235,6 +236,10 @@ vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
   recordDurationAccuracyPrediction: mocks.recordDurationAccuracyPrediction,
   recordDurationAccuracyBacktest: mocks.recordDurationAccuracyBacktest,
   backtestEarliestPendingDurationAccuracyPrediction: mocks.backtestEarliestPendingDurationAccuracyPrediction,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
 }))
 
 vi.mock('../services/taskDurationForecastService.js', () => ({
@@ -331,6 +336,7 @@ describe('project critical path service', () => {
     mocks.recordDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.recordDurationAccuracyBacktest.mockResolvedValue(null)
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([])
     mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     mocks.readLiveProjectGenerationFacts.mockResolvedValue({})
@@ -387,6 +393,44 @@ describe('project critical path service', () => {
     expect(mocks.rawQuery.mock.calls.some((call) => (
       String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
     ))).toBe(false)
+  })
+
+  it('uses current execution facts instead of stale task compatibility columns for completed outcomes', async () => {
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: row.id === 'task-b' ? 'todo' : 'completed',
+      progress: row.id === 'task-b' ? 0 : 100,
+      actual_start_date: row.id === 'task-b' ? null : row.start_date,
+      actual_end_date: row.id === 'task-b' ? null : row.end_date,
+    }))
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      { entityType: 'task', entityId: 'task-b', factType: 'task.status', value: 'completed' },
+      { entityType: 'task', entityId: 'task-b', factType: 'task.progress', value: 100 },
+      { entityType: 'task', entityId: 'task-b', factType: 'task.actual_start_date', value: '2026-04-01' },
+      { entityType: 'task', entityId: 'task-b', factType: 'task.actual_end_date', value: '2026-04-08' },
+    ])
+
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-a', 'task-b', 'task-c'],
+      factTypes: [
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.first_progress_at',
+        'task.progress',
+        'task.status',
+      ],
+    }))
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      actualStartDate: '2026-04-01',
+      actualFinishDate: '2026-04-08',
+      actualDurationDays: 8,
+    }))
   })
 
   it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {

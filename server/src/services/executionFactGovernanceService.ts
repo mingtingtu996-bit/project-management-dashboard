@@ -101,6 +101,13 @@ export interface ExecutionFactDependencies {
   isTransactionActive?: () => boolean
 }
 
+export interface ListCurrentExecutionFactsInput {
+  projectId: string
+  entityType: ExecutionFactEntityType
+  entityIds: readonly string[]
+  factTypes?: readonly ExecutionFactType[]
+}
+
 export interface RunExecutionFactProjectionInput<T> {
   applyProjection: () => Promise<T>
   buildFacts: (projection: T) => RecordExecutionFactInput[]
@@ -335,6 +342,36 @@ async function defaultQueryExec<T = Record<string, unknown>>(sql: string, params
   // database-query-dynamic-approved: execution-fact governance owns fixed parameterized SQL templates; callers provide only bound values.
   const result = await rawQuery(sql, params)
   return result.rows as T[]
+}
+
+export async function listCurrentExecutionFacts(
+  input: ListCurrentExecutionFactsInput,
+  dependencies: Pick<ExecutionFactDependencies, 'queryExec'> = {},
+): Promise<ExecutionFactEvent[]> {
+  const projectId = requireUuid(input.projectId, 'projectId')
+  const allowedFactTypes = FACT_TYPES_BY_ENTITY[input.entityType]
+  if (!allowedFactTypes) {
+    throw executionFactError('EXECUTION_FACT_INPUT_INVALID', 'entityType is not governed')
+  }
+  const entityIds = Array.from(new Set(input.entityIds.map((entityId) => requireUuid(entityId, 'entityId'))))
+  if (entityIds.length === 0) return []
+  const factTypes = Array.from(new Set(input.factTypes ?? [...allowedFactTypes]))
+  if (factTypes.length === 0 || factTypes.some((factType) => !allowedFactTypes.has(factType))) {
+    throw executionFactError('EXECUTION_FACT_TYPE_MISMATCH', 'requested fact types are not owned by the entity type')
+  }
+
+  const queryExec = dependencies.queryExec ?? defaultQueryExec
+  const rows = await queryExec<Record<string, unknown>>(
+    `SELECT event.*
+       FROM public.current_execution_facts event
+      WHERE event.project_id = $1
+        AND event.entity_type = $2
+        AND event.entity_id = ANY($3::uuid[])
+        AND event.fact_type = ANY($4::text[])
+      ORDER BY event.entity_id, event.fact_type`,
+    [projectId, input.entityType, entityIds, factTypes],
+  )
+  return rows.map(rowToEvent)
 }
 
 function normalizeInput(input: RecordExecutionFactInput) {
