@@ -25,6 +25,15 @@ export type ScopedDurationForecastDimension = 'division' | 'subdivision' | 'spec
 export type ScopedDurationForecastState = 'not_started' | 'in_progress' | 'completed'
 export type ScopedDurationForecastDataStatus = 'ready' | 'degraded' | 'insufficient_data'
 
+export type ScopedDurationTargetDateCompletion = {
+  targetDate: string
+  targetDuration: DurationMetricDto
+  completionProbability: number | null
+  probabilityBasis: 'monte_carlo' | 'pert_analytic' | 'deterministic_completed' | 'unavailable'
+  sampleCount: number
+  reasonCodes: string[]
+}
+
 export type ScopedDurationForecastGroup = {
   id: string
   dimension: ScopedDurationForecastDimension
@@ -71,6 +80,7 @@ export type ScopedDurationForecastGroup = {
     p50FinishDate: string | null
     p80FinishDate: string | null
   }) | null
+  targetDateCompletion: ScopedDurationTargetDateCompletion | null
   forecastState: ScopedDurationForecastState
   dataStatus: ScopedDurationForecastDataStatus
   degradationReasons: string[]
@@ -80,6 +90,7 @@ export type ScopedDurationForecastGroup = {
 export type ScopedDurationForecastResponse = {
   projectId: string
   asOfDate: string
+  targetDate: string | null
   dimensions: Record<ScopedDurationForecastDimension, ScopedDurationForecastGroup[]>
   summary: {
     groupCount: number
@@ -92,6 +103,7 @@ export type ScopedDurationForecastResponse = {
 export type BuildScopedDurationForecastsInput = {
   projectId: string
   asOfDate: string
+  targetDate?: string | null
   rows: ScheduleAccelerationRow[]
   forecasts: TaskDurationForecast[]
   attributions: Map<string, ProjectTaskAttribution>
@@ -401,6 +413,158 @@ function productionDaysFromAsOf(
   return productionDaysBetweenInclusive(asOf, finish, calendar)
 }
 
+function interpolatePercentileCompletionProbability(input: {
+  targetDays: number
+  p20Days: number
+  p50Days: number
+  p80Days: number
+}) {
+  const p20 = Math.max(0, input.p20Days)
+  const p50 = Math.max(p20, input.p50Days)
+  const p80 = Math.max(p50, input.p80Days)
+  if (p20 === p80) return input.targetDays < p50 ? 0 : 1
+
+  const lowerWidth = Math.max(1, p50 - p20)
+  const upperWidth = Math.max(1, p80 - p50)
+  const anchors = new Map<number, number>()
+  for (const [days, probability] of [
+    [Math.max(0, p20 - (lowerWidth * 2) / 3), 0],
+    [p20, 0.2],
+    [p50, 0.5],
+    [p80, 0.8],
+    [p80 + (upperWidth * 2) / 3, 1],
+  ] as Array<[number, number]>) {
+    anchors.set(days, Math.max(probability, anchors.get(days) ?? 0))
+  }
+  const ordered = [...anchors.entries()]
+    .map(([days, probability]) => ({ days, probability }))
+    .sort((left, right) => left.days - right.days)
+  if (input.targetDays <= ordered[0].days) return ordered[0].probability
+  for (let index = 1; index < ordered.length; index += 1) {
+    const left = ordered[index - 1]
+    const right = ordered[index]
+    if (input.targetDays > right.days) continue
+    const ratio = (input.targetDays - left.days) / (right.days - left.days)
+    return Number((left.probability + (right.probability - left.probability) * ratio).toFixed(6))
+  }
+  return 1
+}
+
+function completedTargetDateCompletion(input: {
+  targetDate: string | null
+  asOfDate: string
+  completionFinishDate: string | null
+  calendar?: ConstructionCalendarContext | null
+}): ScopedDurationTargetDateCompletion | null {
+  if (!input.targetDate) return null
+  const authoritative = isAuthoritativeConstructionCalendar(input.calendar)
+  const targetDays = authoritative
+    ? productionDaysFromAsOf(input.asOfDate, input.targetDate, input.calendar)
+    : null
+  const targetDuration = buildConstructionProductionDayDurationMetric(targetDays, {
+    asOf: input.asOfDate,
+    timezone: input.calendar?.timezone,
+    calendar: input.calendar,
+  })
+  if (!authoritative) {
+    return {
+      targetDate: input.targetDate,
+      targetDuration,
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      reasonCodes: ['construction_calendar_identity_missing'],
+    }
+  }
+  if (!input.completionFinishDate) {
+    return {
+      targetDate: input.targetDate,
+      targetDuration,
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      reasonCodes: ['missing_actual_completion'],
+    }
+  }
+  return {
+    targetDate: input.targetDate,
+    targetDuration,
+    completionProbability: input.completionFinishDate <= input.targetDate ? 1 : 0,
+    probabilityBasis: 'deterministic_completed',
+    sampleCount: 0,
+    reasonCodes: [],
+  }
+}
+
+function activeTargetDateCompletion(input: {
+  targetDate: string | null
+  asOfDate: string
+  orderedBand: { p20: string | null; p50: string | null; p80: string | null }
+  networkProbability: DurationNetworkProbabilityResult
+  monteCarloApplied: boolean
+  calendar?: ConstructionCalendarContext | null
+}): ScopedDurationTargetDateCompletion | null {
+  if (!input.targetDate) return null
+  const authoritative = isAuthoritativeConstructionCalendar(input.calendar)
+  const targetDays = authoritative
+    ? productionDaysFromAsOf(input.asOfDate, input.targetDate, input.calendar)
+    : null
+  const targetDuration = buildConstructionProductionDayDurationMetric(targetDays, {
+    asOf: input.asOfDate,
+    timezone: input.calendar?.timezone,
+    calendar: input.calendar,
+  })
+  if (!authoritative || targetDays === null) {
+    return {
+      targetDate: input.targetDate,
+      targetDuration,
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      reasonCodes: ['construction_calendar_identity_missing'],
+    }
+  }
+  if (input.monteCarloApplied && input.networkProbability.completionProbability !== null) {
+    return {
+      targetDate: input.targetDate,
+      targetDuration,
+      completionProbability: input.networkProbability.completionProbability,
+      probabilityBasis: 'monte_carlo',
+      sampleCount: input.networkProbability.simulationCount,
+      reasonCodes: [],
+    }
+  }
+  const p20Days = productionDaysFromAsOf(input.asOfDate, input.orderedBand.p20, input.calendar)
+  const p50Days = productionDaysFromAsOf(input.asOfDate, input.orderedBand.p50, input.calendar)
+  const p80Days = productionDaysFromAsOf(input.asOfDate, input.orderedBand.p80, input.calendar)
+  if (p20Days === null || p50Days === null || p80Days === null) {
+    return {
+      targetDate: input.targetDate,
+      targetDuration,
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      reasonCodes: unique([...input.networkProbability.fallbackReasons, 'probability_band_unavailable']),
+    }
+  }
+  return {
+    targetDate: input.targetDate,
+    targetDuration,
+    completionProbability: interpolatePercentileCompletionProbability({
+      targetDays,
+      p20Days,
+      p50Days,
+      p80Days,
+    }),
+    probabilityBasis: 'pert_analytic',
+    sampleCount: 0,
+    reasonCodes: unique([
+      ...input.networkProbability.fallbackReasons,
+      'network_probability_unavailable_analytic_fallback',
+    ]),
+  }
+}
+
 function forecastProbabilityRemainingDays(
   forecast: TaskDurationForecast | undefined,
   percentile: 'p20' | 'p50' | 'p80',
@@ -510,6 +674,7 @@ function buildGroupForecast(input: {
   bucket: GroupBucket
   projectId: string
   asOfDate: string
+  targetDate: string | null
   forecastByTaskId: Map<string, TaskDurationForecast>
   criticalTaskIds: Set<string>
   attributions: Map<string, ProjectTaskAttribution>
@@ -591,6 +756,12 @@ function buildGroupForecast(input: {
       probabilityCoverageRate: 1,
       probabilityBasis: 'deterministic_completed',
       networkProbability: null,
+      targetDateCompletion: completedTargetDateCompletion({
+        targetDate: input.targetDate,
+        asOfDate,
+        completionFinishDate: actualFinishDate,
+        calendar,
+      }),
       forecastState: 'completed',
       dataStatus: completionFinishDate
         ? (reasons.length > 0 ? 'degraded' : 'ready')
@@ -640,6 +811,9 @@ function buildGroupForecast(input: {
     dependencies: networkDependencies,
     simulationCount: 1000,
     scenarioCorrelation: 0.35,
+    completionTargetDays: isAuthoritativeConstructionCalendar(calendar) && input.targetDate
+      ? productionDaysFromAsOf(asOfDate, input.targetDate, calendar)
+      : null,
   })
   const monteCarloApplied = networkProbabilityResult.probabilityBasis === 'monte_carlo'
     && networkProbabilityResult.p20DurationDays !== null
@@ -725,6 +899,14 @@ function buildGroupForecast(input: {
       p50FinishDate: monteCarloBand?.p50 ?? analyticOrdered.p50,
       p80FinishDate: monteCarloBand?.p80 ?? analyticOrdered.p80,
     },
+    targetDateCompletion: activeTargetDateCompletion({
+      targetDate: input.targetDate,
+      asOfDate,
+      orderedBand: ordered,
+      networkProbability: networkProbabilityResult,
+      monteCarloApplied,
+      calendar,
+    }),
     forecastState: forecastState(bucket.tasks),
     dataStatus,
     degradationReasons,
@@ -762,6 +944,7 @@ export function buildScopedDurationForecasts(
   input: BuildScopedDurationForecastsInput,
 ): ScopedDurationForecastResponse {
   const asOfDate = normalizeDate(input.asOfDate) ?? input.asOfDate
+  const targetDate = normalizeDate(input.targetDate)
   const rowById = new Map<string, ScheduleAccelerationRow>()
   for (const row of input.rows) {
     const id = normalizeText(row.clientRowId)
@@ -802,6 +985,7 @@ export function buildScopedDurationForecasts(
         bucket,
         projectId: normalizeText(input.projectId),
         asOfDate,
+        targetDate,
         forecastByTaskId,
         criticalTaskIds: input.criticalTaskIds,
         attributions: input.attributions,
@@ -816,6 +1000,7 @@ export function buildScopedDurationForecasts(
   return {
     projectId: normalizeText(input.projectId),
     asOfDate,
+    targetDate,
     dimensions,
     summary: {
       groupCount: allGroups.length,

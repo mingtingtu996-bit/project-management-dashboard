@@ -193,6 +193,74 @@ describe('scopedDurationForecastService', () => {
     expect(division.p80FinishDate).not.toBe(division.p50FinishDate)
   })
 
+  it('returns a typed completion probability for an arbitrary target date', () => {
+    const rows = [
+      row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-17' }),
+      row('second', { planned_start_date: '2026-07-18', planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const common = {
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22', [5, 5, 5])),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    }
+
+    const immediate = buildScopedDurationForecasts({
+      ...common,
+      targetDate: '2026-07-13',
+    } as any).dimensions.division[0] as any
+    const later = buildScopedDurationForecasts({
+      ...common,
+      targetDate: '2026-12-31',
+    } as any).dimensions.division[0] as any
+
+    expect(immediate.targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-07-13',
+      completionProbability: 0,
+      probabilityBasis: 'monte_carlo',
+      sampleCount: 1000,
+      targetDuration: expect.objectContaining({
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+    }))
+    expect(later.targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-12-31',
+      completionProbability: 1,
+      probabilityBasis: 'monte_carlo',
+      sampleCount: 1000,
+    }))
+  })
+
+  it('fails target-date probability closed without authoritative calendar identity', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-31',
+      rows: [row('task-1', { planned_end_date: '2026-07-20' })],
+      forecasts: [forecast('task-1', '2026-07-20')],
+      attributions: new Map([['task-1', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: {
+        basis: 'calendar_day', windows: [], calendarRef: null, calendarVersion: null,
+        timezone: 'Asia/Shanghai', availability: 'unavailable', unavailableReason: 'calendar_identity_missing',
+      },
+    } as any).dimensions.division[0] as any
+
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-07-31',
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      reasonCodes: expect.arrayContaining(['construction_calendar_identity_missing']),
+      targetDuration: expect.objectContaining({ availability: 'unavailable', value: null }),
+    }))
+  })
+
   it('does not count a future task release offset twice in scoped Monte Carlo', () => {
     const rows = [
       row('first', {
@@ -307,6 +375,7 @@ describe('scopedDurationForecastService', () => {
     const result = buildScopedDurationForecasts({
       projectId: 'project-1',
       asOfDate: '2026-07-13',
+      targetDate: '2026-07-31',
       rows: [
         row('task-a', {
           status: 'completed',
@@ -328,6 +397,12 @@ describe('scopedDurationForecastService', () => {
       forecastState: 'completed',
       dataStatus: 'degraded',
       degradationReasons: expect.arrayContaining(['missing_actual_completion']),
+      targetDateCompletion: expect.objectContaining({
+        targetDate: '2026-07-31',
+        completionProbability: null,
+        probabilityBasis: 'unavailable',
+        reasonCodes: ['missing_actual_completion'],
+      }),
     }))
   })
 

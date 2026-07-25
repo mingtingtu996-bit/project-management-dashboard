@@ -85,6 +85,9 @@ const scopedDurationForecastQuerySchema = z.object({
   as_of_date: z.string().trim().refine(isValidScopedDurationForecastDate, {
     message: 'as_of_date must be a valid YYYY-MM-DD date',
   }).optional(),
+  target_date: z.string().trim().refine(isValidScopedDurationForecastDate, {
+    message: 'target_date must be a valid YYYY-MM-DD date',
+  }).optional(),
 }).passthrough()
 
 function normalizeText(value: unknown) {
@@ -357,11 +360,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const projectId = req.params.id
     const asOfDate = normalizeText(req.query.as_of_date) || undefined
-    const cacheKey = ['scoped-duration-forecast', projectId, asOfDate ?? 'current'].join(':')
+    const targetDate = normalizeText(req.query.target_date) || undefined
+    const cacheKey = ['scoped-duration-forecast', projectId, asOfDate ?? 'current', targetDate ?? 'no-target'].join(':')
     const cachedResponse = getCachedTaskSummaryResponse<ApiResponse>(cacheKey)
     if (cachedResponse) return res.json(cachedResponse)
 
-    const result = await buildRuntimeScopedDurationForecast(projectId, { asOfDate })
+    const result = await buildRuntimeScopedDurationForecast(projectId, { asOfDate, targetDate })
     const response: ApiResponse = {
       success: true,
       data: result,

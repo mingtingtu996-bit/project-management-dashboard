@@ -175,6 +175,25 @@ describe('scopedDurationForecastRuntimeService', () => {
     }
   })
 
+  it('validates and forwards an arbitrary target date into the scoped forecast response', async () => {
+    const result = await buildRuntimeScopedDurationForecast(
+      'project-1',
+      { asOfDate: '2026-07-13', targetDate: '2026-08-31' } as any,
+      dependencies(),
+    ) as any
+
+    expect(result.targetDate).toBe('2026-08-31')
+    expect(result.dimensions.division[0].targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-08-31',
+    }))
+
+    await expect(buildRuntimeScopedDurationForecast(
+      'project-1',
+      { targetDate: '08/31/2026' } as any,
+      dependencies(),
+    )).rejects.toThrow('targetDate must be a valid YYYY-MM-DD date')
+  })
+
   it('does not import forecast refresh or mutation APIs', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/services/scopedDurationForecastRuntimeService.ts'), 'utf8')
     expect(source).toContain('listCurrentTaskDurationForecasts')
