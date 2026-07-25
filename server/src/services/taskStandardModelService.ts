@@ -12,6 +12,7 @@ import { clearCriticalPathCache } from './criticalPathHelpers.js'
 import { clearProjectCriticalPathSnapshotCache } from './projectCriticalPathService.js'
 import { getStatusLabel, getVisualTone, normalizeStatus } from './statusDictionaryService.js'
 import { deriveTaskUnifiedStatus } from './taskStatusDerivationService.js'
+import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
 
 type TransactionClientLike = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows?: unknown[]; rowCount?: number }>
@@ -610,6 +611,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
     metadata: Record<string, unknown>
   }>()
   for (const dependency of params.dependencies) {
+    if (isUnconfirmedHeuristicDependency(dependency)) continue
     const taskId = String(dependency.taskId ?? '').trim()
     const dependencyTaskId = String(dependency.dependencyTaskId ?? '').trim()
     if (!taskId || !dependencyTaskId) {

@@ -128,6 +128,7 @@ import {
 import type { ApiResponse } from '../types/index.js'
 import type { PlanningTableOperation } from '../types/planningTable.js'
 import { orderedInclusiveDurationDays } from '../utils/durationDays.js'
+import { isUnconfirmedHeuristicDependency } from '../services/dependencyAuthorityService.js'
 
 const router = Router()
 
@@ -3057,6 +3058,7 @@ function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<s
   const taskId = idByClientRowId.get(row.clientRowId)
   if (!taskId) return []
   return row.predecessorDependencies
+    .filter((dependency) => !isUnconfirmedHeuristicDependency(dependency))
     .map((dependency) => {
       const dependencyTaskId = idByClientRowId.get(dependency.clientRowId)
       if (!dependencyTaskId) return null

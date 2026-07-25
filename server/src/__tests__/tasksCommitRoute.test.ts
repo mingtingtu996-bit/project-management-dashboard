@@ -873,6 +873,19 @@ describe('tasks commit route', () => {
             dependencyType: 'FS',
             lagDays: 0,
             source: 'dependency_intent_template',
+          }, {
+            clientRowId: 'drilldown-process-1',
+            dependencyType: 'SS',
+            lagDays: 3,
+            intentCode: 'sequencing_fallback:heuristic_stagger',
+            source: 'heuristic_stagger',
+            sequencingBasis: 'heuristic_stagger',
+            governanceGapCode: 'master_plan_dependency_rule_gap',
+            dependencyRuleEvidence: {
+              source: 'heuristic_stagger',
+              evidenceLevel: 'heuristic_fallback_l0',
+              publicationStatus: 'fallback_not_published_dependency_rule',
+            },
           }],
           values: {
             title: '墙柱模板安装',

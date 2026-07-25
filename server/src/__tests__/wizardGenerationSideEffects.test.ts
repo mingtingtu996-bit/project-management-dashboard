@@ -3886,7 +3886,7 @@ describe('v1.4.22.1 project wizard route side effects', () => {
     }))
   })
 
-  it('preserves sequencing fallback basis and gap lineage in wizard dependency writes', async () => {
+  it('keeps heuristic sequencing fallback in preview lineage without writing a formal dependency', async () => {
     const generated = structuredClone(await mocks.generateWbsTemplateRows()) as any
     mocks.generateWbsTemplateRows.mockClear()
     generated.rows[1].predecessorDependencies = [{
@@ -3914,24 +3914,17 @@ describe('v1.4.22.1 project wizard route side effects', () => {
       })
       .expect(201)
 
-    expect(mocks.replaceWizardGeneratedTaskDependenciesBatch).toHaveBeenCalledWith(expect.objectContaining({
-      dependencies: expect.arrayContaining([
-        expect.objectContaining({
-          taskId: 'task-2',
-          dependencyTaskId: 'task-1',
-          sourceType: 'template_generated',
-          metadata: expect.objectContaining({
-            source: 'heuristic_stagger',
-            sequencingBasis: 'heuristic_stagger',
-            governanceGapCode: 'master_plan_dependency_rule_gap',
-            intentCode: 'sequencing_fallback:heuristic_stagger',
-            dependencyRuleEvidence: expect.objectContaining({
-              evidenceLevel: 'heuristic_fallback_l0',
-            }),
-          }),
+    const writtenDependencies = mocks.replaceWizardGeneratedTaskDependenciesBatch.mock.calls
+      .flatMap(([input]) => input.dependencies)
+    expect(writtenDependencies).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: 'task-2',
+        dependencyTaskId: 'task-1',
+        metadata: expect.objectContaining({
+          source: 'heuristic_stagger',
         }),
-      ]),
-    }))
+      }),
+    ]))
   })
 
   it('recomputes committed target alignment when duration assets shorten the generated natural end date', async () => {

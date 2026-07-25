@@ -2119,9 +2119,13 @@ function applyPromotedSiblingReleaseRhythm(
             evidenceLevel: sequencingBasis === 'execution_phase_order_fallback'
               ? 'semantic_fallback_l0'
               : 'heuristic_fallback_l0',
-            productionWritePolicy: 'wizard_commit_transactional_tasks_and_dependencies',
-            mutationBoundary: 'preview_no_write_wizard_commit_transactional',
-            createsProductionTaskDependency: true,
+            productionWritePolicy: sequencingBasis === 'heuristic_stagger'
+              ? 'candidate_only_requires_governed_dependency_rule_publication'
+              : 'wizard_commit_transactional_tasks_and_dependencies',
+            mutationBoundary: sequencingBasis === 'heuristic_stagger'
+              ? 'preview_and_governance_only_no_task_dependency_write'
+              : 'preview_no_write_wizard_commit_transactional',
+            createsProductionTaskDependency: sequencingBasis !== 'heuristic_stagger',
             publicationStatus: 'fallback_not_published_dependency_rule',
             releasePolicy: sequencingBasis === 'execution_phase_order_fallback'
               ? 'earlier_execution_phase_coarse_release_until_governed_rule_is_published'

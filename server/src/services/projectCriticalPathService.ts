@@ -47,6 +47,7 @@ import {
   businessDateKey,
   type DurationMetricDto,
 } from './durationMetricService.js'
+import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
 
 const criticalPathSnapshotCache = new Map<string, CachedCriticalPathSnapshot>()
 const criticalPathRecalculationByProject = new Map<string, Promise<ProjectCriticalPathResult>>()
@@ -1073,6 +1074,7 @@ function buildDependencyEdges(tasks: TaskNode[], dependencies: CriticalPathDepen
 
   dependencies.forEach((dependency, index) => {
     if (!isActiveRequiredDependency(dependency)) return
+    if (isUnconfirmedHeuristicDependency(dependency)) return
     const fromTask = taskMap.get(dependency.dependency_task_id)
     const toTask = taskMap.get(dependency.task_id)
     if (!fromTask || !toTask || fromTask.id === toTask.id) return

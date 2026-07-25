@@ -82,6 +82,7 @@ import {
   buildSpecialWorkDurationCandidateNodes,
 } from '../services/wbsTemplateCandidateEventService.js'
 import { persistDurationLearningRuntimeConsumptions } from '../services/durationLearningRuntimeConsumptionService.js'
+import { isUnconfirmedHeuristicDependency } from '../services/dependencyAuthorityService.js'
 import {
   buildGeneratedDurationPredictionOutboxEvents,
   buildWbsCandidateOutboxEvent,
@@ -1176,6 +1177,7 @@ function buildGeneratedTemplateDependencyWrites(
   tempIdMap: Map<string, string>,
 ) {
   return row.predecessorDependencies
+    .filter((dependency) => !isUnconfirmedHeuristicDependency(dependency))
     .map((dependency) => {
       const dependencyTaskId = generatedIdByClientRowId.get(dependency.clientRowId) ?? tempIdMap.get(dependency.clientRowId)
       if (!dependencyTaskId) return null

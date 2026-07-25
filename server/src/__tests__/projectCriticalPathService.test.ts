@@ -2319,6 +2319,25 @@ describe('project critical path service', () => {
         status: 'active',
       },
       {
+        id: 'dep-c-a-unconfirmed-heuristic',
+        project_id: 'project-typed',
+        task_id: 'task-c',
+        dependency_task_id: 'task-a',
+        dependency_type: 'FS',
+        lag_days: 0,
+        required_for_start: true,
+        status: 'active',
+        source_type: 'template_generated',
+        metadata: {
+          source: 'heuristic_stagger',
+          sequencingBasis: 'heuristic_stagger',
+          intentCode: 'sequencing_fallback:heuristic_stagger',
+          dependencyRuleEvidence: {
+            evidenceLevel: 'heuristic_fallback_l0',
+          },
+        },
+      },
+      {
         id: 'dep-legacy-a-inactive',
         project_id: 'project-typed',
         task_id: 'task-a',
