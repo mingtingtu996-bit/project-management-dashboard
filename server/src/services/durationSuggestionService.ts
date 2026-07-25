@@ -53,6 +53,7 @@ import {
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import { hasIdentifiedConstructionCalendar } from './durationMetricService.js'
 import { recordDurationAccuracyPrediction } from './durationAlgorithmAccuracyService.js'
 import {
   decideAlgorithmAssetColdStartRuntime,
@@ -1714,6 +1715,100 @@ function isBenchmarkCandidateScopeConsistent(
   return isTemplateUsableForContext(benchmark, input, companyId)
 }
 
+type BenchmarkCalendarProvenance = {
+  calendarRef: string
+  calendarVersion: string
+  timezone: string
+  asOf: string
+}
+
+function normalizeCalendarProvenanceDate(value: unknown) {
+  const text = normalizeId(value)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
+  const [year, month, day] = text.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+    ? text
+    : null
+}
+
+function readBenchmarkCalendarProvenance(benchmark: DurationBenchmarkRow): BenchmarkCalendarProvenance | null {
+  const row = benchmark as Record<string, unknown>
+  const metadata = readMetadataObject(row.metadata)
+  const calendar = readMetadataObject(
+    row.constructionCalendar
+      ?? row.construction_calendar
+      ?? metadata.constructionCalendar
+      ?? metadata.construction_calendar,
+  )
+  const calendarRef = normalizeId(
+    row.construction_calendar_ref
+      ?? row.constructionCalendarRef
+      ?? row.calendar_ref
+      ?? row.calendarRef
+      ?? metadata.construction_calendar_ref
+      ?? metadata.constructionCalendarRef
+      ?? metadata.calendar_ref
+      ?? metadata.calendarRef
+      ?? calendar.calendarRef
+      ?? calendar.calendar_ref,
+  )
+  const calendarVersion = normalizeId(
+    row.construction_calendar_version
+      ?? row.constructionCalendarVersion
+      ?? row.calendar_version
+      ?? row.calendarVersion
+      ?? metadata.construction_calendar_version
+      ?? metadata.constructionCalendarVersion
+      ?? metadata.calendar_version
+      ?? metadata.calendarVersion
+      ?? calendar.calendarVersion
+      ?? calendar.calendar_version,
+  )
+  const timezone = normalizeId(
+    row.construction_calendar_timezone
+      ?? row.constructionCalendarTimezone
+      ?? metadata.construction_calendar_timezone
+      ?? metadata.constructionCalendarTimezone
+      ?? metadata.timezone
+      ?? calendar.timezone,
+  )
+  const asOf = normalizeCalendarProvenanceDate(
+    row.construction_calendar_as_of
+      ?? row.constructionCalendarAsOf
+      ?? row.calendar_as_of
+      ?? row.calendarAsOf
+      ?? row.as_of
+      ?? row.asOf
+      ?? metadata.construction_calendar_as_of
+      ?? metadata.constructionCalendarAsOf
+      ?? metadata.calendar_as_of
+      ?? metadata.calendarAsOf
+      ?? metadata.as_of
+      ?? metadata.asOf
+      ?? calendar.asOf
+      ?? calendar.as_of,
+  )
+
+  return calendarRef && calendarVersion && timezone && asOf
+    ? { calendarRef, calendarVersion, timezone, asOf }
+    : null
+}
+
+function isBenchmarkCalendarProvenanceCompatible(
+  benchmark: DurationBenchmarkRow,
+  currentCalendar?: ConstructionCalendarContext | null,
+) {
+  const provenance = readBenchmarkCalendarProvenance(benchmark)
+  if (!provenance) return false
+  if (!hasIdentifiedConstructionCalendar(currentCalendar)) return true
+  return provenance.calendarRef === normalizeId(currentCalendar.calendarRef)
+    && provenance.calendarVersion === normalizeId(currentCalendar.calendarVersion)
+    && provenance.timezone === normalizeId(currentCalendar.timezone)
+}
+
 async function collectBenchmarkCandidates(params: {
   benchmarkIdentity: string
   wbsNodeType: string
@@ -1729,6 +1824,7 @@ async function collectBenchmarkCandidates(params: {
     const addCandidate = (benchmark: DurationBenchmarkRow | null, scope: BenchmarkScope) => {
       if (!benchmark || !isBenchmarkCandidateScopeConsistent(benchmark, scope, params.input, params.companyId)) return
       if (resolveDurationDayBasis(benchmark as Record<string, unknown>) !== 'construction_production_day') return
+      if (!isBenchmarkCalendarProvenanceCompatible(benchmark, params.input.workCalendar)) return
       const sampleSize = Number(benchmark.sample_count ?? 0)
       if (!isBenchmarkCandidateUsable(scope, sampleSize, specificity)) return
       candidates.push({
@@ -1775,6 +1871,10 @@ async function collectBenchmarkCandidates(params: {
           metadata: {
             source: 'duration_learning_runtime_publication',
             publication_key: resolution.publicationKey,
+            construction_calendar_ref: payload.constructionCalendarRef ?? payload.construction_calendar_ref ?? null,
+            construction_calendar_version: payload.constructionCalendarVersion ?? payload.construction_calendar_version ?? null,
+            construction_calendar_timezone: payload.constructionCalendarTimezone ?? payload.construction_calendar_timezone ?? null,
+            construction_calendar_as_of: payload.constructionCalendarAsOf ?? payload.construction_calendar_as_of ?? null,
           },
           __durationLearningPublicationKey: resolution.publicationKey,
           __durationLearningPublicationStage: resolution.publication.publicationStage,

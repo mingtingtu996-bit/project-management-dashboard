@@ -27,6 +27,7 @@ import {
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
 } from './constructionCalendar.js'
+import { hasIdentifiedConstructionCalendar } from './durationMetricService.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
 import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './durationLearningRuntimeConsumptionService.js'
 
@@ -756,31 +757,25 @@ export async function collectDurationExperienceSampleFromTask(
       error: error instanceof Error ? error.message : String(error),
     }),
   })
-  const hasAuthoritativeConstructionCalendar = constructionCalendar.availability === 'available'
-    && constructionCalendar.basis === 'official_construction_calendar_seed'
-    && Boolean(normalizeText(constructionCalendar.calendarRef))
-    && Boolean(normalizeText(constructionCalendar.calendarVersion))
-  const durationDayBasis = hasAuthoritativeConstructionCalendar
-    ? 'construction_production_day' as const
-    : 'calendar_day' as const
-  const actualDurationProductionDays = hasAuthoritativeConstructionCalendar
-    ? Math.max(1, productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar))
-    : null
-  const plannedDurationProductionDays = hasAuthoritativeConstructionCalendar
-    ? plannedStartDate && plannedEndDate
-      ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
-      : actualDurationProductionDays
-    : null
-  const actualDuration = actualDurationProductionDays ?? actualDurationCalendarDays
-  const plannedDuration = plannedDurationProductionDays ?? plannedDurationCalendarDays
+  const hasProductionCalendar = hasIdentifiedConstructionCalendar(constructionCalendar)
+   const actualDurationProductionDays = hasProductionCalendar
+     ? Math.max(1, productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar))
+     : null
+   const plannedDurationProductionDays = hasProductionCalendar
+     ? plannedStartDate && plannedEndDate
+       ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
+       : actualDurationProductionDays
+     : null
+   const durationDayBasis = hasProductionCalendar ? 'construction_production_day' : 'calendar_day'
+   const actualDuration = actualDurationProductionDays ?? actualDurationCalendarDays
+   const plannedDuration = plannedDurationProductionDays ?? plannedDurationCalendarDays
+   const constructionCalendarAsOf = actualEndDate.toISOString().slice(0, 10)
   const progressQuality = await resolveProgressQualityForSample(task)
   const dateSampleStrength = weakerSampleStrength(actualStart.strength, actualEnd.strength)
   const measuredSampleStrength = progressQuality.sampleStrength
     ? weakerSampleStrength(dateSampleStrength, progressQuality.sampleStrength)
     : dateSampleStrength
-  const finalSampleStrength: SampleStrength = hasAuthoritativeConstructionCalendar
-    ? measuredSampleStrength
-    : 'unusable'
+  const finalSampleStrength: SampleStrength = hasProductionCalendar ? measuredSampleStrength : 'unusable'
   const confidence = confidenceForStrength(finalSampleStrength)
   const companyId = await resolveCompanyId(String(task.project_id))
   if (!companyId) {
@@ -889,11 +884,14 @@ export async function collectDurationExperienceSampleFromTask(
     planned_duration_production_days: plannedDurationProductionDays,
     construction_calendar_basis: constructionCalendar.basis,
     construction_calendar_window_count: constructionCalendar.windows.length,
+    construction_calendar_availability: constructionCalendar.availability ?? 'unavailable',
     construction_calendar_ref: constructionCalendar.calendarRef ?? null,
     construction_calendar_version: constructionCalendar.calendarVersion ?? null,
     construction_calendar_timezone: constructionCalendar.timezone ?? null,
-    construction_calendar_availability: constructionCalendar.availability ?? 'unavailable',
-    construction_calendar_unavailable_reason: constructionCalendar.unavailableReason ?? null,
+    construction_calendar_as_of: constructionCalendarAsOf,
+    construction_calendar_unavailable_reason: hasProductionCalendar
+      ? null
+      : constructionCalendar.unavailableReason ?? 'construction_calendar_identity_missing',
     raw_task_title: task.title ?? null,
     title_weak_alias: normalizeText(backendStandardMapping.source) === 'algorithm_seed_rule'
       ? task.title ?? null
@@ -1015,11 +1013,14 @@ export async function collectDurationExperienceSampleFromTask(
       durationDayBasis,
       constructionCalendarBasis: constructionCalendar.basis,
       constructionCalendarWindowCount: constructionCalendar.windows.length,
+      constructionCalendarAvailability: constructionCalendar.availability ?? 'unavailable',
       constructionCalendarRef: constructionCalendar.calendarRef ?? null,
       constructionCalendarVersion: constructionCalendar.calendarVersion ?? null,
       constructionCalendarTimezone: constructionCalendar.timezone ?? null,
-      constructionCalendarAvailability: constructionCalendar.availability ?? 'unavailable',
-      constructionCalendarUnavailableReason: constructionCalendar.unavailableReason ?? null,
+      constructionCalendarAsOf,
+      constructionCalendarUnavailableReason: hasProductionCalendar
+        ? null
+        : constructionCalendar.unavailableReason ?? 'construction_calendar_identity_missing',
       collectedTrigger: options.trigger ?? 'task_completion',
       collectedBy: options.actorId ?? null,
     },

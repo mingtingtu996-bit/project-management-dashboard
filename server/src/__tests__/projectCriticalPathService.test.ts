@@ -320,7 +320,15 @@ describe('project critical path service', () => {
     mocks.recordDurationAccuracyBacktest.mockResolvedValue(null)
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([])
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
     mocks.readLiveProjectGenerationFacts.mockResolvedValue({})
   })
 
@@ -334,6 +342,7 @@ describe('project critical path service', () => {
   })
 
   it('fails closed for project, task, chain and network production-day metrics without calendar identity', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     const snapshot = await getProjectCriticalPathSnapshot('project-1')
 
     expect(snapshot.projectDuration).toEqual(expect.objectContaining({
@@ -357,6 +366,30 @@ describe('project critical path service', () => {
       float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
     }))
+  })
+
+  it('does not persist CPM production-day prediction or outcome evidence without calendar identity', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.end_date,
+    }))
+
+    const result = await recalculateProjectCriticalPath('project-1')
+
+    expect(result.snapshot.projectDuration).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    }))
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.rawQuery.mock.calls.some((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
+    ))).toBe(false)
   })
 
   it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {
@@ -810,6 +843,16 @@ describe('project critical path service', () => {
   })
 
   it('records CPM project-duration prediction snapshots for accuracy backtesting', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
+
     const result = await recalculateProjectCriticalPath('project-1')
 
     expect(result.projectDuration).toBe(8)
@@ -1026,10 +1069,17 @@ describe('project critical path service', () => {
         source: 'project_critical_path_cpm',
         algorithm_version: 'critical_path_cpm_v1',
         duration_day_unit: 'construction_production_day',
-        construction_calendar: {
-          basis: 'calendar_day',
-          windows: [],
-        },
+        construction_calendar: expect.objectContaining({
+          basis: 'official_construction_calendar_seed',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          availability: 'available',
+        }),
+        duration_metric: expect.objectContaining({
+          value: 8,
+          unit: 'construction_production_day',
+          availability: 'available',
+        }),
         prediction_duration_days: 8,
         actual_duration_days: 8,
         duration_error_days: 0,
@@ -1492,6 +1542,7 @@ describe('project critical path service', () => {
   })
 
   it('keeps CPM lineage hashes stable when typed duration DTOs are decorated', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     const withoutCalendarIdentity = await buildProjectCriticalPathSnapshot(
       'project-1',
       mocks.tables.tasks as Parameters<typeof buildProjectCriticalPathSnapshot>[1],

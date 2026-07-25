@@ -259,7 +259,13 @@ describe('taskDurationForecastService', () => {
     state.modelProfiles = []
     state.projectOverlays = []
     state.residualOverlays = []
-    state.seedRecords = []
+    state.seedRecords = [{
+      __resolverVersionId: 'work-calendar-v1',
+      calendarKind: 'forecast_calendar_window',
+      startDate: '2026-01-01',
+      endDate: '2026-01-01',
+      productivity: 1,
+    }]
     state.insertedForecasts = []
     state.updatedForecasts = []
     mocks.from.mockImplementation((table: string) => createBuilder(table))
@@ -312,6 +318,13 @@ describe('taskDurationForecastService', () => {
   })
 
   it('records a v1.4.22.4 prediction event for task remaining duration forecasts', async () => {
+    state.seedRecords = [{
+      __resolverVersionId: 'work-calendar-v1',
+      calendarKind: 'forecast_calendar_window',
+      startDate: '2026-05-01',
+      endDate: '2026-05-01',
+      productivity: 1,
+    }]
     state.tasks = [{
       id: 'task-remaining-event',
       project_id: 'project-1',
@@ -353,6 +366,49 @@ describe('taskDurationForecastService', () => {
         triggerContext: 'api_request',
       }),
     }))
+  })
+
+  it('does not expose, persist, or learn production-day forecast values without calendar identity', async () => {
+    state.seedRecords = []
+    state.tasks = [{
+      id: 'task-calendar-unavailable',
+      project_id: 'project-1',
+      title: 'Calendar identity unavailable',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-24',
+      actual_start_date: '2026-05-10',
+      progress: 50,
+    }]
+
+    const forecast = await forecastTaskDuration('task-calendar-unavailable')
+
+    expect(forecast).toEqual(expect.objectContaining({
+      remainingDurationDays: null,
+      remainingForecastDays: null,
+      optimisticRemainingDays: null,
+      conservativeRemainingDays: null,
+      remainingDuration: expect.objectContaining({
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      }),
+    }))
+    expect(state.insertedForecasts[0]).toEqual(expect.objectContaining({
+      remaining_duration_days: null,
+      metadata: expect.objectContaining({
+        remainingDuration: expect.objectContaining({
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+        }),
+        remainingDurationCalendarDay: expect.objectContaining({
+          unit: 'calendar_day',
+          availability: 'available',
+        }),
+      }),
+    }))
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
   it('records the forecast runtime call without fabricating observations when no publication is consumed', async () => {
