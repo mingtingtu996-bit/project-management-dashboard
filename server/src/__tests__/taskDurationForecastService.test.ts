@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   recordDurationAccuracyPrediction: vi.fn(),
   loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
   readPlanningReplayCalibrationReadback: vi.fn(),
+  listCurrentExecutionFacts: vi.fn(),
   from: vi.fn(),
   rawQuery: vi.fn(async (_sql?: string, _params?: unknown[]) => ({ rows: [] })),
 }))
@@ -158,6 +159,10 @@ vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
 
 vi.mock('../services/planningReplayCalibrationService.js', () => ({
   readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
 }))
 
 vi.mock('../services/algorithmSeedResolver.js', () => ({
@@ -289,6 +294,7 @@ describe('taskDurationForecastService', () => {
       writesSeedRuntimeDirectly: false,
     })
     mocks.readPlanningReplayCalibrationReadback.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
   })
 
   it('rejects a task that is outside the explicit project scope', async () => {
@@ -1433,6 +1439,60 @@ describe('taskDurationForecastService', () => {
     }))
   })
 
+  it('uses current execution facts instead of stale task compatibility columns when forecasting', async () => {
+    state.tasks = [{
+      id: 'task-execution-fact-authority',
+      project_id: 'project-1',
+      title: 'Execution fact authority task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 15,
+      status: 'todo',
+    }]
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.actual_start_date',
+        value: '2026-05-06',
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.progress',
+        value: 60,
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.status',
+        value: 'in_progress',
+      },
+    ])
+
+    await forecastTaskDuration('task-execution-fact-authority')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-execution-fact-authority'],
+      factTypes: expect.arrayContaining([
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.progress',
+        'task.status',
+      ]),
+    }))
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      actualStartDate: '2026-05-06',
+      progress: 60,
+      runtimeExecutionFacts: expect.objectContaining({
+        progressCompletionRatio: 0.6,
+      }),
+    }))
+  })
+
   it('passes the one exact confirmed canonical task primary into the duration suggestion caller', async () => {
     state.tasks = [{
       id: 'task-confirmed-cause',
@@ -2308,6 +2368,85 @@ describe('taskDurationForecastService', () => {
       blockingDependencies: expect.arrayContaining([
         expect.objectContaining({
           dependencyTaskId: 'task-parent',
+          source: 'current_dependency_forecast',
+        }),
+      ]),
+    })
+  })
+
+  it('uses current execution facts when deciding whether a predecessor still blocks the forecast', async () => {
+    state.tasks = [
+      {
+        id: 'task-authority-child',
+        project_id: 'project-1',
+        title: 'Authority child task',
+        planned_start_date: '2026-05-18',
+        planned_end_date: '2026-05-22',
+        progress: 0,
+      },
+      {
+        id: 'task-authority-parent',
+        project_id: 'project-1',
+        title: 'Stale completed predecessor',
+        planned_start_date: '2026-05-11',
+        planned_end_date: '2026-05-15',
+        actual_end_date: '2026-05-15',
+        status: 'completed',
+        progress: 100,
+      },
+    ]
+    state.dependencies = [{
+      task_id: 'task-authority-child',
+      project_id: 'project-1',
+      dependency_task_id: 'task-authority-parent',
+      dependency_type: 'FS',
+      lag_days: 2,
+      required_for_start: true,
+      status: 'active',
+    }]
+    state.dependencyForecasts = [{
+      task_id: 'task-authority-parent',
+      project_id: 'project-1',
+      forecast_finish_date: '2026-05-29',
+      remaining_duration_days: 9,
+      forecast_delay_days: 8,
+      is_current: true,
+    }]
+    mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
+      input.entityIds.includes('task-authority-parent')
+        ? [
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.actual_end_date',
+              value: null,
+            },
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.progress',
+              value: 60,
+            },
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.status',
+              value: 'in_progress',
+            },
+          ]
+        : []
+    ))
+
+    const forecast = await forecastTaskDuration('task-authority-child')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityIds: ['task-authority-parent'],
+    }))
+    expect(forecast.forecastSources?.dependencyPropagation).toMatchObject({
+      count: 1,
+      blockingDependencies: expect.arrayContaining([
+        expect.objectContaining({
+          dependencyTaskId: 'task-authority-parent',
           source: 'current_dependency_forecast',
         }),
       ]),

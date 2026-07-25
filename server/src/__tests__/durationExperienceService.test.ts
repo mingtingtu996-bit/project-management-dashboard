@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
     resolveV1474BuildingPatternMatch: vi.fn(),
     resolveAlgorithmSeedRecords: vi.fn(),
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
+    listCurrentExecutionFacts: vi.fn(),
     structuredCauseRows: [] as Record<string, unknown>[],
   }
 })
@@ -67,6 +68,10 @@ vi.mock('../services/algorithmSeedResolver.js', () => ({
 
 vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
   backtestEarliestPendingDurationAccuracyPrediction: mocks.backtestEarliestPendingDurationAccuracyPrediction,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
 }))
 
 const {
@@ -138,6 +143,7 @@ describe('durationExperienceService', () => {
       return []
     })
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
     mocks.resolveAlgorithmSeedRecords.mockResolvedValue([{
       stableCode: 'authoritative-calendar-identity',
       calendarKind: 'authority_marker',
@@ -585,6 +591,62 @@ describe('durationExperienceService', () => {
       actual_duration: 5,
       sample_strength: 'strong',
       included_in_benchmark: true,
+    }))
+  })
+
+  it('uses current execution facts before deciding whether a completion sample is eligible', async () => {
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.actual_start_date',
+        value: '2026-05-02T00:00:00.000Z',
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.actual_end_date',
+        value: '2026-05-04T00:00:00.000Z',
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.progress',
+        value: 100,
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.status',
+        value: 'completed',
+      },
+    ])
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-execution-fact-completion',
+      status: 'todo',
+      progress: 0,
+      actual_start_date: null,
+      actual_end_date: null,
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-execution-fact-completion'],
+      factTypes: expect.arrayContaining([
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.first_progress_at',
+        'task.progress',
+        'task.status',
+      ]),
+    }))
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-execution-fact-completion',
+      actual_duration: 3,
+      completed_at: '2026-05-04T00:00:00.000Z',
     }))
   })
 

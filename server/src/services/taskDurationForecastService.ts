@@ -10,6 +10,10 @@ import type { DurationAlgorithmHydratableInput } from './durationAlgorithmInputH
 import { supabase } from './dbService.js'
 import { query as rawQuery } from '../database.js'
 import {
+  listCurrentExecutionFacts,
+  type ExecutionFactEvent,
+} from './executionFactGovernanceService.js'
+import {
   readTaskStructuredCauseAuthority,
   type TaskStructuredCauseAuthority,
 } from './taskStructuredCauseAuthorityService.js'
@@ -197,6 +201,60 @@ type ForecastTaskRow = {
   acceptance_required?: boolean | null
   material_required?: boolean | null
   standard_task_metadata?: Record<string, unknown> | null
+}
+
+const TASK_FORECAST_EXECUTION_FACT_TYPES = [
+  'task.actual_start_date',
+  'task.actual_end_date',
+  'task.progress',
+  'task.status',
+] as const
+
+function applyCurrentTaskExecutionFacts(
+  rows: ForecastTaskRow[],
+  facts: ExecutionFactEvent[],
+): ForecastTaskRow[] {
+  const rowsById = new Map(rows.map((row) => [String(row.id ?? ''), { ...row }]))
+  for (const fact of facts) {
+    const row = rowsById.get(fact.entityId)
+    if (!row || fact.entityType !== 'task') continue
+    switch (fact.factType) {
+      case 'task.actual_start_date':
+        row.actual_start_date = fact.value == null ? null : String(fact.value)
+        break
+      case 'task.actual_end_date':
+        row.actual_end_date = fact.value == null ? null : String(fact.value)
+        break
+      case 'task.progress': {
+        const progress = Number(fact.value)
+        row.progress = Number.isFinite(progress) ? progress : null
+        break
+      }
+      case 'task.status':
+        row.status = fact.value == null ? null : String(fact.value)
+        break
+      default:
+        break
+    }
+  }
+  return rows.map((row) => rowsById.get(String(row.id ?? '')) ?? row)
+}
+
+async function applyTaskExecutionFactAuthority(
+  projectId: string,
+  rows: ForecastTaskRow[],
+): Promise<ForecastTaskRow[]> {
+  const entityIds = rows
+    .map((row) => String(row.id ?? '').trim())
+    .filter(Boolean)
+  if (!projectId || entityIds.length === 0) return rows
+  const facts = await listCurrentExecutionFacts({
+    projectId,
+    entityType: 'task',
+    entityIds,
+    factTypes: [...TASK_FORECAST_EXECUTION_FACT_TYPES],
+  })
+  return applyCurrentTaskExecutionFacts(rows, facts)
 }
 
 const TASK_DURATION_FORECAST_CONSUMER_ASSET_KEYS = new Set([
@@ -1413,7 +1471,12 @@ async function loadTask(
   }
 
   if (!data) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_MISMATCH')
-  return data as ForecastTaskRow
+  const task = data as ForecastTaskRow
+  const [authoritativeTask] = await applyTaskExecutionFactAuthority(
+    String(task.project_id ?? ''),
+    [task],
+  )
+  return authoritativeTask ?? task
 }
 
 async function buildForecastProjectGenerationFactInput(task: ForecastTaskRow | null) {
@@ -1533,7 +1596,9 @@ async function loadDependencyTasks(
     return new Map()
   }
 
-  return new Map((Array.isArray(data) ? data : []).map((task: ForecastTaskRow) => [String(task.id ?? ''), task]))
+  const tasks = Array.isArray(data) ? data as ForecastTaskRow[] : []
+  const authoritativeTasks = await applyTaskExecutionFactAuthority(projectId, tasks)
+  return new Map(authoritativeTasks.map((task) => [String(task.id ?? ''), task]))
 }
 
 async function loadCurrentDependencyForecasts(
