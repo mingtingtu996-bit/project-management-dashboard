@@ -18,6 +18,7 @@ import {
   type GovernanceSignalDirectoryInput,
   type RiskIssueWarningGovernanceSignal,
 } from './riskIssueWarningGovernanceSignalService.js'
+import { resolveProjectBusinessDateBuckets } from './projectBusinessDateService.js'
 
 // ============================================================
 // Warning signature: stable natural key for dedup
@@ -773,31 +774,53 @@ export interface RiskIssueWarningSummary {
 // ============================================================
 // Unified business warning sync: scan all sources
 // ============================================================
-export async function syncBusinessWarnings(projectId?: string): Promise<{
+export type BusinessWarningSyncOptions = {
+  now?: Date
+}
+
+function scopeQueryToProjectIds(query: any, field: string, projectIds: string[]) {
+  if (projectIds.length === 0) return query
+  if (projectIds.length === 1) return query.eq(field, projectIds[0])
+  return query.in(field, projectIds)
+}
+
+export async function syncBusinessWarnings(
+  projectId?: string,
+  options: BusinessWarningSyncOptions = {},
+): Promise<{
   warningsCreated: number
   risksEscalated: number
   issuesCreated: number
 }> {
-  const projectFilter = projectId ? { project_id: projectId } : {}
+  const now = options.now ?? new Date()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
   let warningsCreated = 0
   let risksEscalated = 0
   let issuesCreated = 0
   const warningSignals: GovernanceSignalDirectoryInput[] = []
 
   // 1. Scan expired conditions -> condition_expired issues
-  const { data: expiredConditions } = await (supabase as any)
-    .from('task_conditions')
-    .select('*')
-    .eq('is_satisfied', false)
-    .lt('target_date', new Date().toISOString().slice(0, 10))
-    .in('status', ['active', 'pending', 'open'])
-    .match(projectId ? { project_id: projectId } : {})
-    .limit(500) as any
+  const expiredConditions: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = (supabase as any)
+      .from('task_conditions')
+      .select('*')
+      .eq('is_satisfied', false)
+      .lt('target_date', bucket.businessDate)
+      .in('status', ['active', 'pending', 'open'])
+    query = scopeQueryToProjectIds(query, 'project_id', bucket.projectIds)
+    const { data, error } = await query.limit(500)
+    if (error) throw new Error(error.message)
+    expiredConditions.push(...((data ?? []) as Record<string, unknown>[]))
+  }
 
-  if (expiredConditions?.length) {
-    for (const condition of expiredConditions) {
+  if (expiredConditions.length) {
+    for (const rawCondition of expiredConditions) {
+      const condition = rawCondition as Record<string, any>
       const issueId = await ensureIssueFromExpiredCondition(condition)
       if (issueId) issuesCreated++
+      const businessDate = dateBuckets.find((bucket) => bucket.projectIds.includes(String(condition.project_id ?? '')))
+        ?.businessDate
       // Also generate a warning
       const warningId = await upsertWarningLifecycle({
         projectId: condition.project_id,
@@ -808,22 +831,31 @@ export async function syncBusinessWarnings(projectId?: string): Promise<{
         sourceEntityType: 'task_condition',
         sourceEntityId: condition.id,
         taskId: condition.task_id,
+        businessDate,
       })
       if (warningId) warningsCreated++
     }
   }
 
   // 2. Scan acceptance plans for overdue items
-  const { data: overdueAcceptances } = await (supabase as any)
-    .from('acceptance_plans')
-    .select('*')
-    .lt('planned_date', new Date().toISOString().slice(0, 10))
-    .in('status', ['draft', 'in_progress', 'pending', 'active'])
-    .match(projectId ? { project_id: projectId } : {})
-    .limit(500) as any
+  const overdueAcceptances: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = (supabase as any)
+      .from('acceptance_plans')
+      .select('*')
+      .lt('planned_date', bucket.businessDate)
+      .in('status', ['draft', 'in_progress', 'pending', 'active'])
+    query = scopeQueryToProjectIds(query, 'project_id', bucket.projectIds)
+    const { data, error } = await query.limit(500)
+    if (error) throw new Error(error.message)
+    overdueAcceptances.push(...((data ?? []) as Record<string, unknown>[]))
+  }
 
-  if (overdueAcceptances?.length) {
-    for (const acceptance of overdueAcceptances) {
+  if (overdueAcceptances.length) {
+    for (const rawAcceptance of overdueAcceptances) {
+      const acceptance = rawAcceptance as Record<string, any>
+      const businessDate = dateBuckets.find((bucket) => bucket.projectIds.includes(String(acceptance.project_id ?? '')))
+        ?.businessDate
       const warningId = await upsertWarningLifecycle({
         projectId: acceptance.project_id,
         warningType: 'acceptance_expired',
@@ -832,6 +864,7 @@ export async function syncBusinessWarnings(projectId?: string): Promise<{
         message: acceptance.description ?? '验收计划已逾期',
         sourceEntityType: 'acceptance_plan',
         sourceEntityId: acceptance.id,
+        businessDate,
       })
       if (warningId) warningsCreated++
     }
@@ -844,20 +877,20 @@ export async function syncBusinessWarnings(projectId?: string): Promise<{
   issuesCreated += await autoEscalateRisksToIssues(projectId)
 
   // 5. Un-mute expired muted warnings
-  const now = new Date().toISOString()
+  const nowIso = now.toISOString()
   const { data: expiredMutes } = await (supabase as any)
     .from('notifications')
     .select('id')
     .eq('source_entity_type', 'warning')
     .eq('warning_lifecycle_status', 'muted')
-    .lt('muted_until', now)
+    .lt('muted_until', nowIso)
     .match(projectId ? { project_id: projectId } : {})
     .limit(500) as any
 
   if (expiredMutes?.length) {
     await (supabase as any)
       .from('notifications')
-      .update({ warning_lifecycle_status: 'active', muted_until: null, updated_at: now })
+      .update({ warning_lifecycle_status: 'active', muted_until: null, updated_at: nowIso })
       .in('id', expiredMutes.map((n: any) => n.id))
   }
 

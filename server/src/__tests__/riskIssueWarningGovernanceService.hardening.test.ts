@@ -329,6 +329,46 @@ describe('risk/issue/warning governance service hardening', () => {
     ])
   })
 
+  it('uses the project business date for both condition and acceptance overdue scans', async () => {
+    const dateFilters: Array<{ table: string; field: string; value: unknown }> = []
+    mocks.from.mockImplementation((table: string) => {
+      const query: Record<string, any> = {
+        select: vi.fn(() => query),
+        update: vi.fn(() => query),
+        insert: vi.fn(() => query),
+        eq: vi.fn(() => query),
+        in: vi.fn(() => query),
+        is: vi.fn(() => query),
+        lt: vi.fn((field: string, value: unknown) => {
+          dateFilters.push({ table, field, value })
+          return query
+        }),
+        match: vi.fn(() => query),
+        limit: vi.fn(() => query),
+        or: vi.fn(() => query),
+        maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+        single: vi.fn(async () => ({ data: null, error: null })),
+        catch: vi.fn(async () => undefined),
+        then: vi.fn((resolve: any) => resolve({
+          data: table === 'projects'
+            ? [{ id: 'project-1', metadata: { business_timezone: 'America/Los_Angeles' } }]
+            : [],
+          error: null,
+        })),
+      }
+      return query
+    })
+
+    await syncBusinessWarnings('project-1', {
+      now: new Date('2026-07-26T00:30:00.000Z'),
+    })
+
+    expect(dateFilters).toEqual(expect.arrayContaining([
+      { table: 'task_conditions', field: 'target_date', value: '2026-07-25' },
+      { table: 'acceptance_plans', field: 'planned_date', value: '2026-07-25' },
+    ]))
+  })
+
   it('delegates warning and risk escalation to the atomic upgrade chain', async () => {
     await expect(confirmWarningAsRisk('project-1', 'warning-1', 'user-1')).resolves.toBe('risk-from-chain')
     await expect(convertRiskToIssue('risk-1')).resolves.toBe('issue-from-chain')

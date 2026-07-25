@@ -29,6 +29,10 @@ import {
   normalizeAcceptanceStatus,
 } from '../utils/acceptanceStatus.js'
 import { getRiskIssueWarningLifecycleThresholdMs } from './riskIssueWarningRuleRegistry.js'
+import {
+  resolveProjectBusinessDateBuckets,
+  type ProjectBusinessDateBucket,
+} from './projectBusinessDateService.js'
 
 const WARNING_SOURCE_ENTITY_TYPE = 'warning'
 const ACTIVE_WARNING_STATUSES = new Set(['active', 'acknowledged', 'muted', 'unread'])
@@ -62,6 +66,16 @@ interface WarningAcknowledgmentRow {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+export type ExpiredIssueSyncOptions = {
+  now?: Date
+}
+
+function scopeQueryToProjectIds(query: any, field: string, projectIds: string[]) {
+  if (projectIds.length === 0) return query
+  if (projectIds.length === 1) return query.eq(field, projectIds[0])
+  return query.in(field, projectIds)
 }
 
 function uniqueRecipients(values: Array<string | null | undefined>) {
@@ -1080,20 +1094,23 @@ async function listAcceptanceExpiredIssues(projectId?: string) {
   return (data ?? []) as Issue[]
 }
 
-export async function syncConditionExpiredIssues(projectId?: string) {
-  const timestamp = nowIso()
-  let query = supabase
-    .from('task_conditions')
-    .select('id, task_id, name, target_date, tasks!inner(project_id, title)')
-    .eq('is_satisfied', false)
-    .lt('target_date', timestamp)
+export async function syncConditionExpiredIssues(projectId?: string, options: ExpiredIssueSyncOptions = {}) {
+  const now = options.now ?? new Date()
+  const timestamp = now.toISOString()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
+  const data: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = supabase
+      .from('task_conditions')
+      .select('id, task_id, name, target_date, tasks!inner(project_id, title)')
+      .eq('is_satisfied', false)
+      .lt('target_date', bucket.businessDate)
+    query = scopeQueryToProjectIds(query, 'tasks.project_id', bucket.projectIds)
 
-  if (projectId) {
-    query = query.eq('tasks.project_id', projectId)
+    const { data: rows, error } = await query
+    if (error) throw new Error(error.message)
+    data.push(...((rows ?? []) as Record<string, unknown>[]))
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
 
   const existingIssues = await listConditionExpiredIssues(projectId)
   const existingByConditionId = new Map(
@@ -1137,20 +1154,23 @@ export async function syncConditionExpiredIssues(projectId?: string) {
   return created
 }
 
-export async function syncAcceptanceExpiredIssues(projectId?: string) {
-  const timestamp = nowIso()
-  let query = supabase
-    .from('acceptance_plans')
-    .select('id, project_id, acceptance_name, acceptance_type, type_name, planned_date, status')
-    .in('status', [...ACTIVE_ACCEPTANCE_STATUSES])
-    .lt('planned_date', timestamp)
+export async function syncAcceptanceExpiredIssues(projectId?: string, options: ExpiredIssueSyncOptions = {}) {
+  const now = options.now ?? new Date()
+  const timestamp = now.toISOString()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
+  const data: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = supabase
+      .from('acceptance_plans')
+      .select('id, project_id, acceptance_name, acceptance_type, type_name, planned_date, status')
+      .in('status', [...ACTIVE_ACCEPTANCE_STATUSES])
+      .lt('planned_date', bucket.businessDate)
+    query = scopeQueryToProjectIds(query, 'project_id', bucket.projectIds)
 
-  if (projectId) {
-    query = query.eq('project_id', projectId)
+    const { data: rows, error } = await query
+    if (error) throw new Error(error.message)
+    data.push(...((rows ?? []) as Record<string, unknown>[]))
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
   const coveredTaskIdsByPlanId = await loadCoveredTaskIdsByAcceptancePlanIds(
     (data ?? []).map((row: any) => String(row.id ?? '')),
     projectId,

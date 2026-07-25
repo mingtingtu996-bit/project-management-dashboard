@@ -7,6 +7,7 @@ process.env.SUPABASE_SERVICE_KEY = 'test-service-key'
 const state = vi.hoisted(() => {
   const acceptancePlans: Array<Record<string, unknown>> = []
   const projectEntityLinks: Array<Record<string, unknown>> = []
+  const projects: Array<Record<string, unknown>> = []
   const issues: Array<Record<string, unknown>> = []
   const risks: Array<Record<string, unknown>> = []
   const selectCalls: string[] = []
@@ -60,22 +61,26 @@ const state = vi.hoisted(() => {
       }),
       order: vi.fn(() => query),
       single: vi.fn(async () => {
-        const source = table === 'acceptance_plans'
-          ? acceptancePlans
-          : table === 'project_entity_links'
-            ? projectEntityLinks
-            : issues
+      const source = table === 'acceptance_plans'
+        ? acceptancePlans
+        : table === 'project_entity_links'
+          ? projectEntityLinks
+          : table === 'projects'
+            ? projects
+          : issues
         const row = source.find((candidate) => filters.every((filter) => filter(candidate)))
         return row
           ? { data: row, error: null }
           : { data: null, error: { code: 'PGRST116', message: 'not found' } }
       }),
       then: (resolve: (value: { data: Record<string, unknown>[]; error: null }) => unknown) => {
-        const source = table === 'acceptance_plans'
-          ? acceptancePlans
-          : table === 'project_entity_links'
-            ? projectEntityLinks
-            : issues
+      const source = table === 'acceptance_plans'
+        ? acceptancePlans
+        : table === 'project_entity_links'
+          ? projectEntityLinks
+          : table === 'projects'
+            ? projects
+          : issues
         return Promise.resolve(resolve({
           data: source.filter((row) => filters.every((filter) => filter(row))),
           error: null,
@@ -89,6 +94,7 @@ const state = vi.hoisted(() => {
   return {
     acceptancePlans,
     projectEntityLinks,
+    projects,
     issues,
     risks,
     selectCalls,
@@ -126,6 +132,7 @@ describe('upgradeChainService acceptance expired sync', () => {
   beforeEach(() => {
     state.acceptancePlans.splice(0, state.acceptancePlans.length)
     state.projectEntityLinks.splice(0, state.projectEntityLinks.length)
+    state.projects.splice(0, state.projects.length)
     state.issues.splice(0, state.issues.length)
     state.risks.splice(0, state.risks.length)
     state.selectCalls.splice(0, state.selectCalls.length)
@@ -214,6 +221,28 @@ describe('upgradeChainService acceptance expired sync', () => {
     })
 
     const created = await syncAcceptanceExpiredIssues('project-1')
+
+    expect(created).toHaveLength(0)
+    expect(state.createIssue).not.toHaveBeenCalled()
+  })
+
+  it('uses the project business timezone instead of UTC to decide whether an acceptance plan is overdue', async () => {
+    state.projects.push({
+      id: 'project-1',
+      metadata: { business_timezone: 'America/Los_Angeles' },
+    })
+    state.acceptancePlans.push({
+      id: 'plan-1',
+      project_id: 'project-1',
+      acceptance_name: 'Same local-day acceptance',
+      acceptance_type: 'quality',
+      planned_date: '2026-07-25',
+      status: 'submitted',
+    })
+
+    const created = await syncAcceptanceExpiredIssues('project-1', {
+      now: new Date('2026-07-26T00:30:00.000Z'),
+    })
 
     expect(created).toHaveLength(0)
     expect(state.createIssue).not.toHaveBeenCalled()
