@@ -18,6 +18,11 @@ const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
 
 const SPRING_FESTIVAL_SHUTDOWN: ConstructionCalendarContext = {
   basis: 'official_construction_calendar_seed',
+  calendarRef: 'work_calendar',
+  calendarVersion: 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  availability: 'available',
+  unavailableReason: null,
   windows: [{
     holidayCode: 'spring-festival-shutdown',
     holidayName: 'Spring Festival shutdown',
@@ -110,6 +115,19 @@ describe('task-summary production delay semantics', () => {
     expect(compareAndDailySource).not.toContain('currentProgress - 10')
     expect(compareAndDailySource).not.toContain('falling back to tasks table')
     expect(compareAndDailySource).not.toContain('route-level-aggregation-approved')
+  })
+
+  it('uses project business-day boundaries for daily progress queries', () => {
+    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const dailySource = source.slice(source.indexOf("router.get('/projects/:id/daily-progress'"))
+
+    expect(dailySource).toContain('resolveConstructionCalendarContext({ projectId })')
+    expect(dailySource).toContain('resolveDailyTaskProgressWindow({')
+    expect(dailySource).toContain(".gte('updated_at', dayStartInclusive)")
+    expect(dailySource).toContain(".lt('updated_at', dayEndExclusive)")
+    expect(dailySource).not.toContain("new Date().toISOString().slice(0, 10)")
+    expect(dailySource).not.toContain('`${targetDate} 00:00:00`')
+    expect(dailySource).not.toContain('`${targetDate} 23:59:59`')
   })
 
   it('delegates trend, assignee, and monthly-plan aggregation to the project summary authority', () => {

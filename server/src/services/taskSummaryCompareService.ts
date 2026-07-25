@@ -2,6 +2,7 @@ import type { ConstructionCalendarContext } from './constructionCalendar.js'
 import { calculateProgressMetrics } from '../utils/progressCalculation.js'
 import { delayDayDelta } from '../utils/durationDays.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
+import { businessDateKey } from './durationMetricService.js'
 
 export type TaskSummaryCompareGranularity = 'day' | 'week' | 'month'
 
@@ -29,6 +30,104 @@ export const TASK_SUMMARY_COMPARE_METRIC_KEYS = {
   delayed: 'task_summary_delayed_count',
   on_time_rate: 'task_summary_on_time_rate',
 } as const
+
+const TASK_SUMMARY_DATE_KEY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/
+
+function parseTaskSummaryDateKey(value: string) {
+  const match = TASK_SUMMARY_DATE_KEY_PATTERN.exec(value)
+  if (!match) throw new Error('TASK_SUMMARY_DAILY_DATE_INVALID')
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    throw new Error('TASK_SUMMARY_DAILY_DATE_INVALID')
+  }
+  return { year, month, day }
+}
+
+function shiftTaskSummaryDateKey(value: string, days: number) {
+  const { year, month, day } = parseTaskSummaryDateKey(value)
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10)
+}
+
+function readTimeZoneDateTimeParts(value: Date, timezone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(value)
+  const part = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((item) => item.type === type)?.value)
+  return {
+    year: part('year'),
+    month: part('month'),
+    day: part('day'),
+    hour: part('hour'),
+    minute: part('minute'),
+    second: part('second'),
+  }
+}
+
+function businessMidnightUtc(dateKey: string, timezone: string) {
+  const target = parseTaskSummaryDateKey(dateKey)
+  const targetUtcMs = Date.UTC(target.year, target.month - 1, target.day)
+  let candidateMs = targetUtcMs
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const candidate = new Date(candidateMs)
+    const local = readTimeZoneDateTimeParts(candidate, timezone)
+    const representedUtcMs = Date.UTC(
+      local.year,
+      local.month - 1,
+      local.day,
+      local.hour,
+      local.minute,
+      local.second,
+    )
+    const nextCandidateMs = targetUtcMs - (representedUtcMs - candidate.getTime())
+    if (nextCandidateMs === candidateMs) break
+    candidateMs = nextCandidateMs
+  }
+  const result = new Date(candidateMs)
+  const local = readTimeZoneDateTimeParts(result, timezone)
+  if (
+    local.year !== target.year
+    || local.month !== target.month
+    || local.day !== target.day
+    || local.hour !== 0
+    || local.minute !== 0
+    || local.second !== 0
+  ) {
+    throw new Error('TASK_SUMMARY_BUSINESS_DAY_BOUNDARY_UNRESOLVED')
+  }
+  return result.toISOString()
+}
+
+export function resolveDailyTaskProgressWindow(input: {
+  date?: string | null
+  timezone?: string | null
+  now?: Date
+}) {
+  const timezone = String(input.timezone ?? '').trim() || 'Asia/Shanghai'
+  const targetDate = String(input.date ?? '').trim() || businessDateKey(input.now ?? new Date(), timezone)
+  parseTaskSummaryDateKey(targetDate)
+  const previousDate = shiftTaskSummaryDateKey(targetDate, -1)
+  const nextDate = shiftTaskSummaryDateKey(targetDate, 1)
+  return {
+    targetDate,
+    previousDate,
+    dayStartInclusive: businessMidnightUtc(targetDate, timezone),
+    dayEndExclusive: businessMidnightUtc(nextDate, timezone),
+  }
+}
 
 export function normalizeTaskSummaryCompareGranularity(raw?: string | null): TaskSummaryCompareGranularity {
   return raw === 'week' || raw === 'month' ? raw : 'day'

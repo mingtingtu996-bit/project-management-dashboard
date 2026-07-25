@@ -37,6 +37,7 @@ import {
   isTaskDelayedByPeriodEnd,
   normalizeTaskSummaryCompareGranularity,
   normalizeTaskSummaryComparePeriods,
+  resolveDailyTaskProgressWindow,
 } from '../services/taskSummaryCompareService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import {
@@ -827,10 +828,16 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, requireProject
 // 返回: 当日进度变化百分比总和、更新的任务数、完成的任务数、任务详情列表
 router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
-  const targetDate = (req.query.date as string) || new Date().toISOString().slice(0, 10)
-  const previousDate = new Date(`${targetDate}T00:00:00`)
-  previousDate.setDate(previousDate.getDate() - 1)
-  const previousDateStr = previousDate.toISOString().slice(0, 10)
+  const workCalendar = await resolveConstructionCalendarContext({ projectId })
+  const {
+    targetDate,
+    previousDate: previousDateStr,
+    dayStartInclusive,
+    dayEndExclusive,
+  } = resolveDailyTaskProgressWindow({
+    date: req.query.date as string | undefined,
+    timezone: workCalendar.timezone,
+  })
 
   const { data: projectTaskRows, error: projectTaskErr } = await supabase
     .from('tasks')
@@ -881,15 +888,12 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
   const previousSnapshotMap = snapshotByDateAndTask.get(previousDateStr) ?? new Map<string, any>()
 
   // Task rows provide labels and ownership only; progress deltas remain snapshot-derived.
-  const dayStart = `${targetDate} 00:00:00`
-  const dayEnd = `${targetDate} 23:59:59`
-  
   const { data: updatedTasks, error: taskErr } = await supabase
     .from('tasks')
     .select('id, title, assignee_user_id, participant_unit_id, status, progress, end_date, updated_at')
     .eq('project_id', projectId)
-    .gte('updated_at', dayStart)
-    .lte('updated_at', dayEnd)
+    .gte('updated_at', dayStartInclusive)
+    .lt('updated_at', dayEndExclusive)
 
   if (taskErr) throw new Error(`[daily-progress] 查询失败: ${taskErr.message}`)
 
