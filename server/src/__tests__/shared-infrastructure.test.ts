@@ -237,7 +237,7 @@ const mocks = vi.hoisted(() => {
     enqueueProjectHealthUpdate: vi.fn(async () => undefined),
     syncProjectDataQuality: vi.fn(async () => undefined),
     evaluateTaskConstraint: vi.fn(async () => undefined),
-    finalizeTaskWrite: vi.fn(async () => undefined),
+    requestTaskWriteFinalizationOutboxDrain: vi.fn(async () => undefined),
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -297,7 +297,7 @@ registerDbServiceBusinessSideEffectAdapters({
   enqueueProjectHealthUpdate: mocks.enqueueProjectHealthUpdate,
   syncProjectDataQuality: mocks.syncProjectDataQuality,
   evaluateTaskConstraint: mocks.evaluateTaskConstraint,
-  finalizeTaskWrite: mocks.finalizeTaskWrite,
+  requestTaskWriteFinalizationOutboxDrain: mocks.requestTaskWriteFinalizationOutboxDrain,
 })
 
 function resetTables() {
@@ -556,7 +556,7 @@ describe('shared infrastructure contract', () => {
     expect(task?.progress).toBe(100)
   })
 
-  it('runs canonical task finalization for low-level completion updates', async () => {
+  it('schedules durable canonical task finalization for low-level completion updates', async () => {
     const completed = await updateTask('task-1', {
       status: 'completed',
       progress: 100,
@@ -565,11 +565,7 @@ describe('shared infrastructure contract', () => {
 
     expect(completed?.status).toBe('completed')
     await vi.waitFor(() => {
-      expect(mocks.finalizeTaskWrite).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'task-1', status: 'completed', progress: 100 }),
-        expect.objectContaining({ id: 'task-1', status: 'todo', progress: 0 }),
-        'user-1',
-      )
+      expect(mocks.requestTaskWriteFinalizationOutboxDrain).toHaveBeenCalledWith('task-1')
     })
   })
 

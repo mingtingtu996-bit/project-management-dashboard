@@ -21,6 +21,7 @@ import { inferWbsNodeType, deriveWbsFlags, validateCategoryNodeTypeConsistency, 
 import { assertTransition } from './statusDictionaryService.js'
 import { collectDurationExperienceSampleFromTask, retireDurationExperienceSampleForTask } from './durationExperienceService.js'
 import { enqueueDurationExperienceCollectionFailure } from './durationExperienceReconciliationService.js'
+import { taskWriteFinalizationOutboxDrainJob } from '../jobs/taskWriteFinalizationOutboxDrainJob.js'
 import { applyTaskMaterialLifecycleFeedback } from './materialTaskFeedbackService.js'
 import { createTaskWithCodeInTransaction, createTasksWithCodeInWizardBatchTransaction, reopenTaskWithCodeInTransaction, updateTaskWithCodeInTransaction } from './taskCodeTransactionService.js'
 import {
@@ -382,16 +383,8 @@ function justCompletedTask(previousTask?: Task | null, nextTask?: Task | null) {
   return !previousCompleted && nextCompleted
 }
 
-function queuePassiveReorderDetection(projectId: string, taskId: string) {
-  try {
-    systemAnomalyService.enqueuePassiveReorderDetection(projectId)
-  } catch (error) {
-    logger.warn('Failed to enqueue passive reorder detection', {
-      projectId,
-      taskId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-  }
+async function queuePassiveReorderDetection(projectId: string, taskId: string): Promise<void> {
+  await systemAnomalyService.enqueuePassiveReorderDetection(projectId)
   logger.debug('Passive reorder detection queued', { projectId, taskId })
 }
 
@@ -738,15 +731,59 @@ async function autoResolveDependentObstacles(
   return resolved
 }
 
+type TaskWriteFinalizationStep =
+  | 'evaluate_task_warning'
+  | 'close_delay_source_risks'
+  | 'infer_structured_causes'
+  | 'collect_duration_experience'
+  | 'enqueue_duration_experience_reconciliation'
+  | 'retire_duration_experience'
+  | 'apply_material_lifecycle_feedback'
+  | 'queue_passive_reorder_detection'
+
+export class TaskWriteFinalizationIncompleteError extends Error {
+  readonly details: {
+    taskId: string
+    projectId: string | null
+    failedSteps: Array<{ step: TaskWriteFinalizationStep; error: string }>
+  }
+
+  constructor(task: Task, failedSteps: Array<{ step: TaskWriteFinalizationStep; error: string }>) {
+    super(`task_write_finalization_incomplete:${failedSteps.map(({ step }) => step).join(',')}`)
+    this.name = 'TaskWriteFinalizationIncompleteError'
+    this.details = {
+      taskId: String(task.id),
+      projectId: task.project_id ? String(task.project_id) : null,
+      failedSteps,
+    }
+  }
+}
+
 async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId?: string | null) {
-  await warningService.evaluate({
-    type: 'task',
-    task: {
-      id: task.id,
-      status: task.status,
-      progress: task.progress,
-    },
-  })
+  const failedSteps: Array<{ step: TaskWriteFinalizationStep; error: string }> = []
+  const recordFailure = (step: TaskWriteFinalizationStep, error: unknown) => {
+    failedSteps.push({
+      step,
+      error: (error instanceof Error ? error.message : String(error ?? 'unknown error')).slice(0, 2_000),
+    })
+  }
+
+  try {
+    await warningService.evaluate({
+      type: 'task',
+      task: {
+        id: task.id,
+        status: task.status,
+        progress: task.progress,
+      },
+    })
+  } catch (error) {
+    logger.warn('Failed to evaluate warnings after task write', {
+      taskId: task.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    recordFailure('evaluate_task_warning', error)
+  }
 
   if (justCompletedTask(previousTask, task)) {
     try {
@@ -757,6 +794,7 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
         taskId: task.id,
         error: error instanceof Error ? error.message : String(error),
       })
+      recordFailure('close_delay_source_risks', error)
     }
 
     try {
@@ -769,6 +807,7 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
         taskId: task.id,
         error: error instanceof Error ? error.message : String(error),
       })
+      recordFailure('infer_structured_causes', error)
     }
 
     try {
@@ -782,6 +821,7 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
         taskId: task.id,
         error: error instanceof Error ? error.message : String(error),
       })
+      recordFailure('collect_duration_experience', error)
       try {
         await enqueueDurationExperienceCollectionFailure({
           projectId: String(task.project_id ?? ''),
@@ -795,6 +835,7 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
           taskId: task.id,
           error: enqueueError instanceof Error ? enqueueError.message : String(enqueueError),
         })
+        recordFailure('enqueue_duration_experience_reconciliation', enqueueError)
       }
     }
   } else if (
@@ -812,6 +853,7 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
         taskId: task.id,
         error: error instanceof Error ? error.message : String(error),
       })
+      recordFailure('retire_duration_experience', error)
     }
   }
 
@@ -822,9 +864,22 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
       taskId: task.id,
       error: error instanceof Error ? error.message : String(error),
     })
+    recordFailure('apply_material_lifecycle_feedback', error)
   }
 
-  queuePassiveReorderDetection(task.project_id, task.id)
+  try {
+    await queuePassiveReorderDetection(task.project_id, task.id)
+  } catch (error) {
+    logger.warn('Failed to queue passive reorder detection after task write', {
+      taskId: task.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    recordFailure('queue_passive_reorder_detection', error)
+  }
+
+  if (failedSteps.length > 0) {
+    throw new TaskWriteFinalizationIncompleteError(task, failedSteps)
+  }
 }
 
 export async function finalizeTaskWriteFromLegacyMutation(
@@ -1044,7 +1099,7 @@ export async function createTaskInMainChain(
     })
 
     await runPostCommitTaskSideEffect('queue_create_reorder_detection', task.id, async () => {
-      queuePassiveReorderDetection(task.project_id, task.id)
+      await queuePassiveReorderDetection(task.project_id, task.id)
     })
   }
   clearTaskCriticalPathReadCaches(task.project_id)
@@ -1510,7 +1565,7 @@ export async function updateTaskInMainChain(
   }
 
   await runPostCommitTaskSideEffect('finalize_task_write', task.id, async () => {
-    await finalizeTaskWrite(task, previousTask, updates.updated_by ?? null)
+    await taskWriteFinalizationOutboxDrainJob.executeNow()
   })
   clearTaskCriticalPathReadCaches(task.project_id ?? previousTask.project_id)
   return { task, participantUnit }
@@ -1556,7 +1611,7 @@ export async function deleteTaskInMainChain(
       if (parentId) {
         await refreshTaskWbsFlags(parentId)
       }
-      queuePassiveReorderDetection(normalizedProjectId, taskId)
+      await queuePassiveReorderDetection(normalizedProjectId, taskId)
     })
   }
 
@@ -1717,7 +1772,7 @@ export async function reopenTaskInMainChain(
   }
 
   await runPostCommitTaskSideEffect('finalize_reopen_task_write', task.id, async () => {
-    await finalizeTaskWrite(task, previousTask, actorId ?? null)
+    await taskWriteFinalizationOutboxDrainJob.executeNow()
   })
   return { task, participantUnit: null }
 }

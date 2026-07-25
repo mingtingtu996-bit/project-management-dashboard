@@ -10,6 +10,7 @@ import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
 import { defaultMasterPlanVisibilityLearningJob } from '../jobs/defaultMasterPlanVisibilityLearningJob.js'
 import { durationContextPolicyLearningJob } from '../jobs/durationContextPolicyLearningJob.js'
 import { durationLearningRuntimeEvidenceOutboxDrainJob } from '../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'
+import { taskWriteFinalizationOutboxDrainJob } from '../jobs/taskWriteFinalizationOutboxDrainJob.js'
 import { durationLiveLearningProductionClaimAuditJob } from '../jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { drawingPackageExperienceIterationJob } from '../jobs/drawingPackageExperienceIterationJob.js'
 import { forecastResidualOverlayProductionJob } from '../jobs/forecastResidualOverlayProductionJob.js'
@@ -139,6 +140,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const forecastResidualOverlayProductionStatus = forecastResidualOverlayProductionJob.getStatus()
   const durationContextPolicyLearningStatus = durationContextPolicyLearningJob.getStatus()
   const durationLearningRuntimeEvidenceOutboxDrainStatus = durationLearningRuntimeEvidenceOutboxDrainJob.getStatus()
+  const taskWriteFinalizationOutboxDrainStatus = taskWriteFinalizationOutboxDrainJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
   const templateDurationGovernanceStatus = templateDurationGovernanceJob.getStatus()
   const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
@@ -431,6 +433,21 @@ function buildJobStatusViews(): JobStatusView[] {
     buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
       durationLearningRuntimeEvidenceOutboxDrainStatus,
     ),
+    {
+      name: 'taskWriteFinalizationOutboxDrainJob',
+      displayName: 'Task write finalization outbox drain job',
+      isRunning: taskWriteFinalizationOutboxDrainStatus.isRunning,
+      isScheduled: taskWriteFinalizationOutboxDrainStatus.isScheduled,
+      schedule: '*/5 * * * *',
+      lastRun: taskWriteFinalizationOutboxDrainStatus.lastRun,
+      nextRun: taskWriteFinalizationOutboxDrainStatus.nextRun,
+      status: buildStatus(
+        taskWriteFinalizationOutboxDrainStatus.isRunning,
+        taskWriteFinalizationOutboxDrainStatus.isScheduled,
+      ),
+      description:
+        'Retries durable canonical task-write finalization every five minutes. Cross-tenant manual HTTP execution is intentionally unavailable.',
+    },
     {
       name: 'constructionDependencyReplayCalibrationJob',
       displayName: 'Construction dependency replay calibration job',

@@ -49,7 +49,7 @@ export interface DbServiceBusinessSideEffectAdapters {
   enqueueProjectHealthUpdate?: (projectId: string, trigger: string) => Promise<unknown> | unknown
   syncProjectDataQuality?: (projectId: string) => Promise<unknown> | unknown
   evaluateTaskConstraint?: (taskId: string, options: { projectId: string; sourceEventType: string }) => Promise<unknown> | unknown
-  finalizeTaskWrite?: (task: Task, previousTask?: Task | null, actorId?: string | null) => Promise<unknown> | unknown
+  requestTaskWriteFinalizationOutboxDrain?: (taskId: string) => Promise<unknown> | unknown
 }
 
 let businessSideEffectAdapters: DbServiceBusinessSideEffectAdapters = {}
@@ -65,7 +65,7 @@ export function assertDbServiceBusinessSideEffectAdaptersRegistered() {
     'enqueueProjectHealthUpdate',
     'syncProjectDataQuality',
     'evaluateTaskConstraint',
-    'finalizeTaskWrite',
+    'requestTaskWriteFinalizationOutboxDrain',
   ]
   const missingAdapters = requiredAdapters.filter((name) => !businessSideEffectAdapters[name])
   if (missingAdapters.length > 0) {
@@ -2614,9 +2614,9 @@ export async function updateTask(
 
   if (needsSnapshot) {
     runBusinessSideEffect(
-      'finalizeTaskWrite',
-      businessSideEffectAdapters.finalizeTaskWrite
-        ? () => businessSideEffectAdapters.finalizeTaskWrite!(updatedTask, oldTask, changedBy)
+      'requestTaskWriteFinalizationOutboxDrain',
+      businessSideEffectAdapters.requestTaskWriteFinalizationOutboxDrain
+        ? () => businessSideEffectAdapters.requestTaskWriteFinalizationOutboxDrain!(id)
         : undefined,
       { taskId: id, projectId: oldTask.project_id ?? updatedTask.project_id ?? null },
     )

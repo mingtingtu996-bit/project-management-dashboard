@@ -52,7 +52,7 @@ import {
 } from './services/projectHealthService.js'
 import { dataQualityService } from './services/dataQualityService.js'
 import { evaluateTaskConstraint } from './services/taskConstraintGovernanceService.js'
-import { finalizeTaskWriteFromLegacyMutation } from './services/taskWriteChainService.js'
+import { taskWriteFinalizationOutboxDrainJob } from './jobs/taskWriteFinalizationOutboxDrainJob.js'
 
 import projectsRouter, { warmProjectListCache } from './routes/projects.js'
 import projectWizardRouter from './routes/projectWizard.js'
@@ -183,7 +183,7 @@ registerDbServiceBusinessSideEffectAdapters({
   enqueueProjectHealthUpdate,
   syncProjectDataQuality: (projectId) => dataQualityService.syncProjectDataQuality(projectId),
   evaluateTaskConstraint,
-  finalizeTaskWrite: finalizeTaskWriteFromLegacyMutation,
+  requestTaskWriteFinalizationOutboxDrain: () => taskWriteFinalizationOutboxDrainJob.executeNow(),
 })
 assertDbServiceBusinessSideEffectAdaptersRegistered()
 

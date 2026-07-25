@@ -49,6 +49,7 @@ const expectedPersistentJobNames = [
   'responsibilityAlertJob',
   'riskStatisticsJob',
   'standardWorkDurationSeedReplayJob',
+  'taskWriteFinalizationOutboxDrainJob',
   'templateDurationGovernanceJob',
   'warningImpactSignalGovernanceJob',
   'weeklyDigestJob',
@@ -264,7 +265,7 @@ describe('persistent job schedule service', () => {
     )
     expect(result).toMatchObject({
       healthy: true,
-      registeredJobCount: 38,
+      registeredJobCount: 39,
     })
   })
 

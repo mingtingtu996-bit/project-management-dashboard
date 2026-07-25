@@ -104,6 +104,14 @@
     },
     {
       "kind": "job",
+      "id": "taskWriteFinalizationOutboxDrainJob",
+      "architectureUnit": "\u4e3b\u6267\u884c\u73af\uff1a\u884c\u52a8\u95ed\u73af",
+      "runtimeScope": "business_core",
+      "assignmentReason": "Retries only durable canonical task-write finalization events every five minutes under its own distributed lease; company-admin manual HTTP execution is unavailable.",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A\u4f53\u7cfb\u6536\u53e3\u53f0\u8d26\u4e0e\u9a8c\u6536\u95e8\u7981\u77e9\u9635.md#4.7.05-C-13"
+    },
+    {
+      "kind": "job",
       "id": "durationLiveLearningProductionClaimAuditJob",
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
@@ -3210,6 +3218,21 @@
       "architectureUnit": "学习治理环",
       "runtimeScope": "governance",
       "assignmentReason": "adds a durable, tenant-authoritative and idempotent evidence handoff from committed task and baseline materialization to duration-learning writers"
+    },
+    {
+      "kind": "migration",
+      "id": "324_task_dependency_heuristic_retirement",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "retires unpublished heuristic dependency rows from formal CPM consumption while preserving candidate evidence",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "migration",
+      "id": "326_task_write_finalization_outbox",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "atomically persists ordered canonical task-write finalization work and retry state from task execution-fact updates"
     },
     {
       "kind": "migration",
@@ -6666,6 +6689,14 @@
     },
     {
       "kind": "service",
+      "id": "taskDependencyPublicationPolicy",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "keeps heuristic dependency proposals candidate-only until governed dependency-rule publication",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
       "id": "taskDtoService",
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",
@@ -6767,6 +6798,13 @@
       "runtimeScope": "business_core",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges",
       "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
+    },
+    {
+      "kind": "service",
+      "id": "taskWriteFinalizationOutboxService",
+      "architectureUnit": "底座：平台运行观测",
+      "runtimeScope": "platform_foundation",
+      "assignmentReason": "claims, retries and completes ordered canonical task-write finalization events with bounded backlog health gates"
     },
     {
       "kind": "service",

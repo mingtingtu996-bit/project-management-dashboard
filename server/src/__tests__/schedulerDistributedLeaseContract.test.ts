@@ -34,11 +34,12 @@ describe('scheduler distributed job leases', () => {
     ...scheduledJobs.map(([, , jobName]) => jobName),
     'warningImpactSignalGovernanceJob',
     'durationLearningRuntimeEvidenceOutboxDrainJob',
+    'taskWriteFinalizationOutboxDrainJob',
   ]
 
-  it('keeps nine independent distributed lease keys', () => {
-    expect(expectedLeaseJobNames).toHaveLength(9)
-    expect(new Set(expectedLeaseJobNames)).toHaveLength(9)
+  it('keeps ten independent distributed lease keys', () => {
+    expect(expectedLeaseJobNames).toHaveLength(10)
+    expect(new Set(expectedLeaseJobNames)).toHaveLength(10)
   })
 
   it.each(scheduledJobs)('%s holds its own distributed lease around retry and side effects', (
