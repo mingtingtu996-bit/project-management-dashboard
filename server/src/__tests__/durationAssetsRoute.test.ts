@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   membership: { companyId: '11111111-1111-4111-8111-111111111111', role: 'company_admin' as string } as any,
   getVisibleProjectIds: vi.fn(),
   getProjectCompanyId: vi.fn(),
+  isDurationAssetGovernanceOperator: vi.fn(),
   listDurationAssetReviewItems: vi.fn(),
+  listSharedDurationAssetReviewItems: vi.fn(),
+  decideDurationAssetReviewItem: vi.fn(),
+  areRuleAssetRuntimeActionsEnabled: vi.fn(),
 }))
 
 vi.mock('../middleware/auth.js', () => ({
@@ -39,8 +43,21 @@ vi.mock('../services/durationAssetReviewQueueService.js', async (importOriginal)
   return {
     ...actual,
     listDurationAssetReviewItems: mocks.listDurationAssetReviewItems,
+    listSharedDurationAssetReviewItems: mocks.listSharedDurationAssetReviewItems,
   }
 })
+
+vi.mock('../services/durationAssetPlatformOperatorService.js', () => ({
+  isDurationAssetGovernanceOperator: mocks.isDurationAssetGovernanceOperator,
+}))
+
+vi.mock('../services/durationAssetReviewDecisionService.js', () => ({
+  decideDurationAssetReviewItem: mocks.decideDurationAssetReviewItem,
+}))
+
+vi.mock('../services/v14231ActionableSurfaceRegistryService.js', () => ({
+  areRuleAssetRuntimeActionsEnabled: mocks.areRuleAssetRuntimeActionsEnabled,
+}))
 
 import { errorHandler } from '../middleware/errorHandler.js'
 import { createDatabaseDurationAssetReviewQueueStore } from '../services/durationAssetReviewQueueService.js'
@@ -65,6 +82,8 @@ describe('duration assets admin read route', () => {
     }
     mocks.getVisibleProjectIds.mockResolvedValue([projectId])
     mocks.getProjectCompanyId.mockResolvedValue('11111111-1111-4111-8111-111111111111')
+    mocks.isDurationAssetGovernanceOperator.mockResolvedValue(false)
+    mocks.areRuleAssetRuntimeActionsEnabled.mockReturnValue(true)
     mocks.listDurationAssetReviewItems.mockResolvedValue({
       generatedAt: '2026-07-24T08:00:00.000Z',
       total: 1,
@@ -94,6 +113,42 @@ describe('duration assets admin read route', () => {
         createdAt: '2026-07-23T00:00:00.000Z',
         updatedAt: '2026-07-23T00:00:00.000Z',
       }],
+    })
+    mocks.listSharedDurationAssetReviewItems.mockResolvedValue({
+      generatedAt: '2026-07-24T08:00:00.000Z',
+      total: 1,
+      items: [{
+        id: '44444444-4444-4444-8444-444444444444',
+        sourceKey: 'shared-review-source',
+        decisionFingerprint: 'a'.repeat(64),
+        reviewKind: 'candidate_publication',
+        assetKey: 'standard_work_duration_seed',
+        artifactKey: 'shared-standard-work',
+        scope: { level: 'global' },
+        proposalKey: 'proposal-global',
+        candidateEventRef: 'candidate-global',
+        conflictRef: null,
+        publicationKey: null,
+        resolvedPublicationKey: null,
+        reasonCodes: ['manual_review_required'],
+        reviewPayload: { proposalKey: 'proposal-global' },
+        status: 'open',
+        canReview: true,
+        approvalReady: true,
+        assignedToUserId: null,
+        reviewedByUserId: null,
+        reviewedAt: null,
+        decisionReason: null,
+        resolutionSource: null,
+        createdAt: '2026-07-23T00:00:00.000Z',
+        updatedAt: '2026-07-23T00:00:00.000Z',
+      }],
+    })
+    mocks.decideDurationAssetReviewItem.mockResolvedValue({
+      status: 'rejected',
+      reviewItemId: '44444444-4444-4444-8444-444444444444',
+      publicationKey: null,
+      idempotent: false,
     })
   })
 
@@ -144,6 +199,65 @@ describe('duration assets admin read route', () => {
     expect(response.body.error.code).toBe('FORBIDDEN')
     expect(mocks.getVisibleProjectIds).not.toHaveBeenCalled()
     expect(mocks.listDurationAssetReviewItems).not.toHaveBeenCalled()
+  })
+
+  it('lets a dedicated duration governance operator read actionable shared-scope rows without company authority', async () => {
+    mocks.globalRole = 'company_admin'
+    mocks.membership = null
+    mocks.isDurationAssetGovernanceOperator.mockResolvedValue(true)
+
+    const response = await request(buildApp())
+      .get('/api/admin/duration-assets/review-items')
+      .query({ scope: 'global', status: 'open', age: '7d' })
+      .expect(200)
+
+    expect(mocks.listSharedDurationAssetReviewItems).toHaveBeenCalledWith({
+      assetKey: undefined,
+      scopeLevel: 'global',
+      reason: undefined,
+      status: 'open',
+      age: '7d',
+    })
+    expect(mocks.getVisibleProjectIds).not.toHaveBeenCalled()
+    expect(response.body.data.items[0]).toMatchObject({
+      scope: { level: 'global' },
+      canReview: true,
+      approvalReady: true,
+      proposalKey: 'proposal-global',
+    })
+  })
+
+  it('does not let a legacy or current company admin decide a shared-scope item', async () => {
+    mocks.globalRole = 'company_admin'
+
+    const response = await request(buildApp())
+      .post('/api/admin/duration-assets/review-items/44444444-4444-4444-8444-444444444444/decision')
+      .send({ decision: 'reject', decisionNotes: 'shared evidence rejected' })
+      .expect(403)
+
+    expect(response.body.error.code).toBe('DURATION_ASSET_PLATFORM_OPERATOR_REQUIRED')
+    expect(mocks.decideDurationAssetReviewItem).not.toHaveBeenCalled()
+  })
+
+  it('lets the dedicated operator decide a shared item through platform authority', async () => {
+    mocks.membership = null
+    mocks.isDurationAssetGovernanceOperator.mockResolvedValue(true)
+
+    const response = await request(buildApp())
+      .post('/api/admin/duration-assets/review-items/44444444-4444-4444-8444-444444444444/decision')
+      .send({ decision: 'reject', decisionNotes: 'shared evidence rejected' })
+      .expect(200)
+
+    expect(mocks.decideDurationAssetReviewItem).toHaveBeenCalledWith(expect.objectContaining({
+      reviewItemId: '44444444-4444-4444-8444-444444444444',
+      decision: 'reject',
+      decisionReason: 'shared evidence rejected',
+      authority: {
+        kind: 'duration_governance_operator',
+        reviewerUserId: '33333333-3333-4333-8333-333333333333',
+      },
+    }))
+    expect(response.body.data).toMatchObject({ status: 'rejected' })
   })
 
   it('fails closed for projects outside the server-resolved current-company project set', async () => {

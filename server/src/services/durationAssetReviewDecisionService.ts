@@ -29,6 +29,7 @@ export type DurationAssetReviewDecision = 'approve' | 'reject' | 'supersede'
 
 export type DurationAssetReviewDecisionAuthority =
   { kind: 'company_admin'; companyId: string; authorizedProjectIds: string[] | null; reviewerUserId: string }
+  | { kind: 'duration_governance_operator'; reviewerUserId: string }
 
 export interface DecideDurationAssetReviewItemInput {
   reviewItemId: string
@@ -140,8 +141,18 @@ function normalizeDecision(value: unknown): DurationAssetReviewDecision {
 }
 
 function normalizeAuthority(input: DurationAssetReviewDecisionAuthority) {
+  if (input?.kind === 'duration_governance_operator') {
+    return {
+      kind: 'duration_governance_operator' as const,
+      reviewerUserId: normalizeRequiredText(
+        input.reviewerUserId,
+        'DURATION_ASSET_REVIEW_AUTHORITY_REQUIRED',
+        'Duration governance operator',
+      ),
+    }
+  }
   if (input?.kind !== 'company_admin') {
-    throw decisionError('DURATION_ASSET_REVIEW_AUTHORITY_REQUIRED', 403, 'Current company administrator authority is required.')
+    throw decisionError('DURATION_ASSET_REVIEW_AUTHORITY_REQUIRED', 403, 'Governed duration asset review authority is required.')
   }
   return {
     kind: 'company_admin' as const,
@@ -165,6 +176,16 @@ function assertItemAuthority(
   item: DurationAssetReviewItem,
   authority: ReturnType<typeof normalizeAuthority>,
 ) {
+  if (authority.kind === 'duration_governance_operator') {
+    if (item.scope.level !== 'industry' && item.scope.level !== 'global') {
+      throw decisionError(
+        'DURATION_ASSET_REVIEW_SHARED_SCOPE_REQUIRED',
+        403,
+        'Duration governance operators can decide industry and global review items only.',
+      )
+    }
+    return
+  }
   if (item.scope.level === 'industry' || item.scope.level === 'global') {
     throw decisionError(
       'DURATION_ASSET_REVIEW_SHARED_SCOPE_READ_ONLY',

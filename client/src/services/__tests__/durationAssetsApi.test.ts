@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   apiGet: vi.fn(),
+  apiPost: vi.fn(),
   executeRuleAssetGovernanceWorkbenchOperation: vi.fn(),
 }))
 
-vi.mock('@/lib/apiClient', () => ({ apiGet: mocks.apiGet }))
+vi.mock('@/lib/apiClient', () => ({ apiGet: mocks.apiGet, apiPost: mocks.apiPost }))
 vi.mock('@/services/ruleAssetGovernanceWorkbenchApi', () => ({
   executeRuleAssetGovernanceWorkbenchOperation: mocks.executeRuleAssetGovernanceWorkbenchOperation,
 }))
@@ -70,6 +71,31 @@ describe('durationAssetsApi', () => {
       domainWriterKey: 'duration_asset_review_decision_service', evidenceToken: 'source-1',
       reviewItemId: 'review-1', reviewDecision: 'approve', decisionNotes: 'reviewed evidence',
     })
+  })
+
+  it('routes industry and global decisions through the dedicated platform operator endpoint', async () => {
+    mocks.apiPost.mockResolvedValueOnce({ status: 'rejected', reviewItemId: '44444444-4444-4444-8444-444444444444' })
+    const item = {
+      id: '44444444-4444-4444-8444-444444444444', sourceKey: 'source-shared', decisionFingerprint: 'a'.repeat(64),
+      reviewKind: 'candidate_publication' as const, assetKey: 'standard_work_duration_seed' as const,
+      artifactKey: 'asset-shared', scope: { level: 'industry' as const, industryKey: 'general_civil' },
+      proposalKey: 'proposal-shared', candidateEventRef: 'candidate-shared', conflictRef: null, publicationKey: null,
+      resolvedPublicationKey: null, reasonCodes: [], reviewPayload: {}, status: 'open' as const,
+      canReview: true, approvalReady: true, assignedToUserId: null, reviewedByUserId: null,
+      reviewedAt: null, decisionReason: null, resolutionSource: null,
+      createdAt: '2026-07-22T08:00:00.000Z', updatedAt: '2026-07-23T08:00:00.000Z',
+    }
+
+    await expect(decideDurationAssetReviewItem(item, 'reject', 'shared evidence rejected')).resolves.toEqual({
+      status: 'operation_delegated',
+      reasons: [],
+    })
+
+    expect(mocks.apiPost).toHaveBeenCalledWith(
+      '/api/admin/duration-assets/review-items/44444444-4444-4444-8444-444444444444/decision',
+      { decision: 'reject', decisionNotes: 'shared evidence rejected' },
+    )
+    expect(mocks.executeRuleAssetGovernanceWorkbenchOperation).not.toHaveBeenCalled()
   })
 
   it('preserves backend availability metadata for accuracy and governance sources', async () => {

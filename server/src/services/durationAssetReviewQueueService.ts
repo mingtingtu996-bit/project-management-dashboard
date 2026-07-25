@@ -158,6 +158,16 @@ export interface ListDurationAssetReviewItemsInput {
   now?: string
 }
 
+export interface ListSharedDurationAssetReviewItemsInput {
+  assetKey?: DurationAssetReviewKey | null
+  scopeLevel?: 'industry' | 'global' | null
+  reason?: string | null
+  status?: DurationAssetReviewStatus | null
+  age?: 'all' | '24h' | '7d' | '30d'
+  limit?: number
+  now?: string
+}
+
 export interface DurationAssetReviewReadModel {
   generatedAt: string
   items: DurationAssetReviewItem[]
@@ -496,7 +506,10 @@ function scopeFromRow(row: QueueRow): DurationLearningRuntimeScope {
   throw new Error('duration_asset_review_row_scope_invalid')
 }
 
-function rowToItem(row: QueueRow, options: { sanitizeShared?: boolean } = {}): DurationAssetReviewItem {
+function rowToItem(
+  row: QueueRow,
+  options: { sanitizeShared?: boolean; sharedReviewAuthority?: boolean } = {},
+): DurationAssetReviewItem {
   const scope = scopeFromRow(row)
   const shared = scope.level === 'industry' || scope.level === 'global'
   const sanitize = Boolean(options.sanitizeShared && shared)
@@ -518,8 +531,8 @@ function rowToItem(row: QueueRow, options: { sanitizeShared?: boolean } = {}): D
     reasonCodes: uniqueTexts(asArray(field(row, 'reason_codes', 'reasonCodes'))).sort(),
     reviewPayload: sanitize ? null : validateQueuePayload(field(row, 'review_payload', 'reviewPayload')),
     status,
-    canReview: !shared,
-    approvalReady: status === 'open' && !shared,
+    canReview: !shared || Boolean(options.sharedReviewAuthority),
+    approvalReady: status === 'open' && (!shared || Boolean(options.sharedReviewAuthority)),
     assignedToUserId: sanitize ? null : nullableText(field(row, 'assigned_to_user_id', 'assignedToUserId')),
     reviewedByUserId: sanitize ? null : nullableText(field(row, 'reviewed_by_user_id', 'reviewedByUserId')),
     reviewedAt: nullableText(field(row, 'reviewed_at', 'reviewedAt')),
@@ -804,4 +817,40 @@ export async function listDurationAssetReviewItems(
 ) {
   const { queryExec, ...listInput } = input
   return createDatabaseDurationAssetReviewQueueStore(queryExec).list(listInput)
+}
+
+export async function listSharedDurationAssetReviewItems(
+  input: ListSharedDurationAssetReviewItemsInput & { queryExec?: DurationAssetReviewQueryExec },
+) {
+  const queryExec = input.queryExec ?? executeSQL
+  const assetKey = input.assetKey == null ? null : requireDurationAssetReviewKey(input.assetKey)
+  const scopeLevel = input.scopeLevel == null ? null : normalizeText(input.scopeLevel)
+  if (scopeLevel && scopeLevel !== 'industry' && scopeLevel !== 'global') {
+    throw new Error('duration_asset_review_shared_scope_invalid')
+  }
+  const status = input.status == null ? null : requireReviewStatus(input.status)
+  const age = input.age ?? 'all'
+  if (!['all', '24h', '7d', '30d'].includes(age)) throw new Error('duration_asset_review_age_invalid')
+  const now = normalizeText(input.now) || new Date().toISOString()
+  const limit = Math.max(1, Math.min(200, Math.trunc(Number(input.limit) || 100)))
+  const rows = await queryExec<QueueRow>(
+    `select *, count(*) over() as total_count
+       from public.duration_asset_review_items
+      where scope_level in ('industry', 'global')
+        and ($1::text is null or asset_key = $1)
+        and ($2::text is null or scope_level = $2)
+        and ($3::text is null or status = $3)
+        and ($4::text is null or $4 = any(reason_codes))
+        and ($5::text = 'all' or updated_at >= case $5::text
+          when '24h' then $6::timestamptz - interval '24 hours'
+          when '7d' then $6::timestamptz - interval '7 days'
+          when '30d' then $6::timestamptz - interval '30 days'
+          else $6::timestamptz
+        end)
+      order by updated_at desc, id asc
+      limit $7`,
+    [assetKey, scopeLevel || null, status, nullableText(input.reason), age, now, limit],
+  )
+  const items = rows.map((row) => rowToItem(row, { sharedReviewAuthority: true }))
+  return { generatedAt: now, items, total: Math.max(0, Math.trunc(Number(rows[0]?.total_count) || items.length)) }
 }

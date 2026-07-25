@@ -1,4 +1,4 @@
-import { apiGet } from '@/lib/apiClient'
+import { apiGet, apiPost } from '@/lib/apiClient'
 import { executeRuleAssetGovernanceWorkbenchOperation } from '@/services/ruleAssetGovernanceWorkbenchApi'
 
 export const DURATION_ASSET_REVIEW_KEYS = [
@@ -223,6 +223,15 @@ export function readTimestamp(value: string | null | undefined): number | null {
 }
 
 export function decideDurationAssetReviewItem(item: DurationAssetReviewItem, decision: DurationAssetReviewDecision, decisionNotes: string) {
+  if (item.scope.level === 'industry' || item.scope.level === 'global') {
+    return apiPost(`/api/admin/duration-assets/review-items/${encodeURIComponent(item.id)}/decision`, {
+      decision,
+      decisionNotes,
+    }).then(() => ({
+      status: 'operation_delegated' as const,
+      reasons: [] as string[],
+    }))
+  }
   return executeRuleAssetGovernanceWorkbenchOperation({
     action: 'duration_asset_review_decision', assetType: 'duration_learning_runtime',
     domainWriterKey: 'duration_asset_review_decision_service', evidenceToken: item.sourceKey,

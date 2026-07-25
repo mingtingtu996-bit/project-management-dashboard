@@ -8,7 +8,11 @@ import { asyncHandler } from '../middleware/errorHandler.js'
 import {
   DURATION_ASSET_REVIEW_KEYS,
   listDurationAssetReviewItems,
+  listSharedDurationAssetReviewItems,
 } from '../services/durationAssetReviewQueueService.js'
+import { isDurationAssetGovernanceOperator } from '../services/durationAssetPlatformOperatorService.js'
+import { decideDurationAssetReviewItem } from '../services/durationAssetReviewDecisionService.js'
+import { areRuleAssetRuntimeActionsEnabled } from '../services/v14231ActionableSurfaceRegistryService.js'
 import type { ApiResponse } from '../types/index.js'
 
 const router = Router()
@@ -24,7 +28,24 @@ const reviewListSchema = z.object({
   age: z.enum(['all', '24h', '7d', '30d']).optional(),
 })
 
-function forbidden(res: any, code: 'FORBIDDEN' | 'FORBIDDEN_COMPANY_SCOPE', message: string) {
+const sharedReviewListSchema = reviewListSchema
+  .omit({ scope: true, projectId: true })
+  .extend({ scope: z.enum(['industry', 'global']).optional() })
+
+const reviewDecisionSchema = z.object({
+  decision: z.enum(['approve', 'reject', 'supersede']),
+  decisionNotes: z.string().trim().min(1).max(1000),
+})
+
+const reviewItemParamsSchema = z.object({
+  reviewItemId: z.string().uuid(),
+})
+
+function forbidden(
+  res: any,
+  code: 'FORBIDDEN' | 'FORBIDDEN_COMPANY_SCOPE' | 'DURATION_ASSET_PLATFORM_OPERATOR_REQUIRED',
+  message: string,
+) {
   return res.status(403).json({
     success: false,
     error: { code, message },
@@ -33,6 +54,19 @@ function forbidden(res: any, code: 'FORBIDDEN' | 'FORBIDDEN_COMPANY_SCOPE', mess
 }
 
 router.get('/review-items', asyncHandler(async (req: any, res) => {
+  const platformOperator = await isDurationAssetGovernanceOperator(req.user?.id)
+  if (platformOperator && (!req.query.scope || req.query.scope === 'industry' || req.query.scope === 'global')) {
+    const filters = sharedReviewListSchema.parse(req.query)
+    const data = await listSharedDurationAssetReviewItems({
+      assetKey: filters.assetKey,
+      scopeLevel: filters.scope,
+      reason: filters.reason,
+      status: filters.status,
+      age: filters.age,
+    })
+    return res.json({ success: true, data, timestamp: new Date().toISOString() } satisfies ApiResponse)
+  }
+
   const membership = req.user?.id
     ? await getCurrentCompanyMembership(req.user.id, getRequestCompanyId(req))
     : null
@@ -73,6 +107,39 @@ router.get('/review-items', asyncHandler(async (req: any, res) => {
     data,
     timestamp: new Date().toISOString(),
   } satisfies ApiResponse)
+}))
+
+router.post('/review-items/:reviewItemId/decision', asyncHandler(async (req: any, res) => {
+  const reviewerUserId = String(req.user?.id ?? '').trim()
+  if (!reviewerUserId || !(await isDurationAssetGovernanceOperator(reviewerUserId))) {
+    return forbidden(
+      res,
+      'DURATION_ASSET_PLATFORM_OPERATOR_REQUIRED',
+      'A dedicated duration governance platform operator is required for shared-scope decisions.',
+    )
+  }
+  const { reviewItemId } = reviewItemParamsSchema.parse(req.params)
+  const decision = reviewDecisionSchema.parse(req.body ?? {})
+  if (decision.decision === 'approve' && !areRuleAssetRuntimeActionsEnabled()) {
+    return res.status(409).json({
+      success: false,
+      error: {
+        code: 'ACTION_READINESS_GATED',
+        message: 'Runtime publication actions are not enabled.',
+      },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse)
+  }
+  const data = await decideDurationAssetReviewItem({
+    reviewItemId,
+    decision: decision.decision,
+    decisionReason: decision.decisionNotes,
+    authority: {
+      kind: 'duration_governance_operator',
+      reviewerUserId,
+    },
+  })
+  res.json({ success: true, data, timestamp: new Date().toISOString() } satisfies ApiResponse)
 }))
 
 export default router

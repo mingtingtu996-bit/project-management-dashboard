@@ -31,6 +31,7 @@ import {
   buildDurationAssetReviewSourceKey,
   createDatabaseDurationAssetReviewQueueStore,
   listDurationAssetReviewItems,
+  listSharedDurationAssetReviewItems,
   requireDurationAssetReviewKey,
   type DurationAssetReviewItem,
 } from '../services/durationAssetReviewQueueService.js'
@@ -528,6 +529,37 @@ describe('durationAssetReviewQueueService', () => {
       canReview: false, proposalKey: null, candidateEventRef: null, conflictRef: null, reviewPayload: null,
       assignedToUserId: null, reviewedByUserId: null,
     }))
+  })
+
+  it('returns only actionable unsanitized shared rows to the platform operator reader', async () => {
+    const sharedRows: Row[] = [
+      {
+        ...rowForInput(upsertInput(), 'review-global'), scope_level: 'global', company_id: null, project_id: null,
+        source_key: 'review-global', proposal_key: 'proposal-global', candidate_event_ref: 'candidate-global',
+        review_payload: reviewPayload(), total_count: 1,
+      },
+    ]
+    const { queryExec } = createHarness(sharedRows)
+
+    const result = await listSharedDurationAssetReviewItems({
+      scopeLevel: 'global',
+      status: 'open',
+      age: '7d',
+      now: '2026-07-23T09:00:00.000Z',
+      queryExec,
+    })
+
+    expect(result.items).toEqual([expect.objectContaining({
+      scope: { level: 'global' },
+      canReview: true,
+      approvalReady: true,
+      proposalKey: 'proposal-global',
+      candidateEventRef: 'candidate-global',
+      reviewPayload: expect.any(Object),
+    })])
+    const [sql, params] = queryExec.mock.calls.at(-1) as [string, unknown[]]
+    expect(sql.replace(/\s+/g, ' ')).toContain("where scope_level in ('industry', 'global')")
+    expect(params).toEqual([null, 'global', 'open', null, '7d', '2026-07-23T09:00:00.000Z', 100])
   })
 
   it('fails closed for unknown assets, invalid scopes, project/company mismatches, and invalid fingerprints', async () => {

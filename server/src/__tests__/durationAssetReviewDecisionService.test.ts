@@ -273,6 +273,48 @@ describe('duration asset review decision service', () => {
     expect(queueStore.decide).not.toHaveBeenCalled()
   })
 
+  it('lets a dedicated duration governance operator reject global and industry items', async () => {
+    for (const scope of [{ level: 'global' as const }, { level: 'industry' as const, industryKey: 'general_civil' }]) {
+      vi.mocked(queueStore.loadForUpdate).mockResolvedValueOnce(reviewItem({ scope }))
+      await expect(decideDurationAssetReviewItem({
+        ...approveInput,
+        decision: 'reject',
+        authority: {
+          kind: 'duration_governance_operator',
+          reviewerUserId: 'operator-1',
+        } as any,
+      })).resolves.toMatchObject({ status: 'rejected' })
+    }
+
+    expect(queueStore.decide).toHaveBeenCalledTimes(2)
+    expect(queueStore.decide).toHaveBeenCalledWith(expect.objectContaining({
+      reviewerUserId: 'operator-1',
+      resolutionSource: 'manual_rejection',
+    }))
+  })
+
+  it('does not let a shared-scope operator mutate company or project review items', async () => {
+    for (const scope of [
+      { level: 'company' as const, companyId: 'company-1' },
+      { level: 'project' as const, companyId: 'company-1', projectId: 'project-1' },
+    ]) {
+      vi.mocked(queueStore.loadForUpdate).mockResolvedValueOnce(reviewItem({ scope }))
+      await expect(decideDurationAssetReviewItem({
+        ...approveInput,
+        decision: 'reject',
+        authority: {
+          kind: 'duration_governance_operator',
+          reviewerUserId: 'operator-1',
+        } as any,
+      })).rejects.toMatchObject({
+        code: 'DURATION_ASSET_REVIEW_SHARED_SCOPE_REQUIRED',
+        status: 403,
+      })
+    }
+
+    expect(queueStore.decide).not.toHaveBeenCalled()
+  })
+
   it('uses the atomic writer for project benchmark stable approval', async () => {
     const transactionEvents: string[] = []
     const stableItem = reviewItem({
