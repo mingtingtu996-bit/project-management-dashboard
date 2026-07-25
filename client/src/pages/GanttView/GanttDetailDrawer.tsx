@@ -361,7 +361,9 @@ export function GanttDetailDrawer({
                 <span>{formatForecastDelay(durationForecast.forecastDelayDays)}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-blue-700">
-                {durationForecast.remainingForecastDays != null ? <span>预计还需 {durationForecast.remainingForecastDays} 天</span> : null}
+                <span>{formatDurationMetric(durationForecast.remainingDuration, {
+                  expectedUnit: 'construction_production_day',
+                })}</span>
                 <span>预计完成 {durationForecast.forecastFinishDate || '-'}</span>
                 <span>可信度 {formatForecastConfidence(durationForecast.confidenceLevel)}</span>
               </div>

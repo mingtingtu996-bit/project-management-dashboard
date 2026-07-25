@@ -1,4 +1,9 @@
 import { apiGet, apiPost } from '@/lib/apiClient'
+import {
+  normalizeDurationMetricDto,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
 
 export type DurationConfidenceLevel = 'high' | 'medium' | 'low' | 'unavailable' | 'data_pending' | string
 export type DurationDataMaturityLevel = 'L0' | 'L1' | 'L2' | string
@@ -57,6 +62,7 @@ export interface TaskDurationForecast {
   durationOutputCode?: string | null
   durationOutputSemanticFieldName?: string | null
   remainingForecastDays?: number | null
+  remainingDuration: DurationMetricDto | null
   conservativeDurationDays: number | null
   forecastFinishDate: string | null
   forecastDelayDays: number | null
@@ -94,7 +100,8 @@ export interface TaskDurationForecast {
 }
 
 function normalizeTaskDurationForecast(raw: any): TaskDurationForecast {
-  const remainingForecastDays = raw?.remainingForecastDays ?? null
+  const remainingDuration = normalizeDurationMetricDto(raw?.remainingDuration)
+  const remainingForecastDays = readAvailableDurationValue(remainingDuration, 'construction_production_day')
   const durationOutputCode = raw?.durationOutputCode ?? null
   const normalizedOutputCode = String(durationOutputCode ?? '').trim()
   const semanticReferenceDays = normalizedOutputCode === 'remaining_forecast'
@@ -105,6 +112,7 @@ function normalizeTaskDurationForecast(raw: any): TaskDurationForecast {
     durationOutputCode,
     durationOutputSemanticFieldName: raw?.durationOutputSemanticFieldName ?? null,
     remainingForecastDays,
+    remainingDuration,
     conservativeDurationDays: semanticReferenceDays == null ? null : raw?.conservativeDurationDays ?? null,
     forecastFinishDate: raw?.forecastFinishDate ?? null,
     forecastDelayDays: raw?.forecastDelayDays ?? null,

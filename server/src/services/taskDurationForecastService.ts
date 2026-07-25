@@ -69,6 +69,12 @@ import {
 } from './durationOutputGovernanceService.js'
 import { recordDurationAccuracyPrediction } from './durationAlgorithmAccuracyService.js'
 import {
+  buildConstructionProductionDayDurationMetric,
+  businessDateKey,
+  normalizeDurationMetricDto,
+  type DurationMetricDto,
+} from './durationMetricService.js'
+import {
   recordTaskDurationForecastConsumedArtifacts,
   type DurationRuntimeConsumerFacadeArtifactsResult,
 } from './durationRuntimeConsumerObservationAdapterService.js'
@@ -99,6 +105,7 @@ export interface TaskDurationForecast {
   durationOutputCode?: DurationOutputCode
   durationOutputSemanticFieldName?: string | null
   remainingForecastDays?: number | null
+  remainingDuration: DurationMetricDto
   optimisticRemainingDays?: number | null
   remainingDurationDays: number | null
   conservativeRemainingDays?: number | null
@@ -590,6 +597,7 @@ type SignalForecastImpact = ReturnType<typeof buildSignalForecastImpact>
 type ForecastModelResult = {
   optimisticRemainingDays: number | null
   remainingDurationDays: number | null
+  remainingDuration: DurationMetricDto
   conservativeRemainingDays: number | null
   forecastFinishDate: string | null
   forecastDelayDays: number
@@ -1694,11 +1702,15 @@ function remainingForecastOutputContractSummary() {
 function withRemainingForecastOutputContract(forecast: TaskDurationForecast): TaskDurationForecast {
   const contract = remainingForecastOutputContractSummary()
   if (!contract) return forecast
+  const remainingForecastDays = forecast.remainingDuration.availability === 'available'
+    ? forecast.remainingDuration.value
+    : null
   return {
     ...forecast,
+    remainingDurationDays: remainingForecastDays,
     durationOutputCode: contract.code as DurationOutputCode,
     durationOutputSemanticFieldName: contract.semanticFieldName,
-    remainingForecastDays: forecast.remainingDurationDays,
+    remainingForecastDays,
     calculationContext: {
       ...(forecast.calculationContext ?? {}),
       durationOutputContract: contract,
@@ -1762,6 +1774,7 @@ async function recordTaskRemainingForecastPredictionEvent(params: {
   options: NormalizedForecastOptions
   generatedAt: string
 }) {
+  if (params.forecastDates.remainingDuration.availability !== 'available') return
   try {
     await recordDurationAccuracyPrediction({
       engineCode: 'task_remaining_forecast',
@@ -1822,20 +1835,29 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     : undefined
   const executionReferenceDays = readNullableNumber(forecast.execution_reference_days)
     ?? readNullableNumber(forecast.recommended_duration_days)
+  const generatedAsOf = normalizeDate(forecast.generated_at ?? forecast.created_at)
+    ?? businessDateKey(new Date())
+  const remainingDuration = normalizeDurationMetricDto(metadata.remainingDuration)
+    ?? buildConstructionProductionDayDurationMetric(null, {
+      asOf: generatedAsOf,
+      calendar: null,
+    })
+  const remainingDurationAvailable = remainingDuration.availability === 'available'
 
   return withRemainingForecastOutputContract({
     taskId: normalizeId(forecast.task_id) ?? taskId,
     recommendedDurationDays: executionReferenceDays,
     executionReferenceDays,
     conservativeDurationDays: readNullableNumber(forecast.conservative_duration_days),
-    optimisticRemainingDays: readNullableNumber(metadata.optimisticRemainingDays),
-    remainingDurationDays: readNullableNumber(forecast.remaining_duration_days),
-    conservativeRemainingDays: readNullableNumber(metadata.conservativeRemainingDays),
-    forecastFinishDate: normalizeDate(forecast.forecast_finish_date),
-    forecastDelayDays: readNullableNumber(forecast.forecast_delay_days) ?? 0,
+    optimisticRemainingDays: remainingDurationAvailable ? readNullableNumber(metadata.optimisticRemainingDays) : null,
+    remainingDurationDays: remainingDurationAvailable ? remainingDuration.value : null,
+    remainingDuration,
+    conservativeRemainingDays: remainingDurationAvailable ? readNullableNumber(metadata.conservativeRemainingDays) : null,
+    forecastFinishDate: remainingDurationAvailable ? normalizeDate(forecast.forecast_finish_date) : null,
+    forecastDelayDays: remainingDurationAvailable ? readNullableNumber(forecast.forecast_delay_days) ?? 0 : 0,
     delayRiskIndex: readNullableNumber(forecast.delay_risk_index) ?? readNullableNumber(metadata.delayRiskIndex) ?? undefined,
-    confidenceLevel: normalizeId(forecast.confidence_level) ?? 'medium',
-    confidenceScore: readNullableNumber(forecast.confidence_score) ?? 50,
+    confidenceLevel: remainingDurationAvailable ? normalizeId(forecast.confidence_level) ?? 'medium' : 'unavailable',
+    confidenceScore: remainingDurationAvailable ? readNullableNumber(forecast.confidence_score) ?? 50 : 0,
     forecastSource: normalizeId(forecast.forecast_source) ?? 'cached_current',
     durationCalibrationSource: normalizeId(forecast.duration_calibration_source),
     durationProvenance: normalizeId(forecast.duration_provenance),
@@ -2689,6 +2711,21 @@ function chooseRuntimeResidualOverlay(rows: ForecastResidualOverlayRow[]) {
   }
 }
 
+function syncRemainingDurationMetric(
+  forecastDates: ForecastModelResult,
+  workCalendar: WorkCalendarContext,
+): ForecastModelResult {
+  if (forecastDates.remainingDuration.availability !== 'available') return forecastDates
+
+  return {
+    ...forecastDates,
+    remainingDuration: buildConstructionProductionDayDurationMetric(forecastDates.remainingDurationDays, {
+      asOf: forecastDates.remainingDuration.asOf,
+      calendar: workCalendar,
+    }),
+  }
+}
+
 function applyForecastResidualOverlay(params: {
   forecastDates: ForecastModelResult
   task: ForecastTaskRow | null
@@ -2773,7 +2810,7 @@ function applyForecastResidualOverlay(params: {
     writesBaseDurationSeed: overlay.writes_base_duration_seed,
   }
 
-  return {
+  return syncRemainingDurationMetric({
     ...params.forecastDates,
     remainingDurationDays: afterRemainingDurationDays,
     forecastFinishDate,
@@ -2797,7 +2834,7 @@ function applyForecastResidualOverlay(params: {
         residualOverlay,
       },
     },
-  }
+  }, params.workCalendar)
 }
 
 function readForecastPlanningReplayCorrectionDays(readback: PlanningReplayCalibrationReadback | null | undefined) {
@@ -2884,7 +2921,7 @@ async function applyPlanningReplayCalibrationReadbackToForecast(params: {
   }
   const topFactor = `回放校准显示该粗工序历史预测误差可补 ${correctionDays} 天，已按候选 overlay 修正剩余工期。`
 
-  return {
+  return syncRemainingDurationMetric({
     ...params.forecastDates,
     remainingDurationDays: afterRemainingDurationDays,
     forecastFinishDate,
@@ -2913,7 +2950,7 @@ async function applyPlanningReplayCalibrationReadbackToForecast(params: {
         planningReplayCalibrationReadback: readbackContext,
       },
     },
-  }
+  }, params.workCalendar)
 }
 
 function buildT2RhythmForecastContext(calculationContext: unknown, factorSummary?: DurationContextSummary | null) {
@@ -4892,6 +4929,55 @@ async function buildRemainingForecastModel(params: {
   const modelProfile = runtimeParameterApplication.modelProfile
   const learnableParameterRuntimeGate = runtimeParameterApplication.runtimeGate
   const learnableParameterRegistry = buildTaskRemainingForecastLearnableParameterRegistry(modelProfile)
+  const forecastAsOf = businessDateKey(now, params.workCalendar.timezone)
+
+  if (!isAuthoritativeConstructionCalendar(params.workCalendar)) {
+    const remainingDuration = buildConstructionProductionDayDurationMetric(null, {
+      asOf: forecastAsOf,
+      calendar: params.workCalendar,
+    })
+    const unavailableReason = remainingDuration.unavailableReason ?? 'construction_calendar_identity_missing'
+    const forecastSources = {
+      candidates: [],
+      calendarBasis: effectiveConstructionCalendarBasis(params.workCalendar),
+      calendarWindowCount: effectiveConstructionCalendarWindowCount(params.workCalendar),
+      calendar: remainingDuration,
+      forecastOptions: params.forecastOptions,
+      unavailableReason,
+      modelProfile: {
+        id: modelProfile.id,
+        key: modelProfile.modelKey,
+        version: modelProfile.modelVersion,
+        source: modelProfile.source,
+      },
+      learnableParameterRegistry,
+      learnableParameterRuntimeGate,
+    }
+    return {
+      optimisticRemainingDays: null,
+      remainingDurationDays: null,
+      remainingDuration,
+      conservativeRemainingDays: null,
+      forecastFinishDate: null,
+      forecastDelayDays: 0,
+      delayRiskIndex: 0,
+      confidenceLevel: 'unavailable',
+      confidenceScore: 0,
+      dataMaturity: 'L0',
+      businessFactorBadges: [],
+      topFactors: ['Construction calendar identity is unavailable; production-day forecast is not consumable.'],
+      probabilityDuration: null,
+      forecastSources,
+      calculationContext: {
+        ...params.calculationContext,
+        remaining_duration_forecast: {
+          availability: 'unavailable',
+          unavailableReason,
+          duration: remainingDuration,
+        },
+      },
+    }
+  }
 
   if (isCompletedTask({
     status: params.task?.status,
@@ -4903,6 +4989,10 @@ async function buildRemainingForecastModel(params: {
     return {
       optimisticRemainingDays: 0,
       remainingDurationDays: 0,
+      remainingDuration: buildConstructionProductionDayDurationMetric(0, {
+        asOf: forecastAsOf,
+        calendar: params.workCalendar,
+      }),
       conservativeRemainingDays: 0,
       forecastFinishDate: finish.toISOString().slice(0, 10),
       forecastDelayDays,
@@ -5456,6 +5546,10 @@ async function buildRemainingForecastModel(params: {
   return {
     optimisticRemainingDays,
     remainingDurationDays,
+    remainingDuration: buildConstructionProductionDayDurationMetric(remainingDurationDays, {
+      asOf: forecastAsOf,
+      calendar: params.workCalendar,
+    }),
     conservativeRemainingDays,
     forecastFinishDate,
     forecastDelayDays,
@@ -5647,6 +5741,7 @@ async function refreshTaskDurationForecast(
       durationOutputCode: durationOutputContract?.code ?? 'remaining_forecast',
       durationOutputSemanticFieldName: durationOutputContract?.semanticFieldName ?? 'remainingForecastDays',
       executionReferenceDays,
+      remainingDuration: forecastDates.remainingDuration,
       recommendedDurationDaysPolicy: 'new_task_reference_only_not_written_by_execution_forecast',
       optimisticRemainingDays: forecastDates.optimisticRemainingDays,
       conservativeRemainingDays: forecastDates.conservativeRemainingDays,
@@ -5708,6 +5803,7 @@ async function refreshTaskDurationForecast(
     conservativeDurationDays: suggestion.conservativeDurationDays,
     optimisticRemainingDays: forecastDates.optimisticRemainingDays,
     remainingDurationDays: forecastDates.remainingDurationDays,
+    remainingDuration: forecastDates.remainingDuration,
     conservativeRemainingDays: forecastDates.conservativeRemainingDays,
     probabilityDuration: forecastDates.probabilityDuration,
     forecastFinishDate: forecastDates.forecastFinishDate,

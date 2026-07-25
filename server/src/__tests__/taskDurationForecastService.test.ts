@@ -259,7 +259,15 @@ describe('taskDurationForecastService', () => {
     state.modelProfiles = []
     state.projectOverlays = []
     state.residualOverlays = []
-    state.seedRecords = []
+    state.seedRecords = [{
+      holidayCode: 'test_calendar_identity',
+      holidayName: 'Test construction calendar identity',
+      calendarKind: 'forecast_calendar_window',
+      startDate: '2099-01-01',
+      endDate: '2099-01-01',
+      counts_as_construction_shutdown: false,
+      __resolverVersionId: 'calendar-test-v1',
+    }]
     state.insertedForecasts = []
     state.updatedForecasts = []
     mocks.from.mockImplementation((table: string) => createBuilder(table))
@@ -298,6 +306,53 @@ describe('taskDurationForecastService', () => {
       projectId: 'project-1',
     })).rejects.toThrow('TASK_DURATION_FORECAST_PROJECT_SCOPE_MISMATCH')
     expect(state.insertedForecasts).toEqual([])
+  })
+
+  it('fails closed when the construction calendar identity is unavailable', async () => {
+    state.seedRecords = []
+    state.tasks = [{
+      id: 'task-calendar-unavailable',
+      project_id: 'project-1',
+      title: 'Calendar unavailable task',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-24',
+      actual_start_date: '2026-05-10',
+      progress: 50,
+      status: 'in_progress',
+    }]
+
+    const forecast = await forecastTaskDuration('task-calendar-unavailable')
+
+    expect(forecast).toMatchObject({
+      remainingDurationDays: null,
+      remainingForecastDays: null,
+      forecastFinishDate: null,
+      confidenceLevel: 'unavailable',
+      remainingDuration: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-18',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    })
+    expect(state.insertedForecasts).toEqual([
+      expect.objectContaining({
+        remaining_duration_days: null,
+        forecast_finish_date: null,
+        metadata: expect.objectContaining({
+          remainingDuration: expect.objectContaining({
+            value: null,
+            availability: 'unavailable',
+            unavailableReason: 'construction_calendar_identity_missing',
+          }),
+        }),
+      }),
+    ])
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
   afterEach(() => {
@@ -420,6 +475,16 @@ describe('taskDurationForecastService', () => {
         recommendedDurationDays: 10,
         conservativeDurationDays: 14,
         remainingDurationDays: 6,
+        remainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
         forecastDelayDays: 2,
@@ -490,6 +555,16 @@ describe('taskDurationForecastService', () => {
         recommendedDurationDays: 10,
         conservativeDurationDays: 14,
         remainingDurationDays: 6,
+        remainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
         forecastDelayDays: 2,
@@ -2783,6 +2858,7 @@ describe('taskDurationForecastService', () => {
       holidayName: 'Labor Day',
       startDate: '2026-05-01',
       endDate: '2026-05-05',
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-unstarted-window-overflow',
@@ -3503,6 +3579,14 @@ describe('taskDurationForecastService', () => {
 
     expect(forecast.executionReferenceDays).toBe(14)
     expect(forecast.recommendedDurationDays).toBe(14)
+    expect(forecast.remainingDuration).toMatchObject({
+      value: null,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+    expect(forecast.remainingDurationDays).toBeNull()
+    expect(forecast.remainingForecastDays).toBeNull()
+    expect(forecast.forecastFinishDate).toBeNull()
     expect(state.insertedForecasts).toHaveLength(0)
     expect(state.updatedForecasts).toHaveLength(0)
   })
@@ -3523,7 +3607,18 @@ describe('taskDurationForecastService', () => {
       forecast_source: 'cached_current',
       is_current: true,
       created_at: '2026-05-18T08:00:00.000Z',
-      metadata: {},
+      metadata: {
+        remainingDuration: {
+          value: 8,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-18',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
     }]
 
     const [forecast] = await listCurrentTaskDurationForecasts(['task-date-object'], {

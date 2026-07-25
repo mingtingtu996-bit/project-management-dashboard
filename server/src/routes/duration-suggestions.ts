@@ -416,7 +416,12 @@ function serializeDurationSuggestion(suggestion: any) {
 function serializeTaskDurationForecast(forecast: any) {
   const durationOutputCode = forecast?.durationOutputCode ?? null
   const durationOutputSemanticFieldName = forecast?.durationOutputSemanticFieldName ?? null
-  const remainingForecastDays = forecast?.remainingForecastDays ?? null
+  const remainingDuration = forecast?.remainingDuration ?? null
+  const remainingForecastDays = remainingDuration?.availability === 'available'
+    && remainingDuration?.unit === 'construction_production_day'
+    && Number.isFinite(Number(remainingDuration?.value))
+    ? Number(remainingDuration.value)
+    : null
   const normalizedOutputCode = String(durationOutputCode ?? '').trim()
   const semanticReferenceDays = normalizedOutputCode === 'remaining_forecast' ? remainingForecastDays : null
   return {
@@ -424,6 +429,7 @@ function serializeTaskDurationForecast(forecast: any) {
     durationOutputCode,
     durationOutputSemanticFieldName,
     remainingForecastDays,
+    remainingDuration,
     conservativeDurationDays: semanticReferenceDays == null ? null : forecast?.conservativeDurationDays ?? null,
     forecastFinishDate: forecast?.forecastFinishDate ?? null,
     forecastDelayDays: forecast?.forecastDelayDays ?? 0,

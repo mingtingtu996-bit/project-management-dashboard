@@ -447,6 +447,16 @@ describe('durationSuggestionsApi governed duration outputs', () => {
       durationOutputCode: 'remaining_forecast',
       durationOutputSemanticFieldName: 'remainingForecastDays',
       remainingForecastDays: 6,
+      remainingDuration: {
+        value: 6,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-15',
+        availability: 'available',
+        unavailableReason: null,
+      },
       remainingDurationDays: 99,
       forecastFinishDate: '2026-06-20',
       forecastDelayDays: 2,
@@ -461,6 +471,10 @@ describe('durationSuggestionsApi governed duration outputs', () => {
       durationOutputCode: 'remaining_forecast',
       durationOutputSemanticFieldName: 'remainingForecastDays',
       remainingForecastDays: 6,
+      remainingDuration: expect.objectContaining({
+        value: 6,
+        availability: 'available',
+      }),
       forecastFinishDate: '2026-06-20',
     })
     expect(forecast).not.toHaveProperty('recommendedDurationDays')
