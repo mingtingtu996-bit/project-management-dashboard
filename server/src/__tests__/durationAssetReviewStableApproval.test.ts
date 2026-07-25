@@ -335,6 +335,9 @@ function benchmarkSamples(): DurationExperienceSampleRow[] {
     metadata: {
       construction_calendar_ref: 'cn-work-calendar',
       construction_calendar_version: '2026.07',
+      construction_calendar_basis: 'official_construction_calendar_seed',
+      construction_calendar_availability: 'available',
+      construction_calendar_timezone: 'Asia/Shanghai',
       structured_cause_snapshot: {
         confirmed_causes: index < 6 ? [{
           attribution_id: `cccccccc-cccc-4ccc-8ccc-${String(index + 1).padStart(12, '0')}`,
