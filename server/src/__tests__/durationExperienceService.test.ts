@@ -125,6 +125,8 @@ describe('durationExperienceService', () => {
       countsAsConstructionShutdown: false,
       __resolverVersionId: 'work-calendar-version-1',
       sourceVersion: '2026',
+      startDate: '2026-12-31',
+      endDate: '2026-12-31',
     }])
     mocks.resolveV1474BuildingPatternMatch.mockResolvedValue({
       record: null,
@@ -608,6 +610,7 @@ describe('durationExperienceService', () => {
   it('stores calendar-day and construction-production-day durations and consumes the production basis', async () => {
     mocks.resolveAlgorithmSeedRecords.mockResolvedValueOnce([{
       stableCode: 'spring-shutdown-2026',
+      __resolverVersionId: 'calendar-v1',
       startDate: '2026-05-02',
       endDate: '2026-05-03',
       countsAsConstructionShutdown: true,
@@ -655,6 +658,65 @@ describe('durationExperienceService', () => {
         planned_duration_production_days: 4,
         construction_calendar_basis: 'official_construction_calendar_seed',
         construction_calendar_window_count: 1,
+      }),
+    }))
+  })
+
+  it('quarantines a completed sample when the resolved calendar has no identity', async () => {
+    mocks.resolveAlgorithmSeedRecords.mockResolvedValueOnce([])
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-calendar-identity-missing',
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-calendar-identity-missing',
+      duration_day_basis: 'calendar_day',
+      actual_duration: 5,
+      planned_duration: 6,
+      actual_duration_production_days: null,
+      planned_duration_production_days: null,
+      sample_strength: 'unusable',
+      confidence_level: 'low',
+      confidence_score: 15,
+      included_in_benchmark: false,
+      metadata: expect.objectContaining({
+        duration_day_basis: 'calendar_day',
+        construction_calendar_availability: 'unavailable',
+        construction_calendar_ref: null,
+        construction_calendar_version: null,
+        construction_calendar_as_of: '2026-05-05',
+      }),
+      source_lineage: expect.objectContaining({
+        durationDayBasis: 'calendar_day',
+        constructionCalendarAvailability: 'unavailable',
+        constructionCalendarRef: null,
+        constructionCalendarVersion: null,
+        constructionCalendarAsOf: '2026-05-05',
+      }),
+    }))
+  })
+
+  it('quarantines a completed sample when calendar resolution fails', async () => {
+    mocks.resolveAlgorithmSeedRecords.mockRejectedValueOnce(new Error('calendar resolver unavailable'))
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-calendar-resolution-failed',
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-calendar-resolution-failed',
+      duration_day_basis: 'calendar_day',
+      actual_duration_production_days: null,
+      planned_duration_production_days: null,
+      sample_strength: 'unusable',
+      included_in_benchmark: false,
+      metadata: expect.objectContaining({
+        construction_calendar_availability: 'unavailable',
+        construction_calendar_ref: null,
+        construction_calendar_version: null,
       }),
     }))
   })
