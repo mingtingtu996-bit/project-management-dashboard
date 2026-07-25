@@ -102,6 +102,7 @@ const mocks = vi.hoisted(() => {
     rawQuery: vi.fn(async () => ({ rows: [] })),
     executeSQL: vi.fn(async () => []),
     getTask: vi.fn(),
+    loggerError: vi.fn(),
   }
 })
 
@@ -125,7 +126,7 @@ vi.mock('../middleware/logger.js', () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
-    error: vi.fn(),
+    error: mocks.loggerError,
   },
 }))
 
@@ -293,6 +294,29 @@ function isSystemBenchmarkScope() {
   return isDurationBenchmarkQuery()
     && hasCurrentFilter('company_id', null, 'is')
     && !mocks.state.currentFilters.some((filter) => filter.key === 'project_id')
+}
+
+function availableConstructionCalendar(overrides: Record<string, unknown> = {}) {
+  return {
+    basis: 'official_construction_calendar_seed' as const,
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available' as const,
+    unavailableReason: null,
+    ...overrides,
+  }
+}
+
+function benchmarkCalendarMetadata(overrides: Record<string, unknown> = {}) {
+  return {
+    construction_calendar_ref: 'work_calendar',
+    construction_calendar_version: 'calendar-v1',
+    construction_calendar_timezone: 'Asia/Shanghai',
+    construction_calendar_as_of: '2026-05-17',
+    ...overrides,
+  }
 }
 
 const serviceSourcePath = fileURLToPath(new URL('../services/durationSuggestionService.ts', import.meta.url))
@@ -2143,7 +2167,8 @@ describe('durationSuggestionService', () => {
           sample_count: 30,
           confidence_level: 'high',
           confidence_score: 88,
-            company_id: 'company-1',
+          company_id: 'company-1',
+          metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2167,8 +2192,10 @@ describe('durationSuggestionService', () => {
       standardWorkCode: 'plastering_wall_ceiling',
       taskTitle: 'wall plastering',
       wbsNodeType: 'process',
+      workCalendar: availableConstructionCalendar(),
     })
 
+    expect(mocks.loggerError).not.toHaveBeenCalled()
     expect(suggestion.recommendedDurationDays).toBe(6)
     expect(suggestion.conservativeDurationDays).toBe(9)
     expect(suggestion.forecastSource).toBe('standard_work_duration_seed')
@@ -2218,6 +2245,93 @@ describe('durationSuggestionService', () => {
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
   })
 
+  it('does not blend a production-day benchmark without calendar provenance', async () => {
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (isCompanyBenchmarkScope('company-1')) {
+        return {
+          data: {
+            duration_day_basis: 'construction_production_day',
+            p50_days: 4,
+            p75_days: 6,
+          sample_count: 30,
+          confidence_level: 'high',
+          confidence_score: 88,
+          company_id: 'company-1',
+        },
+          error: null,
+        }
+      }
+      return { data: null, error: null }
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 8,
+      defaultDaysP80: 12,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      wbsNodeType: 'process',
+      workCalendar: availableConstructionCalendar(),
+    })
+
+    expect(suggestion.recommendedDurationDays).not.toBe(6)
+    expect(suggestion.conservativeDurationDays).not.toBe(9)
+    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+  })
+
+  it('does not blend a production-day benchmark from a different calendar version', async () => {
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (isCompanyBenchmarkScope('company-1')) {
+        return {
+          data: {
+            duration_day_basis: 'construction_production_day',
+            p50_days: 4,
+            p75_days: 6,
+            sample_count: 30,
+            confidence_level: 'high',
+            confidence_score: 88,
+            company_id: 'company-1',
+            metadata: benchmarkCalendarMetadata({ construction_calendar_version: 'calendar-v0' }),
+          },
+          error: null,
+        }
+      }
+      return { data: null, error: null }
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 8,
+      defaultDaysP80: 12,
+      fixedDays: 1,
+      variableDays: 7,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      wbsNodeType: 'process',
+      workCalendar: availableConstructionCalendar(),
+    })
+
+    expect(suggestion.recommendedDurationDays).not.toBe(6)
+    expect(suggestion.conservativeDurationDays).not.toBe(9)
+    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+  })
+
   it('uses a published learnable parameter runtime weight for company benchmark blending', async () => {
     mocks.getProjectCompanyId.mockResolvedValue('company-1')
     mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: any) => (
@@ -2263,8 +2377,9 @@ describe('durationSuggestionService', () => {
           sample_count: 30,
           confidence_level: 'high',
           confidence_score: 88,
-            company_id: 'company-1',
-          },
+          company_id: 'company-1',
+          metadata: benchmarkCalendarMetadata(),
+        },
           error: null,
         }
       }
@@ -2384,7 +2499,8 @@ describe('durationSuggestionService', () => {
           sample_count: 30,
           confidence_level: 'high',
           confidence_score: 88,
-            company_id: 'company-1',
+          company_id: 'company-1',
+          metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2618,7 +2734,8 @@ describe('durationSuggestionService', () => {
           sample_count: 30,
           confidence_level: 'high',
           confidence_score: 88,
-            company_id: 'company-1',
+          company_id: 'company-1',
+          metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2664,6 +2781,7 @@ describe('durationSuggestionService', () => {
           sample_count: 60,
           confidence_level: 'high',
           confidence_score: 86,
+          metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2718,6 +2836,7 @@ describe('durationSuggestionService', () => {
             confidence_level: 'medium',
             confidence_score: 72,
             project_id: 'project-1',
+            metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2733,6 +2852,7 @@ describe('durationSuggestionService', () => {
             confidence_level: 'high',
             confidence_score: 88,
             company_id: 'company-1',
+            metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2747,6 +2867,7 @@ describe('durationSuggestionService', () => {
             sample_count: 120,
             confidence_level: 'high',
             confidence_score: 84,
+            metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -2799,8 +2920,9 @@ describe('durationSuggestionService', () => {
           variance: 0.32,
           confidence_level: 'high',
           confidence_score: 86,
-            company_id: 'company-1',
-          },
+          company_id: 'company-1',
+          metadata: benchmarkCalendarMetadata(),
+        },
           error: null,
         }
       }
@@ -2881,6 +3003,7 @@ describe('durationSuggestionService', () => {
             p75_days: 10,
             sample_count: 18,
             metadata: {
+              ...benchmarkCalendarMetadata(),
               variance: 0.55,
               coefficientOfVariation: 0.55,
             },
@@ -4764,6 +4887,7 @@ describe('durationSuggestionService', () => {
             confidence_level: 'high',
             confidence_score: 86,
             company_id: 'company-1',
+            metadata: benchmarkCalendarMetadata(),
           },
           error: null,
         }
@@ -4895,6 +5019,10 @@ describe('durationSuggestionService', () => {
             defaultDaysP50: 7,
             defaultDaysP80: 9,
             durationDayBasis: 'construction_production_day',
+            constructionCalendarRef: 'work_calendar',
+            constructionCalendarVersion: 'calendar-v1',
+            constructionCalendarTimezone: 'Asia/Shanghai',
+            constructionCalendarAsOf: '2026-07-17',
           },
           previous_publication_key: 'algorithm_seed_versions:standard-v1',
           traffic_percent: 100,
@@ -4967,6 +5095,10 @@ describe('durationSuggestionService', () => {
             sampleCount: 50,
             variance: 0.2,
             durationDayBasis: 'construction_production_day',
+            constructionCalendarRef: 'work_calendar',
+            constructionCalendarVersion: 'calendar-v1',
+            constructionCalendarTimezone: 'Asia/Shanghai',
+            constructionCalendarAsOf: '2026-07-17',
           },
           previous_publication_key: 'duration_benchmarks:company-v1',
           traffic_percent: 100,

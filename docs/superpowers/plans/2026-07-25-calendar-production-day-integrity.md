@@ -101,11 +101,11 @@ git commit -m "fix(duration): quarantine samples without calendar identity"
 - Consumes: `DurationBenchmarkRow.metadata` calendar provenance and the resolved `DurationSuggestionInput.workCalendar`.
 - Produces: benchmark candidates only when a production-day basis has calendar ref, version, timezone, a valid `asOf`, and identity matching the current calendar when one is available.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Add a company benchmark with `duration_day_basis: 'construction_production_day'` but no calendar metadata and prove it does not blend. Add a second benchmark with a distinct calendar version and prove it does not blend into an available current calendar. Add an exact matching provenance row and prove the existing blend still occurs.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -115,11 +115,11 @@ Run:
 
 Expected: rows with only `duration_day_basis` currently affect the recommendation.
 
-- [ ] **Step 3: Implement provenance admission before blending**
+- [x] **Step 3: Implement provenance admission before blending**
 
 Add a pure helper that reads both camelCase and snake_case metadata keys and requires a valid `YYYY-MM-DD` as-of date. Call it inside `addCandidate` before sample-size checks and candidate insertion. Runtime-publication candidates must carry the same provenance or be rejected; do not synthesize identifiers.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 Run the focused suggestion suite, then:
 
