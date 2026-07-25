@@ -76,17 +76,19 @@ describe('task-summary production delay semantics', () => {
   })
 
   it('loads the authoritative task delay_reason and passes it into the response mapper', () => {
-    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryService.ts'), 'utf8')
 
-    expect(source).toMatch(/\.select\('[^']*delay_reason[^']*'\)/)
-    expect(source).toContain('rawDelayReason: t.delay_reason')
+    expect(routeSource).toMatch(/\.select\('[^']*delay_reason[^']*'\)/)
+    expect(serviceSource).toContain('rawDelayReason: task.delay_reason')
   })
 
   it('uses the shared task attribution projection instead of a route-local WBS resolver', () => {
-    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryService.ts'), 'utf8')
 
-    expect(source).toContain('buildProjectTaskAttributionProjection(taskRows')
-    expect(source).not.toContain('const resolveWbsAttribution =')
+    expect(serviceSource).toContain('buildProjectTaskAttributionProjection(input.taskRows)')
+    expect(routeSource).not.toContain('const resolveWbsAttribution =')
   })
 
   it('does not keep a generic rawQuery wrapper in the task summary route', () => {
@@ -151,6 +153,24 @@ describe('task-summary production delay semantics', () => {
     expect(summarySource).toContain('export async function getTaskSummaryAssigneeRows(')
     expect(summarySource).toContain('export async function getTaskSummaryMonthlyPlanFulfillmentTrend(')
     expect(summarySource).toContain('return getMonthlyPlanFulfillmentTrend(projectId, safeMonths)')
+  })
+
+  it('delegates project summary filtering, grouping, DTO assembly, and counts to the read-model service', () => {
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryService.ts'), 'utf8')
+    const projectSummarySource = routeSource.slice(
+      routeSource.indexOf("router.get('/projects/:id/task-summary'"),
+      routeSource.indexOf("router.get('/projects/:id/task-summary/trend'"),
+    )
+
+    expect(projectSummarySource).toContain('buildProjectTaskSummaryReadModel({')
+    expect(projectSummarySource).not.toContain('buildProjectTaskAttributionProjection(')
+    expect(projectSummarySource).not.toContain('const normalizedTaskById = new Map(')
+    expect(projectSummarySource).not.toContain('const groups =')
+    expect(projectSummarySource).not.toContain('onTimeCount')
+    expect(projectSummarySource).not.toContain('delayedCount')
+    expect(projectSummarySource).not.toContain('completedMilestoneCount')
+    expect(serviceSource).toContain('export async function buildProjectTaskSummaryReadModel(')
   })
 
   it('uses planned_end_date before legacy end_date when deciding whether a task is overdue by a period end', () => {
