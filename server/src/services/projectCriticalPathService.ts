@@ -811,16 +811,20 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
 }) {
   const { projectId, snapshot, actualSpan, constructionCalendar } = params
   const networkLineage = snapshot.networkLineage
+  const projectDuration = snapshot.projectDuration
   if (
     snapshot.calculationStatus !== 'fresh'
     || !networkLineage?.criticalPathInputHash
     || !networkLineage.criticalSetHash
-    || snapshot.projectDurationDays <= 0
+    || projectDuration.unit !== 'construction_production_day'
+    || projectDuration.availability !== 'available'
+    || projectDuration.value === null
+    || projectDuration.value <= 0
   ) {
     return
   }
 
-  const predictedDurationDays = Math.max(0, Math.round(snapshot.projectDurationDays))
+  const predictedDurationDays = Math.max(0, Math.round(projectDuration.value))
   const durationErrorDays = Math.abs(actualSpan.actualDurationDays - predictedDurationDays)
   const outcomeToleranceDays = criticalPathOutcomeToleranceDays(predictedDurationDays)
   const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays)).length
@@ -843,7 +847,8 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
   const metadata: Record<string, unknown> = {
     source: 'project_critical_path_cpm',
     algorithm_version: networkLineage.criticalPathAlgorithmVersion,
-    duration_day_unit: 'construction_production_day',
+    duration_day_unit: projectDuration.unit,
+    duration_metric: projectDuration,
     construction_calendar: constructionCalendar,
     prediction_duration_days: predictedDurationDays,
     actual_duration_days: actualSpan.actualDurationDays,
@@ -3546,60 +3551,67 @@ async function recalculateProjectCriticalPathInternal(projectId: string): Promis
     : constructionOrganizationLineage
       ? mergeConstructionOrganizationLineageIntoContext({}, constructionOrganizationLineage)
       : undefined
-  await recordDurationAccuracyPrediction({
-    engineCode: 'critical_path_cpm',
-    outputKind: 'critical_path_project_duration',
-    projectId,
-    dedupeKey: cpmDedupeKey,
-    predictionBasis: 'critical_path_runtime_snapshot',
-    modelVersion: 'critical_path_cpm_v1',
-    predictedStartDate: earliestDate(rows.map((row) => row.start_date ?? row.planned_start_date)),
-    predictedFinishDate: latestDate(rows.map((row) => row.end_date ?? row.planned_end_date)),
-    predictedDurationDays: snapshot.projectDurationDays,
-    predictedAt: snapshot.calculatedAt ?? null,
-    predictionContext: mergeConstructionOrganizationLineageIntoContext({
-      taskCount: tasks.length,
-      eligibleTaskCount: snapshot.networkSchedule?.length ?? 0,
-      durationDayUnit: 'construction_production_day',
-      constructionCalendar,
-      autoTaskIds: snapshot.autoTaskIds,
-      manualAttentionTaskIds: snapshot.manualAttentionTaskIds,
-      manualInsertedTaskIds: snapshot.manualInsertedTaskIds,
-      primaryChain: snapshot.primaryChain,
-      alternateChainCount: snapshot.alternateChains.length,
-      edgeCount: snapshot.edges.length,
-      calculationStatus: snapshot.calculationStatus,
-      networkLineage: predictionNetworkLineage ?? null,
-      runtimePublicationKeys: unique(
-        (snapshot.criticalPathLearningPublications ?? []).map((publication) => publication.publicationKey),
-      ),
-      criticalPathLearningPublications: snapshot.criticalPathLearningPublications ?? [],
-      durationInputAssembly: snapshot.durationInputAssembly ?? null,
-      t2RhythmScheduleCandidateNetworkEvidence: snapshot.t2RhythmScheduleCandidateNetworkEvidence ?? null,
-    }, constructionOrganizationLineage),
-    networkLineage: predictionNetworkLineage,
-  })
-  const actualSpan = buildCompletedProjectActualSpan(rows, constructionCalendar)
-  if (actualSpan) {
-    await backtestEarliestPendingDurationAccuracyPrediction({
-      projectId,
+  const productionDurationAvailable = snapshot.projectDuration.availability === 'available'
+    && snapshot.projectDuration.unit === 'construction_production_day'
+    && snapshot.projectDuration.value !== null
+  if (productionDurationAvailable) {
+    await recordDurationAccuracyPrediction({
       engineCode: 'critical_path_cpm',
-      actualStartDate: actualSpan.actualStartDate,
-      actualFinishDate: actualSpan.actualFinishDate,
-      actualDurationDays: actualSpan.actualDurationDays,
-      actualContext: mergeConstructionOrganizationLineageIntoContext({
-        source: 'completed_project_task_span',
-        durationBasis: 'project_actual_span',
-        skippedCurrentDedupeKey: cpmDedupeKey,
-        taskCount: tasks.length,
-      }, constructionOrganizationLineage),
-    })
-    await recordCriticalPathRulePlanNetworkOutcome({
+      outputKind: 'critical_path_project_duration',
       projectId,
-      snapshot,
-      actualSpan,
-      constructionCalendar,
+      dedupeKey: cpmDedupeKey,
+      predictionBasis: 'critical_path_runtime_snapshot',
+      modelVersion: 'critical_path_cpm_v1',
+      predictedStartDate: earliestDate(rows.map((row) => row.start_date ?? row.planned_start_date)),
+      predictedFinishDate: latestDate(rows.map((row) => row.end_date ?? row.planned_end_date)),
+      predictedDurationDays: snapshot.projectDuration.value,
+      predictedAt: snapshot.calculatedAt ?? null,
+      predictionContext: mergeConstructionOrganizationLineageIntoContext({
+        taskCount: tasks.length,
+        eligibleTaskCount: snapshot.networkSchedule?.length ?? 0,
+        durationDayUnit: snapshot.projectDuration.unit,
+        durationMetric: snapshot.projectDuration,
+        constructionCalendar,
+        autoTaskIds: snapshot.autoTaskIds,
+        manualAttentionTaskIds: snapshot.manualAttentionTaskIds,
+        manualInsertedTaskIds: snapshot.manualInsertedTaskIds,
+        primaryChain: snapshot.primaryChain,
+        alternateChainCount: snapshot.alternateChains.length,
+        edgeCount: snapshot.edges.length,
+        calculationStatus: snapshot.calculationStatus,
+        networkLineage: predictionNetworkLineage ?? null,
+        runtimePublicationKeys: unique(
+          (snapshot.criticalPathLearningPublications ?? []).map((publication) => publication.publicationKey),
+        ),
+        criticalPathLearningPublications: snapshot.criticalPathLearningPublications ?? [],
+        durationInputAssembly: snapshot.durationInputAssembly ?? null,
+        t2RhythmScheduleCandidateNetworkEvidence: snapshot.t2RhythmScheduleCandidateNetworkEvidence ?? null,
+      }, constructionOrganizationLineage),
+      networkLineage: predictionNetworkLineage,
     })
+    const actualSpan = buildCompletedProjectActualSpan(rows, constructionCalendar)
+    if (actualSpan) {
+      await backtestEarliestPendingDurationAccuracyPrediction({
+        projectId,
+        engineCode: 'critical_path_cpm',
+        actualStartDate: actualSpan.actualStartDate,
+        actualFinishDate: actualSpan.actualFinishDate,
+        actualDurationDays: actualSpan.actualDurationDays,
+        actualContext: mergeConstructionOrganizationLineageIntoContext({
+          source: 'completed_project_task_span',
+          durationBasis: 'project_actual_span',
+          durationMetric: snapshot.projectDuration,
+          skippedCurrentDedupeKey: cpmDedupeKey,
+          taskCount: tasks.length,
+        }, constructionOrganizationLineage),
+      })
+      await recordCriticalPathRulePlanNetworkOutcome({
+        projectId,
+        snapshot,
+        actualSpan,
+        constructionCalendar,
+      })
+    }
   }
 
   logger.info('[projectCriticalPathService] recalculated project critical path snapshot', {
