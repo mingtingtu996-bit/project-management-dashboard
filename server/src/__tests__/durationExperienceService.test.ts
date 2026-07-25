@@ -610,7 +610,6 @@ describe('durationExperienceService', () => {
   it('stores calendar-day and construction-production-day durations and consumes the production basis', async () => {
     mocks.resolveAlgorithmSeedRecords.mockResolvedValueOnce([{
       stableCode: 'spring-shutdown-2026',
-      __resolverVersionId: 'calendar-v1',
       startDate: '2026-05-02',
       endDate: '2026-05-03',
       countsAsConstructionShutdown: true,
