@@ -264,6 +264,18 @@ const {
   recalculateProjectCriticalPath,
 } = await import('../services/projectCriticalPathService.js')
 
+function useAuthoritativeConstructionCalendar() {
+  mocks.resolveConstructionCalendarContext.mockResolvedValue({
+    basis: 'official_construction_calendar_seed',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available',
+    unavailableReason: null,
+    windows: [],
+  })
+}
+
 describe('project critical path service', () => {
   beforeEach(() => {
     clearProjectCriticalPathSnapshotCache()
@@ -359,7 +371,26 @@ describe('project critical path service', () => {
     }))
   })
 
+  it('does not persist production-day learning evidence without authoritative calendar identity', async () => {
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: 'completed',
+      progress: 100,
+      actual_start_date: row.start_date,
+      actual_end_date: row.end_date,
+    }))
+
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.rawQuery.mock.calls.some((call) => (
+      String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes')
+    ))).toBe(false)
+  })
+
   it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((task) => task.id === 'task-a'
       ? { ...task, standard_work_code: 'SW-LEARNED-WATCH' }
       : task)
@@ -810,6 +841,7 @@ describe('project critical path service', () => {
   })
 
   it('records CPM project-duration prediction snapshots for accuracy backtesting', async () => {
+    useAuthoritativeConstructionCalendar()
     const result = await recalculateProjectCriticalPath('project-1')
 
     expect(result.projectDuration).toBe(8)
@@ -866,6 +898,7 @@ describe('project critical path service', () => {
   })
 
   it('records construction organization plan-network publication lineage on E3 CPM prediction events', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.task_dependencies = [
       ...mocks.tables.task_dependencies,
       {
@@ -918,6 +951,7 @@ describe('project critical path service', () => {
   })
 
   it('carries construction organization plan-network lineage into completed CPM backtests', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.task_dependencies = [
       ...mocks.tables.task_dependencies,
       {
@@ -964,6 +998,7 @@ describe('project critical path service', () => {
   })
 
   it('closes the earliest pending CPM prediction instead of the current recalculation key when the project is complete', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       status: 'completed',
@@ -990,6 +1025,7 @@ describe('project critical path service', () => {
   })
 
   it('records completed critical-path replay as a plan-network outcome without mutating facts or runtime artifacts', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       status: 'completed',
@@ -1027,7 +1063,12 @@ describe('project critical path service', () => {
         algorithm_version: 'critical_path_cpm_v1',
         duration_day_unit: 'construction_production_day',
         construction_calendar: {
-          basis: 'calendar_day',
+          basis: 'official_construction_calendar_seed',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
           windows: [],
         },
         prediction_duration_days: 8,
@@ -1065,6 +1106,7 @@ describe('project critical path service', () => {
   })
 
   it('counts one completed project network as one replay outcome while retaining all distinct task ids', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       end_date: row.id === 'task-c' ? '2026-04-10' : row.end_date,
@@ -1089,6 +1131,7 @@ describe('project critical path service', () => {
   })
 
   it('records completed critical-path impact against the exact consumed publication, artifact, and input tasks', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       standard_work_code: row.id === 'task-b' ? 'SW-LEARNED-CRITICAL' : row.standard_work_code,
@@ -1570,6 +1613,7 @@ describe('project critical path service', () => {
   })
 
   it('surfaces T2 phase-1 rhythm network evidence in E3 CPM snapshots without using it as authoritative task dependencies', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = [
       {
         id: 'cold-a',
