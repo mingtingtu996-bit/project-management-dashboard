@@ -233,11 +233,41 @@ function nullableString(value: unknown) {
   return value == null ? null : typeof value === 'string' ? value : undefined
 }
 
+const STRICT_RFC3339_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/
+
 function nullableTimestamp(value: unknown) {
   const normalized = nullableString(value)
-  return normalized === null || normalized === undefined
-    ? normalized
-    : Number.isFinite(Date.parse(normalized)) ? normalized : undefined
+  if (normalized === null || normalized === undefined) return normalized
+  const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(normalized)
+  if (!match) return undefined
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fractionText = '', timezoneText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const millisecond = Number(`${fractionText}000`.slice(0, 3))
+  if (month < 1 || month > 12) return undefined
+  if (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return undefined
+  if (timezoneText.startsWith('+14:') || timezoneText.startsWith('-14:')) {
+    if (!timezoneText.endsWith(':00')) return undefined
+  }
+
+  const parsed = new Date(normalized)
+  if (!Number.isFinite(parsed.getTime())) return undefined
+  const localShape = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond))
+  if (
+    localShape.getUTCFullYear() !== year
+    || localShape.getUTCMonth() !== month - 1
+    || localShape.getUTCDate() !== day
+    || localShape.getUTCHours() !== hour
+    || localShape.getUTCMinutes() !== minute
+    || localShape.getUTCSeconds() !== second
+  ) return undefined
+
+  return parsed.toISOString()
 }
 
 function normalizeBenchmarkProvenanceEntry(raw: unknown): BenchmarkProvenanceEntry | null {
@@ -442,11 +472,11 @@ function benchmarkProvenanceSemanticsMatch(input: {
   }
 
   const generatedAt = input.entries.map((entry) => entry.generatedAt as string)
-    .sort((left, right) => Date.parse(left) - Date.parse(right))
+    .sort((left, right) => left.localeCompare(right))
   const sourceAsOf = input.entries.map((entry) => entry.sourceAsOf as string)
-    .sort((left, right) => Date.parse(left) - Date.parse(right))
+    .sort((left, right) => left.localeCompare(right))
   const sourceWindowStart = input.entries.map((entry) => entry.sourceWindowStart as string)
-    .sort((left, right) => Date.parse(left) - Date.parse(right))
+    .sort((left, right) => left.localeCompare(right))
   const scopes = [...new Set(input.entries.map((entry) => entry.scope as Exclude<BenchmarkScope, 'mixed'>))]
   const expectedScope: BenchmarkScope = scopes.length === 1 ? scopes[0] : 'mixed'
   return input.benchmarkGeneratedAt === generatedAt.at(-1)

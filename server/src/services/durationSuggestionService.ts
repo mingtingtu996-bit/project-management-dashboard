@@ -1832,11 +1832,40 @@ function isBenchmarkCandidateScopeConsistent(
   return isTemplateUsableForContext(benchmark, input, companyId)
 }
 
+const STRICT_RFC3339_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/
+
 function readRuntimeTimestamp(value: unknown) {
-  const normalized = normalizeId(value)
-  return normalized && Number.isFinite(Date.parse(normalized))
-    ? new Date(normalized).toISOString()
-    : null
+  if (typeof value !== 'string') return null
+  const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(value)
+  if (!match) return null
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fractionText = '', timezoneText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const millisecond = Number(`${fractionText}000`.slice(0, 3))
+  if (month < 1 || month > 12) return null
+  if (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return null
+  if (timezoneText.startsWith('+14:') || timezoneText.startsWith('-14:')) {
+    if (!timezoneText.endsWith(':00')) return null
+  }
+
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  const localShape = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond))
+  if (
+    localShape.getUTCFullYear() !== year
+    || localShape.getUTCMonth() !== month - 1
+    || localShape.getUTCDate() !== day
+    || localShape.getUTCHours() !== hour
+    || localShape.getUTCMinutes() !== minute
+    || localShape.getUTCSeconds() !== second
+  ) return null
+
+  return parsed.toISOString()
 }
 
 function readRuntimeList(value: unknown): unknown[] {
@@ -3339,6 +3368,17 @@ function buildBenchmarkProvenanceEntry(
     availability: uniqueReasonCodes.length === 0 ? 'available' : 'unavailable',
     reasonCodes: uniqueReasonCodes,
   }
+}
+
+function partitionBenchmarkCandidatesByProvenance(candidates: DurationBenchmarkCandidate[]) {
+  const admissible: DurationBenchmarkCandidate[] = []
+  const rejected: DurationBenchmarkCandidate[] = []
+  for (const candidate of candidates) {
+    const provenance = buildBenchmarkProvenanceEntry(candidate, null, false)
+    if (provenance.availability === 'available') admissible.push(candidate)
+    else rejected.push(candidate)
+  }
+  return { admissible, rejected }
 }
 
 function buildBenchmarkProvenance(
@@ -5507,8 +5547,13 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       allCauseBenchmarkCandidates,
       normalizedInput.structuredCauseAuthority ?? normalizedInput.confirmedCauseCode,
     )
-    const benchmarkCandidates = causeAwareBenchmarkSelection.candidates
-    const benchmarkCauseSegment = causeAwareBenchmarkSelection.segment
+    const selectedBenchmarkCandidates = causeAwareBenchmarkSelection.candidates
+    const benchmarkCandidateAdmission = partitionBenchmarkCandidatesByProvenance(selectedBenchmarkCandidates)
+    const benchmarkCandidates = benchmarkCandidateAdmission.admissible
+    const rejectedBenchmarkCandidates = benchmarkCandidateAdmission.rejected
+    const benchmarkCauseSegment = benchmarkCandidates.some((candidate) => Boolean(candidate.benchmark.__durationLearningCauseSegment))
+      ? causeAwareBenchmarkSelection.segment
+      : null
     const benchmarkCauseFallback = causeAwareBenchmarkSelection.fallback
     const benchmarkCauseSelection = causeAwareBenchmarkSelection.selection
     const primaryBenchmarkCandidate = benchmarkCandidates[0] ?? null
@@ -5519,7 +5564,6 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
     const matchedBenchmarkContextKey = primaryBenchmarkCandidate?.contextKey ?? 'all'
     const benchmarkSampleSize = primaryBenchmarkCandidate?.sampleSize ?? 0
     const benchmarkSpecificity = primaryBenchmarkCandidate?.specificity ?? benchmarkContextSpecificity(matchedBenchmarkContextKey)
-    const benchmarkUsable = benchmarkCandidates.length > 0
     const broadGlobalBenchmark = benchmarkCandidates.length === 0
       ? await findBenchmark([benchmarkIdentity, wbsNodeType, 'all'].join(':'), null)
       : null
@@ -5653,9 +5697,9 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const coldStartP80 = coldStartBaselineApplied && coldStartBaseDays && baseDays
         ? coldStartConservativeDays(baseDays, p80, coldStartBaseDays)
         : p80
-      const canBlendBenchmark = benchmarkCandidates.length > 0
-        && benchmarkUsable
-        && (suggestionPurpose === 'new_task_reference' || suggestionPurpose === 'execution_reference')
+      const benchmarkPurposeAllowsBlend = suggestionPurpose === 'new_task_reference'
+        || suggestionPurpose === 'execution_reference'
+      const canBlendBenchmark = benchmarkCandidates.length > 0 && benchmarkPurposeAllowsBlend
       const benchmarkBlendRuntimeParameter = companyBenchmarkCandidate
         && canBlendBenchmark
         ? await loadBenchmarkBlendRuntimeParameter(
@@ -5668,7 +5712,8 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         ? blendBenchmarkCandidates(coldStartBaseDays, coldStartP80, benchmarkCandidates, benchmarkBlendRuntimeParameter)
         : null
       const benchmarkProvenance = buildBenchmarkProvenance(
-        benchmarkBlend?.candidates ?? [],
+        benchmarkBlend?.candidates
+        ?? (benchmarkCandidates.length === 0 && benchmarkPurposeAllowsBlend ? rejectedBenchmarkCandidates : []),
       )
       const benchmarkBlendScopeLabel = benchmarkBlend?.scopes.length
         ? benchmarkBlend.scopes.map((scope) => (

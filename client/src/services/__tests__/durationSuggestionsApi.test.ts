@@ -268,12 +268,33 @@ describe('durationSuggestionsApi governed duration outputs', () => {
       mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].generatedAt = null },
     },
     {
+      name: 'a date-only generated timestamp in both scalar and entry fields',
+      mutate: (payload: any) => {
+        payload.benchmarkGeneratedAt = '2026-07-01'
+        payload.benchmarkProvenance.entries[0].generatedAt = '2026-07-01'
+      },
+    },
+    {
       name: 'a missing source-as-of timestamp',
       mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].sourceAsOf = null },
     },
     {
+      name: 'a space-separated source-as-of timestamp in both scalar and entry fields',
+      mutate: (payload: any) => {
+        payload.benchmarkAsOf = '2026-06-30 23:59:59'
+        payload.benchmarkProvenance.entries[0].sourceAsOf = '2026-06-30 23:59:59'
+      },
+    },
+    {
       name: 'a missing source-window timestamp',
       mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].sourceWindowStart = null },
+    },
+    {
+      name: 'a source-window timestamp with surrounding whitespace in both scalar and entry fields',
+      mutate: (payload: any) => {
+        payload.benchmarkWindowStart = ' 2026-04-01T00:00:00.000Z '
+        payload.benchmarkProvenance.entries[0].sourceWindowStart = ' 2026-04-01T00:00:00.000Z '
+      },
     },
     {
       name: 'an invalid sample count',

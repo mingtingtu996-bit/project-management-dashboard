@@ -2278,6 +2278,32 @@ describe('durationSuggestionService', () => {
     })
   })
 
+  it('accepts a canonical project runtime benchmark before applying malformed-field cases', () => {
+    const benchmark = buildDurationBenchmarkRowFromRuntimePublication({
+      publicationKey: 'runtime-publication-1',
+      selectionBasis: 'project_canary',
+      publication: {
+        runtimePayload: completeRuntimeBenchmarkPayload({
+          generatedAt: '2026-07-01T16:00:00+08:00',
+        }),
+        companyId: 'company-1',
+        projectId: 'project-1',
+        publicationStage: 'canary',
+        scopeLevel: 'project',
+      },
+    })
+
+    expect(benchmark).toMatchObject({
+      id: 'runtime-benchmark-1',
+      benchmark_version: 'runtime-v7',
+      generated_at: '2026-07-01T08:00:00.000Z',
+      source_as_of: '2026-06-30T23:59:59.000Z',
+      source_window_start: '2026-04-01T00:00:00.000Z',
+      company_id: 'company-1',
+      project_id: 'project-1',
+    })
+  })
+
   it.each([
     {
       label: 'version',
@@ -2286,8 +2312,20 @@ describe('durationSuggestionService', () => {
       missingField: 'benchmarkVersion',
     },
     {
+      label: 'generated timestamp',
+      overrides: { generated_at: '2026-07-01' },
+      reason: 'benchmark_generated_at_missing',
+      missingField: 'generatedAt',
+    },
+    {
+      label: 'source as-of timestamp',
+      overrides: { source_as_of: '2026-06-30 23:59:59' },
+      reason: 'benchmark_source_as_of_missing',
+      missingField: 'sourceAsOf',
+    },
+    {
       label: 'source window',
-      overrides: { source_window_start: null },
+      overrides: { source_window_start: ' 2026-04-01T00:00:00.000Z ' },
       reason: 'benchmark_source_window_start_missing',
       missingField: 'sourceWindowStart',
     },
@@ -2296,6 +2334,12 @@ describe('durationSuggestionService', () => {
       overrides: { metadata: { calendar_ref: null, calendar_version: 'calendar-v3' } },
       reason: 'benchmark_calendar_identity_missing',
       missingField: 'calendarRef',
+    },
+    {
+      label: 'calendar version',
+      overrides: { metadata: { calendar_ref: 'calendar-1', calendar_version: null } },
+      reason: 'benchmark_calendar_identity_missing',
+      missingField: 'calendarVersion',
     },
   ])('fails closed for persisted benchmark provenance with missing $label', async ({ overrides, reason, missingField }) => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2035-01-02T03:04:05.000Z'))
@@ -2323,6 +2367,8 @@ describe('durationSuggestionService', () => {
         wbsNodeType: 'process',
       })
 
+      expect(suggestion.recommendedDurationDays).toBe(10)
+      expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
       expect(suggestion).toMatchObject({
         benchmarkGeneratedAt: null,
         benchmarkAsOf: null,
@@ -2352,21 +2398,25 @@ describe('durationSuggestionService', () => {
 
   it.each([
     { label: 'missing version', overrides: { benchmarkVersion: null } },
+    { label: 'non-canonical generated timestamp', overrides: { generatedAt: '2026-07-01' } },
+    { label: 'non-canonical source as-of timestamp', overrides: { sourceAsOf: '2026-06-30 23:59:59' } },
     { label: 'missing source window', overrides: { sourceWindowStart: null } },
+    { label: 'surrounding source-window whitespace', overrides: { sourceWindowStart: ' 2026-04-01T00:00:00.000Z ' } },
     { label: 'wrong day basis', overrides: { durationDayBasis: 'calendar_day' } },
     { label: 'missing calendar identity', overrides: { calendarRef: null } },
+    { label: 'missing calendar version', overrides: { calendarVersion: null } },
   ])('rejects a runtime benchmark with $label instead of substituting request time', ({ overrides }) => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2035-01-02T03:04:05.000Z'))
     try {
       const benchmark = buildDurationBenchmarkRowFromRuntimePublication({
         publicationKey: 'runtime-publication-1',
-        selectionBasis: 'company_stable',
+        selectionBasis: 'project_canary',
         publication: {
           runtimePayload: completeRuntimeBenchmarkPayload(overrides),
           companyId: 'company-1',
-          projectId: null,
-          publicationStage: 'stable',
-          scopeLevel: 'company',
+          projectId: 'project-1',
+          publicationStage: 'canary',
+          scopeLevel: 'project',
         },
       })
 
@@ -2599,15 +2649,11 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 7,
-          p75_days: 9,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-            company_id: 'company-1',
-          },
+          data: completePersistedBenchmark({
+            p50_days: 7,
+            p75_days: 9,
+            sample_count: 30,
+          }),
           error: null,
         }
       }
@@ -2720,15 +2766,11 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 8,
-          p75_days: 14,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-            company_id: 'company-1',
-          },
+          data: completePersistedBenchmark({
+            p50_days: 8,
+            p75_days: 14,
+            sample_count: 30,
+          }),
           error: null,
         }
       }
@@ -2953,16 +2995,12 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 6,
-          p75_days: 8,
-          p80_days: 10,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-            company_id: 'company-1',
-          },
+          data: completePersistedBenchmark({
+            p50_days: 6,
+            p75_days: 8,
+            p80_days: 10,
+            sample_count: 30,
+          }),
           error: null,
         }
       }
@@ -3130,25 +3168,82 @@ describe('durationSuggestionService', () => {
     expect(benchmarkSelects.some((columns) => columns.includes('source_as_of'))).toBe(true)
   })
 
+  it('does not expose or blend an exact cause segment with incomplete calendar provenance', async () => {
+    mocks.query.maybeSingle.mockImplementation(async () => (
+      isCompanyBenchmarkScope('company-1')
+        ? { data: completePersistedBenchmark({ id: 'benchmark-company-1' }), error: null }
+        : { data: null, error: null }
+    ))
+    mocks.loadCurrentCauseSegment.mockResolvedValue({
+      id: 'segment-missing-calendar',
+      benchmarkId: 'benchmark-company-1',
+      companyId: 'company-1',
+      projectId: null,
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      sampleCount: 8,
+      p50Days: 4,
+      p75Days: 5,
+      p80Days: 6,
+      meanDays: 4.5,
+      variance: 0.2,
+      durationDayBasis: 'construction_production_day',
+      calendarRef: null,
+      calendarVersion: 'calendar-v3',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by materials',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'material_shortage',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(12)
+    expect(suggestion.benchmarkCauseSegment).toBeNull()
+    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+    expect(suggestion).toMatchObject({
+      benchmarkProvenanceAvailability: 'unavailable',
+      benchmarkProvenanceReasonCodes: ['benchmark_calendar_identity_missing'],
+      benchmarkProvenance: {
+        entries: [expect.objectContaining({
+          source: 'cause_segment',
+          availability: 'unavailable',
+          reasonCodes: ['benchmark_calendar_identity_missing'],
+        })],
+      },
+    })
+  })
+
   it('keeps the all-cause benchmark and marks fallback when the confirmed cause has no exact segment', async () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
       return {
-        data: {
+        data: completePersistedBenchmark({
           id: 'benchmark-company-1',
           company_id: 'company-1',
           project_id: null,
-          duration_day_basis: 'construction_production_day',
           p50_days: 8,
           p75_days: 9,
           p80_days: 11,
           sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
           generated_at: '2026-07-21T00:00:00.000Z',
           source_window_start: '2026-07-01T00:00:00.000Z',
           source_as_of: '2026-07-20T00:00:00.000Z',
-        },
+        }),
         error: null,
       }
     })
@@ -3231,21 +3326,18 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
       return {
-        data: {
+        data: completePersistedBenchmark({
           id: 'benchmark-company-1',
           company_id: 'company-1',
           project_id: null,
-          duration_day_basis: 'construction_production_day',
           p50_days: 8,
           p75_days: 9,
           p80_days: 11,
           sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
           generated_at: '2026-07-21T00:00:00.000Z',
           source_window_start: '2026-07-01T00:00:00.000Z',
           source_as_of: '2026-07-20T00:00:00.000Z',
-        },
+        }),
         error: null,
       }
     })
@@ -3284,21 +3376,18 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
       return {
-        data: {
+        data: completePersistedBenchmark({
           id: 'benchmark-company-1',
           company_id: 'company-1',
           project_id: null,
-          duration_day_basis: 'construction_production_day',
           p50_days: 8,
           p75_days: 9,
           p80_days: 11,
           sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
           generated_at: '2026-07-21T00:00:00.000Z',
           source_window_start: '2026-07-01T00:00:00.000Z',
           source_as_of: '2026-07-20T00:00:00.000Z',
-        },
+        }),
         error: null,
       }
     })
@@ -3358,15 +3447,15 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isGlobalBenchmarkScope()) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 6,
-          p75_days: 8,
-          p80_days: 10,
-          sample_count: 60,
-          confidence_level: 'high',
-          confidence_score: 86,
-          },
+          data: completePersistedBenchmark({
+            id: 'benchmark-global-1',
+            company_id: null,
+            project_id: null,
+            p50_days: 6,
+            p75_days: 8,
+            p80_days: 10,
+            sample_count: 60,
+          }),
           error: null,
         }
       }
@@ -3411,45 +3500,41 @@ describe('durationSuggestionService', () => {
       }
       if (isProjectBenchmarkScope('project-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
+            id: 'benchmark-project-1',
+            company_id: 'company-1',
+            project_id: 'project-1',
             p50_days: 7,
             p75_days: 7,
             p80_days: 9,
             sample_count: 8,
-            confidence_level: 'medium',
-            confidence_score: 72,
-            project_id: 'project-1',
-          },
+          }),
           error: null,
         }
       }
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
+            id: 'benchmark-company-1',
             p50_days: 6,
             p75_days: 6,
             p80_days: 8,
             sample_count: 20,
-            confidence_level: 'high',
-            confidence_score: 88,
-            company_id: 'company-1',
-          },
+          }),
           error: null,
         }
       }
       if (isGlobalBenchmarkScope()) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
+            id: 'benchmark-global-1',
+            company_id: null,
+            project_id: null,
             p50_days: 12,
             p75_days: 12,
             p80_days: 14,
             sample_count: 120,
-            confidence_level: 'high',
-            confidence_score: 84,
-          },
+          }),
           error: null,
         }
       }
@@ -3614,16 +3699,13 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 8,
-          p75_days: 9,
-          sample_count: 24,
-          variance: 0.32,
-          confidence_level: 'high',
-          confidence_score: 86,
-            company_id: 'company-1',
-          },
+          data: completePersistedBenchmark({
+            p50_days: 8,
+            p75_days: 9,
+            p80_days: null,
+            sample_count: 24,
+            variance: 0.32,
+          }),
           error: null,
         }
       }
@@ -3698,19 +3780,20 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
             p50_days: 8,
             p75_days: 10,
+            p80_days: null,
             sample_count: 18,
+            variance: null,
+            coefficient_of_variation: null,
             metadata: {
+              calendar_ref: 'calendar-1',
+              calendar_version: 'calendar-v3',
               variance: 0.55,
               coefficientOfVariation: 0.55,
             },
-            confidence_level: 'medium',
-            confidence_score: 70,
-            company_id: 'company-1',
-          },
+          }),
           error: null,
         }
       }
@@ -5631,16 +5714,12 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
             p50_days: 8,
             p75_days: 10,
             p80_days: 12,
             sample_count: 24,
-            confidence_level: 'high',
-            confidence_score: 86,
-            company_id: 'company-1',
-          },
+          }),
           error: null,
         }
       }
