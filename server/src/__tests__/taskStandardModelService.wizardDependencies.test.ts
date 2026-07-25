@@ -153,6 +153,33 @@ describe('taskStandardModelService wizard dependency batch', () => {
     expect(insertCalls[0][1]).not.toEqual(expect.arrayContaining(['template_cross_item_workflow']))
   })
 
+  it('rejects unpublished heuristic dependencies before task reads or writes', async () => {
+    await expect(replaceWizardGeneratedTaskDependenciesBatch({
+      projectId: 'project-1',
+      actorId: 'user-1',
+      dependencies: [{
+        taskId: 'task-2',
+        dependencyTaskId: 'task-1',
+        dependencyType: 'SS',
+        lagDays: 3,
+        sourceType: 'template_generated',
+        metadata: {
+          source: 'heuristic_stagger',
+          sequencingBasis: 'heuristic_stagger',
+          learningPolicy: 'candidate_only_until_dependency_rule_replay_publication',
+          dependencyRuleEvidence: {
+            evidenceLevel: 'heuristic_fallback_l0',
+            publicationStatus: 'fallback_not_published_dependency_rule',
+          },
+        },
+      }],
+    })).rejects.toMatchObject({ code: 'TASK_DEPENDENCY_CANDIDATE_ONLY' })
+
+    expect(state.taskIn).not.toHaveBeenCalled()
+    expect(state.getClient).not.toHaveBeenCalled()
+    expect(state.client.query).not.toHaveBeenCalled()
+  })
+
   it('rejects a cycle before opening a write transaction', async () => {
     await expect(replaceWizardGeneratedTaskDependenciesBatch({
       projectId: 'project-1',

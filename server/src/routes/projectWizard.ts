@@ -13,6 +13,7 @@ import { executeProjectCreationUnderCommercialGuard } from '../services/commerci
 import { createDurationRuntimeConsumerObservationQueryExec } from '../services/durationRuntimeConsumerObservationService.js'
 import { deriveWbsFlags, type WbsNodeType } from '../services/wbsSemanticService.js'
 import { replaceWizardGeneratedTaskDependenciesBatch } from '../services/taskStandardModelService.js'
+import { isFormalTaskDependencyEvidence } from '../services/taskDependencyPublicationPolicy.js'
 import {
   CHINA_GB55032_TEMPLATE_ID,
   buildCandidateNetworkEvaluationFromGeneratedDependencies,
@@ -3056,6 +3057,7 @@ function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<s
   const taskId = idByClientRowId.get(row.clientRowId)
   if (!taskId) return []
   return row.predecessorDependencies
+    .filter(isFormalTaskDependencyEvidence)
     .map((dependency) => {
       const dependencyTaskId = idByClientRowId.get(dependency.clientRowId)
       if (!dependencyTaskId) return null

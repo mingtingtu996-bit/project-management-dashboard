@@ -341,6 +341,40 @@ describe('project critical path service', () => {
     expect(result.snapshot.autoTaskIds).toEqual(['task-b'])
   })
 
+  it('excludes persisted heuristic fallback edges from CPM until dependency publication', async () => {
+    mocks.tables.task_dependencies.push({
+      id: 'dep-task-b-task-c-heuristic',
+      project_id: 'project-1',
+      task_id: 'task-b',
+      dependency_task_id: 'task-c',
+      dependency_type: 'FS',
+      lag_days: 0,
+      required_for_start: true,
+      status: 'active',
+      source_type: 'template_generated',
+      metadata: {
+        source: 'heuristic_stagger',
+        sequencingBasis: 'heuristic_stagger',
+        learningPolicy: 'candidate_only_until_dependency_rule_replay_publication',
+        dependencyRuleEvidence: {
+          evidenceLevel: 'heuristic_fallback_l0',
+          publicationStatus: 'fallback_not_published_dependency_rule',
+        },
+      },
+    })
+
+    const result = await recalculateProjectCriticalPath('project-1')
+
+    expect(result.projectDuration).toBe(8)
+    expect(result.snapshot.autoTaskIds).toEqual(['task-b'])
+    expect(result.snapshot.edges).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromTaskId: 'task-c',
+        toTaskId: 'task-b',
+      }),
+    ]))
+  })
+
   it('fails closed for project, task, chain and network production-day metrics without calendar identity', async () => {
     mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     const snapshot = await getProjectCriticalPathSnapshot('project-1')

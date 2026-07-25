@@ -17,6 +17,7 @@ import {
   listCurrentTaskDurationForecasts,
   type TaskDurationForecast,
 } from './taskDurationForecastService.js'
+import { isFormalTaskDependencyEvidence } from './taskDependencyPublicationPolicy.js'
 import { assembleDurationInput } from './durationInputAssemblerService.js'
 import { buildDownstreamDurationAssetConsumption } from './durationAssetDownstreamConsumptionService.js'
 import {
@@ -1029,6 +1030,7 @@ function readRecord(value: unknown): Record<string, unknown> {
 function isActiveRequiredDependency(row: CriticalPathDependencyRow): boolean {
   const status = String(row.status ?? 'active').trim().toLowerCase()
   if (status && status !== 'active') return false
+  if (!isFormalTaskDependencyEvidence(row)) return false
   return row.required_for_start !== false
 }
 

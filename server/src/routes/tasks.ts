@@ -30,6 +30,7 @@ import {
   replaceTaskDependencies,
   replaceWizardGeneratedTaskDependenciesBatch,
 } from '../services/taskStandardModelService.js'
+import { isFormalTaskDependencyEvidence } from '../services/taskDependencyPublicationPolicy.js'
 import { loadBaselineProjectionMap } from '../services/taskBaselineProjectionService.js'
 import {
   broadcastPlanningTableChanged,
@@ -1174,6 +1175,7 @@ function buildGeneratedTemplateDependencyWrites(
   tempIdMap: Map<string, string>,
 ) {
   return row.predecessorDependencies
+    .filter(isFormalTaskDependencyEvidence)
     .map((dependency) => {
       const dependencyTaskId = generatedIdByClientRowId.get(dependency.clientRowId) ?? tempIdMap.get(dependency.clientRowId)
       if (!dependencyTaskId) return null

@@ -814,6 +814,44 @@ describe('tasks commit route', () => {
     })
   })
 
+  it('does not promote heuristic sequencing fallbacks to task dependencies', async () => {
+    const generated = structuredClone(await mocks.generateWbsTemplateRows())
+    generated.rows[2].predecessorDependencies = [{
+      clientRowId: 'batch-1:02-01-01-P01:1',
+      dependencyType: 'SS',
+      lagDays: 3,
+      intentCode: 'sequencing_fallback:heuristic_stagger',
+      source: 'heuristic_stagger',
+      sequencingBasis: 'heuristic_stagger',
+      governanceGapCode: 'master_plan_dependency_rule_gap',
+      dependencyRuleEvidence: {
+        source: 'heuristic_stagger',
+        evidenceLevel: 'heuristic_fallback_l0',
+        publicationStatus: 'fallback_not_published_dependency_rule',
+      },
+    }]
+    mocks.generateWbsTemplateRows.mockClear()
+    mocks.generateWbsTemplateRows.mockResolvedValueOnce(generated)
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'template_generate',
+          generationBatchId: 'batch-1',
+          templateId: 'china-gb55032-2022',
+          selectedNodeIds: ['02-01-01'],
+          scope: { building_object_id: 'building-1' },
+        }],
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()
+  })
+
   it('commits selected-task drilldown tasks and dependencies in one transaction', async () => {
     const parentTaskId = '00000000-0000-4000-8000-000000000101'
     const parentTask = buildTask({

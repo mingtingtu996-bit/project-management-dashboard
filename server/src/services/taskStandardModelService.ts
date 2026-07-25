@@ -10,6 +10,7 @@ import { createLineageBatchInTransaction, recordLineageInTransaction, type Linea
 import { evaluateTaskConstraint } from './taskConstraintGovernanceService.js'
 import { clearCriticalPathCache } from './criticalPathHelpers.js'
 import { clearProjectCriticalPathSnapshotCache } from './projectCriticalPathService.js'
+import { isFormalTaskDependencyEvidence } from './taskDependencyPublicationPolicy.js'
 import { getStatusLabel, getVisualTone, normalizeStatus } from './statusDictionaryService.js'
 import { deriveTaskUnifiedStatus } from './taskStatusDerivationService.js'
 
@@ -303,6 +304,15 @@ function taskDependencyError(code: string, message: string, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode })
 }
 
+function assertFormalTaskDependencyInput(dependency: unknown) {
+  if (!isFormalTaskDependencyEvidence(dependency)) {
+    throw taskDependencyError(
+      'TASK_DEPENDENCY_CANDIDATE_ONLY',
+      'Unpublished heuristic dependency evidence cannot be written to task_dependencies',
+    )
+  }
+}
+
 export async function validateTaskDependencies(
   taskId: string,
   dependencies: TaskDependencyWriteInput[],
@@ -313,6 +323,7 @@ export async function validateTaskDependencies(
   if (!scopedProjectId) {
     throw taskDependencyError('TASK_DEPENDENCY_PROJECT_REQUIRED', 'Expected project id is required')
   }
+  dependencies.forEach(assertFormalTaskDependencyInput)
   let task: { project_id?: string | null } | null = null
   if (transactionClient) {
     const taskResult = await transactionClient.query(
@@ -599,6 +610,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
   if (!projectId) {
     throw taskDependencyError('TASK_DEPENDENCY_PROJECT_REQUIRED', 'Project id is required')
   }
+  params.dependencies.forEach(assertFormalTaskDependencyInput)
 
   const dependencyBySignature = new Map<string, {
     task_id: string
