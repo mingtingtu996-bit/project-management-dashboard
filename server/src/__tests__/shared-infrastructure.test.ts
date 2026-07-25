@@ -352,6 +352,7 @@ vi.mock('../middleware/logger.js', () => ({
 const dbService = await import('../services/dbService.js')
 const {
   createTask,
+  finalizeTaskWriteWithRegisteredAdapter,
   registerDbServiceBusinessSideEffectAdapters,
   reopenTask,
   updateTask,
@@ -624,7 +625,7 @@ describe('shared infrastructure contract', () => {
     expect(task?.progress).toBe(100)
   })
 
-  it('runs canonical task finalization for low-level completion updates', async () => {
+  it('defers low-level completion finalization to the durable scheduled outbox', async () => {
     const completed = await updateTask('task-1', {
       status: 'completed',
       progress: 100,
@@ -632,13 +633,16 @@ describe('shared infrastructure contract', () => {
     } as any, 1)
 
     expect(completed?.status).toBe('completed')
-    await vi.waitFor(() => {
-      expect(mocks.finalizeTaskWrite).toHaveBeenCalledWith(
-        expect.objectContaining({ id: 'task-1', status: 'completed', progress: 100 }),
-        expect.objectContaining({ id: 'task-1', status: 'todo', progress: 0 }),
-        'user-1',
-      )
-    })
+    expect(mocks.finalizeTaskWrite).not.toHaveBeenCalled()
+  })
+
+  it('lets the leased outbox job invoke the registered canonical finalizer', async () => {
+    const task = (mocks.tables.tasks as Row[]).find((row) => row.id === 'task-1')!
+    const completed = { ...task, status: 'completed', progress: 100 }
+
+    await finalizeTaskWriteWithRegisteredAdapter(completed as any, task as any, 'user-1')
+
+    expect(mocks.finalizeTaskWrite).toHaveBeenCalledWith(completed, task, 'user-1')
   })
 
   it('writes change logs when risk and issue states change', async () => {

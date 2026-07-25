@@ -189,6 +189,9 @@ describe('task code transaction optimistic locking', () => {
     expect(update?.sql).toMatch(/version\s*=\s*version\s*\+\s*1/i)
     expect(update?.sql).toMatch(/where\s+id\s*=\s*\$\d+\s+and\s+project_id\s*=\s*\$\d+\s+and\s+version\s*=\s*\$\d+/i)
     expect(update?.params).toContain(3)
+    expect(state.queries).toContainEqual(expect.objectContaining({
+      sql: "SELECT set_config('workbuddy.task_finalization_outbox_mode', 'canonical_inline', TRUE)",
+    }))
   })
 
   it('rejects stale expected versions before applying task changes', async () => {
@@ -518,6 +521,9 @@ describe('task code transaction optimistic locking', () => {
     )
     const sql = state.queries.map((entry) => entry.sql)
     expect(sql.indexOf('SELECT execution_fact_writer_marker')).toBeLessThan(sql.indexOf('COMMIT'))
+    expect(state.queries).toContainEqual(expect.objectContaining({
+      sql: "SELECT set_config('workbuddy.task_finalization_outbox_mode', 'canonical_inline', TRUE)",
+    }))
   })
 
   it('reserves multiple wizard task code sequence keys with one lock query and one update query', async () => {

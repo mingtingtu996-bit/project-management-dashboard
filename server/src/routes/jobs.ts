@@ -10,6 +10,7 @@ import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
 import { defaultMasterPlanVisibilityLearningJob } from '../jobs/defaultMasterPlanVisibilityLearningJob.js'
 import { durationContextPolicyLearningJob } from '../jobs/durationContextPolicyLearningJob.js'
 import { durationLearningRuntimeEvidenceOutboxDrainJob } from '../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'
+import { taskWriteFinalizationOutboxJob } from '../jobs/taskWriteFinalizationOutboxJob.js'
 import { durationLiveLearningProductionClaimAuditJob } from '../jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { drawingPackageExperienceIterationJob } from '../jobs/drawingPackageExperienceIterationJob.js'
 import { forecastResidualOverlayProductionJob } from '../jobs/forecastResidualOverlayProductionJob.js'
@@ -122,6 +123,23 @@ function buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
   }
 }
 
+function buildTaskWriteFinalizationOutboxStatusView(
+  jobStatus = taskWriteFinalizationOutboxJob.getStatus(),
+): JobStatusView {
+  return {
+    name: 'taskWriteFinalizationOutboxJob',
+    displayName: 'Task write finalization outbox job',
+    isRunning: jobStatus.isRunning,
+    isScheduled: jobStatus.isScheduled,
+    schedule: '* * * * *',
+    lastRun: jobStatus.lastRun,
+    nextRun: jobStatus.nextRun,
+    status: buildStatus(jobStatus.isRunning, jobStatus.isScheduled),
+    description:
+      'Retries durable cross-tenant task-write finalization every minute. Company-admin HTTP manual execution is intentionally unavailable.',
+  }
+}
+
 function buildJobStatusViews(): JobStatusView[] {
   const riskJobStatus = riskStatisticsJob.getStatus()
   const draftLockStatus = planningDraftLockTimeoutJob.getStatus()
@@ -139,6 +157,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const forecastResidualOverlayProductionStatus = forecastResidualOverlayProductionJob.getStatus()
   const durationContextPolicyLearningStatus = durationContextPolicyLearningJob.getStatus()
   const durationLearningRuntimeEvidenceOutboxDrainStatus = durationLearningRuntimeEvidenceOutboxDrainJob.getStatus()
+  const taskWriteFinalizationOutboxStatus = taskWriteFinalizationOutboxJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
   const templateDurationGovernanceStatus = templateDurationGovernanceJob.getStatus()
   const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
@@ -431,6 +450,7 @@ function buildJobStatusViews(): JobStatusView[] {
     buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
       durationLearningRuntimeEvidenceOutboxDrainStatus,
     ),
+    buildTaskWriteFinalizationOutboxStatusView(taskWriteFinalizationOutboxStatus),
     {
       name: 'constructionDependencyReplayCalibrationJob',
       displayName: 'Construction dependency replay calibration job',

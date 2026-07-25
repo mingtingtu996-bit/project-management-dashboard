@@ -1125,6 +1125,16 @@ function enqueueProjectHealthRefresh(projectId: unknown, trigger: string) {
   )
 }
 
+export async function finalizeTaskWriteWithRegisteredAdapter(
+  task: Task,
+  previousTask?: Task | null,
+  actorId?: string | null,
+) {
+  const finalize = businessSideEffectAdapters.finalizeTaskWrite
+  if (!finalize) throw new Error('[dbService] task write finalizer is not registered')
+  await finalize(task, previousTask, actorId)
+}
+
 async function enqueueProjectHealthRefreshAfterCommit(projectId: unknown, trigger: string) {
   const normalizedProjectId = String(projectId ?? '').trim()
   if (!normalizedProjectId) return
@@ -2695,16 +2705,6 @@ export async function updateTask(
     await recordTaskProgressSnapshot(updatedTask, {
       recordedBy: changedBy,
     }, oldTask)
-  }
-
-  if (needsSnapshot) {
-    runBusinessSideEffect(
-      'finalizeTaskWrite',
-      businessSideEffectAdapters.finalizeTaskWrite
-        ? () => businessSideEffectAdapters.finalizeTaskWrite!(updatedTask, oldTask, changedBy)
-        : undefined,
-      { taskId: id, projectId: oldTask.project_id ?? updatedTask.project_id ?? null },
-    )
   }
 
   if (fields.progress !== undefined || fields.status !== undefined) {
