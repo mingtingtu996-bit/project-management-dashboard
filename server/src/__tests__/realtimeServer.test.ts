@@ -11,6 +11,11 @@ const authMocks = vi.hoisted(() => ({
   getProjectPermissionLevel: vi.fn(),
   isCompanySessionRevoked: vi.fn(),
 }))
+const loggerMocks = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}))
 
 vi.mock('../auth/jwt.js', () => ({ verifyToken: authMocks.verifyToken }))
 vi.mock('../auth/session.js', () => ({ getAuthUserById: authMocks.getAuthUserById }))
@@ -21,9 +26,11 @@ vi.mock('../auth/access.js', () => ({
 vi.mock('../auth/companySession.js', () => ({
   isCompanySessionRevoked: authMocks.isCompanySessionRevoked,
 }))
+vi.mock('../middleware/logger.js', () => ({ logger: loggerMocks }))
 
 import {
   broadcastRealtimeEvent,
+  closeRealtimeServer,
   getRealtimeClientCount,
   initializeRealtimeServer,
   parseRealtimeSubscriptionFromRequest,
@@ -35,9 +42,11 @@ import {
 let httpServer: Server | null = null
 
 async function connectRealtime(query = '') {
-  httpServer = createServer()
-  initializeRealtimeServer(httpServer)
-  await new Promise<void>((resolve) => httpServer!.listen(0, '127.0.0.1', resolve))
+  if (!httpServer) {
+    httpServer = createServer()
+    initializeRealtimeServer(httpServer)
+    await new Promise<void>((resolve) => httpServer!.listen(0, '127.0.0.1', resolve))
+  }
   const address = httpServer.address()
   if (!address || typeof address === 'string') throw new Error('missing realtime test address')
 
@@ -237,6 +246,61 @@ describe('realtime server helpers', () => {
     socket.close()
   })
 
+  it('starts one heartbeat loop for multiple authenticated clients', async () => {
+    const setIntervalSpy = vi.spyOn(global, 'setInterval')
+    try {
+      const first = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
+      first.socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))
+      await waitForMessage(first.messages, 'connection.ready')
+
+      const second = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
+      second.socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))
+      await waitForMessage(second.messages, 'connection.ready')
+
+      expect(setIntervalSpy.mock.calls.filter(([, delay]) => delay === 25_000)).toHaveLength(1)
+      first.socket.close()
+      second.socket.close()
+    } finally {
+      setIntervalSpy.mockRestore()
+    }
+  })
+
+  it('isolates a client heartbeat error from the remaining clients', async () => {
+    let heartbeat: (() => void) | null = null
+    const setIntervalSpy = vi.spyOn(global, 'setInterval').mockImplementation(((callback: TimerHandler) => {
+      heartbeat = callback as () => void
+      return { unref: vi.fn() } as unknown as NodeJS.Timeout
+    }) as typeof setInterval)
+    const pingSpy = vi.spyOn(WebSocket.prototype, 'ping')
+    let pingCount = 0
+    pingSpy.mockImplementation(() => {
+      pingCount += 1
+      if (pingCount === 1) throw new Error('heartbeat ping failed')
+    })
+
+    try {
+      const first = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
+      first.socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))
+      await waitForMessage(first.messages, 'connection.ready')
+      const second = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
+      second.socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))
+      await waitForMessage(second.messages, 'connection.ready')
+
+      expect(heartbeat).toEqual(expect.any(Function))
+      expect(() => heartbeat!()).not.toThrow()
+      expect(pingCount).toBe(2)
+      expect(loggerMocks.warn).toHaveBeenCalledWith(
+        'Realtime heartbeat client check failed',
+        expect.objectContaining({ error: 'heartbeat ping failed' }),
+      )
+      first.socket.close()
+      second.socket.close()
+    } finally {
+      pingSpy.mockRestore()
+      setIntervalSpy.mockRestore()
+    }
+  })
+
   it('stops the heartbeat loop when the final authenticated client disconnects', async () => {
     const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
     try {
@@ -253,6 +317,22 @@ describe('realtime server helpers', () => {
       }, { timeout: 1_000 })
 
       expect(clearIntervalSpy).toHaveBeenCalled()
+    } finally {
+      clearIntervalSpy.mockRestore()
+    }
+  })
+
+  it('clears the heartbeat loop during realtime server shutdown', async () => {
+    const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
+    try {
+      const { socket, messages } = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
+      socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))
+      await waitForMessage(messages, 'connection.ready')
+
+      await closeRealtimeServer()
+
+      expect(clearIntervalSpy).toHaveBeenCalled()
+      expect(getRealtimeClientCount()).toBe(0)
     } finally {
       clearIntervalSpy.mockRestore()
     }

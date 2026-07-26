@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
+import {
+  discoverAlgorithmTunablesFromRuntimeSource,
+  discoverAlgorithmTunablesInSource,
+} from './helpers/algorithmTunableSourceDiscovery.js'
 import * as registryModule from '../services/algorithmAssetLearnableParameterRegistryService.js'
 import {
   evaluateAlgorithmAssetParameterRuntimeUse,
@@ -26,11 +30,31 @@ function joinedSql(calls: Array<{ sql: string }>) {
 
 const serviceSourcePath = fileURLToPath(new URL('../services/algorithmAssetLearnableParameterRegistryService.ts', import.meta.url))
 
-function sourcePath(relativePath: string) {
-  return fileURLToPath(new URL(relativePath, import.meta.url))
-}
-
 describe('algorithmAssetLearnableParameterRegistryService', () => {
+  it('discovers structured algorithm settings without matching comments or strings', () => {
+    const discovered = discoverAlgorithmTunablesInSource(`
+      const documentation = 'simulationCount: 5, scenarioCorrelation: 0.1'
+      // const IGNORED_DEFAULT_WEIGHT = 0.5
+      const FORECAST_POLICY = {
+        simulationCount: 500,
+        nested: { scenarioCorrelation: 0.25 },
+      }
+      function run() {
+        engine({
+          simulationCount: 1000,
+          scenarioCorrelation: 0.35,
+        })
+      }
+    `, 'server/src/services/exampleForecastService.ts')
+
+    expect(discovered).toHaveLength(3)
+    expect(discovered).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceSymbol: 'FORECAST_POLICY', kind: 'declaration', line: 4 }),
+      expect.objectContaining({ sourceSymbol: 'run.simulationCount', kind: 'inline_call_option', line: 10 }),
+      expect.objectContaining({ sourceSymbol: 'run.scenarioCorrelation', kind: 'inline_call_option', line: 11 }),
+    ]))
+  })
+
   it('registers the required v1.4.22.3 learnable parameter families with governance fields', () => {
     const parameters = listAlgorithmAssetLearnableParameters()
     const keys = parameters.map((parameter) => parameter.parameterKey)
@@ -77,6 +101,8 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
       listAlgorithmAssetTunableParameterSourceInventory?: () => Array<{
         inventoryKey: string
         classification: string
+        owner?: string
+        reason?: string
         sourcePath: string
         sourceSymbols: string[]
         registryParameterKeys: string[]
@@ -86,167 +112,46 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
     expect(inventoryFactory).toEqual(expect.any(Function))
 
     const inventory = inventoryFactory!()
-    const expectedEntries = [
-      {
-        inventoryKey: 'forecast.candidate_weights',
-        classification: 'governed_learnable',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: ['DEFAULT_CANDIDATE_WEIGHTS'],
-        registryParameterKeys: [
-          'forecast.L0.candidate_weight',
-          'forecast.L1.candidate_weight',
-          'forecast.L2.candidate_weight',
-        ],
-      },
-      {
-        inventoryKey: 'forecast.progress_curve_policy',
-        classification: 'governed_learnable',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: ['DEFAULT_PROGRESS_CURVE_POLICIES'],
-        registryParameterKeys: ['forecast.progress_curve_multiplier'],
-      },
-      {
-        inventoryKey: 'forecast.residual_overlay_limits',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: [
-          'RESIDUAL_OVERLAY_MIN_PROJECT_SAMPLE_COUNT',
-          'RESIDUAL_OVERLAY_MIN_COMPANY_SAMPLE_COUNT',
-          'PROJECT_FORECAST_OVERLAY_MIN_SAMPLE_COUNT',
-          'MAX_RUNTIME_RESIDUAL_OVERCOMPENSATION_RATIO',
-          'MAX_RUNTIME_RESIDUAL_CORRECTION_DAYS',
-        ],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'forecast.earliest_start_rule_policy',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: ['DEFAULT_EARLIEST_START_RULE_POLICY'],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'forecast.default_model_profile',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: ['DEFAULT_FORECAST_MODEL_PROFILE'],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'forecast.trigger_context_defaults',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: ['DEFAULT_FORECAST_OPTIONS', 'TRIGGER_CONTEXT_DEFAULTS'],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'forecast.stuck_finishing_policy',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        sourceSymbols: ['DEFAULT_STUCK_FINISHING_POLICIES'],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'duration.context.factor_multiplier_caps',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/durationContextService.ts',
-        sourceSymbols: ['FACTOR_MULTIPLIER_CAP_POLICY'],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'duration.context.site_capacity_pressure_policy',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/durationContextService.ts',
-        sourceSymbols: ['DEFAULT_SITE_CAPACITY_PRESSURE_POLICY'],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'duration.context.site_pressure_runtime_parameter',
-        classification: 'governed_learnable',
-        sourcePath: 'server/src/services/durationContextService.ts',
-        sourceSymbols: ['SITE_PRESSURE_MULTIPLIER_PARAMETER_KEY'],
-        registryParameterKeys: ['duration.context.site_pressure_multiplier'],
-      },
-      {
-        inventoryKey: 'duration.context.application_safety_bounds',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/durationContextService.ts',
-        sourceSymbols: [
-          'DURATION_MULTIPLIER_SAFETY_MAX',
-          'DURATION_CONTEXT_CONFIDENCE_DELTA_MIN',
-          'DURATION_CONTEXT_CONFIDENCE_DELTA_MAX',
-        ],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'duration.context.synthesis_safety_bounds',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/durationContextFactorSynthesisService.ts',
-        sourceSymbols: [
-          'DURATION_CONTEXT_FACTOR_SYNTHESIS_MULTIPLIER_SAFETY_MAX',
-          'DURATION_CONTEXT_FACTOR_SYNTHESIS_CONFIDENCE_DELTA_MIN',
-          'DURATION_CONTEXT_FACTOR_SYNTHESIS_CONFIDENCE_DELTA_MAX',
-        ],
-        registryParameterKeys: [],
-      },
-      {
-        inventoryKey: 'forecast.network_monte_carlo_defaults',
-        classification: 'frozen_constant',
-        sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
-        sourceSymbols: ['DEFAULT_SIMULATION_COUNT', 'DEFAULT_SCENARIO_CORRELATION'],
-        registryParameterKeys: [],
-      },
-    ]
+    const discovered = discoverAlgorithmTunablesFromRuntimeSource()
+    expect(discovered).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourcePath: 'server/src/services/scopedDurationForecastService.ts',
+        sourceSymbol: 'buildGroupForecast.simulationCount',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/scopedDurationForecastService.ts',
+        sourceSymbol: 'buildGroupForecast.scenarioCorrelation',
+      }),
+    ]))
 
-    expect(inventory).toEqual(expectedEntries)
+    const classifiedSources = inventory.flatMap((entry) => entry.sourceSymbols.map((sourceSymbol) => ({
+      sourcePath: entry.sourcePath,
+      sourceSymbol,
+    })))
+    const discoveredSources = discovered.map(({ sourcePath, sourceSymbol }) => ({ sourcePath, sourceSymbol }))
+    const compareSources = (left: { sourcePath: string, sourceSymbol: string }, right: { sourcePath: string, sourceSymbol: string }) => (
+      left.sourcePath.localeCompare(right.sourcePath) || left.sourceSymbol.localeCompare(right.sourceSymbol)
+    )
+    expect([...classifiedSources].sort(compareSources)).toEqual(discoveredSources)
+    expect(new Set(classifiedSources.map((entry) => `${entry.sourcePath}::${entry.sourceSymbol}`)).size)
+      .toBe(classifiedSources.length)
+    expect(new Set(inventory.map((entry) => entry.inventoryKey)).size).toBe(inventory.length)
 
     const registeredKeys = new Set(listAlgorithmAssetLearnableParameters().map((parameter) => parameter.parameterKey))
     for (const entry of inventory) {
-      const source = readFileSync(sourcePath(`../services/${entry.sourcePath.split('/').at(-1)}`), 'utf8')
-      for (const symbol of entry.sourceSymbols) {
-        expect(source).toContain(symbol)
-      }
+      expect(entry.owner).toEqual(expect.any(String))
+      expect(entry.owner?.trim()).not.toBe('')
+      expect(entry.reason).toEqual(expect.any(String))
+      expect(entry.reason?.trim()).not.toBe('')
       if (entry.classification === 'governed_learnable') {
         expect(entry.registryParameterKeys.length).toBeGreaterThan(0)
         for (const parameterKey of entry.registryParameterKeys) {
           expect(registeredKeys).toContain(parameterKey)
         }
       } else {
+        expect(entry.classification).toBe('frozen')
         expect(entry.registryParameterKeys).toEqual([])
       }
-    }
-
-    const sourceCandidatePatterns: Array<{ sourcePath: string, pattern: RegExp }> = [
-      {
-        sourcePath: 'server/src/services/taskDurationForecastService.ts',
-        pattern: /^(?:RESIDUAL_OVERLAY_|PROJECT_FORECAST_OVERLAY_|MAX_RUNTIME_RESIDUAL_|DEFAULT_CANDIDATE_WEIGHTS$|DEFAULT_FORECAST_MODEL_PROFILE$|DEFAULT_EARLIEST_START_RULE_POLICY$|DEFAULT_FORECAST_OPTIONS$|TRIGGER_CONTEXT_DEFAULTS$|DEFAULT_PROGRESS_CURVE_POLICIES$|DEFAULT_STUCK_FINISHING_POLICIES$)/,
-      },
-      {
-        sourcePath: 'server/src/services/durationContextService.ts',
-        pattern: /^(?:DURATION_MULTIPLIER_SAFETY_MAX$|DURATION_CONTEXT_CONFIDENCE_DELTA_(?:MIN|MAX)$|FACTOR_MULTIPLIER_CAP_POLICY$|DEFAULT_SITE_CAPACITY_PRESSURE_POLICY$|SITE_PRESSURE_MULTIPLIER_PARAMETER_KEY$)/,
-      },
-      {
-        sourcePath: 'server/src/services/durationContextFactorSynthesisService.ts',
-        pattern: /^DURATION_CONTEXT_FACTOR_SYNTHESIS_(?:MULTIPLIER_SAFETY_MAX|CONFIDENCE_DELTA_MIN|CONFIDENCE_DELTA_MAX)$/,
-      },
-      {
-        sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
-        pattern: /^(?:DEFAULT_SIMULATION_COUNT|DEFAULT_SCENARIO_CORRELATION)$/,
-      },
-    ]
-
-    for (const entry of sourceCandidatePatterns) {
-      const source = readFileSync(sourcePath(`../services/${entry.sourcePath.split('/').at(-1)}`), 'utf8')
-      const sourceCandidates = [...source.matchAll(/^(?:export )?const ([A-Z][A-Z0-9_]*)/gm)]
-        .map((match) => match[1])
-        .filter((symbol): symbol is string => Boolean(symbol) && entry.pattern.test(symbol))
-        .sort()
-      const inventoriedSymbols = inventory
-        .filter((item) => item.sourcePath === entry.sourcePath)
-        .flatMap((item) => item.sourceSymbols)
-        .sort()
-
-      expect(inventoriedSymbols).toEqual(sourceCandidates)
     }
   })
 
