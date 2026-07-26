@@ -23211,8 +23211,7 @@ CREATE TABLE IF NOT EXISTS public.algorithm_intervention_evaluations (
       AND sample_sufficiency_status = 'sufficient'
     )
   ),
-  CHECK (rollback_review_recommended = (decision = 'harm_detected')),
-  CHECK (decision <> 'harm_detected' OR NULLIF(BTRIM(rollback_target), '') IS NOT NULL)
+  CHECK (rollback_review_recommended = (decision = 'harm_detected'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_algorithm_intervention_evaluations_publication

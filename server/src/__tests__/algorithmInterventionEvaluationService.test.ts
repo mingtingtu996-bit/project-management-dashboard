@@ -362,6 +362,7 @@ describe('algorithmInterventionEvaluationService', () => {
       evaluatedAt: EVALUATED_AT,
       candidates: [candidate({
         treatedPostOutcomes: cohort('treated', 'post', 13, 'project-a'),
+        rollbackTarget: null,
       })],
       rollbackExecutor,
     } as never)
@@ -373,6 +374,9 @@ describe('algorithmInterventionEvaluationService', () => {
       rollbackExecuted: 0,
       rollbackBlocked: 1,
       failed: 1,
+    }))
+    expect(rollbackExecutor).toHaveBeenCalledWith(expect.objectContaining({
+      rollbackTarget: '',
     }))
   })
 
@@ -389,6 +393,7 @@ describe('algorithmInterventionEvaluationService', () => {
     expect(migration).toContain('data_freshness_status')
     expect(migration).toContain('sample_sufficiency_status')
     expect(migration).toContain('rollback_target TEXT NULL')
+    expect(migration).not.toContain("decision <> 'harm_detected'")
     expect(migration).toContain('evaluation_fingerprint TEXT NOT NULL')
     expect(migration).toContain('UNIQUE (evaluation_fingerprint)')
     expect(migration).toContain('ENABLE ROW LEVEL SECURITY')
