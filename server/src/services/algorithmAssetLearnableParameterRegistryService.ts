@@ -600,7 +600,12 @@ const TUNABLE_PARAMETER_SOURCE_INVENTORY: readonly AlgorithmAssetTunableParamete
     owner: 'algorithmInterventionEvaluationService',
     reason: 'Intervention cohort and publication limits are fixed evaluation policy.',
     sourcePath: 'server/src/services/algorithmInterventionEvaluationService.ts',
-    sourceSymbols: ['DEFAULT_MINIMUM_COHORT_SIZE', 'DEFAULT_PUBLICATION_LIMIT'],
+    sourceSymbols: [
+      'DEFAULT_MAXIMUM_OUTCOME_AGE_DAYS',
+      'DEFAULT_MINIMUM_COHORT_SIZE',
+      'DEFAULT_PRE_PERIOD_DAYS',
+      'DEFAULT_PUBLICATION_LIMIT',
+    ],
     registryParameterKeys: [],
   },
   {
@@ -724,15 +729,6 @@ const TUNABLE_PARAMETER_SOURCE_INVENTORY: readonly AlgorithmAssetTunableParamete
     reason: 'Scoped forecast freshness age is fixed runtime cache policy.',
     sourcePath: 'server/src/services/scopedDurationForecastRuntimeService.ts',
     sourceSymbols: ['DEFAULT_SCOPED_FORECAST_MAX_AGE_MS'],
-    registryParameterKeys: [],
-  },
-  {
-    inventoryKey: 'forecast.scoped_network_options',
-    classification: 'frozen',
-    owner: 'scopedDurationForecastService',
-    reason: 'Scoped Monte Carlo simulation count and scenario correlation have no registered live-tuning path.',
-    sourcePath: 'server/src/services/scopedDurationForecastService.ts',
-    sourceSymbols: ['buildGroupForecast.simulationCount', 'buildGroupForecast.scenarioCorrelation'],
     registryParameterKeys: [],
   },
   {
