@@ -521,7 +521,7 @@ function buildReadyBusinessPathSourceFiles() {
       `,
     },
     {
-      sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+      sourcePath: 'server/src/services/wbsTemplateGenerationOrchestrator.ts',
       sourceText: `
         import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
         export async function generateWbsTemplateRows() {

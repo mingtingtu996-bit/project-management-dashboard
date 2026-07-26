@@ -74,7 +74,7 @@ const REQUIRED_BUSINESS_PATH_INTEGRATIONS: DurationRuntimeConsumerBusinessPathIn
   },
   {
     consumerKey: 'wbsTemplateGenerationService',
-    sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+    sourcePath: 'server/src/services/wbsTemplateGenerationOrchestrator.ts',
     facadeFunctionName: 'recordWbsTemplateGenerationConsumedArtifacts',
     runtimeEntryRef: 'wbsTemplateGenerationService:generateWbsTemplateRows',
   },

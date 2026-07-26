@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
+import { readWbsTemplateGenerationImplementationSource } from './helpers/wbsTemplateGenerationSource.js'
 
 const serverRoot = resolve(process.cwd().endsWith('server') ? process.cwd() : join(process.cwd(), 'server'))
 const guardPath = resolve(serverRoot, 'scripts', 'guard-duration-architecture-boundaries.mjs')
@@ -588,9 +589,9 @@ describe('duration architecture boundary guard', () => {
     const { evaluateDurationArchitectureBoundaryGuard } = await import(pathToFileURL(guardPath).href)
 
     const result = evaluateDurationArchitectureBoundaryGuard(serverRoot)
-    const wbsSource = readFileSync(resolve(serverRoot, 'src/services/wbsTemplateGenerationService.ts'), 'utf8')
+    const wbsSource = readWbsTemplateGenerationImplementationSource(serverRoot)
 
-    expect(result.violations.filter((item) => item.fileName === 'wbsTemplateGenerationService.ts')).toEqual([])
+    expect(result.violations.filter((item) => item.fileName.startsWith('wbsTemplate'))).toEqual([])
     expect(wbsSource).toContain('resolveStandardWorkDurationSeed')
     expect(wbsSource).not.toContain('STANDARD_WORK_DURATION_SEED')
     expect(wbsSource).not.toContain("from('duration_experience_samples')")

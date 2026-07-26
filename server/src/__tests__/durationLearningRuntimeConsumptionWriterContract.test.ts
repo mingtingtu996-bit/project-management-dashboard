@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
+import { readWbsTemplateGenerationImplementationSource } from './helpers/wbsTemplateGenerationSource.js'
+
+const serverRoot = fileURLToPath(new URL('../..', import.meta.url))
 
 function source(path: string) {
   return readFileSync(new URL(path, import.meta.url), 'utf8')
@@ -88,7 +92,7 @@ describe('duration learning runtime consumption writer contracts', () => {
   })
 
   it('keeps every WBS preview/replay call no-write and reserves recording for trusted materialization writers', () => {
-    const generation = source('../services/wbsTemplateGenerationService.ts')
+    const generation = readWbsTemplateGenerationImplementationSource(serverRoot)
     const suggestion = source('../services/durationSuggestionService.ts')
     const previewRoute = source('../routes/wbs-templates.ts')
     const wizard = source('../routes/projectWizard.ts')

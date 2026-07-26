@@ -7236,6 +7236,78 @@
     },
     {
       "kind": "service",
+      "id": "wbsTemplateGenerationFoundation",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_foundation",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateScopeClassificationService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_scope_classification",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateDurationAssemblyService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_duration_assembly",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateOutputProjectionService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_output_projection",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateDependencyCandidateService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_dependency_and_handoff",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateAssetStrategyService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_asset_strategy",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateCloseoutChainService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_closeout_chain",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateAuditFormattingService",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_audit_formatting",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
+      "id": "wbsTemplateGenerationOrchestrator",
+      "architectureUnit": "主执行环：计划编制",
+      "runtimeScope": "business_core",
+      "assignmentReason": "wbs_template_generation_modularity_orchestration",
+      "production_readiness_source": "docs/superpowers/specs/2026-07-23-full-code-correctness-closeout-design.md#workstream-6-wbs-modularity-and-scheduler-residual"
+    },
+    {
+      "kind": "service",
       "id": "wbsTemplateGoldenBenchmarkGateService",
       "architectureUnit": "主执行环：计划编制",
       "runtimeScope": "business_core",

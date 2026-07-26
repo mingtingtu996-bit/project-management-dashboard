@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readWbsTemplateGenerationImplementationSource } from './helpers/wbsTemplateGenerationSource.js'
 
 const serverRoot = resolve(__dirname, '..', '..')
 
@@ -17,7 +18,6 @@ const CALENDAR_CONSUMERS = [
   'services/templateDurationGovernanceService.ts',
   'services/wbsPlanRollupService.ts',
   'services/wbsTemplateFeedback.ts',
-  'services/wbsTemplateGenerationService.ts',
 ]
 
 describe('construction calendar identity consumption contract', () => {
@@ -28,11 +28,15 @@ describe('construction calendar identity consumption contract', () => {
         /isAuthoritativeConstructionCalendar|effectiveConstructionCalendarBasis|normalizeConstructionCalendarForConsumption|hasIdentifiedConstructionCalendar/,
       )
     }
+    expect(readWbsTemplateGenerationImplementationSource(serverRoot)).toMatch(
+      /isAuthoritativeConstructionCalendar|effectiveConstructionCalendarBasis|normalizeConstructionCalendarForConsumption|hasIdentifiedConstructionCalendar/,
+    )
   })
 
   it('does not reintroduce the known basis-only or window-count-only predicates', () => {
     const combinedSource = CALENDAR_CONSUMERS
       .map((relativePath) => readFileSync(resolve(serverRoot, 'src', relativePath), 'utf8'))
+      .concat(readWbsTemplateGenerationImplementationSource(serverRoot))
       .join('\n')
 
     expect(combinedSource).not.toMatch(

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { readWbsTemplateGenerationImplementationSource } from './helpers/wbsTemplateGenerationSource.js'
 
 const rootDir = path.resolve(__dirname, '../../..')
 const allowedLegacyFieldFiles = new Set([
@@ -52,6 +53,9 @@ const legacyTaskDurationCacheScriptTargets = [
 ]
 
 function read(relativePath: string) {
+  if (relativePath === 'server/src/services/wbsTemplateGenerationService.ts') {
+    return readWbsTemplateGenerationImplementationSource(path.join(rootDir, 'server'))
+  }
   return fs.readFileSync(path.join(rootDir, relativePath), 'utf8')
 }
 

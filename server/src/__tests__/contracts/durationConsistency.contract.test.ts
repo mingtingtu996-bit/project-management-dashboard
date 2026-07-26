@@ -9,6 +9,7 @@ import {
 } from '../../services/constructionCalendar.js'
 import { calculateWbsParentPlanRollup } from '../../services/wbsPlanRollupService.js'
 import { delayDayDelta, inclusiveDurationDays, signedDurationDayDelta } from '../../utils/durationDays.js'
+import { readWbsTemplateGenerationImplementationSource } from '../helpers/wbsTemplateGenerationSource.js'
 
 const repoRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
   ? resolve(process.cwd(), '..')
@@ -59,6 +60,9 @@ function date(value: string) {
 }
 
 function readSource(relativeToRepo: string) {
+  if (relativeToRepo === 'server/src/services/wbsTemplateGenerationService.ts') {
+    return readWbsTemplateGenerationImplementationSource(resolve(repoRoot, 'server'))
+  }
   return readFileSync(resolve(repoRoot, relativeToRepo), 'utf8')
 }
 

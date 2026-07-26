@@ -65,8 +65,21 @@ const TIER_REQUIRED_CANDIDATE_FILE_CONTRACTS = new Map([
   }],
 ])
 
+const WBS_GENERATION_IMPLEMENTATION_FILES = [
+  "wbsTemplateGenerationFoundation.ts",
+  "wbsTemplateScopeClassificationService.ts",
+  "wbsTemplateDurationAssemblyService.ts",
+  "wbsTemplateOutputProjectionService.ts",
+  "wbsTemplateDependencyCandidateService.ts",
+  "wbsTemplateAssetStrategyService.ts",
+  "wbsTemplateCloseoutChainService.ts",
+  "wbsTemplateAuditFormattingService.ts",
+  "wbsTemplateGenerationOrchestrator.ts",
+]
+
 const WBS_RUNTIME_CONSUMER_FILES = new Set([
   "wbsTemplateGenerationService.ts",
+  ...WBS_GENERATION_IMPLEMENTATION_FILES,
 ])
 
 const DURATION_INPUT_ASSEMBLER_ENGINE_CONTRACTS = new Map([
@@ -99,6 +112,7 @@ const DURATION_INPUT_ASSEMBLER_ENGINE_CONTRACTS = new Map([
 
 const DIAGNOSTIC_FAST_TEMPLATE_ALLOWED_FILES = new Set([
   "server/src/services/wbsTemplateGenerationService.ts",
+  ...WBS_GENERATION_IMPLEMENTATION_FILES.map((fileName) => `server/src/services/${fileName}`),
   "server/src/services/wbsTemplateGoldenBenchmarkReplayService.ts",
   "server/src/routes/projectWizard.ts",
 ])

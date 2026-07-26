@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { extname, resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
+import { readWbsTemplateGenerationImplementationSource } from './helpers/wbsTemplateGenerationSource.js'
 
 const workspaceRoot = resolve(__dirname, '..', '..', '..')
 const PROJECT_CENTER_PATH = /project-(?:data|evidence|search|testing|ui)[\\/]/
@@ -62,10 +63,7 @@ describe('project center production runtime isolation', () => {
   })
 
   it('uses stable external source identifiers instead of repository paths in runtime lineage', () => {
-    const generationService = readFileSync(
-      resolve(workspaceRoot, 'server/src/services/wbsTemplateGenerationService.ts'),
-      'utf8',
-    )
+    const generationService = readWbsTemplateGenerationImplementationSource(resolve(workspaceRoot, 'server'))
     const buildingPatternSeed = readFileSync(
       resolve(workspaceRoot, 'server/src/seeds/v1474BuildingPatternSeed.ts'),
       'utf8',
