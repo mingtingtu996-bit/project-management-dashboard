@@ -17,6 +17,9 @@ vi.mock('../services/scopedDurationForecastRuntimeService.js', () => ({
     const parsed = new Date(`${text}T00:00:00.000Z`)
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text
   },
+  isValidScopedDurationForecastSimulationSeed: (value: unknown) => {
+    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(String(value ?? '').trim())
+  },
 }))
 
 vi.mock('../middleware/auth.js', () => ({
@@ -91,30 +94,42 @@ describe('task scoped duration forecast route', () => {
     expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenCalledTimes(1)
     expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenCalledWith(
       mocks.allowedProjectId,
-      { asOfDate: '2026-07-13', targetDate: undefined },
+      { asOfDate: '2026-07-13', targetDate: undefined, simulationSeed: undefined },
     )
   })
 
-  it('validates target_date, forwards it, and isolates cache entries by target', async () => {
+  it('requires and forwards simulation_seed and isolates cache entries by target and seed', async () => {
     const base = `/api/task-summaries/projects/${mocks.allowedProjectId}/duration-forecasts?as_of_date=2026-07-13`
-    const august = await supertest(buildApp()).get(`${base}&target_date=2026-08-31`)
-    const september = await supertest(buildApp()).get(`${base}&target_date=2026-09-30`)
+    const missingSeed = await supertest(buildApp()).get(`${base}&target_date=2026-08-31`)
+    expect(missingSeed.status).toBe(400)
+    expect(mocks.buildRuntimeScopedDurationForecast).not.toHaveBeenCalled()
 
-    expect(august.status).toBe(200)
-    expect(august.body.data.targetDate).toBe('2026-08-31')
-    expect(september.status).toBe(200)
-    expect(september.body.data.targetDate).toBe('2026-09-30')
+    const augustA = await supertest(buildApp())
+      .get(`${base}&target_date=2026-08-31&simulation_seed=route-seed-a`)
+    const augustB = await supertest(buildApp())
+      .get(`${base}&target_date=2026-08-31&simulation_seed=route-seed-b`)
+
+    expect(augustA.status).toBe(200)
+    expect(augustA.body.data.targetDate).toBe('2026-08-31')
+    expect(augustB.status).toBe(200)
+    expect(augustB.body.data.targetDate).toBe('2026-08-31')
     expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenNthCalledWith(1, mocks.allowedProjectId, {
       asOfDate: '2026-07-13',
       targetDate: '2026-08-31',
+      simulationSeed: 'route-seed-a',
     })
     expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenNthCalledWith(2, mocks.allowedProjectId, {
       asOfDate: '2026-07-13',
-      targetDate: '2026-09-30',
+      targetDate: '2026-08-31',
+      simulationSeed: 'route-seed-b',
     })
 
-    const invalid = await supertest(buildApp()).get(`${base}&target_date=08%2F31%2F2026`)
-    expect(invalid.status).toBe(400)
+    const invalidDate = await supertest(buildApp())
+      .get(`${base}&target_date=08%2F31%2F2026&simulation_seed=route-seed-a`)
+    expect(invalidDate.status).toBe(400)
+    const invalidSeed = await supertest(buildApp())
+      .get(`${base}&target_date=2026-08-31&simulation_seed=contains%20spaces`)
+    expect(invalidSeed.status).toBe(400)
   })
 
   it('returns 400 for an invalid as-of date before reading forecast data', async () => {

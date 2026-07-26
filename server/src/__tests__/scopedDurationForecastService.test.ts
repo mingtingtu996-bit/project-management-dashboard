@@ -193,7 +193,7 @@ describe('scopedDurationForecastService', () => {
     expect(division.p80FinishDate).not.toBe(division.p50FinishDate)
   })
 
-  it('returns a typed completion probability for an arbitrary target date', () => {
+  it('returns the authoritative network target-date contract for an arbitrary target date', () => {
     const rows = [
       row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-17' }),
       row('second', { planned_start_date: '2026-07-18', planned_end_date: '2026-07-22' }, [
@@ -213,17 +213,29 @@ describe('scopedDurationForecastService', () => {
     const immediate = buildScopedDurationForecasts({
       ...common,
       targetDate: '2026-07-13',
+      simulationSeed: 'target-date-seed-1',
     } as any).dimensions.division[0] as any
     const later = buildScopedDurationForecasts({
       ...common,
       targetDate: '2026-12-31',
+      simulationSeed: 'target-date-seed-1',
     } as any).dimensions.division[0] as any
 
     expect(immediate.targetDateCompletion).toEqual(expect.objectContaining({
       targetDate: '2026-07-13',
+      availability: 'available',
+      unavailableReason: null,
       completionProbability: 0,
       probabilityBasis: 'monte_carlo',
       sampleCount: 1000,
+      confidenceInterval: expect.objectContaining({
+        confidenceLevel: 0.95,
+        lowerProbability: 0,
+        upperProbability: expect.any(Number),
+        method: 'wilson_score',
+      }),
+      governingTaskIds: ['first', 'second'],
+      analyticAdvisory: null,
       targetDuration: expect.objectContaining({
         unit: 'construction_production_day',
         availability: 'available',
@@ -231,9 +243,173 @@ describe('scopedDurationForecastService', () => {
     }))
     expect(later.targetDateCompletion).toEqual(expect.objectContaining({
       targetDate: '2026-12-31',
+      availability: 'available',
+      unavailableReason: null,
       completionProbability: 1,
       probabilityBasis: 'monte_carlo',
       sampleCount: 1000,
+      confidenceInterval: expect.objectContaining({
+        confidenceLevel: 0.95,
+        lowerProbability: expect.any(Number),
+        upperProbability: 1,
+        method: 'wilson_score',
+      }),
+      governingTaskIds: ['first', 'second'],
+      analyticAdvisory: null,
+    }))
+  })
+
+  it('is deterministic for a fixed simulation seed and consumes that seed', () => {
+    const rows = [
+      row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-20' }),
+      row('second', { planned_start_date: '2026-07-21', planned_end_date: '2026-07-31' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const common = {
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-08-03',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-31', [4, 8, 16])),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    }
+
+    const first = buildScopedDurationForecasts({
+      ...common,
+      simulationSeed: 'fixed-seed-a',
+    } as any).dimensions.division[0] as any
+    const repeated = buildScopedDurationForecasts({
+      ...common,
+      simulationSeed: 'fixed-seed-a',
+    } as any).dimensions.division[0] as any
+    const otherSeed = buildScopedDurationForecasts({
+      ...common,
+      simulationSeed: 'fixed-seed-b',
+    } as any).dimensions.division[0] as any
+
+    expect(repeated.targetDateCompletion).toEqual(first.targetDateCompletion)
+    expect(repeated.networkProbability.inputHash).toBe(first.networkProbability.inputHash)
+    expect(otherSeed.networkProbability.inputHash).not.toBe(first.networkProbability.inputHash)
+    expect(first.targetDateCompletion.confidenceInterval.lowerProbability)
+      .toBeLessThanOrEqual(first.targetDateCompletion.completionProbability)
+    expect(first.targetDateCompletion.confidenceInterval.upperProbability)
+      .toBeGreaterThanOrEqual(first.targetDateCompletion.completionProbability)
+  })
+
+  it('fails the authoritative result closed and labels the task-only estimate as advisory', () => {
+    const rows = [
+      row('first', { planned_end_date: '2026-07-20' }),
+      row('second', { planned_end_date: '2026-07-22' }),
+    ]
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-21',
+      simulationSeed: 'network-unavailable-seed',
+      rows,
+      forecasts: [
+        forecast('first', '2026-07-20', [5, 8, 12]),
+        forecast('second', '2026-07-22', [6, 10, 14]),
+      ],
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    } as any).dimensions.division[0] as any
+
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      availability: 'unavailable',
+      unavailableReason: 'network_probability_unavailable',
+      completionProbability: null,
+      confidenceInterval: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      governingTaskIds: [],
+      reasonCodes: expect.arrayContaining([
+        'dependency_network_missing',
+        'network_probability_unavailable',
+      ]),
+      analyticAdvisory: expect.objectContaining({
+        completionProbability: expect.any(Number),
+        probabilityBasis: 'pert_analytic',
+        governingTaskIds: expect.arrayContaining(['second']),
+      }),
+    }))
+  })
+
+  it.each([
+    [undefined, 'simulation_seed_missing'],
+    ['contains spaces', 'simulation_seed_invalid'],
+  ])('fails target-date probability closed for simulation seed %s', (simulationSeed, reasonCode) => {
+    const rows = [
+      row('first', { planned_end_date: '2026-07-20' }),
+      row('second', { planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-21',
+      simulationSeed,
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22')),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    } as any).dimensions.division[0] as any
+
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      availability: 'unavailable',
+      unavailableReason: reasonCode,
+      completionProbability: null,
+      confidenceInterval: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      governingTaskIds: [],
+      reasonCodes: expect.arrayContaining([reasonCode]),
+      analyticAdvisory: null,
+    }))
+  })
+
+  it('fails target-date probability closed when required dependency evidence is unavailable', () => {
+    const rows = [
+      row('first', { planned_end_date: '2026-07-20' }),
+      row('second', { planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-21',
+      simulationSeed: 'dependency-evidence-seed',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22')),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+      globalDegradationReasons: ['task_dependencies_unavailable'],
+    } as any).dimensions.division[0] as any
+
+    expect(result.networkProbability.probabilityBasis).toBe('monte_carlo')
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      availability: 'unavailable',
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      governingTaskIds: [],
+      reasonCodes: expect.arrayContaining([
+        'task_dependencies_unavailable',
+        'network_probability_unavailable',
+      ]),
+      analyticAdvisory: {
+        completionProbability: 0.4,
+        probabilityBasis: 'pert_analytic',
+        governingTaskIds: ['first', 'second'],
+      },
     }))
   })
 
@@ -242,6 +418,7 @@ describe('scopedDurationForecastService', () => {
       projectId: 'project-1',
       asOfDate: '2026-07-13',
       targetDate: '2026-07-31',
+      simulationSeed: 'calendar-authority-seed',
       rows: [row('task-1', { planned_end_date: '2026-07-20' })],
       forecasts: [forecast('task-1', '2026-07-20')],
       attributions: new Map([['task-1', attribution()]]),
@@ -254,8 +431,13 @@ describe('scopedDurationForecastService', () => {
 
     expect(result.targetDateCompletion).toEqual(expect.objectContaining({
       targetDate: '2026-07-31',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
       completionProbability: null,
+      confidenceInterval: null,
       probabilityBasis: 'unavailable',
+      governingTaskIds: [],
+      analyticAdvisory: null,
       reasonCodes: expect.arrayContaining(['construction_calendar_identity_missing']),
       targetDuration: expect.objectContaining({ availability: 'unavailable', value: null }),
     }))

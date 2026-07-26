@@ -12,6 +12,7 @@ import {
 import {
   buildRuntimeScopedDurationForecast,
   isValidScopedDurationForecastDate,
+  isValidScopedDurationForecastSimulationSeed,
 } from '../services/scopedDurationForecastRuntimeService.js'
 import { getProjectTimelineEvents, isTaskTimelineEventStoreReady } from '../services/taskTimelineService.js'
 import {
@@ -88,7 +89,18 @@ const scopedDurationForecastQuerySchema = z.object({
   target_date: z.string().trim().refine(isValidScopedDurationForecastDate, {
     message: 'target_date must be a valid YYYY-MM-DD date',
   }).optional(),
-}).passthrough()
+  simulation_seed: z.string().trim().refine(isValidScopedDurationForecastSimulationSeed, {
+    message: 'simulation_seed must be a valid 1-128 character seed',
+  }).optional(),
+}).passthrough().superRefine((query, context) => {
+  if (query.target_date && !query.simulation_seed) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['simulation_seed'],
+      message: 'simulation_seed is required when target_date is provided',
+    })
+  }
+})
 
 function normalizeText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
@@ -361,11 +373,22 @@ router.get(
     const projectId = req.params.id
     const asOfDate = normalizeText(req.query.as_of_date) || undefined
     const targetDate = normalizeText(req.query.target_date) || undefined
-    const cacheKey = ['scoped-duration-forecast', projectId, asOfDate ?? 'current', targetDate ?? 'no-target'].join(':')
+    const simulationSeed = normalizeText(req.query.simulation_seed) || undefined
+    const cacheKey = [
+      'scoped-duration-forecast',
+      projectId,
+      asOfDate ?? 'current',
+      targetDate ?? 'no-target',
+      simulationSeed ?? 'no-seed',
+    ].join(':')
     const cachedResponse = getCachedTaskSummaryResponse<ApiResponse>(cacheKey)
     if (cachedResponse) return res.json(cachedResponse)
 
-    const result = await buildRuntimeScopedDurationForecast(projectId, { asOfDate, targetDate })
+    const result = await buildRuntimeScopedDurationForecast(projectId, {
+      asOfDate,
+      targetDate,
+      simulationSeed,
+    })
     const response: ApiResponse = {
       success: true,
       data: result,

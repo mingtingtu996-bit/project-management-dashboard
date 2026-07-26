@@ -182,7 +182,11 @@ describe('scopedDurationForecastRuntimeService', () => {
   it('validates and forwards an arbitrary target date into the scoped forecast response', async () => {
     const result = await buildRuntimeScopedDurationForecast(
       'project-1',
-      { asOfDate: '2026-07-13', targetDate: '2026-08-31' } as any,
+      {
+        asOfDate: '2026-07-13',
+        targetDate: '2026-08-31',
+        simulationSeed: 'runtime-target-seed',
+      } as any,
       dependencies(),
     ) as any
 
@@ -196,6 +200,24 @@ describe('scopedDurationForecastRuntimeService', () => {
       { targetDate: '08/31/2026' } as any,
       dependencies(),
     )).rejects.toThrow('targetDate must be a valid YYYY-MM-DD date')
+  })
+
+  it('rejects missing or invalid target-date simulation seeds before loading project data', async () => {
+    const missingSeedDependencies = dependencies()
+    await expect(buildRuntimeScopedDurationForecast(
+      'project-1',
+      { targetDate: '2026-08-31' } as any,
+      missingSeedDependencies,
+    )).rejects.toThrow(/simulationSeed.*required/)
+    expect(missingSeedDependencies.buildRuntimeScheduleAccelerationRowsWithDiagnostics).not.toHaveBeenCalled()
+
+    const invalidSeedDependencies = dependencies()
+    await expect(buildRuntimeScopedDurationForecast(
+      'project-1',
+      { targetDate: '2026-08-31', simulationSeed: 'contains spaces' } as any,
+      invalidSeedDependencies,
+    )).rejects.toThrow(/simulationSeed.*valid/)
+    expect(invalidSeedDependencies.buildRuntimeScheduleAccelerationRowsWithDiagnostics).not.toHaveBeenCalled()
   })
 
   it('does not import forecast refresh or mutation APIs', () => {

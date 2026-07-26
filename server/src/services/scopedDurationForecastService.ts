@@ -25,13 +25,31 @@ export type ScopedDurationForecastDimension = 'division' | 'subdivision' | 'spec
 export type ScopedDurationForecastState = 'not_started' | 'in_progress' | 'completed'
 export type ScopedDurationForecastDataStatus = 'ready' | 'degraded' | 'insufficient_data'
 
+export type ScopedDurationProbabilityConfidenceInterval = {
+  lowerProbability: number
+  upperProbability: number
+  confidenceLevel: number
+  method: 'wilson_score' | 'deterministic'
+}
+
+export type ScopedDurationTargetDateAnalyticAdvisory = {
+  completionProbability: number
+  probabilityBasis: 'pert_analytic'
+  governingTaskIds: string[]
+}
+
 export type ScopedDurationTargetDateCompletion = {
   targetDate: string
   targetDuration: DurationMetricDto
+  availability: 'available' | 'unavailable'
+  unavailableReason: string | null
   completionProbability: number | null
+  confidenceInterval: ScopedDurationProbabilityConfidenceInterval | null
   probabilityBasis: 'monte_carlo' | 'pert_analytic' | 'deterministic_completed' | 'unavailable'
   sampleCount: number
+  governingTaskIds: string[]
   reasonCodes: string[]
+  analyticAdvisory: ScopedDurationTargetDateAnalyticAdvisory | null
 }
 
 export type ScopedDurationForecastGroup = {
@@ -104,6 +122,7 @@ export type BuildScopedDurationForecastsInput = {
   projectId: string
   asOfDate: string
   targetDate?: string | null
+  simulationSeed?: string | null
   rows: ScheduleAccelerationRow[]
   forecasts: TaskDurationForecast[]
   attributions: Map<string, ProjectTaskAttribution>
@@ -178,6 +197,10 @@ const EXCLUDED_TASK_STATUSES = new Set([
 ])
 function normalizeText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+export function isValidScopedDurationForecastSimulationSeed(value: unknown): value is string {
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(normalizeText(value))
 }
 
 function normalizeDate(value: unknown) {
@@ -450,10 +473,32 @@ function interpolatePercentileCompletionProbability(input: {
   return 1
 }
 
+function monteCarloConfidenceInterval(
+  probability: number,
+  sampleCount: number,
+): ScopedDurationProbabilityConfidenceInterval | null {
+  if (!Number.isFinite(probability) || probability < 0 || probability > 1 || sampleCount <= 0) return null
+  const confidenceLevel = 0.95
+  const zScore = 1.959963984540054
+  const zSquared = zScore ** 2
+  const denominator = 1 + zSquared / sampleCount
+  const center = (probability + zSquared / (2 * sampleCount)) / denominator
+  const margin = (zScore / denominator) * Math.sqrt(
+    (probability * (1 - probability)) / sampleCount + zSquared / (4 * sampleCount ** 2),
+  )
+  return {
+    lowerProbability: Number(Math.max(0, center - margin).toFixed(6)),
+    upperProbability: Number(Math.min(1, center + margin).toFixed(6)),
+    confidenceLevel,
+    method: 'wilson_score',
+  }
+}
+
 function completedTargetDateCompletion(input: {
   targetDate: string | null
   asOfDate: string
   completionFinishDate: string | null
+  governingTaskIds: string[]
   calendar?: ConstructionCalendarContext | null
 }): ScopedDurationTargetDateCompletion | null {
   if (!input.targetDate) return null
@@ -470,29 +515,50 @@ function completedTargetDateCompletion(input: {
     return {
       targetDate: input.targetDate,
       targetDuration,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
       completionProbability: null,
+      confidenceInterval: null,
       probabilityBasis: 'unavailable',
       sampleCount: 0,
+      governingTaskIds: [],
       reasonCodes: ['construction_calendar_identity_missing'],
+      analyticAdvisory: null,
     }
   }
   if (!input.completionFinishDate) {
     return {
       targetDate: input.targetDate,
       targetDuration,
+      availability: 'unavailable',
+      unavailableReason: 'missing_actual_completion',
       completionProbability: null,
+      confidenceInterval: null,
       probabilityBasis: 'unavailable',
       sampleCount: 0,
+      governingTaskIds: [],
       reasonCodes: ['missing_actual_completion'],
+      analyticAdvisory: null,
     }
   }
+  const completionProbability = input.completionFinishDate <= input.targetDate ? 1 : 0
   return {
     targetDate: input.targetDate,
     targetDuration,
-    completionProbability: input.completionFinishDate <= input.targetDate ? 1 : 0,
+    availability: 'available',
+    unavailableReason: null,
+    completionProbability,
+    confidenceInterval: {
+      lowerProbability: completionProbability,
+      upperProbability: completionProbability,
+      confidenceLevel: 1,
+      method: 'deterministic',
+    },
     probabilityBasis: 'deterministic_completed',
     sampleCount: 0,
+    governingTaskIds: input.governingTaskIds,
     reasonCodes: [],
+    analyticAdvisory: null,
   }
 }
 
@@ -502,6 +568,10 @@ function activeTargetDateCompletion(input: {
   orderedBand: { p20: string | null; p50: string | null; p80: string | null }
   networkProbability: DurationNetworkProbabilityResult
   monteCarloApplied: boolean
+  simulationSeedReason: string | null
+  networkAuthorityReasonCodes: string[]
+  governingTaskIds: string[]
+  analyticGoverningTaskIds: string[]
   calendar?: ConstructionCalendarContext | null
 }): ScopedDurationTargetDateCompletion | null {
   if (!input.targetDate) return null
@@ -518,50 +588,87 @@ function activeTargetDateCompletion(input: {
     return {
       targetDate: input.targetDate,
       targetDuration,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
       completionProbability: null,
+      confidenceInterval: null,
       probabilityBasis: 'unavailable',
       sampleCount: 0,
+      governingTaskIds: [],
       reasonCodes: ['construction_calendar_identity_missing'],
+      analyticAdvisory: null,
     }
   }
-  if (input.monteCarloApplied && input.networkProbability.completionProbability !== null) {
+  if (input.simulationSeedReason) {
     return {
       targetDate: input.targetDate,
       targetDuration,
-      completionProbability: input.networkProbability.completionProbability,
+      availability: 'unavailable',
+      unavailableReason: input.simulationSeedReason,
+      completionProbability: null,
+      confidenceInterval: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      governingTaskIds: [],
+      reasonCodes: [input.simulationSeedReason],
+      analyticAdvisory: null,
+    }
+  }
+  if (
+    input.networkAuthorityReasonCodes.length === 0
+    && input.monteCarloApplied
+    && input.networkProbability.completionProbability !== null
+  ) {
+    const completionProbability = input.networkProbability.completionProbability
+    return {
+      targetDate: input.targetDate,
+      targetDuration,
+      availability: 'available',
+      unavailableReason: null,
+      completionProbability,
+      confidenceInterval: monteCarloConfidenceInterval(
+        completionProbability,
+        input.networkProbability.simulationCount,
+      ),
       probabilityBasis: 'monte_carlo',
       sampleCount: input.networkProbability.simulationCount,
+      governingTaskIds: input.governingTaskIds,
       reasonCodes: [],
+      analyticAdvisory: null,
     }
   }
   const p20Days = productionDaysFromAsOf(input.asOfDate, input.orderedBand.p20, input.calendar)
   const p50Days = productionDaysFromAsOf(input.asOfDate, input.orderedBand.p50, input.calendar)
   const p80Days = productionDaysFromAsOf(input.asOfDate, input.orderedBand.p80, input.calendar)
-  if (p20Days === null || p50Days === null || p80Days === null) {
-    return {
-      targetDate: input.targetDate,
-      targetDuration,
-      completionProbability: null,
-      probabilityBasis: 'unavailable',
-      sampleCount: 0,
-      reasonCodes: unique([...input.networkProbability.fallbackReasons, 'probability_band_unavailable']),
-    }
-  }
+  const analyticAdvisory = p20Days === null || p50Days === null || p80Days === null
+    ? null
+    : {
+        completionProbability: interpolatePercentileCompletionProbability({
+          targetDays,
+          p20Days,
+          p50Days,
+          p80Days,
+        }),
+        probabilityBasis: 'pert_analytic' as const,
+        governingTaskIds: input.analyticGoverningTaskIds,
+      }
   return {
     targetDate: input.targetDate,
     targetDuration,
-    completionProbability: interpolatePercentileCompletionProbability({
-      targetDays,
-      p20Days,
-      p50Days,
-      p80Days,
-    }),
-    probabilityBasis: 'pert_analytic',
+    availability: 'unavailable',
+    unavailableReason: 'network_probability_unavailable',
+    completionProbability: null,
+    confidenceInterval: null,
+    probabilityBasis: 'unavailable',
     sampleCount: 0,
+    governingTaskIds: [],
     reasonCodes: unique([
       ...input.networkProbability.fallbackReasons,
-      'network_probability_unavailable_analytic_fallback',
+      ...input.networkAuthorityReasonCodes,
+      ...(analyticAdvisory ? [] : ['probability_band_unavailable']),
+      'network_probability_unavailable',
     ]),
+    analyticAdvisory,
   }
 }
 
@@ -675,6 +782,8 @@ function buildGroupForecast(input: {
   projectId: string
   asOfDate: string
   targetDate: string | null
+  simulationSeed: string
+  simulationSeedReason: string | null
   forecastByTaskId: Map<string, TaskDurationForecast>
   criticalTaskIds: Set<string>
   attributions: Map<string, ProjectTaskAttribution>
@@ -760,6 +869,11 @@ function buildGroupForecast(input: {
         targetDate: input.targetDate,
         asOfDate,
         completionFinishDate: actualFinishDate,
+        governingTaskIds: actualFinishDate
+          ? completedTasks
+              .filter((task) => normalizeDate(task.row.values.actual_end_date) === actualFinishDate)
+              .map((task) => task.id)
+          : [],
         calendar,
       }),
       forecastState: 'completed',
@@ -793,7 +907,9 @@ function buildGroupForecast(input: {
       lagDays: dependency.lagDays,
     })))
   const networkProbabilityResult = simulateDurationNetworkProbability({
-    seed: [input.projectId, bucket.dimension, bucket.id, asOfDate].join(':'),
+    seed: input.targetDate && !input.simulationSeedReason
+      ? input.simulationSeed
+      : [input.projectId, bucket.dimension, bucket.id, asOfDate].join(':'),
     tasks: activeTasks.map((task) => {
       const forecast = forecastByTaskId.get(task.id)
       const plannedStart = normalizeDate(task.row.values.planned_start_date ?? task.row.values.start_date)
@@ -809,9 +925,9 @@ function buildGroupForecast(input: {
       }
     }),
     dependencies: networkDependencies,
-    simulationCount: 1000,
-    scenarioCorrelation: 0.35,
-    completionTargetDays: isAuthoritativeConstructionCalendar(calendar) && input.targetDate
+    completionTargetDays: !input.simulationSeedReason
+      && isAuthoritativeConstructionCalendar(calendar)
+      && input.targetDate
       ? productionDaysFromAsOf(asOfDate, input.targetDate, calendar)
       : null,
   })
@@ -831,13 +947,18 @@ function buildGroupForecast(input: {
 
   const forecastCoverageRate = bands.filter((band) => band.forecastCovered).length / activeTasks.length
   const probabilityCoverageRate = bands.filter((band) => band.probabilityCovered).length / activeTasks.length
+  const analyticGoverningIds = governingTaskIds(
+    bands,
+    { p20: rawP20, p50: rawP50, p80: rawP80 },
+    [analyticOrdered.p20, analyticOrdered.p50, analyticOrdered.p80],
+  )
   const governingIds = monteCarloApplied
     ? activeTasks.map((task) => task.id)
-    : governingTaskIds(
-        bands,
-        { p20: rawP20, p50: rawP50, p80: rawP80 },
-        [ordered.p20, ordered.p50, ordered.p80],
-      )
+    : analyticGoverningIds
+  const networkAuthorityReasonCodes = unique([
+    ...(boundary.unresolved > 0 ? ['unresolved_boundary_predecessor'] : []),
+    ...input.globalDegradationReasons.filter((reason) => reason === 'task_dependencies_unavailable'),
+  ])
   const confidence = governingConfidence(governingIds, forecastByTaskId)
   const remainingDurationDays = productionDaysFromAsOf(asOfDate, ordered.p50, calendar)
   const targetGapDays = delayDayDelta(targetFinishDate, ordered.p50, calendar)
@@ -902,9 +1023,13 @@ function buildGroupForecast(input: {
     targetDateCompletion: activeTargetDateCompletion({
       targetDate: input.targetDate,
       asOfDate,
-      orderedBand: ordered,
+      orderedBand: analyticOrdered,
       networkProbability: networkProbabilityResult,
       monteCarloApplied,
+      simulationSeedReason: input.simulationSeedReason,
+      networkAuthorityReasonCodes,
+      governingTaskIds: governingIds,
+      analyticGoverningTaskIds: analyticGoverningIds,
       calendar,
     }),
     forecastState: forecastState(bucket.tasks),
@@ -945,6 +1070,14 @@ export function buildScopedDurationForecasts(
 ): ScopedDurationForecastResponse {
   const asOfDate = normalizeDate(input.asOfDate) ?? input.asOfDate
   const targetDate = normalizeDate(input.targetDate)
+  const simulationSeed = normalizeText(input.simulationSeed)
+  const simulationSeedReason = targetDate
+    ? !simulationSeed
+      ? 'simulation_seed_missing'
+      : isValidScopedDurationForecastSimulationSeed(simulationSeed)
+        ? null
+        : 'simulation_seed_invalid'
+    : null
   const rowById = new Map<string, ScheduleAccelerationRow>()
   for (const row of input.rows) {
     const id = normalizeText(row.clientRowId)
@@ -986,6 +1119,8 @@ export function buildScopedDurationForecasts(
         projectId: normalizeText(input.projectId),
         asOfDate,
         targetDate,
+        simulationSeed,
+        simulationSeedReason,
         forecastByTaskId,
         criticalTaskIds: input.criticalTaskIds,
         attributions: input.attributions,

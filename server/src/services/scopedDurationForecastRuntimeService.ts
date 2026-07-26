@@ -8,8 +8,11 @@ import {
 import { buildProjectTaskAttributionProjection } from './taskAttributionProjectionService.js'
 import {
   buildScopedDurationForecasts,
+  isValidScopedDurationForecastSimulationSeed,
   type ScopedDurationForecastResponse,
 } from './scopedDurationForecastService.js'
+
+export { isValidScopedDurationForecastSimulationSeed }
 
 export type ScopedDurationForecastRuntimeDependencies = {
   buildRuntimeScheduleAccelerationRowsWithDiagnostics: typeof buildRuntimeScheduleAccelerationRowsWithDiagnostics
@@ -21,6 +24,7 @@ export type ScopedDurationForecastRuntimeDependencies = {
 export type ScopedDurationForecastRuntimeOptions = {
   asOfDate?: string | null
   targetDate?: string | null
+  simulationSeed?: string | null
 }
 
 const defaultDependencies: ScopedDurationForecastRuntimeDependencies = {
@@ -74,6 +78,13 @@ export async function buildRuntimeScopedDurationForecast(
   const targetDate = normalizeText(options.targetDate) || null
   if (targetDate && !isValidScopedDurationForecastDate(targetDate)) {
     throw new TypeError('targetDate must be a valid YYYY-MM-DD date')
+  }
+  const simulationSeed = normalizeText(options.simulationSeed)
+  if (targetDate && !simulationSeed) {
+    throw new TypeError('simulationSeed is required when targetDate is provided')
+  }
+  if (simulationSeed && !isValidScopedDurationForecastSimulationSeed(simulationSeed)) {
+    throw new TypeError('simulationSeed must be a valid 1-128 character seed')
   }
 
   // Project rows are mandatory and loaded before optional evidence so a failed task read
@@ -135,6 +146,7 @@ export async function buildRuntimeScopedDurationForecast(
     projectId: normalizedProjectId,
     asOfDate,
     targetDate,
+    simulationSeed: simulationSeed || null,
     rows,
     forecasts,
     attributions,
