@@ -311,7 +311,9 @@ Implementation uses the following dependency order and exact migration identitie
 1. `324_canonical_cause_and_benchmark_provenance.sql` for explicit benchmark provenance and `duration_benchmark_cause_segments`.
 2. `325_duration_asset_review_queue.sql` for `duration_asset_review_items`.
 3. `326_execution_fact_governance.sql` for `execution_fact_events`.
-4. `327_algorithm_intervention_evaluations.sql` for `algorithm_intervention_evaluations`.
+4. `329_algorithm_intervention_evaluations.sql` for `algorithm_intervention_evaluations`.
+
+Migration identities `327_task_write_finalization_outbox.sql` and `328_duration_asset_platform_operator.sql` were already occupied when this workstream was integrated. The intervention evaluation schema therefore follows them as migration 329; this preserves numeric apply order and avoids reusing an immutable migration identity.
 
 Every migration must provide:
 

@@ -72,6 +72,25 @@ describe('migration helper entrypoints', () => {
     expect(clean).toContain(forward.trim())
   })
 
+  it('keeps every closeout migration from 327 through 330 aligned across forward, CLEAN, and rollback entrypoints', () => {
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const migrationNames = [
+      '327_task_write_finalization_outbox.sql',
+      '328_duration_asset_platform_operator.sql',
+      '329_algorithm_intervention_evaluations.sql',
+      '330_task_dependency_heuristic_retirement.sql',
+    ]
+
+    for (const migrationName of migrationNames) {
+      const forward = readServerFile('migrations', migrationName)
+      const rollback = readServerFile('migrations', 'rollback', migrationName)
+
+      expect(clean, migrationName).toContain(`-- Source: ${migrationName}`)
+      expect(clean, migrationName).toContain(forward.trim())
+      expect(rollback.trim().length, migrationName).toBeGreaterThan(0)
+    }
+  })
+
   it('pins clean migration helpers to the canonical V4 bundle only', () => {
     const cleanRunner = readServerFile('run-clean-migration.mjs')
     const guidanceRunner = readServerFile('run-migration.js')

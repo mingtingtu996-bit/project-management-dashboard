@@ -18,11 +18,23 @@ CREATE TABLE IF NOT EXISTS public.algorithm_intervention_evaluations (
   scope_level TEXT NOT NULL CHECK (scope_level IN ('system','company','project','industry_baseline','segment_baseline')),
   company_id UUID NULL REFERENCES public.companies(id) ON DELETE CASCADE,
   project_id UUID NULL,
+  rollback_target TEXT NULL,
+  proxy_metric TEXT NOT NULL CHECK (NULLIF(BTRIM(proxy_metric), '') IS NOT NULL),
+  observation_started_at TIMESTAMPTZ NOT NULL,
   intervention_at TIMESTAMPTZ NOT NULL,
+  pre_period_start TIMESTAMPTZ NOT NULL,
+  pre_period_end TIMESTAMPTZ NOT NULL,
+  post_period_start TIMESTAMPTZ NOT NULL,
+  post_period_end TIMESTAMPTZ NOT NULL,
   evaluation_window_start TIMESTAMPTZ NULL,
   evaluation_window_end TIMESTAMPTZ NULL,
+  decision TEXT NOT NULL CHECK (decision IN ('insufficient_data','no_detectable_effect','benefit_detected','harm_detected','confounded')),
   evaluation_status TEXT NOT NULL CHECK (evaluation_status IN ('insufficient_evidence','observational_estimate','counterfactual_supported')),
   causal_estimate_status TEXT NOT NULL CHECK (causal_estimate_status IN ('not_estimable','observational_before_after','observational_difference_in_differences')),
+  treated_pre_sample_count INTEGER NOT NULL CHECK (treated_pre_sample_count >= 0),
+  treated_post_sample_count INTEGER NOT NULL CHECK (treated_post_sample_count >= 0),
+  control_pre_sample_count INTEGER NOT NULL CHECK (control_pre_sample_count >= 0),
+  control_post_sample_count INTEGER NOT NULL CHECK (control_post_sample_count >= 0),
   treatment_sample_count INTEGER NOT NULL CHECK (treatment_sample_count >= 0),
   control_sample_count INTEGER NOT NULL CHECK (control_sample_count >= 0),
   treated_baseline_mae_days NUMERIC NULL,
@@ -30,7 +42,12 @@ CREATE TABLE IF NOT EXISTS public.algorithm_intervention_evaluations (
   control_baseline_mae_days NUMERIC NULL,
   control_post_mae_days NUMERIC NULL,
   counterfactual_effect_days NUMERIC NULL,
+  counterfactual_effect_ci95_lower_days NUMERIC NULL,
+  counterfactual_effect_ci95_upper_days NUMERIC NULL,
   post_intervention_error_rate_inflection_days NUMERIC NULL,
+  data_freshness_status TEXT NOT NULL CHECK (data_freshness_status IN ('fresh','stale','unavailable')),
+  sample_sufficiency_status TEXT NOT NULL CHECK (sample_sufficiency_status IN ('sufficient','insufficient')),
+  monitor_reference TEXT NOT NULL CHECK (NULLIF(BTRIM(monitor_reference), '') IS NOT NULL),
   rollback_review_recommended BOOLEAN NOT NULL DEFAULT FALSE,
   limitations TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   evidence JSONB NOT NULL DEFAULT '{}'::JSONB CHECK (jsonb_typeof(evidence) = 'object' AND pg_column_size(evidence) <= 32768),
@@ -39,18 +56,56 @@ CREATE TABLE IF NOT EXISTS public.algorithm_intervention_evaluations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   FOREIGN KEY (project_id, company_id) REFERENCES public.projects(id, company_id) ON UPDATE RESTRICT ON DELETE CASCADE,
   UNIQUE (evaluation_fingerprint),
-  CHECK (evaluation_window_start IS NULL OR evaluation_window_start >= intervention_at),
+  CHECK (pre_period_start <= pre_period_end AND pre_period_end < intervention_at),
+  CHECK (post_period_start = observation_started_at AND post_period_start >= intervention_at),
+  CHECK (post_period_start <= post_period_end AND post_period_end <= evaluated_at),
+  CHECK (evaluation_window_start IS NULL OR evaluation_window_start >= pre_period_start),
   CHECK (evaluation_window_end IS NULL OR evaluation_window_start IS NULL OR evaluation_window_end >= evaluation_window_start),
+  CHECK (treatment_sample_count = treated_post_sample_count),
+  CHECK (control_sample_count = control_post_sample_count),
+  CHECK (
+    (counterfactual_effect_ci95_lower_days IS NULL AND counterfactual_effect_ci95_upper_days IS NULL)
+    OR (
+      counterfactual_effect_ci95_lower_days IS NOT NULL
+      AND counterfactual_effect_ci95_upper_days IS NOT NULL
+      AND counterfactual_effect_ci95_lower_days <= counterfactual_effect_ci95_upper_days
+    )
+  ),
   CHECK (
     (scope_level = 'project' AND company_id IS NOT NULL AND project_id IS NOT NULL)
     OR (scope_level = 'company' AND company_id IS NOT NULL AND project_id IS NULL)
     OR (scope_level IN ('system','industry_baseline','segment_baseline') AND project_id IS NULL)
   ),
   CHECK (
-    (evaluation_status = 'insufficient_evidence' AND causal_estimate_status = 'not_estimable' AND counterfactual_effect_days IS NULL)
-    OR (evaluation_status = 'observational_estimate' AND causal_estimate_status = 'observational_before_after' AND counterfactual_effect_days IS NULL)
-    OR (evaluation_status = 'counterfactual_supported' AND causal_estimate_status = 'observational_difference_in_differences' AND counterfactual_effect_days IS NOT NULL)
-  )
+    (
+      decision = 'insufficient_data'
+      AND evaluation_status = 'insufficient_evidence'
+      AND causal_estimate_status = 'not_estimable'
+      AND counterfactual_effect_days IS NULL
+      AND counterfactual_effect_ci95_lower_days IS NULL
+      AND counterfactual_effect_ci95_upper_days IS NULL
+    )
+    OR (
+      decision = 'confounded'
+      AND evaluation_status = 'observational_estimate'
+      AND causal_estimate_status = 'observational_before_after'
+      AND counterfactual_effect_days IS NULL
+      AND counterfactual_effect_ci95_lower_days IS NULL
+      AND counterfactual_effect_ci95_upper_days IS NULL
+    )
+    OR (
+      decision IN ('no_detectable_effect','benefit_detected','harm_detected')
+      AND evaluation_status = 'counterfactual_supported'
+      AND causal_estimate_status = 'observational_difference_in_differences'
+      AND counterfactual_effect_days IS NOT NULL
+      AND counterfactual_effect_ci95_lower_days IS NOT NULL
+      AND counterfactual_effect_ci95_upper_days IS NOT NULL
+      AND data_freshness_status = 'fresh'
+      AND sample_sufficiency_status = 'sufficient'
+    )
+  ),
+  CHECK (rollback_review_recommended = (decision = 'harm_detected')),
+  CHECK (decision <> 'harm_detected' OR NULLIF(BTRIM(rollback_target), '') IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS idx_algorithm_intervention_evaluations_publication

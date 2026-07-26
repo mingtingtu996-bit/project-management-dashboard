@@ -8,6 +8,18 @@ const repoRoot = process.cwd().endsWith('\\client') || process.cwd().endsWith('/
   ? resolve(process.cwd(), '..')
   : process.cwd()
 
+const WBS_TEMPLATE_GENERATION_IMPLEMENTATION_FILES = [
+  'wbsTemplateGenerationFoundation.ts',
+  'wbsTemplateScopeClassificationService.ts',
+  'wbsTemplateDurationAssemblyService.ts',
+  'wbsTemplateOutputProjectionService.ts',
+  'wbsTemplateDependencyCandidateService.ts',
+  'wbsTemplateAssetStrategyService.ts',
+  'wbsTemplateCloseoutChainService.ts',
+  'wbsTemplateAuditFormattingService.ts',
+  'wbsTemplateGenerationOrchestrator.ts',
+] as const
+
 const SURFACE_FIXTURE = {
   taskId: 'task-same-truth',
   plannedStart: '2026-05-01',
@@ -25,6 +37,12 @@ function readSource(relativeToSrc: string) {
 
 function readRepoSource(relativeToRepo: string) {
   return readFileSync(resolve(repoRoot, relativeToRepo), 'utf8')
+}
+
+function readWbsTemplateGenerationImplementationSource() {
+  return WBS_TEMPLATE_GENERATION_IMPLEMENTATION_FILES
+    .map((fileName) => readRepoSource(`server/src/services/${fileName}`))
+    .join('\n')
 }
 
 function listFiles(root: string): string[] {
@@ -406,7 +424,7 @@ describe('duration surface contract', () => {
   })
 
   it('asserts package parent rows do not expose package seed reference as the final parent duration', () => {
-    const wbsGenerationSource = readRepoSource('server/src/services/wbsTemplateGenerationService.ts')
+    const wbsGenerationSource = readWbsTemplateGenerationImplementationSource()
     const tooltipSource = readSource('components/planning/DurationSuggestionTooltip.tsx')
 
     expect(wbsGenerationSource).toContain("planDurationTruthSource: 'child_plan_window_rollup'")
