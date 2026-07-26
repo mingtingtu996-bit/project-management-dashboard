@@ -35,6 +35,8 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
     const discovered = discoverAlgorithmTunablesInSource(`
       const documentation = 'simulationCount: 5, scenarioCorrelation: 0.1'
       // const IGNORED_DEFAULT_WEIGHT = 0.5
+      const DEFAULT_REPO_ROOT = '/tmp/workbuddy'
+      const DEFAULT_DURATION_TIMEZONE = 'Asia/Shanghai'
       const FORECAST_POLICY = {
         simulationCount: 500,
         nested: { scenarioCorrelation: 0.25 },
@@ -49,9 +51,9 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
 
     expect(discovered).toHaveLength(3)
     expect(discovered).toEqual(expect.arrayContaining([
-      expect.objectContaining({ sourceSymbol: 'FORECAST_POLICY', kind: 'declaration', line: 4 }),
-      expect.objectContaining({ sourceSymbol: 'run.simulationCount', kind: 'inline_call_option', line: 10 }),
-      expect.objectContaining({ sourceSymbol: 'run.scenarioCorrelation', kind: 'inline_call_option', line: 11 }),
+      expect.objectContaining({ sourceSymbol: 'FORECAST_POLICY', kind: 'declaration', line: 6 }),
+      expect.objectContaining({ sourceSymbol: 'run.simulationCount', kind: 'inline_call_option', line: 12 }),
+      expect.objectContaining({ sourceSymbol: 'run.scenarioCorrelation', kind: 'inline_call_option', line: 13 }),
     ]))
   })
 
@@ -96,7 +98,7 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
     expect(validateAlgorithmAssetLearnableParameterRegistry().status).toBe('pass')
   })
 
-  it('keeps every source-defined forecast and duration tuning surface explicitly governed or frozen', () => {
+  it('keeps every source-defined service tunable explicitly governed or frozen', () => {
     const inventoryFactory = (registryModule as typeof registryModule & {
       listAlgorithmAssetTunableParameterSourceInventory?: () => Array<{
         inventoryKey: string
@@ -115,12 +117,28 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
     const discovered = discoverAlgorithmTunablesFromRuntimeSource()
     expect(discovered).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        sourcePath: 'server/src/services/scopedDurationForecastService.ts',
-        sourceSymbol: 'buildGroupForecast.simulationCount',
+        sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
+        sourceSymbol: 'DEFAULT_SIMULATION_COUNT',
       }),
       expect.objectContaining({
-        sourcePath: 'server/src/services/scopedDurationForecastService.ts',
-        sourceSymbol: 'buildGroupForecast.scenarioCorrelation',
+        sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
+        sourceSymbol: 'DEFAULT_SCENARIO_CORRELATION',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/constructionDependencyReplayCalibrationService.ts',
+        sourceSymbol: 'DEFAULT_ZERO_LAG_REVIEW_THRESHOLD_DAYS',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/progressVelocityLearningService.ts',
+        sourceSymbol: 'CROSS_PROJECT_SAMPLE_WEIGHT',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/projectHealthService.ts',
+        sourceSymbol: 'HEALTH_WEIGHTS',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/wbsReconciliationService.ts',
+        sourceSymbol: 'SIMILARITY_THRESHOLD',
       }),
     ]))
 

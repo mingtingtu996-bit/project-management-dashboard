@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs'
-import { basename, join, relative } from 'node:path'
+import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import * as ts from 'typescript'
@@ -12,17 +12,14 @@ export type DiscoveredAlgorithmTunable = {
 }
 
 export const ALGORITHM_TUNABLE_DISCOVERY_POLICY = Object.freeze({
-  runtimeRoot: 'server/src',
-  governedModuleDirectory: 'server/src/services',
-  governedFileNameTerms: ['algorithm', 'duration', 'forecast'],
-  declarationRule: 'top_level_const_with_uppercase_default_or_tuning_name',
+  runtimeRoot: 'server/src/services',
+  declarationRule: 'top_level_const_with_uppercase_default_or_tuning_name_and_static_numeric_content',
   inlineRule: 'numeric_tuning_property_in_call_object_argument',
   excludedDeclarationSuffixes: ['_CONSUMER_KEY', '_VERSION'],
 })
 
-const sourceRoot = fileURLToPath(new URL('../../', import.meta.url))
+const servicesRoot = fileURLToPath(new URL('../../services/', import.meta.url))
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
-const governedModuleNamePattern = /(algorithm|duration|forecast)/i
 const uppercaseConstantPattern = /^[_A-Z][_A-Z0-9]*$/
 const excludedDeclarationSuffixPattern = /_(?:CONSUMER_KEY|VERSION)$/
 const structuredTuningContainerSuffixPattern = /_(?:CAPS|CONFIG|DEFAULTS|FLOORS|OPTIONS|POLICY|PROFILE|SETTINGS|THRESHOLDS|WEIGHTS)$/
@@ -87,12 +84,6 @@ function hasAlgorithmTuningName(value: string) {
     && (tokenSet.has('min') || tokenSet.has('max'))
 }
 
-function isGovernedAlgorithmModule(path: string) {
-  const repoPath = slash(relative(repoRoot, path))
-  return repoPath.startsWith(`${ALGORITHM_TUNABLE_DISCOVERY_POLICY.governedModuleDirectory}/`)
-    && governedModuleNamePattern.test(basename(path))
-}
-
 function unwrapExpression(expression: ts.Expression): ts.Expression {
   if (
     ts.isAsExpression(expression)
@@ -112,6 +103,63 @@ function isStaticNumericExpression(expression: ts.Expression): boolean {
   return ts.isBinaryExpression(unwrapped)
     && isStaticNumericExpression(unwrapped.left)
     && isStaticNumericExpression(unwrapped.right)
+}
+
+function containsStaticNumericValue(
+  expression: ts.Expression,
+  topLevelInitializers: ReadonlyMap<string, ts.Expression>,
+  seenIdentifiers = new Set<string>(),
+): boolean {
+  const unwrapped = unwrapExpression(expression)
+  if (isStaticNumericExpression(unwrapped)) return true
+  if (ts.isIdentifier(unwrapped)) {
+    if (seenIdentifiers.has(unwrapped.text)) return false
+    const initializer = topLevelInitializers.get(unwrapped.text)
+    if (!initializer) return false
+    const nextSeen = new Set(seenIdentifiers)
+    nextSeen.add(unwrapped.text)
+    return containsStaticNumericValue(initializer, topLevelInitializers, nextSeen)
+  }
+  if (ts.isPrefixUnaryExpression(unwrapped)) {
+    return containsStaticNumericValue(unwrapped.operand, topLevelInitializers, seenIdentifiers)
+  }
+  if (ts.isBinaryExpression(unwrapped)) {
+    return containsStaticNumericValue(unwrapped.left, topLevelInitializers, seenIdentifiers)
+      && containsStaticNumericValue(unwrapped.right, topLevelInitializers, seenIdentifiers)
+  }
+  if (ts.isArrayLiteralExpression(unwrapped)) {
+    return unwrapped.elements.some((element) => (
+      ts.isSpreadElement(element)
+        ? containsStaticNumericValue(element.expression, topLevelInitializers, seenIdentifiers)
+        : containsStaticNumericValue(element, topLevelInitializers, seenIdentifiers)
+    ))
+  }
+  if (ts.isObjectLiteralExpression(unwrapped)) {
+    return unwrapped.properties.some((property) => {
+      if (ts.isPropertyAssignment(property)) {
+        return containsStaticNumericValue(property.initializer, topLevelInitializers, seenIdentifiers)
+      }
+      if (ts.isShorthandPropertyAssignment(property)) {
+        return containsStaticNumericValue(property.name, topLevelInitializers, seenIdentifiers)
+      }
+      if (ts.isSpreadAssignment(property)) {
+        return containsStaticNumericValue(property.expression, topLevelInitializers, seenIdentifiers)
+      }
+      return false
+    })
+  }
+  if (
+    ts.isCallExpression(unwrapped)
+    && ts.isPropertyAccessExpression(unwrapped.expression)
+    && ts.isIdentifier(unwrapped.expression.expression)
+    && unwrapped.expression.expression.text === 'Object'
+    && unwrapped.expression.name.text === 'freeze'
+  ) {
+    return unwrapped.arguments.some((argument) => (
+      containsStaticNumericValue(argument, topLevelInitializers, seenIdentifiers)
+    ))
+  }
+  return false
 }
 
 function containsStaticTuningProperty(node: ts.Node, sourceFile: ts.SourceFile) {
@@ -167,29 +215,38 @@ export function discoverAlgorithmTunablesInSource(source: string, sourcePath: st
     sourcePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
   )
   const discovered: DiscoveredAlgorithmTunable[] = []
-
-  for (const statement of sourceFile.statements) {
-    if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue
-    for (const declaration of statement.declarationList.declarations) {
-      if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue
-      const sourceSymbol = declaration.name.text
-      if (!uppercaseConstantPattern.test(sourceSymbol) || excludedDeclarationSuffixPattern.test(sourceSymbol)) continue
-      const tokens = new Set(nameTokens(sourceSymbol))
-      const structuredTuningContainer = structuredTuningContainerSuffixPattern.test(sourceSymbol)
-        && containsStaticTuningProperty(declaration.initializer, sourceFile)
-      if (
-        !tokens.has('default')
-        && !tokens.has('defaults')
-        && !hasAlgorithmTuningName(sourceSymbol)
-        && !structuredTuningContainer
-      ) continue
-      discovered.push({
-        sourcePath,
-        sourceSymbol,
-        kind: 'declaration',
-        line: lineFor(declaration.name, sourceFile),
-      })
+  const topLevelDeclarations = sourceFile.statements.flatMap((statement) => (
+    ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const)
+      ? [...statement.declarationList.declarations]
+      : []
+  ))
+  const topLevelInitializers = new Map<string, ts.Expression>()
+  for (const declaration of topLevelDeclarations) {
+    if (ts.isIdentifier(declaration.name) && declaration.initializer) {
+      topLevelInitializers.set(declaration.name.text, declaration.initializer)
     }
+  }
+
+  for (const declaration of topLevelDeclarations) {
+    if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue
+    const sourceSymbol = declaration.name.text
+    if (!uppercaseConstantPattern.test(sourceSymbol) || excludedDeclarationSuffixPattern.test(sourceSymbol)) continue
+    if (!containsStaticNumericValue(declaration.initializer, topLevelInitializers)) continue
+    const tokens = new Set(nameTokens(sourceSymbol))
+    const structuredTuningContainer = structuredTuningContainerSuffixPattern.test(sourceSymbol)
+      && containsStaticTuningProperty(declaration.initializer, sourceFile)
+    if (
+      !tokens.has('default')
+      && !tokens.has('defaults')
+      && !hasAlgorithmTuningName(sourceSymbol)
+      && !structuredTuningContainer
+    ) continue
+    discovered.push({
+      sourcePath,
+      sourceSymbol,
+      kind: 'declaration',
+      line: lineFor(declaration.name, sourceFile),
+    })
   }
 
   const inlineOptions: Array<DiscoveredAlgorithmTunable & { baseSymbol: string }> = []
@@ -245,8 +302,7 @@ function discoverInModule(path: string) {
 }
 
 export function discoverAlgorithmTunablesFromRuntimeSource() {
-  return productionTypeScriptFiles(sourceRoot)
-    .filter(isGovernedAlgorithmModule)
+  return productionTypeScriptFiles(servicesRoot)
     .sort()
     .flatMap(discoverInModule)
     .sort((left, right) => (
