@@ -35,6 +35,43 @@ describe('migration helper entrypoints', () => {
     expect(mismatches).toEqual([])
   })
 
+  it('exposes migration 324 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '324_canonical_cause_and_benchmark_provenance.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.duration_benchmark_cause_segments')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+  })
+
+  it('exposes migration 325 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '325_duration_asset_review_queue.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.duration_asset_review_items')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_asset_review_items')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+  })
+
+  it('exposes migration 326 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '326_execution_fact_governance.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.execution_fact_events')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.execution_fact_events')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+  })
+
   it('pins clean migration helpers to the canonical V4 bundle only', () => {
     const cleanRunner = readServerFile('run-clean-migration.mjs')
     const guidanceRunner = readServerFile('run-migration.js')

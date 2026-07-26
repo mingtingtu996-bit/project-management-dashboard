@@ -519,6 +519,11 @@ describe('durationAlgorithmAccuracyService', () => {
             endDate: '2026-02-17',
             counts_as_construction_shutdown: true,
           }],
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
         },
       },
     })

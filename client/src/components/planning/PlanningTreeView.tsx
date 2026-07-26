@@ -45,6 +45,7 @@ import {
   type SharedTreeViewMode,
 } from '@/components/tree/SharedTreePrimitives'
 import { getWbsNodeTypeLabel } from '@/lib/wbsLabels'
+import { readAvailableDurationValue } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 import {
   PLAN_ITEM_KIND_OPTIONS,
@@ -2121,9 +2122,9 @@ export function PlanningTreeView({
 
   const renderDurationForecastSummary = (forecast?: TaskDurationForecast | null) => {
     if (!forecast) return null
-    const remainingDays = Number(forecast.remainingForecastDays)
+    const remainingDays = readAvailableDurationValue(forecast.remainingDuration, 'construction_production_day')
     const delayDays = Number(forecast.forecastDelayDays ?? 0)
-    const hasRemaining = Number.isFinite(remainingDays)
+    const hasRemaining = remainingDays !== null
     const hasDelay = Number.isFinite(delayDays) && delayDays > 0
     const toneClass = hasDelay
       ? 'border-amber-200 bg-amber-50 text-amber-800'

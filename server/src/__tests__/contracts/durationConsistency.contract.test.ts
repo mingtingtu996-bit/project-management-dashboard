@@ -255,13 +255,13 @@ describe('duration consistency contract scaffold', () => {
     const delayBearingFiles = [
       'server/src/services/progressDeviationService.ts',
       'server/src/services/taskSummaryService.ts',
+      'server/src/services/taskSummaryCompareService.ts',
       'server/src/services/taskAttributionSummaryService.ts',
       'server/src/services/scheduleAccelerationService.ts',
       'server/src/services/projectExecutionSummaryService.ts',
       'server/src/services/projectHealthService.ts',
       'server/src/services/weeklyDigestService.ts',
       'server/src/services/warningService.ts',
-      'server/src/routes/task-summaries.ts',
     ]
 
     for (const file of delayBearingFiles) {
@@ -280,13 +280,13 @@ describe('duration consistency contract scaffold', () => {
     const calendarAwareDelayFiles = [
       'server/src/services/progressDeviationService.ts',
       'server/src/services/taskSummaryService.ts',
+      'server/src/services/taskSummaryCompareService.ts',
       'server/src/services/taskAttributionSummaryService.ts',
       'server/src/services/scheduleAccelerationService.ts',
       'server/src/services/projectExecutionSummaryService.ts',
       'server/src/services/projectHealthService.ts',
       'server/src/services/weeklyDigestService.ts',
       'server/src/services/warningService.ts',
-      'server/src/routes/task-summaries.ts',
     ]
 
     for (const file of calendarAwareDelayFiles) {
@@ -486,6 +486,11 @@ describe('duration consistency contract scaffold', () => {
         endDate: '2026-05-05',
         counts_as_construction_shutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     }
 
     expect(productionDaysBetweenInclusive(date('2026-05-01'), date('2026-05-03'), calendar)).toBe(3)

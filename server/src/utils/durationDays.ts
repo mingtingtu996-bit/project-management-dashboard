@@ -1,4 +1,5 @@
 import {
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
 } from '../services/constructionCalendar.js'
@@ -103,7 +104,7 @@ export function delayDayDelta(
   if (!planned || !actual) return null
 
   const rawDelta = Math.round((actual.getTime() - planned.getTime()) / DAY_MS)
-  if (rawDelta === 0 || !calendar?.windows?.length) return rawDelta
+  if (rawDelta === 0 || !isAuthoritativeConstructionCalendar(calendar)) return rawDelta
 
   const direction = rawDelta > 0 ? 1 : -1
   const start = new Date(direction > 0 ? planned : actual)

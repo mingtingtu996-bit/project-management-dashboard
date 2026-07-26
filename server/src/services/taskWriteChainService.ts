@@ -19,9 +19,11 @@ import { hasAnyScopeObjectId, validateScopeObjectTypes, validateTaskScopeConsist
 import { validateTaskStandardFields } from './taskStandardModelService.js'
 import { inferWbsNodeType, deriveWbsFlags, validateCategoryNodeTypeConsistency, type WbsNodeType } from './wbsSemanticService.js'
 import { assertTransition } from './statusDictionaryService.js'
-import { collectDurationExperienceSampleFromTask, retireDurationExperienceSampleForTask } from './durationExperienceService.js'
-import { enqueueDurationExperienceCollectionFailure } from './durationExperienceReconciliationService.js'
-import { taskWriteFinalizationOutboxDrainJob } from '../jobs/taskWriteFinalizationOutboxDrainJob.js'
+import { retireDurationExperienceSampleForTask } from './durationExperienceService.js'
+import {
+  collectDurationExperienceSampleWithTaskLock,
+  enqueueDurationExperienceCollectionFailure,
+} from './durationExperienceReconciliationService.js'
 import { applyTaskMaterialLifecycleFeedback } from './materialTaskFeedbackService.js'
 import { createTaskWithCodeInTransaction, createTasksWithCodeInWizardBatchTransaction, reopenTaskWithCodeInTransaction, updateTaskWithCodeInTransaction } from './taskCodeTransactionService.js'
 import {
@@ -113,6 +115,7 @@ type TaskWritePatch = Partial<Task> & {
 type TaskWriteOptions = {
   executionFactIntent?: ExecutionFactIntent
   executionFactEventDate?: string | null
+  executionFactCorrectionReason?: string | null
   allowManualActualDates?: boolean
 }
 
@@ -811,7 +814,9 @@ async function finalizeTaskWrite(task: Task, previousTask?: Task | null, actorId
     }
 
     try {
-      await collectDurationExperienceSampleFromTask(task, {
+      await collectDurationExperienceSampleWithTaskLock({
+        projectId: String(task.project_id ?? ''),
+        taskId: String(task.id),
         previousTask,
         actorId,
         trigger: 'task_completion',
@@ -1494,6 +1499,7 @@ export async function updateTaskInMainChain(
     expectedVersion,
     updates.updated_by ?? null,
     String(previousTask.project_id ?? ''),
+    { correctionReason: options.executionFactCorrectionReason ?? null },
   )
   const task = taskData as unknown as Task
   if (!task) return null
@@ -1564,9 +1570,6 @@ export async function updateTaskInMainChain(
     })
   }
 
-  await runPostCommitTaskSideEffect('finalize_task_write', task.id, async () => {
-    await taskWriteFinalizationOutboxDrainJob.executeNow()
-  })
   clearTaskCriticalPathReadCaches(task.project_id ?? previousTask.project_id)
   return { task, participantUnit }
 }
@@ -1771,8 +1774,5 @@ export async function reopenTaskInMainChain(
     })
   }
 
-  await runPostCommitTaskSideEffect('finalize_reopen_task_write', task.id, async () => {
-    await taskWriteFinalizationOutboxDrainJob.executeNow()
-  })
   return { task, participantUnit: null }
 }

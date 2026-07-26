@@ -10,6 +10,7 @@ import {
   rollbackDurationLearningRuntimePublication,
   type DurationLearningRuntimePublicationQueryExec,
 } from '../services/durationLearningRuntimePublicationService.js'
+import { hashDurationContextPolicyLearningValue } from '../services/durationContextPolicyLearningCheckpointService.js'
 
 const projectId = '11111111-1111-4111-8111-111111111111'
 const companyId = '22222222-2222-4222-8222-222222222222'
@@ -23,6 +24,78 @@ function asQueryExec(queryMock: ReturnType<typeof vi.fn>): DurationLearningRunti
 
 function queryCalls(queryMock: ReturnType<typeof vi.fn>): Array<[string, unknown[]]> {
   return queryMock.mock.calls as unknown as Array<[string, unknown[]]>
+}
+
+function benchmarkRuntimePayload(overrides: Record<string, unknown> = {}) {
+  return {
+    benchmarkId: '44444444-4444-4444-8444-444444444444',
+    benchmarkVersion: 'candidate:2026-07-17:benchmark-1',
+    p50Days: 12,
+    p75Days: 14,
+    p80Days: 16,
+    meanDays: 13,
+    variance: 4,
+    coefficientOfVariation: 0.153846,
+    sampleCount: 30,
+    confidenceLevel: 'high',
+    confidenceScore: 88,
+    durationDayBasis: 'construction_production_day',
+    calendarRef: 'cn-work-calendar',
+    calendarVersion: '2026.07',
+    generatedAt: '2026-07-17T00:00:00.000Z',
+    sourceWindowStart: '2026-07-01T00:00:00.000Z',
+    sourceAsOf: '2026-07-16T23:59:59.000Z',
+    ...overrides,
+  }
+}
+
+function aggregateBenchmarkRuntimePayload(
+  scopeLevel: 'company' | 'industry' | 'global',
+  overrides: Record<string, unknown> = {},
+) {
+  const scope = scopeLevel === 'company'
+    ? { level: 'company' as const, companyId }
+    : scopeLevel === 'industry'
+      ? { level: 'industry' as const, industryKey: 'general_civil' }
+      : { level: 'global' as const }
+  const payload = {
+    benchmarkKind: 'aggregate_all_cause',
+    causeApplicability: 'all_cause',
+    p50Days: 12,
+    p75Days: 14,
+    p80Days: 16,
+    meanDays: 13,
+    variance: 4,
+    coefficientOfVariation: 0.153846,
+    sampleCount: 60,
+    confidenceLevel: 'high',
+    confidenceScore: 88,
+    durationDayBasis: 'construction_production_day',
+    generatedAt: '2026-07-17T00:00:00.000Z',
+    sourceWindowStart: '2026-07-01T00:00:00.000Z',
+    sourceAsOf: '2026-07-16T23:59:59.000Z',
+    aggregateProvenance: {
+      schemaVersion: 'duration-benchmark-aggregate/v1',
+      scopeLevel,
+      sourceBenchmarkIds: ['44444444-4444-4444-8444-444444444444'],
+      sourceBenchmarkVersions: ['candidate:2026-07-17:benchmark-1'],
+      sourceProjectIds: [projectId],
+      sourceCompanyIds: [companyId],
+      sourceIndustryKeys: ['general_civil'],
+      calendarIdentities: [{ calendarRef: 'cn-work-calendar', calendarVersion: '2026.07' }],
+    },
+    ...overrides,
+  }
+  const provenance = payload.aggregateProvenance as Record<string, unknown>
+  const benchmarkVersion = Object.prototype.hasOwnProperty.call(overrides, 'benchmarkVersion')
+    ? overrides.benchmarkVersion
+    : `aggregate:${scopeLevel}:${hashDurationContextPolicyLearningValue({
+        scope,
+        sourceBenchmarkIds: provenance.sourceBenchmarkIds,
+        sourceBenchmarkVersions: provenance.sourceBenchmarkVersions,
+        sourceAsOf: payload.sourceAsOf,
+      }).slice(0, 16)}`
+  return { ...payload, benchmarkVersion }
 }
 
 describe('durationLearningRuntimePublicationService', () => {
@@ -73,11 +146,7 @@ describe('durationLearningRuntimePublicationService', () => {
           project_id: null,
           industry_key: null,
           publication_stage: 'canary',
-          runtime_payload: {
-            p50Days: 12,
-            p80Days: 16,
-            durationDayBasis: 'construction_production_day',
-          },
+          runtime_payload: aggregateBenchmarkRuntimePayload('company'),
           source_candidate_refs: ['duration_benchmarks:candidate-1'],
           source_evidence_refs: ['duration_experience_samples:sample-1'],
           automation_decision: {},
@@ -99,11 +168,7 @@ describe('durationLearningRuntimePublicationService', () => {
       artifactKey: 'STD-001:process:all',
       scope: { level: 'company', companyId },
       stage: 'canary',
-      runtimePayload: {
-        p50Days: 12,
-        p80Days: 16,
-        durationDayBasis: 'construction_production_day',
-      },
+      runtimePayload: aggregateBenchmarkRuntimePayload('company'),
       sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
       sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
       trafficPercent: 10,
@@ -128,11 +193,7 @@ describe('durationLearningRuntimePublicationService', () => {
           project_id: null,
           industry_key: null,
           publication_stage: 'canary',
-          runtime_payload: {
-            p50Days: 12,
-            p80Days: 16,
-            durationDayBasis: 'construction_production_day',
-          },
+          runtime_payload: aggregateBenchmarkRuntimePayload('company'),
           source_candidate_refs: ['duration_benchmarks:candidate-1'],
           source_evidence_refs: ['duration_experience_samples:sample-1'],
           automation_decision: {},
@@ -154,11 +215,7 @@ describe('durationLearningRuntimePublicationService', () => {
       artifactKey: 'STD-001:process:all',
       scope: { level: 'company', companyId },
       stage: 'canary',
-      runtimePayload: {
-        p50Days: 13,
-        p80Days: 17,
-        durationDayBasis: 'construction_production_day',
-      },
+      runtimePayload: aggregateBenchmarkRuntimePayload('company', { p50Days: 13, p80Days: 17 }),
       sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
       sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
       trafficPercent: 10,
@@ -193,6 +250,157 @@ describe('durationLearningRuntimePublicationService', () => {
 
     expect(result.status).toBe('blocked')
     expect(result.reasons).toContain('benchmark_production_day_basis_required')
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a versionless exact project benchmark before querying', async () => {
+    const queryMock = vi.fn(async () => [])
+
+    const result = await persistDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration-learning:benchmark:missing-version',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'STD-001:process:all',
+      scope: { level: 'project', companyId, projectId },
+      stage: 'canary',
+      runtimePayload: benchmarkRuntimePayload({ benchmarkVersion: undefined }),
+      sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reasons: expect.arrayContaining(['benchmark_version_required']),
+    })
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: 'tampered deterministic version',
+      payload: aggregateBenchmarkRuntimePayload('company', {
+        benchmarkVersion: 'aggregate:company:tampered000000',
+      }),
+      reason: 'benchmark_aggregate_version_mismatch',
+    },
+    {
+      name: 'non-canonical source benchmark versions',
+      payload: (() => {
+        const valid = aggregateBenchmarkRuntimePayload('company')
+        return aggregateBenchmarkRuntimePayload('company', {
+          aggregateProvenance: {
+            ...(valid.aggregateProvenance as Record<string, unknown>),
+            sourceBenchmarkVersions: ['candidate:2026-07-17:z', 'candidate:2026-07-17:a'],
+          },
+        })
+      })(),
+      reason: 'benchmark_aggregate_source_versions_canonical_required',
+    },
+  ])('rejects an aggregate benchmark with $name before querying', async ({ payload, reason }) => {
+    const queryMock = vi.fn(async () => [])
+
+    const result = await persistDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: `duration-learning:benchmark:${reason}`,
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'STD-001:process:all',
+      scope: { level: 'company', companyId },
+      stage: 'canary',
+      runtimePayload: payload,
+      sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reasons: expect.arrayContaining([reason]),
+    })
+    expect(queryMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: 'project exact candidate',
+      scope: { level: 'project' as const, companyId, projectId },
+      payload: benchmarkRuntimePayload(),
+    },
+    {
+      name: 'company aggregate',
+      scope: { level: 'company' as const, companyId },
+      payload: aggregateBenchmarkRuntimePayload('company'),
+    },
+    {
+      name: 'industry aggregate',
+      scope: { level: 'industry' as const, industryKey: 'general_civil' },
+      payload: aggregateBenchmarkRuntimePayload('industry'),
+    },
+    {
+      name: 'global aggregate',
+      scope: { level: 'global' as const },
+      payload: aggregateBenchmarkRuntimePayload('global'),
+    },
+  ])('publishes and immutably replays a compatible $name payload', async ({ name, scope, payload }) => {
+    const publicationKey = `duration-learning:benchmark:${name.replace(/\s+/g, '-')}`
+    let persisted: Record<string, unknown> | null = null
+    let insertCount = 0
+    const queryMock = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('as scope_authorized')) return [{ scope_authorized: true }]
+      if (sql.includes('where publication_key = $1')) return persisted ? [persisted] : []
+      if (sql.includes('persist_duration_learning_runtime_publication')) {
+        insertCount += 1
+        persisted = {
+          publication_key: params[0], asset_key: params[1], artifact_key: params[2], scope_level: params[3],
+          company_id: params[4], project_id: params[5], industry_key: params[6], publication_stage: params[7],
+          runtime_payload: params[8], source_candidate_refs: params[9], source_evidence_refs: params[10],
+          automation_decision: params[11], previous_publication_key: params[12], traffic_percent: params[13],
+          monitoring_window_hours: params[14], monitoring_status: 'pending', published_at: params[15],
+        }
+        return [persisted]
+      }
+      return []
+    })
+    const input = {
+      queryExec: asQueryExec(queryMock),
+      publicationKey,
+      assetKey: 'base_duration_benchmark' as const,
+      artifactKey: 'STD-001:process:all',
+      scope,
+      stage: 'canary' as const,
+      runtimePayload: payload,
+      sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+      trafficPercent: 10,
+      monitoringWindowHours: 72,
+      publishedAt: '2026-07-17T00:00:00.000Z',
+    }
+
+    const first = await persistDurationLearningRuntimePublication(input)
+    const replay = await persistDurationLearningRuntimePublication(input)
+
+    expect(first.status).toBe('published')
+    expect(replay.status).toBe('published')
+    expect(insertCount).toBe(1)
+    expect(first.publication?.runtimePayload).toMatchObject({ benchmarkVersion: expect.any(String) })
+  })
+
+  it('rejects an upper-scope benchmark that masquerades as an exact project candidate', async () => {
+    const queryMock = vi.fn(async () => [])
+    const result = await persistDurationLearningRuntimePublication({
+      queryExec: asQueryExec(queryMock),
+      publicationKey: 'duration-learning:benchmark:company-exact-invalid',
+      assetKey: 'base_duration_benchmark',
+      artifactKey: 'STD-001:process:all',
+      scope: { level: 'company', companyId },
+      stage: 'canary',
+      runtimePayload: benchmarkRuntimePayload(),
+      sourceCandidateRefs: ['duration_benchmarks:candidate-1'],
+      sourceEvidenceRefs: ['duration_experience_samples:sample-1'],
+    })
+
+    expect(result).toMatchObject({
+      status: 'blocked',
+      reasons: expect.arrayContaining(['benchmark_aggregate_provenance_required']),
+    })
     expect(queryMock).not.toHaveBeenCalled()
   })
 

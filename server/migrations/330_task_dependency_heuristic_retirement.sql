@@ -4,7 +4,7 @@ SET status = 'inactive',
     metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
       'formalDependencyRetirement',
       jsonb_build_object(
-        'migration', '324_task_dependency_heuristic_retirement',
+        'migration', '330_task_dependency_heuristic_retirement',
         'previousStatus', 'active',
         'reason', 'unpublished_heuristic_dependency_candidate_only'
       )

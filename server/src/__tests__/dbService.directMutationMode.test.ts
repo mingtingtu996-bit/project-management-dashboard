@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   from: vi.fn(),
   rpc: vi.fn(),
   rawQuery: vi.fn(),
+  recordChangedExecutionFacts: vi.fn(async () => []),
 }))
 
 vi.mock('@supabase/supabase-js', () => ({
@@ -23,6 +24,12 @@ vi.mock('@supabase/supabase-js', () => ({
 vi.mock('../database.js', () => ({
   query: mocks.rawQuery,
   isDatabaseTransactionActive: vi.fn(() => false),
+  withDatabaseTransaction: vi.fn(async (work: () => Promise<unknown>) => work()),
+  registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => effect()),
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: mocks.recordChangedExecutionFacts,
 }))
 
 const {
@@ -42,6 +49,7 @@ beforeEach(() => {
   mocks.from.mockClear()
   mocks.rpc.mockClear()
   mocks.rawQuery.mockReset()
+  mocks.recordChangedExecutionFacts.mockClear()
 })
 
 it('uses the low-privilege database connection for mutations when no dedicated runtime REST key exists', async () => {
@@ -195,21 +203,44 @@ it('lists project issues and priority locks through the backend database role', 
 })
 
 it('converts a risk to an issue through a direct named-argument RPC call', async () => {
+  const previousRisk = {
+    id: 'risk-1',
+    project_id: 'project-1',
+    task_id: 'task-1',
+    title: 'Converted risk',
+    status: 'active',
+    linked_issue_id: null,
+    version: 1,
+    created_at: '2026-07-11T00:00:00.000Z',
+    updated_at: '2026-07-11T00:00:00.000Z',
+  }
+  const createdIssue = {
+    id: 'issue-1',
+    project_id: 'project-1',
+    task_id: 'task-1',
+    source_type: 'risk_converted',
+    severity: 'medium',
+    priority: 30,
+    status: 'open',
+    version: 1,
+    created_at: '2026-07-12T00:00:00.000Z',
+    updated_at: '2026-07-12T00:00:00.000Z',
+  }
   mocks.rawQuery
+    .mockResolvedValueOnce({ rows: [previousRisk] })
+    .mockResolvedValueOnce({ rows: [] })
     .mockResolvedValueOnce({ rows: [{ result: 'issue-1' }] })
+    .mockResolvedValueOnce({ rows: [createdIssue] })
+    .mockResolvedValueOnce({ rows: [] })
     .mockResolvedValueOnce({
       rows: [{
-        id: 'issue-1',
-        project_id: 'project-1',
-        task_id: 'task-1',
-        source_type: 'risk_converted',
-        severity: 'medium',
-        priority: 30,
-        status: 'open',
-        created_at: '2026-07-12T00:00:00.000Z',
+        ...previousRisk,
+        status: 'closed',
+        linked_issue_id: 'issue-1',
+        version: 2,
+        updated_at: '2026-07-12T00:00:00.000Z',
       }],
     })
-    .mockResolvedValueOnce({ rows: [] })
 
   await expect(createIssue({
     project_id: 'project-1',
@@ -221,9 +252,10 @@ it('converts a risk to an issue through a direct named-argument RPC call', async
     severity: 'medium',
   } as any)).resolves.toMatchObject({ id: 'issue-1', source_type: 'risk_converted' })
 
-  expect(String(mocks.rawQuery.mock.calls[0][0])).toContain('create_issue_from_risk_atomic')
-  expect(String(mocks.rawQuery.mock.calls[0][0])).toContain('"p_risk_id" => $1')
-  expect(mocks.rawQuery.mock.calls[0][1]).toEqual([
+  const rpcCall = mocks.rawQuery.mock.calls.find(([sql]) => String(sql).includes('create_issue_from_risk_atomic'))
+  expect(rpcCall).toBeDefined()
+  expect(String(rpcCall?.[0])).toContain('"p_risk_id" => $1')
+  expect(rpcCall?.[1]).toEqual([
     'risk-1',
     'risk_converted',
     'Converted risk issue',
@@ -249,7 +281,6 @@ it('updates issues with a direct optimistic-lock statement', async () => {
   }
   mocks.rawQuery
     .mockResolvedValueOnce({ rows: [oldIssue] })
-    .mockResolvedValueOnce({ rows: [] })
     .mockResolvedValueOnce({ rows: [{ id: 'issue-1' }] })
     .mockResolvedValueOnce({ rows: [{ ...oldIssue, status: 'investigating', version: 2 }] })
     .mockResolvedValueOnce({ rows: [] })

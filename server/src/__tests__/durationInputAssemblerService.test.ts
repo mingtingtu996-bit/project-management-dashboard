@@ -94,6 +94,11 @@ function buildCompatibleT2Assets() {
     constructionCalendar: {
       basis: 'official_construction_calendar_seed',
       windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     },
   })
   const candidatePackage = buildT2RhythmScheduleCandidatePackage({
@@ -674,6 +679,11 @@ describe('durationInputAssemblerService', () => {
         constructionCalendar: {
           basis: 'official_construction_calendar_seed',
           windows: [],
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
         },
       },
     }]

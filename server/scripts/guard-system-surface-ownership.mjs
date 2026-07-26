@@ -1,5 +1,6 @@
 import fs from "fs"
 import path from "path"
+import ts from "typescript"
 
 const DEFAULT_WORKSPACE_ROOT = fs.existsSync(path.resolve(process.cwd(), "server", "src"))
   ? process.cwd()
@@ -38,8 +39,6 @@ const UNIT_ACCEPTANCE = ARCHITECTURE_UNIT_LIST[8]
 const UNIT_ORGANIZATION_PERMISSION = ARCHITECTURE_UNIT_LIST[9]
 const UNIT_PLATFORM_OPERATION = ARCHITECTURE_UNIT_LIST[10]
 
-const PAGE_LAZY_IMPORT_PATTERN = /const\s+([A-Za-z_$][\w$]*)\s*=\s*lazy\(\(\)\s*=>\s*(?:[^?\n]+?\?\?\s*)?import\(['"](@\/[^'"]+)['"]\)\)/g
-const PAGE_DIRECT_IMPORT_PATTERN = /import\s+([A-Za-z_$][\w$]*)\s+from\s+['"](@\/pages\/[^'"]+)['"]/g
 const SQL_TABLE_PATTERN = /\b(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|ALTER\s+TABLE(?:\s+IF\s+EXISTS)?(?:\s+ONLY)?)\s+((?:"[^"]+"|[A-Za-z_][\w]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w]*))?)/gi
 const SQL_VIEW_PATTERN = /\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(MATERIALIZED)\s+)?VIEW\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:"[^"]+"|[A-Za-z_][\w]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w]*))?)/gi
 const SQL_FUNCTION_PATTERN = /\bCREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+((?:"[^"]+"|[A-Za-z_][\w]*)(?:\.(?:"[^"]+"|[A-Za-z_][\w]*))?)/gi
@@ -91,33 +90,99 @@ function resolveClientImport(workspaceRoot, importPath) {
   return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[1]
 }
 
+function addClientPage(pages, workspaceRoot, appPath, sourceFile, id, importPath, node) {
+  if (!id || !importPath.startsWith("@/pages/")) return
+  const key = `${id}\u0000${importPath}`
+  if (pages.has(key)) return
+  pages.set(key, {
+    kind: "page",
+    id,
+    importPath,
+    sourceFile: appPath,
+    resolvedPath: resolveClientImport(workspaceRoot, importPath),
+    line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+  })
+}
+
+function isLazyInitializer(node) {
+  if (!ts.isCallExpression(node)) return false
+  if (ts.isIdentifier(node.expression)) return node.expression.text === "lazy"
+  return ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === "lazy"
+}
+
+function collectLazyPageImports(initializer) {
+  const imports = []
+  const visit = (node) => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const [argument] = node.arguments
+      if (argument && ts.isStringLiteralLike(argument)) {
+        imports.push({ importPath: argument.text, node })
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(initializer, visit)
+  return imports
+}
+
+function collectDirectPageImportBindings(statement) {
+  if (!ts.isImportDeclaration(statement) || !ts.isStringLiteralLike(statement.moduleSpecifier)) return []
+  const importPath = statement.moduleSpecifier.text
+  if (!importPath.startsWith("@/pages/")) return []
+  const importClause = statement.importClause
+  if (!importClause || importClause.isTypeOnly) return []
+
+  const bindings = []
+  if (importClause.name) bindings.push(importClause.name.text)
+  if (!importClause.namedBindings) return bindings
+  if (ts.isNamespaceImport(importClause.namedBindings)) {
+    bindings.push(importClause.namedBindings.name.text)
+    return bindings
+  }
+  for (const element of importClause.namedBindings.elements) {
+    if (!element.isTypeOnly) bindings.push(element.name.text)
+  }
+  return bindings
+}
+
 function collectClientPages(workspaceRoot) {
   const appPath = path.join(workspaceRoot, "client", "src", "App.tsx")
   if (!fs.existsSync(appPath)) return []
   const source = fs.readFileSync(appPath, "utf8")
+  const sourceFile = ts.createSourceFile(appPath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
   const pages = new Map()
-  for (const match of source.matchAll(PAGE_LAZY_IMPORT_PATTERN)) {
-    pages.set(match[2], {
-      kind: "page",
-      id: match[1],
-      importPath: match[2],
-      sourceFile: appPath,
-      resolvedPath: resolveClientImport(workspaceRoot, match[2]),
-      line: lineFor(source, match.index),
-    })
+  for (const statement of sourceFile.statements) {
+    for (const id of collectDirectPageImportBindings(statement)) {
+      addClientPage(pages, workspaceRoot, appPath, sourceFile, id, statement.moduleSpecifier.text, statement)
+    }
   }
-  for (const match of source.matchAll(PAGE_DIRECT_IMPORT_PATTERN)) {
-    if (pages.has(match[2])) continue
-    pages.set(match[2], {
-      kind: "page",
-      id: match[1],
-      importPath: match[2],
-      sourceFile: appPath,
-      resolvedPath: resolveClientImport(workspaceRoot, match[2]),
-      line: lineFor(source, match.index),
-    })
+
+  const visit = (node) => {
+    if (
+      ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.initializer
+      && isLazyInitializer(node.initializer)
+    ) {
+      for (const pageImport of collectLazyPageImports(node.initializer)) {
+        addClientPage(
+          pages,
+          workspaceRoot,
+          appPath,
+          sourceFile,
+          node.name.text,
+          pageImport.importPath,
+          pageImport.node,
+        )
+      }
+    }
+    ts.forEachChild(node, visit)
   }
-  return [...pages.values()].sort((a, b) => a.id.localeCompare(b.id))
+  visit(sourceFile)
+
+  return [...pages.values()].sort((left, right) => (
+    left.id.localeCompare(right.id) || left.importPath.localeCompare(right.importPath)
+  ))
 }
 
 function addMigrationSurface(surfaces, surface) {
@@ -215,6 +280,9 @@ function assignment(architectureUnit, runtimeScope, reason) {
 }
 
 function inferPageAssignment(page) {
+  if (page.id === "DurationAssetsAdmin" && page.importPath === "@/pages/DurationAssetsAdmin") {
+    return assignment(UNIT_LEARNING_GOVERNANCE, "governance", "admin governance page surface")
+  }
   const text = `${page.id} ${page.importPath}`.toLowerCase()
   if (/billingsettings|billing settings/.test(text)) {
     return assignment("底座：组织权限", "commercial_foundation", "commercial admission and billing page surface")
@@ -251,6 +319,9 @@ function inferPageAssignment(page) {
 
 function inferTableAssignment(table) {
   const id = table.id.toLowerCase()
+  if (/^(execution_fact_events|current_execution_facts)$/.test(id)) {
+    return assignment(UNIT_EXECUTION_FACT, "business_core", "execution fact authority surface")
+  }
   if (/^(algorithm|duration_context|duration_experience|duration_benchmarks|progress_asset|progress_knowledge|regional_climate|construction_dependency_replay|t2_|policy_template|acceptance_template_policy_auto_publish|certificate_template_policy_auto_publish)/.test(id)) {
     return assignment("学习治理环", "governance", "governed learning or policy table surface")
   }

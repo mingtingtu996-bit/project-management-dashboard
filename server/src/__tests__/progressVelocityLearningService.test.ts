@@ -59,7 +59,15 @@ function buildProjectProgressVelocityLearning(input: ProgressVelocityLearningInp
   return buildProjectProgressVelocityLearningRuntime({
     ...input,
     constructionCalendarResolver: input.constructionCalendarResolver
-      ?? (async () => ({ basis: 'calendar_day', windows: [] })),
+      ?? (async () => ({
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      })),
   })
 }
 

@@ -32,8 +32,9 @@ const mocks = vi.hoisted(() => ({
   recordDurationAccuracyPrediction: vi.fn(),
   loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
   readPlanningReplayCalibrationReadback: vi.fn(),
+  listCurrentExecutionFacts: vi.fn(),
   from: vi.fn(),
-  rawQuery: vi.fn(async () => ({ rows: [] })),
+  rawQuery: vi.fn(async (_sql?: string, _params?: unknown[]) => ({ rows: [] })),
 }))
 
 vi.mock('../database.js', () => ({
@@ -160,6 +161,10 @@ vi.mock('../services/planningReplayCalibrationService.js', () => ({
   readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
 }))
 
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
+}))
+
 vi.mock('../services/algorithmSeedResolver.js', () => ({
   resolveAlgorithmSeedRecords: vi.fn(async (seedType: string) => {
     if (seedType === 'work_calendar') return state.seedRecords
@@ -260,11 +265,13 @@ describe('taskDurationForecastService', () => {
     state.projectOverlays = []
     state.residualOverlays = []
     state.seedRecords = [{
-      __resolverVersionId: 'work-calendar-v1',
+      holidayCode: 'test_calendar_identity',
+      holidayName: 'Test construction calendar identity',
       calendarKind: 'forecast_calendar_window',
-      startDate: '2026-01-01',
-      endDate: '2026-01-01',
-      productivity: 1,
+      startDate: '2099-01-01',
+      endDate: '2099-01-01',
+      counts_as_construction_shutdown: false,
+      __resolverVersionId: 'calendar-test-v1',
     }]
     state.insertedForecasts = []
     state.updatedForecasts = []
@@ -287,6 +294,7 @@ describe('taskDurationForecastService', () => {
       writesSeedRuntimeDirectly: false,
     })
     mocks.readPlanningReplayCalibrationReadback.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
   })
 
   it('rejects a task that is outside the explicit project scope', async () => {
@@ -306,6 +314,53 @@ describe('taskDurationForecastService', () => {
     expect(state.insertedForecasts).toEqual([])
   })
 
+  it('fails closed when the construction calendar identity is unavailable', async () => {
+    state.seedRecords = []
+    state.tasks = [{
+      id: 'task-calendar-unavailable',
+      project_id: 'project-1',
+      title: 'Calendar unavailable task',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-24',
+      actual_start_date: '2026-05-10',
+      progress: 50,
+      status: 'in_progress',
+    }]
+
+    const forecast = await forecastTaskDuration('task-calendar-unavailable')
+
+    expect(forecast).toMatchObject({
+      remainingDurationDays: null,
+      remainingForecastDays: null,
+      forecastFinishDate: null,
+      confidenceLevel: 'unavailable',
+      remainingDuration: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-18',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    })
+    expect(state.insertedForecasts).toEqual([
+      expect.objectContaining({
+        remaining_duration_days: null,
+        forecast_finish_date: null,
+        metadata: expect.objectContaining({
+          remainingDuration: expect.objectContaining({
+            value: null,
+            availability: 'unavailable',
+            unavailableReason: 'construction_calendar_identity_missing',
+          }),
+        }),
+      }),
+    ])
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+  })
+
   afterEach(() => {
     vi.useRealTimers()
   })
@@ -318,13 +373,6 @@ describe('taskDurationForecastService', () => {
   })
 
   it('records a v1.4.22.4 prediction event for task remaining duration forecasts', async () => {
-    state.seedRecords = [{
-      __resolverVersionId: 'work-calendar-v1',
-      calendarKind: 'forecast_calendar_window',
-      startDate: '2026-05-01',
-      endDate: '2026-05-01',
-      productivity: 1,
-    }]
     state.tasks = [{
       id: 'task-remaining-event',
       project_id: 'project-1',
@@ -366,49 +414,6 @@ describe('taskDurationForecastService', () => {
         triggerContext: 'api_request',
       }),
     }))
-  })
-
-  it('does not expose, persist, or learn production-day forecast values without calendar identity', async () => {
-    state.seedRecords = []
-    state.tasks = [{
-      id: 'task-calendar-unavailable',
-      project_id: 'project-1',
-      title: 'Calendar identity unavailable',
-      planned_start_date: '2026-05-10',
-      planned_end_date: '2026-05-24',
-      actual_start_date: '2026-05-10',
-      progress: 50,
-    }]
-
-    const forecast = await forecastTaskDuration('task-calendar-unavailable')
-
-    expect(forecast).toEqual(expect.objectContaining({
-      remainingDurationDays: null,
-      remainingForecastDays: null,
-      optimisticRemainingDays: null,
-      conservativeRemainingDays: null,
-      remainingDuration: expect.objectContaining({
-        value: null,
-        unit: 'construction_production_day',
-        availability: 'unavailable',
-        unavailableReason: 'construction_calendar_identity_missing',
-      }),
-    }))
-    expect(state.insertedForecasts[0]).toEqual(expect.objectContaining({
-      remaining_duration_days: null,
-      metadata: expect.objectContaining({
-        remainingDuration: expect.objectContaining({
-          value: null,
-          unit: 'construction_production_day',
-          availability: 'unavailable',
-        }),
-        remainingDurationCalendarDay: expect.objectContaining({
-          unit: 'calendar_day',
-          availability: 'available',
-        }),
-      }),
-    }))
-    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
   it('records the forecast runtime call without fabricating observations when no publication is consumed', async () => {
@@ -476,6 +481,16 @@ describe('taskDurationForecastService', () => {
         recommendedDurationDays: 10,
         conservativeDurationDays: 14,
         remainingDurationDays: 6,
+        remainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
         forecastDelayDays: 2,
@@ -546,6 +561,16 @@ describe('taskDurationForecastService', () => {
         recommendedDurationDays: 10,
         conservativeDurationDays: 14,
         remainingDurationDays: 6,
+        remainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
         forecastDelayDays: 2,
@@ -1414,6 +1439,156 @@ describe('taskDurationForecastService', () => {
     }))
   })
 
+  it('uses current execution facts instead of stale task compatibility columns when forecasting', async () => {
+    state.tasks = [{
+      id: 'task-execution-fact-authority',
+      project_id: 'project-1',
+      title: 'Execution fact authority task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 15,
+      status: 'todo',
+    }]
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.actual_start_date',
+        value: '2026-05-06',
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.progress',
+        value: 60,
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.status',
+        value: 'in_progress',
+      },
+    ])
+
+    await forecastTaskDuration('task-execution-fact-authority')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-execution-fact-authority'],
+      factTypes: expect.arrayContaining([
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.progress',
+        'task.status',
+      ]),
+    }))
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      actualStartDate: '2026-05-06',
+      progress: 60,
+      runtimeExecutionFacts: expect.objectContaining({
+        progressCompletionRatio: 0.6,
+      }),
+    }))
+  })
+
+  it('passes the one exact confirmed canonical task primary into the duration suggestion caller', async () => {
+    state.tasks = [{
+      id: 'task-confirmed-cause',
+      project_id: 'project-1',
+      title: 'Confirmed material delay task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 45,
+    }]
+    state.projects = [{ id: 'project-1', company_id: 'company-1' }]
+    mocks.rawQuery.mockImplementation(async (sql = '') => {
+      if (sql.includes('FROM public.structured_cause_attributions')) {
+        return { rows: [{
+          id: '00000000-0000-4000-8000-000000000091',
+          company_id: 'company-1',
+          project_id: 'project-1',
+          subject_type: 'task',
+          subject_id: 'task-confirmed-cause',
+          event_type: 'delay',
+          status: 'confirmed',
+          cause_code: 'material_shortage',
+          cause_role: 'primary',
+          taxonomy_version: 'v1.0.0',
+          confirmation_source: 'user_confirmed',
+          confirmed_at: '2026-05-18T08:00:00.000Z',
+        }] }
+      }
+      return { rows: [] }
+    })
+
+    await forecastTaskDuration('task-confirmed-cause')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      structuredCauseAuthority: {
+        state: 'confirmed',
+        causeCode: 'material_shortage',
+        taxonomyVersion: 'v1.0.0',
+        reasonCodes: [],
+      },
+    }))
+    expect(mocks.getTaskDurationSuggestion.mock.calls.at(-1)?.[0]).not.toHaveProperty('confirmedCauseCode')
+  })
+
+  it.each([
+    {
+      name: 'no cause',
+      rows: [],
+      readFails: false,
+      expected: { state: 'no_cause', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+    },
+    {
+      name: 'review required',
+      rows: [{
+        id: '00000000-0000-4000-8000-000000000092', company_id: 'company-1', project_id: 'project-1',
+        subject_type: 'task', subject_id: 'task-authority-state', event_type: 'delay', status: 'candidate',
+        cause_code: 'quality_rework', cause_role: 'primary', taxonomy_version: 'v1.0.0',
+        confirmation_source: 'candidate', confirmed_at: null,
+        review_reason_codes: ['manual_text_requires_user_confirmation'],
+      }],
+      readFails: false,
+      expected: {
+        state: 'review_required', causeCode: 'quality_rework', taxonomyVersion: 'v1.0.0',
+        reasonCodes: ['manual_text_requires_user_confirmation'],
+      },
+    },
+    {
+      name: 'unavailable',
+      rows: [],
+      readFails: true,
+      expected: {
+        state: 'unavailable', causeCode: null, taxonomyVersion: 'v1.0.0',
+        reasonCodes: ['structured_cause_read_failed'],
+      },
+    },
+  ])('passes the discriminated $name authority state into duration suggestion', async ({ rows, readFails, expected }) => {
+    state.tasks = [{
+      id: 'task-authority-state', project_id: 'project-1', title: 'Authority state task',
+      planned_start_date: '2026-05-01', planned_end_date: '2026-05-20', actual_start_date: '2026-05-02', progress: 45,
+    }]
+    state.projects = [{ id: 'project-1', company_id: 'company-1' }]
+    mocks.rawQuery.mockImplementation(async (sql = '') => {
+      if (!sql.includes('FROM public.structured_cause_attributions')) return { rows: [] }
+      if (readFails) throw new Error('rls denied')
+      return { rows }
+    })
+
+    await forecastTaskDuration('task-authority-state')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      structuredCauseAuthority: expected,
+    }))
+    expect(mocks.getTaskDurationSuggestion.mock.calls.at(-1)?.[0]).not.toHaveProperty('confirmedCauseCode')
+  })
+
   it('uses SPI and recent velocity when execution facts show the task is slower than the reference ratio', async () => {
     state.tasks = [{
       id: 'task-1',
@@ -1866,6 +2041,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-02-23',
       adjustedWorkDates: ['2026-02-14', '2026-02-28'],
       productivity: 0.45,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-spring',
@@ -1899,6 +2075,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-05-03',
       counts_as_construction_shutdown: true,
       productivity: 0,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-explicit-shutdown',
@@ -1931,6 +2108,7 @@ describe('taskDurationForecastService', () => {
       startDate: '2026-06-01',
       endDate: '2026-06-10',
       productivity: 0.8,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-climate-window',
@@ -1960,6 +2138,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-02-23',
       calendarKind: 'statutory_holiday',
       productivity: 0.45,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-spring-unstarted',
@@ -2189,6 +2368,85 @@ describe('taskDurationForecastService', () => {
       blockingDependencies: expect.arrayContaining([
         expect.objectContaining({
           dependencyTaskId: 'task-parent',
+          source: 'current_dependency_forecast',
+        }),
+      ]),
+    })
+  })
+
+  it('uses current execution facts when deciding whether a predecessor still blocks the forecast', async () => {
+    state.tasks = [
+      {
+        id: 'task-authority-child',
+        project_id: 'project-1',
+        title: 'Authority child task',
+        planned_start_date: '2026-05-18',
+        planned_end_date: '2026-05-22',
+        progress: 0,
+      },
+      {
+        id: 'task-authority-parent',
+        project_id: 'project-1',
+        title: 'Stale completed predecessor',
+        planned_start_date: '2026-05-11',
+        planned_end_date: '2026-05-15',
+        actual_end_date: '2026-05-15',
+        status: 'completed',
+        progress: 100,
+      },
+    ]
+    state.dependencies = [{
+      task_id: 'task-authority-child',
+      project_id: 'project-1',
+      dependency_task_id: 'task-authority-parent',
+      dependency_type: 'FS',
+      lag_days: 2,
+      required_for_start: true,
+      status: 'active',
+    }]
+    state.dependencyForecasts = [{
+      task_id: 'task-authority-parent',
+      project_id: 'project-1',
+      forecast_finish_date: '2026-05-29',
+      remaining_duration_days: 9,
+      forecast_delay_days: 8,
+      is_current: true,
+    }]
+    mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
+      input.entityIds.includes('task-authority-parent')
+        ? [
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.actual_end_date',
+              value: null,
+            },
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.progress',
+              value: 60,
+            },
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.status',
+              value: 'in_progress',
+            },
+          ]
+        : []
+    ))
+
+    const forecast = await forecastTaskDuration('task-authority-child')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityIds: ['task-authority-parent'],
+    }))
+    expect(forecast.forecastSources?.dependencyPropagation).toMatchObject({
+      count: 1,
+      blockingDependencies: expect.arrayContaining([
+        expect.objectContaining({
+          dependencyTaskId: 'task-authority-parent',
           source: 'current_dependency_forecast',
         }),
       ]),
@@ -2739,6 +2997,7 @@ describe('taskDurationForecastService', () => {
       holidayName: 'Labor Day',
       startDate: '2026-05-01',
       endDate: '2026-05-05',
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-unstarted-window-overflow',
@@ -3459,6 +3718,14 @@ describe('taskDurationForecastService', () => {
 
     expect(forecast.executionReferenceDays).toBe(14)
     expect(forecast.recommendedDurationDays).toBe(14)
+    expect(forecast.remainingDuration).toMatchObject({
+      value: null,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+    expect(forecast.remainingDurationDays).toBeNull()
+    expect(forecast.remainingForecastDays).toBeNull()
+    expect(forecast.forecastFinishDate).toBeNull()
     expect(state.insertedForecasts).toHaveLength(0)
     expect(state.updatedForecasts).toHaveLength(0)
   })
@@ -3479,7 +3746,18 @@ describe('taskDurationForecastService', () => {
       forecast_source: 'cached_current',
       is_current: true,
       created_at: '2026-05-18T08:00:00.000Z',
-      metadata: {},
+      metadata: {
+        remainingDuration: {
+          value: 8,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-18',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
     }]
 
     const [forecast] = await listCurrentTaskDurationForecasts(['task-date-object'], {

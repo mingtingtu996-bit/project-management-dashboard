@@ -5,6 +5,8 @@ process.env.DB_SQL_EXECUTION_MODE = 'rest'
 type Row = Record<string, any>
 
 const mocks = vi.hoisted(() => {
+  let transactionActive = false
+  const postCommitEffects: Array<() => Promise<void>> = []
   const baseTables: Record<string, Row[]> = {
     tasks: [
       {
@@ -85,6 +87,54 @@ const mocks = vi.hoisted(() => {
   for (const [key, value] of Object.entries(baseTables)) {
     tables[key] = value.map((row) => ({ ...row }))
   }
+
+  const transactionQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
+    const normalized = sql.replace(/\s+/g, ' ').trim()
+    const selectMatch = normalized.match(/^SELECT \* FROM (risks|issues) WHERE id = \$(\d+)(?: LIMIT 1)?(?: FOR UPDATE)?$/i)
+    if (selectMatch) {
+      const [, table, idParam] = selectMatch
+      const row = tables[table].find((candidate) => candidate.id === params[Number(idParam) - 1])
+      return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 }
+    }
+
+    const updateMatch = normalized.match(/^UPDATE (risks|issues) SET (.+) WHERE (.+) RETURNING id$/i)
+    if (updateMatch) {
+      const [, table, setClause, whereClause] = updateMatch
+      const row = tables[table].find((candidate) => {
+        const conditions = [...whereClause.matchAll(/([a-z_]+) = \$(\d+)/gi)]
+        return conditions.every(([, column, paramIndex]) => candidate[column] === params[Number(paramIndex) - 1])
+      })
+      if (!row) return { rows: [], rowCount: 0 }
+      for (const [, column, paramIndex] of setClause.matchAll(/([a-z_]+) = \$(\d+)/gi)) {
+        row[column] = params[Number(paramIndex) - 1]
+      }
+      return { rows: [{ id: row.id }], rowCount: 1 }
+    }
+
+    if (/^SELECT entity_id FROM change_logs /i.test(normalized)) {
+      return { rows: [], rowCount: 0 }
+    }
+
+    throw new Error(`[shared-infrastructure transaction query] Unexpected SQL: ${normalized}`)
+  })
+
+  const withDatabaseTransaction = vi.fn(async <T>(work: () => Promise<T>) => {
+    const parentActive = transactionActive
+    transactionActive = true
+    try {
+      const result = await work()
+      if (!parentActive) {
+        const effects = postCommitEffects.splice(0, postCommitEffects.length)
+        for (const effect of effects) await effect()
+      }
+      return result
+    } catch (error) {
+      if (!parentActive) postCommitEffects.splice(0, postCommitEffects.length)
+      throw error
+    } finally {
+      transactionActive = parentActive
+    }
+  })
 
   const makeResult = (data: any, error: any = null, count?: number) => ({ data, error, count })
 
@@ -237,7 +287,14 @@ const mocks = vi.hoisted(() => {
     enqueueProjectHealthUpdate: vi.fn(async () => undefined),
     syncProjectDataQuality: vi.fn(async () => undefined),
     evaluateTaskConstraint: vi.fn(async () => undefined),
-    requestTaskWriteFinalizationOutboxDrain: vi.fn(async () => undefined),
+    finalizeTaskWrite: vi.fn(async () => undefined),
+    transactionQuery,
+    withDatabaseTransaction,
+    isDatabaseTransactionActive: () => transactionActive,
+    registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => {
+      if (transactionActive) postCommitEffects.push(effect)
+      else await effect()
+    }),
     logger: {
       info: vi.fn(),
       warn: vi.fn(),
@@ -249,6 +306,17 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: mocks.createClient,
+}))
+
+vi.mock('../database.js', () => ({
+  query: mocks.transactionQuery,
+  isDatabaseTransactionActive: mocks.isDatabaseTransactionActive,
+  withDatabaseTransaction: mocks.withDatabaseTransaction,
+  registerDatabasePostCommitEffect: mocks.registerDatabasePostCommitEffect,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: vi.fn(async () => []),
 }))
 
 vi.mock('../services/changeLogs.js', () => ({
@@ -284,6 +352,7 @@ vi.mock('../middleware/logger.js', () => ({
 const dbService = await import('../services/dbService.js')
 const {
   createTask,
+  finalizeTaskWriteWithRegisteredAdapter,
   registerDbServiceBusinessSideEffectAdapters,
   reopenTask,
   updateTask,
@@ -297,7 +366,7 @@ registerDbServiceBusinessSideEffectAdapters({
   enqueueProjectHealthUpdate: mocks.enqueueProjectHealthUpdate,
   syncProjectDataQuality: mocks.syncProjectDataQuality,
   evaluateTaskConstraint: mocks.evaluateTaskConstraint,
-  requestTaskWriteFinalizationOutboxDrain: mocks.requestTaskWriteFinalizationOutboxDrain,
+  finalizeTaskWrite: mocks.finalizeTaskWrite,
 })
 
 function resetTables() {
@@ -556,7 +625,7 @@ describe('shared infrastructure contract', () => {
     expect(task?.progress).toBe(100)
   })
 
-  it('schedules durable canonical task finalization for low-level completion updates', async () => {
+  it('defers low-level completion finalization to the durable scheduled outbox', async () => {
     const completed = await updateTask('task-1', {
       status: 'completed',
       progress: 100,
@@ -564,9 +633,16 @@ describe('shared infrastructure contract', () => {
     } as any, 1)
 
     expect(completed?.status).toBe('completed')
-    await vi.waitFor(() => {
-      expect(mocks.requestTaskWriteFinalizationOutboxDrain).toHaveBeenCalledWith('task-1')
-    })
+    expect(mocks.finalizeTaskWrite).not.toHaveBeenCalled()
+  })
+
+  it('lets the leased outbox job invoke the registered canonical finalizer', async () => {
+    const task = (mocks.tables.tasks as Row[]).find((row) => row.id === 'task-1')!
+    const completed = { ...task, status: 'completed', progress: 100 }
+
+    await finalizeTaskWriteWithRegisteredAdapter(completed as any, task as any, 'user-1')
+
+    expect(mocks.finalizeTaskWrite).toHaveBeenCalledWith(completed, task, 'user-1')
   })
 
   it('writes change logs when risk and issue states change', async () => {

@@ -78,6 +78,9 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       stablePromotionReused: 0,
       rollbackExecuted: 0,
       rollbackReused: 0,
+      reviewItemsOpened: 0,
+      reviewItemsReused: 0,
+      reviewItemsResolved: 0,
       failed: 0,
       failureRefs: [],
       collectionCursorAdvanced: true,
@@ -95,6 +98,69 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       durationLearningRuntimeLifecycle: expect.objectContaining({
         canaryPublished: 2,
         stablePromoted: 1,
+      }),
+    }))
+  })
+
+  it('runs the durable intervention evaluation sweep after parameter monitoring', async () => {
+    const interventionEvaluationSweep = vi.fn(async () => ({
+      total: 1,
+      persisted: 1,
+      insufficientEvidence: 0,
+      observationalEstimate: 0,
+      counterfactualSupported: 1,
+      rollbackReviewRecommended: 0,
+      failed: 0,
+      evaluationRefs: ['evaluation:duration-blend:2026-07-25'],
+    }))
+    const job = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
+      candidateProvider: async () => [],
+      interventionEvaluationSweep,
+    })
+
+    const result = await job.executeNow()
+
+    expect(interventionEvaluationSweep).toHaveBeenCalledOnce()
+    expect(result).toEqual(expect.objectContaining({
+      interventionEvaluation: expect.objectContaining({
+        persisted: 1,
+        counterfactualSupported: 1,
+      }),
+    }))
+  })
+
+  it('retries a partial intervention evaluation before completing the parent monitoring slot', async () => {
+    const partial = {
+      total: 2,
+      persisted: 1,
+      insufficientEvidence: 0,
+      observationalEstimate: 0,
+      counterfactualSupported: 1,
+      rollbackReviewRecommended: 0,
+      failed: 1,
+      evaluationRefs: ['evaluation:partial'],
+    }
+    const recovered = {
+      ...partial,
+      persisted: 2,
+      failed: 0,
+      evaluationRefs: ['evaluation:partial', 'evaluation:recovered'],
+    }
+    const interventionEvaluationSweep = vi.fn()
+      .mockResolvedValueOnce(partial)
+      .mockResolvedValueOnce(recovered)
+    const job = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
+      candidateProvider: async () => [],
+      interventionEvaluationSweep,
+    })
+
+    const result = await job.executeNow()
+
+    expect(interventionEvaluationSweep).toHaveBeenCalledTimes(2)
+    expect(result).toEqual(expect.objectContaining({
+      interventionEvaluation: expect.objectContaining({
+        persisted: 2,
+        failed: 0,
       }),
     }))
   })
@@ -117,6 +183,9 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       stablePromotionReused: 0,
       rollbackExecuted: 0,
       rollbackReused: 0,
+      reviewItemsOpened: 0,
+      reviewItemsReused: 0,
+      reviewItemsResolved: 0,
       failed: 1,
       failureRefs: [{
         phase: 'candidate_publication',
@@ -129,6 +198,9 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
       ...partial,
       canaryPublished: 1,
       candidateCheckpointReused: 1,
+      reviewItemsOpened: 0,
+      reviewItemsReused: 0,
+      reviewItemsResolved: 0,
       failed: 0,
       failureRefs: [],
     }
@@ -368,9 +440,13 @@ describe('algorithmAssetLearnableParameterImpactMonitoringJob', () => {
 
   it('is wired into the scheduler as the learnable-parameter post-release monitoring job', () => {
     const schedulerSource = readFileSync(new URL('../scheduler.ts', import.meta.url), 'utf8')
+    const jobSource = readFileSync(new URL('../jobs/algorithmAssetLearnableParameterImpactMonitoringJob.ts', import.meta.url), 'utf8')
 
     expect(schedulerSource).toContain("import { algorithmAssetLearnableParameterImpactMonitoringJob } from './jobs/algorithmAssetLearnableParameterImpactMonitoringJob.js'")
     expect(schedulerSource).toContain('algorithmAssetLearnableParameterImpactMonitoringJob.start()')
     expect(schedulerSource).toContain('algorithmAssetLearnableParameterImpactMonitoringJob.stop()')
+    expect(jobSource).toContain('runAlgorithmInterventionEvaluationSweep,')
+    expect(jobSource).toContain("from '../services/algorithmInterventionEvaluationService.js'")
+    expect(jobSource).toContain('interventionEvaluationSweep: runAlgorithmInterventionEvaluationSweep')
   })
 })

@@ -12,6 +12,10 @@ import {
   runDurationLearningRuntimeLifecycleSweep,
   type DurationLearningRuntimeLifecycleSweepResult,
 } from '../services/durationLearningRuntimeLifecycleService.js'
+import {
+  runAlgorithmInterventionEvaluationSweep,
+  type AlgorithmInterventionEvaluationSweepResult,
+} from '../services/algorithmInterventionEvaluationService.js'
 import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 
 const DEFAULT_MONITORING_WINDOW_HOURS = 72
@@ -86,6 +90,7 @@ export type AlgorithmAssetLearnableParameterImpactMonitoringJobOptions = {
   candidateProvider?: () => Promise<AlgorithmAssetLearnableParameterMonitoringCandidate[]>
   thresholdEvaluator?: (candidate: AlgorithmAssetLearnableParameterMonitoringCandidate) => string[]
   durationLearningRuntimeLifecycleSweep?: () => Promise<DurationLearningRuntimeLifecycleSweepResult>
+  interventionEvaluationSweep?: () => Promise<AlgorithmInterventionEvaluationSweepResult>
 }
 
 export class DurationLearningRuntimeLifecyclePartialFailureError extends Error {
@@ -102,10 +107,27 @@ export class DurationLearningRuntimeLifecyclePartialFailureError extends Error {
   }
 }
 
+export class AlgorithmInterventionEvaluationPartialFailureError extends Error {
+  readonly result: AlgorithmInterventionEvaluationSweepResult
+
+  constructor(result: AlgorithmInterventionEvaluationSweepResult) {
+    super(`algorithm_intervention_evaluation_partial_failure:${result.failed}`)
+    this.name = 'AlgorithmInterventionEvaluationPartialFailureError'
+    this.result = result
+  }
+}
+
 function assertDurationLearningRuntimeLifecycleSweepSucceeded(
   result: DurationLearningRuntimeLifecycleSweepResult,
 ) {
   if (result.failed > 0) throw new DurationLearningRuntimeLifecyclePartialFailureError(result)
+  return result
+}
+
+function assertAlgorithmInterventionEvaluationSweepSucceeded(
+  result: AlgorithmInterventionEvaluationSweepResult,
+) {
+  if (result.failed > 0) throw new AlgorithmInterventionEvaluationPartialFailureError(result)
   return result
 }
 
@@ -451,14 +473,30 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
         durationLearningRuntimeLifecycle = lifecycleRun.value
       }
 
+      let interventionEvaluation: AlgorithmInterventionEvaluationSweepResult | null = null
+      if (this.options.interventionEvaluationSweep) {
+        const interventionRun = await runJobWithRetry(
+          {
+            jobName: 'algorithmInterventionEvaluationSweep',
+            triggeredBy,
+            jobId,
+          },
+          async () => assertAlgorithmInterventionEvaluationSweepSucceeded(
+            await this.options.interventionEvaluationSweep!(),
+          ),
+        )
+        interventionEvaluation = interventionRun.value
+      }
+
       logger.info('algorithmAssetLearnableParameterImpactMonitoringJob completed', {
         triggeredBy,
         jobId,
         attempts,
         ...value,
         durationLearningRuntimeLifecycle,
+        interventionEvaluation,
       })
-      return { ...value, durationLearningRuntimeLifecycle }
+      return { ...value, durationLearningRuntimeLifecycle, interventionEvaluation }
     } catch (error) {
       logger.error('algorithmAssetLearnableParameterImpactMonitoringJob failed', {
         triggeredBy,
@@ -466,6 +504,8 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
         error: error instanceof Error ? error.message : String(error),
         details: error instanceof DurationLearningRuntimeLifecyclePartialFailureError
           ? error.details
+          : error instanceof AlgorithmInterventionEvaluationPartialFailureError
+            ? error.result
           : null,
       })
       if (triggeredBy === 'scheduler') throw error
@@ -478,4 +518,5 @@ export class AlgorithmAssetLearnableParameterImpactMonitoringJob {
 
 export const algorithmAssetLearnableParameterImpactMonitoringJob = new AlgorithmAssetLearnableParameterImpactMonitoringJob({
   durationLearningRuntimeLifecycleSweep: runDurationLearningRuntimeLifecycleSweep,
+  interventionEvaluationSweep: runAlgorithmInterventionEvaluationSweep,
 })

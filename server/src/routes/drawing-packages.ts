@@ -10,6 +10,7 @@ import {
 } from '../middleware/auth.js'
 import { withDatabaseTransaction } from '../database.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
+import { recordDrawingVersionCurrentFactChanges } from '../services/drawingVersionExecutionFactService.js'
 import {
   buildDrawingBoardView,
   buildDrawingLedgerRows,
@@ -1367,6 +1368,7 @@ export function registerDrawingPackageRoutes(router: Router) {
         `${DRAWING_VERSION_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY is_current_version DESC, created_at DESC FOR UPDATE`,
         [projectId, lockedPackageId],
       )
+      const versionFactsBefore = versions.map((version) => ({ ...version }))
       const drawings = dedupeRowsById([...drawingsByPackageId, ...drawingsByPackageCode])
 
       let target = resolveDrawingPackageCurrentVersionTarget({
@@ -1463,6 +1465,19 @@ export function registerDrawingPackageRoutes(router: Router) {
         drawingId: targetDrawingId,
         drawingCode: normalizeText(target.targetDrawing?.drawing_code),
         versionNo: normalizeText(targetVersion.version_no),
+      })
+      const versionFactsAfter = await executeSQL<DrawingVersionRecordSource>(
+        `${DRAWING_VERSION_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY is_current_version DESC, created_at DESC FOR UPDATE`,
+        [projectId, lockedPackageId],
+      )
+      await recordDrawingVersionCurrentFactChanges({
+        projectId,
+        sourceModule: 'drawing-packages',
+        sourceMutationId: `drawing-package:${lockedPackageId}:set-current:${normalizeText(targetVersion.id)}:${Date.now()}`,
+        observedAt: new Date().toISOString(),
+        actorUserId: req.user?.id ?? null,
+        before: versionFactsBefore,
+        after: versionFactsAfter,
       })
       await syncPackageCurrentDrawingCertificateLink(
         projectId,

@@ -34,12 +34,37 @@ import {
   CONSTRUCTION_DRAWING_COLUMNS,
   DRAWING_VERSION_COLUMNS,
 } from '../services/sqlColumns.js'
+import {
+  recordDrawingVersionCurrentFactChanges,
+  type DrawingVersionCurrentFactRow,
+} from '../services/drawingVersionExecutionFactService.js'
 import { withDatabaseTransaction } from '../database.js'
 
 const router = Router()
 router.use(authenticate)
 const CONSTRUCTION_DRAWING_SELECT = `SELECT ${CONSTRUCTION_DRAWING_COLUMNS} FROM construction_drawings`
 const DRAWING_VERSION_SELECT = `SELECT ${DRAWING_VERSION_COLUMNS} FROM drawing_versions`
+
+async function loadDrawingVersionCurrentFactRows(
+  projectId: string,
+  packageIds: Array<string | null | undefined>,
+) {
+  const rows: DrawingVersionCurrentFactRow[] = []
+  const normalizedPackageIds = packageIds
+    .map(normalizeNullableText)
+    .filter((packageId): packageId is string => Boolean(packageId))
+  for (const packageId of [...new Set(normalizedPackageIds)]) {
+    const packageRows = await executeSQL<DrawingVersionCurrentFactRow>(
+      `${DRAWING_VERSION_SELECT}
+        WHERE project_id = ? AND package_id = ?
+        ORDER BY is_current_version DESC, created_at DESC
+        FOR UPDATE`,
+      [projectId, packageId],
+    )
+    rows.push(...packageRows.map((row) => ({ ...row })))
+  }
+  return [...new Map(rows.map((row) => [normalizeNullableText(row.id), row])).values()]
+}
 
 type DrawingMutationResult<T> =
   | { ok: true; value: T }
@@ -716,6 +741,10 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
           error: null,
         }
 
+    const versionFactsBefore = packageId
+      ? await loadDrawingVersionCurrentFactRows(payload.project_id, [packageId])
+      : []
+
     if (currentVersionPolicy.error) {
       return drawingMutationFailure(
         currentVersionPolicy.error.status,
@@ -819,6 +848,16 @@ router.post('/', requireProjectEditor(req => req.body.project_id), asyncHandler(
         drawingCode: normalizeNullableText(payload.drawing_code),
         versionNo,
         isCurrentVersion: currentVersionPolicy.resolvedCurrentVersion,
+      })
+      const versionFactsAfter = await loadDrawingVersionCurrentFactRows(payload.project_id, [packageId])
+      await recordDrawingVersionCurrentFactChanges({
+        projectId: payload.project_id,
+        sourceModule: 'construction-drawings',
+        sourceMutationId: `construction-drawing:${id}:create`,
+        observedAt: new Date().toISOString(),
+        actorUserId: req.user?.id ?? null,
+        before: versionFactsBefore,
+        after: versionFactsAfter,
       })
     }
 
@@ -1061,6 +1100,10 @@ router.put('/:id', requireProjectEditor(async (req) => {
         error: null,
       }
 
+  const writeProjectId = currentProjectId || payload.project_id || ''
+  const versionFactPackageIds = [currentPackageId, packageId]
+  const versionFactsBefore = await loadDrawingVersionCurrentFactRows(writeProjectId, versionFactPackageIds)
+
   fieldMap.is_current_version = currentVersionPolicy.resolvedCurrentVersion
 
   if (currentVersionPolicy.error) {
@@ -1071,7 +1114,6 @@ router.put('/:id', requireProjectEditor(async (req) => {
     )
   }
 
-  const writeProjectId = currentProjectId || payload.project_id || ''
   const updateParams = [
     ts,
     currentLockVersion + 1,
@@ -1226,6 +1268,17 @@ router.put('/:id', requireProjectEditor(async (req) => {
   if (packageChanged) {
     await refreshPackageCurrentPointer(currentPackageId, writeProjectId)
   }
+
+  const versionFactsAfter = await loadDrawingVersionCurrentFactRows(writeProjectId, versionFactPackageIds)
+  await recordDrawingVersionCurrentFactChanges({
+    projectId: writeProjectId,
+    sourceModule: 'construction-drawings',
+    sourceMutationId: `construction-drawing:${id}:lock-version:${currentLockVersion + 1}`,
+    observedAt: new Date().toISOString(),
+    actorUserId: req.user?.id ?? null,
+    before: versionFactsBefore,
+    after: versionFactsAfter,
+  })
 
   if (versionChanged) {
     await notifyDrawingVersionUpdate({

@@ -3,13 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   executeSQL: vi.fn(),
   getTask: vi.fn(),
-  updateTask: vi.fn(),
+  updateTaskInMainChain: vi.fn(),
+  reopenTaskInMainChain: vi.fn(),
 }))
 
 vi.mock('../services/dbService.js', () => ({
   executeSQL: mocks.executeSQL,
   getTask: mocks.getTask,
-  updateTask: mocks.updateTask,
 }))
 
 vi.mock('../services/planningScheduleGovernanceService.js', () => ({
@@ -17,6 +17,11 @@ vi.mock('../services/planningScheduleGovernanceService.js', () => ({
     AcceptancePass: 'acceptance_pass',
     SystemBackfill: 'system_backfill',
   },
+}))
+
+vi.mock('../services/taskWriteChainService.js', () => ({
+  updateTaskInMainChain: mocks.updateTaskInMainChain,
+  reopenTaskInMainChain: mocks.reopenTaskInMainChain,
 }))
 
 const {
@@ -30,7 +35,8 @@ describe('acceptanceTaskSyncService', () => {
     vi.clearAllMocks()
     mocks.executeSQL.mockResolvedValue([])
     mocks.getTask.mockResolvedValue(null)
-    mocks.updateTask.mockResolvedValue(null)
+    mocks.updateTaskInMainChain.mockResolvedValue(null)
+    mocks.reopenTaskInMainChain.mockResolvedValue(null)
   })
 
   it('does not sync ordinary construction tasks or checkpoint metadata into the acceptance timeline', async () => {
@@ -131,7 +137,9 @@ describe('acceptanceTaskSyncService', () => {
         planItemKind: 'linked_projection',
       },
     })
-    mocks.updateTask.mockResolvedValue({ id: 'major-acceptance-task', status: 'completed' })
+    mocks.updateTaskInMainChain.mockResolvedValue({
+      task: { id: 'major-acceptance-task', status: 'completed' },
+    })
 
     const previousPlan = {
       id: 'plan-1',
@@ -154,7 +162,7 @@ describe('acceptanceTaskSyncService', () => {
       actorId: 'user-1',
     })
 
-    expect(mocks.updateTask).toHaveBeenCalledWith(
+    expect(mocks.updateTaskInMainChain).toHaveBeenCalledWith(
       'major-acceptance-task',
       {
         planned_start_date: '2026-06-05',
@@ -186,7 +194,9 @@ describe('acceptanceTaskSyncService', () => {
         acceptanceLinkRule: { mode: 'completion_acceptance' },
       },
     })
-    mocks.updateTask.mockResolvedValue({ id: 'major-acceptance-task', actual_end_date: '2026-06-09' })
+    mocks.updateTaskInMainChain.mockResolvedValue({
+      task: { id: 'major-acceptance-task', actual_end_date: '2026-06-09' },
+    })
 
     const previousPlan = {
       id: 'plan-1',
@@ -207,7 +217,7 @@ describe('acceptanceTaskSyncService', () => {
       actorId: 'user-1',
     })
 
-    expect(mocks.updateTask).toHaveBeenCalledWith(
+    expect(mocks.updateTaskInMainChain).toHaveBeenCalledWith(
       'major-acceptance-task',
       {
         actual_end_date: '2026-06-09',
@@ -233,11 +243,13 @@ describe('acceptanceTaskSyncService', () => {
         acceptanceLinkRule: { mode: 'completion_acceptance' },
       },
     })
-    mocks.updateTask.mockResolvedValue({
-      id: 'major-acceptance-task',
-      status: 'in_progress',
-      progress: 80,
-      actual_end_date: null,
+    mocks.reopenTaskInMainChain.mockResolvedValue({
+      task: {
+        id: 'major-acceptance-task',
+        status: 'in_progress',
+        progress: 80,
+        actual_end_date: null,
+      },
     })
 
     const previousPlan = {
@@ -260,20 +272,70 @@ describe('acceptanceTaskSyncService', () => {
       actorId: 'user-1',
     })
 
-    expect(mocks.updateTask).toHaveBeenCalledWith(
+    expect(mocks.reopenTaskInMainChain).toHaveBeenCalledWith(
+      'major-acceptance-task',
+      80,
+      undefined,
+      'user-1',
+    )
+  })
+
+  it('preserves changed acceptance dates after reopening the canonical task', async () => {
+    mocks.getTask.mockResolvedValue({
+      id: 'major-acceptance-task',
+      project_id: 'project-1',
+      status: 'completed',
+      progress: 100,
+      actual_end_date: '2026-06-06',
+      standard_task_metadata: {
+        planItemKind: 'linked_projection',
+      },
+    })
+    mocks.reopenTaskInMainChain.mockResolvedValue({
+      task: { id: 'major-acceptance-task', status: 'in_progress', progress: 80 },
+    })
+    mocks.updateTaskInMainChain.mockResolvedValue({
+      task: { id: 'major-acceptance-task', planned_end_date: '2026-06-10' },
+    })
+
+    await syncCanonicalTaskFromAcceptancePlan({
+      previousPlan: {
+        id: 'plan-1',
+        covered_task_ids: ['major-acceptance-task'],
+        project_id: 'project-1',
+        status: 'passed',
+        planned_date: '2026-06-05',
+        actual_date: '2026-06-06',
+      } as any,
+      nextPlan: {
+        id: 'plan-1',
+        covered_task_ids: ['major-acceptance-task'],
+        project_id: 'project-1',
+        status: 'rectifying',
+        planned_date: '2026-06-10',
+        actual_date: null,
+      } as any,
+      actorId: 'user-1',
+    })
+
+    expect(mocks.reopenTaskInMainChain).toHaveBeenCalledWith(
+      'major-acceptance-task',
+      80,
+      undefined,
+      'user-1',
+    )
+    expect(mocks.updateTaskInMainChain).toHaveBeenCalledWith(
       'major-acceptance-task',
       {
-        status: 'in_progress',
-        progress: 80,
-        actual_end_date: null,
-        updated_by: 'user-1',
+        planned_start_date: '2026-06-10',
+        start_date: '2026-06-10',
+        planned_end_date: '2026-06-10',
+        end_date: '2026-06-10',
       },
       undefined,
       {
         executionFactIntent: 'system_backfill',
-        executionFactEventDate: '2026-06-05',
-        allowManualActualDates: true,
-        allowReopen: true,
+        executionFactEventDate: '2026-06-10',
       },
     )
   })

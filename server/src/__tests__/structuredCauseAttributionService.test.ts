@@ -6,6 +6,7 @@ import {
   confirmStructuredCauseAttribution,
   getStructuredCauseAttributionQualityMetrics,
   inferAndPersistTaskStructuredCauseAttributions,
+  listStructuredCauseAttributions,
   loadTaskStructuredCauseEvidence,
   persistStructuredCauseCandidates,
   recordBaselinePublicationStructuredCause,
@@ -13,7 +14,76 @@ import {
 } from '../services/structuredCauseAttributionService.js'
 import { getMetricDefinition } from '../services/metricRegistryService.js'
 
+const rebuildGenerationA = '2026-07-23 08:00:00.000001+00'
+const rebuildGenerationB = '2026-07-23 08:00:00.000002+00'
+
 describe('structuredCauseAttributionService', () => {
+  it('parameterizes event and role filters while preserving backend newest-first order', async () => {
+    const newestPrimaryDelay = {
+      id: 'cause-new',
+      event_type: 'delay',
+      cause_role: 'primary',
+      created_at: '2026-07-23T02:00:00.000Z',
+    }
+    const oldestPrimaryDelay = {
+      id: 'cause-old',
+      event_type: 'delay',
+      cause_role: 'primary',
+      created_at: '2026-07-22T02:00:00.000Z',
+    }
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM public.projects')) {
+        return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+
+      expect(sql).toContain('($6::text IS NULL OR event_type = $6)')
+      expect(sql).toContain('($7::text IS NULL OR cause_role = $7)')
+      expect(sql).toContain('ORDER BY created_at DESC, id DESC')
+      if (params[5] === 'delay' && params[6] === 'primary') {
+        return { rows: [newestPrimaryDelay, oldestPrimaryDelay], rowCount: 2 }
+      }
+      if (params[5] === 'completion' && params[6] === 'contributing') {
+        return {
+          rows: [{ id: 'cause-completion', event_type: 'completion', cause_role: 'contributing' }],
+          rowCount: 1,
+        }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    const primaryDelayRows = await listStructuredCauseAttributions({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      status: 'confirmed',
+      eventType: 'delay',
+      causeRole: 'primary',
+    }, { queryExec })
+    const contributingCompletionRows = await listStructuredCauseAttributions({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      status: 'confirmed',
+      eventType: 'completion',
+      causeRole: 'contributing',
+    }, { queryExec })
+    await listStructuredCauseAttributions({
+      companyId: 'company-1',
+      projectId: 'project-1',
+    }, { queryExec })
+
+    expect(primaryDelayRows).toEqual([newestPrimaryDelay, oldestPrimaryDelay])
+    expect(contributingCompletionRows).toEqual([
+      expect.objectContaining({ id: 'cause-completion', event_type: 'completion', cause_role: 'contributing' }),
+    ])
+    const listCalls = queryExec.mock.calls.filter(([sql]) => String(sql).includes('FROM public.structured_cause_attributions'))
+    expect(listCalls.map(([, params]) => params)).toEqual([
+      ['company-1', 'project-1', 'task', null, 'confirmed', 'delay', 'primary'],
+      ['company-1', 'project-1', 'task', null, 'confirmed', 'completion', 'contributing'],
+      ['company-1', 'project-1', null, null, null, null, null],
+    ])
+  })
+
   it('records a baseline publication change log and its confirmed cause in one supplied transaction boundary', async () => {
     let changeLogId = ''
     const queryExec = vi.fn(async (sql: string, params?: unknown[]) => {
@@ -183,8 +253,31 @@ describe('structuredCauseAttributionService', () => {
     ]))
   })
 
-  it('never auto-confirms an offline-model label or an unclassified free-text fallback', () => {
+  it('keeps manual text as review-required raw evidence', () => {
     const candidates = buildStructuredCauseCandidates({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      subjectId: 'task-1',
+      eventType: 'delay',
+      rawText: 'material not delivered',
+      evidence: [],
+    })
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        causeCode: 'other',
+        availability: 'review_required',
+        rawText: 'material not delivered',
+        status: 'candidate',
+        autoConfirmed: false,
+        reviewReasonCodes: ['manual_text_requires_user_confirmation'],
+      }),
+    ])
+  })
+
+  it('rejects offline labels as new production evidence', () => {
+    expect(() => buildStructuredCauseCandidates({
       companyId: 'company-1',
       projectId: 'project-1',
       subjectType: 'task',
@@ -193,7 +286,7 @@ describe('structuredCauseAttributionService', () => {
       rawText: '现场临时协调后恢复',
       evidence: [
         {
-          sourceType: 'offline_label',
+          sourceType: 'offline_label' as never,
           sourceId: 'label-1',
           attributes: { suggestedCauseCode: 'labor_shortage', confidence: 0.99 },
         },
@@ -203,12 +296,275 @@ describe('structuredCauseAttributionService', () => {
           attributes: { text: '现场临时协调后恢复' },
         },
       ],
+    })).toThrowError(/CAUSE_EVIDENCE_SOURCE_UNSUPPORTED/)
+  })
+
+  it('uses nonblank manual evidence text for candidate identity and persistence fallback', async () => {
+    const scope = {
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task' as const,
+      subjectId: 'task-1',
+      eventType: 'delay' as const,
+      evidence: [{
+        sourceType: 'manual_text' as const,
+        sourceId: 'task:task-1:delay_reason',
+        attributes: { text: 'Evidence fallback text' },
+      }],
+    }
+    const [omitted] = buildStructuredCauseCandidates(scope)
+    const [whitespace] = buildStructuredCauseCandidates({ ...scope, rawText: '   ' })
+    const [direct] = buildStructuredCauseCandidates({
+      ...scope,
+      rawText: '  evidence   FALLBACK text  ',
+      evidence: [],
     })
 
-    expect(candidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ causeCode: 'labor_shortage', status: 'candidate', autoConfirmed: false }),
-      expect.objectContaining({ causeCode: 'other', status: 'candidate', autoConfirmed: false }),
-    ]))
+    for (const candidate of [omitted, whitespace]) {
+      expect(candidate).toEqual(expect.objectContaining({
+        causeCode: 'other',
+        availability: 'review_required',
+        status: 'candidate',
+        autoConfirmed: false,
+        rawText: 'Evidence fallback text',
+        responsibilityBasis: null,
+        reviewReasonCodes: ['manual_text_requires_user_confirmation'],
+      }))
+    }
+    expect(whitespace.dedupeKey).toBe(omitted.dedupeKey)
+    expect(direct.dedupeKey).toBe(omitted.dedupeKey)
+    expect(buildStructuredCauseCandidates({
+      ...scope,
+      rawText: '   ',
+      evidence: [{
+        sourceType: 'manual_text',
+        sourceId: 'empty-manual-text',
+        attributes: { text: '\t' },
+      }],
+    })).toEqual([])
+
+    let insertParams: unknown[] | undefined
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM public.projects')) {
+        return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        insertParams = params
+        return { rows: [], rowCount: 0 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+    const [persisted] = await persistStructuredCauseCandidates(
+      { ...scope, rawText: '   ' },
+      { queryExec, withTransaction: async (work) => work() },
+    )
+
+    expect(insertParams?.[9]).toBe('Evidence fallback text')
+    expect(persisted).toEqual(expect.objectContaining({
+      rawText: 'Evidence fallback text',
+      dedupeKey: omitted.dedupeKey,
+    }))
+  })
+
+  it('persists manual other candidates with collision-proof idempotent identity', async () => {
+    const scope = {
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task' as const,
+      subjectId: 'task-1',
+      eventType: 'delay' as const,
+      windowStart: '2026-04-01',
+      windowEnd: '2026-04-20',
+    }
+    const existingOther = buildStructuredCauseCandidates({
+      ...scope,
+      evidence: [{
+        sourceType: 'task_obstacle',
+        sourceId: 'obstacle-unclassified',
+        attributes: { obstacleType: 'unclassified' },
+      }],
+    })[0]
+    const stored = new Map<string, Record<string, unknown>>([[
+      existingOther.dedupeKey,
+      {
+        id: 'confirmed-other-1',
+        dedupe_key: existingOther.dedupeKey,
+        cause_code: 'other',
+        cause_role: 'primary',
+        status: 'confirmed',
+        auto_confirmed: false,
+        confirmation_source: 'user_confirmed',
+        raw_text: null,
+        review_reason_codes: [],
+      },
+    ]])
+    let nextId = 1
+    let lastUpsertSql = ''
+    const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM public.projects')) {
+        return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
+      if (!sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [], rowCount: 0 }
+      }
+      lastUpsertSql = sql
+
+      const evidenceSourceTypes = JSON.parse(String(params[11])) as string[]
+      const incoming = {
+        id: `manual-other-${nextId}`,
+        dedupe_key: String(params[20]),
+        cause_code: String(params[5]),
+        prefilled_cause_code: String(params[5]),
+        prefill_modified: null,
+        cause_role: String(params[6]),
+        responsibility_class: null,
+        responsibility_basis: params[8],
+        status: String(params[16]),
+        auto_confirmed: params[17] === true,
+        confirmation_source: String(params[18]),
+        confirmed_by: null,
+        confirmed_at: null,
+        rejected_by: null,
+        rejected_at: null,
+        rejection_reason: null,
+        raw_text: params[9],
+        review_reason_codes: JSON.parse(String(params[19])) as string[],
+        evidence_source_types: evidenceSourceTypes,
+      }
+      const current = stored.get(incoming.dedupe_key)
+      if (!current) {
+        nextId += 1
+        stored.set(incoming.dedupe_key, incoming)
+        return { rows: [{ ...incoming }], rowCount: 1 }
+      }
+
+      const resetsManualConflict = /EXCLUDED\.evidence_source_types\s+@>\s+'\["manual_text"\]'::jsonb/.test(sql)
+      if (evidenceSourceTypes.includes('manual_text') && resetsManualConflict) {
+        Object.assign(current, {
+          cause_code: incoming.cause_code,
+          prefilled_cause_code: incoming.prefilled_cause_code,
+          prefill_modified: incoming.prefill_modified,
+          status: 'candidate',
+          auto_confirmed: false,
+          confirmation_source: 'candidate',
+          responsibility_class: null,
+          responsibility_basis: null,
+          confirmed_by: null,
+          confirmed_at: null,
+          rejected_by: null,
+          rejected_at: null,
+          rejection_reason: null,
+          raw_text: incoming.raw_text,
+          review_reason_codes: ['manual_text_requires_user_confirmation'],
+        })
+      } else {
+        current.status = ['confirmed', 'rejected'].includes(String(current.status))
+          ? current.status
+          : incoming.status
+        current.auto_confirmed = current.auto_confirmed === true || incoming.auto_confirmed
+      }
+      return { rows: [{ ...current }], rowCount: 1 }
+    })
+    const manualInput = (rawText: string) => ({
+      ...scope,
+      rawText,
+      evidence: [],
+    })
+    const dependencies = {
+      queryExec,
+      withTransaction: async <T>(work: () => Promise<T>) => work(),
+    }
+
+    const [created] = await persistStructuredCauseCandidates(
+      manualInput('Material not delivered'),
+      dependencies,
+    )
+    expect(stored.size).toBe(2)
+    expect(created).toEqual(expect.objectContaining({
+      status: 'candidate',
+      auto_confirmed: false,
+      confirmation_source: 'candidate',
+      review_reason_codes: ['manual_text_requires_user_confirmation'],
+    }))
+    expect(created.dedupe_key).not.toBe(existingOther.dedupeKey)
+
+    const persistedManual = stored.get(String(created.dedupe_key))!
+    Object.assign(persistedManual, {
+      cause_code: 'material_shortage',
+      prefilled_cause_code: 'other',
+      prefill_modified: true,
+      status: 'confirmed',
+      auto_confirmed: true,
+      confirmation_source: 'user_confirmed',
+      responsibility_class: 'contractor_attributable',
+      responsibility_basis: 'supplier_default',
+      confirmed_by: 'reviewer-1',
+      confirmed_at: '2026-04-21T08:00:00.000Z',
+      rejected_by: 'reviewer-2',
+      rejected_at: '2026-04-22T08:00:00.000Z',
+      rejection_reason: 'stale rejection decision',
+      review_reason_codes: [],
+    })
+    const [repeated] = await persistStructuredCauseCandidates(
+      manualInput('  material   NOT delivered  '),
+      dependencies,
+    )
+    expect(stored.size).toBe(2)
+    expect(repeated).toEqual(expect.objectContaining({
+      id: created.id,
+      dedupe_key: created.dedupe_key,
+      cause_code: 'other',
+      prefilled_cause_code: 'other',
+      prefill_modified: null,
+      status: 'candidate',
+      auto_confirmed: false,
+      confirmation_source: 'candidate',
+      responsibility_class: null,
+      responsibility_basis: null,
+      confirmed_by: null,
+      confirmed_at: null,
+      rejected_by: null,
+      rejected_at: null,
+      rejection_reason: null,
+      raw_text: 'material   NOT delivered',
+      review_reason_codes: ['manual_text_requires_user_confirmation'],
+    }))
+    expect(lastUpsertSql).toContain('evidence_refs = EXCLUDED.evidence_refs')
+    expect(lastUpsertSql).toContain('evidence_source_types = EXCLUDED.evidence_source_types')
+    for (const field of [
+      'cause_code',
+      'prefilled_cause_code',
+      'prefill_modified',
+      'status',
+      'auto_confirmed',
+      'confirmation_source',
+      'raw_text',
+      'review_reason_codes',
+      'responsibility_class',
+      'responsibility_basis',
+      'confirmed_by',
+      'confirmed_at',
+      'rejected_by',
+      'rejected_at',
+      'rejection_reason',
+    ]) {
+      expect(lastUpsertSql).toMatch(new RegExp(
+        `(?:^|\\n)\\s*${field}\\s*=\\s*CASE[\\s\\S]*?manual_text[\\s\\S]*?THEN\\s+EXCLUDED\\.${field}`,
+      ))
+    }
+
+    const [different] = await persistStructuredCauseCandidates(
+      manualInput('Supplier approval pending'),
+      dependencies,
+    )
+    expect(stored.size).toBe(3)
+    expect(different.dedupe_key).not.toBe(created.dedupe_key)
   })
 
   it('rejects cross-tenant persistence before writing candidate rows', async () => {
@@ -234,9 +590,105 @@ describe('structuredCauseAttributionService', () => {
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.structured_cause_attributions'))).toBe(false)
   })
 
+  it('serializes concurrent delay/completion candidate primaries on one task authority row', async () => {
+    const activeRows: Array<Record<string, unknown>> = []
+    let nextId = 1
+    let taskLockOwner: string | null = null
+    const taskLockWaiters: Array<() => void> = []
+    let secondTransactionStarted!: () => void
+    const secondTransaction = new Promise<void>((resolve) => { secondTransactionStarted = resolve })
+
+    const dependenciesFor = (name: 'first' | 'second') => {
+      const queryExec = vi.fn(async (sql: string, params: unknown[] = []) => {
+        if (sql.includes('FROM public.projects')) {
+          return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+        }
+        if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+          if (taskLockOwner && taskLockOwner !== name) {
+            await new Promise<void>((resolve) => taskLockWaiters.push(resolve))
+          }
+          taskLockOwner = name
+          return { rows: [{ id: 'task-1' }], rowCount: 1 }
+        }
+        if (sql.includes("SET status = 'superseded'")) {
+          for (const row of activeRows) {
+            if (
+              ['candidate', 'confirmed'].includes(String(row.status))
+              && row.cause_role === 'primary'
+              && row.dedupe_key !== params[3]
+            ) row.status = 'superseded'
+          }
+          return { rows: [], rowCount: 0 }
+        }
+        if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+          if (name === 'first') await secondTransaction
+          const dedupeKey = String(params[20])
+          const existing = activeRows.find((row) => row.dedupe_key === dedupeKey)
+          if (existing) return { rows: [{ ...existing }], rowCount: 1 }
+          const row = {
+            id: `candidate-${nextId++}`,
+            event_type: String(params[4]),
+            cause_code: String(params[5]),
+            cause_role: String(params[6]),
+            status: String(params[16]),
+            dedupe_key: dedupeKey,
+          }
+          activeRows.push(row)
+          return { rows: [{ ...row }], rowCount: 1 }
+        }
+        return { rows: [], rowCount: 0 }
+      })
+      return {
+        queryExec,
+        withTransaction: async <T>(work: () => Promise<T>) => {
+          if (name === 'second') secondTransactionStarted()
+          try {
+            return await work()
+          } finally {
+            if (taskLockOwner === name) {
+              taskLockOwner = null
+              taskLockWaiters.shift()?.()
+            }
+          }
+        },
+      }
+    }
+    const input = (eventType: 'delay' | 'completion', rawText: string) => ({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task' as const, subjectId: 'task-1',
+      eventType, rawText, evidence: [],
+    })
+
+    await Promise.all([
+      persistStructuredCauseCandidates(input('delay', 'Material delay'), dependenciesFor('first')),
+      persistStructuredCauseCandidates(input('completion', 'Completion review'), dependenciesFor('second')),
+    ])
+
+    const activePrimaries = activeRows.filter((row) => (
+      ['candidate', 'confirmed'].includes(String(row.status)) && row.cause_role === 'primary'
+    ))
+    expect(activePrimaries).toHaveLength(1)
+    expect(activePrimaries[0]).toEqual(expect.objectContaining({ event_type: 'completion' }))
+  })
+
   it('requires explicit confirmation before assigning contractual responsibility', async () => {
+    const lifecycle: string[] = []
+    const registeredEffects: Array<() => Promise<void>> = []
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('enqueue')
+      return { id: 'queue-confirm-1', generationToken: rebuildGenerationA }
+    })
+    const completeDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('complete')
+    })
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => {
+      lifecycle.push('rebuild')
+      return true
+    })
     const queryExec = vi.fn(async (sql: string) => {
-      if (sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.structured_cause_attributions')) {
         return {
           rows: [{
             id: 'attribution-1',
@@ -253,6 +705,7 @@ describe('structuredCauseAttributionService', () => {
         }
       }
       if (sql.includes('UPDATE public.structured_cause_attributions') && sql.includes('RETURNING')) {
+        lifecycle.push('confirm')
         return {
           rows: [{
             id: 'attribution-1',
@@ -275,18 +728,58 @@ describe('structuredCauseAttributionService', () => {
     }, {
       queryExec,
       withTransaction: async (work) => work(),
+      registerPostCommitEffect: async (_label, effect) => {
+        lifecycle.push('register')
+        registeredEffects.push(effect)
+      },
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
+      rebuildTaskDurationExperienceSample,
     })
 
     expect(result).toEqual(expect.objectContaining({
       status: 'confirmed',
       responsibility_class: 'contractor_attributable',
     }))
+    const statements = queryExec.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim())
+    const identityRead = statements.findIndex((sql) => (
+      sql.includes('FROM public.structured_cause_attributions') && !sql.includes('FOR UPDATE')
+    ))
+    const taskLock = statements.findIndex((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))
+    const attributionLock = statements.findIndex((sql) => (
+      sql.includes('FROM public.structured_cause_attributions') && sql.includes('FOR UPDATE')
+    ))
+    expect(identityRead).toBeGreaterThanOrEqual(0)
+    expect(taskLock).toBeGreaterThan(identityRead)
+    expect(attributionLock).toBeGreaterThan(taskLock)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes("confirmation_source = 'user_confirmed'"))).toBe(true)
+    const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
+    expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
+    expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
+    expect(enqueueDurationExperienceRebuild).toHaveBeenCalledWith({
+      companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register'])
+    expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
+    expect(registeredEffects).toHaveLength(1)
+    await registeredEffects[0]()
+    expect(rebuildTaskDurationExperienceSample).toHaveBeenCalledWith({
+      companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith({
+      id: 'queue-confirm-1', generationToken: rebuildGenerationA,
+    })
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register', 'rebuild', 'complete'])
   })
 
   it('keeps the inferred prefill and records whether a user changed it during confirmation', async () => {
     const queryExec = vi.fn(async (sql: string, params?: unknown[]) => {
-      if (sql.includes('FOR UPDATE')) {
+      if (sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE')) {
+        return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      }
+      if (sql.includes('FROM public.structured_cause_attributions')) {
         return {
           rows: [{
             id: 'attribution-1',
@@ -329,6 +822,12 @@ describe('structuredCauseAttributionService', () => {
     }, {
       queryExec,
       withTransaction: async (work) => work(),
+      registerPostCommitEffect: async () => undefined,
+      enqueueDurationExperienceRebuild: async () => ({
+        id: 'queue-prefill-1', generationToken: rebuildGenerationA,
+      }),
+      completeDurationExperienceRebuild: async () => undefined,
+      rebuildTaskDurationExperienceSample: async () => true,
     })
 
     expect(result).toEqual(expect.objectContaining({
@@ -455,6 +954,283 @@ describe('structuredCauseAttributionService', () => {
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes('FROM public.risks'))).toBe(true)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes("status = 'superseded'"))).toBe(true)
     expect(queryExec.mock.calls.some(([sql]) => String(sql).includes('INSERT INTO public.structured_cause_attributions'))).toBe(true)
+  })
+
+  it('supersedes stale task primaries across delay/completion and rebuilds duration evidence after commit', async () => {
+    const lifecycle: string[] = []
+    const registeredEffects: Array<() => Promise<void>> = []
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('enqueue')
+      return { id: 'queue-record-1', generationToken: rebuildGenerationA }
+    })
+    const completeDurationExperienceRebuild = vi.fn(async () => {
+      lifecycle.push('complete')
+    })
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => {
+      lifecycle.push('rebuild')
+      return true
+    })
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        lifecycle.push('confirm')
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed', cause_code: 'material_shortage' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      subjectType: 'task',
+      subjectId: 'task-1',
+      eventType: 'delay',
+      causeCode: 'material_shortage',
+      causeRole: 'primary',
+      rawText: 'Original material delay wording.',
+      actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => work(),
+      registerPostCommitEffect: async (_label, effect) => {
+        lifecycle.push('register')
+        registeredEffects.push(effect)
+      },
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
+      rebuildTaskDurationExperienceSample,
+    })
+
+    const supersede = queryExec.mock.calls.find(([sql]) => String(sql).includes("SET status = 'superseded'"))
+    const statements = queryExec.mock.calls.map(([sql]) => String(sql).replace(/\s+/g, ' ').trim())
+    const taskLockIndex = statements.findIndex((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))
+    const supersedeIndex = statements.findIndex((sql) => sql.includes("SET status = 'superseded'"))
+    const insertIndex = statements.findIndex((sql) => sql.includes('INSERT INTO public.structured_cause_attributions'))
+    expect(taskLockIndex).toBeGreaterThan(0)
+    expect(taskLockIndex).toBeLessThan(supersedeIndex)
+    expect(supersedeIndex).toBeLessThan(insertIndex)
+    expect(supersede?.[0]).toContain("event_type IN ('delay', 'completion')")
+    expect(supersede?.[0]).toContain("status IN ('candidate', 'confirmed')")
+    expect(supersede?.[0]).toContain('dedupe_key <>')
+    expect(enqueueDurationExperienceRebuild).toHaveBeenCalledWith({
+      companyId: 'company-1', projectId: 'project-1', taskId: 'task-1', actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register'])
+    expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
+    expect(registeredEffects).toHaveLength(1)
+
+    await registeredEffects[0]()
+    expect(rebuildTaskDurationExperienceSample).toHaveBeenCalledOnce()
+    expect(rebuildTaskDurationExperienceSample).toHaveBeenCalledWith({
+      companyId: 'company-1',
+      projectId: 'project-1',
+      taskId: 'task-1',
+      actorId: 'user-1',
+      trigger: 'structured_cause_user_confirmation',
+    })
+    expect(completeDurationExperienceRebuild).toHaveBeenCalledWith({
+      id: 'queue-record-1', generationToken: rebuildGenerationA,
+    })
+    expect(lifecycle).toEqual(['confirm', 'enqueue', 'register', 'rebuild', 'complete'])
+  })
+
+  it('does not take the task-primary lock or supersede authority for a contributing task cause', async () => {
+    const enqueueDurationExperienceRebuild = vi.fn()
+    const registerPostCommitEffect = vi.fn()
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'contributing-1', cause_role: 'contributing', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'delay', causeCode: 'weather_impact', causeRole: 'contributing',
+      rawText: 'Weather contributed to delay.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => work(),
+      enqueueDurationExperienceRebuild,
+      registerPostCommitEffect,
+    })
+
+    const statements = queryExec.mock.calls.map(([sql]) => String(sql))
+    expect(statements.some((sql) => sql.includes('FROM public.tasks') && sql.includes('FOR UPDATE'))).toBe(false)
+    expect(statements.some((sql) => sql.includes("SET status = 'superseded'"))).toBe(false)
+    expect(enqueueDurationExperienceRebuild).not.toHaveBeenCalled()
+    expect(registerPostCommitEffect).not.toHaveBeenCalled()
+  })
+
+  it('retains durable rebuild work when the post-commit rebuild fails', async () => {
+    const registeredEffects: Array<() => Promise<void>> = []
+    const enqueueDurationExperienceRebuild = vi.fn(async () => ({
+      id: 'queue-failed-rebuild', generationToken: rebuildGenerationA,
+    }))
+    const completeDurationExperienceRebuild = vi.fn(async () => undefined)
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => {
+      throw new Error('rebuild unavailable')
+    })
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmed after completion.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => work(),
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
+      registerPostCommitEffect: async (_label, effect) => { registeredEffects.push(effect) },
+      rebuildTaskDurationExperienceSample,
+    })
+
+    expect(enqueueDurationExperienceRebuild).toHaveBeenCalledOnce()
+    expect(registeredEffects).toHaveLength(1)
+    await expect(registeredEffects[0]()).rejects.toThrow('rebuild unavailable')
+    expect(completeDurationExperienceRebuild).not.toHaveBeenCalled()
+  })
+
+  it('lets post-commit closures complete only the generation they enqueued', async () => {
+    const registeredEffects: Array<() => Promise<void>> = []
+    const generations = [rebuildGenerationA, rebuildGenerationB]
+    let currentGeneration = ''
+    let queueStatus: 'pending' | 'completed' = 'pending'
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      const generationToken = generations.shift() as string
+      currentGeneration = generationToken
+      queueStatus = 'pending'
+      return { id: 'queue-shared-1', generationToken }
+    })
+    const completeDurationExperienceRebuild = vi.fn(async (generation: {
+      id: string
+      generationToken: string
+    }) => {
+      if (generation.generationToken !== currentGeneration) return false
+      queueStatus = 'completed'
+      return true
+    })
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+    const dependencies = {
+      queryExec,
+      withTransaction: async <T>(work: () => Promise<T>) => work(),
+      enqueueDurationExperienceRebuild,
+      completeDurationExperienceRebuild,
+      registerPostCommitEffect: async (_label: string, effect: () => Promise<void>) => {
+        registeredEffects.push(effect)
+      },
+      rebuildTaskDurationExperienceSample: async () => true,
+    }
+
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmation generation A.', actorId: 'user-1',
+    }, dependencies)
+    await recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmation generation B.', actorId: 'user-1',
+    }, dependencies)
+
+    await registeredEffects[0]()
+    expect(queueStatus).toBe('pending')
+    await registeredEffects[1]()
+    expect(queueStatus).toBe('completed')
+    expect(completeDurationExperienceRebuild).toHaveBeenNthCalledWith(1, {
+      id: 'queue-shared-1', generationToken: rebuildGenerationA,
+    })
+    expect(completeDurationExperienceRebuild).toHaveBeenNthCalledWith(2, {
+      id: 'queue-shared-1', generationToken: rebuildGenerationB,
+    })
+  })
+
+  it('rolls back confirmation and registers no effect when durable enqueue fails', async () => {
+    let rolledBack = false
+    const enqueueDurationExperienceRebuild = vi.fn(async () => {
+      throw new Error('queue unavailable')
+    })
+    const registerPostCommitEffect = vi.fn()
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) {
+        return { rows: [{ id: 'confirmed-1', status: 'confirmed' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 0 }
+    })
+
+    await expect(recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Confirmed after completion.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => {
+        try {
+          return await work()
+        } catch (error) {
+          rolledBack = true
+          throw error
+        }
+      },
+      enqueueDurationExperienceRebuild,
+      registerPostCommitEffect,
+    })).rejects.toThrow('queue unavailable')
+
+    expect(rolledBack).toBe(true)
+    expect(registerPostCommitEffect).not.toHaveBeenCalled()
+  })
+
+  it('discards the task sample rebuild effect when confirmation rolls back', async () => {
+    let pendingEffects: Array<() => Promise<void>> = []
+    const rebuildTaskDurationExperienceSample = vi.fn(async () => true)
+    const queryExec = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM public.projects')) return { rows: [{ company_id: 'company-1' }], rowCount: 1 }
+      if (sql.includes('FROM public.tasks')) return { rows: [{ id: 'task-1' }], rowCount: 1 }
+      if (sql.includes('INSERT INTO public.structured_cause_attributions')) throw new Error('confirmation write failed')
+      return { rows: [], rowCount: 0 }
+    })
+
+    await expect(recordUserConfirmedStructuredCauseAttribution({
+      companyId: 'company-1', projectId: 'project-1', subjectType: 'task', subjectId: 'task-1',
+      eventType: 'completion', causeCode: 'material_shortage', causeRole: 'primary',
+      rawText: 'Original material delay wording.', actorId: 'user-1',
+    }, {
+      queryExec,
+      withTransaction: async (work) => {
+        try {
+          return await work()
+        } catch (error) {
+          pendingEffects = []
+          throw error
+        }
+      },
+      registerPostCommitEffect: async (_label, effect) => { pendingEffects.push(effect) },
+      rebuildTaskDurationExperienceSample,
+    })).rejects.toThrow('confirmation write failed')
+
+    expect(pendingEffects).toHaveLength(0)
+    expect(rebuildTaskDurationExperienceSample).not.toHaveBeenCalled()
   })
 
   it('fails closed without an unscoped subject lookup when the subject is outside the project', async () => {

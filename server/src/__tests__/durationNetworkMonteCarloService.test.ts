@@ -56,4 +56,35 @@ describe('duration network Monte Carlo service', () => {
       fallbackReasons: expect.arrayContaining(['incomplete_task_probability_distribution']),
     }))
   })
+
+  it('answers an arbitrary target duration from the same deterministic network samples', () => {
+    const input = {
+      seed: 'target-date-network',
+      simulationCount: 500,
+      scenarioCorrelation: 0.35,
+      tasks: [
+        { id: 'first', p20Days: 5, p50Days: 5, p80Days: 5, releaseOffsetDays: 0 },
+        { id: 'second', p20Days: 5, p50Days: 5, p80Days: 5, releaseOffsetDays: 0 },
+      ],
+      dependencies: [
+        { predecessorTaskId: 'first', successorTaskId: 'second', dependencyType: 'FS' as const, lagDays: 0 },
+      ],
+    }
+
+    const beforeFinish = simulateDurationNetworkProbability({ ...input, completionTargetDays: 9 } as any)
+    const onFinish = simulateDurationNetworkProbability({ ...input, completionTargetDays: 10 } as any)
+
+    expect(beforeFinish).toMatchObject({
+      probabilityBasis: 'monte_carlo',
+      completionTargetDays: 9,
+      completionProbability: 0,
+    })
+    expect(onFinish).toMatchObject({
+      probabilityBasis: 'monte_carlo',
+      completionTargetDays: 10,
+      completionProbability: 1,
+    })
+    expect(beforeFinish.p50DurationDays).toBe(onFinish.p50DurationDays)
+    expect(beforeFinish.inputHash).toBe(onFinish.inputHash)
+  })
 })

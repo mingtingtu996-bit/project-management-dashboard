@@ -7,6 +7,7 @@ import { query as rawQuery, withDatabaseTransaction } from '../database.js'
 import { logger } from '../middleware/logger.js'
 import { inclusiveDurationDays } from '../utils/durationDays.js'
 import {
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -305,10 +306,12 @@ function getDurationDays(
   const start = parseConstructionCalendarDate(task.actual_start_date)
   const end = parseConstructionCalendarDate(task.actual_end_date)
   if (!start || !end) return null
+  const constructionCalendar = constructionCalendarsByProjectId[task.project_id] ?? null
+  if (!isAuthoritativeConstructionCalendar(constructionCalendar)) return null
   const duration = productionDaysBetweenInclusive(
     start,
     end,
-    constructionCalendarsByProjectId[task.project_id] ?? null,
+    constructionCalendar,
   )
   return Number.isFinite(duration) && duration >= 1 ? duration : null
 }

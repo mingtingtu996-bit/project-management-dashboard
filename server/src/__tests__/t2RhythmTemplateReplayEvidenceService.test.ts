@@ -131,6 +131,11 @@ describe('t2RhythmTemplateReplayEvidenceService', () => {
           endDate: '2026-05-02',
           shutdown: true,
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
       tasks: [
         {

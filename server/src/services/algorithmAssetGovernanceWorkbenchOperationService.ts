@@ -74,6 +74,10 @@ import {
   type DurationLearningRuntimeScope,
 } from './durationLearningRuntimePublicationService.js'
 import {
+  decideDurationAssetReviewItem,
+  type DurationAssetReviewDecision,
+} from './durationAssetReviewDecisionService.js'
+import {
   publishApprovedAlgorithmSeedOverride,
   type AlgorithmSeedOverrideReleaseExecutionInput,
   type AlgorithmSeedOverrideReleaseExecutionResult,
@@ -93,6 +97,7 @@ export type AlgorithmAssetGovernanceWorkbenchOperationAction =
   | 'runtime_recommendation_adopt'
   | 'runtime_recommendation_decline'
   | 'runtime_rollback'
+  | 'duration_asset_review_decision'
 
 export type AlgorithmAssetGovernanceWorkbenchAssetType =
   | 'learnable_parameter'
@@ -104,6 +109,7 @@ export type AlgorithmAssetGovernanceWorkbenchAssetType =
   | 'dependency_rule'
   | 'template_seed'
   | 'construction_organization_plan_network'
+  | 'duration_learning_runtime'
 
 export type AlgorithmAssetGovernanceWorkbenchOperationStatus =
   | 'operation_blocked'
@@ -205,6 +211,8 @@ export type AlgorithmAssetGovernanceWorkbenchOperationDependencies = {
     Promise<RecordConstructionOrganizationPlanNetworkSavedOutcomeResult>
   recordConstructionOrganizationPlanNetworkRecommendationDecision?: (input: RecordConstructionOrganizationPlanNetworkRecommendationDecisionInput) =>
     Promise<RecordConstructionOrganizationPlanNetworkRecommendationDecisionResult>
+  decideDurationAssetReviewItem?: typeof decideDurationAssetReviewItem
+  getCurrentTime?: () => string
 }
 
 export type AlgorithmAssetGovernanceWorkbenchOperationInput = {
@@ -233,6 +241,8 @@ export type AlgorithmAssetGovernanceWorkbenchOperationInput = {
   actualDurationDays?: number | string | null
   releaseRecordTarget?: string | null
   manualConflictReviewDecision?: string | null
+  reviewItemId?: string | null
+  reviewDecision?: DurationAssetReviewDecision | string | null
   decisionNotes?: string | null
   selectedScenarioIds?: string[]
   consumerVerificationRefs?: string[]
@@ -240,6 +250,7 @@ export type AlgorithmAssetGovernanceWorkbenchOperationInput = {
   rollbackWriterRefs?: string[]
   constructionOrganizationPlanNetworkDraft?: ConstructionOrganizationPlanNetworkDraft | null
   queryExec?: AlgorithmAssetLearnableParameterReleaseExecutionQueryExec
+  authorizedProjectIds?: string[] | null
   executedAt?: string
   impactMonitoring?: {
     monitoredAssetCount?: number
@@ -275,6 +286,7 @@ const SUPPORTED_ACTIONS = new Set<AlgorithmAssetGovernanceWorkbenchOperationActi
   'runtime_recommendation_adopt',
   'runtime_recommendation_decline',
   'runtime_rollback',
+  'duration_asset_review_decision',
 ])
 
 const SUPPORTED_ASSET_TYPES = new Set<AlgorithmAssetGovernanceWorkbenchAssetType>([
@@ -287,6 +299,7 @@ const SUPPORTED_ASSET_TYPES = new Set<AlgorithmAssetGovernanceWorkbenchAssetType
   'dependency_rule',
   'template_seed',
   'construction_organization_plan_network',
+  'duration_learning_runtime',
 ])
 
 const LEARNABLE_PARAMETER_WRITER = 'algorithmAssetLearnableParameterReleaseExecutionService'
@@ -304,6 +317,7 @@ const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_RUNTIME_CONSUMER_OBSERVATION_WRITER
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_RUNTIME_ENGINE_EVIDENCE_WRITER = 'constructionOrganizationPlanNetworkRuntimeEvidenceService.recordRuntimeEngineEvidence'
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_SAVED_OUTCOME_WRITER = 'constructionOrganizationPlanNetworkRuntimeEvidenceService.recordSavedOutcome'
 const CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_RECOMMENDATION_DECISION_WRITER = 'constructionOrganizationPlanNetworkRuntimeEvidenceService.recordRecommendationDecision'
+const DURATION_ASSET_REVIEW_DECISION_WRITER = 'duration_asset_review_decision_service'
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -407,6 +421,52 @@ function baseReasons(
   else if (!assetType) reasons.push('unsupported_asset_type')
   if (!normalizeText(input.evidenceToken)) reasons.push('evidence_token_required')
   return reasons
+}
+
+function normalizeDurationAssetReviewDecision(value: unknown): DurationAssetReviewDecision | null {
+  const decision = normalizeText(value)
+  return decision === 'approve' || decision === 'reject' || decision === 'supersede'
+    ? decision
+    : null
+}
+
+function durationAssetReviewDecisionReasons(input: AlgorithmAssetGovernanceWorkbenchOperationInput) {
+  const reasons: string[] = []
+  const writerKey = normalizeText(input.domainWriterKey)
+  if (!writerKey) reasons.push('domain_writer_required')
+  else if (writerKey !== DURATION_ASSET_REVIEW_DECISION_WRITER) {
+    reasons.push('domain_writer_not_registered_for_asset_type')
+  }
+  if (!normalizeText(input.reviewItemId)) reasons.push('review_item_id_required')
+  if (!normalizeDurationAssetReviewDecision(input.reviewDecision)) reasons.push('review_decision_required')
+  if (!normalizeText(input.decisionNotes)) reasons.push('decision_notes_required')
+  if (!normalizeText(input.companyId)) reasons.push('company_scope_required')
+  if (!normalizeText(input.requestedByUserId)) reasons.push('reviewer_user_id_required')
+  if (input.authorizedProjectIds === undefined) reasons.push('authorized_project_scope_required')
+  if (!input.dependencies?.decideDurationAssetReviewItem && !input.queryExec) {
+    reasons.push('domain_writer_dependency_required')
+  }
+  return reasons
+}
+
+async function delegateDurationAssetReviewDecision(input: AlgorithmAssetGovernanceWorkbenchOperationInput) {
+  const writer = input.dependencies?.decideDurationAssetReviewItem ?? decideDurationAssetReviewItem
+  const observedAt = (input.dependencies?.getCurrentTime ?? (() => new Date().toISOString()))()
+  return writer({
+    reviewItemId: normalizeText(input.reviewItemId),
+    decision: normalizeDurationAssetReviewDecision(input.reviewDecision)!,
+    decisionReason: normalizeText(input.decisionNotes),
+    authority: {
+      kind: 'company_admin',
+      companyId: normalizeText(input.companyId),
+      authorizedProjectIds: input.authorizedProjectIds === null
+        ? null
+        : normalizeRefs(input.authorizedProjectIds),
+      reviewerUserId: normalizeText(input.requestedByUserId),
+    },
+    queryExec: input.queryExec as DurationLearningRuntimePublicationQueryExec | undefined,
+    observedAt,
+  })
 }
 
 function learnableParameterWriterReasons(input: AlgorithmAssetGovernanceWorkbenchOperationInput) {
@@ -1370,6 +1430,28 @@ export async function executeAlgorithmAssetGovernanceWorkbenchOperation(
 
   if (reasons.length > 0 || !action || !assetType) {
     return blockedResult({ action, assetType, domainWriterKey, reasons })
+  }
+
+  if (action === 'duration_asset_review_decision') {
+    if (assetType !== 'duration_learning_runtime') {
+      return blockedResult({
+        action,
+        assetType,
+        domainWriterKey,
+        reasons: ['domain_operation_not_registered_for_asset_type'],
+      })
+    }
+    const decisionReasons = durationAssetReviewDecisionReasons(input)
+    if (decisionReasons.length > 0) {
+      return blockedResult({ action, assetType, domainWriterKey, reasons: decisionReasons })
+    }
+    const domainResult = await delegateDurationAssetReviewDecision(input)
+    return delegatedResult({
+      action,
+      assetType,
+      domainWriterKey: DURATION_ASSET_REVIEW_DECISION_WRITER,
+      domainResult,
+    })
   }
 
   if (

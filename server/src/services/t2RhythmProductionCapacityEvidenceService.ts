@@ -1,4 +1,8 @@
-import type { ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  effectiveConstructionCalendarBasis,
+  isAuthoritativeConstructionCalendar,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 import type { T2RhythmScheduleCandidatePackage } from './t2DivisionRhythmTemplateRegistryService.js'
 
 export type T2RhythmProductionCapacity = {
@@ -114,7 +118,7 @@ function readExpansionWorkfaces(input: T2RhythmProductionCapacityEvidenceInput['
 
 function readCalendarBasis(calendar?: ConstructionCalendarContext | null): T2RhythmProductionCapacity['calendarBasis'] | null {
   if (!calendar) return null
-  return calendar.basis === 'official_construction_calendar_seed' ? 'working_day' : 'calendar_day'
+  return isAuthoritativeConstructionCalendar(calendar) ? 'working_day' : 'calendar_day'
 }
 
 function buildEvidenceRefs(input: T2RhythmProductionCapacityEvidenceInput) {
@@ -122,7 +126,9 @@ function buildEvidenceRefs(input: T2RhythmProductionCapacityEvidenceInput) {
   return unique([
     ...resourceRefs,
     input.constructionRhythmExpansion ? 'construction_rhythm_expansion:workfaces' : '',
-    input.constructionCalendar ? `construction_calendar:${input.constructionCalendar.basis}` : '',
+    input.constructionCalendar
+      ? `construction_calendar:${effectiveConstructionCalendarBasis(input.constructionCalendar)}`
+      : '',
   ])
 }
 

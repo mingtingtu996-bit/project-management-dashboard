@@ -255,7 +255,7 @@ describe('executeSQL static guard', () => {
     }
 
     const unexpectedFindings = findings.filter((finding) => !knownDynamicExecuteSqlDebt.has(finding))
-    expect(unexpectedFindings).toEqual([])
+    expect(unexpectedFindings, unexpectedFindings.join('\n')).toEqual([])
     expect(findings).toHaveLength(knownDynamicExecuteSqlDebt.size)
   })
 
@@ -292,7 +292,7 @@ describe('executeSQL static guard', () => {
     }
 
     const unexpectedFindings = findings.filter((finding) => !knownDynamicDatabaseQueryDebt.has(finding))
-    expect(unexpectedFindings).toEqual([])
+    expect(unexpectedFindings, unexpectedFindings.join('\n')).toEqual([])
     expect(findings).toHaveLength(knownDynamicDatabaseQueryDebt.size)
   })
 

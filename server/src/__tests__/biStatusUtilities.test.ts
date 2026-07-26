@@ -87,7 +87,6 @@ describe('BI status utilities', () => {
     expect(dbServiceSource).not.toContain('function isCompletedState')
 
     const completionSources = [
-      taskSummarySource,
       taskSummaryServiceSource,
       taskSummaryCompareSource,
       taskAttributionSummarySource,
@@ -95,6 +94,9 @@ describe('BI status utilities', () => {
     ]
     completionSources.forEach((source) => {
       expect(source).toContain("from '../utils/taskStatus.js'")
+    })
+    const guardedCompletionSources = [taskSummarySource, ...completionSources]
+    guardedCompletionSources.forEach((source) => {
       expect(source).not.toContain("String(task.status ?? '').toLowerCase() === 'completed'")
       expect(source).not.toContain("['completed', 'done', 'finished', 'on_time', 'delayed'].includes(status)")
       expect(source).not.toContain("status === '已完成' ||")
@@ -107,7 +109,7 @@ describe('BI status utilities', () => {
       (count, source) => count + (source.match(/\bisCompletedTask\(/g) ?? []).length,
       0,
     )).toBeGreaterThanOrEqual(8)
-    expect((taskSummarySource.match(/\bisCompletedMilestone\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
+    expect((taskSummaryServiceSource.match(/\bisCompletedMilestone\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
     expect(taskSummarySource).not.toContain(".in('status', ['已完成', 'completed'])")
   })
 })

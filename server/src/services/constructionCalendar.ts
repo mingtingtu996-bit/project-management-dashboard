@@ -31,6 +31,16 @@ export type ConstructionCalendarContext<TWindow extends ConstructionCalendarWind
   unavailableReason?: string | null
 }
 
+export type AuthoritativeConstructionCalendarContext<
+  TWindow extends ConstructionCalendarWindow = ConstructionCalendarWindow,
+> = ConstructionCalendarContext<TWindow> & {
+  basis: 'official_construction_calendar_seed'
+  calendarRef: string
+  calendarVersion: string
+  timezone: string
+  availability: 'available'
+}
+
 export type ResolveConstructionCalendarContextInput = {
   projectId?: string | null
   standardWorkCode?: string | null
@@ -54,6 +64,60 @@ function loadAlgorithmSeedResolverModule() {
 
 function normalizeId(value: unknown) {
   return String(value ?? '').trim().toLowerCase()
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+export function isAuthoritativeConstructionCalendar<
+  TWindow extends ConstructionCalendarWindow = ConstructionCalendarWindow,
+>(
+  calendar: ConstructionCalendarContext<TWindow> | null | undefined,
+): calendar is AuthoritativeConstructionCalendarContext<TWindow> {
+  return calendar?.basis === 'official_construction_calendar_seed'
+    && calendar.availability === 'available'
+    && Boolean(normalizeText(calendar.calendarRef))
+    && Boolean(normalizeText(calendar.calendarVersion))
+    && Boolean(normalizeText(calendar.timezone))
+    && Array.isArray(calendar.windows)
+}
+
+export function effectiveConstructionCalendarBasis(
+  calendar: ConstructionCalendarContext | null | undefined,
+): ConstructionCalendarContext['basis'] {
+  return isAuthoritativeConstructionCalendar(calendar)
+    ? 'official_construction_calendar_seed'
+    : 'calendar_day'
+}
+
+export function effectiveConstructionCalendarWindowCount(
+  calendar: ConstructionCalendarContext | null | undefined,
+) {
+  return isAuthoritativeConstructionCalendar(calendar) ? calendar.windows.length : 0
+}
+
+export function normalizeConstructionCalendarForConsumption<
+  TWindow extends ConstructionCalendarWindow = ConstructionCalendarWindow,
+>(calendar: ConstructionCalendarContext<TWindow>): ConstructionCalendarContext<TWindow> {
+  if (isAuthoritativeConstructionCalendar(calendar)) {
+    return {
+      ...calendar,
+      calendarRef: normalizeText(calendar.calendarRef),
+      calendarVersion: normalizeText(calendar.calendarVersion),
+      timezone: normalizeText(calendar.timezone),
+      unavailableReason: null,
+    }
+  }
+  return {
+    basis: 'calendar_day',
+    windows: [],
+    calendarRef: null,
+    calendarVersion: null,
+    timezone: normalizeText(calendar.timezone) || 'Asia/Shanghai',
+    availability: 'unavailable',
+    unavailableReason: normalizeText(calendar.unavailableReason) || 'construction_calendar_identity_missing',
+  }
 }
 
 function readBooleanFlag(window: ConstructionCalendarWindow, keys: string[]) {
@@ -175,7 +239,8 @@ export function isDateInConstructionShutdownWindow(window: ConstructionCalendarW
 
 export function isConstructionProductionDay(date: Date, calendar?: ConstructionCalendarContext | null) {
   const dateText = calendarDateText(date)
-  if (calendar?.windows.some((window) => isDateInConstructionShutdownWindow(window, dateText))) return false
+  if (isAuthoritativeConstructionCalendar(calendar)
+    && calendar.windows.some((window) => isDateInConstructionShutdownWindow(window, dateText))) return false
   return true
 }
 
@@ -229,8 +294,8 @@ export async function resolveConstructionCalendarContext(
     ]).filter(Boolean))).sort()
     const available = windows.length > 0 && calendarVersions.length > 0
     return {
-      basis: windows.length > 0 ? 'official_construction_calendar_seed' : 'calendar_day',
-      windows,
+      basis: available ? 'official_construction_calendar_seed' : 'calendar_day',
+      windows: available ? windows : [],
       calendarRef: available ? 'work_calendar' : null,
       calendarVersion: available ? calendarVersions.join('|') : null,
       timezone: 'Asia/Shanghai',

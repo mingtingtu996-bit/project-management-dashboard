@@ -1,4 +1,7 @@
-import type { ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  isAuthoritativeConstructionCalendar,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 
 export type DurationMetricUnit = 'calendar_day' | 'construction_production_day'
 export type DurationMetricAvailability = 'available' | 'unavailable'
@@ -12,6 +15,35 @@ export type DurationMetricDto = {
   asOf: string
   availability: DurationMetricAvailability
   unavailableReason: string | null
+}
+
+export function normalizeDurationMetricDto(value: unknown): DurationMetricDto | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const raw = value as Record<string, unknown>
+  const unit = raw.unit
+  const availability = raw.availability
+  if (unit !== 'calendar_day' && unit !== 'construction_production_day') return null
+  if (availability !== 'available' && availability !== 'unavailable') return null
+
+  const normalizedAsOf = normalizeAsOf(raw.asOf)
+  const timezone = normalizeText(raw.timezone)
+  if (!normalizedAsOf || !timezone) return null
+
+  const calendarRef = normalizeText(raw.calendarRef) || null
+  const calendarVersion = normalizeText(raw.calendarVersion) || null
+  const normalizedValue = normalizeValue(raw.value)
+  if (availability === 'available' && (normalizedValue === null || !calendarRef || !calendarVersion)) return null
+
+  return {
+    value: availability === 'available' ? normalizedValue : null,
+    unit,
+    calendarRef,
+    calendarVersion,
+    timezone,
+    asOf: normalizedAsOf,
+    availability,
+    unavailableReason: normalizeText(raw.unavailableReason) || null,
+  }
 }
 
 type DurationMetricOptions = {
@@ -93,10 +125,7 @@ export function buildCalendarDayDurationMetric(
 export function hasIdentifiedConstructionCalendar(
   calendar: ConstructionCalendarContext | null | undefined,
 ): boolean {
-  return calendar?.availability === 'available'
-    && Boolean(normalizeText(calendar.calendarRef))
-    && Boolean(normalizeText(calendar.calendarVersion))
-    && Boolean(normalizeText(calendar.timezone))
+  return isAuthoritativeConstructionCalendar(calendar)
 }
 
 export function buildConstructionProductionDayDurationMetric(

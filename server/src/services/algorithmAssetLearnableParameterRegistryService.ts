@@ -42,6 +42,14 @@ export type AlgorithmAssetLearnableParameter = {
   description: string
 }
 
+export type AlgorithmAssetTunableParameterSourceInventoryEntry = {
+  inventoryKey: string
+  classification: 'governed_learnable' | 'frozen_constant'
+  sourcePath: string
+  sourceSymbols: string[]
+  registryParameterKeys: string[]
+}
+
 export type AlgorithmAssetParameterRuntimeUseEvidence = {
   sampleCount?: number | null
   replayPassed?: boolean | null
@@ -447,6 +455,120 @@ const LEARNABLE_PARAMETERS: readonly AlgorithmAssetLearnableParameter[] = [
   },
 ]
 
+// This lists every source-defined setting that changes the core duration and forecast decision paths.
+// A missing registry key is intentional only for a frozen constant; it is never an implicit live-tuning gap.
+const TUNABLE_PARAMETER_SOURCE_INVENTORY: readonly AlgorithmAssetTunableParameterSourceInventoryEntry[] = [
+  {
+    inventoryKey: 'forecast.candidate_weights',
+    classification: 'governed_learnable',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: ['DEFAULT_CANDIDATE_WEIGHTS'],
+    registryParameterKeys: [
+      'forecast.L0.candidate_weight',
+      'forecast.L1.candidate_weight',
+      'forecast.L2.candidate_weight',
+    ],
+  },
+  {
+    inventoryKey: 'forecast.progress_curve_policy',
+    classification: 'governed_learnable',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: ['DEFAULT_PROGRESS_CURVE_POLICIES'],
+    registryParameterKeys: ['forecast.progress_curve_multiplier'],
+  },
+  {
+    inventoryKey: 'forecast.residual_overlay_limits',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: [
+      'RESIDUAL_OVERLAY_MIN_PROJECT_SAMPLE_COUNT',
+      'RESIDUAL_OVERLAY_MIN_COMPANY_SAMPLE_COUNT',
+      'PROJECT_FORECAST_OVERLAY_MIN_SAMPLE_COUNT',
+      'MAX_RUNTIME_RESIDUAL_OVERCOMPENSATION_RATIO',
+      'MAX_RUNTIME_RESIDUAL_CORRECTION_DAYS',
+    ],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'forecast.earliest_start_rule_policy',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: ['DEFAULT_EARLIEST_START_RULE_POLICY'],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'forecast.default_model_profile',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: ['DEFAULT_FORECAST_MODEL_PROFILE'],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'forecast.trigger_context_defaults',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: ['DEFAULT_FORECAST_OPTIONS', 'TRIGGER_CONTEXT_DEFAULTS'],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'forecast.stuck_finishing_policy',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/taskDurationForecastService.ts',
+    sourceSymbols: ['DEFAULT_STUCK_FINISHING_POLICIES'],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'duration.context.factor_multiplier_caps',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/durationContextService.ts',
+    sourceSymbols: ['FACTOR_MULTIPLIER_CAP_POLICY'],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'duration.context.site_capacity_pressure_policy',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/durationContextService.ts',
+    sourceSymbols: ['DEFAULT_SITE_CAPACITY_PRESSURE_POLICY'],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'duration.context.site_pressure_runtime_parameter',
+    classification: 'governed_learnable',
+    sourcePath: 'server/src/services/durationContextService.ts',
+    sourceSymbols: ['SITE_PRESSURE_MULTIPLIER_PARAMETER_KEY'],
+    registryParameterKeys: ['duration.context.site_pressure_multiplier'],
+  },
+  {
+    inventoryKey: 'duration.context.application_safety_bounds',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/durationContextService.ts',
+    sourceSymbols: [
+      'DURATION_MULTIPLIER_SAFETY_MAX',
+      'DURATION_CONTEXT_CONFIDENCE_DELTA_MIN',
+      'DURATION_CONTEXT_CONFIDENCE_DELTA_MAX',
+    ],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'duration.context.synthesis_safety_bounds',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/durationContextFactorSynthesisService.ts',
+    sourceSymbols: [
+      'DURATION_CONTEXT_FACTOR_SYNTHESIS_MULTIPLIER_SAFETY_MAX',
+      'DURATION_CONTEXT_FACTOR_SYNTHESIS_CONFIDENCE_DELTA_MIN',
+      'DURATION_CONTEXT_FACTOR_SYNTHESIS_CONFIDENCE_DELTA_MAX',
+    ],
+    registryParameterKeys: [],
+  },
+  {
+    inventoryKey: 'forecast.network_monte_carlo_defaults',
+    classification: 'frozen_constant',
+    sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
+    sourceSymbols: ['DEFAULT_SIMULATION_COUNT', 'DEFAULT_SCENARIO_CORRELATION'],
+    registryParameterKeys: [],
+  },
+]
+
 function normalizeKey(value: string) {
   return value.trim()
 }
@@ -535,6 +657,14 @@ function missingFieldsFor(parameter: AlgorithmAssetLearnableParameter) {
 
 export function listAlgorithmAssetLearnableParameters() {
   return [...LEARNABLE_PARAMETERS]
+}
+
+export function listAlgorithmAssetTunableParameterSourceInventory() {
+  return TUNABLE_PARAMETER_SOURCE_INVENTORY.map((entry) => ({
+    ...entry,
+    sourceSymbols: [...entry.sourceSymbols],
+    registryParameterKeys: [...entry.registryParameterKeys],
+  }))
 }
 
 export function getAlgorithmAssetLearnableParameter(parameterKey: string) {

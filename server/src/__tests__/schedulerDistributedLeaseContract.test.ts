@@ -34,7 +34,7 @@ describe('scheduler distributed job leases', () => {
     ...scheduledJobs.map(([, , jobName]) => jobName),
     'warningImpactSignalGovernanceJob',
     'durationLearningRuntimeEvidenceOutboxDrainJob',
-    'taskWriteFinalizationOutboxDrainJob',
+    'taskWriteFinalizationOutboxJob',
   ]
 
   it('keeps ten independent distributed lease keys', () => {

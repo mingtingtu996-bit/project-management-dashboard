@@ -12,8 +12,10 @@ process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = 'test-jwt-secret'
 
 const state = vi.hoisted(() => {
+  let transactionActive = false
   const materials: Array<Record<string, unknown>> = []
   const participantUnits: Array<Record<string, unknown>> = []
+  const factTransactionStates: boolean[] = []
   const authState = {
     userId: 'user-1',
     globalRole: 'regular',
@@ -25,6 +27,10 @@ const state = vi.hoisted(() => {
   }
   let failMaterialInsertAt: number | null = null
   let materialInsertCount = 0
+  const recordChangedExecutionFacts = vi.fn(async () => {
+    factTransactionStates.push(transactionActive)
+    return []
+  })
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.trim().replace(/\s+/g, ' ').toLowerCase()
     if (normalized.startsWith('insert into project_materials')) {
@@ -67,17 +73,69 @@ const state = vi.hoisted(() => {
       materials.push(row)
       return [row]
     }
+    if (normalized.startsWith('select * from project_materials')) {
+      const [materialId, projectId] = params
+      const row = materials.find((material) => material.id === materialId && material.project_id === projectId)
+      return row ? [{ ...row }] : []
+    }
+    if (normalized.startsWith('update project_materials set participant_unit_id')) {
+      const [
+        participantUnitId,
+        materialName,
+        specialtyType,
+        requiresSampleConfirmation,
+        sampleConfirmed,
+        expectedArrivalDate,
+        actualArrivalDate,
+        requiresInspection,
+        inspectionDone,
+        version,
+        updatedAt,
+        materialId,
+        projectId,
+      ] = params
+      const index = materials.findIndex((material) => material.id === materialId && material.project_id === projectId)
+      if (index < 0) return []
+      materials[index] = {
+        ...materials[index],
+        participant_unit_id: participantUnitId,
+        material_name: materialName,
+        specialty_type: specialtyType,
+        requires_sample_confirmation: requiresSampleConfirmation,
+        sample_confirmed: sampleConfirmed,
+        expected_arrival_date: expectedArrivalDate,
+        actual_arrival_date: actualArrivalDate,
+        requires_inspection: requiresInspection,
+        inspection_done: inspectionDone,
+        version,
+        updated_at: updatedAt,
+      }
+      return [{ ...materials[index] }]
+    }
     return []
   })
   const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
     const snapshot = materials.map((row) => ({ ...row }))
+    const parentActive = transactionActive
+    transactionActive = true
     try {
       return await work()
     } catch (error) {
       materials.splice(0, materials.length, ...snapshot)
       throw error
+    } finally {
+      transactionActive = parentActive
     }
   })
+
+  const materialArrivalReminderService = {
+    handleMaterialArrived: vi.fn(async () => ({
+      conditionUnlockCount: 0,
+      conditionIds: [],
+      taskIds: [],
+      notificationId: null,
+    })),
+  }
 
   const supabaseInstance = {
     query: vi.fn(async (table: string, conditions: Record<string, unknown> = {}) => {
@@ -166,6 +224,10 @@ const state = vi.hoisted(() => {
     changeLogs,
     executeSQL,
     withDatabaseTransaction,
+    recordChangedExecutionFacts,
+    factTransactionStates,
+    isTransactionActive: () => transactionActive,
+    materialArrivalReminderService,
     setFailMaterialInsertAt(value: number | null) {
       failMaterialInsertAt = value
       materialInsertCount = 0
@@ -203,6 +265,10 @@ vi.mock('../database.js', () => ({
   withDatabaseTransaction: state.withDatabaseTransaction,
 }))
 
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: state.recordChangedExecutionFacts,
+}))
+
 vi.mock('../middleware/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -224,14 +290,7 @@ vi.mock('../services/changeLogs.js', () => ({
 }))
 
 vi.mock('../services/materialArrivalReminderService.js', () => ({
-  materialArrivalReminderService: {
-    handleMaterialArrived: vi.fn(async () => ({
-      conditionUnlockCount: 0,
-      conditionIds: [],
-      taskIds: [],
-      notificationId: null,
-    })),
-  },
+  materialArrivalReminderService: state.materialArrivalReminderService,
 }))
 
 vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
@@ -280,6 +339,11 @@ describe('project materials routes', () => {
     state.authState.permissionLevel = 'owner'
     state.setFailMaterialInsertAt(null)
     vi.clearAllMocks()
+    state.factTransactionStates.splice(0, state.factTransactionStates.length)
+    state.recordChangedExecutionFacts.mockImplementation(async () => {
+      state.factTransactionStates.push(state.isTransactionActive())
+      return []
+    })
   })
 
   it('keeps the route registered before generic project routes', () => {
@@ -383,6 +447,175 @@ describe('project materials routes', () => {
     expect(state.withDatabaseTransaction).toHaveBeenCalledTimes(1)
     expect(state.materials).toHaveLength(0)
     expect(state.supabaseInstance.create).not.toHaveBeenCalled()
+  })
+
+  it('records a forced initial arrival fact for every created material inside the batch transaction', async () => {
+    const response = await supertest(buildApp())
+      .post('/api/projects/project-1/materials')
+      .send([
+        {
+          material_name: 'pending cable',
+          specialty_type: 'mep',
+          expected_arrival_date: '2026-04-25',
+        },
+        {
+          material_name: 'delivered glass',
+          specialty_type: 'facade',
+          expected_arrival_date: '2026-04-24',
+          actual_arrival_date: '2026-04-23',
+        },
+      ])
+
+    expect(response.status).toBe(201)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(2)
+    expect(state.recordChangedExecutionFacts).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'material_batch',
+      sourceModule: 'project-materials',
+      sourceMutationId: expect.stringMatching(/^material_batch:.+:version:1$/),
+      changes: [expect.objectContaining({
+        factType: 'material_batch.actual_arrival_date',
+        previousValue: null,
+        nextValue: null,
+        force: true,
+      })],
+    }))
+    expect(state.recordChangedExecutionFacts).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      changes: [expect.objectContaining({
+        factType: 'material_batch.actual_arrival_date',
+        previousValue: null,
+        nextValue: '2026-04-23',
+        force: true,
+        effectiveAt: '2026-04-23T00:00:00.000Z',
+      })],
+    }))
+    expect(state.factTransactionStates).toEqual([true, true])
+  })
+
+  it('rolls back a material arrival projection when execution-fact persistence fails', async () => {
+    state.materials.push({
+      id: 'material-1',
+      project_id: 'project-1',
+      material_name: 'arrival rollback',
+      specialty_type: 'facade',
+      expected_arrival_date: '2026-04-25',
+      actual_arrival_date: null,
+      requires_sample_confirmation: false,
+      sample_confirmed: false,
+      requires_inspection: false,
+      inspection_done: false,
+      version: 1,
+      created_at: '2026-04-19T00:00:00.000Z',
+      updated_at: '2026-04-19T00:00:00.000Z',
+    })
+    state.recordChangedExecutionFacts.mockRejectedValueOnce(new Error('simulated execution fact failure'))
+
+    const response = await supertest(buildApp())
+      .patch('/api/projects/project-1/materials/material-1')
+      .send({ actual_arrival_date: '2026-04-24' })
+
+    expect(response.status).toBe(500)
+    expect(state.materials[0]?.actual_arrival_date).toBeNull()
+    expect(state.materialArrivalReminderService.handleMaterialArrived).not.toHaveBeenCalled()
+    expect(state.materialReportsService.clearMaterialReportCache).not.toHaveBeenCalled()
+  })
+
+  it('records a changed arrival fact before the material patch transaction commits', async () => {
+    state.materials.push({
+      id: 'material-1',
+      project_id: 'project-1',
+      material_name: 'arrival fact',
+      specialty_type: 'facade',
+      expected_arrival_date: '2026-04-25',
+      actual_arrival_date: null,
+      requires_sample_confirmation: false,
+      sample_confirmed: false,
+      requires_inspection: false,
+      inspection_done: false,
+      version: 1,
+      created_at: '2026-04-19T00:00:00.000Z',
+      updated_at: '2026-04-19T00:00:00.000Z',
+    })
+
+    const response = await supertest(buildApp())
+      .patch('/api/projects/project-1/materials/material-1')
+      .send({ actual_arrival_date: '2026-04-24' })
+
+    expect(response.status).toBe(200)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'material_batch',
+      entityId: 'material-1',
+      sourceMutationId: 'material_batch:material-1:version:2',
+      changes: [expect.objectContaining({
+        factType: 'material_batch.actual_arrival_date',
+        previousValue: null,
+        nextValue: '2026-04-24',
+        effectiveAt: '2026-04-24T00:00:00.000Z',
+      })],
+    }))
+    expect(state.factTransactionStates).toEqual([true])
+    expect(state.materialArrivalReminderService.handleMaterialArrived).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires an explicit reason before correcting an established material arrival date', async () => {
+    state.materials.push({
+      id: 'material-1',
+      project_id: 'project-1',
+      material_name: 'corrected arrival',
+      specialty_type: 'facade',
+      expected_arrival_date: '2026-04-25',
+      actual_arrival_date: '2026-04-23',
+      requires_sample_confirmation: false,
+      sample_confirmed: false,
+      requires_inspection: false,
+      inspection_done: false,
+      version: 1,
+      created_at: '2026-04-19T00:00:00.000Z',
+      updated_at: '2026-04-19T00:00:00.000Z',
+    })
+
+    const response = await supertest(buildApp())
+      .patch('/api/projects/project-1/materials/material-1')
+      .send({ actual_arrival_date: '2026-04-24' })
+
+    expect(response.status).toBe(400)
+    expect(state.materials[0]?.actual_arrival_date).toBe('2026-04-23')
+    expect(state.recordChangedExecutionFacts).not.toHaveBeenCalled()
+  })
+
+  it('records the supplied reason when correcting an established material arrival date', async () => {
+    state.materials.push({
+      id: 'material-1',
+      project_id: 'project-1',
+      material_name: 'corrected arrival',
+      specialty_type: 'facade',
+      expected_arrival_date: '2026-04-25',
+      actual_arrival_date: '2026-04-23',
+      requires_sample_confirmation: false,
+      sample_confirmed: false,
+      requires_inspection: false,
+      inspection_done: false,
+      version: 1,
+      created_at: '2026-04-19T00:00:00.000Z',
+      updated_at: '2026-04-19T00:00:00.000Z',
+    })
+
+    const response = await supertest(buildApp())
+      .patch('/api/projects/project-1/materials/material-1')
+      .send({
+        actual_arrival_date: '2026-04-24',
+        change_reason: 'Corrected against the signed delivery receipt.',
+      })
+
+    expect(response.status).toBe(200)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      correctionReason: 'Corrected against the signed delivery receipt.',
+      changes: [expect.objectContaining({
+        previousValue: '2026-04-23',
+        nextValue: '2026-04-24',
+      })],
+    }))
+    expect(state.factTransactionStates).toEqual([true])
   })
 
   it('allows editor reads but blocks writes after project permission is removed', async () => {

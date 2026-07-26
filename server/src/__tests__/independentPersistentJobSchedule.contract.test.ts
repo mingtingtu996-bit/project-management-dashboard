@@ -33,7 +33,7 @@ const jobs = [
   ['planningReplayCalibrationJob.ts', "schedule: { kind: 'daily', hour: 6, minute: 45 }", false],
   ['durationLiveLearningProductionClaimAuditJob.ts', "schedule: { kind: 'daily', hour: 6, minute: 45 }", true],
   ['durationLearningRuntimeEvidenceOutboxDrainJob.ts', "schedule: { kind: 'minute_interval', intervalMinutes", 'always'],
-  ['taskWriteFinalizationOutboxDrainJob.ts', "kind: 'minute_interval'", 'always'],
+  ['taskWriteFinalizationOutboxJob.ts', "kind: 'minute_interval'", 'always'],
   ['algorithmAssetLearnableParameterImpactMonitoringJob.ts', "schedule: { kind: 'daily', hour: 7, minute: 5 }", true],
   ['constructionOrganizationPlanNetworkRuntimeEvidenceJob.ts', "schedule: { kind: 'daily', hour: 7, minute: 20 }", false],
   ['projectWeatherForecastJob.ts', "schedule: { kind: 'hourly_interval', intervalHours", true],

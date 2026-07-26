@@ -1,5 +1,5 @@
 import type { AcceptancePlan, Task } from '../types/db.js'
-import { executeSQL, getTask, updateTask } from './dbService.js'
+import { executeSQL, getTask } from './dbService.js'
 import { ExecutionFactIntent } from './planningScheduleGovernanceService.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
 import { normalizeAcceptanceStatus } from '../utils/acceptanceStatus.js'
@@ -100,6 +100,9 @@ export async function syncCanonicalTaskFromAcceptancePlan(params: {
   const taskIds = [...new Set((nextPlan.covered_task_ids ?? []).map(normalizeText).filter(Boolean))]
   if (!projectId || taskIds.length === 0) return null
 
+  // The task write chain also projects task date changes back to acceptance plans.
+  // Load it after module initialization to avoid a static circular dependency.
+  const { updateTaskInMainChain, reopenTaskInMainChain } = await import('./taskWriteChainService.js')
   const updatedTasks: Task[] = []
   for (const taskId of taskIds) {
     const task = await getTask(taskId)
@@ -143,13 +146,39 @@ export async function syncCanonicalTaskFromAcceptancePlan(params: {
     }
 
     if (Object.keys(patch).length === 0) continue
-    const updatedTask = await updateTask(taskId, patch as any, undefined, {
+    if (movedOutOfPassed) {
+      const reopened = await reopenTaskInMainChain(
+        taskId,
+        Math.min(Number(task.progress ?? 80) || 80, 80),
+        undefined,
+        actorId ?? null,
+      )
+      if (!reopened?.task) continue
+
+      const followUpPatch = { ...patch }
+      delete followUpPatch.status
+      delete followUpPatch.progress
+      delete followUpPatch.actual_end_date
+      delete followUpPatch.updated_by
+      if (Object.keys(followUpPatch).length === 0) {
+        updatedTasks.push(reopened.task)
+        continue
+      }
+
+      const updated = await updateTaskInMainChain(taskId, followUpPatch as any, undefined, {
+        executionFactIntent: ExecutionFactIntent.SystemBackfill,
+        executionFactEventDate: nextPlannedDate || normalizeDate(previousPlan.planned_date) || undefined,
+      })
+      updatedTasks.push(updated?.task ?? reopened.task)
+      continue
+    }
+
+    const updated = await updateTaskInMainChain(taskId, patch as any, undefined, {
       executionFactIntent: nextStatus === 'passed' ? ExecutionFactIntent.AcceptancePass : ExecutionFactIntent.SystemBackfill,
       executionFactEventDate: actualDate || nextPlannedDate || normalizeDate(previousPlan.planned_date) || undefined,
-      allowManualActualDates: (nextStatus === 'passed' && Boolean(actualDate)) || movedOutOfPassed,
-      ...(movedOutOfPassed ? { allowReopen: true } : {}),
+      allowManualActualDates: nextStatus === 'passed' && Boolean(actualDate),
     })
-    if (updatedTask) updatedTasks.push(updatedTask)
+    if (updated?.task) updatedTasks.push(updated.task)
   }
 
   return updatedTasks.at(-1) ?? null

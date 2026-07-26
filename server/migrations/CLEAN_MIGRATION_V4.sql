@@ -1,4 +1,4 @@
--- CANONICAL: current clean bootstrap bundle, synchronized through migration 323
+-- CANONICAL: current clean bootstrap bundle, synchronized through migration 330
 -- CLEAN MIGRATION (UTF-8, no encoding issues)
 -- Generated: 2026-03-26 02:39
 -- All 17 migration files merged
@@ -21884,3 +21884,1348 @@ COMMENT ON COLUMN public.duration_learning_runtime_evidence_outbox.subject_type 
 NOTIFY pgrst, 'reload schema';
 
 COMMIT;
+
+-- ============================================================
+-- Source: 324_canonical_cause_and_benchmark_provenance.sql
+-- ============================================================
+-- Canonical cause-aware duration benchmark segments with explicit provenance.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 324';
+  END IF;
+END
+$$;
+
+ALTER TABLE public.duration_benchmarks
+  ADD COLUMN IF NOT EXISTS generated_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS source_window_start TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS source_as_of TIMESTAMPTZ;
+
+UPDATE public.duration_benchmarks
+   SET generated_at = COALESCE(generated_at, updated_at, created_at)
+ WHERE generated_at IS NULL;
+
+ALTER TABLE public.duration_benchmarks
+  ALTER COLUMN generated_at SET DEFAULT NOW(),
+  ALTER COLUMN generated_at SET NOT NULL;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM public.duration_benchmarks
+     WHERE is_active = TRUE
+       AND metadata ->> 'candidate_operation_id' IS NOT NULL
+     GROUP BY company_id, project_id, benchmark_key, metadata ->> 'candidate_operation_id'
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'migration 324 blocked: duplicate active duration benchmark candidate operations exist';
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmarks_candidate_operation
+  ON public.duration_benchmarks (
+    company_id,
+    project_id,
+    benchmark_key,
+    (metadata ->> 'candidate_operation_id')
+  ) NULLS NOT DISTINCT
+  WHERE is_active = TRUE AND metadata ->> 'candidate_operation_id' IS NOT NULL;
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM public.structured_cause_attributions
+     WHERE subject_type = 'task'
+       AND event_type IN ('delay', 'completion')
+       AND status IN ('candidate', 'confirmed')
+       AND cause_role = 'primary'
+     GROUP BY company_id, project_id, subject_type, subject_id
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION 'migration 324 blocked: duplicate active task primary causes exist';
+  END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_structured_cause_task_active_primary
+  ON public.structured_cause_attributions (company_id, project_id, subject_type, subject_id)
+  WHERE subject_type = 'task'
+    AND event_type IN ('delay', 'completion')
+    AND status IN ('candidate', 'confirmed')
+    AND cause_role = 'primary';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_id_company_id_for_duration_benchmarks
+  ON public.projects (id, company_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conrelid = 'public.duration_benchmarks'::regclass
+       AND conname = 'duration_benchmarks_project_company_fk'
+  ) THEN
+    ALTER TABLE public.duration_benchmarks
+      ADD CONSTRAINT duration_benchmarks_project_company_fk
+      FOREIGN KEY (project_id, company_id)
+      REFERENCES public.projects(id, company_id)
+      ON UPDATE RESTRICT;
+  END IF;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  project_company_id UUID;
+BEGIN
+  IF NEW.project_id IS NOT NULL THEN
+    IF NEW.company_id IS NULL THEN
+      RAISE EXCEPTION 'duration benchmark company is required for project scope';
+    END IF;
+
+    SELECT project.company_id
+      INTO project_company_id
+      FROM public.projects project
+     WHERE project.id = NEW.project_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'duration benchmark project not found';
+    END IF;
+
+    IF project_company_id IS DISTINCT FROM NEW.company_id THEN
+      RAISE EXCEPTION 'duration benchmark project/company mismatch';
+    END IF;
+  END IF;
+
+  NEW.updated_at := pg_catalog.now();
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS ensure_duration_benchmark_scope_trigger
+  ON public.duration_benchmarks;
+CREATE TRIGGER ensure_duration_benchmark_scope_trigger
+  BEFORE INSERT OR UPDATE OF company_id, project_id
+  ON public.duration_benchmarks
+  FOR EACH ROW
+  EXECUTE FUNCTION public.ensure_duration_benchmark_scope();
+
+CREATE TABLE IF NOT EXISTS public.duration_benchmark_cause_segments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  benchmark_id UUID NOT NULL REFERENCES public.duration_benchmarks(id) ON DELETE CASCADE,
+  company_id UUID NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  cause_code TEXT NOT NULL,
+  taxonomy_version TEXT NOT NULL,
+  sample_count INTEGER NOT NULL CHECK (sample_count > 0),
+  p50_days INTEGER NULL CHECK (p50_days IS NULL OR p50_days > 0),
+  p75_days INTEGER NULL CHECK (p75_days IS NULL OR p75_days > 0),
+  p80_days INTEGER NULL CHECK (p80_days IS NULL OR p80_days > 0),
+  mean_days REAL NULL CHECK (mean_days IS NULL OR mean_days > 0),
+  variance REAL NULL CHECK (variance IS NULL OR variance >= 0),
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source_window_start TIMESTAMPTZ NULL,
+  source_as_of TIMESTAMPTZ NOT NULL,
+  duration_day_basis TEXT NOT NULL CHECK (duration_day_basis = 'construction_production_day'),
+  calendar_ref TEXT NOT NULL,
+  calendar_version TEXT NOT NULL,
+  lineage JSONB NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(lineage) = 'array'),
+  is_current BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CHECK (source_window_start IS NULL OR source_window_start <= source_as_of),
+  CHECK (project_id IS NULL OR company_id IS NOT NULL),
+  CHECK (cause_code IN (
+    'predecessor_delay','material_shortage','labor_shortage','equipment_unavailable',
+    'design_change','drawing_delay','quality_rework','weather_impact','owner_decision',
+    'government_inspection','site_capacity_pressure','workflow_sequence','external_readiness','other'
+  ))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_duration_benchmark_cause_segment_current
+  ON public.duration_benchmark_cause_segments (benchmark_id, cause_code, taxonomy_version)
+  WHERE is_current = TRUE;
+
+CREATE INDEX IF NOT EXISTS idx_duration_benchmark_cause_segments_benchmark_id
+  ON public.duration_benchmark_cause_segments (benchmark_id);
+
+CREATE OR REPLACE FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  benchmark_company_id UUID;
+  benchmark_project_id UUID;
+  project_company_id UUID;
+  lock_benchmark_scope BOOLEAN;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    lock_benchmark_scope := TRUE;
+  ELSE
+    lock_benchmark_scope := NEW.benchmark_id IS DISTINCT FROM OLD.benchmark_id;
+  END IF;
+
+  IF lock_benchmark_scope THEN
+    SELECT benchmark.company_id, benchmark.project_id
+      INTO benchmark_company_id, benchmark_project_id
+      FROM public.duration_benchmarks benchmark
+     WHERE benchmark.id = NEW.benchmark_id
+     FOR SHARE;
+  ELSE
+    SELECT benchmark.company_id, benchmark.project_id
+      INTO benchmark_company_id, benchmark_project_id
+      FROM public.duration_benchmarks benchmark
+     WHERE benchmark.id = NEW.benchmark_id;
+  END IF;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'duration benchmark cause segment benchmark not found';
+  END IF;
+
+  IF NEW.company_id IS DISTINCT FROM benchmark_company_id
+     OR NEW.project_id IS DISTINCT FROM benchmark_project_id THEN
+    RAISE EXCEPTION 'duration benchmark cause segment scope mismatch';
+  END IF;
+
+  IF NEW.project_id IS NOT NULL THEN
+    SELECT project.company_id
+      INTO project_company_id
+      FROM public.projects project
+     WHERE project.id = NEW.project_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'duration benchmark cause segment project not found';
+    END IF;
+
+    IF project_company_id IS DISTINCT FROM NEW.company_id THEN
+      RAISE EXCEPTION 'duration benchmark cause segment project/company mismatch';
+    END IF;
+  END IF;
+
+  NEW.updated_at := pg_catalog.now();
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS ensure_duration_benchmark_cause_segment_scope_trigger
+  ON public.duration_benchmark_cause_segments;
+CREATE TRIGGER ensure_duration_benchmark_cause_segment_scope_trigger
+  BEFORE INSERT OR UPDATE
+  ON public.duration_benchmark_cause_segments
+  FOR EACH ROW
+  EXECUTE FUNCTION public.ensure_duration_benchmark_cause_segment_scope();
+
+CREATE OR REPLACE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF (
+    NEW.company_id IS DISTINCT FROM OLD.company_id
+    OR NEW.project_id IS DISTINCT FROM OLD.project_id
+  ) AND EXISTS (
+    SELECT 1
+    FROM public.duration_benchmark_cause_segments segment
+    WHERE segment.benchmark_id = OLD.id
+  ) THEN
+    RAISE EXCEPTION 'duration benchmark scope cannot change while cause segments exist';
+  END IF;
+
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS prevent_duration_benchmark_scope_change_with_segments_trigger
+  ON public.duration_benchmarks;
+CREATE TRIGGER prevent_duration_benchmark_scope_change_with_segments_trigger
+  BEFORE UPDATE OF company_id, project_id
+  ON public.duration_benchmarks
+  FOR EACH ROW
+  EXECUTE FUNCTION public.prevent_duration_benchmark_scope_change_with_segments();
+
+REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope()
+  FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_scope()
+  FROM PUBLIC, anon, authenticated;
+REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_change_with_segments()
+  FROM PUBLIC, anon, authenticated;
+
+ALTER TABLE public.duration_benchmark_cause_segments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.duration_benchmark_cause_segments FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM PUBLIC, anon;
+REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM authenticated;
+REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM workbuddy_runtime;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'REVOKE ALL ON TABLE public.duration_benchmark_cause_segments FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_cause_segment_scope() FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.ensure_duration_benchmark_scope() FROM service_role';
+    EXECUTE 'REVOKE EXECUTE ON FUNCTION public.prevent_duration_benchmark_scope_change_with_segments() FROM service_role';
+  END IF;
+END
+$$;
+
+GRANT SELECT ON TABLE public.duration_benchmark_cause_segments TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.duration_benchmark_cause_segments TO workbuddy_runtime;
+
+DROP POLICY IF EXISTS duration_benchmark_cause_segments_member_read
+  ON public.duration_benchmark_cause_segments;
+CREATE POLICY duration_benchmark_cause_segments_member_read
+  ON public.duration_benchmark_cause_segments
+  FOR SELECT
+  TO authenticated
+  USING (
+    auth.uid() IS NOT NULL
+    AND (
+      (
+        duration_benchmark_cause_segments.company_id IS NULL
+        AND duration_benchmark_cause_segments.project_id IS NULL
+      )
+      OR (
+        duration_benchmark_cause_segments.company_id IS NOT NULL
+        AND duration_benchmark_cause_segments.project_id IS NULL
+        AND workbuddy_private.is_active_company_member(
+          duration_benchmark_cause_segments.company_id,
+          NULL::TEXT[]
+        )
+      )
+      OR (
+        duration_benchmark_cause_segments.company_id IS NOT NULL
+        AND duration_benchmark_cause_segments.project_id IS NOT NULL
+        AND workbuddy_private.is_active_company_member(
+          duration_benchmark_cause_segments.company_id,
+          NULL::TEXT[]
+        )
+        AND (
+          workbuddy_private.is_active_company_member(
+            duration_benchmark_cause_segments.company_id,
+            ARRAY['company_admin']::TEXT[]
+          )
+          OR workbuddy_private.is_active_project_member(
+            duration_benchmark_cause_segments.project_id,
+            NULL::TEXT[]
+          )
+        )
+        AND EXISTS (
+          SELECT 1
+          FROM public.projects project
+          WHERE project.id = duration_benchmark_cause_segments.project_id
+            AND project.company_id = duration_benchmark_cause_segments.company_id
+        )
+      )
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM public.duration_benchmarks benchmark
+      WHERE benchmark.id = duration_benchmark_cause_segments.benchmark_id
+        AND benchmark.company_id IS NOT DISTINCT FROM duration_benchmark_cause_segments.company_id
+        AND benchmark.project_id IS NOT DISTINCT FROM duration_benchmark_cause_segments.project_id
+    )
+  );
+
+DROP POLICY IF EXISTS duration_benchmark_cause_segments_backend_runtime
+  ON public.duration_benchmark_cause_segments;
+CREATE POLICY duration_benchmark_cause_segments_backend_runtime
+  ON public.duration_benchmark_cause_segments
+  FOR ALL
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  )
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+COMMENT ON TABLE public.duration_benchmark_cause_segments IS
+  'Canonical cause-aware benchmark distributions with tenant scope, production-day semantics, and source lineage.';
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 325_duration_asset_review_queue.sql
+-- ============================================================
+-- Durable review projection for non-automatic duration-learning asset decisions.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 325';
+  END IF;
+END
+$$;
+
+-- BEGIN MIGRATION 325
+CREATE TABLE IF NOT EXISTS public.duration_asset_review_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope_level TEXT NOT NULL CHECK (scope_level IN ('project','company','industry','global')),
+  company_id UUID NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NULL,
+  industry_key TEXT NULL,
+  asset_key TEXT NOT NULL CHECK (asset_key IN ('base_duration_benchmark','standard_work_duration_seed','special_work_duration_seed','wbs_reference_days','dependency_rule_candidate','critical_path_rule_candidate')),
+  artifact_key TEXT NOT NULL,
+  review_kind TEXT NOT NULL CHECK (review_kind IN ('candidate_publication','stable_promotion')),
+  decision_fingerprint TEXT NOT NULL CHECK (decision_fingerprint ~ '^[a-f0-9]{64}$'),
+  source_key TEXT NOT NULL,
+  proposal_key TEXT NULL,
+  candidate_event_ref TEXT NULL,
+  conflict_ref TEXT NULL,
+  publication_key TEXT NULL,
+  resolved_publication_key TEXT NULL,
+  reason_codes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  review_payload JSONB NOT NULL DEFAULT '{}'::JSONB CHECK (pg_column_size(review_payload) <= 32768),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','approved','rejected','superseded','resolved_by_publication')),
+  assigned_to_user_id UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  reviewed_by_user_id UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  reviewed_at TIMESTAMPTZ NULL,
+  decision_reason TEXT NULL,
+  resolution_source TEXT NULL CHECK (resolution_source IN ('automatic_publication','manual_approval','manual_rejection','manual_supersession')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_key),
+  CHECK (NULLIF(BTRIM(source_key), '') IS NOT NULL),
+  CHECK (
+    (scope_level = 'project' AND company_id IS NOT NULL AND project_id IS NOT NULL AND industry_key IS NULL)
+    OR (scope_level = 'company' AND company_id IS NOT NULL AND project_id IS NULL AND industry_key IS NULL)
+    OR (scope_level = 'industry' AND company_id IS NULL AND project_id IS NULL AND NULLIF(BTRIM(industry_key), '') IS NOT NULL)
+    OR (scope_level = 'global' AND company_id IS NULL AND project_id IS NULL AND industry_key IS NULL)
+  ),
+  CONSTRAINT duration_asset_review_items_resolution_state_check CHECK (
+    (
+      status = 'open'
+      AND reviewed_by_user_id IS NULL
+      AND reviewed_at IS NULL
+      AND decision_reason IS NULL
+      AND resolution_source IS NULL
+      AND resolved_publication_key IS NULL
+    )
+    OR (
+      status = 'approved' AND resolution_source = 'manual_approval'
+      AND resolution_source IS NOT NULL
+      AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
+      AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
+      AND resolved_publication_key IS NULL
+    )
+    OR (
+      status = 'rejected' AND resolution_source = 'manual_rejection'
+      AND resolution_source IS NOT NULL
+      AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
+      AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
+      AND resolved_publication_key IS NULL
+    )
+    OR (
+      status = 'superseded' AND resolution_source = 'manual_supersession'
+      AND resolution_source IS NOT NULL
+      AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
+      AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
+      AND resolved_publication_key IS NULL
+    )
+    OR (
+      status = 'resolved_by_publication'
+      AND resolution_source IS NOT NULL
+      AND resolution_source IN ('automatic_publication','manual_approval')
+      AND reviewed_at IS NOT NULL
+      AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
+      AND NULLIF(BTRIM(resolved_publication_key), '') IS NOT NULL
+      AND (
+        (resolution_source = 'automatic_publication' AND reviewed_by_user_id IS NULL)
+        OR (resolution_source = 'manual_approval' AND reviewed_by_user_id IS NOT NULL)
+      )
+    )
+  ),
+  FOREIGN KEY (project_id, company_id) REFERENCES public.projects(id, company_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_duration_asset_review_items_queue
+  ON public.duration_asset_review_items (status, asset_key, scope_level, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_duration_asset_review_items_company_project
+  ON public.duration_asset_review_items (company_id, project_id, status, updated_at DESC);
+
+DROP TRIGGER IF EXISTS set_duration_asset_review_items_updated_at ON public.duration_asset_review_items;
+CREATE TRIGGER set_duration_asset_review_items_updated_at
+  BEFORE UPDATE ON public.duration_asset_review_items
+  FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
+
+ALTER TABLE public.duration_asset_review_items ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.duration_asset_review_items FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.duration_asset_review_items FROM PUBLIC, anon;
+REVOKE ALL ON TABLE public.duration_asset_review_items FROM authenticated;
+REVOKE ALL ON TABLE public.duration_asset_review_items FROM workbuddy_runtime;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'REVOKE ALL ON TABLE public.duration_asset_review_items FROM service_role';
+  END IF;
+END
+$$;
+
+GRANT SELECT ON TABLE public.duration_asset_review_items TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.duration_asset_review_items TO workbuddy_runtime;
+
+DROP POLICY IF EXISTS duration_asset_review_items_member_read
+  ON public.duration_asset_review_items;
+CREATE POLICY duration_asset_review_items_member_read
+  ON public.duration_asset_review_items
+  FOR SELECT
+  TO authenticated
+  USING (
+    auth.uid() IS NOT NULL
+    AND duration_asset_review_items.scope_level IN ('company','project')
+    AND duration_asset_review_items.company_id IS NOT NULL
+    AND workbuddy_private.is_active_company_member(
+      duration_asset_review_items.company_id,
+      ARRAY['company_admin']::TEXT[]
+    )
+    AND (
+      (
+        duration_asset_review_items.scope_level = 'company'
+        AND duration_asset_review_items.project_id IS NULL
+      )
+      OR (
+        duration_asset_review_items.scope_level = 'project'
+        AND duration_asset_review_items.project_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM public.projects project
+          WHERE project.id = duration_asset_review_items.project_id
+            AND project.company_id = duration_asset_review_items.company_id
+        )
+      )
+    )
+  );
+
+DROP POLICY IF EXISTS duration_asset_review_items_backend_runtime
+  ON public.duration_asset_review_items;
+CREATE POLICY duration_asset_review_items_backend_runtime
+  ON public.duration_asset_review_items
+  FOR ALL
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  )
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+COMMENT ON TABLE public.duration_asset_review_items IS
+  'Durable review projection for six duration-learning runtime asset families; payloads remain bounded and source authorities stay external.';
+
+-- END MIGRATION 325
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+-- ============================================================
+-- Source: 326_execution_fact_governance.sql
+-- ============================================================
+-- Append-only cross-domain execution-fact authority with atomic compatibility projections.
+
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 326';
+  END IF;
+  IF to_regprocedure('workbuddy_private.is_active_company_member(uuid,text[])') IS NULL THEN
+    RAISE EXCEPTION 'workbuddy_private.is_active_company_member(uuid,text[]) is required before migration 326';
+  END IF;
+  IF to_regprocedure('workbuddy_private.is_active_project_member(uuid,text[])') IS NULL THEN
+    RAISE EXCEPTION 'workbuddy_private.is_active_project_member(uuid,text[]) is required before migration 326';
+  END IF;
+END
+$$;
+
+-- BEGIN MIGRATION 326
+CREATE TABLE IF NOT EXISTS public.execution_fact_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NOT NULL,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('task','risk','issue','material_batch','drawing_version','certificate_work_item','acceptance_plan')),
+  entity_id UUID NOT NULL,
+  fact_type TEXT NOT NULL CHECK (fact_type IN (
+    'task.actual_start_date','task.actual_end_date','task.first_progress_at','task.progress','task.status',
+    'risk.status','risk.closure','issue.status','issue.closure',
+    'material_batch.actual_arrival_date','drawing_version.current',
+    'certificate_work_item.status','certificate_work_item.actual_finish_date',
+    'acceptance_plan.status','acceptance_plan.actual_date'
+  )),
+  fact_value JSONB NOT NULL CHECK (pg_column_size(fact_value) <= 32768),
+  effective_at TIMESTAMPTZ NOT NULL,
+  observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source_module TEXT NOT NULL CHECK (NULLIF(BTRIM(source_module), '') IS NOT NULL AND LENGTH(source_module) <= 160),
+  source_event_id TEXT NOT NULL CHECK (NULLIF(BTRIM(source_event_id), '') IS NOT NULL AND LENGTH(source_event_id) <= 256),
+  actor_user_id UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  evidence_refs JSONB NOT NULL DEFAULT '[]'::JSONB CHECK (jsonb_typeof(evidence_refs) = 'array' AND pg_column_size(evidence_refs) <= 32768),
+  confidence NUMERIC(5,4) NOT NULL DEFAULT 1 CHECK (confidence >= 0 AND confidence <= 1),
+  supersedes_event_id UUID NULL REFERENCES public.execution_fact_events(id) ON DELETE RESTRICT,
+  supersession_kind TEXT NOT NULL CHECK (supersession_kind IN ('initial','new_observation','correction')),
+  correction_reason TEXT NULL,
+  idempotency_key TEXT NOT NULL CHECK (NULLIF(BTRIM(idempotency_key), '') IS NOT NULL AND LENGTH(idempotency_key) <= 256),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (project_id, company_id) REFERENCES public.projects(id, company_id) ON UPDATE RESTRICT ON DELETE CASCADE,
+  UNIQUE (company_id, idempotency_key),
+  CONSTRAINT execution_fact_events_entity_fact_type_check CHECK (
+    (entity_type = 'task' AND fact_type IN ('task.actual_start_date','task.actual_end_date','task.first_progress_at','task.progress','task.status'))
+    OR (entity_type = 'risk' AND fact_type IN ('risk.status','risk.closure'))
+    OR (entity_type = 'issue' AND fact_type IN ('issue.status','issue.closure'))
+    OR (entity_type = 'material_batch' AND fact_type = 'material_batch.actual_arrival_date')
+    OR (entity_type = 'drawing_version' AND fact_type = 'drawing_version.current')
+    OR (entity_type = 'certificate_work_item' AND fact_type IN ('certificate_work_item.status','certificate_work_item.actual_finish_date'))
+    OR (entity_type = 'acceptance_plan' AND fact_type IN ('acceptance_plan.status','acceptance_plan.actual_date'))
+  ),
+  CONSTRAINT execution_fact_events_supersession_state_check CHECK (
+    (supersession_kind = 'initial' AND supersedes_event_id IS NULL AND correction_reason IS NULL)
+    OR (supersession_kind = 'new_observation' AND supersedes_event_id IS NOT NULL AND correction_reason IS NULL)
+    OR (
+      supersession_kind = 'correction'
+      AND supersedes_event_id IS NOT NULL
+      AND NULLIF(BTRIM(correction_reason), '') IS NOT NULL
+    )
+  )
+);
+
+CREATE UNIQUE INDEX uq_execution_fact_events_superseded_once
+  ON public.execution_fact_events (supersedes_event_id)
+  WHERE supersedes_event_id IS NOT NULL;
+
+CREATE INDEX idx_execution_fact_events_stream
+  ON public.execution_fact_events (
+    company_id,
+    project_id,
+    entity_type,
+    entity_id,
+    fact_type,
+    effective_at DESC,
+    observed_at DESC
+  );
+
+CREATE INDEX idx_execution_fact_events_source
+  ON public.execution_fact_events (company_id, source_module, source_event_id);
+
+CREATE OR REPLACE FUNCTION workbuddy_private.ensure_execution_fact_event_scope()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  project_company_id UUID;
+  entity_project_id UUID;
+  current_event_id UUID;
+  superseded_company_id UUID;
+  superseded_project_id UUID;
+  superseded_entity_type TEXT;
+  superseded_entity_id UUID;
+  superseded_fact_type TEXT;
+BEGIN
+  SELECT project.company_id
+    INTO project_company_id
+    FROM public.projects project
+   WHERE project.id = NEW.project_id
+   FOR KEY SHARE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'execution fact project not found';
+  END IF;
+  IF project_company_id IS DISTINCT FROM NEW.company_id THEN
+    RAISE EXCEPTION 'execution fact project/company mismatch';
+  END IF;
+
+  CASE NEW.entity_type
+    WHEN 'task' THEN
+      SELECT task.project_id INTO entity_project_id
+        FROM public.tasks task WHERE task.id = NEW.entity_id FOR KEY SHARE;
+    WHEN 'risk' THEN
+      SELECT risk.project_id INTO entity_project_id
+        FROM public.risks risk WHERE risk.id = NEW.entity_id FOR KEY SHARE;
+    WHEN 'issue' THEN
+      SELECT issue.project_id INTO entity_project_id
+        FROM public.issues issue WHERE issue.id = NEW.entity_id FOR KEY SHARE;
+    WHEN 'material_batch' THEN
+      SELECT material.project_id INTO entity_project_id
+        FROM public.project_materials material WHERE material.id = NEW.entity_id FOR KEY SHARE;
+    WHEN 'drawing_version' THEN
+      SELECT drawing_version.project_id INTO entity_project_id
+        FROM public.drawing_versions drawing_version WHERE drawing_version.id = NEW.entity_id FOR KEY SHARE;
+    WHEN 'certificate_work_item' THEN
+      SELECT work_item.project_id INTO entity_project_id
+        FROM public.certificate_work_items work_item WHERE work_item.id = NEW.entity_id FOR KEY SHARE;
+    WHEN 'acceptance_plan' THEN
+      SELECT acceptance_plan.project_id INTO entity_project_id
+        FROM public.acceptance_plans acceptance_plan WHERE acceptance_plan.id = NEW.entity_id FOR KEY SHARE;
+  END CASE;
+
+  IF entity_project_id IS NULL OR entity_project_id IS DISTINCT FROM NEW.project_id THEN
+    RAISE EXCEPTION 'execution fact entity does not belong to the governed project';
+  END IF;
+
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(
+      NEW.company_id::TEXT || ':' || NEW.project_id::TEXT || ':' || NEW.entity_type || ':' || NEW.entity_id::TEXT || ':' || NEW.fact_type,
+      0
+    )
+  );
+
+  SELECT event.id
+    INTO current_event_id
+    FROM public.execution_fact_events event
+   WHERE event.company_id = NEW.company_id
+     AND event.project_id = NEW.project_id
+     AND event.entity_type = NEW.entity_type
+     AND event.entity_id = NEW.entity_id
+     AND event.fact_type = NEW.fact_type
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.execution_fact_events successor
+        WHERE successor.supersedes_event_id = event.id
+     )
+   ORDER BY event.effective_at DESC, event.observed_at DESC, event.id DESC
+   LIMIT 1
+   FOR UPDATE;
+
+  IF current_event_id IS NULL THEN
+    IF NEW.supersedes_event_id IS NOT NULL OR NEW.supersession_kind <> 'initial' THEN
+      RAISE EXCEPTION 'initial execution fact cannot supersede another event';
+    END IF;
+  ELSIF NEW.supersedes_event_id IS DISTINCT FROM current_event_id THEN
+    RAISE EXCEPTION 'execution fact must supersede the current fact stream head';
+  END IF;
+
+  IF NEW.supersedes_event_id IS NOT NULL THEN
+    SELECT prior.company_id, prior.project_id, prior.entity_type, prior.entity_id, prior.fact_type
+      INTO superseded_company_id, superseded_project_id, superseded_entity_type, superseded_entity_id, superseded_fact_type
+      FROM public.execution_fact_events prior
+     WHERE prior.id = NEW.supersedes_event_id
+     FOR KEY SHARE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'execution fact superseded event not found';
+    END IF;
+    IF superseded_company_id IS DISTINCT FROM NEW.company_id
+       OR superseded_project_id IS DISTINCT FROM NEW.project_id
+       OR superseded_entity_type IS DISTINCT FROM NEW.entity_type
+       OR superseded_entity_id IS DISTINCT FROM NEW.entity_id
+       OR superseded_fact_type IS DISTINCT FROM NEW.fact_type THEN
+      RAISE EXCEPTION 'execution fact supersession must stay in the same fact stream';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION workbuddy_private.reject_execution_fact_event_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = pg_catalog
+AS $$
+BEGIN
+  IF TG_OP = 'DELETE' AND NOT EXISTS (
+    SELECT 1
+      FROM public.projects project
+     WHERE project.id = OLD.project_id
+  ) THEN
+    RETURN OLD;
+  END IF;
+
+  RAISE EXCEPTION 'execution_fact_events is append-only';
+END
+$$;
+
+DROP TRIGGER IF EXISTS ensure_execution_fact_event_scope_trigger
+  ON public.execution_fact_events;
+CREATE TRIGGER ensure_execution_fact_event_scope_trigger
+  BEFORE INSERT ON public.execution_fact_events
+  FOR EACH ROW
+  EXECUTE FUNCTION workbuddy_private.ensure_execution_fact_event_scope();
+
+DROP TRIGGER IF EXISTS reject_execution_fact_event_mutation_trigger
+  ON public.execution_fact_events;
+CREATE TRIGGER reject_execution_fact_event_mutation_trigger
+  BEFORE UPDATE OR DELETE ON public.execution_fact_events
+  FOR EACH ROW
+  EXECUTE FUNCTION workbuddy_private.reject_execution_fact_event_mutation();
+
+WITH candidate_facts AS (
+  SELECT project.company_id,
+         task.project_id,
+         'task'::TEXT AS entity_type,
+         task.id AS entity_id,
+         'task.actual_start_date'::TEXT AS fact_type,
+         COALESCE(to_jsonb(task.actual_start_date), 'null'::JSONB) AS fact_value,
+         COALESCE(task.updated_at, task.created_at, NOW()) AS effective_at
+    FROM public.tasks task
+    JOIN public.projects project ON project.id = task.project_id
+  UNION ALL
+  SELECT project.company_id, task.project_id, 'task', task.id,
+         'task.actual_end_date', COALESCE(to_jsonb(task.actual_end_date), 'null'::JSONB),
+         COALESCE(task.updated_at, task.created_at, NOW())
+    FROM public.tasks task
+    JOIN public.projects project ON project.id = task.project_id
+  UNION ALL
+  SELECT project.company_id, task.project_id, 'task', task.id,
+         'task.first_progress_at', COALESCE(to_jsonb(task.first_progress_at), 'null'::JSONB),
+         COALESCE(task.updated_at, task.created_at, NOW())
+    FROM public.tasks task
+    JOIN public.projects project ON project.id = task.project_id
+  UNION ALL
+  SELECT project.company_id, task.project_id, 'task', task.id,
+         'task.progress', to_jsonb(task.progress),
+         COALESCE(task.updated_at, task.created_at, NOW())
+    FROM public.tasks task
+    JOIN public.projects project ON project.id = task.project_id
+   WHERE task.progress IS NOT NULL
+  UNION ALL
+  SELECT project.company_id, task.project_id, 'task', task.id,
+         'task.status', to_jsonb(task.status),
+         COALESCE(task.updated_at, task.created_at, NOW())
+    FROM public.tasks task
+    JOIN public.projects project ON project.id = task.project_id
+   WHERE NULLIF(BTRIM(task.status), '') IS NOT NULL
+  UNION ALL
+  SELECT project.company_id, risk.project_id, 'risk', risk.id,
+         'risk.status', to_jsonb(risk.status),
+         COALESCE(risk.updated_at, risk.created_at, NOW())
+    FROM public.risks risk
+    JOIN public.projects project ON project.id = risk.project_id
+   WHERE NULLIF(BTRIM(risk.status), '') IS NOT NULL
+  UNION ALL
+  SELECT project.company_id, risk.project_id, 'risk', risk.id,
+         'risk.closure',
+         jsonb_strip_nulls(jsonb_build_object(
+           'status', risk.status,
+           'resultCode', risk.closure_result_code,
+           'resultSummary', risk.closure_result_summary,
+           'effectiveness', risk.closure_effectiveness,
+           'evidenceRefs', risk.closure_evidence_refs,
+           'causeAttributionId', risk.closure_cause_attribution_id,
+           'closedBy', risk.closed_by,
+           'recordedAt', risk.closure_recorded_at
+         )),
+         COALESCE(risk.closure_recorded_at, risk.closed_at, risk.resolved_at, risk.updated_at, risk.created_at, NOW())
+    FROM public.risks risk
+    JOIN public.projects project ON project.id = risk.project_id
+   WHERE risk.status = 'closed'
+  UNION ALL
+  SELECT project.company_id, issue.project_id, 'issue', issue.id,
+         'issue.status', to_jsonb(issue.status),
+         COALESCE(issue.updated_at, issue.created_at, NOW())
+    FROM public.issues issue
+    JOIN public.projects project ON project.id = issue.project_id
+   WHERE NULLIF(BTRIM(issue.status), '') IS NOT NULL
+  UNION ALL
+  SELECT project.company_id, issue.project_id, 'issue', issue.id,
+         'issue.closure',
+         jsonb_strip_nulls(jsonb_build_object(
+           'status', issue.status,
+           'resultCode', issue.closure_result_code,
+           'resultSummary', issue.closure_result_summary,
+           'effectiveness', issue.closure_effectiveness,
+           'evidenceRefs', issue.closure_evidence_refs,
+           'causeAttributionId', issue.closure_cause_attribution_id,
+           'closedBy', issue.closed_by,
+           'recordedAt', issue.closure_recorded_at
+         )),
+         COALESCE(issue.closure_recorded_at, issue.closed_at, issue.updated_at, issue.created_at, NOW())
+    FROM public.issues issue
+    JOIN public.projects project ON project.id = issue.project_id
+   WHERE issue.status = 'closed'
+  UNION ALL
+  SELECT project.company_id, material.project_id, 'material_batch', material.id,
+         'material_batch.actual_arrival_date', COALESCE(to_jsonb(material.actual_arrival_date), 'null'::JSONB),
+         COALESCE(material.updated_at, material.created_at, NOW())
+    FROM public.project_materials material
+    JOIN public.projects project ON project.id = material.project_id
+  UNION ALL
+  SELECT project.company_id, drawing_version.project_id, 'drawing_version', drawing_version.id,
+         'drawing_version.current', to_jsonb(COALESCE(drawing_version.is_current_version, FALSE)),
+         COALESCE(drawing_version.updated_at, drawing_version.created_at, NOW())
+    FROM public.drawing_versions drawing_version
+    JOIN public.projects project ON project.id = drawing_version.project_id
+  UNION ALL
+  SELECT project.company_id, work_item.project_id, 'certificate_work_item', work_item.id,
+         'certificate_work_item.status', to_jsonb(work_item.status),
+         COALESCE(work_item.updated_at, work_item.created_at, NOW())
+    FROM public.certificate_work_items work_item
+    JOIN public.projects project ON project.id = work_item.project_id
+   WHERE NULLIF(BTRIM(work_item.status), '') IS NOT NULL
+  UNION ALL
+  SELECT project.company_id, work_item.project_id, 'certificate_work_item', work_item.id,
+         'certificate_work_item.actual_finish_date', COALESCE(to_jsonb(work_item.actual_finish_date), 'null'::JSONB),
+         COALESCE(work_item.updated_at, work_item.created_at, NOW())
+    FROM public.certificate_work_items work_item
+    JOIN public.projects project ON project.id = work_item.project_id
+  UNION ALL
+  SELECT project.company_id, acceptance_plan.project_id, 'acceptance_plan', acceptance_plan.id,
+         'acceptance_plan.status', to_jsonb(acceptance_plan.status),
+         COALESCE(acceptance_plan.updated_at, acceptance_plan.created_at, NOW())
+    FROM public.acceptance_plans acceptance_plan
+    JOIN public.projects project ON project.id = acceptance_plan.project_id
+   WHERE NULLIF(BTRIM(acceptance_plan.status), '') IS NOT NULL
+  UNION ALL
+  SELECT project.company_id, acceptance_plan.project_id, 'acceptance_plan', acceptance_plan.id,
+         'acceptance_plan.actual_date', COALESCE(to_jsonb(acceptance_plan.actual_date), 'null'::JSONB),
+         COALESCE(acceptance_plan.updated_at, acceptance_plan.created_at, NOW())
+    FROM public.acceptance_plans acceptance_plan
+    JOIN public.projects project ON project.id = acceptance_plan.project_id
+), backfill AS (
+  SELECT candidate_facts.*,
+         candidate_facts.effective_at AS observed_at,
+         'migration.326_execution_fact_governance'::TEXT AS source_module,
+         'backfill:' || candidate_facts.entity_type || ':' || candidate_facts.entity_id::TEXT || ':' || candidate_facts.fact_type AS source_event_id,
+         jsonb_build_array('compatibility_projection_backfill', candidate_facts.fact_type) AS evidence_refs,
+         'initial'::TEXT AS supersession_kind,
+         'migration326:' || candidate_facts.entity_type || ':' || candidate_facts.entity_id::TEXT || ':' || candidate_facts.fact_type AS idempotency_key
+    FROM candidate_facts
+)
+INSERT INTO public.execution_fact_events (
+  company_id, project_id, entity_type, entity_id, fact_type, fact_value,
+  effective_at, observed_at, source_module, source_event_id, actor_user_id,
+  evidence_refs, confidence, supersedes_event_id, supersession_kind,
+  correction_reason, idempotency_key
+)
+SELECT backfill.company_id,
+       backfill.project_id,
+       backfill.entity_type,
+       backfill.entity_id,
+       backfill.fact_type,
+       backfill.fact_value,
+       backfill.effective_at,
+       backfill.observed_at,
+       backfill.source_module,
+       backfill.source_event_id,
+       NULL,
+       backfill.evidence_refs,
+       1,
+       NULL,
+       backfill.supersession_kind,
+       NULL,
+       backfill.idempotency_key
+  FROM backfill
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM public.execution_fact_events existing
+    WHERE existing.company_id = backfill.company_id
+      AND existing.idempotency_key = backfill.idempotency_key
+ )
+ON CONFLICT (company_id, idempotency_key) DO NOTHING;
+
+REVOKE ALL ON FUNCTION workbuddy_private.ensure_execution_fact_event_scope()
+  FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+REVOKE ALL ON FUNCTION workbuddy_private.reject_execution_fact_event_mutation()
+  FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+
+ALTER TABLE public.execution_fact_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.execution_fact_events FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.execution_fact_events FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'REVOKE ALL ON TABLE public.execution_fact_events FROM service_role';
+  END IF;
+END
+$$;
+
+GRANT SELECT ON TABLE public.execution_fact_events TO authenticated;
+GRANT SELECT, INSERT ON TABLE public.execution_fact_events TO workbuddy_runtime;
+
+DROP POLICY IF EXISTS execution_fact_events_member_read
+  ON public.execution_fact_events;
+CREATE POLICY execution_fact_events_member_read
+  ON public.execution_fact_events
+  FOR SELECT
+  TO authenticated
+  USING (
+    auth.uid() IS NOT NULL
+    AND workbuddy_private.is_active_company_member(
+      execution_fact_events.company_id,
+      NULL::TEXT[]
+    )
+    AND (
+      workbuddy_private.is_active_company_member(
+        execution_fact_events.company_id,
+        ARRAY['company_admin']::TEXT[]
+      )
+      OR workbuddy_private.is_active_project_member(
+        execution_fact_events.project_id,
+        NULL::TEXT[]
+      )
+    )
+    AND EXISTS (
+      SELECT 1
+        FROM public.projects project
+       WHERE project.id = execution_fact_events.project_id
+         AND project.company_id = execution_fact_events.company_id
+    )
+  );
+
+DROP POLICY IF EXISTS execution_fact_events_backend_runtime_read
+  ON public.execution_fact_events;
+CREATE POLICY execution_fact_events_backend_runtime_read
+  ON public.execution_fact_events
+  FOR SELECT
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+DROP POLICY IF EXISTS execution_fact_events_backend_runtime_insert
+  ON public.execution_fact_events;
+CREATE POLICY execution_fact_events_backend_runtime_insert
+  ON public.execution_fact_events
+  FOR INSERT
+  TO workbuddy_runtime
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+CREATE OR REPLACE VIEW public.current_execution_facts
+WITH (security_invoker = true)
+AS
+SELECT event.*
+  FROM public.execution_fact_events event
+ WHERE NOT EXISTS (
+   SELECT 1
+     FROM public.execution_fact_events successor
+    WHERE successor.supersedes_event_id = event.id
+ );
+
+REVOKE ALL ON TABLE public.current_execution_facts FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+GRANT SELECT ON TABLE public.current_execution_facts TO authenticated, workbuddy_runtime;
+
+COMMENT ON TABLE public.execution_fact_events IS
+  'Append-only tenant-scoped authority for cross-domain execution facts; legacy columns are transactional compatibility projections only.';
+COMMENT ON VIEW public.current_execution_facts IS
+  'Current execution fact stream heads selected by append-only supersession lineage.';
+
+-- END MIGRATION 326
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+-- ============================================================
+-- Source: 327_task_write_finalization_outbox.sql
+-- ============================================================
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 327';
+  END IF;
+  IF to_regnamespace('workbuddy_private') IS NULL THEN
+    RAISE EXCEPTION 'workbuddy_private schema is required before applying migration 327';
+  END IF;
+END
+$$;
+
+-- BEGIN MIGRATION 327
+CREATE TABLE IF NOT EXISTS public.task_write_finalization_outbox (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sequence_id BIGINT GENERATED ALWAYS AS IDENTITY UNIQUE NOT NULL,
+  company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NOT NULL,
+  task_id UUID NOT NULL REFERENCES public.tasks(id) ON DELETE CASCADE,
+  previous_task JSONB NOT NULL CHECK (jsonb_typeof(previous_task) = 'object'),
+  next_task JSONB NOT NULL CHECK (jsonb_typeof(next_task) = 'object'),
+  actor_user_id UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
+  processing_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (processing_status IN ('pending','processing','failed','completed')),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  lease_owner TEXT NULL,
+  lease_expires_at TIMESTAMPTZ NULL,
+  last_error TEXT NULL,
+  completed_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (project_id, company_id)
+    REFERENCES public.projects(id, company_id) ON UPDATE RESTRICT ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_write_finalization_outbox_claim
+  ON public.task_write_finalization_outbox (
+    processing_status,
+    next_attempt_at,
+    lease_expires_at,
+    sequence_id
+  )
+  WHERE processing_status IN ('pending','processing','failed');
+
+CREATE INDEX IF NOT EXISTS idx_task_write_finalization_outbox_task_order
+  ON public.task_write_finalization_outbox (task_id, sequence_id)
+  WHERE processing_status <> 'completed';
+
+CREATE OR REPLACE FUNCTION workbuddy_private.enqueue_task_write_finalization_outbox()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $$
+DECLARE
+  project_company_id UUID;
+BEGIN
+  IF pg_catalog.current_setting('workbuddy.task_finalization_outbox_mode', TRUE)
+       IS NOT DISTINCT FROM 'canonical_inline' THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT project.company_id
+    INTO project_company_id
+    FROM public.projects project
+   WHERE project.id = NEW.project_id;
+
+  IF project_company_id IS NULL THEN
+    RAISE EXCEPTION 'task finalization outbox project company scope is missing';
+  END IF;
+
+  INSERT INTO public.task_write_finalization_outbox (
+    company_id,
+    project_id,
+    task_id,
+    previous_task,
+    next_task,
+    actor_user_id,
+    processing_status,
+    next_attempt_at,
+    created_at,
+    updated_at
+  ) VALUES (
+    project_company_id,
+    NEW.project_id,
+    NEW.id,
+    to_jsonb(OLD),
+    to_jsonb(NEW),
+    NEW.updated_by,
+    'pending',
+    NOW(),
+    NOW(),
+    NOW()
+  );
+
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS enqueue_task_write_finalization_outbox_trigger
+  ON public.tasks;
+CREATE TRIGGER enqueue_task_write_finalization_outbox_trigger
+AFTER UPDATE ON public.tasks
+FOR EACH ROW
+WHEN (
+  OLD.status IS DISTINCT FROM NEW.status
+  OR OLD.progress IS DISTINCT FROM NEW.progress
+  OR OLD.actual_start_date IS DISTINCT FROM NEW.actual_start_date
+  OR OLD.actual_end_date IS DISTINCT FROM NEW.actual_end_date
+  OR OLD.first_progress_at IS DISTINCT FROM NEW.first_progress_at
+)
+EXECUTE FUNCTION workbuddy_private.enqueue_task_write_finalization_outbox();
+
+REVOKE ALL ON FUNCTION workbuddy_private.enqueue_task_write_finalization_outbox()
+  FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+
+ALTER TABLE public.task_write_finalization_outbox ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.task_write_finalization_outbox FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.task_write_finalization_outbox FROM PUBLIC, anon, authenticated;
+
+DROP POLICY IF EXISTS task_write_finalization_outbox_runtime
+  ON public.task_write_finalization_outbox;
+CREATE POLICY task_write_finalization_outbox_runtime
+  ON public.task_write_finalization_outbox
+  FOR ALL
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  )
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.task_write_finalization_outbox TO workbuddy_runtime;
+
+COMMENT ON TABLE public.task_write_finalization_outbox IS
+  'Durable transactional handoff for canonical task write finalization side effects.';
+-- END MIGRATION 327
+
+-- ============================================================
+-- Source: 328_duration_asset_platform_operator.sql
+-- ============================================================
+BEGIN;
+
+-- BEGIN MIGRATION 328
+ALTER TABLE public.users
+  DROP CONSTRAINT IF EXISTS users_platform_role_check;
+ALTER TABLE public.users
+  ADD CONSTRAINT users_platform_role_check
+  CHECK (platform_role IN ('none', 'commercial_operator', 'duration_governance_operator'));
+-- END MIGRATION 328
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+-- ============================================================
+-- Source: 329_algorithm_intervention_evaluations.sql
+-- ============================================================
+BEGIN;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 329';
+  END IF;
+END
+$$;
+
+-- BEGIN MIGRATION 329
+CREATE TABLE IF NOT EXISTS public.algorithm_intervention_evaluations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  source_publication_key TEXT NOT NULL CHECK (NULLIF(BTRIM(source_publication_key), '') IS NOT NULL),
+  asset_key TEXT NOT NULL CHECK (NULLIF(BTRIM(asset_key), '') IS NOT NULL),
+  parameter_key TEXT NOT NULL CHECK (NULLIF(BTRIM(parameter_key), '') IS NOT NULL),
+  owner_algorithm TEXT NULL,
+  scope_level TEXT NOT NULL CHECK (scope_level IN ('system','company','project','industry_baseline','segment_baseline')),
+  company_id UUID NULL REFERENCES public.companies(id) ON DELETE CASCADE,
+  project_id UUID NULL,
+  intervention_at TIMESTAMPTZ NOT NULL,
+  evaluation_window_start TIMESTAMPTZ NULL,
+  evaluation_window_end TIMESTAMPTZ NULL,
+  evaluation_status TEXT NOT NULL CHECK (evaluation_status IN ('insufficient_evidence','observational_estimate','counterfactual_supported')),
+  causal_estimate_status TEXT NOT NULL CHECK (causal_estimate_status IN ('not_estimable','observational_before_after','observational_difference_in_differences')),
+  treatment_sample_count INTEGER NOT NULL CHECK (treatment_sample_count >= 0),
+  control_sample_count INTEGER NOT NULL CHECK (control_sample_count >= 0),
+  treated_baseline_mae_days NUMERIC NULL,
+  treated_post_mae_days NUMERIC NULL,
+  control_baseline_mae_days NUMERIC NULL,
+  control_post_mae_days NUMERIC NULL,
+  counterfactual_effect_days NUMERIC NULL,
+  post_intervention_error_rate_inflection_days NUMERIC NULL,
+  rollback_review_recommended BOOLEAN NOT NULL DEFAULT FALSE,
+  limitations TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+  evidence JSONB NOT NULL DEFAULT '{}'::JSONB CHECK (jsonb_typeof(evidence) = 'object' AND pg_column_size(evidence) <= 32768),
+  evaluation_fingerprint TEXT NOT NULL CHECK (evaluation_fingerprint ~ '^[a-f0-9]{64}$'),
+  evaluated_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  FOREIGN KEY (project_id, company_id) REFERENCES public.projects(id, company_id) ON UPDATE RESTRICT ON DELETE CASCADE,
+  UNIQUE (evaluation_fingerprint),
+  CHECK (evaluation_window_start IS NULL OR evaluation_window_start >= intervention_at),
+  CHECK (evaluation_window_end IS NULL OR evaluation_window_start IS NULL OR evaluation_window_end >= evaluation_window_start),
+  CHECK (
+    (scope_level = 'project' AND company_id IS NOT NULL AND project_id IS NOT NULL)
+    OR (scope_level = 'company' AND company_id IS NOT NULL AND project_id IS NULL)
+    OR (scope_level IN ('system','industry_baseline','segment_baseline') AND project_id IS NULL)
+  ),
+  CHECK (
+    (evaluation_status = 'insufficient_evidence' AND causal_estimate_status = 'not_estimable' AND counterfactual_effect_days IS NULL)
+    OR (evaluation_status = 'observational_estimate' AND causal_estimate_status = 'observational_before_after' AND counterfactual_effect_days IS NULL)
+    OR (evaluation_status = 'counterfactual_supported' AND causal_estimate_status = 'observational_difference_in_differences' AND counterfactual_effect_days IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_algorithm_intervention_evaluations_publication
+  ON public.algorithm_intervention_evaluations (source_publication_key, evaluated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_algorithm_intervention_evaluations_scope
+  ON public.algorithm_intervention_evaluations (company_id, project_id, parameter_key, evaluated_at DESC);
+
+ALTER TABLE public.algorithm_intervention_evaluations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.algorithm_intervention_evaluations FORCE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE public.algorithm_intervention_evaluations FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT ON TABLE public.algorithm_intervention_evaluations TO workbuddy_runtime;
+
+DROP POLICY IF EXISTS algorithm_intervention_evaluations_backend_runtime_read
+  ON public.algorithm_intervention_evaluations;
+CREATE POLICY algorithm_intervention_evaluations_backend_runtime_read
+  ON public.algorithm_intervention_evaluations
+  FOR SELECT
+  TO workbuddy_runtime
+  USING (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+DROP POLICY IF EXISTS algorithm_intervention_evaluations_backend_runtime_insert
+  ON public.algorithm_intervention_evaluations;
+CREATE POLICY algorithm_intervention_evaluations_backend_runtime_insert
+  ON public.algorithm_intervention_evaluations
+  FOR INSERT
+  TO workbuddy_runtime
+  WITH CHECK (
+    current_user = 'workbuddy_runtime'
+    OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
+  );
+
+COMMENT ON TABLE public.algorithm_intervention_evaluations IS
+  'Append-only observational intervention evaluations. Difference-in-differences estimates are evidence, not randomized causal proof.';
+
+-- END MIGRATION 329
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+-- ============================================================
+-- Source: 330_task_dependency_heuristic_retirement.sql
+-- ============================================================
+-- Unpublished heuristic edges are preview candidates, not executable task dependencies.
+UPDATE public.task_dependencies
+SET status = 'inactive',
+    metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+      'formalDependencyRetirement',
+      jsonb_build_object(
+        'migration', '330_task_dependency_heuristic_retirement',
+        'previousStatus', 'active',
+        'reason', 'unpublished_heuristic_dependency_candidate_only'
+      )
+    ),
+    updated_at = NOW()
+WHERE status = 'active'
+  AND (
+    LOWER(BTRIM(COALESCE(metadata ->> 'source', ''))) = 'heuristic_stagger'
+    OR LOWER(BTRIM(COALESCE(metadata ->> 'sequencingBasis', metadata ->> 'sequencing_basis', ''))) = 'heuristic_stagger'
+    OR LOWER(BTRIM(COALESCE(
+      metadata -> 'dependencyRuleEvidence' ->> 'evidenceLevel',
+      metadata -> 'dependency_rule_evidence' ->> 'evidence_level',
+      ''
+    ))) = 'heuristic_fallback_l0'
+    OR LOWER(BTRIM(COALESCE(
+      metadata -> 'dependencyRuleEvidence' ->> 'publicationStatus',
+      metadata -> 'dependency_rule_evidence' ->> 'publication_status',
+      ''
+    ))) = 'fallback_not_published_dependency_rule'
+    OR LOWER(BTRIM(COALESCE(metadata ->> 'learningPolicy', metadata ->> 'learning_policy', '')))
+      = 'candidate_only_until_dependency_rule_replay_publication'
+  );

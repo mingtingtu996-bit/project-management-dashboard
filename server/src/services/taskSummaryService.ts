@@ -4,7 +4,17 @@ import { executeSQL, executeSQLOne } from './dbService.js'
 import type { Task, TaskCompletionReport } from '../types/db.js'
 import { logger } from '../middleware/logger.js'
 import { delayDayDelta, inclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
-import { isCompletedTask } from '../utils/taskStatus.js'
+import {
+  isCompletedMilestone,
+  isCompletedTask,
+  type TaskStatusLike,
+} from '../utils/taskStatus.js'
+import { buildProjectTaskAttributionProjection } from './taskAttributionProjectionService.js'
+import {
+  buildTaskSummaryAttributionGroups,
+  taskAttributionSummaryService,
+  type TaskSummaryAttributionTask,
+} from './taskAttributionSummaryService.js'
 import {
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
@@ -32,6 +42,22 @@ export interface TaskSummaryDurationStats {
   plannedDurationMetric: DurationMetricDto
   actualDurationMetric: DurationMetricDto
 }
+
+export interface TaskSummaryScopeBinding {
+  id: string
+  scopeDimensionId: string
+  label: string
+  sortOrder: number
+}
+
+export interface TaskSummaryScopeLabelMap {
+  specialty: TaskSummaryScopeBinding[]
+  building: TaskSummaryScopeBinding[]
+  region: TaskSummaryScopeBinding[]
+  phase: TaskSummaryScopeBinding[]
+}
+
+type ProjectTaskSummaryRow = Record<string, any> & TaskStatusLike & { id: string }
 
 type TaskSummaryDurationInput = Pick<
   Task,
@@ -122,6 +148,211 @@ export function calculateTaskCompletionDelayStats(
     delayCount: isChronologicallyDelayed ? 1 : 0,
     delayDetails,
     delayDurationMetric,
+  }
+}
+
+export function resolveTaskSummaryDurationAsOf(
+  task: { completedAt?: string | null; plannedEndDate?: string | null },
+  calendar?: ConstructionCalendarContext | null,
+  now = new Date(),
+) {
+  return task.completedAt?.slice(0, 10)
+    || task.plannedEndDate?.slice(0, 10)
+    || businessDateKey(now, calendar?.timezone)
+}
+
+export function buildTaskSummaryDelayRecords(input: {
+  isDelayed: boolean
+  delayDays: number | null
+  delayMetric: DurationMetricDto
+  recordedAt: string | null
+  rawDelayReason?: unknown
+}) {
+  if (!input.isDelayed) return []
+  const rawReason = String(input.rawDelayReason ?? '').trim() || null
+  return [{
+    delay_days: input.delayDays,
+    delay: input.delayMetric,
+    reason: rawReason,
+    reason_source: rawReason ? 'tasks.delay_reason' as const : null,
+    display_reason: '\u5b9e\u9645\u5b8c\u6210\u65f6\u95f4\u665a\u4e8e\u8ba1\u5212\u5b8c\u6210\u65f6\u95f4',
+    display_reason_source: 'derived_completion_variance' as const,
+    recorded_at: input.recordedAt,
+  }]
+}
+
+function resolveTaskSummaryScopeBinding(bindings: TaskSummaryScopeBinding[], value: unknown) {
+  const normalized = String(value ?? '').trim()
+  if (!normalized) return null
+  return bindings.find((binding) => (
+    binding.label === normalized
+    || binding.id === normalized
+    || binding.scopeDimensionId === normalized
+  )) ?? null
+}
+
+export async function buildProjectTaskSummaryReadModel(
+  input: {
+    projectId: string
+    type?: string | null
+    milestones: ProjectTaskSummaryRow[]
+    taskRows: ProjectTaskSummaryRow[]
+    scopeBindingMap: TaskSummaryScopeLabelMap
+    workCalendar?: ConstructionCalendarContext | null
+    participantUnitNameMap: ReadonlyMap<string, string>
+    projectMemberNameMap: ReadonlyMap<string, string>
+    taskMilestoneRows: Array<{ task_id: string; milestone_id: string }>
+    monthlyFulfillment: unknown
+    timelineEvents: unknown[]
+    timelineReady: boolean
+  },
+  dependencies: {
+    getAttributionTotals?: (
+      projectId: string,
+      tasks: TaskSummaryAttributionTask[],
+    ) => Promise<unknown>
+  } = {},
+) {
+  const completedRows = input.taskRows.filter((task) => isCompletedTask(task))
+  const attributionProjection = buildProjectTaskAttributionProjection(input.taskRows)
+  const normalizedTaskById = new Map(input.taskRows.map((task) => {
+    const taskAttribution = attributionProjection.get(String(task.id))
+    const building = resolveTaskSummaryScopeBinding(input.scopeBindingMap.building, task.building_object_id)
+    const region = resolveTaskSummaryScopeBinding(
+      input.scopeBindingMap.region,
+      task.physical_zone_object_id ?? task.functional_area_object_id,
+    )
+    const phase = resolveTaskSummaryScopeBinding(input.scopeBindingMap.phase, task.phase_object_id)
+    const plannedEndDate = (task.planned_end_date || task.end_date) as string | null
+    const taskCompleted = isCompletedTask(task)
+    const actualEndDate = String(task.actual_end_date ?? '').slice(0, 10)
+    const completedAt = taskCompleted ? (actualEndDate || plannedEndDate) : null
+    const asOf = resolveTaskSummaryDurationAsOf({ completedAt, plannedEndDate }, input.workCalendar)
+    const completionDelay = calculateTaskCompletionDelayStats({
+      planned_end_date: plannedEndDate,
+      actual_end_date: completedAt,
+      status: task.status as Task['status'],
+      progress: task.progress,
+    }, input.workCalendar, asOf)
+    const computedDelay = taskCompleted
+      ? delayDayDelta(plannedEndDate, completedAt, input.workCalendar)
+      : null
+    const delayTotal = taskCompleted ? completionDelay.totalDelayDays : 0
+    const isDelayed = taskCompleted && (computedDelay ?? delayTotal ?? 0) > 0
+    const durationStats = calculateTaskSummaryDurationStats(task as TaskSummaryDurationInput, input.workCalendar, asOf)
+    const assigneeUserId = String(task.assignee_user_id ?? '').trim()
+    const participantUnitId = String(task.participant_unit_id ?? '').trim()
+    const assignee = assigneeUserId ? input.projectMemberNameMap.get(assigneeUserId) ?? null : null
+    const normalized = {
+      id: task.id,
+      title: task.title,
+      assignee,
+      assignee_user_id: assigneeUserId && assignee ? assigneeUserId : null,
+      participant_unit_name: participantUnitId ? input.participantUnitNameMap.get(participantUnitId) ?? null : null,
+      participant_unit_id: participantUnitId || null,
+      parent_id: task.parent_id || null,
+      phase_object_id: phase?.id ?? null,
+      phase_name: phase?.label ?? null,
+      phase_sort_order: phase?.sortOrder ?? 0,
+      wbs_code: task.wbs_code || null,
+      wbs_level: task.wbs_level ?? null,
+      division_id: taskAttribution?.divisionId ?? null,
+      division_name: taskAttribution?.divisionName ?? null,
+      division_sort_order: taskAttribution?.divisionSortOrder ?? 0,
+      subdivision_id: taskAttribution?.subdivisionId ?? null,
+      subdivision_name: taskAttribution?.subdivisionName ?? null,
+      subdivision_sort_order: taskAttribution?.subdivisionSortOrder ?? 0,
+      specialty_id: taskAttribution?.specialtyId ?? null,
+      specialty_name: taskAttribution?.specialtyName ?? null,
+      specialty_type: taskAttribution?.specialtyName ?? null,
+      specialty_sort_order: taskAttribution?.specialtySortOrder ?? 0,
+      building_id: building?.id ?? null,
+      building_name: building?.label ?? null,
+      building_sort_order: building?.sortOrder ?? 0,
+      region_id: region?.id ?? null,
+      region_name: region?.label ?? null,
+      region_sort_order: region?.sortOrder ?? 0,
+      completed_at: completedAt?.slice(0, 10) || null,
+      planned_end_date: plannedEndDate,
+      actual_duration: durationStats.actualDuration,
+      planned_duration: durationStats.plannedDuration,
+      actual_duration_metric: durationStats.actualDurationMetric,
+      planned_duration_metric: durationStats.plannedDurationMetric,
+      delay_total: completionDelay.delayDurationMetric,
+      delay_total_days: delayTotal,
+      delay_records: buildTaskSummaryDelayRecords({
+        isDelayed,
+        delayDays: delayTotal,
+        delayMetric: completionDelay.delayDurationMetric,
+        recordedAt: completedAt,
+        rawDelayReason: task.delay_reason,
+      }),
+      status_label: taskCompleted ? (isDelayed ? 'delayed' : 'on_time') : (String(task.status ?? '').trim() || 'pending'),
+    } satisfies TaskSummaryAttributionTask & Record<string, any>
+    return [String(task.id), normalized] as const
+  }))
+
+  const taskMilestones = new Map<string, string[]>()
+  for (const row of input.taskMilestoneRows) {
+    const milestoneIds = taskMilestones.get(row.task_id) ?? []
+    milestoneIds.push(row.milestone_id)
+    taskMilestones.set(row.task_id, milestoneIds)
+  }
+  const groups = input.milestones.map((milestone) => ({
+    id: milestone.id,
+    name: milestone.title,
+    status: milestone.status,
+    completed_at: milestone.completed_at,
+    planned_end_date: milestone.target_date,
+    tasks: completedRows
+      .filter((task) => {
+        const belongsToMilestone = (taskMilestones.get(String(task.id)) ?? []).includes(String(milestone.id))
+        if (input.type === 'milestone') return belongsToMilestone && task.is_milestone
+        if (input.type === 'normal') return belongsToMilestone && !task.is_milestone
+        return belongsToMilestone
+      })
+      .map((task) => normalizedTaskById.get(String(task.id)))
+      .filter(Boolean),
+  }))
+  const assignedTaskIds = new Set(groups.flatMap((group) => group.tasks.map((task) => task?.id)))
+  const unclassifiedTasks = completedRows
+    .filter((task) => !assignedTaskIds.has(task.id))
+    .map((task) => normalizedTaskById.get(String(task.id)))
+    .filter(Boolean)
+  if (unclassifiedTasks.length > 0) {
+    groups.push({
+      id: 'unclassified',
+      name: '\u672a\u5f52\u5c5e\u91cc\u7a0b\u7891',
+      status: null,
+      completed_at: null,
+      planned_end_date: null,
+      tasks: unclassifiedTasks,
+    })
+  }
+
+  const allTasks = Array.from(normalizedTaskById.values())
+  const completedSummaryTasks = completedRows
+    .map((task) => normalizedTaskById.get(String(task.id)))
+    .filter(Boolean) as Array<TaskSummaryAttributionTask & Record<string, any>>
+  const getAttributionTotals = dependencies.getAttributionTotals
+    ?? ((projectId: string, tasks: TaskSummaryAttributionTask[]) => (
+      taskAttributionSummaryService.getAttributionTotals(projectId, tasks)
+    ))
+  const attributionTotals = await getAttributionTotals(input.projectId, allTasks)
+
+  return {
+    stats: {
+      total_completed: completedSummaryTasks.length,
+      on_time_count: completedSummaryTasks.filter((task) => task.status_label === 'on_time').length,
+      delayed_count: completedSummaryTasks.filter((task) => task.status_label === 'delayed').length,
+      completed_milestone_count: input.milestones.filter((milestone) => isCompletedMilestone(milestone)).length,
+    },
+    groups,
+    attribution_groups: buildTaskSummaryAttributionGroups(completedSummaryTasks, input.workCalendar),
+    attribution_totals: attributionTotals,
+    monthlyFulfillment: input.monthlyFulfillment,
+    timeline_events: input.timelineEvents,
+    timeline_ready: input.timelineReady,
   }
 }
 

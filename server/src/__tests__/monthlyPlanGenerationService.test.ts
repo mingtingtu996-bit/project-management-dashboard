@@ -826,6 +826,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
         startDate: '2026-05-06',
         endDate: '2026-05-08',
         counts_as_construction_shutdown: true,
+        __resolverVersionId: 'calendar-v1',
       }]
     })
     mocks.forecastBatchTasks.mockResolvedValue([

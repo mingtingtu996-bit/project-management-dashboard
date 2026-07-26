@@ -37,7 +37,7 @@ const harness = vi.hoisted(() => {
 
   const state = {
     transactionActive: false,
-    failure: null as 'certificate' | 'condition' | null,
+    failure: null as 'certificate' | 'condition' | 'execution_fact' | null,
     retentionBlocked: false,
     committedEvents: [] as string[],
     attemptedEvents: [] as Array<{ label: string; inTransaction: boolean }>,
@@ -160,6 +160,33 @@ const harness = vi.hoisted(() => {
     if (normalized.includes('from project_members') && normalized.includes('project_id = ?')) {
       observe('project-members:als-read')
       return [{ id: 'member-1', user_id: 'owner-1', permission_level: 'owner', is_active: true }]
+    }
+
+    if (
+      normalized.includes('from drawing_versions')
+      && normalized.includes('where project_id = ? and package_id = ?')
+      && normalized.includes('for update')
+    ) {
+      const [requestedProjectId, requestedPackageId] = params.map((value) => String(value ?? ''))
+      const versions = requestedProjectId === projectId && requestedPackageId === packageId
+        ? [{
+            id: '55555555-5555-4555-8555-555555555555',
+            project_id: projectId,
+            package_id: packageId,
+            drawing_id: drawingId,
+            version_no: '1.0',
+            is_current_version: true,
+            created_at: '2026-07-20T00:00:00.000Z',
+          }]
+        : []
+      if (
+        state.insertedVersion
+        && state.insertedVersion.project_id === requestedProjectId
+        && state.insertedVersion.package_id === requestedPackageId
+      ) {
+        versions.push({ ...state.insertedVersion } as typeof versions[number])
+      }
+      return versions
     }
 
     if (normalized.startsWith('insert into construction_drawings')) {
@@ -303,6 +330,11 @@ const harness = vi.hoisted(() => {
     return 1
   })
 
+  const recordDrawingVersionCurrentFactChanges = vi.fn(async () => {
+    mutate('drawing-version-facts:record')
+    if (state.failure === 'execution_fact') throw new Error('injected execution-fact failure')
+  })
+
   const listActiveEntityLinksForEntity = vi.fn(async () => {
     observe('active-links:revalidate')
     return []
@@ -346,6 +378,7 @@ const harness = vi.hoisted(() => {
     syncDrawingCertificateLink,
     cleanupDrawingCertificateLink,
     autoSatisfyDrawingPackageConditions,
+    recordDrawingVersionCurrentFactChanges,
     listActiveEntityLinksForEntity,
     enforceRetentionOrBlock,
   }
@@ -415,6 +448,10 @@ vi.mock('../services/projectLinkingService.js', () => ({
 
 vi.mock('../services/warningChainService.js', () => ({
   persistNotification: harness.persistNotification,
+}))
+
+vi.mock('../services/drawingVersionExecutionFactService.js', () => ({
+  recordDrawingVersionCurrentFactChanges: harness.recordDrawingVersionCurrentFactChanges,
 }))
 
 vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
@@ -534,6 +571,39 @@ describe('construction drawing request mutation atomicity', () => {
       'notification:persist',
       'certificate-link:package-sync',
     ])
+  })
+
+  it('rolls back the complete POST mutation when drawing-version fact persistence fails', async () => {
+    harness.state.failure = 'execution_fact'
+
+    const response = await supertest(buildApp())
+      .post('/api/construction-drawings')
+      .send({
+        project_id: harness.projectId,
+        package_id: harness.packageId,
+        package_code: 'PKG-001',
+        package_name: 'Structure package',
+        related_license_id: harness.licenseId,
+        drawing_type: 'structure',
+        drawing_name: 'Fact rollback drawing',
+        drawing_code: 'D-003',
+        version: '2.0',
+        version_no: '2.0',
+        revision_no: 'R2',
+        review_mode: 'none',
+        is_current_version: true,
+      })
+
+    expect(response.status).toBe(500)
+    expect(harness.state.insertedDrawing).toBeNull()
+    expect(harness.state.insertedVersion).toBeNull()
+    expect(harness.state.committedEvents).toEqual([])
+    expect(harness.clearDrawingBoardCache).not.toHaveBeenCalled()
+    expect(harness.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledTimes(1)
+    expect(harness.state.attemptedEvents).toContainEqual({
+      label: 'drawing-version-facts:record',
+      inTransaction: true,
+    })
   })
 
   it('rolls back PUT CAS, version, package, notification, certificate, and condition writes when condition sync fails', async () => {

@@ -5,11 +5,28 @@ import {
   collectDurationLearningRuntimeMonitoringCandidates,
   createInMemoryDurationLearningRuntimeCollectionCursorStore,
   expandDurationLearningRuntimeCandidateScopes,
-  runDurationLearningRuntimeLifecycleSweep,
+  runDurationLearningRuntimeLifecycleSweep as runDurationLearningRuntimeLifecycleSweepActual,
   type DurationLearningRuntimeCandidateProposal,
 } from '../services/durationLearningRuntimeLifecycleService.js'
 import { evaluateDurationLearningAssetAutomationPolicy } from '../services/durationLearningAssetAutomationPolicyService.js'
 import { createInMemoryDurationContextPolicyLearningCheckpointStore } from '../services/durationContextPolicyLearningCheckpointService.js'
+
+const lifecycleReviewQueueStore = {
+  upsertOpen: vi.fn(async () => ({ disposition: 'created', item: {} })),
+  loadForUpdate: vi.fn(async () => null),
+  resolveByPublication: vi.fn(),
+  resolveOpenByPublicationIdentity: vi.fn(async () => 0),
+  decide: vi.fn(),
+  list: vi.fn(),
+}
+
+function runDurationLearningRuntimeLifecycleSweep(input: Record<string, unknown> = {}) {
+  return runDurationLearningRuntimeLifecycleSweepActual({
+    reviewQueueStore: lifecycleReviewQueueStore as any,
+    transactionRunner: <T>(work: () => Promise<T>) => work(),
+    ...input,
+  })
+}
 
 function benchmarkProposal(input: {
   projectId: string
@@ -27,9 +44,23 @@ function benchmarkProposal(input: {
       projectId: input.projectId,
     },
     runtimePayload: {
+      benchmarkId: `benchmark-${input.projectId}`,
+      benchmarkVersion: `candidate:2026-07-01:${input.projectId}`,
       p50Days: 8,
+      p75Days: 10,
       p80Days: 11,
+      meanDays: 8.5,
+      variance: 2.25,
+      coefficientOfVariation: 0.176471,
+      sampleCount: input.sampleCount ?? 5,
+      confidenceLevel: 'high',
+      confidenceScore: 88,
       durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-04-22T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
     },
     sourceCandidateRefs: [`duration_benchmarks:${input.projectId}`],
     sourceEvidenceRefs: [`duration_experience_samples:${input.projectId}`],
@@ -402,13 +433,28 @@ describe('durationLearningRuntimeLifecycleService', () => {
       ['benchmark:base_duration_benchmark', {
         ...common,
         id: 'benchmark-1',
+        benchmark_version: 'candidate:2026-07-01:abc123',
         collector_group_key: 'benchmark-artifact',
         benchmark_key: 'benchmark-artifact',
         sample_count: 20,
         p50_days: 8,
+        p75_days: 10,
         p80_days: 11,
+        mean_days: 8.5,
+        variance: 2.25,
+        coefficient_of_variation: 0.176471,
+        confidence_level: 'high',
+        confidence_score: 88,
         duration_day_basis: 'construction_production_day',
-        metadata: numericHoldoutEvidence,
+        generated_at: '2026-07-21T00:00:00.000Z',
+        source_window_start: '2026-04-22T00:00:00.000Z',
+        source_as_of: '2026-07-20T00:00:00.000Z',
+        metadata: {
+          ...numericHoldoutEvidence,
+          calendar_ref: 'cn-work-calendar',
+          calendar_version: '2026.07',
+          sample_ids: taskIds.map((_, index) => `sample-${index + 1}`),
+        },
       }],
       ['seed:standard_work_duration_seed', {
         ...common,
@@ -556,6 +602,25 @@ describe('durationLearningRuntimeLifecycleService', () => {
     const projectProposals = proposals.filter((proposal) => proposal.scope.level === 'project')
 
     expect(projectProposals).toHaveLength(6)
+    expect(projectProposals.find((proposal) => proposal.assetKey === 'base_duration_benchmark')?.runtimePayload).toEqual({
+      benchmarkId: 'benchmark-1',
+      benchmarkVersion: 'candidate:2026-07-01:abc123',
+      p50Days: 8,
+      p75Days: 10,
+      p80Days: 11,
+      meanDays: 8.5,
+      variance: 2.25,
+      coefficientOfVariation: 0.176471,
+      sampleCount: 20,
+      confidenceLevel: 'high',
+      confidenceScore: 88,
+      durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-04-22T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+    })
     expect(Object.fromEntries(projectProposals.map((proposal) => [
       proposal.assetKey,
       {
@@ -1518,9 +1583,10 @@ describe('durationLearningRuntimeLifecycleService', () => {
     proposals.forEach((proposal, index) => {
       proposal.sampleCount = projectSamples[index].length
       proposal.runtimePayload = {
+        ...proposal.runtimePayload,
         p50Days: index === 3 ? 100 : 2,
         p80Days: 100,
-        durationDayBasis: 'construction_production_day',
+        sampleCount: projectSamples[index].length,
       }
       ;(proposal as any).productionDaySamples = projectSamples[index]
     })
@@ -1531,9 +1597,37 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(industry).toEqual(expect.objectContaining({
       sampleCount: 12,
       runtimePayload: {
+        benchmarkKind: 'aggregate_all_cause',
+        causeApplicability: 'all_cause',
+        benchmarkVersion: expect.stringMatching(/^aggregate:industry:[a-f0-9]{16}$/),
         p50Days: 2,
+        p75Days: 100,
         p80Days: 100,
+        meanDays: 50.75,
+        variance: expect.any(Number),
+        coefficientOfVariation: expect.any(Number),
+        sampleCount: 12,
+        confidenceLevel: 'high',
+        confidenceScore: 88,
         durationDayBasis: 'construction_production_day',
+        generatedAt: '2026-07-21T00:00:00.000Z',
+        sourceWindowStart: '2026-04-22T00:00:00.000Z',
+        sourceAsOf: '2026-07-20T00:00:00.000Z',
+        aggregateProvenance: {
+          schemaVersion: 'duration-benchmark-aggregate/v1',
+          scopeLevel: 'industry',
+          sourceBenchmarkIds: ['benchmark-p1', 'benchmark-p2', 'benchmark-p3', 'benchmark-p4'],
+          sourceBenchmarkVersions: [
+            'candidate:2026-07-01:p1',
+            'candidate:2026-07-01:p2',
+            'candidate:2026-07-01:p3',
+            'candidate:2026-07-01:p4',
+          ],
+          sourceProjectIds: ['p1', 'p2', 'p3', 'p4'],
+          sourceCompanyIds: ['c1', 'c2'],
+          sourceIndustryKeys: ['general_civil'],
+          calendarIdentities: [{ calendarRef: 'cn-work-calendar', calendarVersion: '2026.07' }],
+        },
       },
     }))
   })
@@ -1959,15 +2053,27 @@ describe('durationLearningRuntimeLifecycleService', () => {
       if (sql.includes('duration-learning-collector:history:benchmark:base_duration_benchmark')) {
         return [{
           id: 'benchmark-retry-row',
+          benchmark_version: 'candidate:2026-07-21:retry',
           benchmark_key: 'benchmark-retry-cursor',
           company_id: 'c1',
           project_id: 'p1',
           business_type: 'general_civil',
           sample_count: 220,
           p50_days: 8,
+          p75_days: 10,
           p80_days: 11,
+          mean_days: 8.5,
+          variance: 2.25,
+          coefficient_of_variation: 0.176471,
+          confidence_level: 'high',
+          confidence_score: 88,
           duration_day_basis: 'construction_production_day',
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-04-22T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
           metadata: {
+            calendar_ref: 'cn-work-calendar',
+            calendar_version: '2026.07',
             task_ids: Array.from({ length: 120 }, (_, index) => `task-${index}`),
             real_outcome_count: 110,
             replay_case_count: 220,
@@ -2070,9 +2176,19 @@ describe('durationLearningRuntimeLifecycleService', () => {
     expect(new Set(persistPublication.mock.calls.map(([input]) => input.publicationKey)).size).toBe(2)
   })
 
-  it('promotes a measured canary after its monitoring window', async () => {
+  it.each([
+    { name: 'project', scope: { level: 'project' as const, companyId: 'company-1', projectId: 'project-1' }, projectAtomic: true },
+    { name: 'company', scope: { level: 'company' as const, companyId: 'company-1' }, projectAtomic: false },
+    { name: 'industry', scope: { level: 'industry' as const, industryKey: 'general_civil' }, projectAtomic: false },
+    { name: 'global', scope: { level: 'global' as const }, projectAtomic: false },
+  ])('promotes a measured $name base-benchmark canary through its compatible path', async ({ scope, projectAtomic }) => {
     const recordImpact = vi.fn(async () => ({ status: 'impact_recorded', reasons: [] }))
     const promoteCanary = vi.fn(async () => ({
+      status: 'stable_promoted',
+      previousPublicationKey: 'stable-0',
+      reasons: [],
+    }))
+    const promoteBenchmarkCanary = vi.fn(async () => ({
       status: 'stable_promoted',
       previousPublicationKey: 'stable-0',
       reasons: [],
@@ -2086,7 +2202,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
         assetKey: 'base_duration_benchmark',
         artifactKey: 'SW-CONCRETE:process:all',
         publicationStage: 'canary',
-        scope: { level: 'company', companyId: 'company-1' },
+        scope,
         monitoringWindowHours: 72,
         monitoringElapsedHours: 80,
         observedCount: 20,
@@ -2101,13 +2217,15 @@ describe('durationLearningRuntimeLifecycleService', () => {
           experienceTier: 'T2',
           factSource: 'actual_outcome',
           observed: {
-            validChangeCount: 220,
-            distinctTaskCount: 120,
-            distinctProjectCount: 45,
-            distinctCompanyCount: 1,
-            realOutcomeCount: 110,
-            replayCaseCount: 220,
-            observationWindowDays: 60,
+            validChangeCount: 1000,
+            distinctTaskCount: 500,
+            distinctProjectCount: 250,
+            distinctCompanyCount: 20,
+            distinctIndustryCount: 2,
+            realOutcomeCount: 500,
+            replayCaseCount: 1000,
+            observationWindowDays: 120,
+            holdoutSampleCount: 500,
             overcompensationRate: 0,
             rollbackReady: true,
             tenantScopeValid: true,
@@ -2116,6 +2234,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
       }],
       recordImpact: recordImpact as any,
       promoteCanary: promoteCanary as any,
+      promoteBenchmarkCanary: promoteBenchmarkCanary as any,
       rollbackPublication: rollbackPublication as any,
       observedAt: '2026-07-17T00:00:00.000Z',
     })
@@ -2126,7 +2245,8 @@ describe('durationLearningRuntimeLifecycleService', () => {
       monitoringStatus: 'passed',
       metrics: expect.objectContaining({ accuracySampleCount: 20, maeBefore: 8, maeAfter: 6 }),
     }))
-    expect(promoteCanary).toHaveBeenCalledOnce()
+    expect(promoteBenchmarkCanary).toHaveBeenCalledTimes(projectAtomic ? 1 : 0)
+    expect(promoteCanary).toHaveBeenCalledTimes(projectAtomic ? 0 : 1)
     expect(rollbackPublication).not.toHaveBeenCalled()
   })
 
@@ -2203,7 +2323,7 @@ describe('durationLearningRuntimeLifecycleService', () => {
             distinctCompanyCount: 1,
             realOutcomeCount: 0,
             replayCaseCount: 500,
-            observationWindowDays: 0,
+            observationWindowDays: 57,
             replayPassRate: 1,
             outcomeAcceptanceRate: 1,
             qualityConsistencyRate: 1,

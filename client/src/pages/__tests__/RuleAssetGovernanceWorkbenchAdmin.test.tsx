@@ -2,6 +2,7 @@ import { act } from 'react'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -27,7 +28,11 @@ vi.mock('@/services/v14231ReadinessApi', async () => {
   }
 })
 
-const { default: RuleAssetGovernanceWorkbenchAdmin } = await import('../RuleAssetGovernanceWorkbenchAdmin')
+const { default: RuleAssetGovernanceWorkbenchAdminPage } = await import('../RuleAssetGovernanceWorkbenchAdmin')
+
+function RuleAssetGovernanceWorkbenchAdmin() {
+  return <MemoryRouter><RuleAssetGovernanceWorkbenchAdminPage /></MemoryRouter>
+}
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -704,6 +709,15 @@ describe('RuleAssetGovernanceWorkbenchAdmin', () => {
         },
       ],
     })
+  })
+
+  it('renders the unified duration assets published link', async () => {
+    await act(async () => {
+      root.render(<RuleAssetGovernanceWorkbenchAdmin />)
+    })
+    await waitForText(container, ['\u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03'])
+    const link = Array.from(container.querySelectorAll('a')).find((element) => element.textContent === '\u67e5\u770b\u5de5\u671f\u8d44\u4ea7\u53d1\u5e03')
+    expect(link?.getAttribute('href')).toBe('/admin/duration-assets?tab=published')
   })
 
   afterEach(() => {

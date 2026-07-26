@@ -1791,6 +1791,11 @@ function buildRepresentativeProductionCapacityEvidence(
     constructionCalendar: {
       basis: 'official_construction_calendar_seed',
       windows: [],
+      calendarRef: 'representative_work_calendar',
+      calendarVersion: 't2-rhythm-capacity-probe-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     },
   })
 }

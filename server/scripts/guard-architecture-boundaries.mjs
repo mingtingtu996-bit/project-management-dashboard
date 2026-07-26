@@ -46,6 +46,9 @@ const DEFAULT_DISALLOWED_ARCHITECTURE_UNIT_IMPORTS = [
       "service:taskCodeTransactionService",
       "service:planningTableCommitService",
     ],
+    allowedImportPairs: [
+      "service:acceptanceTaskSyncService->service:taskWriteChainService",
+    ],
     reason: "acceptance_fact_subchannel_must_not_bypass_acceptance_pass_governance_into_execution_fact_writers",
   },
 ]
@@ -206,7 +209,10 @@ function extractImports(source) {
 
 function findDisallowedArchitectureUnitImport(importerEntry, targetEntry, rules = DEFAULT_DISALLOWED_ARCHITECTURE_UNIT_IMPORTS) {
   if (!importerEntry?.architectureUnit || !targetEntry?.architectureUnit) return null
+  const importPair = importerEntry.kind + ":" + importerEntry.id + "->" + targetEntry.kind + ":" + targetEntry.id
   return rules.find((rule) => (
+    !(rule.allowedImportPairs ?? []).includes(importPair)
+    &&
     (
       rule.importerArchitectureUnit === importerEntry.architectureUnit
       || rule.importerRuntimeScope === importerEntry.runtimeScope

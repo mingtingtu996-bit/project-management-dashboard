@@ -707,6 +707,9 @@ export interface ProgressDeviationAttribution {
   delay_reasons: Array<{
     id: string
     reason: string
+    canonicalCauseAvailability: 'available' | 'unavailable'
+    canonicalCauseCode: string | null
+    canonicalCauseTaxonomyVersion: string | null
     delay_reason?: string | null
     status?: string | null
     delayed_date?: string | null

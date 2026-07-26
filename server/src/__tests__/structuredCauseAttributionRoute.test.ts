@@ -25,18 +25,22 @@ vi.mock('../auth/companyContext.js', () => ({
   getRequestCompanyId: () => 'company-1',
 }))
 
-vi.mock('../services/structuredCauseAttributionService.js', () => ({
-  StructuredCauseAttributionError: class StructuredCauseAttributionError extends Error {},
-  loadTaskStructuredCauseEvidence: mocks.loadTaskStructuredCauseEvidence,
-  persistStructuredCauseCandidates: mocks.persistStructuredCauseCandidates,
-  listStructuredCauseAttributions: mocks.listStructuredCauseAttributions,
-  getStructuredCauseAttributionQualityMetrics: mocks.getStructuredCauseAttributionQualityMetrics,
-  confirmStructuredCauseAttribution: mocks.confirmStructuredCauseAttribution,
-  recordUserConfirmedStructuredCauseAttribution: mocks.recordUserConfirmedStructuredCauseAttribution,
-  rejectStructuredCauseAttribution: mocks.rejectStructuredCauseAttribution,
-}))
+vi.mock('../services/structuredCauseAttributionService.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/structuredCauseAttributionService.js')>()
+  return {
+    ...actual,
+    loadTaskStructuredCauseEvidence: mocks.loadTaskStructuredCauseEvidence,
+    persistStructuredCauseCandidates: mocks.persistStructuredCauseCandidates,
+    listStructuredCauseAttributions: mocks.listStructuredCauseAttributions,
+    getStructuredCauseAttributionQualityMetrics: mocks.getStructuredCauseAttributionQualityMetrics,
+    confirmStructuredCauseAttribution: mocks.confirmStructuredCauseAttribution,
+    recordUserConfirmedStructuredCauseAttribution: mocks.recordUserConfirmedStructuredCauseAttribution,
+    rejectStructuredCauseAttribution: mocks.rejectStructuredCauseAttribution,
+  }
+})
 
 import causeAttributionRoutes from '../routes/cause-attributions.js'
+import { STRUCTURED_CAUSE_TAXONOMY, STRUCTURED_CAUSE_TAXONOMY_VERSION } from '../services/structuredCauseAttributionService.js'
 
 function buildApp() {
   const app = express()
@@ -63,6 +67,18 @@ describe('cause attribution routes', () => {
     mocks.confirmStructuredCauseAttribution.mockResolvedValue({ id: 'cause-1', status: 'confirmed' })
     mocks.recordUserConfirmedStructuredCauseAttribution.mockResolvedValue({ id: 'cause-user-1', status: 'confirmed' })
     mocks.rejectStructuredCauseAttribution.mockResolvedValue({ id: 'cause-1', status: 'rejected' })
+  })
+
+  it('returns the exact canonical structured-cause taxonomy authority', async () => {
+    const response = await supertest(buildApp())
+      .get('/api/cause-attributions/taxonomy')
+
+    expect(response.status).toBe(200)
+    expect(response.body.data).toEqual({
+      version: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+      entries: STRUCTURED_CAUSE_TAXONOMY,
+    })
+    expect(response.body.data.entries).toHaveLength(14)
   })
 
   it('infers from server-loaded facts and persists under request tenant scope', async () => {
@@ -94,7 +110,7 @@ describe('cause attribution routes', () => {
 
   it('exposes tenant-scoped list, confirmation, and rejection commands', async () => {
     const listResponse = await supertest(buildApp())
-      .get('/api/cause-attributions/projects/project-1?subjectType=task&subjectId=task-1')
+      .get('/api/cause-attributions/projects/project-1?subjectType=task&subjectId=task-1&status=confirmed&eventType=delay&causeRole=primary')
     const confirmResponse = await supertest(buildApp())
       .post('/api/cause-attributions/projects/project-1/cause-1/confirm')
       .send({
@@ -114,11 +130,29 @@ describe('cause attribution routes', () => {
       actorId: 'user-1',
       responsibilityClass: 'contractor_attributable',
     }))
+    expect(mocks.listStructuredCauseAttributions).toHaveBeenCalledWith(expect.objectContaining({
+      subjectType: 'task',
+      subjectId: 'task-1',
+      status: 'confirmed',
+      eventType: 'delay',
+      causeRole: 'primary',
+    }))
     expect(mocks.rejectStructuredCauseAttribution).toHaveBeenCalledWith(expect.objectContaining({
       companyId: 'company-1',
       projectId: 'project-1',
       actorId: 'user-1',
     }))
+  })
+
+  it('rejects unsupported list event and role filters', async () => {
+    const eventResponse = await supertest(buildApp())
+      .get('/api/cause-attributions/projects/project-1?eventType=all')
+    const roleResponse = await supertest(buildApp())
+      .get('/api/cause-attributions/projects/project-1?causeRole=all')
+
+    expect(eventResponse.status).toBe(400)
+    expect(roleResponse.status).toBe(400)
+    expect(mocks.listStructuredCauseAttributions).not.toHaveBeenCalled()
   })
 
   it('exposes project-scoped cause-quality metrics to project members', async () => {

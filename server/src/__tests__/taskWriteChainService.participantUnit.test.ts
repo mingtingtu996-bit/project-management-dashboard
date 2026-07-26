@@ -142,6 +142,7 @@ const state = vi.hoisted(() => {
     })),
     inferAndPersistTaskStructuredCauseAttributions: vi.fn(async () => []),
     collectDurationExperienceSampleFromTask: vi.fn(async () => true),
+    collectDurationExperienceSampleWithTaskLock: vi.fn(async () => true),
     retireDurationExperienceSampleForTask: vi.fn(async () => true),
     enqueueDurationExperienceCollectionFailure: vi.fn(async () => undefined),
     applyTaskMaterialLifecycleFeedback: vi.fn(async () => undefined),
@@ -209,45 +210,12 @@ vi.mock('../services/durationExperienceService.js', () => ({
 }))
 
 vi.mock('../services/durationExperienceReconciliationService.js', () => ({
+  collectDurationExperienceSampleWithTaskLock: state.collectDurationExperienceSampleWithTaskLock,
   enqueueDurationExperienceCollectionFailure: state.enqueueDurationExperienceCollectionFailure,
 }))
 
 vi.mock('../services/materialTaskFeedbackService.js', () => ({
   applyTaskMaterialLifecycleFeedback: state.applyTaskMaterialLifecycleFeedback,
-}))
-
-vi.mock('../jobs/taskWriteFinalizationOutboxDrainJob.js', () => ({
-  taskWriteFinalizationOutboxDrainJob: {
-    executeNow: vi.fn(async () => {
-    const previousTask = await state.getTask.mock.results.at(-1)?.value
-    const updateResult = await state.updateTaskWithCodeInTransaction.mock.results.at(-1)?.value
-    if (previousTask && updateResult?.task) {
-      const { finalizeTaskWriteFromLegacyMutation } = await import('../services/taskWriteChainService.js')
-      await finalizeTaskWriteFromLegacyMutation(
-        updateResult.task,
-        previousTask,
-        updateResult.task.updated_by ?? null,
-      )
-    }
-    return {
-      status: 'completed',
-      attempts: 1,
-      claimed: previousTask && updateResult?.task ? 1 : 0,
-      completed: previousTask && updateResult?.task ? 1 : 0,
-      failed: 0,
-      failureIds: [],
-      batches: 1,
-      maxBatches: 4,
-      backlogCount: 0,
-      readyBacklogCount: 0,
-      failedBacklogCount: 0,
-      expiredProcessingCount: 0,
-      oldestPendingAt: null,
-      oldestPendingAgeSeconds: null,
-      backlogAgeExceeded: false,
-    }
-    }),
-  },
 }))
 
 vi.mock('../services/upgradeChainService.js', () => ({
@@ -650,7 +618,7 @@ describe('taskWriteChainService participant unit lookup', () => {
   })
 
   it('infers structured task causes before collecting the completion learning sample', async () => {
-    state.getTask.mockResolvedValue({
+    const previousTask = {
       id: 'task-1',
       project_id: 'project-1',
       title: 'material-delayed task',
@@ -661,36 +629,64 @@ describe('taskWriteChainService participant unit lookup', () => {
       actual_start_date: '2026-04-01',
       building_object_id: 'building-1',
       version: 3,
-    })
-    state.updateTaskWithCodeInTransaction.mockResolvedValue({
-      task: {
-        id: 'task-1',
-        project_id: 'project-1',
-        title: 'material-delayed task',
-        status: 'completed',
-        progress: 100,
-        planned_start_date: '2026-04-01',
-        planned_end_date: '2026-04-10',
-        actual_start_date: '2026-04-01',
-        actual_end_date: '2026-04-18',
-        building_object_id: 'building-1',
-        version: 4,
-      },
-    } as never)
-
-    await updateTaskInMainChain('task-1', {
+    } as any
+    const completedTask = {
+      ...previousTask,
       status: 'completed',
       progress: 100,
       actual_end_date: '2026-04-18',
       updated_by: 'user-1',
-    }, 3)
+      version: 4,
+    } as any
+
+    await finalizeTaskWriteFromLegacyMutation(completedTask, previousTask, 'user-1')
 
     expect(state.inferAndPersistTaskStructuredCauseAttributions).toHaveBeenCalledWith({
       task: expect.objectContaining({ id: 'task-1', status: 'completed' }),
     })
-    expect(state.collectDurationExperienceSampleFromTask).toHaveBeenCalled()
+    expect(state.collectDurationExperienceSampleWithTaskLock).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      previousTask: expect.objectContaining({ id: 'task-1', status: 'in_progress' }),
+      actorId: 'user-1',
+      trigger: 'task_completion',
+    })
     expect(state.inferAndPersistTaskStructuredCauseAttributions.mock.invocationCallOrder[0])
-      .toBeLessThan(state.collectDurationExperienceSampleFromTask.mock.invocationCallOrder[0])
+      .toBeLessThan(state.collectDurationExperienceSampleWithTaskLock.mock.invocationCallOrder[0])
+  })
+
+  it('passes the controlled correction reason into the transactional task writer', async () => {
+    state.getTask.mockResolvedValue({
+      id: 'task-1',
+      project_id: 'project-1',
+      title: 'corrected task',
+      status: 'in_progress',
+      progress: 40,
+      actual_start_date: '2026-06-01',
+      actual_end_date: null,
+      first_progress_at: '2026-06-01T08:00:00.000Z',
+      building_object_id: 'building-1',
+      version: 3,
+    })
+
+    await updateTaskInMainChain(
+      'task-1',
+      { actual_end_date: '2026-06-05', updated_by: 'user-1' },
+      3,
+      {
+        allowManualActualDates: true,
+        executionFactCorrectionReason: 'Verified against signed site record',
+      },
+    )
+
+    expect(state.updateTaskWithCodeInTransaction).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ actual_end_date: '2026-06-05' }),
+      3,
+      'user-1',
+      'project-1',
+      { correctionReason: 'Verified against signed site record' },
+    )
   })
 
   it('reports partial canonical finalization failure after attempting later recoverable steps', async () => {
@@ -724,7 +720,7 @@ describe('taskWriteChainService participant unit lookup', () => {
         ]),
       }),
     })
-    expect(state.collectDurationExperienceSampleFromTask).toHaveBeenCalled()
+    expect(state.collectDurationExperienceSampleWithTaskLock).toHaveBeenCalled()
     expect(state.applyTaskMaterialLifecycleFeedback).toHaveBeenCalled()
   })
 

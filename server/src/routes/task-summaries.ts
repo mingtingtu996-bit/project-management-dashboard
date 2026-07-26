@@ -4,15 +4,11 @@ import { Router } from 'express'
 import { z } from 'zod'
 import {
   TaskSummaryService,
-  calculateTaskCompletionDelayStats,
-  calculateTaskSummaryDurationStats,
+  buildProjectTaskSummaryReadModel,
+  buildTaskSummaryDelayRecords,
+  resolveTaskSummaryDurationAsOf,
+  type TaskSummaryScopeLabelMap,
 } from '../services/taskSummaryService.js'
-import {
-  buildTaskSummaryAttributionGroups,
-  taskAttributionSummaryService,
-  type TaskSummaryAttributionTask,
-} from '../services/taskAttributionSummaryService.js'
-import { buildProjectTaskAttributionProjection } from '../services/taskAttributionProjectionService.js'
 import {
   buildRuntimeScopedDurationForecast,
   isValidScopedDurationForecastDate,
@@ -26,8 +22,6 @@ import {
   resolveTaskSummaryTrendWindow,
 } from '../services/projectExecutionSummaryService.js'
 import { resolveConstructionCalendarContext } from '../services/constructionCalendar.js'
-import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
-import { businessDateKey } from '../services/durationMetricService.js'
 import { executeSQLOne, supabase } from '../services/dbService.js'
 import {
   buildDailyTaskProgressSummary,
@@ -37,6 +31,7 @@ import {
   isTaskDelayedByPeriodEnd,
   normalizeTaskSummaryCompareGranularity,
   normalizeTaskSummaryComparePeriods,
+  resolveDailyTaskProgressWindow,
 } from '../services/taskSummaryCompareService.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import {
@@ -47,25 +42,15 @@ import {
 } from '../middleware/auth.js'
 import { validate, validateIdParam } from '../middleware/validation.js'
 import { logger } from '../middleware/logger.js'
-import { delayDayDelta } from '../utils/durationDays.js'
-import { isCompletedMilestone, isCompletedTask } from '../utils/taskStatus.js'
 import type { ApiResponse } from '../types/index.js'
 import type { TaskCompletionReport } from '../types/db.js'
 
 export {
+  buildTaskSummaryDelayRecords,
   getTaskActualEndDate,
   getTaskPlannedEndDate,
   isTaskDelayedByPeriodEnd,
-}
-
-export function resolveTaskSummaryDurationAsOf(
-  task: { completedAt?: string | null; plannedEndDate?: string | null },
-  calendar?: ConstructionCalendarContext | null,
-  now = new Date(),
-) {
-  return task.completedAt?.slice(0, 10)
-    || task.plannedEndDate?.slice(0, 10)
-    || businessDateKey(now, calendar?.timezone)
+  resolveTaskSummaryDurationAsOf,
 }
 
 const router = Router()
@@ -100,11 +85,15 @@ const scopedDurationForecastQuerySchema = z.object({
   as_of_date: z.string().trim().refine(isValidScopedDurationForecastDate, {
     message: 'as_of_date must be a valid YYYY-MM-DD date',
   }).optional(),
+  target_date: z.string().trim().refine(isValidScopedDurationForecastDate, {
+    message: 'target_date must be a valid YYYY-MM-DD date',
+  }).optional(),
 }).passthrough()
 
 function normalizeText(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
+
 
 function getCachedTaskSummaryResponse<T>(key: string): T | null {
   const cached = taskSummaryResponseCache.get(key)
@@ -158,20 +147,6 @@ async function loadParticipantUnitNameMap(projectId: string, unitIds: string[]) 
   return new Map((data || []).map((row: any) => [String(row.id), normalizeText(row.unit_name)]))
 }
 
-type TaskSummaryScopeLabelMap = {
-  specialty: TaskSummaryScopeBinding[]
-  building: TaskSummaryScopeBinding[]
-  region: TaskSummaryScopeBinding[]
-  phase: TaskSummaryScopeBinding[]
-}
-
-type TaskSummaryScopeBinding = {
-  id: string
-  scopeDimensionId: string
-  label: string
-  sortOrder: number
-}
-
 async function loadTaskSummaryScopeBindingMap(projectId: string): Promise<TaskSummaryScopeLabelMap> {
   const { data: eoData, error: eoError } = await supabase
     .from('engineering_objects')
@@ -211,15 +186,6 @@ async function loadTaskSummaryScopeBindingMap(projectId: string): Promise<TaskSu
   return labels
 }
 
-function resolveTaskSummaryScopeBinding(
-  bindings: TaskSummaryScopeBinding[],
-  value: unknown,
-): TaskSummaryScopeBinding | null {
-  const normalized = normalizeText(value)
-  if (!normalized) return null
-  return bindings.find((binding) => binding.label === normalized || binding.id === normalized || binding.scopeDimensionId === normalized) ?? null
-}
-
 async function loadTaskSummaryMilestones(projectId: string, milestoneId?: string | null) {
   let msQuery = supabase
     .from('tasks')
@@ -240,7 +206,7 @@ async function loadTaskSummaryMilestones(projectId: string, milestoneId?: string
 async function loadTaskSummaryTaskRows(projectId: string, dateFrom?: string | null, dateTo?: string | null) {
   let tasksQuery = supabase
     .from('tasks')
-    .select('id, parent_id, title, participant_unit_id, assignee_user_id, status, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, is_milestone, specialty_type, engineering_category_id, wbs_code, wbs_level, sort_order, updated_at, engineering_object_id, building_object_id, basement_object_id, physical_zone_object_id, functional_area_object_id, phase_object_id, section_object_id, floor_object_id')
+    .select('id, parent_id, title, participant_unit_id, assignee_user_id, status, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, delay_reason, is_milestone, specialty_type, engineering_category_id, wbs_code, wbs_level, sort_order, updated_at, engineering_object_id, building_object_id, basement_object_id, physical_zone_object_id, functional_area_object_id, phase_object_id, section_object_id, floor_object_id')
     .eq('project_id', projectId)
     .order('updated_at', { ascending: false })
 
@@ -394,11 +360,12 @@ router.get(
   asyncHandler(async (req, res) => {
     const projectId = req.params.id
     const asOfDate = normalizeText(req.query.as_of_date) || undefined
-    const cacheKey = ['scoped-duration-forecast', projectId, asOfDate ?? 'current'].join(':')
+    const targetDate = normalizeText(req.query.target_date) || undefined
+    const cacheKey = ['scoped-duration-forecast', projectId, asOfDate ?? 'current', targetDate ?? 'no-target'].join(':')
     const cachedResponse = getCachedTaskSummaryResponse<ApiResponse>(cacheKey)
     if (cachedResponse) return res.json(cachedResponse)
 
-    const result = await buildRuntimeScopedDurationForecast(projectId, { asOfDate })
+    const result = await buildRuntimeScopedDurationForecast(projectId, { asOfDate, targetDate })
     const response: ApiResponse = {
       success: true,
       data: result,
@@ -447,96 +414,7 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
     monthlyFulfillmentPromise,
   ])
 
-  const tasks = (taskRows || []).filter((task: any) => isCompletedTask(task))
-  const attributionProjection = buildProjectTaskAttributionProjection(taskRows || [])
-
-  const resolveScopeAttribution = (task: any) => {
-    const building = resolveTaskSummaryScopeBinding(
-      scopeBindingMap.building,
-      task?.building_object_id,
-    )
-    const region = resolveTaskSummaryScopeBinding(
-      scopeBindingMap.region,
-      task?.physical_zone_object_id ?? task?.functional_area_object_id,
-    )
-    const phase = resolveTaskSummaryScopeBinding(
-      scopeBindingMap.phase,
-      task?.phase_object_id,
-    )
-    return { building, region, phase }
-  }
-
-  const buildTaskSummaryTask = (t: any) => {
-    const taskAttribution = attributionProjection.get(String(t.id))
-    const scopeAttribution = resolveScopeAttribution(t)
-    const plannedEndDate = (t.planned_end_date || t.end_date) as string | null
-    const taskCompleted = isCompletedTask(t)
-    const actualEndDate = getTaskActualEndDate(t)
-    const completedAt = taskCompleted ? (actualEndDate || plannedEndDate) : null
-    const asOf = resolveTaskSummaryDurationAsOf({ completedAt, plannedEndDate }, workCalendar)
-    const completionDelay = calculateTaskCompletionDelayStats({
-      planned_end_date: plannedEndDate,
-      actual_end_date: completedAt,
-      status: t.status,
-      progress: t.progress,
-    }, workCalendar, asOf)
-    const computedDelay = taskCompleted
-      ? delayDayDelta(plannedEndDate, completedAt, workCalendar)
-      : null
-    const delayTotal = taskCompleted ? completionDelay.totalDelayDays : 0
-    const isDelayed = taskCompleted && (computedDelay ?? delayTotal ?? 0) > 0
-    const durationStats = calculateTaskSummaryDurationStats(t, workCalendar, asOf)
-
-    return {
-      id: t.id,
-      title: t.title,
-      assignee: null,
-      assignee_user_id: t.assignee_user_id || null,
-      participant_unit_name: null,
-      participant_unit_id: t.participant_unit_id || null,
-      parent_id: t.parent_id || null,
-      phase_object_id: scopeAttribution.phase?.id ?? null,
-      phase_name: scopeAttribution.phase?.label ?? null,
-      phase_sort_order: scopeAttribution.phase?.sortOrder ?? 0,
-      wbs_code: t.wbs_code || null,
-      wbs_level: t.wbs_level ?? null,
-      division_id: taskAttribution?.divisionId ?? null,
-      division_name: taskAttribution?.divisionName ?? null,
-      division_sort_order: taskAttribution?.divisionSortOrder ?? 0,
-      subdivision_id: taskAttribution?.subdivisionId ?? null,
-      subdivision_name: taskAttribution?.subdivisionName ?? null,
-      subdivision_sort_order: taskAttribution?.subdivisionSortOrder ?? 0,
-      specialty_id: taskAttribution?.specialtyId ?? null,
-      specialty_name: taskAttribution?.specialtyName ?? null,
-      specialty_type: taskAttribution?.specialtyName ?? null,
-      specialty_sort_order: taskAttribution?.specialtySortOrder ?? 0,
-      building_id: scopeAttribution.building?.id ?? null,
-      building_name: scopeAttribution.building?.label ?? null,
-      building_sort_order: scopeAttribution.building?.sortOrder ?? 0,
-      region_id: scopeAttribution.region?.id ?? null,
-      region_name: scopeAttribution.region?.label ?? null,
-      region_sort_order: scopeAttribution.region?.sortOrder ?? 0,
-      completed_at: completedAt?.slice(0, 10) || null,
-      planned_end_date: plannedEndDate,
-      actual_duration: durationStats.actualDuration,
-      planned_duration: durationStats.plannedDuration,
-      actual_duration_metric: durationStats.actualDurationMetric,
-      planned_duration_metric: durationStats.plannedDurationMetric,
-      delay_total: completionDelay.delayDurationMetric,
-      delay_total_days: delayTotal,
-      delay_records: isDelayed
-        ? [{
-            delay_days: delayTotal,
-            delay: completionDelay.delayDurationMetric,
-            reason: '实际完成时间晚于计划完成时间',
-            recorded_at: completedAt,
-          }]
-        : [],
-      status_label: taskCompleted ? (isDelayed ? 'delayed' : 'on_time') : (normalizeText(t.status) || 'pending'),
-    }
-  }
-
-  const taskIds = (tasks || []).map((t: any) => t.id)
+  const taskIds = (taskRows || []).map((task: any) => task.id)
   const participantUnitIds = Array.from(
     new Set((taskRows || []).map((task: any) => task.participant_unit_id).filter(Boolean)),
   )
@@ -550,105 +428,24 @@ router.get('/projects/:id/task-summary', validateIdParam, requireProjectMember((
     loadTaskSummaryTaskMilestones(projectId, taskIds),
     timelineReady ? getProjectTimelineEvents(projectId) : Promise.resolve([]),
   ])
-
-  const normalizedTaskById = new Map((taskRows || []).map((t: any) => {
-    const normalized = buildTaskSummaryTask(t) as TaskSummaryAttributionTask & Record<string, any>
-    const assigneeUserId = normalizeText(normalized.assignee_user_id)
-    normalized.assignee = assigneeUserId ? projectMemberNameMap.get(assigneeUserId) || null : null
-    if (assigneeUserId && !projectMemberNameMap.has(assigneeUserId)) {
-      normalized.assignee_user_id = null
-    }
-    normalized.participant_unit_name = normalized.participant_unit_id
-      ? participantUnitNameMap.get(normalized.participant_unit_id) || null
-      : null
-    return [String(t.id), normalized]
-  }))
-
-  // 3. Build the canonical taskId -> milestoneId mapping.
-  let taskMsMap: Record<string, string[]> = {} // taskId → milestoneId[]
-  for (const row of taskMilestoneRows) {
-    if (!taskMsMap[row.task_id]) taskMsMap[row.task_id] = []
-    taskMsMap[row.task_id].push(row.milestone_id)
-  }
-
-  // 5. 组装分组数据（按里程碑分组）
-  const groups = (milestones || []).map((ms: any) => {
-    // Find tasks assigned to this canonical milestone task.
-    const msTasks = (tasks || [])
-      .filter((t: any) => {
-        const msIds = taskMsMap[t.id] || []
-        const belongsToMs = msIds.includes(ms.id)
-        if (type === 'milestone') return belongsToMs && t.is_milestone
-        if (type === 'normal') return belongsToMs && !t.is_milestone
-        return belongsToMs
-      })
-      .map((t: any) => normalizedTaskById.get(String(t.id)))
-      .filter(Boolean)
-
-    return {
-      id: ms.id,
-      name: ms.title,
-      status: ms.status,
-      completed_at: ms.completed_at,
-      planned_end_date: ms.target_date,
-      tasks: msTasks,
-    }
+  const data = await buildProjectTaskSummaryReadModel({
+    projectId,
+    type,
+    milestones,
+    taskRows,
+    scopeBindingMap,
+    workCalendar,
+    participantUnitNameMap,
+    projectMemberNameMap,
+    taskMilestoneRows,
+    monthlyFulfillment,
+    timelineEvents,
+    timelineReady,
   })
-
-  // 6. 未归属里程碑的任务放到"未分类"分组
-  const assignedTaskIds = new Set(groups.flatMap((g: any) => g.tasks.map((t: any) => t.id)))
-  const unclassifiedTasks = (tasks || [])
-    .filter((t: any) => !assignedTaskIds.has(t.id))
-    .map((t: any) => normalizedTaskById.get(String(t.id)))
-    .filter(Boolean)
-  if (unclassifiedTasks.length > 0) {
-    groups.push({
-      id: 'unclassified',
-      name: '未归属里程碑',
-      status: null,
-      completed_at: null,
-      planned_end_date: null,
-      tasks: unclassifiedTasks,
-    })
-  }
-
-  // 7. 统计概况
-  const allTasks = Array.from(normalizedTaskById.values())
-  const completedSummaryTasks = tasks
-    .map((t: any) => normalizedTaskById.get(String(t.id)))
-    .filter(Boolean) as TaskSummaryAttributionTask[]
-  const attributionGroups = buildTaskSummaryAttributionGroups(completedSummaryTasks, workCalendar)
-  const attributionTotals = await taskAttributionSummaryService.getAttributionTotals(projectId, allTasks)
-  let onTimeCount = 0
-  let delayedCount = 0
-  for (const task of completedSummaryTasks) {
-    if (task.status_label === 'on_time') onTimeCount += 1
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    if (task.status_label === 'delayed') delayedCount += 1
-  }
-  let completedMilestoneCount = 0
-  for (const milestone of milestones || []) {
-    // eslint-disable-next-line -- route-level-aggregation-approved
-    if (isCompletedMilestone(milestone)) completedMilestoneCount += 1
-  }
-  const stats = {
-    total_completed: completedSummaryTasks.length,
-    on_time_count: onTimeCount,
-    delayed_count: delayedCount,
-    completed_milestone_count: completedMilestoneCount,
-  }
 
   const response: ApiResponse = {
     success: true,
-    data: {
-      stats,
-      groups,
-      attribution_groups: attributionGroups,
-      attribution_totals: attributionTotals,
-      monthlyFulfillment,
-      timeline_events: timelineEvents,
-      timeline_ready: timelineReady,
-    },
+    data,
     timestamp: new Date().toISOString(),
   }
   setCachedTaskSummaryResponse(cacheKey, response)
@@ -807,10 +604,16 @@ router.get('/projects/:id/task-summary/compare', validateIdParam, requireProject
 // 返回: 当日进度变化百分比总和、更新的任务数、完成的任务数、任务详情列表
 router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
-  const targetDate = (req.query.date as string) || new Date().toISOString().slice(0, 10)
-  const previousDate = new Date(`${targetDate}T00:00:00`)
-  previousDate.setDate(previousDate.getDate() - 1)
-  const previousDateStr = previousDate.toISOString().slice(0, 10)
+  const workCalendar = await resolveConstructionCalendarContext({ projectId })
+  const {
+    targetDate,
+    previousDate: previousDateStr,
+    dayStartInclusive,
+    dayEndExclusive,
+  } = resolveDailyTaskProgressWindow({
+    date: req.query.date as string | undefined,
+    timezone: workCalendar.timezone,
+  })
 
   const { data: projectTaskRows, error: projectTaskErr } = await supabase
     .from('tasks')
@@ -861,15 +664,12 @@ router.get('/projects/:id/daily-progress', validateIdParam, requireProjectMember
   const previousSnapshotMap = snapshotByDateAndTask.get(previousDateStr) ?? new Map<string, any>()
 
   // Task rows provide labels and ownership only; progress deltas remain snapshot-derived.
-  const dayStart = `${targetDate} 00:00:00`
-  const dayEnd = `${targetDate} 23:59:59`
-  
   const { data: updatedTasks, error: taskErr } = await supabase
     .from('tasks')
     .select('id, title, assignee_user_id, participant_unit_id, status, progress, end_date, updated_at')
     .eq('project_id', projectId)
-    .gte('updated_at', dayStart)
-    .lte('updated_at', dayEnd)
+    .gte('updated_at', dayStartInclusive)
+    .lt('updated_at', dayEndExclusive)
 
   if (taskErr) throw new Error(`[daily-progress] 查询失败: ${taskErr.message}`)
 

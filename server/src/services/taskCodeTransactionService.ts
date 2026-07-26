@@ -6,10 +6,102 @@ import { bootstrapTaskCodeRuleInTransaction } from './taskCodeRuleService.js'
 import { hasAnyScopeObjectId } from './engineeringObjectService.js'
 import { createLineageBatchInTransaction, recordLineageInTransaction } from './dataLineageService.js'
 import { mergeWbsTaskStructureGovernanceMetadata } from './wbsTaskStructureGovernancePipelineService.js'
+import {
+  recordChangedExecutionFacts,
+  type ExecutionFactProjectionChange,
+} from './executionFactGovernanceService.js'
 
 type TransactionClientLike = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows?: unknown[]; rowCount?: number }>
   release?: () => void
+}
+
+export interface TaskExecutionFactWriteOptions {
+  correctionReason?: string | null
+}
+
+const TASK_EXECUTION_FACT_FIELDS = [
+  ['actual_start_date', 'task.actual_start_date'],
+  ['actual_end_date', 'task.actual_end_date'],
+  ['first_progress_at', 'task.first_progress_at'],
+  ['progress', 'task.progress'],
+  ['status', 'task.status'],
+] as const
+
+function normalizeTaskExecutionFactValue(field: typeof TASK_EXECUTION_FACT_FIELDS[number][0], value: unknown) {
+  if (field === 'progress') return Number(value ?? 0)
+  if (field === 'status') return String(value ?? 'todo').trim()
+  if (value === undefined || value === null || value === '') return null
+  if (field === 'first_progress_at') {
+    const timestamp = new Date(String(value))
+    return Number.isNaN(timestamp.getTime()) ? String(value) : timestamp.toISOString()
+  }
+  return String(value).trim()
+}
+
+function taskExecutionFactEffectiveAt(
+  field: typeof TASK_EXECUTION_FACT_FIELDS[number][0],
+  value: unknown,
+  observedAt: string,
+) {
+  if (value === null) return observedAt
+  if (field === 'actual_start_date' || field === 'actual_end_date') {
+    return `${String(value)}T00:00:00.000Z`
+  }
+  if (field === 'first_progress_at') return String(value)
+  return observedAt
+}
+
+function buildTaskExecutionFactChanges(
+  previous: Record<string, unknown> | null,
+  next: Record<string, unknown>,
+  observedAt: string,
+): ExecutionFactProjectionChange[] {
+  return TASK_EXECUTION_FACT_FIELDS.map(([field, factType]) => {
+    const previousValue = previous
+      ? normalizeTaskExecutionFactValue(field, previous[field])
+      : null
+    const nextValue = normalizeTaskExecutionFactValue(field, next[field])
+    return {
+      factType,
+      previousValue,
+      nextValue,
+      force: previous === null,
+      effectiveAt: taskExecutionFactEffectiveAt(field, nextValue, observedAt),
+    }
+  })
+}
+
+async function recordTaskExecutionFactsInTransaction(
+  client: TransactionClientLike,
+  input: {
+    taskId: string
+    projectId: string
+    previous: Record<string, unknown> | null
+    next: Record<string, unknown>
+    version: number
+    actorId?: string | null
+    observedAt: string
+    correctionReason?: string | null
+  },
+) {
+  await recordChangedExecutionFacts({
+    projectId: input.projectId,
+    entityType: 'task',
+    entityId: input.taskId,
+    sourceModule: 'taskCodeTransactionService',
+    sourceMutationId: `task:${input.taskId}:version:${input.version}`,
+    actorUserId: input.actorId ?? null,
+    observedAt: input.observedAt,
+    correctionReason: input.correctionReason ?? null,
+    changes: buildTaskExecutionFactChanges(input.previous, input.next, input.observedAt),
+  }, {
+    queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+      const result = await client.query(sql, params)
+      return (result.rows ?? []) as T[]
+    },
+    isTransactionActive: () => true,
+  })
 }
 
 function readPositiveIntEnv(name: string, fallback: number) {
@@ -288,6 +380,7 @@ function colValue(col: string, input: Record<string, unknown>, taskId: string, t
   if (col === 'progress_method') return (input as any)[col] ?? 'percent'
   if (col === 'completion_rule') return (input as any)[col] ?? 'progress_100'
   if (col === 'progress') return String((input as any)[col] ?? 0)
+  if (col === 'status') return (input as any)[col] ?? 'todo'
   if (col === 'wbs_level') return (input as any)[col] ?? null
   if (col === 'sort_order') return (input as any)[col] ?? 0
   if (col === 'is_milestone') return String(Boolean((input as any)[col]))
@@ -472,6 +565,16 @@ export async function createTaskWithCodeInTransaction(
         metadata: { templateId: input.template_id },
       })
     }
+
+    await recordTaskExecutionFactsInTransaction(client, {
+      taskId,
+      projectId: input.project_id,
+      previous: null,
+      next: input as unknown as Record<string, unknown>,
+      version: 1,
+      actorId,
+      observedAt: ts,
+    })
 
     await client.query('COMMIT')
     invalidateTaskReadCache(input.project_id)
@@ -681,6 +784,18 @@ export async function createTasksWithCodeInWizardBatchTransaction(
       )
     }
 
+    for (const input of inputs) {
+      await recordTaskExecutionFactsInTransaction(client, {
+        taskId: String(input.id),
+        projectId,
+        previous: null,
+        next: input as unknown as Record<string, unknown>,
+        version: 1,
+        actorId,
+        observedAt: ts,
+      })
+    }
+
     if (ownsClient) await client.query('COMMIT')
     invalidateTaskReadCache(projectId)
 
@@ -703,6 +818,7 @@ export async function updateTaskWithCodeInTransaction(
   expectedVersion?: number,
   actorId?: string | null,
   projectId?: string | null,
+  executionFactOptions: TaskExecutionFactWriteOptions = {},
 ): Promise<{ task: Record<string, unknown>; taskCode: string }> {
   const normalizedProjectId = String(projectId ?? '').trim()
   if (!normalizedProjectId) {
@@ -804,6 +920,17 @@ export async function updateTaskWithCodeInTransaction(
       )
     }
 
+    await recordTaskExecutionFactsInTransaction(client, {
+      taskId,
+      projectId: String(prev.project_id),
+      previous: prev,
+      next: merged,
+      version: Number(prev.version ?? 1) + 1,
+      actorId,
+      observedAt: ts,
+      correctionReason: executionFactOptions.correctionReason,
+    })
+
     await client.query('COMMIT')
     invalidateTaskReadCache(prev.project_id)
 
@@ -891,6 +1018,16 @@ export async function reopenTaskWithCodeInTransaction(
       updates: effectiveUpdates,
       actorId,
       changedAt: ts,
+    })
+
+    await recordTaskExecutionFactsInTransaction(client, {
+      taskId,
+      projectId: String(prev.project_id),
+      previous: prev,
+      next: merged,
+      version: Number(prev.version ?? 1) + 1,
+      actorId,
+      observedAt: ts,
     })
 
     await client.query('COMMIT')

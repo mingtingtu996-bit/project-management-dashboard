@@ -6,6 +6,7 @@ import { logger } from '../middleware/logger.js'
 import type { Issue, Notification, Risk, Warning } from '../types/db.js'
 import {
   createIssue as dbCreateIssue,
+  createRisk as dbCreateRisk,
   getIssue as dbGetIssue,
   getRisk as dbGetRisk,
   getMembers,
@@ -28,6 +29,10 @@ import {
   normalizeAcceptanceStatus,
 } from '../utils/acceptanceStatus.js'
 import { getRiskIssueWarningLifecycleThresholdMs } from './riskIssueWarningRuleRegistry.js'
+import {
+  resolveProjectBusinessDateBuckets,
+  type ProjectBusinessDateBucket,
+} from './projectBusinessDateService.js'
 
 const WARNING_SOURCE_ENTITY_TYPE = 'warning'
 const ACTIVE_WARNING_STATUSES = new Set(['active', 'acknowledged', 'muted', 'unread'])
@@ -61,6 +66,16 @@ interface WarningAcknowledgmentRow {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+export type ExpiredIssueSyncOptions = {
+  now?: Date
+}
+
+function scopeQueryToProjectIds(query: any, field: string, projectIds: string[]) {
+  if (projectIds.length === 0) return query
+  if (projectIds.length === 1) return query.eq(field, projectIds[0])
+  return query.in(field, projectIds)
 }
 
 function uniqueRecipients(values: Array<string | null | undefined>) {
@@ -975,14 +990,31 @@ export async function muteWarningNotification(projectId: string, id: string, hou
   return await fetchWarningNotificationById(projectId, id)
 }
 
-async function createRiskFromWarningAtomic(projectId: string, notificationId: string, sourceType: Risk['source_type']) {
-  const riskId = await invokeRpc<string | null>('confirm_warning_as_risk_atomic', {
-    p_warning_id: notificationId,
-    p_source_type: sourceType,
+async function createRiskFromWarningAtomic(
+  notification: WarningNotificationRecord,
+  sourceType: Risk['source_type'],
+  actorId?: string | null,
+) {
+  const severity = normalizeWarningLevel(notification.severity)
+  const level = severity === 'critical' ? 'critical' : severity === 'warning' ? 'high' : 'medium'
+  const probability = severity === 'critical' ? 90 : severity === 'warning' ? 75 : 60
+  const impact = severity === 'critical' ? 90 : severity === 'warning' ? 75 : 50
+  return await dbCreateRisk({
+    project_id: notification.project_id,
+    task_id: notification.task_id ?? null,
+    title: notification.title,
+    description: notification.content,
+    level,
+    probability,
+    impact,
+    status: 'identified',
+    source_type: sourceType,
+    source_id: notification.id,
+    source_entity_type: 'warning',
+    source_entity_id: notification.id,
+    chain_id: notification.chain_id ?? null,
+    created_by: actorId ?? null,
   })
-
-  if (!riskId) return null
-  return await fetchRiskById(projectId, riskId)
 }
 
 export async function confirmWarningAsRisk(projectId: string, id: string, _actorId?: string) {
@@ -993,7 +1025,7 @@ export async function confirmWarningAsRisk(projectId: string, id: string, _actor
     return await fetchRiskById(projectId, notification.escalated_to_risk_id)
   }
 
-  const risk = await createRiskFromWarningAtomic(projectId, notification.id, 'warning_converted')
+  const risk = await createRiskFromWarningAtomic(notification, 'warning_converted', _actorId ?? null)
   if (!risk) return null
   await upsertWarningAcknowledgment(notification, _actorId ?? null)
   logger.info('[upgradeChain] warning escalated to risk', {
@@ -1022,7 +1054,7 @@ export async function autoEscalateWarnings(projectId?: string) {
     const thresholdMs = getRiskIssueWarningLifecycleThresholdMs('warning_to_risk')
     if (timestamp - firstSeenAt < thresholdMs) continue
 
-    const risk = await createRiskFromWarningAtomic(warning.project_id, warning.id, 'warning_auto_escalated')
+    const risk = await createRiskFromWarningAtomic(warning, 'warning_auto_escalated')
     if (!risk) continue
     createdRisks.push(risk)
   }
@@ -1062,20 +1094,23 @@ async function listAcceptanceExpiredIssues(projectId?: string) {
   return (data ?? []) as Issue[]
 }
 
-export async function syncConditionExpiredIssues(projectId?: string) {
-  const timestamp = nowIso()
-  let query = supabase
-    .from('task_conditions')
-    .select('id, task_id, name, target_date, tasks!inner(project_id, title)')
-    .eq('is_satisfied', false)
-    .lt('target_date', timestamp)
+export async function syncConditionExpiredIssues(projectId?: string, options: ExpiredIssueSyncOptions = {}) {
+  const now = options.now ?? new Date()
+  const timestamp = now.toISOString()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
+  const data: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = supabase
+      .from('task_conditions')
+      .select('id, task_id, name, target_date, tasks!inner(project_id, title)')
+      .eq('is_satisfied', false)
+      .lt('target_date', bucket.businessDate)
+    query = scopeQueryToProjectIds(query, 'tasks.project_id', bucket.projectIds)
 
-  if (projectId) {
-    query = query.eq('tasks.project_id', projectId)
+    const { data: rows, error } = await query
+    if (error) throw new Error(error.message)
+    data.push(...((rows ?? []) as Record<string, unknown>[]))
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
 
   const existingIssues = await listConditionExpiredIssues(projectId)
   const existingByConditionId = new Map(
@@ -1119,20 +1154,23 @@ export async function syncConditionExpiredIssues(projectId?: string) {
   return created
 }
 
-export async function syncAcceptanceExpiredIssues(projectId?: string) {
-  const timestamp = nowIso()
-  let query = supabase
-    .from('acceptance_plans')
-    .select('id, project_id, acceptance_name, acceptance_type, type_name, planned_date, status')
-    .in('status', [...ACTIVE_ACCEPTANCE_STATUSES])
-    .lt('planned_date', timestamp)
+export async function syncAcceptanceExpiredIssues(projectId?: string, options: ExpiredIssueSyncOptions = {}) {
+  const now = options.now ?? new Date()
+  const timestamp = now.toISOString()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
+  const data: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = supabase
+      .from('acceptance_plans')
+      .select('id, project_id, acceptance_name, acceptance_type, type_name, planned_date, status')
+      .in('status', [...ACTIVE_ACCEPTANCE_STATUSES])
+      .lt('planned_date', bucket.businessDate)
+    query = scopeQueryToProjectIds(query, 'project_id', bucket.projectIds)
 
-  if (projectId) {
-    query = query.eq('project_id', projectId)
+    const { data: rows, error } = await query
+    if (error) throw new Error(error.message)
+    data.push(...((rows ?? []) as Record<string, unknown>[]))
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
   const coveredTaskIdsByPlanId = await loadCoveredTaskIdsByAcceptancePlanIds(
     (data ?? []).map((row: any) => String(row.id ?? '')),
     projectId,
@@ -1304,17 +1342,25 @@ export async function convertRiskToIssueAtomic(
     status: 'open',
     priority: getIssueBasePriority(sourceType, effectiveSeverity),
   })
-  const issueId = await invokeRpc<string | null>('create_issue_from_risk_atomic', {
-    p_risk_id: riskId,
-    p_issue_source_type: sourceType,
-    p_title: overrides?.title ?? null,
-    p_description: overrides?.description ?? null,
-    p_severity: effectiveSeverity,
-    p_priority: effectivePriority,
+  if (!risk) return null
+  return await dbCreateIssue({
+    project_id: risk.project_id,
+    task_id: risk.task_id ?? null,
+    title: overrides?.title ?? risk.title,
+    description: overrides?.description ?? risk.description ?? null,
+    source_type: sourceType,
+    source_id: riskId,
+    source_entity_type: 'risk',
+    source_entity_id: riskId,
+    chain_id: risk.chain_id ?? null,
+    severity: effectiveSeverity,
+    priority: effectivePriority,
+    pending_manual_close: false,
+    status: 'open',
+    closed_reason: null,
+    closed_at: null,
+    version: 1,
   })
-
-  if (!issueId) return null
-  return await fetchIssueById(issueId)
 }
 
 export async function autoEscalateRisksToIssues(projectId?: string) {

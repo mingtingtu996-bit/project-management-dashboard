@@ -153,31 +153,38 @@ describe('taskStandardModelService wizard dependency batch', () => {
     expect(insertCalls[0][1]).not.toEqual(expect.arrayContaining(['template_cross_item_workflow']))
   })
 
-  it('rejects unpublished heuristic dependencies before task reads or writes', async () => {
-    await expect(replaceWizardGeneratedTaskDependenciesBatch({
+  it('drops unconfirmed heuristic dependencies at the authoritative batch writer', async () => {
+    const rows = await replaceWizardGeneratedTaskDependenciesBatch({
       projectId: 'project-1',
-      actorId: 'user-1',
-      dependencies: [{
-        taskId: 'task-2',
-        dependencyTaskId: 'task-1',
-        dependencyType: 'SS',
-        lagDays: 3,
-        sourceType: 'template_generated',
-        metadata: {
-          source: 'heuristic_stagger',
-          sequencingBasis: 'heuristic_stagger',
-          learningPolicy: 'candidate_only_until_dependency_rule_replay_publication',
-          dependencyRuleEvidence: {
-            evidenceLevel: 'heuristic_fallback_l0',
-            publicationStatus: 'fallback_not_published_dependency_rule',
+      dependencies: [
+        {
+          taskId: 'task-2',
+          dependencyTaskId: 'task-1',
+          dependencyType: 'FS',
+          sourceType: 'template_internal_flow',
+        },
+        {
+          taskId: 'task-3',
+          dependencyTaskId: 'task-2',
+          dependencyType: 'SS',
+          sourceType: 'template_generated',
+          metadata: {
+            source: 'heuristic_stagger',
+            sequencingBasis: 'heuristic_stagger',
+            dependencyRuleEvidence: {
+              evidenceLevel: 'heuristic_fallback_l0',
+            },
           },
         },
-      }],
-    })).rejects.toMatchObject({ code: 'TASK_DEPENDENCY_CANDIDATE_ONLY' })
+      ],
+    })
 
-    expect(state.taskIn).not.toHaveBeenCalled()
-    expect(state.getClient).not.toHaveBeenCalled()
-    expect(state.client.query).not.toHaveBeenCalled()
+    expect(rows).toHaveLength(1)
+    expect(state.taskIn).toHaveBeenCalledWith('id', ['task-2', 'task-1'])
+    const insertCalls = state.client.query.mock.calls.filter(([sql]) => String(sql).includes('INSERT INTO task_dependencies'))
+    expect(insertCalls).toHaveLength(1)
+    expect(insertCalls[0][1]).toHaveLength(9)
+    expect(insertCalls[0][1]).not.toEqual(expect.arrayContaining(['task-3', 'heuristic_stagger']))
   })
 
   it('rejects a cycle before opening a write transaction', async () => {

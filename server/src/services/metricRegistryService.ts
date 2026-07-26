@@ -52,6 +52,7 @@ export type MetricSource =
   | 'projectProductivityCompensationService'
   | 'monthlyPlanSummaryService'
   | 'taskSummaryService'
+  | 'projectStartReadinessService'
   | 'structuredCauseAttributionService'
 
 export interface MetricDefinition {
@@ -822,6 +823,80 @@ export const METRIC_REGISTRY: MetricDefinition[] = [
   },
 
   // --- Conditions & Obstacles ---
+  {
+    metricKey: 'start_readiness_task_count_14d',
+    label: '14-day planned start task count',
+    description: 'Tasks planned to start within the next fourteen business-timezone calendar dates.',
+    dataType: 'count',
+    source: 'projectStartReadinessService',
+    nullStrategy: 'show_zero',
+    defaultGranularity: 'daily',
+    supportedGroupBy: ['project'],
+    frontendVisible: true,
+    snapshotPolicy: 'on_change',
+  },
+  {
+    metricKey: 'start_readiness_ready_task_count_14d',
+    label: '14-day ready task count',
+    description: 'Planned start tasks with no authoritative blocking reference.',
+    dataType: 'count',
+    source: 'projectStartReadinessService',
+    nullStrategy: 'show_zero',
+    defaultGranularity: 'daily',
+    supportedGroupBy: ['project'],
+    frontendVisible: true,
+    snapshotPolicy: 'on_change',
+  },
+  {
+    metricKey: 'start_readiness_blocked_task_count_14d',
+    label: '14-day blocked task count',
+    description: 'Planned start tasks with at least one controlled blocking reference.',
+    dataType: 'count',
+    source: 'projectStartReadinessService',
+    nullStrategy: 'show_zero',
+    defaultGranularity: 'daily',
+    supportedGroupBy: ['project'],
+    frontendVisible: true,
+    snapshotPolicy: 'on_change',
+  },
+  {
+    metricKey: 'start_readiness_attention_task_count_14d',
+    label: '14-day attention task count',
+    description: 'Planned start tasks with non-blocking readiness attention items.',
+    dataType: 'count',
+    source: 'projectStartReadinessService',
+    nullStrategy: 'show_zero',
+    defaultGranularity: 'daily',
+    supportedGroupBy: ['project'],
+    frontendVisible: true,
+    snapshotPolicy: 'on_change',
+  },
+  {
+    metricKey: 'start_readiness_ready_rate_14d',
+    label: '14-day ready task rate',
+    description: 'Ready planned-start tasks divided by tasks in the authoritative fourteen-date window.',
+    dataType: 'percentage',
+    unit: '%',
+    source: 'projectStartReadinessService',
+    nullStrategy: 'show_incomplete',
+    defaultGranularity: 'daily',
+    supportedGroupBy: ['project'],
+    frontendVisible: true,
+    snapshotPolicy: 'on_change',
+  },
+  {
+    metricKey: 'start_readiness_production_date_count_14d',
+    label: '14-day construction production date count',
+    description: 'Production dates in the lookahead window; unavailable when authoritative calendar identity is missing.',
+    dataType: 'count',
+    unit: 'construction_production_day',
+    source: 'projectStartReadinessService',
+    nullStrategy: 'show_incomplete',
+    defaultGranularity: 'daily',
+    supportedGroupBy: ['project'],
+    frontendVisible: true,
+    snapshotPolicy: 'on_change',
+  },
   {
     metricKey: 'pending_condition_count',
     label: '待满足条件数',

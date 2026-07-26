@@ -10,9 +10,9 @@ import { createLineageBatchInTransaction, recordLineageInTransaction, type Linea
 import { evaluateTaskConstraint } from './taskConstraintGovernanceService.js'
 import { clearCriticalPathCache } from './criticalPathHelpers.js'
 import { clearProjectCriticalPathSnapshotCache } from './projectCriticalPathService.js'
-import { isFormalTaskDependencyEvidence } from './taskDependencyPublicationPolicy.js'
 import { getStatusLabel, getVisualTone, normalizeStatus } from './statusDictionaryService.js'
 import { deriveTaskUnifiedStatus } from './taskStatusDerivationService.js'
+import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
 
 type TransactionClientLike = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows?: unknown[]; rowCount?: number }>
@@ -305,7 +305,7 @@ function taskDependencyError(code: string, message: string, statusCode = 400) {
 }
 
 function assertFormalTaskDependencyInput(dependency: unknown) {
-  if (!isFormalTaskDependencyEvidence(dependency)) {
+  if (isUnconfirmedHeuristicDependency(dependency)) {
     throw taskDependencyError(
       'TASK_DEPENDENCY_CANDIDATE_ONLY',
       'Unpublished heuristic dependency evidence cannot be written to task_dependencies',
@@ -610,8 +610,6 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
   if (!projectId) {
     throw taskDependencyError('TASK_DEPENDENCY_PROJECT_REQUIRED', 'Project id is required')
   }
-  params.dependencies.forEach(assertFormalTaskDependencyInput)
-
   const dependencyBySignature = new Map<string, {
     task_id: string
     dependency_task_id: string
@@ -622,6 +620,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
     metadata: Record<string, unknown>
   }>()
   for (const dependency of params.dependencies) {
+    if (isUnconfirmedHeuristicDependency(dependency)) continue
     const taskId = String(dependency.taskId ?? '').trim()
     const dependencyTaskId = String(dependency.dependencyTaskId ?? '').trim()
     if (!taskId || !dependencyTaskId) {

@@ -10,7 +10,7 @@ import { dataRetentionJob } from '../jobs/dataRetentionJob.js'
 import { defaultMasterPlanVisibilityLearningJob } from '../jobs/defaultMasterPlanVisibilityLearningJob.js'
 import { durationContextPolicyLearningJob } from '../jobs/durationContextPolicyLearningJob.js'
 import { durationLearningRuntimeEvidenceOutboxDrainJob } from '../jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'
-import { taskWriteFinalizationOutboxDrainJob } from '../jobs/taskWriteFinalizationOutboxDrainJob.js'
+import { taskWriteFinalizationOutboxJob } from '../jobs/taskWriteFinalizationOutboxJob.js'
 import { durationLiveLearningProductionClaimAuditJob } from '../jobs/durationLiveLearningProductionClaimAuditJob.js'
 import { drawingPackageExperienceIterationJob } from '../jobs/drawingPackageExperienceIterationJob.js'
 import { forecastResidualOverlayProductionJob } from '../jobs/forecastResidualOverlayProductionJob.js'
@@ -123,6 +123,23 @@ function buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
   }
 }
 
+function buildTaskWriteFinalizationOutboxStatusView(
+  jobStatus = taskWriteFinalizationOutboxJob.getStatus(),
+): JobStatusView {
+  return {
+    name: 'taskWriteFinalizationOutboxJob',
+    displayName: 'Task write finalization outbox job',
+    isRunning: jobStatus.isRunning,
+    isScheduled: jobStatus.isScheduled,
+    schedule: '* * * * *',
+    lastRun: jobStatus.lastRun,
+    nextRun: jobStatus.nextRun,
+    status: buildStatus(jobStatus.isRunning, jobStatus.isScheduled),
+    description:
+      'Retries durable cross-tenant task-write finalization every minute. Company-admin HTTP manual execution is intentionally unavailable.',
+  }
+}
+
 function buildJobStatusViews(): JobStatusView[] {
   const riskJobStatus = riskStatisticsJob.getStatus()
   const draftLockStatus = planningDraftLockTimeoutJob.getStatus()
@@ -140,7 +157,7 @@ function buildJobStatusViews(): JobStatusView[] {
   const forecastResidualOverlayProductionStatus = forecastResidualOverlayProductionJob.getStatus()
   const durationContextPolicyLearningStatus = durationContextPolicyLearningJob.getStatus()
   const durationLearningRuntimeEvidenceOutboxDrainStatus = durationLearningRuntimeEvidenceOutboxDrainJob.getStatus()
-  const taskWriteFinalizationOutboxDrainStatus = taskWriteFinalizationOutboxDrainJob.getStatus()
+  const taskWriteFinalizationOutboxStatus = taskWriteFinalizationOutboxJob.getStatus()
   const responsibilityAlertStatus = responsibilityAlertJob.getStatus()
   const templateDurationGovernanceStatus = templateDurationGovernanceJob.getStatus()
   const standardWorkDurationSeedReplayStatus = standardWorkDurationSeedReplayJob.getStatus()
@@ -433,21 +450,7 @@ function buildJobStatusViews(): JobStatusView[] {
     buildDurationLearningRuntimeEvidenceOutboxDrainStatusView(
       durationLearningRuntimeEvidenceOutboxDrainStatus,
     ),
-    {
-      name: 'taskWriteFinalizationOutboxDrainJob',
-      displayName: 'Task write finalization outbox drain job',
-      isRunning: taskWriteFinalizationOutboxDrainStatus.isRunning,
-      isScheduled: taskWriteFinalizationOutboxDrainStatus.isScheduled,
-      schedule: '*/5 * * * *',
-      lastRun: taskWriteFinalizationOutboxDrainStatus.lastRun,
-      nextRun: taskWriteFinalizationOutboxDrainStatus.nextRun,
-      status: buildStatus(
-        taskWriteFinalizationOutboxDrainStatus.isRunning,
-        taskWriteFinalizationOutboxDrainStatus.isScheduled,
-      ),
-      description:
-        'Retries durable canonical task-write finalization every five minutes. Cross-tenant manual HTTP execution is intentionally unavailable.',
-    },
+    buildTaskWriteFinalizationOutboxStatusView(taskWriteFinalizationOutboxStatus),
     {
       name: 'constructionDependencyReplayCalibrationJob',
       displayName: 'Construction dependency replay calibration job',

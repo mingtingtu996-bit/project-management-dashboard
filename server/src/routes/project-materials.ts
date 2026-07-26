@@ -18,6 +18,7 @@ import {
   buildAndPersistBusinessCompletionSampleHealthReport,
   buildMaterialHandoverCompletionSamples,
 } from '../services/businessCompletionSampleHealthAdapterService.js'
+import { recordChangedExecutionFacts } from '../services/executionFactGovernanceService.js'
 
 const router = express.Router({ mergeParams: true })
 const supabaseService = new SupabaseService()
@@ -226,6 +227,40 @@ function normalizeLogValue(value: unknown) {
   if (value === null || value === undefined) return null
   if (typeof value === 'boolean') return value ? 'true' : 'false'
   return String(value)
+}
+
+function materialArrivalEffectiveAt(value: string | null, observedAt: string) {
+  return value ? new Date(`${value}T00:00:00.000Z`).toISOString() : observedAt
+}
+
+async function recordMaterialArrivalExecutionFact(input: {
+  projectId: string
+  materialId: string
+  previousValue: string | null
+  nextValue: string | null
+  version: number
+  observedAt: string
+  actorId?: string | null
+  force?: boolean
+  correctionReason?: string | null
+}) {
+  await recordChangedExecutionFacts({
+    projectId: input.projectId,
+    entityType: 'material_batch',
+    entityId: input.materialId,
+    sourceModule: 'project-materials',
+    sourceMutationId: `material_batch:${input.materialId}:version:${input.version}`,
+    actorUserId: input.actorId ?? null,
+    observedAt: input.observedAt,
+    correctionReason: input.correctionReason ?? null,
+    changes: [{
+      factType: 'material_batch.actual_arrival_date',
+      previousValue: input.previousValue,
+      nextValue: input.nextValue,
+      force: input.force,
+      effectiveAt: materialArrivalEffectiveAt(input.nextValue, input.observedAt),
+    }],
+  })
 }
 
 function collectMaterialChangeLogs(
@@ -439,6 +474,16 @@ router.post(
       )
       if (!created) throw new Error(`Material ${record.id} was not returned after insert`)
       rows.push(created)
+      await recordMaterialArrivalExecutionFact({
+        projectId,
+        materialId: record.id,
+        previousValue: null,
+        nextValue: record.actual_arrival_date,
+        version: record.version,
+        observedAt: record.updated_at,
+        actorId: req.user?.id ?? null,
+        force: true,
+      })
       await writeLifecycleLog({
         project_id: projectId,
         entity_type: 'project_material',
@@ -481,34 +526,84 @@ router.patch(
     })
   }
 
-  const rows = await supabaseService.query<Record<string, any>>('project_materials', { id: materialId, project_id: projectId })
-  const current = rows[0]
-  if (!current) {
+  const changeReason = normalizeNullableText((req.body as MaterialMutationPayload)?.change_reason) ?? null
+  const patchResult = await withDatabaseTransaction(async () => {
+    const [current] = await executeSQL<Record<string, any>>(
+      'SELECT * FROM project_materials WHERE id = ? AND project_id = ? FOR UPDATE',
+      [materialId, projectId],
+    )
+    if (!current) return { kind: 'not_found' as const }
+
+    const updates = normalizeUpdatePayload(current, (req.body ?? {}) as MaterialMutationPayload)
+    const message = validateMaterialPayload(updates)
+    if (message) return { kind: 'validation_error' as const, message }
+
+    const unitMessage = await validateParticipantUnitForProject(projectId, updates.participant_unit_id)
+    if (unitMessage) return { kind: 'validation_error' as const, message: unitMessage }
+
+    const previousActualArrival = normalizeNullableText(current.actual_arrival_date)
+    const actualArrivalChanged = previousActualArrival !== updates.actual_arrival_date
+    if (actualArrivalChanged && previousActualArrival && !changeReason) {
+      return {
+        kind: 'validation_error' as const,
+        message: 'change_reason is required when correcting actual_arrival_date',
+      }
+    }
+
+    const [updated] = await executeSQL<Record<string, any>>(
+      `UPDATE project_materials SET
+         participant_unit_id = ?, material_name = ?, specialty_type = ?,
+         requires_sample_confirmation = ?, sample_confirmed = ?,
+         expected_arrival_date = ?, actual_arrival_date = ?,
+         requires_inspection = ?, inspection_done = ?, version = ?, updated_at = ?
+       WHERE id = ? AND project_id = ?
+       RETURNING *`,
+      [
+        updates.participant_unit_id,
+        updates.material_name,
+        updates.specialty_type,
+        updates.requires_sample_confirmation,
+        updates.sample_confirmed,
+        updates.expected_arrival_date,
+        updates.actual_arrival_date,
+        updates.requires_inspection,
+        updates.inspection_done,
+        updates.version,
+        updates.updated_at,
+        materialId,
+        projectId,
+      ],
+    )
+    if (!updated) throw new Error(`Material ${materialId} was not returned after update`)
+
+    if (actualArrivalChanged) {
+      await recordMaterialArrivalExecutionFact({
+        projectId,
+        materialId,
+        previousValue: previousActualArrival,
+        nextValue: updates.actual_arrival_date,
+        version: updates.version,
+        observedAt: updates.updated_at,
+        actorId: req.user?.id ?? null,
+        correctionReason: previousActualArrival ? changeReason : null,
+      })
+    }
+
+    return { kind: 'updated' as const, current, updates, actualArrivalChanged }
+  })
+
+  if (patchResult.kind === 'not_found') {
     return res.status(404).json({
       success: false,
       error: { code: 'NOT_FOUND', message: 'Material not found' },
       timestamp: nowIso(),
     })
   }
-
-  const updates = normalizeUpdatePayload(current, (req.body ?? {}) as MaterialMutationPayload)
-  const message = validateMaterialPayload(updates)
-  if (message) {
-    return res.status(400).json(validationError(message))
+  if (patchResult.kind === 'validation_error') {
+    return res.status(400).json(validationError(patchResult.message))
   }
 
-  const unitMessage = await validateParticipantUnitForProject(projectId, updates.participant_unit_id)
-  if (unitMessage) {
-    return res.status(400).json(validationError(unitMessage))
-  }
-
-  const { error: updateError } = await supabase
-    .from('project_materials')
-    .update(updates)
-    .eq('id', materialId)
-    .eq('project_id', projectId)
-  if (updateError) throw new Error(updateError.message)
-  const actualArrivalChanged = normalizeNullableText(current.actual_arrival_date) !== updates.actual_arrival_date
+  const { current, updates, actualArrivalChanged } = patchResult
   let conditionUnlockCount = 0
   if (actualArrivalChanged && updates.actual_arrival_date) {
     const participantUnitId = updates.participant_unit_id ?? normalizeNullableText(current.participant_unit_id)
@@ -537,7 +632,7 @@ router.patch(
       projectId,
       materialId,
       req.user?.id ?? null,
-      normalizeNullableText((req.body as MaterialMutationPayload)?.change_reason) ?? null,
+      changeReason,
     ),
   ).catch(() => undefined)
 

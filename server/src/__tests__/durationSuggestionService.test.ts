@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { hashDurationContextPolicyLearningValue } from '../services/durationContextPolicyLearningCheckpointService.js'
+
 const mocks = vi.hoisted(() => {
   let currentTable = ''
   const state = {
@@ -99,10 +101,10 @@ const mocks = vi.hoisted(() => {
     recordDurationAccuracyPrediction: vi.fn(),
     loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
     readPlanningReplayCalibrationReadback: vi.fn(),
+    loadCurrentCauseSegment: vi.fn(),
     rawQuery: vi.fn(async () => ({ rows: [] })),
     executeSQL: vi.fn(async () => []),
     getTask: vi.fn(),
-    loggerError: vi.fn(),
   }
 })
 
@@ -126,7 +128,7 @@ vi.mock('../middleware/logger.js', () => ({
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
-    error: mocks.loggerError,
+    error: vi.fn(),
   },
 }))
 
@@ -168,10 +170,16 @@ vi.mock('../services/planningReplayCalibrationService.js', () => ({
   readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
 }))
 
+vi.mock('../services/durationBenchmarkCauseSegmentService.js', () => ({
+  loadCurrentCauseSegment: mocks.loadCurrentCauseSegment,
+}))
+
 const {
+  buildDurationBenchmarkRowFromRuntimePublication,
   getTaskDurationSuggestion,
   recordCommittedDurationSuggestionPredictionEvidence,
   recordDurationSuggestionRuntimeConsumption,
+  selectCauseAwareBenchmarkCandidates,
 } = await import('../services/durationSuggestionService.js')
 
 function createRecordingQueryExec() {
@@ -287,36 +295,76 @@ function isProjectBenchmarkScope(projectId = 'project-1') {
 }
 
 function isCompanyBenchmarkScope(companyId = 'company-1') {
-  return isDurationBenchmarkQuery() && hasCurrentFilter('company_id', companyId)
+  return isDurationBenchmarkQuery()
+    && hasCurrentFilter('company_id', companyId)
+    && hasCurrentFilter('project_id', null, 'is')
 }
 
-function isSystemBenchmarkScope() {
+function isGlobalBenchmarkScope() {
   return isDurationBenchmarkQuery()
     && hasCurrentFilter('company_id', null, 'is')
-    && !mocks.state.currentFilters.some((filter) => filter.key === 'project_id')
+    && hasCurrentFilter('project_id', null, 'is')
 }
 
-function availableConstructionCalendar(overrides: Record<string, unknown> = {}) {
+function completePersistedBenchmark(overrides: Record<string, unknown> = {}) {
   return {
-    basis: 'official_construction_calendar_seed' as const,
-    windows: [],
-    calendarRef: 'work_calendar',
-    calendarVersion: 'calendar-v1',
-    timezone: 'Asia/Shanghai',
-    availability: 'available' as const,
-    unavailableReason: null,
+    id: 'benchmark-1',
+    benchmark_version: 'v7',
+    company_id: 'company-1',
+    project_id: null,
+    duration_day_basis: 'construction_production_day',
+    p50_days: 6,
+    p75_days: 8,
+    p80_days: 10,
+    mean_days: 7,
+    variance: 0.2,
+    coefficient_of_variation: 0.063888,
+    sample_count: 24,
+    confidence_level: 'high',
+    confidence_score: 88,
+    generated_at: '2026-07-01T08:00:00.000Z',
+    source_window_start: '2026-04-01T00:00:00.000Z',
+    source_as_of: '2026-06-30T23:59:59.000Z',
+    metadata: { calendar_ref: 'calendar-1', calendar_version: 'calendar-v3' },
     ...overrides,
   }
 }
 
-function benchmarkCalendarMetadata(overrides: Record<string, unknown> = {}) {
+function completeRuntimeBenchmarkPayload(overrides: Record<string, unknown> = {}) {
   return {
-    construction_calendar_ref: 'work_calendar',
-    construction_calendar_version: 'calendar-v1',
-    construction_calendar_timezone: 'Asia/Shanghai',
-    construction_calendar_as_of: '2026-05-17',
+    benchmarkId: 'runtime-benchmark-1',
+    benchmarkVersion: 'runtime-v7',
+    p50Days: 6,
+    p75Days: 8,
+    p80Days: 10,
+    meanDays: 7,
+    variance: 0.2,
+    coefficientOfVariation: 0.063888,
+    sampleCount: 24,
+    confidenceLevel: 'high',
+    confidenceScore: 88,
+    durationDayBasis: 'construction_production_day',
+    generatedAt: '2026-07-01T08:00:00.000Z',
+    sourceWindowStart: '2026-04-01T00:00:00.000Z',
+    sourceAsOf: '2026-06-30T23:59:59.000Z',
+    calendarRef: 'calendar-1',
+    calendarVersion: 'calendar-v3',
     ...overrides,
   }
+}
+
+function deterministicAggregateBenchmarkVersion(input: {
+  scope: { level: 'company'; companyId: string } | { level: 'industry'; industryKey: string } | { level: 'global' }
+  sourceBenchmarkIds: string[]
+  sourceBenchmarkVersions: string[]
+  sourceAsOf: string
+}) {
+  return `aggregate:${input.scope.level}:${hashDurationContextPolicyLearningValue({
+    scope: input.scope,
+    sourceBenchmarkIds: input.sourceBenchmarkIds,
+    sourceBenchmarkVersions: input.sourceBenchmarkVersions,
+    sourceAsOf: input.sourceAsOf,
+  }).slice(0, 16)}`
 }
 
 const serviceSourcePath = fileURLToPath(new URL('../services/durationSuggestionService.ts', import.meta.url))
@@ -375,6 +423,7 @@ describe('durationSuggestionService', () => {
       writesSeedRuntimeDirectly: false,
     })
     mocks.readPlanningReplayCalibrationReadback.mockResolvedValue(null)
+    mocks.loadCurrentCauseSegment.mockResolvedValue(null)
     mocks.getProjectCompanyId.mockResolvedValue(null)
     mocks.getTask.mockResolvedValue(null)
   })
@@ -2160,16 +2209,7 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 4,
-          p75_days: 6,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-          company_id: 'company-1',
-          metadata: benchmarkCalendarMetadata(),
-          },
+          data: completePersistedBenchmark({ p50_days: 4, p75_days: 6, p80_days: 8 }),
           error: null,
         }
       }
@@ -2192,19 +2232,345 @@ describe('durationSuggestionService', () => {
       standardWorkCode: 'plastering_wall_ceiling',
       taskTitle: 'wall plastering',
       wbsNodeType: 'process',
-      workCalendar: availableConstructionCalendar(),
     })
 
-    expect(mocks.loggerError).not.toHaveBeenCalled()
     expect(suggestion.recommendedDurationDays).toBe(6)
-    expect(suggestion.conservativeDurationDays).toBe(9)
+    expect(suggestion.conservativeDurationDays).toBe(10)
     expect(suggestion.forecastSource).toBe('standard_work_duration_seed')
     expect(suggestion.durationProvenance).toBe('standard_work_duration_seed')
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
       companyBenchmarkBlendWeight: 0.7,
       companyBenchmarkP50: 4,
-      companyBenchmarkSampleCount: 30,
+      companyBenchmarkSampleCount: 24,
     }))
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: '2026-07-01T08:00:00.000Z',
+      benchmarkAsOf: '2026-06-30T23:59:59.000Z',
+      benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+      benchmarkVersion: 'v7',
+      benchmarkSampleCount: 24,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'company',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [expect.objectContaining({
+          source: 'persisted_benchmark',
+          benchmarkId: 'benchmark-1',
+          publicationKey: null,
+          benchmarkVersion: 'v7',
+          scope: 'company',
+          generatedAt: '2026-07-01T08:00:00.000Z',
+          sourceAsOf: '2026-06-30T23:59:59.000Z',
+          sourceWindowStart: '2026-04-01T00:00:00.000Z',
+          sampleCount: 24,
+          dayBasis: 'construction_production_day',
+          calendarRef: 'calendar-1',
+          calendarVersion: 'calendar-v3',
+          aggregateCalendarIdentities: [],
+          causeSegment: null,
+          blendWeight: null,
+          availability: 'available',
+          reasonCodes: [],
+        })],
+      },
+    })
+  })
+
+  it('accepts a canonical project runtime benchmark before applying malformed-field cases', () => {
+    const benchmark = buildDurationBenchmarkRowFromRuntimePublication({
+      publicationKey: 'runtime-publication-1',
+      selectionBasis: 'project_canary',
+      publication: {
+        runtimePayload: completeRuntimeBenchmarkPayload({
+          generatedAt: '2026-07-01T16:00:00+08:00',
+        }),
+        companyId: 'company-1',
+        projectId: 'project-1',
+        publicationStage: 'canary',
+        scopeLevel: 'project',
+      },
+    })
+
+    expect(benchmark).toMatchObject({
+      id: 'runtime-benchmark-1',
+      benchmark_version: 'runtime-v7',
+      generated_at: '2026-07-01T08:00:00.000Z',
+      source_as_of: '2026-06-30T23:59:59.000Z',
+      source_window_start: '2026-04-01T00:00:00.000Z',
+      company_id: 'company-1',
+      project_id: 'project-1',
+    })
+  })
+
+  it.each([
+    {
+      label: 'version',
+      overrides: { benchmark_version: null },
+      reason: 'benchmark_version_missing',
+      missingField: 'benchmarkVersion',
+    },
+    {
+      label: 'generated timestamp',
+      overrides: { generated_at: '2026-07-01' },
+      reason: 'benchmark_generated_at_missing',
+      missingField: 'generatedAt',
+    },
+    {
+      label: 'source as-of timestamp',
+      overrides: { source_as_of: '2026-06-30 23:59:59' },
+      reason: 'benchmark_source_as_of_missing',
+      missingField: 'sourceAsOf',
+    },
+    {
+      label: 'source window',
+      overrides: { source_window_start: ' 2026-04-01T00:00:00.000Z ' },
+      reason: 'benchmark_source_window_start_missing',
+      missingField: 'sourceWindowStart',
+    },
+    {
+      label: 'calendar identity',
+      overrides: { metadata: { calendar_ref: null, calendar_version: 'calendar-v3' } },
+      reason: 'benchmark_calendar_identity_missing',
+      missingField: 'calendarRef',
+    },
+    {
+      label: 'calendar version',
+      overrides: { metadata: { calendar_ref: 'calendar-1', calendar_version: null } },
+      reason: 'benchmark_calendar_identity_missing',
+      missingField: 'calendarVersion',
+    },
+  ])('fails closed for persisted benchmark provenance with missing $label', async ({ overrides, reason, missingField }) => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2035-01-02T03:04:05.000Z'))
+    try {
+      mocks.getProjectCompanyId.mockResolvedValue('company-1')
+      mocks.query.maybeSingle.mockImplementation(async () => (
+        isCompanyBenchmarkScope('company-1')
+          ? { data: completePersistedBenchmark(overrides), error: null }
+          : { data: null, error: null }
+      ))
+      mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+        __stableCode: 'plastering_wall_ceiling',
+        stableCode: 'plastering_wall_ceiling',
+        defaultDaysP50: 8,
+        defaultDaysP80: 12,
+        confidence: 'medium',
+      })
+
+      const suggestion = await getTaskDurationSuggestion({
+        suggestionPurpose: 'execution_reference',
+        projectId: 'project-1',
+        companyId: 'company-1',
+        standardWorkCode: 'plastering_wall_ceiling',
+        taskTitle: 'wall plastering',
+        wbsNodeType: 'process',
+      })
+
+      expect(suggestion.recommendedDurationDays).toBe(10)
+      expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+      expect(suggestion).toMatchObject({
+        benchmarkGeneratedAt: null,
+        benchmarkAsOf: null,
+        benchmarkWindowStart: null,
+        benchmarkVersion: null,
+        benchmarkSampleCount: null,
+        benchmarkDayBasis: null,
+        benchmarkScope: null,
+        benchmarkProvenanceAvailability: 'unavailable',
+        benchmarkProvenanceReasonCodes: [reason],
+        benchmarkProvenanceUnavailableReason: reason,
+        benchmarkProvenance: {
+          mode: 'single',
+          entries: [expect.objectContaining({
+            availability: 'unavailable',
+            reasonCodes: [reason],
+          })],
+        },
+      })
+      const entry = suggestion.benchmarkProvenance?.entries[0] as unknown as Record<string, unknown>
+      expect(entry[missingField]).toBeNull()
+      expect(JSON.stringify(suggestion.benchmarkProvenance)).not.toContain('2035-01-02T03:04:05.000Z')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it.each([
+    { label: 'missing version', overrides: { benchmarkVersion: null } },
+    { label: 'non-canonical generated timestamp', overrides: { generatedAt: '2026-07-01' } },
+    { label: 'non-canonical source as-of timestamp', overrides: { sourceAsOf: '2026-06-30 23:59:59' } },
+    { label: 'missing source window', overrides: { sourceWindowStart: null } },
+    { label: 'surrounding source-window whitespace', overrides: { sourceWindowStart: ' 2026-04-01T00:00:00.000Z ' } },
+    { label: 'wrong day basis', overrides: { durationDayBasis: 'calendar_day' } },
+    { label: 'missing calendar identity', overrides: { calendarRef: null } },
+    { label: 'missing calendar version', overrides: { calendarVersion: null } },
+  ])('rejects a runtime benchmark with $label instead of substituting request time', ({ overrides }) => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2035-01-02T03:04:05.000Z'))
+    try {
+      const benchmark = buildDurationBenchmarkRowFromRuntimePublication({
+        publicationKey: 'runtime-publication-1',
+        selectionBasis: 'project_canary',
+        publication: {
+          runtimePayload: completeRuntimeBenchmarkPayload(overrides),
+          companyId: 'company-1',
+          projectId: 'project-1',
+          publicationStage: 'canary',
+          scopeLevel: 'project',
+        },
+      })
+
+      expect(benchmark).toBeNull()
+      expect(JSON.stringify(benchmark)).not.toContain('2035-01-02T03:04:05.000Z')
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it('accepts only canonical deterministic aggregate runtime identity and keeps its public benchmark id null', () => {
+    const aggregateProvenance = {
+      schemaVersion: 'duration-benchmark-aggregate/v1',
+      scopeLevel: 'industry',
+      sourceBenchmarkIds: ['benchmark-industry-source-1'],
+      sourceBenchmarkVersions: ['industry-v2'],
+      sourceProjectIds: ['industry-project-1'],
+      sourceCompanyIds: ['industry-company-1'],
+      sourceIndustryKeys: ['general_civil'],
+      calendarIdentities: [{ calendarRef: 'industry-calendar', calendarVersion: 'industry-v4' }],
+    }
+    const benchmarkVersion = deterministicAggregateBenchmarkVersion({
+      scope: { level: 'industry', industryKey: 'general_civil' },
+      sourceBenchmarkIds: aggregateProvenance.sourceBenchmarkIds,
+      sourceBenchmarkVersions: aggregateProvenance.sourceBenchmarkVersions,
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    })
+    const validPayload = {
+      ...completeRuntimeBenchmarkPayload({
+        benchmarkId: undefined,
+        benchmarkVersion,
+        sampleCount: 100,
+      }),
+      benchmarkKind: 'aggregate_all_cause',
+      causeApplicability: 'all_cause',
+      calendarRef: undefined,
+      calendarVersion: undefined,
+      aggregateProvenance,
+    }
+    const publication = {
+      companyId: null,
+      projectId: null,
+      industryKey: 'general_civil',
+      publicationStage: 'stable',
+      scopeLevel: 'industry',
+    }
+    const build = (runtimePayload: Record<string, unknown>) => buildDurationBenchmarkRowFromRuntimePublication({
+      publicationKey: 'runtime-industry-identity',
+      selectionBasis: 'industry_stable',
+      publication: { ...publication, runtimePayload },
+    })
+
+    expect(build(validPayload)).toMatchObject({
+      id: null,
+      benchmark_version: benchmarkVersion,
+      __durationLearningPublicationKey: 'runtime-industry-identity',
+    })
+    expect(build({
+      ...validPayload,
+      benchmarkVersion: 'aggregate:industry:tampered000000',
+    })).toBeNull()
+    expect(build({
+      ...validPayload,
+      aggregateProvenance: {
+        ...aggregateProvenance,
+        sourceBenchmarkVersions: ['industry-v2', 'industry-v1'],
+      },
+    })).toBeNull()
+  })
+
+  it('preserves an industry runtime benchmark as industry provenance', async () => {
+    const aggregateBenchmarkVersion = deterministicAggregateBenchmarkVersion({
+      scope: { level: 'industry', industryKey: 'general_civil' },
+      sourceBenchmarkIds: ['benchmark-industry-source-1'],
+      sourceBenchmarkVersions: ['v6'],
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    })
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      if (!sql.includes('from public.duration_learning_runtime_publications')) return [] as T[]
+      return [{
+        publication_key: 'runtime-industry-1',
+        asset_key: 'base_duration_benchmark',
+        artifact_key: 'plastering_wall_ceiling:process:all',
+        scope_level: 'industry',
+        company_id: null,
+        project_id: null,
+        industry_key: 'general_civil',
+        publication_stage: 'stable',
+        runtime_payload: {
+          ...completeRuntimeBenchmarkPayload({
+            benchmarkId: undefined,
+            benchmarkVersion: aggregateBenchmarkVersion,
+            sampleCount: 100,
+          }),
+          benchmarkKind: 'aggregate_all_cause',
+          causeApplicability: 'all_cause',
+          calendarRef: undefined,
+          calendarVersion: undefined,
+          aggregateProvenance: {
+            schemaVersion: 'duration-benchmark-aggregate/v1',
+            scopeLevel: 'industry',
+            sourceBenchmarkIds: ['benchmark-industry-source-1'],
+            sourceBenchmarkVersions: ['v6'],
+            sourceProjectIds: ['project-source-1'],
+            sourceCompanyIds: ['company-source-1'],
+            sourceIndustryKeys: ['general_civil'],
+            calendarIdentities: [{ calendarRef: 'calendar-1', calendarVersion: 'calendar-v3' }],
+          },
+        },
+        previous_publication_key: null,
+        traffic_percent: 100,
+        monitoring_status: 'passed',
+        published_at: '2026-07-01T08:00:00.000Z',
+      }] as T[]
+    }
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      projectTypeCode: 'general_civil',
+      progress: 10,
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    })
+
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+industry_history_sample')
+    expect(suggestion).toMatchObject({
+      benchmarkVersion: aggregateBenchmarkVersion,
+      benchmarkSampleCount: 100,
+      benchmarkScope: 'industry',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [expect.objectContaining({
+          source: 'runtime_publication',
+          benchmarkId: null,
+          publicationKey: 'runtime-industry-1',
+          benchmarkVersion: aggregateBenchmarkVersion,
+          scope: 'industry',
+          aggregateCalendarIdentities: [{ calendarRef: 'calendar-1', calendarVersion: 'calendar-v3' }],
+          blendWeight: null,
+          availability: 'available',
+        })],
+      },
+    })
   })
 
   it('does not mix a legacy calendar-day benchmark into production-day duration prediction', async () => {
@@ -2241,93 +2607,6 @@ describe('durationSuggestionService', () => {
       wbsNodeType: 'process',
     })
 
-    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
-    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
-  })
-
-  it('does not blend a production-day benchmark without calendar provenance', async () => {
-    mocks.getProjectCompanyId.mockResolvedValue('company-1')
-    mocks.query.maybeSingle.mockImplementation(async () => {
-      if (isCompanyBenchmarkScope('company-1')) {
-        return {
-          data: {
-            duration_day_basis: 'construction_production_day',
-            p50_days: 4,
-            p75_days: 6,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-          company_id: 'company-1',
-        },
-          error: null,
-        }
-      }
-      return { data: null, error: null }
-    })
-    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
-      __stableCode: 'plastering_wall_ceiling',
-      stableCode: 'plastering_wall_ceiling',
-      defaultDaysP50: 8,
-      defaultDaysP80: 12,
-      fixedDays: 1,
-      variableDays: 7,
-      confidence: 'medium',
-    })
-
-    const suggestion = await getTaskDurationSuggestion({
-      companyId: 'company-1',
-      standardWorkCode: 'plastering_wall_ceiling',
-      taskTitle: 'wall plastering',
-      wbsNodeType: 'process',
-      workCalendar: availableConstructionCalendar(),
-    })
-
-    expect(suggestion.recommendedDurationDays).not.toBe(6)
-    expect(suggestion.conservativeDurationDays).not.toBe(9)
-    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
-    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
-  })
-
-  it('does not blend a production-day benchmark from a different calendar version', async () => {
-    mocks.getProjectCompanyId.mockResolvedValue('company-1')
-    mocks.query.maybeSingle.mockImplementation(async () => {
-      if (isCompanyBenchmarkScope('company-1')) {
-        return {
-          data: {
-            duration_day_basis: 'construction_production_day',
-            p50_days: 4,
-            p75_days: 6,
-            sample_count: 30,
-            confidence_level: 'high',
-            confidence_score: 88,
-            company_id: 'company-1',
-            metadata: benchmarkCalendarMetadata({ construction_calendar_version: 'calendar-v0' }),
-          },
-          error: null,
-        }
-      }
-      return { data: null, error: null }
-    })
-    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
-      __stableCode: 'plastering_wall_ceiling',
-      stableCode: 'plastering_wall_ceiling',
-      defaultDaysP50: 8,
-      defaultDaysP80: 12,
-      fixedDays: 1,
-      variableDays: 7,
-      confidence: 'medium',
-    })
-
-    const suggestion = await getTaskDurationSuggestion({
-      companyId: 'company-1',
-      standardWorkCode: 'plastering_wall_ceiling',
-      taskTitle: 'wall plastering',
-      wbsNodeType: 'process',
-      workCalendar: availableConstructionCalendar(),
-    })
-
-    expect(suggestion.recommendedDurationDays).not.toBe(6)
-    expect(suggestion.conservativeDurationDays).not.toBe(9)
     expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
   })
@@ -2370,16 +2649,11 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 7,
-          p75_days: 9,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-          company_id: 'company-1',
-          metadata: benchmarkCalendarMetadata(),
-        },
+          data: completePersistedBenchmark({
+            p50_days: 7,
+            p75_days: 9,
+            sample_count: 30,
+          }),
           error: null,
         }
       }
@@ -2492,16 +2766,11 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 8,
-          p75_days: 14,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-          company_id: 'company-1',
-          metadata: benchmarkCalendarMetadata(),
-          },
+          data: completePersistedBenchmark({
+            p50_days: 8,
+            p75_days: 14,
+            sample_count: 30,
+          }),
           error: null,
         }
       }
@@ -2680,9 +2949,9 @@ describe('durationSuggestionService', () => {
     }))
   })
 
-  it('does not use broad system all-context benchmark unless the sample is very mature', async () => {
+  it('does not use broad global all-context benchmark unless the sample is very mature', async () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
-      if (isSystemBenchmarkScope() && String(currentBenchmarkKey()).endsWith(':all')) {
+      if (isGlobalBenchmarkScope() && String(currentBenchmarkKey()).endsWith(':all')) {
         return {
           data: {
           duration_day_basis: 'construction_production_day',
@@ -2726,17 +2995,12 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 6,
-          p75_days: 8,
-          p80_days: 10,
-          sample_count: 30,
-          confidence_level: 'high',
-          confidence_score: 88,
-          company_id: 'company-1',
-          metadata: benchmarkCalendarMetadata(),
-          },
+          data: completePersistedBenchmark({
+            p50_days: 6,
+            p75_days: 8,
+            p80_days: 10,
+            sample_count: 30,
+          }),
           error: null,
         }
       }
@@ -2766,23 +3030,432 @@ describe('durationSuggestionService', () => {
     expect(suggestion.recommendedDurationDays).toBe(8)
     expect(suggestion.conservativeDurationDays).toBe(12)
     expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBe(0.7)
+    expect(suggestion.businessReasonParams?.benchmarkCauseSelection).toBe('no_confirmed_cause')
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+company_history_sample')
   })
 
-  it('blends E1 seed and mature non-company benchmark candidates for execution reference instead of replacing the seed', async () => {
+  it.each([
+    { label: 'non-zero variance', variance: 0.15, coefficientOfVariation: Math.sqrt(0.15) / 4.5 },
+    { label: 'zero variance', variance: 0, coefficientOfVariation: 0 },
+  ])('prefers an exact confirmed cause segment and preserves $label in its DTO', async ({ variance, coefficientOfVariation }) => {
+    const benchmarkSelects: string[] = []
+    mocks.query.select.mockImplementation((columns?: string) => {
+      if (isDurationBenchmarkQuery() && typeof columns === 'string') benchmarkSelects.push(columns)
+      return mocks.query
+    })
     mocks.query.maybeSingle.mockImplementation(async () => {
-      if (isSystemBenchmarkScope()) {
-        return {
-          data: {
+      if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
+      return {
+        data: {
+          id: 'benchmark-company-1',
+          benchmark_version: 'v7',
+          company_id: 'company-1',
+          project_id: null,
           duration_day_basis: 'construction_production_day',
-          p50_days: 6,
-          p75_days: 8,
-          p80_days: 10,
-          sample_count: 60,
+          p50_days: 8,
+          p75_days: 9,
+          p80_days: 11,
+          sample_count: 30,
           confidence_level: 'high',
-          confidence_score: 86,
-          metadata: benchmarkCalendarMetadata(),
-          },
+          confidence_score: 88,
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-07-01T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
+          metadata: { calendar_ref: 'parent-calendar', calendar_version: 'parent-v1' },
+        },
+        error: null,
+      }
+    })
+    mocks.loadCurrentCauseSegment.mockResolvedValue({
+      id: 'segment-material-1',
+      benchmarkId: 'benchmark-company-1',
+      companyId: 'company-1',
+      projectId: null,
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      sampleCount: 6,
+      p50Days: 4,
+      p75Days: 5,
+      p80Days: 6,
+      meanDays: 4.5,
+      variance,
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 2,
+      variableDays: 8,
+      confidence: 'medium',
+      benchmarkBasis: 'Seed reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by materials',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'material_shortage',
+    })
+
+    expect(mocks.loadCurrentCauseSegment).toHaveBeenCalledWith({
+      benchmarkId: 'benchmark-company-1',
+      causeCode: 'material_shortage',
+      companyId: 'company-1',
+      projectId: null,
+    }, expect.any(Function))
+    expect(suggestion.benchmarkCauseSegment).toEqual(expect.objectContaining({
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      sampleCount: 6,
+    }))
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: '2026-07-21T00:00:00.000Z',
+      benchmarkAsOf: '2026-07-20T00:00:00.000Z',
+      benchmarkWindowStart: '2026-07-01T00:00:00.000Z',
+      benchmarkVersion: 'v7',
+      benchmarkSampleCount: 6,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'company',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [expect.objectContaining({
+          source: 'cause_segment',
+          benchmarkId: 'benchmark-company-1',
+          benchmarkVersion: 'v7',
+          scope: 'company',
+          generatedAt: '2026-07-21T00:00:00.000Z',
+          sourceAsOf: '2026-07-20T00:00:00.000Z',
+          sourceWindowStart: '2026-07-01T00:00:00.000Z',
+          sampleCount: 6,
+          dayBasis: 'construction_production_day',
+          calendarRef: 'cn-work-calendar',
+          calendarVersion: '2026.07',
+          causeSegment: { causeCode: 'material_shortage', taxonomyVersion: 'v1.0.0' },
+          availability: 'available',
+        })],
+      },
+    })
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      benchmarkP50: 4,
+      benchmarkCauseFallback: null,
+      benchmarkCauseSelection: 'exact_cause',
+    }))
+    expect(suggestion.recommendedDurationDays).toBe(10)
+    expect(suggestion.conservativeDurationDays).toBe(12)
+    expect(suggestion.calculationContext).toEqual(expect.objectContaining({
+      durationDistribution: expect.objectContaining({
+        variance,
+        coefficientOfVariation: expect.closeTo(coefficientOfVariation, 6),
+      }),
+    }))
+    expect(benchmarkSelects.some((columns) => columns.includes('id'))).toBe(true)
+    expect(benchmarkSelects.some((columns) => columns.includes('project_id'))).toBe(true)
+    expect(benchmarkSelects.some((columns) => columns.includes('generated_at'))).toBe(true)
+    expect(benchmarkSelects.some((columns) => columns.includes('source_window_start'))).toBe(true)
+    expect(benchmarkSelects.some((columns) => columns.includes('source_as_of'))).toBe(true)
+  })
+
+  it('does not expose or blend an exact cause segment with incomplete calendar provenance', async () => {
+    mocks.query.maybeSingle.mockImplementation(async () => (
+      isCompanyBenchmarkScope('company-1')
+        ? { data: completePersistedBenchmark({ id: 'benchmark-company-1' }), error: null }
+        : { data: null, error: null }
+    ))
+    mocks.loadCurrentCauseSegment.mockResolvedValue({
+      id: 'segment-missing-calendar',
+      benchmarkId: 'benchmark-company-1',
+      companyId: 'company-1',
+      projectId: null,
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      sampleCount: 8,
+      p50Days: 4,
+      p75Days: 5,
+      p80Days: 6,
+      meanDays: 4.5,
+      variance: 0.2,
+      durationDayBasis: 'construction_production_day',
+      calendarRef: null,
+      calendarVersion: 'calendar-v3',
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by materials',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'material_shortage',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(12)
+    expect(suggestion.benchmarkCauseSegment).toBeNull()
+    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+    expect(suggestion).toMatchObject({
+      benchmarkProvenanceAvailability: 'unavailable',
+      benchmarkProvenanceReasonCodes: ['benchmark_calendar_identity_missing'],
+      benchmarkProvenance: {
+        entries: [expect.objectContaining({
+          source: 'cause_segment',
+          availability: 'unavailable',
+          reasonCodes: ['benchmark_calendar_identity_missing'],
+        })],
+      },
+    })
+  })
+
+  it('keeps the all-cause benchmark and marks fallback when the confirmed cause has no exact segment', async () => {
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
+      return {
+        data: completePersistedBenchmark({
+          id: 'benchmark-company-1',
+          company_id: 'company-1',
+          project_id: null,
+          p50_days: 8,
+          p75_days: 9,
+          p80_days: 11,
+          sample_count: 30,
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-07-01T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
+        }),
+        error: null,
+      }
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 2,
+      variableDays: 8,
+      confidence: 'medium',
+      benchmarkBasis: 'Seed reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by quality rework',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'quality_rework',
+    })
+
+    expect(suggestion.benchmarkCauseSegment).toBeNull()
+    expect(suggestion.businessReasonParams?.benchmarkCauseFallback).toBe('all_cause')
+    expect(suggestion.businessReasonParams?.benchmarkCauseSelection).toBe('all_cause_fallback')
+    expect(suggestion.businessReasonParams?.benchmarkP50).toBe(8)
+  })
+
+  it.each([
+    {
+      authority: { state: 'confirmed', causeCode: 'material_shortage', taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+      selection: 'all_cause_fallback', candidateCount: 1, segmentReads: 1,
+    },
+    {
+      authority: { state: 'no_cause', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+      selection: 'no_confirmed_cause', candidateCount: 1, segmentReads: 0,
+    },
+    {
+      authority: { state: 'review_required', causeCode: 'quality_rework', taxonomyVersion: 'v1.0.0', reasonCodes: ['manual_review'] },
+      selection: 'cause_authority_review_required', candidateCount: 0, segmentReads: 0,
+    },
+    {
+      authority: { state: 'unavailable', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: ['structured_cause_read_failed'] },
+      selection: 'cause_authority_unavailable', candidateCount: 0, segmentReads: 0,
+    },
+  ])('applies the $authority.state authority state without converting it to no-cause history', async ({
+    authority,
+    selection,
+    candidateCount,
+    segmentReads,
+  }) => {
+    mocks.loadCurrentCauseSegment.mockResolvedValue(null)
+    const candidate = {
+      benchmark: {
+        id: 'benchmark-company-1', company_id: 'company-1', project_id: null,
+        p50_days: 8, p75_days: 9, p80_days: 11, mean_days: 8.5, sample_count: 30,
+        variance: 2.25, coefficient_of_variation: 0.176471,
+        duration_day_basis: 'construction_production_day' as const,
+      },
+      scope: 'company' as const,
+      benchKey: 'SW-1:process:all',
+      contextKey: 'all',
+      sampleSize: 30,
+      specificity: 'all' as const,
+    }
+
+    const result = await selectCauseAwareBenchmarkCandidates([candidate], authority as any)
+
+    expect(result.selection).toBe(selection)
+    expect(result.candidates).toHaveLength(candidateCount)
+    expect(mocks.loadCurrentCauseSegment).toHaveBeenCalledTimes(segmentReads)
+    if (authority.state === 'review_required' || authority.state === 'unavailable') {
+      expect(result.fallback).toBeNull()
+    }
+  })
+
+  it('fails closed without all-cause blending when exact cause segment reading fails', async () => {
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
+      return {
+        data: completePersistedBenchmark({
+          id: 'benchmark-company-1',
+          company_id: 'company-1',
+          project_id: null,
+          p50_days: 8,
+          p75_days: 9,
+          p80_days: 11,
+          sample_count: 30,
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-07-01T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
+        }),
+        error: null,
+      }
+    })
+    mocks.loadCurrentCauseSegment.mockRejectedValue(new Error('segment read denied'))
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 2,
+      variableDays: 8,
+      confidence: 'medium',
+      benchmarkBasis: 'Seed reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by materials',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'material_shortage',
+    })
+
+    expect(suggestion.benchmarkCauseSegment).toBeNull()
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      benchmarkCauseFallback: null,
+      benchmarkCauseSelection: 'cause_segment_read_failed',
+    }))
+    expect(suggestion.businessReasonParams?.benchmarkP50).toBeUndefined()
+    expect(suggestion.businessReasonParams?.companyBenchmarkBlendWeight).toBeUndefined()
+  })
+
+  it.each([1, 4])('falls back to all-cause duration outputs when an exact cause segment has only %i samples', async (sampleCount) => {
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (!isCompanyBenchmarkScope('company-1')) return { data: null, error: null }
+      return {
+        data: completePersistedBenchmark({
+          id: 'benchmark-company-1',
+          company_id: 'company-1',
+          project_id: null,
+          p50_days: 8,
+          p75_days: 9,
+          p80_days: 11,
+          sample_count: 30,
+          generated_at: '2026-07-21T00:00:00.000Z',
+          source_window_start: '2026-07-01T00:00:00.000Z',
+          source_as_of: '2026-07-20T00:00:00.000Z',
+        }),
+        error: null,
+      }
+    })
+    mocks.loadCurrentCauseSegment.mockResolvedValue({
+      id: `segment-thin-${sampleCount}`,
+      benchmarkId: 'benchmark-company-1',
+      companyId: 'company-1',
+      projectId: null,
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      sampleCount,
+      p50Days: 4,
+      p75Days: 5,
+      p80Days: 6,
+      meanDays: 4.5,
+      variance: 0.15,
+      generatedAt: '2026-07-21T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+    })
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      fixedDays: 2,
+      variableDays: 8,
+      confidence: 'medium',
+      benchmarkBasis: 'Seed reference.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering delayed by materials',
+      wbsNodeType: 'process',
+      confirmedCauseCode: 'material_shortage',
+    })
+
+    expect(suggestion.recommendedDurationDays).toBe(10)
+    expect(suggestion.conservativeDurationDays).toBe(13)
+    expect(suggestion.benchmarkCauseSegment).toBeNull()
+    expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
+      benchmarkCauseFallback: 'all_cause',
+      benchmarkCauseSelection: 'all_cause_fallback',
+      benchmarkP50: 8,
+      benchmarkBlendWeight: 0.7,
+    }))
+  })
+
+  it('blends E1 seed and mature global benchmark candidates for execution reference instead of replacing the seed', async () => {
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (isGlobalBenchmarkScope()) {
+        return {
+          data: completePersistedBenchmark({
+            id: 'benchmark-global-1',
+            company_id: null,
+            project_id: null,
+            p50_days: 6,
+            p75_days: 8,
+            p80_days: 10,
+            sample_count: 60,
+          }),
           error: null,
         }
       }
@@ -2812,63 +3485,56 @@ describe('durationSuggestionService', () => {
     expect(suggestion.recommendedDurationDays).toBe(8)
     expect(suggestion.conservativeDurationDays).toBe(12)
     expect(suggestion.durationProvenance).toBe('standard_work_duration_seed')
-    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+system_history_sample')
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+global_history_sample')
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
-      benchmarkBlendScope: 'system',
+      benchmarkBlendScope: 'global',
       benchmarkBlendWeight: 0.7,
       benchmarkSampleCount: 60,
     }))
   })
 
-  it('blends project, company and system benchmark candidates together for execution reference', async () => {
+  it('blends project, company and global benchmark candidates together for execution reference', async () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (mocks.from.mock.calls.at(-1)?.[0] !== 'duration_benchmarks') {
         return { data: null, error: null }
       }
       if (isProjectBenchmarkScope('project-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
+            id: 'benchmark-project-1',
+            company_id: 'company-1',
+            project_id: 'project-1',
             p50_days: 7,
             p75_days: 7,
             p80_days: 9,
             sample_count: 8,
-            confidence_level: 'medium',
-            confidence_score: 72,
-            project_id: 'project-1',
-            metadata: benchmarkCalendarMetadata(),
-          },
+          }),
           error: null,
         }
       }
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
+            id: 'benchmark-company-1',
             p50_days: 6,
             p75_days: 6,
             p80_days: 8,
             sample_count: 20,
-            confidence_level: 'high',
-            confidence_score: 88,
-            company_id: 'company-1',
-            metadata: benchmarkCalendarMetadata(),
-          },
+          }),
           error: null,
         }
       }
-      if (isSystemBenchmarkScope()) {
+      if (isGlobalBenchmarkScope()) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
+            id: 'benchmark-global-1',
+            company_id: null,
+            project_id: null,
             p50_days: 12,
             p75_days: 12,
             p80_days: 14,
             sample_count: 120,
-            confidence_level: 'high',
-            confidence_score: 84,
-            metadata: benchmarkCalendarMetadata(),
-          },
+          }),
           error: null,
         }
       }
@@ -2898,9 +3564,130 @@ describe('durationSuggestionService', () => {
     expect(suggestion.recommendedDurationDays).toBe(10)
     expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed+mixed_history_sample')
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
-      benchmarkBlendScopes: ['project', 'company', 'system'],
+      benchmarkBlendScopes: ['project', 'company', 'global'],
       benchmarkBlendCandidateCount: 3,
     }))
+  })
+
+  it('publishes complete normalized provenance for a project and industry mixed blend', async () => {
+    const aggregateBenchmarkVersion = deterministicAggregateBenchmarkVersion({
+      scope: { level: 'industry', industryKey: 'general_civil' },
+      sourceBenchmarkIds: ['benchmark-industry-source-1'],
+      sourceBenchmarkVersions: ['industry-v2'],
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    })
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.query.maybeSingle.mockImplementation(async () => {
+      if (isProjectBenchmarkScope('project-1')) {
+        return {
+          data: completePersistedBenchmark({
+            id: 'benchmark-project-1',
+            benchmark_version: 'project-v3',
+            company_id: 'company-1',
+            project_id: 'project-1',
+            sample_count: 20,
+            generated_at: '2026-07-01T08:00:00.000Z',
+            source_window_start: '2026-05-01T00:00:00.000Z',
+            source_as_of: '2026-06-29T23:59:59.000Z',
+            metadata: { calendar_ref: 'project-calendar', calendar_version: 'project-v2' },
+          }),
+          error: null,
+        }
+      }
+      return { data: null, error: null }
+    })
+    const queryExec = async <T = Record<string, unknown>>(sql: string): Promise<T[]> => {
+      if (!sql.includes('from public.duration_learning_runtime_publications')) return [] as T[]
+      return [{
+        publication_key: 'runtime-industry-mixed',
+        asset_key: 'base_duration_benchmark',
+        artifact_key: 'plastering_wall_ceiling:process:all',
+        scope_level: 'industry',
+        company_id: null,
+        project_id: null,
+        industry_key: 'general_civil',
+        publication_stage: 'stable',
+        runtime_payload: {
+          ...completeRuntimeBenchmarkPayload({
+            benchmarkId: undefined,
+            benchmarkVersion: aggregateBenchmarkVersion,
+            sampleCount: 100,
+            generatedAt: '2026-07-03T08:00:00.000Z',
+          }),
+          benchmarkKind: 'aggregate_all_cause',
+          causeApplicability: 'all_cause',
+          calendarRef: undefined,
+          calendarVersion: undefined,
+          aggregateProvenance: {
+            schemaVersion: 'duration-benchmark-aggregate/v1',
+            scopeLevel: 'industry',
+            sourceBenchmarkIds: ['benchmark-industry-source-1'],
+            sourceBenchmarkVersions: ['industry-v2'],
+            sourceProjectIds: ['industry-project-1'],
+            sourceCompanyIds: ['industry-company-1'],
+            sourceIndustryKeys: ['general_civil'],
+            calendarIdentities: [{ calendarRef: 'industry-calendar', calendarVersion: 'industry-v4' }],
+          },
+        },
+        previous_publication_key: null,
+        traffic_percent: 100,
+        monitoring_status: 'passed',
+        published_at: '2026-07-03T08:00:00.000Z',
+      }] as T[]
+    }
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'plastering_wall_ceiling',
+      stableCode: 'plastering_wall_ceiling',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'execution_reference',
+      projectId: 'project-1',
+      companyId: 'company-1',
+      standardWorkCode: 'plastering_wall_ceiling',
+      taskTitle: 'wall plastering',
+      projectTypeCode: 'general_civil',
+      progress: 10,
+      wbsNodeType: 'process',
+      runtimeConsumerObservationQueryExec: queryExec,
+    })
+
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: '2026-07-03T08:00:00.000Z',
+      benchmarkAsOf: '2026-06-29T23:59:59.000Z',
+      benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+      benchmarkVersion: null,
+      benchmarkSampleCount: 120,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'mixed',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenance: {
+        mode: 'blended',
+        entries: [
+          expect.objectContaining({
+            source: 'persisted_benchmark',
+            benchmarkId: 'benchmark-project-1',
+            benchmarkVersion: 'project-v3',
+            scope: 'project',
+            blendWeight: 0.5,
+          }),
+          expect.objectContaining({
+            source: 'runtime_publication',
+            benchmarkId: null,
+            publicationKey: 'runtime-industry-mixed',
+            benchmarkVersion: aggregateBenchmarkVersion,
+            scope: 'industry',
+            blendWeight: 0.5,
+          }),
+        ],
+      },
+    })
+    expect(suggestion.benchmarkProvenance?.entries).toHaveLength(2)
+    expect(suggestion.benchmarkProvenance?.entries.map((entry) => entry.scope)).toEqual(['project', 'industry'])
   })
 
   it('derives conservative P80 from benchmark variance when explicit benchmark P80 is unavailable', async () => {
@@ -2912,17 +3699,13 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-          duration_day_basis: 'construction_production_day',
-          p50_days: 8,
-          p75_days: 9,
-          sample_count: 24,
-          variance: 0.32,
-          confidence_level: 'high',
-          confidence_score: 86,
-          company_id: 'company-1',
-          metadata: benchmarkCalendarMetadata(),
-        },
+          data: completePersistedBenchmark({
+            p50_days: 8,
+            p75_days: 9,
+            p80_days: null,
+            sample_count: 24,
+            variance: 0.32,
+          }),
           error: null,
         }
       }
@@ -2997,20 +3780,20 @@ describe('durationSuggestionService', () => {
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
             p50_days: 8,
             p75_days: 10,
+            p80_days: null,
             sample_count: 18,
+            variance: null,
+            coefficient_of_variation: null,
             metadata: {
-              ...benchmarkCalendarMetadata(),
+              calendar_ref: 'calendar-1',
+              calendar_version: 'calendar-v3',
               variance: 0.55,
               coefficientOfVariation: 0.55,
             },
-            confidence_level: 'medium',
-            confidence_score: 70,
-            company_id: 'company-1',
-          },
+          }),
           error: null,
         }
       }
@@ -4859,6 +5642,11 @@ describe('durationSuggestionService', () => {
           endDate: '2026-05-31',
           counts_as_construction_shutdown: true,
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
@@ -4873,22 +5661,65 @@ describe('durationSuggestionService', () => {
     }))
   })
 
+  it('does not publish an unused benchmark candidate for a monthly commitment window', async () => {
+    mocks.getProjectCompanyId.mockResolvedValue('company-1')
+    mocks.query.maybeSingle.mockImplementation(async () => (
+      isCompanyBenchmarkScope('company-1')
+        ? {
+            data: completePersistedBenchmark({ id: 'benchmark-unused-monthly', p50_days: 2 }),
+            error: null,
+          }
+        : { data: null, error: null }
+    ))
+    mocks.resolveStandardWorkDurationSeed.mockResolvedValue({
+      __stableCode: 'rebar_installation',
+      stableCode: 'rebar_installation',
+      defaultDaysP50: 10,
+      defaultDaysP80: 14,
+      confidence: 'medium',
+      benchmarkBasis: 'Rebar installation default per work face.',
+    })
+
+    const suggestion = await getTaskDurationSuggestion({
+      suggestionPurpose: 'monthly_commitment_window',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      standardWorkCode: 'rebar_installation',
+      taskTitle: 'rebar installation',
+      wbsNodeType: 'process',
+      currentProgress: 0,
+      targetProgress: 50,
+      plannedStartDate: '2026-05-29',
+      plannedEndDate: '2026-05-31',
+    })
+
+    expect(suggestion.durationCalibrationSource).toBe('standard_work_duration_seed')
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: null,
+      benchmarkAsOf: null,
+      benchmarkWindowStart: null,
+      benchmarkVersion: null,
+      benchmarkSampleCount: null,
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: 'unavailable',
+      benchmarkProvenanceReasonCodes: ['benchmark_provenance_missing'],
+      benchmarkProvenance: { mode: 'single', entries: [] },
+    })
+    expect(JSON.stringify(suggestion.benchmarkProvenance)).not.toContain('benchmark-unused-monthly')
+  })
+
   it('records runtime consumer evidence from getTaskDurationSuggestion when published artifacts are consumed', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
     mocks.query.maybeSingle.mockImplementation(async () => {
       if (isCompanyBenchmarkScope('company-1')) {
         return {
-          data: {
-            duration_day_basis: 'construction_production_day',
+          data: completePersistedBenchmark({
             p50_days: 8,
             p75_days: 10,
             p80_days: 12,
             sample_count: 24,
-            confidence_level: 'high',
-            confidence_score: 86,
-            company_id: 'company-1',
-            metadata: benchmarkCalendarMetadata(),
-          },
+          }),
           error: null,
         }
       }
@@ -5019,10 +5850,6 @@ describe('durationSuggestionService', () => {
             defaultDaysP50: 7,
             defaultDaysP80: 9,
             durationDayBasis: 'construction_production_day',
-            constructionCalendarRef: 'work_calendar',
-            constructionCalendarVersion: 'calendar-v1',
-            constructionCalendarTimezone: 'Asia/Shanghai',
-            constructionCalendarAsOf: '2026-07-17',
           },
           previous_publication_key: 'algorithm_seed_versions:standard-v1',
           traffic_percent: 100,
@@ -5079,26 +5906,32 @@ describe('durationSuggestionService', () => {
         && params[0] === 'base_duration_benchmark'
       ) {
         return [{
-          publication_key: 'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
+          publication_key: 'duration_learning_runtime:base_duration_benchmark:rebar-project-canary',
           asset_key: 'base_duration_benchmark',
           artifact_key: 'rebar_installation:process:all',
-          scope_level: 'company',
+          scope_level: 'project',
           company_id: 'company-1',
-          project_id: null,
+          project_id: 'project-1',
           industry_key: null,
           publication_stage: 'canary',
           runtime_payload: {
+            benchmarkId: '44444444-4444-4444-8444-444444444444',
+            benchmarkVersion: 'runtime-project-v2',
             p50Days: 6,
             p75Days: 8,
             p80Days: 9,
             meanDays: 7,
             sampleCount: 50,
             variance: 0.2,
+            coefficientOfVariation: 0.063888,
+            confidenceLevel: 'high',
+            confidenceScore: 92,
             durationDayBasis: 'construction_production_day',
-            constructionCalendarRef: 'work_calendar',
-            constructionCalendarVersion: 'calendar-v1',
-            constructionCalendarTimezone: 'Asia/Shanghai',
-            constructionCalendarAsOf: '2026-07-17',
+            calendarRef: 'cn-work-calendar',
+            calendarVersion: '2026.07',
+            generatedAt: '2026-07-17T00:00:00.000Z',
+            sourceWindowStart: '2026-07-01T00:00:00.000Z',
+            sourceAsOf: '2026-07-16T23:59:59.000Z',
           },
           previous_publication_key: 'duration_benchmarks:company-v1',
           traffic_percent: 100,
@@ -5117,6 +5950,26 @@ describe('durationSuggestionService', () => {
       defaultDaysP80: 14,
       confidence: 'medium',
     })
+    mocks.loadCurrentCauseSegment.mockResolvedValue({
+      id: 'segment-material-runtime',
+      benchmarkId: '44444444-4444-4444-8444-444444444444',
+      companyId: 'company-1',
+      projectId: 'project-1',
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      sampleCount: 6,
+      p50Days: 4,
+      p75Days: 5,
+      p80Days: 6,
+      meanDays: 4.5,
+      variance: 0.15,
+      generatedAt: '2026-07-17T00:00:00.000Z',
+      sourceWindowStart: '2026-07-01T00:00:00.000Z',
+      sourceAsOf: '2026-07-16T23:59:59.000Z',
+      durationDayBasis: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+    })
 
     const suggestion = await getTaskDurationSuggestion({
       projectId: 'project-1',
@@ -5127,16 +5980,40 @@ describe('durationSuggestionService', () => {
       wbsNodeType: 'process',
       runtimeConsumerObservationQueryExec: queryExec,
       runtimeEvidenceMode: 'record',
+      confirmedCauseCode: 'material_shortage',
     } as any)
 
     expect(suggestion.recommendedDurationDays).toBeLessThan(12)
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
-      benchmarkP50: 6,
+      benchmarkP50: 4,
       benchmarkDurationDayBasis: 'construction_production_day',
+      benchmarkCauseSelection: 'exact_cause',
     }))
+    expect(suggestion).toMatchObject({
+      benchmarkVersion: 'runtime-project-v2',
+      benchmarkScope: 'project',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [expect.objectContaining({
+          source: 'cause_segment',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:rebar-project-canary',
+          benchmarkVersion: 'runtime-project-v2',
+          scope: 'project',
+          causeSegment: { causeCode: 'material_shortage', taxonomyVersion: 'v1.0.0' },
+          calendarRef: 'cn-work-calendar',
+          calendarVersion: '2026.07',
+          availability: 'available',
+        })],
+      },
+    })
+    expect(mocks.loadCurrentCauseSegment).toHaveBeenCalledWith(expect.objectContaining({
+      benchmarkId: '44444444-4444-4444-8444-444444444444',
+      causeCode: 'material_shortage',
+    }), expect.any(Function))
     expect(callsForTable(calls, 'runtime_consumer_observations').map((call) => call.params.slice(0, 4))).toContainEqual([
       'base_duration_benchmark',
-      'duration_learning_runtime:base_duration_benchmark:rebar-company-canary',
+      'duration_learning_runtime:base_duration_benchmark:rebar-project-canary',
       'durationSuggestionService',
       'duration_suggestion',
     ])

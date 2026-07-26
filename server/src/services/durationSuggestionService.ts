@@ -48,12 +48,12 @@ import {
 import { resolveProjectFactDurationScaling } from './durationProjectFactScaleService.js'
 import {
   addConstructionProductionDays,
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
-import { hasIdentifiedConstructionCalendar } from './durationMetricService.js'
 import { recordDurationAccuracyPrediction } from './durationAlgorithmAccuracyService.js'
 import {
   decideAlgorithmAssetColdStartRuntime,
@@ -78,6 +78,7 @@ import {
   type DurationPlausibilityWarning,
 } from './durationEngineeringPlausibilityGuardrailService.js'
 import {
+  durationLearningBenchmarkRuntimeVersionReasons,
   executeDurationLearningRuntimePublicationQuery,
   resolveDurationLearningRuntimePublication,
   type DurationLearningRuntimePublicationQueryExec,
@@ -95,19 +96,33 @@ import type { T2RhythmScheduleCandidateNetworkPhase1Evaluation } from './t2Rhyth
 import type { T2RhythmSchedulePhase1Selection } from './t2RhythmSchedulePhase1SelectionService.js'
 import type { ConstructionOrganizationScenarioSelection } from './constructionOrganizationScenarioSelector.js'
 import {
+  loadCurrentCauseSegment,
+  type DurationBenchmarkCauseSegment,
+  type DurationBenchmarkCauseSegmentQueryExec,
+} from './durationBenchmarkCauseSegmentService.js'
+import {
   mergeConstructionOrganizationLineageIntoContext,
   readConstructionOrganizationPlanNetworkRuntimeLineage,
   type ConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
 import { resolveDurationDayBasis } from '../utils/durationDayBasis.js'
+import {
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  type StructuredCauseCode,
+} from '../domain/structuredCauseTaxonomy.js'
+import type { TaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
 
 export type DurationCalibrationSource =
   | 'enterprise_override'
   | 'project_history_sample'
   | 'company_history_sample'
+  | 'industry_history_sample'
+  | 'global_history_sample'
   | 'system_history_sample'
   | 'standard_work_duration_seed'
   | 'standard_work_duration_seed+company_history_sample'
+  | 'standard_work_duration_seed+industry_history_sample'
+  | 'standard_work_duration_seed+global_history_sample'
   | 'standard_work_duration_seed+system_history_sample'
   | 'standard_work_duration_seed+project_history_sample'
   | 'standard_work_duration_seed+mixed_history_sample'
@@ -127,6 +142,45 @@ export type DurationQuantitySource =
   | 'none'
 export type DurationQuantityConfidence = 'high' | 'medium' | 'low' | 'unavailable'
 export type DurationBoundaryRole = 'standalone_duration' | 'aggregate_parent_duration' | 'package_child_window'
+
+export type BenchmarkProvenanceReasonCode =
+  | 'benchmark_provenance_missing'
+  | 'benchmark_version_missing'
+  | 'benchmark_generated_at_missing'
+  | 'benchmark_source_as_of_missing'
+  | 'benchmark_source_window_start_missing'
+  | 'benchmark_sample_count_invalid'
+  | 'benchmark_day_basis_unavailable'
+  | 'benchmark_scope_unavailable'
+  | 'benchmark_calendar_identity_missing'
+  | 'benchmark_runtime_publication_key_missing'
+  | 'benchmark_cause_identity_missing'
+  | 'benchmark_blend_weight_invalid'
+
+export interface BenchmarkProvenanceEntry {
+  source: 'persisted_benchmark' | 'runtime_publication' | 'cause_segment'
+  benchmarkId: string | null
+  publicationKey: string | null
+  benchmarkVersion: string | null
+  scope: 'project' | 'company' | 'industry' | 'global' | null
+  generatedAt: string | null
+  sourceAsOf: string | null
+  sourceWindowStart: string | null
+  sampleCount: number | null
+  dayBasis: 'construction_production_day' | null
+  calendarRef: string | null
+  calendarVersion: string | null
+  aggregateCalendarIdentities: Array<{ calendarRef: string; calendarVersion: string }>
+  causeSegment: null | { causeCode: StructuredCauseCode; taxonomyVersion: string }
+  blendWeight: number | null
+  availability: 'available' | 'unavailable'
+  reasonCodes: BenchmarkProvenanceReasonCode[]
+}
+
+export interface BenchmarkProvenanceSet {
+  mode: 'single' | 'blended'
+  entries: BenchmarkProvenanceEntry[]
+}
 export type ParentDurationBoundaryPolicy =
   | 'aggregate_package_window'
   | 'rhythm_package_window'
@@ -197,6 +251,31 @@ export interface DurationSuggestion {
   packageChildRhythmWindowStartDay?: number | null
   packageChildRhythmWindowEndDay?: number | null
   packageChildRhythmWindowRole?: string | null
+  benchmarkCauseSegment?: {
+    causeCode: StructuredCauseCode
+    taxonomyVersion: string
+    generatedAt: string
+    sourceAsOf: string
+    sampleCount: number
+  } | null
+  benchmarkCauseSelection?:
+    | 'exact_cause'
+    | 'all_cause_fallback'
+    | 'no_confirmed_cause'
+    | 'cause_segment_read_failed'
+    | 'cause_authority_review_required'
+    | 'cause_authority_unavailable'
+  benchmarkGeneratedAt?: string | null
+  benchmarkAsOf?: string | null
+  benchmarkWindowStart?: string | null
+  benchmarkVersion?: string | null
+  benchmarkSampleCount?: number | null
+  benchmarkDayBasis?: 'construction_production_day' | null
+  benchmarkScope?: 'project' | 'company' | 'industry' | 'global' | 'mixed' | null
+  benchmarkProvenance?: BenchmarkProvenanceSet | null
+  benchmarkProvenanceAvailability?: 'available' | 'partial' | 'unavailable' | null
+  benchmarkProvenanceReasonCodes?: BenchmarkProvenanceReasonCode[]
+  benchmarkProvenanceUnavailableReason?: BenchmarkProvenanceReasonCode | null
 }
 
 export interface DurationSuggestionInput {
@@ -260,6 +339,8 @@ export interface DurationSuggestionInput {
   workCalendar?: ConstructionCalendarContext | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
   runtimeEvidenceMode?: 'record' | 'no_write'
+  confirmedCauseCode?: StructuredCauseCode | null
+  structuredCauseAuthority?: TaskStructuredCauseAuthority | null
 }
 
 export interface DurationSuggestionRuntimeArtifactPublication {
@@ -319,7 +400,9 @@ const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
   'special_work_duration_seed',
 ])
 
-type DurationBenchmarkRow = {
+export type DurationBenchmarkRow = {
+  id?: string | null
+  benchmark_version?: string | null
   p50_days?: number | null
   p75_days?: number | null
   p80_days?: number | null
@@ -329,6 +412,9 @@ type DurationBenchmarkRow = {
   confidence_score?: number | null
   company_id?: string | null
   project_id?: string | null
+  generated_at?: string | null
+  source_window_start?: string | null
+  source_as_of?: string | null
   metadata?: Record<string, unknown> | null
   variance?: number | null
   cv?: number | null
@@ -338,6 +424,14 @@ type DurationBenchmarkRow = {
   __durationLearningPublicationKey?: string | null
   __durationLearningPublicationStage?: string | null
   __durationLearningSelectionBasis?: string | null
+  __durationLearningScope?: 'project' | 'company' | 'industry' | 'global' | null
+  __durationLearningAggregateCalendarIdentities?: Array<{ calendarRef: string; calendarVersion: string }>
+  __durationLearningCauseSegment?: null | {
+    causeCode: StructuredCauseCode
+    taxonomyVersion: string
+    calendarRef: string | null
+    calendarVersion: string | null
+  }
 }
 
 type DurationOverrideRow = {
@@ -346,9 +440,9 @@ type DurationOverrideRow = {
   reason?: string | null
 }
 
-type BenchmarkScope = 'project' | 'company' | 'system'
+type BenchmarkScope = DurationLearningRuntimeScope['level']
 
-type DurationBenchmarkCandidate = {
+export type DurationBenchmarkCandidate = {
   benchmark: DurationBenchmarkRow
   scope: BenchmarkScope
   benchKey: string
@@ -1647,10 +1741,11 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
 async function findBenchmark(benchKey: string, companyId: string | null): Promise<DurationBenchmarkRow | null> {
   let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, duration_day_basis, metadata')
+    .select('id, benchmark_version, p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, project_id, duration_day_basis, generated_at, source_window_start, source_as_of, metadata')
     .eq('benchmark_key', benchKey)
     .eq('is_current', true)
     .eq('is_active', true)
+    .is('project_id', null)
 
   query = companyId ? query.eq('company_id', companyId) : query.is('company_id', null)
 
@@ -1660,22 +1755,35 @@ async function findBenchmark(benchKey: string, companyId: string | null): Promis
   return (data ?? null) as DurationBenchmarkRow | null
 }
 
-async function findProjectBenchmark(benchKey: string, projectId: string | null): Promise<DurationBenchmarkRow | null> {
+async function findProjectBenchmark(
+  benchKey: string,
+  companyId: string | null,
+  projectId: string | null,
+): Promise<DurationBenchmarkRow | null> {
   const normalizedProjectId = normalizeId(projectId)
   if (!normalizedProjectId) return null
 
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, duration_day_basis, metadata')
+    .select('id, benchmark_version, p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, project_id, duration_day_basis, generated_at, source_window_start, source_as_of, metadata')
     .eq('benchmark_key', benchKey)
     .eq('project_id', normalizedProjectId)
     .eq('is_current', true)
     .eq('is_active', true)
-    .maybeSingle()
+
+  const normalizedCompanyId = normalizeId(companyId)
+  query = normalizedCompanyId ? query.eq('company_id', normalizedCompanyId) : query.is('company_id', null)
+  const { data, error } = await query.maybeSingle()
 
   if (error) throw error
 
-  return data ? { ...(data as DurationBenchmarkRow), project_id: normalizedProjectId } : null
+  return data
+    ? {
+        ...(data as DurationBenchmarkRow),
+        company_id: normalizedCompanyId || null,
+        project_id: normalizedProjectId,
+      }
+    : null
 }
 
 function isTemplateUsableForContext(
@@ -1704,109 +1812,187 @@ function isBenchmarkCandidateScopeConsistent(
   const inputProjectId = normalizeId(input.projectId)
 
   if (scope === 'project') {
-    return Boolean(inputProjectId) && rowProjectId === inputProjectId
+    return Boolean(inputProjectId)
+      && rowProjectId === inputProjectId
+      && Boolean(companyId)
+      && rowCompanyId === companyId
   }
   if (scope === 'company') {
     return Boolean(companyId) && rowCompanyId === companyId && !rowProjectId
   }
-  if (scope === 'system') {
-    return !rowCompanyId && !rowProjectId
+  if (scope === 'industry') {
+    return !rowCompanyId
+      && !rowProjectId
+      && normalizeId((benchmark as any).__durationLearningScope) === 'industry'
+  }
+  if (scope === 'global') {
+    const runtimeScope = normalizeId((benchmark as any).__durationLearningScope)
+    return !rowCompanyId && !rowProjectId && (!runtimeScope || runtimeScope === 'global')
   }
   return isTemplateUsableForContext(benchmark, input, companyId)
 }
 
-type BenchmarkCalendarProvenance = {
-  calendarRef: string
-  calendarVersion: string
-  timezone: string
-  asOf: string
+const STRICT_RFC3339_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/
+
+function readRuntimeTimestamp(value: unknown) {
+  if (typeof value !== 'string') return null
+  const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(value)
+  if (!match) return null
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fractionText = '', timezoneText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const millisecond = Number(`${fractionText}000`.slice(0, 3))
+  if (month < 1 || month > 12) return null
+  if (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return null
+  if (timezoneText.startsWith('+14:') || timezoneText.startsWith('-14:')) {
+    if (!timezoneText.endsWith(':00')) return null
+  }
+
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  const localShape = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond))
+  if (
+    localShape.getUTCFullYear() !== year
+    || localShape.getUTCMonth() !== month - 1
+    || localShape.getUTCDate() !== day
+    || localShape.getUTCHours() !== hour
+    || localShape.getUTCMinutes() !== minute
+    || localShape.getUTCSeconds() !== second
+  ) return null
+
+  return parsed.toISOString()
 }
 
-function normalizeCalendarProvenanceDate(value: unknown) {
-  const text = normalizeId(value)
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
-  const [year, month, day] = text.split('-').map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day))
-  return date.getUTCFullYear() === year
-    && date.getUTCMonth() === month - 1
-    && date.getUTCDate() === day
-    ? text
-    : null
+function readRuntimeList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
 }
 
-function readBenchmarkCalendarProvenance(benchmark: DurationBenchmarkRow): BenchmarkCalendarProvenance | null {
-  const row = benchmark as Record<string, unknown>
-  const metadata = readMetadataObject(row.metadata)
-  const calendar = readMetadataObject(
-    row.constructionCalendar
-      ?? row.construction_calendar
-      ?? metadata.constructionCalendar
-      ?? metadata.construction_calendar,
+export function buildDurationBenchmarkRowFromRuntimePublication(input: {
+  publicationKey: string
+  selectionBasis: string
+  publication: {
+    runtimePayload: Record<string, unknown>
+    companyId: string | null
+    projectId: string | null
+    industryKey?: string | null
+    publicationStage: string
+    scopeLevel?: string
+  }
+}): DurationBenchmarkRow | null {
+  const payload = input.publication.runtimePayload
+  const benchmarkKind = normalizeId(payload.benchmarkKind ?? payload.benchmark_kind)
+  const causeApplicability = normalizeId(payload.causeApplicability ?? payload.cause_applicability)
+  const scopeLevel = normalizeId(input.publication.scopeLevel)
+  const aggregateProvenance = readMetadataObject(payload.aggregateProvenance ?? payload.aggregate_provenance)
+  const isAggregate = benchmarkKind === 'aggregate_all_cause'
+    && causeApplicability === 'all_cause'
+    && scopeLevel !== 'project'
+  const benchmarkId = normalizeId(payload.benchmarkId ?? payload.benchmark_id)
+  const benchmarkVersion = normalizeId(payload.benchmarkVersion ?? payload.benchmark_version)
+  const p50Days = readPositiveRawNumber(payload.p50Days ?? payload.p50_days)
+  const p75Days = readPositiveRawNumber(payload.p75Days ?? payload.p75_days)
+  const p80Days = readPositiveRawNumber(payload.p80Days ?? payload.p80_days)
+  const meanDays = readPositiveRawNumber(payload.meanDays ?? payload.mean_days)
+  const sampleCount = readPositiveNumber(payload.sampleCount ?? payload.sample_count)
+  const variance = readOptionalNonNegativeNumber(payload.variance)
+  const coefficientOfVariation = readOptionalNonNegativeNumber(
+    payload.coefficientOfVariation ?? payload.coefficient_of_variation,
   )
-  const calendarRef = normalizeId(
-    row.construction_calendar_ref
-      ?? row.constructionCalendarRef
-      ?? row.calendar_ref
-      ?? row.calendarRef
-      ?? metadata.construction_calendar_ref
-      ?? metadata.constructionCalendarRef
-      ?? metadata.calendar_ref
-      ?? metadata.calendarRef
-      ?? calendar.calendarRef
-      ?? calendar.calendar_ref,
-  )
-  const calendarVersion = normalizeId(
-    row.construction_calendar_version
-      ?? row.constructionCalendarVersion
-      ?? row.calendar_version
-      ?? row.calendarVersion
-      ?? metadata.construction_calendar_version
-      ?? metadata.constructionCalendarVersion
-      ?? metadata.calendar_version
-      ?? metadata.calendarVersion
-      ?? calendar.calendarVersion
-      ?? calendar.calendar_version,
-  )
-  const timezone = normalizeId(
-    row.construction_calendar_timezone
-      ?? row.constructionCalendarTimezone
-      ?? metadata.construction_calendar_timezone
-      ?? metadata.constructionCalendarTimezone
-      ?? metadata.timezone
-      ?? calendar.timezone,
-  )
-  const asOf = normalizeCalendarProvenanceDate(
-    row.construction_calendar_as_of
-      ?? row.constructionCalendarAsOf
-      ?? row.calendar_as_of
-      ?? row.calendarAsOf
-      ?? row.as_of
-      ?? row.asOf
-      ?? metadata.construction_calendar_as_of
-      ?? metadata.constructionCalendarAsOf
-      ?? metadata.calendar_as_of
-      ?? metadata.calendarAsOf
-      ?? metadata.as_of
-      ?? metadata.asOf
-      ?? calendar.asOf
-      ?? calendar.as_of,
-  )
-
-  return calendarRef && calendarVersion && timezone && asOf
-    ? { calendarRef, calendarVersion, timezone, asOf }
-    : null
-}
-
-function isBenchmarkCalendarProvenanceCompatible(
-  benchmark: DurationBenchmarkRow,
-  currentCalendar?: ConstructionCalendarContext | null,
-) {
-  const provenance = readBenchmarkCalendarProvenance(benchmark)
-  if (!provenance) return false
-  if (!hasIdentifiedConstructionCalendar(currentCalendar)) return true
-  return provenance.calendarRef === normalizeId(currentCalendar.calendarRef)
-    && provenance.calendarVersion === normalizeId(currentCalendar.calendarVersion)
-    && provenance.timezone === normalizeId(currentCalendar.timezone)
+  const confidenceLevel = normalizeId(payload.confidenceLevel ?? payload.confidence_level)
+  const confidenceScore = readOptionalNonNegativeNumber(payload.confidenceScore ?? payload.confidence_score)
+  const durationDayBasis = normalizeId(payload.durationDayBasis ?? payload.duration_day_basis)
+  const calendarRef = normalizeId(payload.calendarRef ?? payload.calendar_ref)
+  const calendarVersion = normalizeId(payload.calendarVersion ?? payload.calendar_version)
+  const generatedAt = readRuntimeTimestamp(payload.generatedAt ?? payload.generated_at)
+  const sourceWindowStart = readRuntimeTimestamp(payload.sourceWindowStart ?? payload.source_window_start)
+  const sourceAsOf = readRuntimeTimestamp(payload.sourceAsOf ?? payload.source_as_of)
+  const aggregateCalendarIdentities = readRuntimeList(
+    aggregateProvenance.calendarIdentities ?? aggregateProvenance.calendar_identities,
+  ).map(readMetadataObject)
+  const companyId = normalizeId(input.publication.companyId)
+  const projectId = normalizeId(input.publication.projectId)
+  const industryKey = normalizeId(input.publication.industryKey)
+  const runtimeScope: DurationLearningRuntimeScope | null = scopeLevel === 'project'
+    ? companyId && projectId && !industryKey
+      ? { level: 'project', companyId, projectId }
+      : null
+    : scopeLevel === 'company'
+      ? companyId && !projectId && !industryKey
+        ? { level: 'company', companyId }
+        : null
+      : scopeLevel === 'industry'
+        ? industryKey && !companyId && !projectId
+          ? { level: 'industry', industryKey }
+          : null
+        : scopeLevel === 'global' && !companyId && !projectId && !industryKey
+          ? { level: 'global' }
+          : null
+  const aggregateContractValid = isAggregate
+    && DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(scopeLevel as DurationLearningRuntimeScope['level'])
+    && normalizeId(aggregateProvenance.schemaVersion ?? aggregateProvenance.schema_version) === 'duration-benchmark-aggregate/v1'
+    && normalizeId(aggregateProvenance.scopeLevel ?? aggregateProvenance.scope_level) === scopeLevel
+    && readRuntimeList(aggregateProvenance.sourceBenchmarkIds ?? aggregateProvenance.source_benchmark_ids).length > 0
+    && readRuntimeList(aggregateProvenance.sourceBenchmarkVersions ?? aggregateProvenance.source_benchmark_versions).length > 0
+    && readRuntimeList(aggregateProvenance.sourceProjectIds ?? aggregateProvenance.source_project_ids).length > 0
+    && aggregateCalendarIdentities.length > 0
+    && aggregateCalendarIdentities.every((identity) => (
+      Boolean(normalizeId(identity.calendarRef ?? identity.calendar_ref))
+      && Boolean(normalizeId(identity.calendarVersion ?? identity.calendar_version))
+    ))
+  if (
+    !runtimeScope
+    || durationLearningBenchmarkRuntimeVersionReasons(payload, runtimeScope).length > 0
+    || !benchmarkVersion
+    || (!benchmarkId && !aggregateContractValid) || !p50Days || !p75Days || !p80Days || !meanDays || !sampleCount
+    || variance === null || coefficientOfVariation === null
+    || !confidenceLevel || confidenceScore === null
+    || durationDayBasis !== 'construction_production_day'
+    || (!aggregateContractValid && (!calendarRef || !calendarVersion))
+    || !generatedAt || !sourceWindowStart || !sourceAsOf
+    || (aggregateContractValid && Boolean(benchmarkId))
+  ) return null
+  return {
+    id: aggregateContractValid ? null : benchmarkId,
+    benchmark_version: benchmarkVersion,
+    p50_days: p50Days,
+    p75_days: p75Days,
+    p80_days: p80Days,
+    mean_days: meanDays,
+    sample_count: sampleCount,
+    variance,
+    coefficient_of_variation: coefficientOfVariation,
+    confidence_level: confidenceLevel as DurationBenchmarkRow['confidence_level'],
+    confidence_score: confidenceScore,
+    company_id: companyId || null,
+    project_id: projectId || null,
+    generated_at: generatedAt,
+    source_window_start: sourceWindowStart,
+    source_as_of: sourceAsOf,
+    duration_day_basis: 'construction_production_day',
+    metadata: {
+      source: 'duration_learning_runtime_publication',
+      publication_key: input.publicationKey,
+      benchmark_provenance: aggregateContractValid ? 'aggregate_all_cause' : 'exact_project_candidate',
+      ...(aggregateContractValid
+        ? { aggregate_provenance: aggregateProvenance }
+        : { calendar_ref: calendarRef, calendar_version: calendarVersion }),
+    },
+    __durationLearningPublicationKey: input.publicationKey,
+    __durationLearningPublicationStage: input.publication.publicationStage,
+    __durationLearningSelectionBasis: input.selectionBasis,
+    __durationLearningScope: scopeLevel as DurationLearningRuntimeScope['level'],
+    __durationLearningAggregateCalendarIdentities: aggregateCalendarIdentities
+      .map((identity) => ({
+        calendarRef: normalizeId(identity.calendarRef ?? identity.calendar_ref),
+        calendarVersion: normalizeId(identity.calendarVersion ?? identity.calendar_version),
+      }))
+      .filter((identity) => identity.calendarRef && identity.calendarVersion),
+  }
 }
 
 async function collectBenchmarkCandidates(params: {
@@ -1815,16 +2001,16 @@ async function collectBenchmarkCandidates(params: {
   input: DurationSuggestionInput
   companyId: string | null
 }): Promise<DurationBenchmarkCandidate[]> {
+  const candidates: DurationBenchmarkCandidate[] = []
+  const occupiedScopes = new Set<BenchmarkScope>()
   for (const contextKey of buildBenchmarkContextKeys(params.input)) {
     const benchKey = [params.benchmarkIdentity, params.wbsNodeType, contextKey].join(':')
     const specificity = benchmarkContextSpecificity(contextKey)
-    const candidates: DurationBenchmarkCandidate[] = []
-    const occupiedScopes = new Set<BenchmarkScope>()
 
     const addCandidate = (benchmark: DurationBenchmarkRow | null, scope: BenchmarkScope) => {
+      if (occupiedScopes.has(scope)) return
       if (!benchmark || !isBenchmarkCandidateScopeConsistent(benchmark, scope, params.input, params.companyId)) return
       if (resolveDurationDayBasis(benchmark as Record<string, unknown>) !== 'construction_production_day') return
-      if (!isBenchmarkCalendarProvenanceCompatible(benchmark, params.input.workCalendar)) return
       const sampleSize = Number(benchmark.sample_count ?? 0)
       if (!isBenchmarkCandidateUsable(scope, sampleSize, specificity)) return
       candidates.push({
@@ -1849,55 +2035,169 @@ async function collectBenchmarkCandidates(params: {
         industryKey: params.input.projectTypeCode,
       })
       if (resolution.runtimeConsumable && resolution.publication) {
-        const payload = resolution.publication.runtimePayload
-        const scope: BenchmarkScope = resolution.publication.scopeLevel === 'project'
-          ? 'project'
-          : resolution.publication.scopeLevel === 'company'
-            ? 'company'
-            : 'system'
-        addCandidate({
-          p50_days: readPositiveNumber(payload.p50Days ?? payload.p50_days),
-          p75_days: readPositiveNumber(payload.p75Days ?? payload.p75_days),
-          p80_days: readPositiveNumber(payload.p80Days ?? payload.p80_days),
-          mean_days: readPositiveNumber(payload.meanDays ?? payload.mean_days),
-          sample_count: Number(payload.sampleCount ?? payload.sample_count ?? 0),
-          variance: Number(payload.variance ?? payload.coefficientOfVariation ?? payload.coefficient_of_variation ?? 0),
-          coefficient_of_variation: Number(payload.coefficientOfVariation ?? payload.coefficient_of_variation ?? payload.variance ?? 0),
-          confidence_level: (normalizeId(payload.confidenceLevel ?? payload.confidence_level) || 'medium') as DurationBenchmarkRow['confidence_level'],
-          confidence_score: Number(payload.confidenceScore ?? payload.confidence_score ?? 0),
-          company_id: resolution.publication.companyId,
-          project_id: resolution.publication.projectId,
-          duration_day_basis: 'construction_production_day',
-          metadata: {
-            source: 'duration_learning_runtime_publication',
-            publication_key: resolution.publicationKey,
-            construction_calendar_ref: payload.constructionCalendarRef ?? payload.construction_calendar_ref ?? null,
-            construction_calendar_version: payload.constructionCalendarVersion ?? payload.construction_calendar_version ?? null,
-            construction_calendar_timezone: payload.constructionCalendarTimezone ?? payload.construction_calendar_timezone ?? null,
-            construction_calendar_as_of: payload.constructionCalendarAsOf ?? payload.construction_calendar_as_of ?? null,
-          },
-          __durationLearningPublicationKey: resolution.publicationKey,
-          __durationLearningPublicationStage: resolution.publication.publicationStage,
-          __durationLearningSelectionBasis: resolution.selectionBasis,
-        }, scope)
+        const scope = resolution.publication.scopeLevel
+        if (DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(scope as DurationLearningRuntimeScope['level'])) {
+          addCandidate(buildDurationBenchmarkRowFromRuntimePublication({
+            publicationKey: resolution.publicationKey,
+            selectionBasis: resolution.selectionBasis,
+            publication: resolution.publication,
+          }), scope as DurationLearningRuntimeScope['level'])
+        }
       }
     }
 
     if (!occupiedScopes.has('project')) {
-      addCandidate(await findProjectBenchmark(benchKey, params.input.projectId ?? null), 'project')
+      addCandidate(await findProjectBenchmark(benchKey, params.companyId, params.input.projectId ?? null), 'project')
     }
 
     if (params.companyId && !occupiedScopes.has('company')) {
       addCandidate(await findBenchmark(benchKey, params.companyId), 'company')
     }
 
-    if (!occupiedScopes.has('system')) {
-      addCandidate(await findBenchmark(benchKey, null), 'system')
+    if (!occupiedScopes.has('global')) {
+      addCandidate(await findBenchmark(benchKey, null), 'global')
     }
 
-    if (candidates.length > 0) return candidates
   }
-  return []
+  return candidates.sort((left, right) => (
+    BENCHMARK_SCOPE_PRIORITY[left.scope] - BENCHMARK_SCOPE_PRIORITY[right.scope]
+    || left.contextKey.localeCompare(right.contextKey)
+    || left.benchKey.localeCompare(right.benchKey)
+  ))
+}
+
+function benchmarkRowFromCauseSegment(
+  benchmark: DurationBenchmarkRow,
+  segment: DurationBenchmarkCauseSegment,
+): DurationBenchmarkRow {
+  const coefficientOfVariation = segment.variance !== null
+    && Number.isFinite(segment.variance)
+    && segment.variance >= 0
+    && segment.meanDays !== null
+    && Number.isFinite(segment.meanDays)
+    && segment.meanDays > 0
+    ? Math.sqrt(segment.variance) / segment.meanDays
+    : null
+  return {
+    ...benchmark,
+    p50_days: segment.p50Days,
+    p75_days: segment.p75Days,
+    p80_days: segment.p80Days,
+    mean_days: segment.meanDays,
+    sample_count: segment.sampleCount,
+    variance: segment.variance,
+    coefficient_of_variation: coefficientOfVariation,
+    company_id: segment.companyId,
+    project_id: segment.projectId,
+    duration_day_basis: segment.durationDayBasis,
+    generated_at: segment.generatedAt,
+    source_window_start: segment.sourceWindowStart,
+    source_as_of: segment.sourceAsOf,
+    metadata: {
+      ...readMetadataObject(benchmark.metadata),
+      calendar_ref: segment.calendarRef,
+      calendar_version: segment.calendarVersion,
+    },
+    __durationLearningCauseSegment: {
+      causeCode: segment.causeCode,
+      taxonomyVersion: segment.taxonomyVersion,
+      calendarRef: segment.calendarRef,
+      calendarVersion: segment.calendarVersion,
+    },
+  }
+}
+
+export async function selectCauseAwareBenchmarkCandidates(
+  candidates: DurationBenchmarkCandidate[],
+  authorityInput: TaskStructuredCauseAuthority | StructuredCauseCode | null | undefined,
+  queryExec: DurationBenchmarkCauseSegmentQueryExec = executeDurationLearningRuntimePublicationQuery,
+) {
+  const authorityState: TaskStructuredCauseAuthority = typeof authorityInput === 'string'
+    ? {
+          state: 'confirmed',
+          causeCode: authorityInput,
+          taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+          reasonCodes: [],
+        }
+    : authorityInput ?? {
+          state: 'no_cause',
+          causeCode: null,
+          taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+          reasonCodes: [],
+        }
+  if (authorityState.state === 'review_required' || authorityState.state === 'unavailable') {
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null as DurationBenchmarkCauseSegment | null,
+      fallback: null as 'all_cause' | null,
+      selection: authorityState.state === 'review_required'
+        ? 'cause_authority_review_required' as const
+        : 'cause_authority_unavailable' as const,
+    }
+  }
+  const confirmedCauseCode = authorityState.state === 'confirmed' ? authorityState.causeCode : null
+  const primary = candidates[0] ?? null
+  if (!confirmedCauseCode || !primary) {
+    return {
+      candidates,
+      segment: null as DurationBenchmarkCauseSegment | null,
+      fallback: null as 'all_cause' | null,
+      selection: confirmedCauseCode ? 'all_cause_fallback' as const : 'no_confirmed_cause' as const,
+    }
+  }
+
+  const benchmarkId = normalizeId(primary.benchmark.id)
+  const benchmarkMetadata = readMetadataObject(primary.benchmark.metadata)
+  if (normalizeId(benchmarkMetadata.benchmark_provenance) === 'aggregate_all_cause') {
+    return {
+      candidates,
+      segment: null,
+      fallback: 'all_cause' as const,
+      selection: 'all_cause_fallback' as const,
+    }
+  }
+  if (!benchmarkId) {
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null,
+      fallback: null,
+      selection: 'cause_segment_read_failed' as const,
+    }
+  }
+
+  try {
+    const segment = await loadCurrentCauseSegment({
+      benchmarkId,
+      causeCode: confirmedCauseCode,
+      companyId: normalizeId(primary.benchmark.company_id) || null,
+      projectId: normalizeId(primary.benchmark.project_id) || null,
+    }, queryExec)
+    if (
+      !segment
+      || !readPositiveNumber(segment.p50Days)
+      || !isBenchmarkCandidateUsable(primary.scope, segment.sampleCount, primary.specificity)
+    ) {
+      return { candidates, segment: null, fallback: 'all_cause' as const, selection: 'all_cause_fallback' as const }
+    }
+    const exactCandidate: DurationBenchmarkCandidate = {
+      ...primary,
+      benchmark: benchmarkRowFromCauseSegment(primary.benchmark, segment),
+      sampleSize: segment.sampleCount,
+    }
+    return { candidates: [exactCandidate], segment, fallback: null, selection: 'exact_cause' as const }
+  } catch (error) {
+    logger.warn('[durationSuggestionService] failed to load exact benchmark cause segment', {
+      benchmarkId,
+      confirmedCauseCode,
+      error,
+    })
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null,
+      fallback: null,
+      selection: 'cause_segment_read_failed' as const,
+    }
+  }
 }
 
 async function findDurationOverride(input: {
@@ -2765,7 +3065,7 @@ function benchmarkReferenceFromP50P75(
 function readBenchmarkMetadataNumber(benchmark: DurationBenchmarkRow | null | undefined, ...keys: string[]) {
   const metadata = readMetadataObject(benchmark?.metadata)
   for (const key of keys) {
-    const value = readPositiveRawNumber((benchmark as any)?.[key] ?? metadata[key])
+    const value = readOptionalNonNegativeNumber((benchmark as any)?.[key] ?? metadata[key])
     if (value !== null) return value
   }
   return null
@@ -2945,6 +3245,196 @@ function blendBenchmarkCandidates(
     primaryCandidate,
     companyCandidate,
     distributionCandidate,
+  }
+}
+
+const BENCHMARK_SCOPE_PRIORITY: Record<BenchmarkScope, number> = {
+  project: 0,
+  company: 1,
+  industry: 2,
+  global: 3,
+}
+
+function normalizeAggregateCalendarIdentities(value: unknown) {
+  const identities = Array.isArray(value) ? value : []
+  return [...new Map(identities.map((value) => {
+    const identity = readMetadataObject(value)
+    const calendarRef = normalizeId(identity.calendarRef ?? identity.calendar_ref)
+    const calendarVersion = normalizeId(identity.calendarVersion ?? identity.calendar_version)
+    return [`${calendarRef}\u0000${calendarVersion}`, { calendarRef, calendarVersion }] as const
+  }).filter(([, identity]) => Boolean(identity.calendarRef && identity.calendarVersion))).values()]
+    .sort((left, right) => (
+      left.calendarRef.localeCompare(right.calendarRef)
+      || left.calendarVersion.localeCompare(right.calendarVersion)
+    ))
+}
+
+function buildBenchmarkProvenanceEntry(
+  candidate: DurationBenchmarkCandidate,
+  blendWeight: number | null,
+  blendWeightRequired = false,
+): BenchmarkProvenanceEntry {
+  const benchmark = candidate.benchmark
+  const metadata = readMetadataObject(benchmark.metadata)
+  const causeSegment = benchmark.__durationLearningCauseSegment ?? null
+  const source: BenchmarkProvenanceEntry['source'] = causeSegment
+    ? 'cause_segment'
+    : normalizeId(benchmark.__durationLearningPublicationKey)
+      ? 'runtime_publication'
+      : 'persisted_benchmark'
+  const benchmarkId = normalizeId(benchmark.id) || null
+  const publicationKey = normalizeId(benchmark.__durationLearningPublicationKey) || null
+  const benchmarkVersion = normalizeId(benchmark.benchmark_version) || null
+  const scope = DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(candidate.scope)
+    ? candidate.scope
+    : null
+  const generatedAt = readRuntimeTimestamp(benchmark.generated_at)
+  const sourceAsOf = readRuntimeTimestamp(benchmark.source_as_of)
+  const sourceWindowStart = readRuntimeTimestamp(benchmark.source_window_start)
+  const sampleCount = readPositiveNumber(benchmark.sample_count)
+  const dayBasis = benchmark.duration_day_basis === 'construction_production_day'
+    ? 'construction_production_day'
+    : null
+  const calendarRef = normalizeId(
+    causeSegment?.calendarRef
+    ?? metadata.calendar_ref
+    ?? metadata.calendarRef
+    ?? metadata.construction_calendar_ref
+    ?? metadata.constructionCalendarRef,
+  ) || null
+  const calendarVersion = normalizeId(
+    causeSegment?.calendarVersion
+    ?? metadata.calendar_version
+    ?? metadata.calendarVersion
+    ?? metadata.construction_calendar_version
+    ?? metadata.constructionCalendarVersion,
+  ) || null
+  const aggregateCalendarIdentities = normalizeAggregateCalendarIdentities(
+    benchmark.__durationLearningAggregateCalendarIdentities
+    ?? readMetadataObject(metadata.aggregate_provenance ?? metadata.aggregateProvenance).calendarIdentities
+    ?? readMetadataObject(metadata.aggregate_provenance ?? metadata.aggregateProvenance).calendar_identities,
+  )
+  const normalizedCauseCode = normalizeId(causeSegment?.causeCode)
+  const normalizedTaxonomyVersion = normalizeId(causeSegment?.taxonomyVersion)
+  const entryCauseSegment = normalizedCauseCode && normalizedTaxonomyVersion
+    ? {
+        causeCode: normalizedCauseCode as StructuredCauseCode,
+        taxonomyVersion: normalizedTaxonomyVersion,
+      }
+    : null
+  const sourceIdentityAvailable = source === 'runtime_publication'
+    ? Boolean(publicationKey)
+    : Boolean(benchmarkId)
+  const reasonCodes = [
+    ...(sourceIdentityAvailable ? [] : ['benchmark_provenance_missing']),
+    ...(benchmarkVersion ? [] : ['benchmark_version_missing']),
+    ...(generatedAt ? [] : ['benchmark_generated_at_missing']),
+    ...(sourceAsOf ? [] : ['benchmark_source_as_of_missing']),
+    ...(sourceWindowStart ? [] : ['benchmark_source_window_start_missing']),
+    ...(sampleCount ? [] : ['benchmark_sample_count_invalid']),
+    ...(dayBasis ? [] : ['benchmark_day_basis_unavailable']),
+    ...(scope ? [] : ['benchmark_scope_unavailable']),
+    ...(calendarRef && calendarVersion || aggregateCalendarIdentities.length > 0
+      ? []
+      : ['benchmark_calendar_identity_missing']),
+    ...(source !== 'runtime_publication' || publicationKey
+      ? []
+      : ['benchmark_runtime_publication_key_missing']),
+    ...(source !== 'cause_segment' || entryCauseSegment
+      ? []
+      : ['benchmark_cause_identity_missing']),
+    ...(!blendWeightRequired && blendWeight === null
+      || Number.isFinite(blendWeight) && blendWeight > 0 && blendWeight <= 1
+      ? []
+      : ['benchmark_blend_weight_invalid']),
+  ] as BenchmarkProvenanceReasonCode[]
+  const uniqueReasonCodes = [...new Set(reasonCodes)].sort() as BenchmarkProvenanceReasonCode[]
+  return {
+    source,
+    benchmarkId,
+    publicationKey,
+    benchmarkVersion,
+    scope,
+    generatedAt,
+    sourceAsOf,
+    sourceWindowStart,
+    sampleCount,
+    dayBasis,
+    calendarRef,
+    calendarVersion,
+    aggregateCalendarIdentities,
+    causeSegment: entryCauseSegment,
+    blendWeight,
+    availability: uniqueReasonCodes.length === 0 ? 'available' : 'unavailable',
+    reasonCodes: uniqueReasonCodes,
+  }
+}
+
+function partitionBenchmarkCandidatesByProvenance(candidates: DurationBenchmarkCandidate[]) {
+  const admissible: DurationBenchmarkCandidate[] = []
+  const rejected: DurationBenchmarkCandidate[] = []
+  for (const candidate of candidates) {
+    const provenance = buildBenchmarkProvenanceEntry(candidate, null, false)
+    if (provenance.availability === 'available') admissible.push(candidate)
+    else rejected.push(candidate)
+  }
+  return { admissible, rejected }
+}
+
+function buildBenchmarkProvenance(
+  candidates: readonly (DurationBenchmarkCandidate & { weight?: number })[],
+) {
+  const isBlended = candidates.length > 1
+  const rawWeightSum = isBlended
+    ? candidates.reduce((sum, candidate) => sum + Math.max(0, Number(candidate.weight ?? 0)), 0)
+    : 0
+  const entries = candidates
+    .map((candidate) => buildBenchmarkProvenanceEntry(
+      candidate,
+      isBlended && rawWeightSum > 0 ? Math.max(0, Number(candidate.weight ?? 0)) / rawWeightSum : null,
+      isBlended,
+    ))
+    .sort((left, right) => (
+      (right.blendWeight ?? 0) - (left.blendWeight ?? 0)
+      || BENCHMARK_SCOPE_PRIORITY[left.scope ?? 'global'] - BENCHMARK_SCOPE_PRIORITY[right.scope ?? 'global']
+      || `${left.benchmarkId ?? ''}:${left.publicationKey ?? ''}`.localeCompare(
+        `${right.benchmarkId ?? ''}:${right.publicationKey ?? ''}`,
+      )
+    ))
+  const reasonCodes: BenchmarkProvenanceReasonCode[] = entries.length === 0
+    ? (['benchmark_provenance_missing'] as BenchmarkProvenanceReasonCode[])
+    : ([...new Set(entries.flatMap((entry) => entry.reasonCodes))].sort() as BenchmarkProvenanceReasonCode[])
+  const availableCount = entries.filter((entry) => entry.availability === 'available').length
+  const availability: 'available' | 'partial' | 'unavailable' = entries.length === 0 || availableCount === 0
+    ? 'unavailable'
+    : availableCount === entries.length
+      ? 'available'
+      : 'partial'
+  const available = availability === 'available'
+  const timestamps = (key: 'generatedAt' | 'sourceAsOf' | 'sourceWindowStart') => entries
+    .map((entry) => entry[key])
+    .filter((value): value is string => Boolean(value))
+    .sort()
+  const scopes = [...new Set(entries.map((entry) => entry.scope).filter((scope): scope is BenchmarkScope => Boolean(scope)))]
+  return {
+    benchmarkProvenance: {
+      mode: isBlended ? 'blended' : 'single',
+      entries,
+    } satisfies BenchmarkProvenanceSet,
+    benchmarkProvenanceAvailability: availability,
+    benchmarkProvenanceReasonCodes: reasonCodes,
+    benchmarkProvenanceUnavailableReason: reasonCodes[0] ?? null,
+    benchmarkGeneratedAt: available ? timestamps('generatedAt').at(-1) ?? null : null,
+    benchmarkAsOf: available ? timestamps('sourceAsOf')[0] ?? null : null,
+    benchmarkWindowStart: available ? timestamps('sourceWindowStart')[0] ?? null : null,
+    benchmarkVersion: available && !isBlended ? entries[0]?.benchmarkVersion ?? null : null,
+    benchmarkSampleCount: available
+      ? entries.reduce((sum, entry) => sum + Number(entry.sampleCount ?? 0), 0)
+      : null,
+    benchmarkDayBasis: available ? 'construction_production_day' as const : null,
+    benchmarkScope: available
+      ? scopes.length === 1 ? scopes[0] ?? null : 'mixed' as const
+      : null,
   }
 }
 
@@ -3522,12 +4012,13 @@ function withEstimatedPlannedEndDate(input: DurationSuggestionInput, baseDays: n
 }
 
 function calendarContextSummary(calendar?: ConstructionCalendarContext | null) {
-  const hasOfficialCalendar = calendar?.basis === 'official_construction_calendar_seed'
+  const hasOfficialCalendar = isAuthoritativeConstructionCalendar(calendar)
+  const windows = hasOfficialCalendar ? calendar.windows : []
   return {
     basis: hasOfficialCalendar ? 'official_construction_calendar_seed' : 'calendar_day_no_shutdown_context',
     rawBasis: calendar?.basis ?? 'calendar_day',
-    windowCount: calendar?.windows.length ?? 0,
-    shutdownWindowCount: calendar?.windows.filter((window) => {
+    windowCount: windows.length,
+    shutdownWindowCount: windows.filter((window) => {
       const flag = String(
         (window as Record<string, unknown>).countsAsConstructionShutdown
           ?? (window as Record<string, unknown>).counts_as_construction_shutdown
@@ -5046,29 +5537,41 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       ?? normalizedInput.standardWorkCode
       ?? normalizedInput.engineeringCategoryId
       ?? 'all'
-    const benchmarkCandidates = await collectBenchmarkCandidates({
+    const allCauseBenchmarkCandidates = await collectBenchmarkCandidates({
       benchmarkIdentity,
       wbsNodeType,
       input: normalizedInput,
       companyId,
     })
+    const causeAwareBenchmarkSelection = await selectCauseAwareBenchmarkCandidates(
+      allCauseBenchmarkCandidates,
+      normalizedInput.structuredCauseAuthority ?? normalizedInput.confirmedCauseCode,
+    )
+    const selectedBenchmarkCandidates = causeAwareBenchmarkSelection.candidates
+    const benchmarkCandidateAdmission = partitionBenchmarkCandidatesByProvenance(selectedBenchmarkCandidates)
+    const benchmarkCandidates = benchmarkCandidateAdmission.admissible
+    const rejectedBenchmarkCandidates = benchmarkCandidateAdmission.rejected
+    const benchmarkCauseSegment = benchmarkCandidates.some((candidate) => Boolean(candidate.benchmark.__durationLearningCauseSegment))
+      ? causeAwareBenchmarkSelection.segment
+      : null
+    const benchmarkCauseFallback = causeAwareBenchmarkSelection.fallback
+    const benchmarkCauseSelection = causeAwareBenchmarkSelection.selection
     const primaryBenchmarkCandidate = benchmarkCandidates[0] ?? null
     const companyBenchmarkCandidate = benchmarkCandidates.find((candidate) => candidate.scope === 'company') ?? null
     const benchmark = primaryBenchmarkCandidate?.benchmark ?? null
     const matchedBenchKey = primaryBenchmarkCandidate?.benchKey ?? [benchmarkIdentity, wbsNodeType, 'all'].join(':')
-    const benchmarkScope: BenchmarkScope = primaryBenchmarkCandidate?.scope ?? 'system'
+    const benchmarkScope = primaryBenchmarkCandidate?.scope ?? null
     const matchedBenchmarkContextKey = primaryBenchmarkCandidate?.contextKey ?? 'all'
     const benchmarkSampleSize = primaryBenchmarkCandidate?.sampleSize ?? 0
     const benchmarkSpecificity = primaryBenchmarkCandidate?.specificity ?? benchmarkContextSpecificity(matchedBenchmarkContextKey)
-    const benchmarkUsable = benchmarkCandidates.length > 0
-    const broadSystemBenchmark = benchmarkCandidates.length === 0
+    const broadGlobalBenchmark = benchmarkCandidates.length === 0
       ? await findBenchmark([benchmarkIdentity, wbsNodeType, 'all'].join(':'), null)
       : null
     const benchmarkGeneralizationSkipped = Boolean(
-      broadSystemBenchmark
-      && Number(broadSystemBenchmark.sample_count ?? 0) > 0
-      && Number(broadSystemBenchmark.sample_count ?? 0) < 100
-      && isTemplateUsableForContext(broadSystemBenchmark, normalizedInput, companyId),
+      broadGlobalBenchmark
+      && Number(broadGlobalBenchmark.sample_count ?? 0) > 0
+      && Number(broadGlobalBenchmark.sample_count ?? 0) < 100
+      && isTemplateUsableForContext(broadGlobalBenchmark, normalizedInput, companyId),
     )
 
     const baselineMatchText = buildBaselineMatchText(normalizedInput)
@@ -5194,9 +5697,9 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const coldStartP80 = coldStartBaselineApplied && coldStartBaseDays && baseDays
         ? coldStartConservativeDays(baseDays, p80, coldStartBaseDays)
         : p80
-      const canBlendBenchmark = benchmarkCandidates.length > 0
-        && benchmarkUsable
-        && (suggestionPurpose === 'new_task_reference' || suggestionPurpose === 'execution_reference')
+      const benchmarkPurposeAllowsBlend = suggestionPurpose === 'new_task_reference'
+        || suggestionPurpose === 'execution_reference'
+      const canBlendBenchmark = benchmarkCandidates.length > 0 && benchmarkPurposeAllowsBlend
       const benchmarkBlendRuntimeParameter = companyBenchmarkCandidate
         && canBlendBenchmark
         ? await loadBenchmarkBlendRuntimeParameter(
@@ -5208,23 +5711,31 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const benchmarkBlend = canBlendBenchmark
         ? blendBenchmarkCandidates(coldStartBaseDays, coldStartP80, benchmarkCandidates, benchmarkBlendRuntimeParameter)
         : null
+      const benchmarkProvenance = buildBenchmarkProvenance(
+        benchmarkBlend?.candidates
+        ?? (benchmarkCandidates.length === 0 && benchmarkPurposeAllowsBlend ? rejectedBenchmarkCandidates : []),
+      )
       const benchmarkBlendScopeLabel = benchmarkBlend?.scopes.length
         ? benchmarkBlend.scopes.map((scope) => (
-          scope === 'company' ? '公司' : scope === 'system' ? '系统' : '项目'
+          scope === 'project' ? '项目' : scope === 'company' ? '公司' : scope === 'industry' ? '行业' : '全局'
         )).join(' / ')
         : benchmarkScope === 'company'
           ? '公司'
-          : benchmarkScope === 'system'
-            ? '系统'
-            : '项目'
+          : benchmarkScope === 'industry'
+            ? '行业'
+            : benchmarkScope === 'global'
+              ? '全局'
+              : '项目'
       const benchmarkBlendCalibrationSource: DurationCalibrationSource = benchmarkBlend
         ? benchmarkBlend.scopes.length > 1
           ? 'standard_work_duration_seed+mixed_history_sample'
           : benchmarkBlend.scopes[0] === 'company'
             ? 'standard_work_duration_seed+company_history_sample'
-            : benchmarkBlend.scopes[0] === 'system'
-              ? 'standard_work_duration_seed+system_history_sample'
-              : 'standard_work_duration_seed+project_history_sample'
+            : benchmarkBlend.scopes[0] === 'industry'
+              ? 'standard_work_duration_seed+industry_history_sample'
+              : benchmarkBlend.scopes[0] === 'global'
+                ? 'standard_work_duration_seed+global_history_sample'
+                : 'standard_work_duration_seed+project_history_sample'
         : coldStartBaselineApplied ? 'cold_start_baseline' : 'standard_work_duration_seed'
       const effectiveBaseDays = benchmarkBlend?.days ?? coldStartBaseDays
       const sanitizedP80 = sanitizeSeedP80(
@@ -5275,6 +5786,12 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           p80: benchmarkDistributionCandidate.p80,
           mean: readPositiveNumber(benchmarkDistributionCandidate.benchmark.mean_days) ?? benchmarkDistributionCandidate.p50,
           variance: benchmarkDistributionCandidate.variance,
+          coefficientOfVariation: readBenchmarkMetadataNumber(
+            benchmarkDistributionCandidate.benchmark,
+            'cv',
+            'coefficient_of_variation',
+            'coefficientOfVariation',
+          ),
           dayBasis: 'construction_production_day',
           source: 'duration_benchmarks',
           scope: benchmarkDistributionCandidate.scope,
@@ -5309,6 +5826,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         forecastSource: standardForecastSource,
         durationCalibrationSource: benchmarkBlendCalibrationSource,
         durationProvenance: coldStartBaselineApplied ? 'historical_benchmark' : 'standard_work_duration_seed',
+        ...benchmarkProvenance,
         businessReason: seedBusinessReason,
         businessReasonCode: variantFallback.hasFallback ? 'STANDARD_SEED_VARIANT_FALLBACK' : scale.factor === 1 ? 'STANDARD_SEED_REFERENCE' : 'BASED_ON_SEED_AND_COVERAGE',
         businessReasonCodes: [variantFallback.hasFallback ? 'STANDARD_SEED_VARIANT_FALLBACK' : scale.factor === 1 ? 'STANDARD_SEED_REFERENCE' : 'BASED_ON_SEED_AND_COVERAGE'],
@@ -5371,7 +5889,19 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           benchmarkSampleCount: benchmarkBlend?.sampleCount,
           benchmarkBlendWeightSource: benchmarkMetadataCandidate?.weightSource,
           benchmarkGeneralizationSkipped,
+          benchmarkCauseFallback,
+          benchmarkCauseSelection,
         },
+        benchmarkCauseSelection,
+        benchmarkCauseSegment: benchmarkCauseSegment
+          ? {
+              causeCode: benchmarkCauseSegment.causeCode,
+              taxonomyVersion: benchmarkCauseSegment.taxonomyVersion,
+              generatedAt: benchmarkCauseSegment.generatedAt,
+              sourceAsOf: benchmarkCauseSegment.sourceAsOf,
+              sampleCount: benchmarkCauseSegment.sampleCount,
+            }
+          : null,
         benchmarkKey: standardBenchmarkKey,
         sampleSize: 0,
         dataMaturity: maturity.level,
@@ -5397,7 +5927,21 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       businessReason: noSeedReason.message,
       businessReasonCode: noSeedReason.code,
       businessReasonCodes: [noSeedReason.code],
-      businessReasonParams: noSeedReason.params,
+      businessReasonParams: {
+        ...noSeedReason.params,
+        benchmarkCauseFallback,
+        benchmarkCauseSelection,
+      },
+      benchmarkCauseSelection,
+      benchmarkCauseSegment: benchmarkCauseSegment
+        ? {
+            causeCode: benchmarkCauseSegment.causeCode,
+            taxonomyVersion: benchmarkCauseSegment.taxonomyVersion,
+            generatedAt: benchmarkCauseSegment.generatedAt,
+            sourceAsOf: benchmarkCauseSegment.sourceAsOf,
+            sampleCount: benchmarkCauseSegment.sampleCount,
+          }
+        : null,
       dataMaturity: unavailableMaturity.level,
       dataMaturityReasons: unavailableMaturity.reasons,
       dataUpgradePath: unavailableMaturity.upgradePath,

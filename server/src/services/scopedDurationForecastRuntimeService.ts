@@ -20,6 +20,7 @@ export type ScopedDurationForecastRuntimeDependencies = {
 
 export type ScopedDurationForecastRuntimeOptions = {
   asOfDate?: string | null
+  targetDate?: string | null
 }
 
 const defaultDependencies: ScopedDurationForecastRuntimeDependencies = {
@@ -69,6 +70,10 @@ export async function buildRuntimeScopedDurationForecast(
   const asOfDate = normalizeText(options.asOfDate) || currentBusinessDate()
   if (!isValidScopedDurationForecastDate(asOfDate)) {
     throw new TypeError('asOfDate must be a valid YYYY-MM-DD date')
+  }
+  const targetDate = normalizeText(options.targetDate) || null
+  if (targetDate && !isValidScopedDurationForecastDate(targetDate)) {
+    throw new TypeError('targetDate must be a valid YYYY-MM-DD date')
   }
 
   // Project rows are mandatory and loaded before optional evidence so a failed task read
@@ -129,6 +134,7 @@ export async function buildRuntimeScopedDurationForecast(
   return buildScopedDurationForecasts({
     projectId: normalizedProjectId,
     asOfDate,
+    targetDate,
     rows,
     forecasts,
     attributions,

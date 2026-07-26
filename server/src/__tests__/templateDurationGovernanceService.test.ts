@@ -22,6 +22,7 @@ vi.mock('../services/durationLearningAssetAtomicStoreService.js', () => ({
 }))
 
 import {
+  buildDurationBenchmarkCandidatePersistenceRow,
   buildDurationBenchmarkCandidates,
   runTemplateDurationGovernance,
   type DurationExperienceSampleRow,
@@ -30,9 +31,19 @@ import {
 function asProductionSample(sample: DurationExperienceSampleRow): DurationExperienceSampleRow {
   return {
     ...sample,
+    completed_at: sample.completed_at ?? '2026-01-01T00:00:00.000Z',
     duration_day_basis: 'construction_production_day',
     actual_duration_production_days: sample.actual_duration ?? null,
     planned_duration_production_days: sample.planned_duration ?? null,
+    metadata: {
+      ...sample.metadata,
+      construction_calendar_basis: sample.metadata?.construction_calendar_basis ?? 'official_construction_calendar_seed',
+      construction_calendar_ref: sample.metadata?.construction_calendar_ref ?? 'cn-work-calendar',
+      construction_calendar_version: sample.metadata?.construction_calendar_version ?? '2026.01',
+      construction_calendar_timezone: sample.metadata?.construction_calendar_timezone ?? 'Asia/Shanghai',
+      construction_calendar_availability: sample.metadata?.construction_calendar_availability ?? 'available',
+      construction_calendar_unavailable_reason: sample.metadata?.construction_calendar_unavailable_reason ?? null,
+    },
   }
 }
 
@@ -64,7 +75,7 @@ describe('templateDurationGovernanceService', () => {
       p50Days: 6,
       p75Days: 8,
       p80Days: 8,
-      variance: 0.272,
+      variance: 2.666667,
       coefficientOfVariation: 0.272,
       confidenceLevel: 'medium',
       confidenceScore: 55,
@@ -74,6 +85,8 @@ describe('templateDurationGovernanceService', () => {
       observationEndedAt: '2026-01-10T00:00:00.000Z',
       observationWindowDays: 10,
       productionDaySamples: [4, 6, 8],
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.01',
     })
   })
 
@@ -194,18 +207,133 @@ describe('templateDurationGovernanceService', () => {
       p75_days: 8,
       p80_days: 8,
       mean_days: 6,
-      variance: 0.272,
+      variance: 2.666667,
       coefficient_of_variation: 0.272,
+      generated_at: expect.any(String),
+      source_window_start: '2026-01-01T00:00:00.000Z',
+      source_as_of: '2026-01-01T00:00:00.000Z',
       is_current: false,
       metadata: expect.objectContaining({
         runtime_publication_status: 'candidate',
         candidate_operation_id: expect.any(String),
-        variance: 0.272,
+        variance: 2.666667,
         coefficientOfVariation: 0.272,
+        calendar_ref: 'cn-work-calendar',
+        calendar_version: '2026.01',
       }),
     })
     expect(learningAssetMocks.loadGovernanceSamples).toHaveBeenCalledWith({ limit: 1000 })
     expect(learningAssetMocks.stageBenchmark).toHaveBeenCalledOnce()
+  })
+
+  it('keeps candidate operation identity stable when identical evidence is replayed later', async () => {
+    const payloads: Array<Record<string, any>> = []
+    learningAssetMocks.loadGovernanceSamples.mockResolvedValue([
+      asProductionSample({ id: 'stable-1', company_id: 'company-1', project_id: 'project-1', task_id: 'task-1', standard_work_code: 'SW-STABLE', wbs_node_type: 'process', actual_duration: 5 }),
+      asProductionSample({ id: 'stable-2', company_id: 'company-1', project_id: 'project-1', task_id: 'task-2', standard_work_code: 'SW-STABLE', wbs_node_type: 'process', actual_duration: 7 }),
+      asProductionSample({ id: 'stable-3', company_id: 'company-1', project_id: 'project-1', task_id: 'task-3', standard_work_code: 'SW-STABLE', wbs_node_type: 'process', actual_duration: 9 }),
+    ])
+    learningAssetMocks.stageBenchmark.mockImplementation(async (payload: Record<string, unknown>) => {
+      payloads.push(payload)
+      return { id: 'benchmark-stable' }
+    })
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-07-20T00:00:00.000Z'))
+      await runTemplateDurationGovernance()
+      vi.setSystemTime(new Date('2026-07-22T00:00:00.000Z'))
+      await runTemplateDurationGovernance()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    expect(payloads).toHaveLength(2)
+    expect(payloads[0].metadata.candidate_operation_id).toBe(payloads[1].metadata.candidate_operation_id)
+  })
+
+  it('uses the latest linked confirmation or sample mutation as source_as_of while preserving the outcome window', () => {
+    const samples = [4, 6, 8].map((duration, index) => asProductionSample({
+      id: `late-confirmation-${index + 1}`,
+      company_id: 'company-1',
+      project_id: 'project-1',
+      task_id: `task-${index + 1}`,
+      completed_at: `2026-07-0${index + 1}T00:00:00.000Z`,
+      updated_at: index === 0 ? '2026-07-05T10:00:00.000Z' : `2026-07-0${index + 1}T01:00:00.000Z`,
+      standard_work_code: 'SW-LATE-CONFIRM',
+      wbs_node_type: 'process',
+      actual_duration: duration,
+      metadata: {
+        structured_cause_snapshot: {
+          confirmed_causes: index === 0 ? [{
+            attribution_id: '11111111-1111-4111-8111-111111111111',
+            cause_code: 'material_shortage',
+            taxonomy_version: 'v1.0.0',
+            event_type: 'delay',
+            cause_role: 'primary',
+            confirmed_at: '2026-07-05T09:00:00.000Z',
+          }] : [],
+        },
+      },
+    }))
+
+    const [candidate] = buildDurationBenchmarkCandidates(samples, {
+      generatedAt: '2026-07-06T00:00:00.000Z',
+    })
+    const row = buildDurationBenchmarkCandidatePersistenceRow(candidate, '2026-07-06T00:00:00.000Z')
+
+    expect(candidate.observationStartedAt).toBe('2026-07-01T00:00:00.000Z')
+    expect(candidate.observationEndedAt).toBe('2026-07-03T00:00:00.000Z')
+    expect(candidate.sourceAsOf).toBe('2026-07-05T10:00:00.000Z')
+    expect(row.source_window_start).toBe('2026-07-01T00:00:00.000Z')
+    expect(row.source_as_of).toBe('2026-07-05T10:00:00.000Z')
+    expect(row.metadata.structured_cause_attribution_lineage).toEqual([{
+      attributionId: '11111111-1111-4111-8111-111111111111',
+      causeCode: 'material_shortage',
+      taxonomyVersion: 'v1.0.0',
+      eventType: 'delay',
+      causeRole: 'primary',
+      confirmedAt: '2026-07-05T09:00:00.000Z',
+    }])
+  })
+
+  it('changes operation identity when rebuilt evidence keeps the sample id but changes attribution lineage', () => {
+    const buildRow = (attributionId: string, confirmedAt: string) => {
+      const [candidate] = buildDurationBenchmarkCandidates([4, 6, 8].map((duration, index) => asProductionSample({
+        id: `rebuilt-${index + 1}`,
+        company_id: 'company-1', project_id: 'project-1', task_id: `task-${index + 1}`,
+        completed_at: '2026-07-01T00:00:00.000Z', updated_at: '2026-07-02T00:00:00.000Z',
+        standard_work_code: 'SW-REBUILT', wbs_node_type: 'process', actual_duration: duration,
+        metadata: { structured_cause_snapshot: { confirmed_causes: index === 0 ? [{
+          attribution_id: attributionId, cause_code: 'material_shortage', taxonomy_version: 'v1.0.0',
+          event_type: 'delay', cause_role: 'primary', confirmed_at: confirmedAt,
+        }] : [] } },
+      })), { generatedAt: '2026-07-03T00:00:00.000Z' })
+      return buildDurationBenchmarkCandidatePersistenceRow(candidate, '2026-07-03T00:00:00.000Z')
+    }
+
+    const before = buildRow('11111111-1111-4111-8111-111111111111', '2026-07-02T08:00:00.000Z')
+    const after = buildRow('22222222-2222-4222-8222-222222222222', '2026-07-02T09:00:00.000Z')
+    expect(before.metadata.candidate_operation_id).not.toBe(after.metadata.candidate_operation_id)
+  })
+
+  it('excludes a sample whose linked confirmation is later than benchmark generation', () => {
+    const samples = [4, 6, 8].map((duration, index) => asProductionSample({
+      id: `future-${index + 1}`,
+      company_id: 'company-1', project_id: 'project-1', task_id: `task-${index + 1}`,
+      completed_at: '2026-07-01T00:00:00.000Z', standard_work_code: 'SW-FUTURE',
+      wbs_node_type: 'process', actual_duration: duration,
+      metadata: { structured_cause_snapshot: { confirmed_causes: index === 0 ? [{
+        attribution_id: '11111111-1111-4111-8111-111111111111', cause_code: 'material_shortage',
+        taxonomy_version: 'v1.0.0', event_type: 'delay', cause_role: 'primary',
+        confirmed_at: '2026-07-04T00:00:00.000Z',
+      }] : [] } },
+    }))
+
+    const candidates = buildDurationBenchmarkCandidates(samples, {
+      minSampleCount: 3,
+      generatedAt: '2026-07-03T00:00:00.000Z',
+    })
+    expect(candidates).toHaveLength(0)
   })
 
   it('persists every source sample and task without a fifty-row lineage truncation', async () => {

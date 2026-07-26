@@ -237,6 +237,27 @@ describe('realtime server helpers', () => {
     socket.close()
   })
 
+  it('stops the heartbeat loop when the final authenticated client disconnects', async () => {
+    const clearIntervalSpy = vi.spyOn(global, 'clearInterval')
+    try {
+      const { socket, messages } = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
+      socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))
+      await waitForMessage(messages, 'connection.ready')
+      expect(getRealtimeClientCount()).toBe(1)
+
+      const closed = once(socket, 'close')
+      socket.close()
+      await closed
+      await vi.waitFor(() => {
+        expect(getRealtimeClientCount()).toBe(0)
+      }, { timeout: 1_000 })
+
+      expect(clearIntervalSpy).toHaveBeenCalled()
+    } finally {
+      clearIntervalSpy.mockRestore()
+    }
+  })
+
   it('removes an existing project subscription when authorization is revoked', async () => {
     const { socket, messages } = await connectRealtime('?channels=project&companyId=company-1&projectId=project-1')
     socket.send(JSON.stringify({ type: 'auth', token: 'valid-token' }))

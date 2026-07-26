@@ -60,6 +60,8 @@ import {
 } from './planningReplayCalibrationService.js'
 import {
   addConstructionProductionDays,
+  effectiveConstructionCalendarBasis,
+  effectiveConstructionCalendarWindowCount,
   isConstructionProductionDay,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -591,7 +593,7 @@ function buildBaselineGenerationProvenanceMetadata(
   currentItem?: TaskBaselineItem,
 ) {
   const existing = readRecord(currentItem?.generation_metadata)
-  const calendarBasis = options.constructionCalendar?.basis ?? 'calendar_day'
+  const calendarBasis = effectiveConstructionCalendarBasis(options.constructionCalendar)
   const dateSource = resolvedDates.dateSource
   const overrideLevel = dateSource === 'actual_execution'
     ? 'fact_anchor'
@@ -635,7 +637,7 @@ function buildBaselineGenerationProvenanceMetadata(
           factor: 'construction_calendar',
           source: 'resolveConstructionCalendarContext',
           basis: calendarBasis,
-          window_count: options.constructionCalendar.windows.length,
+          window_count: effectiveConstructionCalendarWindowCount(options.constructionCalendar),
         }
       : null,
     planningReplayReadback && planningReplayAdjustmentDays != null

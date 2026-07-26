@@ -43,10 +43,15 @@ vi.mock('../middleware/auth.js', () => ({
 
 import taskSummariesRouter from '../routes/task-summaries.js'
 
-function response(projectId = '00000000-0000-4000-8000-000000000001', asOfDate = '2026-07-13') {
+function response(
+  projectId = '00000000-0000-4000-8000-000000000001',
+  asOfDate = '2026-07-13',
+  targetDate: string | null = null,
+) {
   return {
     projectId,
     asOfDate,
+    targetDate,
     dimensions: { division: [], subdivision: [], specialty: [] },
     summary: { groupCount: 0, readyCount: 0, degradedCount: 0, insufficientDataCount: 0 },
   }
@@ -66,7 +71,7 @@ describe('task scoped duration forecast route', () => {
     mocks.authorizedProjectIds.length = 0
     mocks.buildRuntimeScopedDurationForecast.mockReset()
     mocks.buildRuntimeScopedDurationForecast.mockImplementation(async (projectId: string, options: any) => {
-      return response(projectId, options.asOfDate ?? '2026-07-13')
+      return response(projectId, options.asOfDate ?? '2026-07-13', options.targetDate ?? null)
     })
   })
 
@@ -86,8 +91,30 @@ describe('task scoped duration forecast route', () => {
     expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenCalledTimes(1)
     expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenCalledWith(
       mocks.allowedProjectId,
-      { asOfDate: '2026-07-13' },
+      { asOfDate: '2026-07-13', targetDate: undefined },
     )
+  })
+
+  it('validates target_date, forwards it, and isolates cache entries by target', async () => {
+    const base = `/api/task-summaries/projects/${mocks.allowedProjectId}/duration-forecasts?as_of_date=2026-07-13`
+    const august = await supertest(buildApp()).get(`${base}&target_date=2026-08-31`)
+    const september = await supertest(buildApp()).get(`${base}&target_date=2026-09-30`)
+
+    expect(august.status).toBe(200)
+    expect(august.body.data.targetDate).toBe('2026-08-31')
+    expect(september.status).toBe(200)
+    expect(september.body.data.targetDate).toBe('2026-09-30')
+    expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenNthCalledWith(1, mocks.allowedProjectId, {
+      asOfDate: '2026-07-13',
+      targetDate: '2026-08-31',
+    })
+    expect(mocks.buildRuntimeScopedDurationForecast).toHaveBeenNthCalledWith(2, mocks.allowedProjectId, {
+      asOfDate: '2026-07-13',
+      targetDate: '2026-09-30',
+    })
+
+    const invalid = await supertest(buildApp()).get(`${base}&target_date=08%2F31%2F2026`)
+    expect(invalid.status).toBe(400)
   })
 
   it('returns 400 for an invalid as-of date before reading forecast data', async () => {

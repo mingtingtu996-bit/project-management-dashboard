@@ -3,12 +3,14 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 import {
+  buildTaskSummaryDelayRecords,
   getTaskActualEndDate,
   getTaskPlannedEndDate,
   isTaskDelayedByPeriodEnd,
   resolveTaskSummaryDurationAsOf,
 } from '../routes/task-summaries.js'
 import type { ConstructionCalendarContext } from '../services/constructionCalendar.js'
+import type { DurationMetricDto } from '../services/durationMetricService.js'
 
 const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
   ? process.cwd()
@@ -16,6 +18,11 @@ const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
 
 const SPRING_FESTIVAL_SHUTDOWN: ConstructionCalendarContext = {
   basis: 'official_construction_calendar_seed',
+  calendarRef: 'work_calendar',
+  calendarVersion: 'calendar-v1',
+  timezone: 'Asia/Shanghai',
+  availability: 'available',
+  unavailableReason: null,
   windows: [{
     holidayCode: 'spring-festival-shutdown',
     holidayName: 'Spring Festival shutdown',
@@ -25,12 +32,63 @@ const SPRING_FESTIVAL_SHUTDOWN: ConstructionCalendarContext = {
   }],
 }
 
-describe('task-summary production delay semantics', () => {
-  it('uses the shared task attribution projection instead of a route-local WBS resolver', () => {
-    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+const AVAILABLE_DELAY_METRIC: DurationMetricDto = {
+  value: 2,
+  unit: 'construction_production_day',
+  calendarRef: 'official-construction-calendar',
+  calendarVersion: '2026.1',
+  timezone: 'Asia/Shanghai',
+  asOf: '2026-04-12',
+  availability: 'available',
+  unavailableReason: null,
+}
 
-    expect(source).toContain('buildProjectTaskAttributionProjection(taskRows')
-    expect(source).not.toContain('const resolveWbsAttribution =')
+describe('task-summary production delay semantics', () => {
+  it('keeps derived delay text display-only and exposes only tasks.delay_reason as confirmable raw evidence', () => {
+    expect(buildTaskSummaryDelayRecords({
+      isDelayed: true,
+      delayDays: 2,
+      delayMetric: AVAILABLE_DELAY_METRIC,
+      recordedAt: '2026-04-12T00:00:00.000Z',
+      rawDelayReason: null,
+    })).toEqual([{
+      delay_days: 2,
+      delay: AVAILABLE_DELAY_METRIC,
+      reason: null,
+      reason_source: null,
+      display_reason: '实际完成时间晚于计划完成时间',
+      display_reason_source: 'derived_completion_variance',
+      recorded_at: '2026-04-12T00:00:00.000Z',
+    }])
+
+    expect(buildTaskSummaryDelayRecords({
+      isDelayed: true,
+      delayDays: 2,
+      delayMetric: AVAILABLE_DELAY_METRIC,
+      recordedAt: '2026-04-12T00:00:00.000Z',
+      rawDelayReason: '材料到场延后',
+    })[0]).toEqual(expect.objectContaining({
+      reason: '材料到场延后',
+      reason_source: 'tasks.delay_reason',
+      display_reason: '实际完成时间晚于计划完成时间',
+      display_reason_source: 'derived_completion_variance',
+    }))
+  })
+
+  it('loads the authoritative task delay_reason and passes it into the response mapper', () => {
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryService.ts'), 'utf8')
+
+    expect(routeSource).toMatch(/\.select\('[^']*delay_reason[^']*'\)/)
+    expect(serviceSource).toContain('rawDelayReason: task.delay_reason')
+  })
+
+  it('uses the shared task attribution projection instead of a route-local WBS resolver', () => {
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryService.ts'), 'utf8')
+
+    expect(serviceSource).toContain('buildProjectTaskAttributionProjection(input.taskRows)')
+    expect(routeSource).not.toContain('const resolveWbsAttribution =')
   })
 
   it('does not keep a generic rawQuery wrapper in the task summary route', () => {
@@ -61,6 +119,19 @@ describe('task-summary production delay semantics', () => {
     expect(compareAndDailySource).not.toContain('route-level-aggregation-approved')
   })
 
+  it('uses project business-day boundaries for daily progress queries', () => {
+    const source = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const dailySource = source.slice(source.indexOf("router.get('/projects/:id/daily-progress'"))
+
+    expect(dailySource).toContain('resolveConstructionCalendarContext({ projectId })')
+    expect(dailySource).toContain('resolveDailyTaskProgressWindow({')
+    expect(dailySource).toContain(".gte('updated_at', dayStartInclusive)")
+    expect(dailySource).toContain(".lt('updated_at', dayEndExclusive)")
+    expect(dailySource).not.toContain("new Date().toISOString().slice(0, 10)")
+    expect(dailySource).not.toContain('`${targetDate} 00:00:00`')
+    expect(dailySource).not.toContain('`${targetDate} 23:59:59`')
+  })
+
   it('delegates trend, assignee, and monthly-plan aggregation to the project summary authority', () => {
     const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
     const summarySource = readFileSync(resolve(serverRoot, 'src/services/projectExecutionSummaryService.ts'), 'utf8')
@@ -82,6 +153,24 @@ describe('task-summary production delay semantics', () => {
     expect(summarySource).toContain('export async function getTaskSummaryAssigneeRows(')
     expect(summarySource).toContain('export async function getTaskSummaryMonthlyPlanFulfillmentTrend(')
     expect(summarySource).toContain('return getMonthlyPlanFulfillmentTrend(projectId, safeMonths)')
+  })
+
+  it('delegates project summary filtering, grouping, DTO assembly, and counts to the read-model service', () => {
+    const routeSource = readFileSync(resolve(serverRoot, 'src/routes/task-summaries.ts'), 'utf8')
+    const serviceSource = readFileSync(resolve(serverRoot, 'src/services/taskSummaryService.ts'), 'utf8')
+    const projectSummarySource = routeSource.slice(
+      routeSource.indexOf("router.get('/projects/:id/task-summary'"),
+      routeSource.indexOf("router.get('/projects/:id/task-summary/trend'"),
+    )
+
+    expect(projectSummarySource).toContain('buildProjectTaskSummaryReadModel({')
+    expect(projectSummarySource).not.toContain('buildProjectTaskAttributionProjection(')
+    expect(projectSummarySource).not.toContain('const normalizedTaskById = new Map(')
+    expect(projectSummarySource).not.toContain('const groups =')
+    expect(projectSummarySource).not.toContain('onTimeCount')
+    expect(projectSummarySource).not.toContain('delayedCount')
+    expect(projectSummarySource).not.toContain('completedMilestoneCount')
+    expect(serviceSource).toContain('export async function buildProjectTaskSummaryReadModel(')
   })
 
   it('uses planned_end_date before legacy end_date when deciding whether a task is overdue by a period end', () => {

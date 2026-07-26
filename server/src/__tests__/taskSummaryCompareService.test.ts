@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import * as taskSummaryCompareService from '../services/taskSummaryCompareService.js'
+
 import {
   buildDailyTaskProgressSummary,
   buildTaskSummaryCompareResults,
@@ -8,6 +10,32 @@ import {
 } from '../services/taskSummaryCompareService.js'
 
 describe('taskSummaryCompareService', () => {
+  it('resolves daily progress boundaries in the project business timezone', () => {
+    const resolveDailyTaskProgressWindow = (taskSummaryCompareService as any).resolveDailyTaskProgressWindow
+    expect(resolveDailyTaskProgressWindow).toBeTypeOf('function')
+    if (typeof resolveDailyTaskProgressWindow !== 'function') return
+
+    expect(resolveDailyTaskProgressWindow({
+      now: new Date('2026-07-19T16:30:00.000Z'),
+      timezone: 'Asia/Shanghai',
+    })).toEqual({
+      targetDate: '2026-07-20',
+      previousDate: '2026-07-19',
+      dayStartInclusive: '2026-07-19T16:00:00.000Z',
+      dayEndExclusive: '2026-07-20T16:00:00.000Z',
+    })
+
+    expect(resolveDailyTaskProgressWindow({
+      date: '2026-03-08',
+      timezone: 'America/New_York',
+    })).toEqual(expect.objectContaining({
+      targetDate: '2026-03-08',
+      previousDate: '2026-03-07',
+      dayStartInclusive: '2026-03-08T05:00:00.000Z',
+      dayEndExclusive: '2026-03-09T04:00:00.000Z',
+    }))
+  })
+
   it('normalizes unsupported granularities back to day', () => {
     expect(normalizeTaskSummaryCompareGranularity('year')).toBe('day')
     expect(normalizeTaskSummaryCompareGranularity('month')).toBe('month')

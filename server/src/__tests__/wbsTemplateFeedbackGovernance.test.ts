@@ -75,6 +75,11 @@ describe('wbsTemplateFeedback governance bridge', () => {
         endDate: '2026-05-03',
         shutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     })
     mocks.executeSQLOne.mockResolvedValue({
       id: 'template-1',
@@ -523,6 +528,11 @@ describe('wbsTemplateFeedback governance bridge', () => {
     mocks.resolveConstructionCalendarContext.mockResolvedValue({
       basis: 'official_construction_calendar_seed',
       windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
     })
     const tasks = Array.from({ length: 20 }, (_, index) => ({
       id: `task-${index + 1}`,

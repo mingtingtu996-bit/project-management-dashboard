@@ -62,7 +62,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   const commands = useMemo<CommandItem[]>(() => {
     const navigationCommands: CommandItem[] = COMPANY_NAVIGATION.map((item) => {
-      if (item.key === 'company' && currentCompanyRole !== 'company_admin') {
+      if ((item.key === 'company' || item.key === 'duration-assets') && currentCompanyRole !== 'company_admin') {
         return null
       }
       const href = item.href
@@ -70,7 +70,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         id: `company-${item.key}`,
         group: NAVIGATION_GROUP,
         label: `前往 ${item.label}`,
-        hint: item.key === 'company' ? 'Company' : 'Notifications',
+        hint: item.key === 'company' ? 'Company' : item.key === 'duration-assets' ? 'Duration assets' : 'Notifications',
         icon: item.icon,
         keywords: `${item.label} ${item.key}`,
         href,
@@ -265,7 +265,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 {items.map((item) => {
                   const Icon = item.icon
                   const isActive = item.index === activeIndex
-                  const isCurrent = Boolean(item.href && location.pathname === item.href)
+                  const isCurrent = Boolean(item.href && location.pathname === item.href.split('?')[0])
                   return (
                     <Button unstyled
                       key={item.id}

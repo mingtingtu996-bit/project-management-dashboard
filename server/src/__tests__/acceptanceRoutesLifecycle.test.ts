@@ -66,17 +66,25 @@ type TaskRow = {
 }
 
 const state = vi.hoisted(() => {
+  let transactionActive = false
   const plans: PlanRow[] = []
   const dependencies: DependencyRow[] = []
   const requirements: RequirementRow[] = []
   const records: RecordRow[] = []
   const tasks: TaskRow[] = []
+  const factTransactionStates: boolean[] = []
+  const recordChangedExecutionFacts = vi.fn(async () => {
+    factTransactionStates.push(transactionActive)
+    return []
+  })
 
   const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase()
   const includesSql = (sql: string, fragment: string) => sql.includes(fragment)
   const clone = <T>(row: T | undefined) => (row ? JSON.parse(JSON.stringify(row)) as T : null)
 
   const reset = () => {
+    transactionActive = false
+    factTransactionStates.splice(0, factTransactionStates.length)
     plans.splice(0, plans.length)
     dependencies.splice(0, dependencies.length)
     requirements.splice(0, requirements.length)
@@ -338,6 +346,20 @@ const state = vi.hoisted(() => {
     return []
   })
 
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+    const snapshot = plans.map((plan) => ({ ...plan }))
+    const parentActive = transactionActive
+    transactionActive = true
+    try {
+      return await work()
+    } catch (error) {
+      plans.splice(0, plans.length, ...snapshot)
+      throw error
+    } finally {
+      transactionActive = parentActive
+    }
+  })
+
   return {
     plans,
     dependencies,
@@ -346,6 +368,10 @@ const state = vi.hoisted(() => {
     tasks,
     executeSQL,
     executeSQLOne,
+    withDatabaseTransaction,
+    recordChangedExecutionFacts,
+    factTransactionStates,
+    isTransactionActive: () => transactionActive,
     syncCanonicalTaskFromAcceptancePlan: vi.fn(async () => undefined),
     reset,
   }
@@ -373,7 +399,7 @@ vi.mock('../database.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../database.js')>()
   return {
     ...actual,
-    withDatabaseTransaction: vi.fn(async (work: () => Promise<unknown>) => work()),
+    withDatabaseTransaction: state.withDatabaseTransaction,
   }
 })
 
@@ -391,6 +417,10 @@ vi.mock('../services/warningChainService.js', () => ({
 
 vi.mock('../services/acceptanceTaskSyncService.js', () => ({
   syncCanonicalTaskFromAcceptancePlan: state.syncCanonicalTaskFromAcceptancePlan,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: state.recordChangedExecutionFacts,
 }))
 
 vi.mock('../auth/access.js', () => ({
@@ -842,5 +872,67 @@ describe('acceptance ancillary routes', () => {
     expect(after.body.data.plans.find((plan: PlanRow) => plan.id === 'plan-1')).toMatchObject({
       status: 'submitted',
     })
+  })
+
+  it('records forced initial status and actual date facts inside the acceptance POST transaction', async () => {
+    const response = await supertest(buildApp())
+      .post('/api/acceptance-plans')
+      .send({
+        project_id: 'project-1',
+        acceptance_name: 'new acceptance',
+        type_id: 'pre_acceptance',
+        type_name: 'pre acceptance',
+        planned_date: '2026-05-02',
+        actual_date: '2026-05-03',
+        status: 'passed',
+      })
+
+    expect(response.status).toBe(201)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'acceptance_plan',
+      entityId: response.body.data.id,
+      changes: expect.arrayContaining([
+        expect.objectContaining({ factType: 'acceptance_plan.status', force: true }),
+        expect.objectContaining({ factType: 'acceptance_plan.actual_date', force: true, nextValue: '2026-05-03' }),
+      ]),
+    }))
+    expect(state.factTransactionStates).toEqual([true])
+  })
+
+  it('records changed actual-date facts inside the acceptance PUT transaction', async () => {
+    const response = await supertest(buildApp())
+      .put('/api/acceptance-plans/plan-1')
+      .send({ actual_date: '2026-05-03' })
+
+    expect(response.status).toBe(200)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'acceptance_plan',
+      entityId: 'plan-1',
+      changes: expect.arrayContaining([
+        expect.objectContaining({ factType: 'acceptance_plan.actual_date', previousValue: null, nextValue: '2026-05-03' }),
+      ]),
+    }))
+    expect(state.factTransactionStates).toEqual([true])
+  })
+
+  it('records status and actual-date facts inside the acceptance status transaction', async () => {
+    state.plans.find((plan) => plan.id === 'plan-1')!.status = 'rectifying'
+    state.requirements[0].status = 'met'
+    state.requirements[0].is_satisfied = true
+
+    const response = await supertest(buildApp())
+      .patch('/api/acceptance-plans/plan-1/status')
+      .send({ status: 'passed', actual_date: '2026-05-03' })
+
+    expect(response.status).toBe(200)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'acceptance_plan',
+      entityId: 'plan-1',
+      changes: expect.arrayContaining([
+        expect.objectContaining({ factType: 'acceptance_plan.status', nextValue: 'passed' }),
+        expect.objectContaining({ factType: 'acceptance_plan.actual_date', nextValue: '2026-05-03' }),
+      ]),
+    }))
+    expect(state.factTransactionStates).toEqual([true])
   })
 })

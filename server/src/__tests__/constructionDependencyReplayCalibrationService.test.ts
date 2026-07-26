@@ -342,6 +342,11 @@ describe('construction dependency replay calibration service', () => {
         endDate: '2026-02-22',
         countsAsConstructionShutdown: true,
       }],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available' as const,
+      unavailableReason: null,
     }
     const rows = [
       {

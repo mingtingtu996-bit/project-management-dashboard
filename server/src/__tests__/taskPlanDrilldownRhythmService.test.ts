@@ -242,6 +242,11 @@ describe('task plan drilldown rhythm service', () => {
           startDate: '2027-01-05',
           endDate: '2027-01-06',
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
@@ -256,5 +261,39 @@ describe('task plan drilldown rhythm service', () => {
       ['2027-01-01', '2027-01-11'],
       ['2027-01-12', '2027-01-20'],
     ])
+  })
+
+  it('uses calendar days when a basis-only parent calendar lacks authoritative identity', async () => {
+    const parent = standardFloorParent()
+    parent.planned_start_date = '2027-01-01'
+    parent.planned_end_date = '2027-01-20'
+    parent.standard_task_metadata.residentialMasterPlan.standardFloorCount = 2
+    const generated = await buildTaskPlanRhythmDrilldownRows({
+      parentContext: buildTaskPlanDrilldownParentContext(parent),
+      nextLevel: 'process_detail',
+      generationBatchId: 'batch-unidentified-calendar-t2',
+      attachUnderRowId: PARENT_ID,
+      projectId: PROJECT_ID,
+      scope: { building_object_id: 'building-1' },
+      resolveTemplate: async () => null,
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          calendarKind: 'winter_shutdown',
+          startDate: '2027-01-05',
+          endDate: '2027-01-06',
+        }],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    })
+
+    expect(generated?.parentWindowFit).toEqual(expect.objectContaining({
+      calendarBasis: 'calendar_day',
+      availableProductionDays: 20,
+    }))
   })
 })

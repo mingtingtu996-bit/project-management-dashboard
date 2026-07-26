@@ -5,6 +5,7 @@ import {
 import { inclusiveDurationDays } from '../utils/durationDays.js'
 import {
   addConstructionProductionDays,
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
@@ -151,12 +152,8 @@ function readPositiveInteger(value: unknown): number | null {
   return Math.max(1, Math.round(numeric))
 }
 
-function hasConstructionCalendar(calendar?: ConstructionCalendarContext | null) {
-  return calendar?.basis === 'official_construction_calendar_seed'
-}
-
 export function addPlanDays(date: string, days: number, calendar?: ConstructionCalendarContext | null) {
-  if (hasConstructionCalendar(calendar)) {
+  if (isAuthoritativeConstructionCalendar(calendar)) {
     const parsed = parseConstructionCalendarDate(date)
     if (parsed) return addConstructionProductionDays(parsed, Math.max(1, Math.ceil(days) + 1), calendar)
   }
@@ -169,7 +166,7 @@ export function inclusivePlanDuration(start: unknown, end: unknown, calendar?: C
   const startDate = normalizeDateOnly(start)
   const endDate = normalizeDateOnly(end)
   if (!startDate || !endDate) return 1
-  if (hasConstructionCalendar(calendar)) {
+  if (isAuthoritativeConstructionCalendar(calendar)) {
     const parsedStart = parseConstructionCalendarDate(startDate)
     const parsedEnd = parseConstructionCalendarDate(endDate)
     if (parsedStart && parsedEnd) return Math.max(1, productionDaysBetweenInclusive(parsedStart, parsedEnd, calendar))
@@ -209,7 +206,7 @@ export function contributesToWbsPlannedWindow(value: unknown) {
 }
 
 function buildDiagnostics(inputChildCount: number, calendar?: ConstructionCalendarContext | null): WbsPlanRollupDiagnostics {
-  const calendarApplied = hasConstructionCalendar(calendar)
+  const calendarApplied = isAuthoritativeConstructionCalendar(calendar)
   return {
     durationBasis: calendarApplied ? 'production_day' : 'calendar_day',
     calendarApplied,

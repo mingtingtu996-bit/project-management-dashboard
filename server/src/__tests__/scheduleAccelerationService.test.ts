@@ -2897,6 +2897,11 @@ describe('scheduleAccelerationService', () => {
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
         windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
     const network = buildT2RhythmScheduleCandidateNetwork({
@@ -3031,6 +3036,11 @@ describe('scheduleAccelerationService', () => {
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
         windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
     const phase1Selection = {
@@ -3140,6 +3150,11 @@ describe('scheduleAccelerationService', () => {
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
         windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
     const network = buildT2RhythmScheduleCandidateNetwork({
@@ -3284,6 +3299,11 @@ describe('scheduleAccelerationService', () => {
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
         windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
     const network = buildT2RhythmScheduleCandidateNetwork({

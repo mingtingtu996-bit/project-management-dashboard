@@ -49,7 +49,7 @@ const expectedPersistentJobNames = [
   'responsibilityAlertJob',
   'riskStatisticsJob',
   'standardWorkDurationSeedReplayJob',
-  'taskWriteFinalizationOutboxDrainJob',
+  'taskWriteFinalizationOutboxJob',
   'templateDurationGovernanceJob',
   'warningImpactSignalGovernanceJob',
   'weeklyDigestJob',
