@@ -127,7 +127,7 @@ def test_workflow():
         
         # 检查后端API
         try:
-            response = page.request.get('http://localhost:3001/api/health')
+            response = page.request.get('http://localhost:3001/api/readyz')
             print(f"  - 健康检查API: {response.status}")
         except Exception as e:
             print(f"  - 后端API请求失败: {str(e)[:50]}")

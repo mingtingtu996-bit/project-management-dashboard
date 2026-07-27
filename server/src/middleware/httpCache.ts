@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from 'express'
 
 const READ_ONLY_CACHE_CONTROL = 'private, max-age=30, stale-while-revalidate=30'
-const CACHE_BYPASS_PREFIXES = ['/api/auth', '/api/health', '/api/jobs', '/api/client-errors']
+const CACHE_BYPASS_PREFIXES = ['/api/auth', '/api/livez', '/api/readyz', '/api/jobs', '/api/client-errors']
 const CACHEABLE_TAIL_SEGMENTS = new Set([
   'board',
   'catalog',

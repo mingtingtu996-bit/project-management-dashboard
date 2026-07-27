@@ -26,13 +26,15 @@ export interface BadgeProps
   variant?: "default" | "secondary" | "destructive" | "outline"
 }
 
-function Badge({ className, variant = "default", ...props }: BadgeProps) {
-  return (
+const Badge = React.forwardRef<HTMLDivElement, BadgeProps>(
+  ({ className, variant = "default", ...props }, ref) => (
     <div
+      ref={ref}
       className={cn(badgeVariants({ variant }), className)}
       {...props}
     />
-  )
-}
+  ),
+)
+Badge.displayName = "Badge"
 
 export { Badge }

@@ -3,172 +3,680 @@ set -euo pipefail
 
 : "${APP_DIR:?APP_DIR is required}"
 : "${RELEASE_SHA:?RELEASE_SHA is required}"
+: "${DEPLOY_TARGET:?DEPLOY_TARGET is required}"
+: "${RELEASE_ARCHIVE:?RELEASE_ARCHIVE is required}"
 
 COMPOSE_FILE="${COMPOSE_FILE:-deploy/docker-compose.lighthouse.yml}"
 ENV_FILE="${ENV_FILE:-deploy/env/server.production.env}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1/api/health}"
+HEALTH_URL="${HEALTH_URL:-}"
+HTTP_REDIRECT_URL="${HTTP_REDIRECT_URL:-}"
+PUBLIC_INGRESS_MODE="${PUBLIC_INGRESS_MODE:-}"
+EXPECTED_PUBLIC_HOST="${EXPECTED_PUBLIC_HOST:-}"
 PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
+INITIAL_RUNTIME_BOOTSTRAP="${INITIAL_RUNTIME_BOOTSTRAP:-false}"
+EXPECTED_JWT_SECRET_SHA256="${EXPECTED_JWT_SECRET_SHA256:-}"
+PEER_JWT_SECRET_SHA256="${PEER_JWT_SECRET_SHA256:-}"
+PEER_RUNTIME_ENV_FILE="${PEER_RUNTIME_ENV_FILE:-}"
 
-case "$APP_DIR" in
-  "~") APP_DIR="$HOME" ;;
-  "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;;
-esac
-
-cd "$APP_DIR"
-
-if [ ! -f "$ENV_FILE" ]; then
-  echo "Missing production env file: $APP_DIR/$ENV_FILE" >&2
-  exit 1
-fi
-
-backup_tracked_changes() {
-  local backup_dir="$1"
-  local changed_names_file
-
-  mkdir -p "$backup_dir/files"
-  git status --porcelain --untracked-files=no > "$backup_dir/status.txt"
-  git diff --binary > "$backup_dir/unstaged.diff" || true
-  git diff --cached --binary > "$backup_dir/staged.diff" || true
-
-  changed_names_file="$(mktemp)"
-  git diff --name-only -z > "$changed_names_file"
-  git diff --cached --name-only -z >> "$changed_names_file"
-
-  sort -zu "$changed_names_file" | while IFS= read -r -d '' changed_path; do
-    if [ -e "$changed_path" ]; then
-      mkdir -p "$backup_dir/files/$(dirname "$changed_path")"
-      cp -a -- "$changed_path" "$backup_dir/files/$changed_path"
-    fi
-  done
-
-  rm -f "$changed_names_file"
+require_sha() {
+  [[ "$1" =~ ^[0-9a-f]{40}$ ]] || {
+    echo "Release SHA must be a full lowercase Git SHA." >&2
+    return 1
+  }
 }
 
-if [ -d .git ]; then
-  tracked_changes="$(git status --porcelain --untracked-files=no)"
-  if [ -n "$tracked_changes" ] && [ -z "${RELEASE_ARCHIVE:-}" ] && [ "${ALLOW_DIRTY_DEPLOY:-}" != "1" ]; then
-    echo "Deployment directory has tracked local changes. Refusing to overwrite them." >&2
-    echo "$tracked_changes" >&2
-    echo "Clean or back up the server working tree, or set ALLOW_DIRTY_DEPLOY=1 intentionally." >&2
-    exit 1
-  fi
+require_sha "$RELEASE_SHA"
+: "${HEALTH_URL:?External HTTPS HEALTH_URL is required}"
+: "${HTTP_REDIRECT_URL:?External HTTP redirect URL is required}"
+: "${PUBLIC_INGRESS_MODE:?PUBLIC_INGRESS_MODE is required}"
+: "${EXPECTED_PUBLIC_HOST:?EXPECTED_PUBLIC_HOST is required}"
+: "${PEER_RUNTIME_ENV_FILE:?PEER_RUNTIME_ENV_FILE is required}"
+case "$HEALTH_URL" in https://*) ;; *) echo "External deployment health URL must use https://." >&2; exit 1 ;; esac
+case "$HTTP_REDIRECT_URL" in http://*) ;; *) echo "External deployment redirect URL must use http://." >&2; exit 1 ;; esac
+case "$PUBLIC_INGRESS_MODE" in domain_hsts|temporary_ip_tls) ;; *) echo "Unsupported PUBLIC_INGRESS_MODE." >&2; exit 1 ;; esac
+case "$INITIAL_RUNTIME_BOOTSTRAP" in true|false) ;; *) echo "INITIAL_RUNTIME_BOOTSTRAP must be true or false." >&2; exit 1 ;; esac
+case "$APP_DIR" in "~") APP_DIR="$HOME" ;; "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;; esac
+[ -d "$APP_DIR" ] || { echo "Application root does not exist: $APP_DIR" >&2; exit 1; }
+APP_DIR="$(cd "$APP_DIR" && pwd -P)"
+case "$ENV_FILE" in /*) STABLE_ENV_FILE="$ENV_FILE" ;; *) STABLE_ENV_FILE="$APP_DIR/$ENV_FILE" ;; esac
+case "$PEER_RUNTIME_ENV_FILE" in /*) ;; *) echo "PEER_RUNTIME_ENV_FILE must be absolute." >&2; exit 1 ;; esac
+case "$COMPOSE_FILE" in /*|../*|*/../*) echo "COMPOSE_FILE must stay inside each release." >&2; exit 1 ;; esac
 
-  if [ -n "$tracked_changes" ]; then
-    dirty_backup_dir="${DIRTY_DEPLOY_BACKUP_ROOT:-deploy/backups/dirty-working-tree}/$(date -u +%Y%m%dT%H%M%SZ)-${RELEASE_SHA:0:12}"
-    echo "Deployment directory has tracked local changes. Backing them up to $APP_DIR/$dirty_backup_dir before deploying."
-    echo "$tracked_changes"
-    backup_tracked_changes "$dirty_backup_dir"
-  fi
-elif [ -z "${RELEASE_ARCHIVE:-}" ]; then
-  echo "Deployment directory is not a git repository: $APP_DIR" >&2
+RELEASES_DIR="$APP_DIR/releases"
+FAILED_RELEASES_DIR="$APP_DIR/failed-releases"
+CURRENT_LINK="$APP_DIR/current"
+CURRENT_NEXT_LINK="$APP_DIR/current.next"
+STATE_FILE="$APP_DIR/pending-application-release.env"
+STABLE_DATA_DIR="$APP_DIR/deploy/data"
+CANDIDATE_DIR=''
+RELEASE_DIR="$RELEASES_DIR/$RELEASE_SHA"
+
+mkdir -p "$RELEASES_DIR" "$FAILED_RELEASES_DIR" "$STABLE_DATA_DIR/logs"
+exec 9>"$APP_DIR/.deploy.lock"
+flock -n 9 || { echo "Another application deployment is active." >&2; exit 3; }
+[ -f "$STABLE_ENV_FILE" ] || { echo "Missing production env file: $STABLE_ENV_FILE" >&2; exit 1; }
+[ -f "$PEER_RUNTIME_ENV_FILE" ] || { echo "Missing peer runtime env file: $PEER_RUNTIME_ENV_FILE" >&2; exit 1; }
+[ "$(readlink -f "$STABLE_ENV_FILE")" != "$(readlink -f "$PEER_RUNTIME_ENV_FILE")" ] || {
+  echo "Current and peer runtime env files must differ." >&2
   exit 1
-fi
+}
+[ -f "$RELEASE_ARCHIVE" ] || { echo "Missing release archive: $RELEASE_ARCHIVE" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required on the deployment host." >&2; exit 1; }
+
+read_env_value_from() {
+  local env_file="$1" key="$2"
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$env_file"
+}
 
 read_env_value() {
-  awk -F= -v key="$1" '
-    $1 == key {
-      sub(/^[^=]*=/, "")
-      sub(/\r$/, "")
-      value = $0
-    }
-    END { print value }
-  ' "$ENV_FILE"
+  read_env_value_from "$STABLE_ENV_FILE" "$1"
 }
 
-if [ -z "${VITE_SUPABASE_URL:-}" ]; then
-  VITE_SUPABASE_URL="$(read_env_value VITE_SUPABASE_URL)"
-fi
-if [ -z "${VITE_SUPABASE_URL:-}" ]; then
-  VITE_SUPABASE_URL="$(read_env_value SUPABASE_URL)"
-fi
-if [ -z "${VITE_SUPABASE_ANON_KEY:-}" ]; then
-  VITE_SUPABASE_ANON_KEY="$(read_env_value VITE_SUPABASE_ANON_KEY)"
-fi
-if [ -z "${VITE_SUPABASE_ANON_KEY:-}" ]; then
-  VITE_SUPABASE_ANON_KEY="$(read_env_value SUPABASE_ANON_KEY)"
-fi
+url_origin() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+url = urlsplit(sys.argv[1])
+if not url.scheme or not url.netloc or url.username or url.password:
+    raise SystemExit(1)
+print(f'{url.scheme}://{url.netloc}')
+PY
+}
 
-: "${VITE_SUPABASE_URL:?VITE_SUPABASE_URL or SUPABASE_URL is required in $ENV_FILE}"
-: "${VITE_SUPABASE_ANON_KEY:?VITE_SUPABASE_ANON_KEY or SUPABASE_ANON_KEY is required in $ENV_FILE}"
+url_project_ref() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlsplit
+hostname = urlsplit(sys.argv[1]).hostname or ''
+value = hostname.split('.')[0]
+if not value:
+    raise SystemExit(1)
+print(value)
+PY
+}
+
+validate_runtime_slot() {
+  local expected_web_port expected_compose_project_name
+  local actual_web_port actual_compose_project_name
+  case "$DEPLOY_TARGET" in
+    production)
+      expected_web_port=8080
+      expected_compose_project_name=project-management
+      ;;
+    staging)
+      expected_web_port=8081
+      expected_compose_project_name=project-management-staging
+      ;;
+    *) echo "Unsupported deployment target: $DEPLOY_TARGET" >&2; return 1 ;;
+  esac
+  actual_web_port="$(read_env_value WEB_PORT)"
+  actual_compose_project_name="$(read_env_value COMPOSE_PROJECT_NAME)"
+  [ "$actual_web_port" = "$expected_web_port" ] || {
+    echo "WEB_PORT does not match the governed deployment slot for $DEPLOY_TARGET." >&2
+    return 1
+  }
+  [ "$actual_compose_project_name" = "$expected_compose_project_name" ] || {
+    echo "COMPOSE_PROJECT_NAME does not match the governed deployment slot for $DEPLOY_TARGET." >&2
+    return 1
+  }
+  COMPOSE_PROJECT_NAME_VALUE="$actual_compose_project_name"
+}
+
+validate_jwt_secret_fingerprints() {
+  local jwt_secret_value="$1" peer_jwt_secret_value="$2"
+  local actual_fingerprint peer_actual_fingerprint
+  [[ "$EXPECTED_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Registered JWT secret fingerprint is missing or invalid." >&2
+    return 1
+  }
+  [[ "$PEER_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Peer JWT secret fingerprint is missing or invalid." >&2
+    return 1
+  }
+  [ "$EXPECTED_JWT_SECRET_SHA256" != "$PEER_JWT_SECRET_SHA256" ] || {
+    echo "Staging and production JWT secret fingerprints must differ." >&2
+    return 1
+  }
+  actual_fingerprint="$(printf '%s' "$jwt_secret_value" | sha256sum | awk '{print $1}')" || return 1
+  peer_actual_fingerprint="$(printf '%s' "$peer_jwt_secret_value" | sha256sum | awk '{print $1}')" || return 1
+  [ "$actual_fingerprint" = "$EXPECTED_JWT_SECRET_SHA256" ] || {
+    echo "Runtime JWT secret does not match the registered environment fingerprint." >&2
+    return 1
+  }
+  [ "$peer_actual_fingerprint" = "$PEER_JWT_SECRET_SHA256" ] || {
+    echo "Peer runtime JWT secret does not match the registered peer fingerprint." >&2
+    return 1
+  }
+  [ "$actual_fingerprint" != "$peer_actual_fingerprint" ] || {
+    echo "Current and peer runtime JWT secrets must differ." >&2
+    return 1
+  }
+}
+
+validate_runtime_slot
+
+[ -z "$(read_env_value SUPABASE_SERVICE_KEY)" ] || {
+  echo "SUPABASE_SERVICE_KEY is forbidden in the API runtime env file." >&2
+  exit 1
+}
+[ -n "$(read_env_value SUPABASE_RUNTIME_KEY)" ] || {
+  echo "SUPABASE_RUNTIME_KEY is required and must represent a non-BYPASSRLS application role." >&2
+  exit 1
+}
+
+case "$DEPLOY_TARGET" in
+  production)
+    expected_auth_cookie_name="workbuddy_production_auth_token"
+    expected_jwt_issuer="workbuddy-production"
+    expected_jwt_audience="workbuddy-production-api"
+    ;;
+  staging)
+    expected_auth_cookie_name="workbuddy_staging_auth_token"
+    expected_jwt_issuer="workbuddy-staging"
+    expected_jwt_audience="workbuddy-staging-api"
+    ;;
+  *) echo "Unsupported deployment target: $DEPLOY_TARGET" >&2; exit 1 ;;
+esac
+
+auth_cookie_name="$(read_env_value AUTH_COOKIE_NAME)"
+jwt_issuer="$(read_env_value JWT_ISSUER)"
+jwt_audience="$(read_env_value JWT_AUDIENCE)"
+jwt_secret="$(read_env_value JWT_SECRET)"
+peer_jwt_secret="$(read_env_value_from "$PEER_RUNTIME_ENV_FILE" JWT_SECRET)"
+public_https_origin="$(read_env_value PUBLIC_HTTPS_ORIGIN)"
+runtime_public_ingress_mode="$(read_env_value PUBLIC_INGRESS_MODE)"
+cors_origin="$(read_env_value CORS_ORIGIN)"
+expected_public_origin="$(url_origin "$HEALTH_URL")"
+[ "$auth_cookie_name" = "$expected_auth_cookie_name" ] || { echo "AUTH_COOKIE_NAME does not match DEPLOY_TARGET." >&2; exit 1; }
+[ "$jwt_issuer" = "$expected_jwt_issuer" ] || { echo "JWT_ISSUER does not match DEPLOY_TARGET." >&2; exit 1; }
+[ "$jwt_audience" = "$expected_jwt_audience" ] || { echo "JWT_AUDIENCE does not match DEPLOY_TARGET." >&2; exit 1; }
+[ "${#jwt_secret}" -ge 32 ] || { echo "JWT_SECRET must contain at least 32 characters and must be environment-specific." >&2; exit 1; }
+[ "${#peer_jwt_secret}" -ge 32 ] || { echo "Peer JWT_SECRET must contain at least 32 characters." >&2; exit 1; }
+validate_jwt_secret_fingerprints "$jwt_secret" "$peer_jwt_secret"
+[ "$public_https_origin" = "$expected_public_origin" ] || { echo "PUBLIC_HTTPS_ORIGIN must exactly match the deployment health origin." >&2; exit 1; }
+[ "$runtime_public_ingress_mode" = "$PUBLIC_INGRESS_MODE" ] || { echo "PUBLIC_INGRESS_MODE in the runtime env must match the deployment contract." >&2; exit 1; }
+[ "$cors_origin" = "$expected_public_origin" ] || { echo "CORS_ORIGIN must contain only the current deployment origin." >&2; exit 1; }
+
+WEB_PORT_VALUE="$(read_env_value WEB_PORT)"
+WEB_PORT_VALUE="${WEB_PORT_VALUE:-8080}"
+INTERNAL_HEALTH_URL="http://127.0.0.1:${WEB_PORT_VALUE}/api/readyz"
+VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-$(read_env_value VITE_SUPABASE_URL)}"
+VITE_SUPABASE_URL="${VITE_SUPABASE_URL:-$(read_env_value SUPABASE_URL)}"
+VITE_SUPABASE_ANON_KEY="${VITE_SUPABASE_ANON_KEY:-$(read_env_value VITE_SUPABASE_ANON_KEY)}"
+VITE_SUPABASE_ANON_KEY="${VITE_SUPABASE_ANON_KEY:-$(read_env_value SUPABASE_ANON_KEY)}"
+: "${VITE_SUPABASE_URL:?VITE_SUPABASE_URL or SUPABASE_URL is required in $STABLE_ENV_FILE}"
+: "${VITE_SUPABASE_ANON_KEY:?VITE_SUPABASE_ANON_KEY or SUPABASE_ANON_KEY is required in $STABLE_ENV_FILE}"
 export VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY
+expected_public_project_ref="$(url_project_ref "$(read_env_value SUPABASE_URL)")"
 
 if docker info >/dev/null 2>&1; then
   USE_SUDO_DOCKER=0
 elif sudo -n docker info >/dev/null 2>&1; then
   USE_SUDO_DOCKER=1
 else
-  echo "Docker is not available for the deploy user. Add the user to the docker group or allow passwordless sudo docker." >&2
+  echo "Docker is not available for the deploy user." >&2
   exit 1
 fi
 
-run_docker_compose() {
-  if [ "$USE_SUDO_DOCKER" = "1" ]; then
-    sudo -n env \
-      VITE_SUPABASE_URL="$VITE_SUPABASE_URL" \
-      VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
-      docker compose "$@"
-  else
-    docker compose "$@"
-  fi
-}
-
 retry() {
-  local max_attempts="$1"
-  local delay_seconds="$2"
+  local max_attempts="$1" delay_seconds="$2"
   shift 2
-
   local attempt=1
   until "$@"; do
-    if [ "$attempt" -ge "$max_attempts" ]; then
-      return 1
-    fi
-
+    [ "$attempt" -lt "$max_attempts" ] || return 1
     echo "Command failed, retrying in ${delay_seconds}s (${attempt}/${max_attempts})..." >&2
     sleep "$delay_seconds"
     attempt=$((attempt + 1))
   done
 }
 
-derive_performance_summary_url() {
-  local health_url="$1"
-  if [[ "$health_url" == */api/health ]]; then
-    echo "${health_url%/api/health}/api/performance-reports/summary"
+atomic_link() {
+  local target="$1"
+  ln -sfn "$target" "$CURRENT_NEXT_LINK" || return 1
+  mv -Tf "$CURRENT_NEXT_LINK" "$CURRENT_LINK" || return 1
+}
+
+prepare_runtime_links() {
+  local release_dir="$1"
+  mkdir -p "$release_dir/deploy/env" || return 1
+  rm -f "$release_dir/deploy/env/server.production.env" || return 1
+  ln -sfn "$STABLE_ENV_FILE" "$release_dir/deploy/env/server.production.env" || return 1
+  rm -rf "$release_dir/deploy/data" || return 1
+  ln -sfn "$STABLE_DATA_DIR" "$release_dir/deploy/data" || return 1
+}
+
+release_sha_from_manifest() {
+  python3 - "$1/client/dist/workbuddy-build.json" <<'PY'
+import json
+import re
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    value = json.load(handle).get('releaseSha', '')
+if not re.fullmatch(r'[0-9a-f]{40}', value):
+    raise SystemExit(1)
+print(value, end='')
+PY
+}
+
+set_release_contract() {
+  local release_dir="$1" expected_sha="$2" actual_sha
+  [ -f "$release_dir/$COMPOSE_FILE" ] || { echo "Release Compose file is missing." >&2; return 1; }
+  [ -f "$release_dir/deploy/env/server.production.env" ] || { echo "Release runtime env link is missing." >&2; return 1; }
+  [ -f "$release_dir/scripts/classify-public-ingress-url.mjs" ] || { echo "Release ingress classifier is missing." >&2; return 1; }
+  [ -f "$release_dir/client/dist/workbuddy-build.json" ] || { echo "Release frontend build provenance is missing." >&2; return 1; }
+  actual_sha="$(release_sha_from_manifest "$release_dir")" || return 1
+  [ "$actual_sha" = "$expected_sha" ] || { echo "Frontend build provenance does not match release SHA $expected_sha." >&2; return 1; }
+  ACTIVE_RELEASE_DIR="$release_dir"
+  ACTIVE_RELEASE_SHA="$expected_sha"
+  LATEST_SCHEMA_MIGRATION_PATH="$(find "$release_dir/server/migrations" -maxdepth 1 -type f -name '[0-9]*_*.sql' -print | sort -V | tail -n 1)"
+  [ -n "$LATEST_SCHEMA_MIGRATION_PATH" ] && [ -f "$LATEST_SCHEMA_MIGRATION_PATH" ] || { echo "No managed schema migration found." >&2; return 1; }
+  EXPECTED_SCHEMA_MIGRATION_FILENAME="$(basename "$LATEST_SCHEMA_MIGRATION_PATH")"
+  EXPECTED_SCHEMA_MIGRATION_CHECKSUM="$(sha256sum "$LATEST_SCHEMA_MIGRATION_PATH" | awk '{print $1}')"
+  [ -n "$EXPECTED_SCHEMA_MIGRATION_CHECKSUM" ] || return 1
+}
+
+run_docker_compose() {
+  local release_dir="$1" release_sha="$2" migration_filename="$3" migration_checksum="$4"
+  shift 4
+  if [ "$USE_SUDO_DOCKER" = 1 ]; then
+    sudo -n env RELEASE_SHA="$release_sha" DEPLOY_TARGET="$DEPLOY_TARGET" \
+      EXPECTED_SCHEMA_MIGRATION_FILENAME="$migration_filename" EXPECTED_SCHEMA_MIGRATION_CHECKSUM="$migration_checksum" \
+      VITE_SUPABASE_URL="$VITE_SUPABASE_URL" VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
+      docker compose --env-file "$STABLE_ENV_FILE" -f "$release_dir/$COMPOSE_FILE" "$@"
   else
-    echo "${health_url%/}/api/performance-reports/summary"
+    env RELEASE_SHA="$release_sha" DEPLOY_TARGET="$DEPLOY_TARGET" \
+      EXPECTED_SCHEMA_MIGRATION_FILENAME="$migration_filename" EXPECTED_SCHEMA_MIGRATION_CHECKSUM="$migration_checksum" \
+      VITE_SUPABASE_URL="$VITE_SUPABASE_URL" VITE_SUPABASE_ANON_KEY="$VITE_SUPABASE_ANON_KEY" \
+      docker compose --env-file "$STABLE_ENV_FILE" -f "$release_dir/$COMPOSE_FILE" "$@"
   fi
 }
 
-if [ -n "${RELEASE_ARCHIVE:-}" ]; then
-  if [ ! -f "$RELEASE_ARCHIVE" ]; then
-    echo "Missing release archive: $RELEASE_ARCHIVE" >&2
+run_docker_command() {
+  if [ "$USE_SUDO_DOCKER" = 1 ]; then
+    sudo -n docker "$@"
+  else
+    docker "$@"
+  fi
+}
+
+container_inspect_value() {
+  run_docker_command container inspect "$1" --format "$2" 2>/dev/null
+}
+
+container_env_value() {
+  local container="$1" key="$2"
+  run_docker_command container inspect "$container" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+    | awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); value = $0 } END { print value }'
+}
+
+container_health() {
+  container_inspect_value "$1" '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}'
+}
+
+verify_runtime_container_identities() {
+  local expected_sha="$1" service container release_sha target status health
+  for service in web api worker; do
+    container="${COMPOSE_PROJECT_NAME_VALUE}-${service}"
+    [ "$(container_inspect_value "$container" '{{index .Config.Labels "com.docker.compose.service"}}')" = "$service" ] || return 1
+    status="$(container_inspect_value "$container" '{{.State.Status}}')"
+    [ "$status" = running ] || return 1
+    release_sha="$(container_env_value "$container" RELEASE_SHA)"
+    target="$(container_env_value "$container" DEPLOY_TARGET)"
+    if [ "$service" = web ] && { [ -z "$release_sha" ] || [ -z "$target" ]; }; then
+      # Pre-atomic releases prove Web identity through the immutable served build manifest.
+      :
+    else
+      [ "$release_sha" = "$expected_sha" ] || return 1
+      [ "$target" = "$DEPLOY_TARGET" ] || return 1
+    fi
+    health="$(container_health "$container")"
+    if [ "$service" = web ]; then
+      case "$health" in healthy|missing) ;; *) return 1 ;; esac
+    else
+      [ "$health" = healthy ] || return 1
+    fi
+  done
+}
+
+run_docker_builder_prune() {
+  if [ "$USE_SUDO_DOCKER" = 1 ]; then sudo -n docker builder prune -af; else docker builder prune -af; fi
+}
+
+run_api_build_with_cache_repair() {
+  local release_dir="$1" release_sha="$2" migration_filename="$3" migration_checksum="$4"
+  local build_log="/tmp/project-management-build-api-${release_sha}.log"
+  if run_docker_compose "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" build api 2>&1 | tee "$build_log"; then return 0; fi
+  if grep -Eq 'failed to prepare extraction snapshot|parent snapshot .* does not exist' "$build_log"; then
+    run_docker_builder_prune || return 1
+    run_docker_compose "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" build api
+    return $?
+  fi
+  return 1
+}
+
+build_and_up_release() {
+  local release_dir="$1" release_sha="$2" migration_filename migration_checksum
+  set_release_contract "$release_dir" "$release_sha" || return 1
+  migration_filename="$EXPECTED_SCHEMA_MIGRATION_FILENAME"
+  migration_checksum="$EXPECTED_SCHEMA_MIGRATION_CHECKSUM"
+  run_api_build_with_cache_repair "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" || return 1
+  run_docker_compose "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" up -d --build --remove-orphans || return 1
+  run_docker_compose "$release_dir" "$release_sha" "$migration_filename" "$migration_checksum" ps || return 1
+}
+
+derive_performance_summary_url() {
+  case "$1" in
+    */api/readyz) printf '%s\n' "${1%/api/readyz}/api/performance-reports/summary" ;;
+    *) printf '%s\n' "${1%/}/api/performance-reports/summary" ;;
+  esac
+}
+
+verify_readyz_identity() {
+  RELEASE_SHA_TO_VERIFY="$2" DEPLOY_TARGET_TO_VERIFY="$DEPLOY_TARGET" EXPECTED_PROJECT_REF_TO_VERIFY="$expected_public_project_ref" \
+    python3 - "$1" <<'PY'
+import json
+import os
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    readiness = json.load(handle)
+build = readiness.get('build') or {}
+if (readiness.get('status') != 'ready'
+        or build.get('releaseSha') != os.environ['RELEASE_SHA_TO_VERIFY']
+        or build.get('deployTarget') != os.environ['DEPLOY_TARGET_TO_VERIFY']
+        or build.get('supabaseProjectRef') != os.environ['EXPECTED_PROJECT_REF_TO_VERIFY']
+        or build.get('databaseProjectRef') != os.environ['EXPECTED_PROJECT_REF_TO_VERIFY']):
+    raise SystemExit(1)
+PY
+}
+
+verify_web_build_identity() {
+  RELEASE_SHA_TO_VERIFY="$2" python3 - "$1" <<'PY'
+import json
+import os
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    build = json.load(handle)
+if build.get('releaseSha') != os.environ['RELEASE_SHA_TO_VERIFY']:
+    raise SystemExit(1)
+PY
+}
+
+validate_public_ingress_contract() {
+  python3 - "$HEALTH_URL" "$HTTP_REDIRECT_URL" "$DEPLOY_TARGET" "$EXPECTED_PUBLIC_HOST" "$PUBLIC_INGRESS_MODE" <<'PY'
+import ipaddress
+import re
+import sys
+from urllib.parse import urlsplit
+
+def normalized_expected_host(value):
+    normalized = value.strip().lower()
+    if normalized.startswith('[') and normalized.endswith(']'):
+        normalized = normalized[1:-1]
+    return normalized[:-1] if normalized.endswith('.') else normalized
+
+def is_globally_routable_ipv4(address):
+    if not isinstance(address, ipaddress.IPv4Address):
+        return False
+    a, b, c, _d = (int(part) for part in str(address).split('.'))
+    if a in {0, 10, 127} or a >= 224:
+        return False
+    if a == 100 and 64 <= b <= 127:
+        return False
+    if a == 169 and b == 254:
+        return False
+    if a == 172 and 16 <= b <= 31:
+        return False
+    if a == 192 and b == 168:
+        return False
+    if a == 192 and b == 0 and c in {0, 2}:
+        return False
+    if a == 192 and b == 88 and c == 99:
+        return False
+    if a == 198 and b in {18, 19}:
+        return False
+    if a == 198 and b == 51 and c == 100:
+        return False
+    if a == 203 and b == 0 and c == 113:
+        return False
+    return True
+
+def is_public_dns_hostname(hostname):
+    if len(hostname) > 253:
+        return False
+    normalized = hostname.lower().removesuffix('.')
+    special_use_suffixes = {
+        'internal', 'local', 'localhost', 'onion', 'test', 'invalid',
+        'example', 'home.arpa',
+    }
+    if any(normalized == suffix or normalized.endswith(f'.{suffix}') for suffix in special_use_suffixes):
+        return False
+    labels = normalized.split('.')
+    if len(labels) < 2:
+        return False
+    return all(
+        0 < len(label) <= 63
+        and re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?', label)
+        for label in labels
+    )
+
+health = urlsplit(sys.argv[1])
+redirect = urlsplit(sys.argv[2])
+environment, expected_host, mode = sys.argv[3:6]
+if environment not in {'production', 'staging'} or mode not in {'domain_hsts', 'temporary_ip_tls'}:
+    raise SystemExit(1)
+if health.scheme != 'https' or health.username or health.password or health.query or health.fragment:
+    raise SystemExit(1)
+health_host = (health.hostname or '').lower()
+if health_host != normalized_expected_host(expected_host) or health.path != '/api/readyz':
+    raise SystemExit(1)
+try:
+    address = ipaddress.ip_address(health_host)
+except ValueError:
+    address = None
+if mode == 'domain_hsts':
+    if address is not None or not is_public_dns_hostname(health_host) or (health.port or 443) != 443:
+        raise SystemExit(1)
+else:
+    if not is_globally_routable_ipv4(address):
+        raise SystemExit(1)
+    expected_port = 8443 if environment == 'staging' else 443
+    if (health.port or 443) != expected_port:
+        raise SystemExit(1)
+expected_redirect_path = '/staging-redirect/api/readyz' if mode == 'temporary_ip_tls' and environment == 'staging' else '/api/readyz'
+if (redirect.scheme != 'http' or redirect.username or redirect.password or redirect.query or redirect.fragment
+        or (redirect.hostname or '').lower() != health_host
+        or redirect.path != expected_redirect_path or (redirect.port or 80) != 80):
+    raise SystemExit(1)
+PY
+}
+
+verify_release_health() {
+  local expected_sha="$1" internal_file public_file web_build_file hsts_header_present=false
+  local redirect_result redirect_status redirect_url performance_url
+  internal_file="/tmp/project-management-health-${expected_sha}.json"
+  public_file="/tmp/project-management-public-health-${expected_sha}.json"
+  web_build_file="/tmp/project-management-web-build-${expected_sha}.json"
+  retry 12 5 verify_runtime_container_identities "$expected_sha" || return 1
+  validate_public_ingress_contract || return 1
+  retry 12 5 curl --fail --silent --show-error "$INTERNAL_HEALTH_URL" -o "$internal_file" || return 1
+  verify_readyz_identity "$internal_file" "$expected_sha" || return 1
+  curl --fail --silent --show-error "http://127.0.0.1:${WEB_PORT_VALUE}/workbuddy-build.json" -o "$web_build_file" || return 1
+  verify_web_build_identity "$web_build_file" "$expected_sha" || return 1
+  curl --fail --silent --show-error "$HEALTH_URL" -o "$public_file" || return 1
+  verify_readyz_identity "$public_file" "$expected_sha" || return 1
+  if curl --silent --show-error --head "$HEALTH_URL" | tr -d '\r' | grep -qi '^strict-transport-security:'; then
+    hsts_header_present=true
+  elif [ "$PUBLIC_INGRESS_MODE" = domain_hsts ]; then
+    echo "Public HTTPS response is missing Strict-Transport-Security." >&2
+    return 1
+  fi
+  redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$HTTP_REDIRECT_URL")" || return 1
+  redirect_status="${redirect_result%% *}"
+  redirect_url="${redirect_result#* }"
+  case "$redirect_status" in 301|302|307|308) ;; *) echo "Public HTTP endpoint did not redirect to HTTPS." >&2 ;; esac
+  case "$redirect_status" in 301|302|307|308) ;; *) return 1 ;; esac
+  [ "$redirect_url" = "$HEALTH_URL" ] || echo "Public HTTP endpoint did not redirect to HTTPS health authority." >&2
+  [ "$redirect_url" = "$HEALTH_URL" ] || return 1
+  performance_url="${PERFORMANCE_SUMMARY_URL:-$(derive_performance_summary_url "$HEALTH_URL")}"
+  curl --fail --silent --show-error "$performance_url" -o /tmp/project-management-performance-summary.json || return 1
+  if [ "$PUBLIC_INGRESS_MODE" = temporary_ip_tls ]; then
+    printf '{"transportTlsReady":true,"temporaryIngressReady":true,"hstsHeaderPresent":%s,"hstsUserAgentPolicyApplicable":false,"domainHstsReady":false}\n' "$hsts_header_present"
+  else
+    printf '%s\n' '{"transportTlsReady":true,"temporaryIngressReady":false,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":true,"domainHstsReady":true}'
+  fi
+}
+
+validate_release_archive() {
+  tar -tzf "$1" | awk '{ name=$0; sub(/^\.\//, "", name); if (name ~ /^\// || name ~ /(^|\/)\.\.($|\/)/ || name == "deploy/env/server.production.env") exit 1 }'
+}
+
+quarantine_release_dir() {
+  local release_dir="$1" release_sha="$2" current_target
+  [ -d "$release_dir" ] || return 0
+  current_target="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  [ "$current_target" != "$release_dir" ] || return 1
+  mkdir -p "$FAILED_RELEASES_DIR" || return 1
+  mv "$release_dir" "$FAILED_RELEASES_DIR/${release_sha}-$(date -u +%Y%m%dT%H%M%SZ)-$$" || return 1
+}
+
+state_value() {
+  awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$STATE_FILE"
+}
+
+write_activation_state() {
+  local activated_target="$1" previous_target="$2"
+  local state_candidate="${STATE_FILE}.next.$$"
+  rm -f "$state_candidate" || return 1
+  if ! {
+    printf 'ACTIVATED_SHA=%s\n' "$RELEASE_SHA"
+    printf 'ACTIVATED_TARGET=%s\n' "$activated_target"
+    printf 'PREVIOUS_TARGET=%s\n' "$previous_target"
+  } > "$state_candidate"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+  if ! chmod 600 "$state_candidate"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+  if ! mv -f "$state_candidate" "$STATE_FILE"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+}
+
+rollback_application_release() {
+  local activated_sha activated_target previous_target current_target previous_sha
+  [ -f "$STATE_FILE" ] || return 0
+  activated_sha="$(state_value ACTIVATED_SHA)"
+  activated_target="$(state_value ACTIVATED_TARGET)"
+  previous_target="$(state_value PREVIOUS_TARGET)"
+  require_sha "$activated_sha" || return 1
+  [ "$activated_target" = "$RELEASES_DIR/$activated_sha" ] || return 1
+  current_target="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+  if [ -n "$previous_target" ]; then
+    case "$previous_target" in "$RELEASES_DIR"/*) ;; *) return 1 ;; esac
+    [ -d "$previous_target" ] || return 1
+    case "$current_target" in "$activated_target"|"$previous_target") ;; *) return 1 ;; esac
+    previous_sha="$(release_sha_from_manifest "$previous_target")" || return 1
+    build_and_up_release "$previous_target" "$previous_sha" || return 1
+    verify_release_health "$previous_sha" || {
+      echo "Previous release is not compatible with the migrated schema; rollback remains pending." >&2
+      return 1
+    }
+    atomic_link "$previous_target" || return 1
+  else
+    case "$current_target" in "$activated_target"|'') ;; *) return 1 ;; esac
+    set_release_contract "$activated_target" "$activated_sha" || return 1
+    run_docker_compose "$activated_target" "$activated_sha" "$EXPECTED_SCHEMA_MIGRATION_FILENAME" "$EXPECTED_SCHEMA_MIGRATION_CHECKSUM" down || return 1
+    rm -f "$CURRENT_LINK" || return 1
+  fi
+  quarantine_release_dir "$activated_target" "$activated_sha" || return 1
+  rm -f "$STATE_FILE" || return 1
+  printf '%s\n' '{"status":"rolled_back","previousReleaseVerified":true,"databaseMutation":false}'
+}
+
+snapshot_legacy_release() {
+  local snapshot_dir snapshot_candidate previous_sha timestamp
+  [ -f "$APP_DIR/client/dist/workbuddy-build.json" ] || return 1
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  snapshot_dir="$RELEASES_DIR/legacy-$timestamp-$$"
+  snapshot_candidate="$RELEASES_DIR/.legacy-candidate-$timestamp-$$"
+  mkdir -p "$snapshot_candidate" || return 1
+  if ! tar -C "$APP_DIR" --exclude='./releases' --exclude='./failed-releases' --exclude='./current' \
+    --exclude='./pending-application-release.env' --exclude='./.deploy.lock' --exclude='./.git' \
+    --exclude='./deploy/env/server.production.env' --exclude='./deploy/data' --exclude='./deploy/backups' \
+    -cf - . | tar -xf - -C "$snapshot_candidate"; then
+    rm -rf "$snapshot_candidate"
+    return 1
+  fi
+  prepare_runtime_links "$snapshot_candidate" || { rm -rf "$snapshot_candidate"; return 1; }
+  previous_sha="$(release_sha_from_manifest "$snapshot_candidate")" || { rm -rf "$snapshot_candidate"; return 1; }
+  set_release_contract "$snapshot_candidate" "$previous_sha" || { rm -rf "$snapshot_candidate"; return 1; }
+  mv "$snapshot_candidate" "$snapshot_dir" || return 1
+  atomic_link "$snapshot_dir" || return 1
+  printf '%s' "$snapshot_dir"
+}
+
+deployment_failure() {
+  local exit_code=$? rollback_status=0
+  trap - ERR INT TERM
+  set +e
+  [ -z "$CANDIDATE_DIR" ] || rm -rf "$CANDIDATE_DIR"
+  if [ -f "$STATE_FILE" ]; then
+    rollback_application_release
+    rollback_status=$?
+  else
+    quarantine_release_dir "$RELEASE_DIR" "$RELEASE_SHA"
+    rollback_status=$?
+  fi
+  [ "$rollback_status" -eq 0 ] || echo "Application rollback did not complete; pending state was preserved." >&2
+  exit "$exit_code"
+}
+trap deployment_failure ERR INT TERM
+
+if [ -f "$STATE_FILE" ]; then rollback_application_release || exit 1; fi
+PREVIOUS_TARGET="$(readlink -f "$CURRENT_LINK" 2>/dev/null || true)"
+if [ -z "$PREVIOUS_TARGET" ]; then
+  if [ -f "$APP_DIR/client/dist/workbuddy-build.json" ]; then
+    PREVIOUS_TARGET="$(snapshot_legacy_release)" || { echo "Existing tree could not be captured as a rollback release." >&2; exit 1; }
+  elif [ "$INITIAL_RUNTIME_BOOTSTRAP" != true ]; then
+    echo "No rollback-capable previous release exists; explicit initial bootstrap is required." >&2
     exit 1
   fi
-
-  echo "Deploying release archive for $RELEASE_SHA"
-  if [ -d .git ]; then
-    git ls-files -z | xargs -0 -r rm -f --
-  fi
-  tar -xzf "$RELEASE_ARCHIVE" -C "$APP_DIR"
-  rm -f "$RELEASE_ARCHIVE"
-elif [ -d .git ]; then
-  retry 5 10 git fetch --depth=1 origin "$RELEASE_SHA"
-  git checkout --force "$RELEASE_SHA"
-else
-  echo "Deployment directory is not a git repository and no release archive was provided: $APP_DIR" >&2
+elif [[ "$PREVIOUS_TARGET" != "$RELEASES_DIR/"* ]] || [ ! -d "$PREVIOUS_TARGET" ]; then
+  echo "Current application pointer is outside the managed releases directory." >&2
   exit 1
 fi
 
-mkdir -p deploy/data/logs
-
-run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build --remove-orphans
-run_docker_compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
-
-curl --fail --silent --show-error "$HEALTH_URL" >/tmp/project-management-health.json
-cat /tmp/project-management-health.json
-
-if [ -z "$PERFORMANCE_SUMMARY_URL" ]; then
-  PERFORMANCE_SUMMARY_URL="$(derive_performance_summary_url "$HEALTH_URL")"
+if [ -d "$RELEASE_DIR" ] && [ "$PREVIOUS_TARGET" = "$RELEASE_DIR" ]; then
+  set_release_contract "$RELEASE_DIR" "$RELEASE_SHA"
+  verify_release_health "$RELEASE_SHA"
+  rm -f "$RELEASE_ARCHIVE"
+  trap - ERR INT TERM
+  printf '%s\n' '{"status":"already_deployed","releaseMutation":false}'
+  exit 0
 fi
+if [ -e "$RELEASE_DIR" ]; then quarantine_release_dir "$RELEASE_DIR" "$RELEASE_SHA" || exit 1; fi
 
-curl --fail --silent --show-error "$PERFORMANCE_SUMMARY_URL" >/tmp/project-management-performance-summary.json
-cat /tmp/project-management-performance-summary.json
+CANDIDATE_DIR="$RELEASES_DIR/.candidate-$RELEASE_SHA-$$"
+mkdir -p "$CANDIDATE_DIR"
+validate_release_archive "$RELEASE_ARCHIVE"
+tar -xzf "$RELEASE_ARCHIVE" -C "$CANDIDATE_DIR"
+prepare_runtime_links "$CANDIDATE_DIR"
+set_release_contract "$CANDIDATE_DIR" "$RELEASE_SHA"
+mv "$CANDIDATE_DIR" "$RELEASE_DIR"
+CANDIDATE_DIR=''
+rm -f "$RELEASE_ARCHIVE"
+
+set_release_contract "$RELEASE_DIR" "$RELEASE_SHA"
+run_api_build_with_cache_repair "$RELEASE_DIR" "$RELEASE_SHA" "$EXPECTED_SCHEMA_MIGRATION_FILENAME" "$EXPECTED_SCHEMA_MIGRATION_CHECKSUM"
+write_activation_state "$RELEASE_DIR" "$PREVIOUS_TARGET"
+run_docker_compose "$RELEASE_DIR" "$RELEASE_SHA" "$EXPECTED_SCHEMA_MIGRATION_FILENAME" "$EXPECTED_SCHEMA_MIGRATION_CHECKSUM" up -d --build --remove-orphans
+run_docker_compose "$RELEASE_DIR" "$RELEASE_SHA" "$EXPECTED_SCHEMA_MIGRATION_FILENAME" "$EXPECTED_SCHEMA_MIGRATION_CHECKSUM" ps
+verify_release_health "$RELEASE_SHA"
+atomic_link "$RELEASE_DIR"
+rm -f "$STATE_FILE"
+trap - ERR INT TERM
+printf '{"status":"deployed","releaseSha":"%s","previousReleasePreserved":%s,"databaseMutation":false}\n' \
+  "$RELEASE_SHA" "$([ -n "$PREVIOUS_TARGET" ] && printf true || printf false)"

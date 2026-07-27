@@ -1,9 +1,10 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
-import { executeSQL, executeSQLOne, supabase } from '../services/dbService.js'
+import { withDatabaseTransaction } from '../database.js'
+import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { CertificateDependency, CertificateWorkItem } from '../types/db.js'
 import {
@@ -11,9 +12,30 @@ import {
   REQUEST_TIMEOUT_BUDGETS,
   runWithRequestBudget,
 } from '../services/requestBudgetService.js'
+import { listActiveEntityLinksForEntity } from '../services/projectLinkingService.js'
+import { markPreMilestoneProjectChanged } from '../services/preMilestoneReadCache.js'
+import { getProjectCompanyId } from '../auth/access.js'
+import {
+  buildAndPersistBusinessCompletionSampleHealthReport,
+  buildCertificateMilestoneCompletionSamples,
+} from '../services/businessCompletionSampleHealthAdapterService.js'
+import { recordChangedExecutionFacts } from '../services/executionFactGovernanceService.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
+
+const COMPLETED_CERTIFICATE_WORK_ITEM_STATUSES = new Set([
+  'completed',
+  'approved',
+  'issued',
+  'done',
+  'passed',
+  'closed',
+  '已完成',
+  '已取得',
+  '已批复',
+  '已通过',
+])
 
 export const certificateWorkItemContracts = {
   types: ['CertificateWorkItem', 'CertificateDependency'],
@@ -70,6 +92,136 @@ export const certificateWorkItemContracts = {
   ],
 } as const
 
+function normalizeText(value: unknown, fallback: string | null = null): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed === '' ? fallback : trimmed
+  }
+  if (value == null) return fallback
+  return String(value)
+}
+
+function certificateWorkItemEffectiveAt(value: unknown, observedAt: string) {
+  const date = normalizeText(value)
+  return date ? new Date(`${date}T00:00:00.000Z`).toISOString() : observedAt
+}
+
+async function recordCertificateWorkItemExecutionFacts(input: {
+  projectId: string
+  id: string
+  previous: Record<string, any> | null
+  next: Record<string, any>
+  sourceMutationId: string
+  observedAt: string
+  actorUserId?: string | null
+  forceInitial?: boolean
+}) {
+  const forceInitial = input.forceInitial === true
+  await recordChangedExecutionFacts({
+    projectId: input.projectId,
+    entityType: 'certificate_work_item',
+    entityId: input.id,
+    sourceModule: 'certificate-work-items',
+    sourceMutationId: input.sourceMutationId,
+    actorUserId: input.actorUserId ?? null,
+    observedAt: input.observedAt,
+    changes: [
+      {
+        factType: 'certificate_work_item.status',
+        previousValue: input.previous?.status ?? null,
+        nextValue: input.next.status ?? null,
+        force: forceInitial,
+        effectiveAt: input.observedAt,
+      },
+      {
+        factType: 'certificate_work_item.actual_finish_date',
+        previousValue: input.previous?.actual_finish_date ?? null,
+        nextValue: input.next.actual_finish_date ?? null,
+        force: forceInitial,
+        effectiveAt: certificateWorkItemEffectiveAt(input.next.actual_finish_date, input.observedAt),
+      },
+    ],
+  })
+}
+
+function hasCompletionEvidenceUpdate(updates: Record<string, any>) {
+  return Object.prototype.hasOwnProperty.call(updates, 'status')
+    || Object.prototype.hasOwnProperty.call(updates, 'actual_finish_date')
+}
+
+function hasCertificateWorkItemCompletionEvidence(row: Record<string, any>) {
+  if (normalizeText(row.actual_finish_date)) return true
+  const normalizedStatus = normalizeText(row.status)?.toLowerCase()
+  return Boolean(normalizedStatus && COMPLETED_CERTIFICATE_WORK_ITEM_STATUSES.has(normalizedStatus))
+}
+
+async function recordCertificateWorkItemSampleHealthEvidence(input: {
+  projectId?: string | null
+  items: Array<Record<string, any>>
+  sourceRoute: string
+}) {
+  const projectId = normalizeText(input.projectId)
+  if (!projectId) return
+
+  const completedItems = input.items.filter(hasCertificateWorkItemCompletionEvidence)
+  if (completedItems.length === 0) return
+
+  try {
+    const companyId = await getProjectCompanyId(projectId)
+    if (!companyId) {
+      logger.warn('[certificateWorkItems] skip certificate work item sample health evidence without company scope', {
+        projectId,
+        itemIds: completedItems.map((item) => normalizeText(item.id)).filter(Boolean),
+      })
+      return
+    }
+
+    const samples = buildCertificateMilestoneCompletionSamples(
+      completedItems.map((item) => {
+        const completedAt = normalizeText(item.actual_finish_date)
+          ?? normalizeText(item.updated_at)
+          ?? new Date().toISOString()
+        const milestoneCode = normalizeText(item.item_code)
+          ?? normalizeText(item.item_name)
+          ?? normalizeText(item.id)
+          ?? 'unknown_certificate_work_item'
+        return {
+          companyId,
+          projectId,
+          certificateId: normalizeText(item.id) ?? 'unknown_certificate_work_item',
+          milestoneCode,
+          completedAt,
+          startedAt: completedAt,
+          updatedAt: normalizeText(item.updated_at),
+          qualitySignal: normalizeText(item.actual_finish_date) ? 'verified' : 'low_confidence_match',
+          metadata: {
+            sourceRoute: input.sourceRoute,
+            certificateWorkItemId: normalizeText(item.id),
+            itemCode: normalizeText(item.item_code),
+            itemName: normalizeText(item.item_name),
+            itemStage: normalizeText(item.item_stage),
+            status: normalizeText(item.status),
+            actualFinishDate: normalizeText(item.actual_finish_date),
+          },
+        }
+      }),
+    )
+
+    await buildAndPersistBusinessCompletionSampleHealthReport({
+      companyId,
+      projectId,
+      queryExec: executeSQL,
+      samples,
+    })
+  } catch (error) {
+    logger.warn('[certificateWorkItems] failed to record certificate work item sample health evidence', {
+      projectId,
+      itemIds: completedItems.map((item) => normalizeText(item.id)).filter(Boolean),
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 function normalizeWorkItemRow(row: Record<string, any>, certificateIds: string[] = []): CertificateWorkItem & {
   certificate_ids: string[]
 } {
@@ -125,13 +277,37 @@ async function loadWorkItemRow(projectId: string, id: string) {
   return normalizeWorkItemRow(row, certificateIdsByWorkItemId.get(id) ?? [])
 }
 
+async function validateCertificateIdsBelongToProject(projectId: string, certificateIds: string[]) {
+  const uniqueIds = [...new Set(certificateIds.filter(Boolean))]
+  if (uniqueIds.length === 0) return null
+
+  const rows = await executeSQL<{ id?: string | null }>(
+    `SELECT id FROM pre_milestones WHERE project_id = ? AND id IN (${uniqueIds.map(() => '?').join(', ')})`,
+    [projectId, ...uniqueIds],
+  )
+  const foundIds = new Set(rows.map((row) => String(row.id ?? '')))
+  const missingIds = uniqueIds.filter((id) => !foundIds.has(id))
+  if (missingIds.length === 0) return null
+
+  return {
+    success: false,
+    error: {
+      code: 'CERTIFICATE_PROJECT_MISMATCH',
+      message: '存在不属于当前项目的证照，无法关联办理事项',
+      details: { certificate_ids: missingIds },
+    },
+    timestamp: new Date().toISOString(),
+  } satisfies ApiResponse
+}
+
 async function replaceWorkItemCertificateIds(projectId: string, workItemId: string, certificateIds: string[]) {
+  const uniqueIds = [...new Set(certificateIds.filter(Boolean))]
+
   await executeSQL(
     'DELETE FROM certificate_dependencies WHERE project_id = ? AND predecessor_type = ? AND successor_type = ? AND successor_id = ?',
     [projectId, 'certificate', 'work_item', workItemId],
   )
 
-  const uniqueIds = [...new Set(certificateIds.filter(Boolean))]
   for (const certificateId of uniqueIds) {
     await executeSQL(
       `INSERT INTO certificate_dependencies
@@ -149,6 +325,52 @@ async function replaceWorkItemCertificateIds(projectId: string, workItemId: stri
         new Date().toISOString(),
       ],
     )
+  }
+
+  await executeSQL(
+    `UPDATE certificate_work_items
+       SET certificate_ids = ?,
+           is_shared = ?,
+           updated_at = ?
+     WHERE id = ? AND project_id = ?`,
+    [
+      uniqueIds,
+      uniqueIds.length > 1,
+      new Date().toISOString(),
+      workItemId,
+      projectId,
+    ],
+  )
+}
+
+async function getLinkedCertificateWorkItemDeleteBlockers(projectId: string, ids: string[]) {
+  const blockedIds: string[] = []
+  let activeLinkCount = 0
+
+  for (const id of ids) {
+    const links = await listActiveEntityLinksForEntity({
+      projectId,
+      entityType: 'certificate_work_item',
+      entityId: id,
+    })
+    if (links.length > 0) {
+      blockedIds.push(id)
+      activeLinkCount += links.length
+    }
+  }
+
+  return { blockedIds, activeLinkCount }
+}
+
+function buildCertificateWorkItemLinkedResponse(blockedIds: string[], activeLinkCount: number): ApiResponse {
+  return {
+    success: false,
+    error: {
+      code: 'CERTIFICATE_WORK_ITEM_LINKED',
+      message: 'One or more certificate work items still have active task/certificate links. Deactivate or archive the linkage before deleting.',
+      details: { blockedIds, activeLinkCount },
+    },
+    timestamp: new Date().toISOString(),
   }
 }
 
@@ -175,6 +397,68 @@ type AllowedWorkItemField = (typeof allowedWorkItemFields)[number]
 function pickWorkItemUpdates(body: Record<string, any>) {
   return Object.fromEntries(
     Object.entries(body ?? {}).filter(([key]) => allowedWorkItemFields.includes(key as AllowedWorkItemField)),
+  )
+}
+
+function mergeCertificateWorkItemUpdate(
+  current: Record<string, any>,
+  updates: Record<string, any>,
+) {
+  const next: Record<AllowedWorkItemField, any> = {} as Record<AllowedWorkItemField, any>
+  for (const field of allowedWorkItemFields) {
+    next[field] = Object.prototype.hasOwnProperty.call(updates, field)
+      ? updates[field]
+      : current[field]
+  }
+  return next
+}
+
+async function updateCertificateWorkItemFixedColumns(
+  projectId: string,
+  id: string,
+  current: Record<string, any>,
+  updates: Record<string, any>,
+) {
+  const next = mergeCertificateWorkItemUpdate(current, updates)
+  await executeSQL(
+    `UPDATE certificate_work_items
+       SET item_code = ?,
+           item_name = ?,
+           item_stage = ?,
+           status = ?,
+           planned_finish_date = ?,
+           actual_finish_date = ?,
+           approving_authority = ?,
+           is_shared = ?,
+           next_action = ?,
+           next_action_due_date = ?,
+           is_blocked = ?,
+           block_reason = ?,
+           sort_order = ?,
+           notes = ?,
+           latest_record_at = ?,
+           updated_at = ?
+     WHERE id = ? AND project_id = ?`,
+    [
+      next.item_code ?? null,
+      next.item_name ?? '',
+      next.item_stage ?? '资料准备',
+      next.status ?? 'pending',
+      next.planned_finish_date ?? null,
+      next.actual_finish_date ?? null,
+      next.approving_authority ?? null,
+      next.is_shared ?? false,
+      next.next_action ?? null,
+      next.next_action_due_date ?? null,
+      next.is_blocked ?? false,
+      next.block_reason ?? null,
+      next.sort_order ?? 0,
+      next.notes ?? null,
+      next.latest_record_at ?? null,
+      new Date().toISOString(),
+      id,
+      projectId,
+    ],
   )
 }
 
@@ -218,53 +502,66 @@ function normalizeCreatePayload(input: Record<string, any>): CertificateWorkItem
   }
 }
 
-async function createWorkItemAtomically(projectId: string, input: CertificateWorkItemCreateInput) {
+async function createWorkItemAtomically(
+  projectId: string,
+  input: CertificateWorkItemCreateInput,
+  actorUserId?: string | null,
+) {
   const id = uuidv4()
   const createdAt = new Date().toISOString()
   const sharedFromBody = typeof input.is_shared === 'boolean'
     ? input.is_shared
     : (input.certificate_ids?.length ?? 0) > 1
 
-  const { data, error } = await supabase.rpc('create_certificate_work_item_atomic', {
-    p_id: id,
-    p_project_id: projectId,
-    p_item_code: input.item_code ?? null,
-    p_item_name: input.item_name,
-    p_item_stage: input.item_stage,
-    p_status: input.status ?? 'pending',
-    p_planned_finish_date: input.planned_finish_date ?? null,
-    p_actual_finish_date: input.actual_finish_date ?? null,
-    p_approving_authority: input.approving_authority ?? null,
-    p_is_shared: sharedFromBody,
-    p_next_action: input.next_action ?? null,
-    p_next_action_due_date: input.next_action_due_date ?? null,
-    p_is_blocked: Boolean(input.is_blocked ?? false),
-    p_block_reason: input.block_reason ?? null,
-    p_sort_order: input.sort_order ?? 0,
-    p_notes: input.notes ?? null,
-    p_latest_record_at: createdAt,
-    p_certificate_ids: input.certificate_ids ?? [],
+  const created = await withDatabaseTransaction(async () => {
+    const [createdRow] = await executeSQL<CertificateWorkItem>(
+      `SELECT * FROM create_certificate_work_item_atomic(
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       )`,
+      [
+        id,
+        projectId,
+        input.item_code ?? null,
+        input.item_name,
+        input.item_stage,
+        input.status ?? 'pending',
+        input.planned_finish_date ?? null,
+        input.actual_finish_date ?? null,
+        input.approving_authority ?? null,
+        sharedFromBody,
+        input.next_action ?? null,
+        input.next_action_due_date ?? null,
+        Boolean(input.is_blocked ?? false),
+        input.block_reason ?? null,
+        input.sort_order ?? 0,
+        input.notes ?? null,
+        createdAt,
+        input.certificate_ids ?? [],
+      ],
+    )
+
+    if (!createdRow) throw new Error('CREATE_CERTIFICATE_WORK_ITEM_FAILED')
+
+    await recordCertificateWorkItemExecutionFacts({
+      projectId,
+      id,
+      previous: null,
+      next: createdRow as Record<string, any>,
+      sourceMutationId: `certificate_work_item:${id}:create`,
+      observedAt: normalizeText(createdRow.updated_at) ?? createdAt,
+      actorUserId,
+      forceInitial: true,
+    })
+    return createdRow
   })
 
-  if (error) {
-    logger.error('Failed to create certificate work item atomically', {
-      projectId,
-      workItemId: id,
-      error,
-    })
-    throw new Error(error.message)
-  }
-
-  const created = data as CertificateWorkItem | null
-  if (!created) {
-    throw new Error('CREATE_CERTIFICATE_WORK_ITEM_FAILED')
-  }
-
+  markPreMilestoneProjectChanged(projectId)
   return created
 }
 
 router.get(
   '/',
+  requireProjectMember((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const certificateId = req.query.certificate_id as string | undefined
@@ -316,7 +613,10 @@ router.post(
       return res.status(400).json(response)
     }
 
-    const created = await createWorkItemAtomically(projectId, payload)
+    const certificateError = await validateCertificateIdsBelongToProject(projectId, payload.certificate_ids ?? [])
+    if (certificateError) return res.status(400).json(certificateError)
+
+    const created = await createWorkItemAtomically(projectId, payload, req.user?.id ?? null)
 
     const response: ApiResponse<CertificateWorkItem> = {
       success: true,
@@ -353,6 +653,12 @@ router.post(
       return res.status(400).json(response)
     }
 
+    const certificateError = await validateCertificateIdsBelongToProject(
+      projectId,
+      items.flatMap((item) => item.certificate_ids ?? []),
+    )
+    if (certificateError) return res.status(400).json(certificateError)
+
     if (items.length > 100) {
       const error = buildSyncBatchLimitError(items.length, { operation: 'certificate_work_items.bulk_import' })
       const response: ApiResponse = {
@@ -375,7 +681,7 @@ router.post(
       async () => {
         const rows: CertificateWorkItem[] = []
         for (const item of items) {
-          rows.push(await createWorkItemAtomically(projectId, item))
+          rows.push(await createWorkItemAtomically(projectId, item, req.user?.id ?? null))
         }
         return rows
       },
@@ -449,13 +755,35 @@ router.patch(
         operation: 'certificate_work_items.batch_patch',
         timeoutMs: REQUEST_TIMEOUT_BUDGETS.batchWriteMs,
       },
-      async () => {
-        const setClauses = Object.keys(updates).map((key) => `${key} = ?`)
+      async () => withDatabaseTransaction(async () => {
+        const lockedRows = await executeSQL(
+          `SELECT * FROM certificate_work_items WHERE project_id = ? AND id IN (${ids.map(() => '?').join(', ')}) ORDER BY created_at ASC FOR UPDATE`,
+          [projectId, ...ids],
+        ) as Array<Record<string, any>>
+        if (lockedRows.length !== ids.length) throw new Error('WORK_ITEM_NOT_FOUND')
+
+        const currentById = new Map(lockedRows.map((row) => [String(row.id), row]))
         for (const id of ids) {
-          await executeSQL(
-            `UPDATE certificate_work_items SET ${setClauses.join(', ')}, updated_at = ? WHERE id = ? AND project_id = ?`,
-            [...Object.values(updates), new Date().toISOString(), id, projectId],
-          )
+          const current = currentById.get(id)
+          if (current) {
+            const previous = { ...current }
+            await updateCertificateWorkItemFixedColumns(projectId, id, current, updates)
+            if (hasCompletionEvidenceUpdate(updates)) {
+              const item = await loadWorkItemRow(projectId, id)
+              if (item) {
+                const observedAt = normalizeText(item.updated_at) ?? new Date().toISOString()
+                await recordCertificateWorkItemExecutionFacts({
+                  projectId,
+                  id,
+                  previous,
+                  next: item as Record<string, any>,
+                  sourceMutationId: `certificate_work_item:${id}:update:${observedAt}`,
+                  observedAt,
+                  actorUserId: req.user?.id ?? null,
+                })
+              }
+            }
+          }
         }
 
         const items: Array<CertificateWorkItem & { certificate_ids: string[] }> = []
@@ -464,8 +792,16 @@ router.patch(
           if (item) items.push(item)
         }
         return items
-      },
+      }),
     )
+    markPreMilestoneProjectChanged(projectId)
+    if (hasCompletionEvidenceUpdate(updates)) {
+      await recordCertificateWorkItemSampleHealthEvidence({
+        projectId,
+        items: updatedItems,
+        sourceRoute: 'certificate-work-items.batch-patch',
+      })
+    }
 
     const response: ApiResponse<typeof updatedItems> = {
       success: true,
@@ -511,20 +847,59 @@ router.patch(
       ? req.body.certificate_ids.filter(Boolean).map((value: unknown) => String(value))
       : null
 
-    if (Object.keys(updates).length > 0) {
-      const setClauses = Object.keys(updates).map((key) => `${key} = ?`)
-      const params = [...Object.values(updates), new Date().toISOString(), id, projectId]
-      await executeSQL(
-        `UPDATE certificate_work_items SET ${setClauses.join(', ')}, updated_at = ? WHERE id = ? AND project_id = ?`,
-        params
+    const mutation = await withDatabaseTransaction(async () => {
+      const lockedCurrent = await executeSQLOne(
+        'SELECT * FROM certificate_work_items WHERE id = ? AND project_id = ? LIMIT 1 FOR UPDATE',
+        [id, projectId],
       )
-    }
+      if (!lockedCurrent) return { kind: 'not_found' as const }
 
-    if (nextCertificateIds) {
-      await replaceWorkItemCertificateIds(projectId, id, nextCertificateIds)
-    }
+      const previous = { ...(lockedCurrent as Record<string, any>) }
+      if (Object.keys(updates).length > 0) {
+        await updateCertificateWorkItemFixedColumns(projectId, id, lockedCurrent as Record<string, any>, updates)
+      }
 
-    const data = await loadWorkItemRow(projectId, id)
+      if (nextCertificateIds) {
+        const certificateError = await validateCertificateIdsBelongToProject(projectId, nextCertificateIds)
+        if (certificateError) return { kind: 'validation_error' as const, response: certificateError }
+        await replaceWorkItemCertificateIds(projectId, id, nextCertificateIds)
+      }
+
+      const data = await loadWorkItemRow(projectId, id)
+      if (data && hasCompletionEvidenceUpdate(updates)) {
+        const observedAt = normalizeText(data.updated_at) ?? new Date().toISOString()
+        await recordCertificateWorkItemExecutionFacts({
+          projectId,
+          id,
+          previous,
+          next: data as Record<string, any>,
+          sourceMutationId: `certificate_work_item:${id}:update:${observedAt}`,
+          observedAt,
+          actorUserId: req.user?.id ?? null,
+        })
+      }
+      return { kind: 'ok' as const, data }
+    })
+
+    if (mutation.kind === 'not_found') {
+      const response: ApiResponse = {
+        success: false,
+        error: { code: 'WORK_ITEM_NOT_FOUND', message: 'work item not found' },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(404).json(response)
+    }
+    if (mutation.kind === 'validation_error') return res.status(400).json(mutation.response)
+
+    const data = mutation.data
+    markPreMilestoneProjectChanged(projectId)
+    if (data && hasCompletionEvidenceUpdate(updates)) {
+      await recordCertificateWorkItemSampleHealthEvidence({
+        projectId,
+        items: [data],
+        sourceRoute: 'certificate-work-items.patch',
+      })
+    }
     const response: ApiResponse<typeof data> = {
       success: true,
       data,
@@ -564,6 +939,29 @@ router.delete(
       return res.status(error.statusCode ?? 413).json(response)
     }
 
+    const blockers = await getLinkedCertificateWorkItemDeleteBlockers(projectId, ids)
+    if (blockers.blockedIds.length > 0) {
+      return res.status(422).json(buildCertificateWorkItemLinkedResponse(blockers.blockedIds, blockers.activeLinkCount))
+    }
+
+    const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+    for (const id of ids) {
+      const retention = await enforceRetentionOrBlock({
+        entityType: 'certificate_work_item',
+        entityId: id,
+        projectId,
+        userId: req.user?.id ?? null,
+        userAction: 'delete',
+      })
+      if (retention.blocked) {
+        return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({
+          success: false,
+          error: buildRetentionBlockedApiError(retention.reason, retention.result),
+          timestamp: new Date().toISOString(),
+        })
+      }
+    }
+
     await runWithRequestBudget(
       {
         operation: 'certificate_work_items.batch_delete',
@@ -579,6 +977,7 @@ router.delete(
         }
       },
     )
+    markPreMilestoneProjectChanged(projectId)
 
     const response: ApiResponse<{ deleted_ids: string[] }> = {
       success: true,
@@ -605,11 +1004,33 @@ router.delete(
       return res.status(400).json(response)
     }
 
+    const blockers = await getLinkedCertificateWorkItemDeleteBlockers(projectId, [id])
+    if (blockers.blockedIds.length > 0) {
+      return res.status(422).json(buildCertificateWorkItemLinkedResponse(blockers.blockedIds, blockers.activeLinkCount))
+    }
+
+    const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+    const retention = await enforceRetentionOrBlock({
+      entityType: 'certificate_work_item',
+      entityId: id,
+      projectId,
+      userId: req.user?.id ?? null,
+      userAction: 'delete',
+    })
+    if (retention.blocked) {
+      return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({
+        success: false,
+        error: buildRetentionBlockedApiError(retention.reason, retention.result),
+        timestamp: new Date().toISOString(),
+      })
+    }
+
     await executeSQL(
       'DELETE FROM certificate_dependencies WHERE project_id = ? AND successor_type = ? AND successor_id = ?',
       [projectId, 'work_item', id]
     )
     await executeSQL('DELETE FROM certificate_work_items WHERE id = ? AND project_id = ?', [id, projectId])
+    markPreMilestoneProjectChanged(projectId)
 
     const response: ApiResponse = {
       success: true,

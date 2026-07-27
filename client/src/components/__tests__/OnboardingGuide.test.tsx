@@ -5,9 +5,28 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useStore } from '@/hooks/useStore'
 
 import { OnboardingGuide } from '../OnboardingGuide'
+import { Button } from '@/components/ui/button'
 
 function firstButton(name: string) {
   return screen.getAllByRole('button', { name })[0]
+}
+
+function firstLabel(label: string) {
+  return screen.getAllByLabelText(label)[0]
+}
+
+async function firstGuide() {
+  await screen.findAllByTestId('onboarding-guide')
+  return screen.getAllByTestId('onboarding-guide')[0]
+}
+
+function renderGuide(path: string, content?: React.ReactNode) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      {content}
+      <OnboardingGuide />
+    </MemoryRouter>,
+  )
 }
 
 describe('OnboardingGuide', () => {
@@ -18,73 +37,97 @@ describe('OnboardingGuide', () => {
     useStore.setState({ currentProject: null })
   })
 
-  it('starts the five-step guide for first-time users and can complete it', async () => {
-    render(
+  it('starts a three-step workspace guide on /workspace', async () => {
+    renderGuide('/workspace', (
+      <div>
+        <section data-onboarding-target="workspace-context" />
+        <section data-onboarding-target="workspace-metrics" />
+        <section data-onboarding-target="workspace-projects" />
+      </div>
+    ))
+
+    expect(await firstGuide()).toHaveTextContent('工作台上下文')
+    expect(firstLabel('引导进度 1/3')).toHaveTextContent('● ○ ○')
+
+    fireEvent.click(firstButton('下一步'))
+    await waitFor(() => {
+      expect(screen.getAllByTestId('onboarding-guide')[0]).toHaveTextContent('待处理事项')
+    })
+
+    fireEvent.click(firstButton('下一步'))
+    fireEvent.click(firstButton('完成引导'))
+
+    await waitFor(() => {
+      expect(window.localStorage.setItem).toHaveBeenCalledWith('onboarding_workspace_completed', 'true')
+      expect(screen.queryAllByTestId('onboarding-guide')).toHaveLength(0)
+    })
+  })
+
+  it('starts the three-step project guide for first-time project users and then shows the daily workflow', async () => {
+    renderGuide('/projects/project-1/dashboard', (
       <div>
         <aside data-onboarding-target="sidebar" />
         <div data-onboarding-target="dashboard-metrics" />
         <a data-onboarding-target="planning-nav" />
         <a data-onboarding-target="gantt-nav" />
+        <Button unstyled data-onboarding-target="template-generate">生成任务</Button>
         <a data-onboarding-target="reports-nav" />
-        <MemoryRouter>
-          <OnboardingGuide />
-        </MemoryRouter>
-      </div>,
-    )
+        <a data-onboarding-target="notifications-nav" />
+      </div>
+    ))
 
-    const guidePanels = await screen.findAllByTestId('onboarding-guide')
-    expect(guidePanels[0]).toHaveTextContent('侧边栏导航结构')
-    expect(screen.getAllByLabelText('引导进度 1/5')[0]).toHaveTextContent('● ○ ○ ○ ○')
-    expect(firstButton('跳过引导')).toBeInTheDocument()
+    expect(await firstGuide()).toHaveTextContent('项目导航')
+    expect(firstLabel('引导进度 1/3')).toHaveTextContent('● ○ ○')
 
-    fireEvent.click(firstButton('下一步'))
-    expect((await screen.findAllByText('Dashboard 核心指标区'))[0]).toBeInTheDocument()
-
-    fireEvent.click(firstButton('下一步'))
-    fireEvent.click(firstButton('下一步'))
-    fireEvent.click(firstButton('下一步'))
+    for (let index = 0; index < 2; index += 1) {
+      fireEvent.click(firstButton('下一步'))
+    }
+    await waitFor(() => {
+      expect(screen.getAllByTestId('onboarding-guide')[0]).toHaveTextContent('Dashboard 指标区')
+    })
     fireEvent.click(firstButton('完成引导'))
 
     await waitFor(() => {
-      expect(window.localStorage.setItem).toHaveBeenCalledWith('onboarding_completed', 'true')
+      expect(window.localStorage.setItem).toHaveBeenCalledWith('onboarding_project_completed', 'true')
+      expect(window.localStorage.setItem).not.toHaveBeenCalledWith('onboarding_completed', 'true')
       expect(screen.getByTestId('onboarding-daily-workflow')).toHaveTextContent('每日工作流')
     })
   })
 
-  it('shows the daily workflow card after onboarding has been completed', async () => {
+  it('links daily workflow steps when project onboarding has been completed', async () => {
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
-      if (key === 'onboarding_completed') return 'true'
+      if (key === 'onboarding_project_completed') return 'true'
       return null
     })
+    useStore.setState({ currentProject: { id: 'project-1', name: '示例项目' } as never })
 
-    render(
-      <MemoryRouter>
-        <OnboardingGuide />
-      </MemoryRouter>,
-    )
+    renderGuide('/projects/project-1/dashboard')
 
-    expect(await screen.findByTestId('onboarding-daily-workflow')).toHaveTextContent('Dashboard 查看概况')
-    expect(screen.queryByTestId('onboarding-guide')).not.toBeInTheDocument()
+    expect(await screen.findByRole('link', { name: 'Dashboard 查看概况' })).toHaveAttribute('href', '/projects/project-1/dashboard')
+    expect(screen.getByRole('link', { name: '进入任务列表' })).toHaveAttribute('href', '/projects/project-1/gantt')
+    expect(screen.getByRole('link', { name: '查看提醒中心' })).toHaveAttribute('href', '/projects/project-1/notifications')
 
     fireEvent.click(firstButton('关闭每日工作流'))
     expect(window.localStorage.setItem).toHaveBeenCalledWith('onboarding_daily_workflow_dismissed', 'true')
   })
 
-  it('links daily workflow steps when a project is selected', async () => {
+  it('does not render onboarding on unrelated routes', () => {
+    renderGuide('/login')
+
+    expect(screen.queryByTestId('onboarding-guide')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('onboarding-daily-workflow')).not.toBeInTheDocument()
+  })
+
+  it('shows the project daily workflow inside task-list modeling workbench routes', async () => {
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
-      if (key === 'onboarding_completed') return 'true'
+      if (key === 'onboarding_project_completed') return 'true'
       return null
     })
     useStore.setState({ currentProject: { id: 'project-1', name: '示例项目' } as never })
 
-    render(
-      <MemoryRouter>
-        <OnboardingGuide />
-      </MemoryRouter>,
-    )
+    renderGuide('/projects/project-1/gantt?modelingWorkbench=generate')
 
-    expect(await screen.findByRole('link', { name: 'Dashboard 查看概况' })).toHaveAttribute('href', '/projects/project-1/dashboard')
-    expect(screen.getByRole('link', { name: '进甘特图调整任务' })).toHaveAttribute('href', '/projects/project-1/gantt')
-    expect(screen.getByRole('link', { name: '查看报表' })).toHaveAttribute('href', '/projects/project-1/reports')
+    expect(screen.queryByTestId('onboarding-guide')).not.toBeInTheDocument()
+    expect(await screen.findByTestId('onboarding-daily-workflow')).toBeInTheDocument()
   })
 })

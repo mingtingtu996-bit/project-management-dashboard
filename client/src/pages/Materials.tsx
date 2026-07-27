@@ -42,7 +42,7 @@ import {
 import { usePermissions } from '@/hooks/usePermissions'
 import { toast } from '@/hooks/use-toast'
 import { useCurrentProject } from '@/hooks/useStore'
-import { getApiErrorMessage, isAbortError } from '@/lib/apiClient'
+import { apiPost, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import { MATERIAL_CATEGORY_PALETTE } from '@/lib/chartPalette'
 import {
   formatDateTime as formatDisplayDateTime,
@@ -65,9 +65,16 @@ import {
   type MaterialStatusFilter,
 } from '@/lib/materialStatus'
 import {
+  buildRetentionDecisionDialogModel,
+  getRetentionApiUserMessage,
+  getRetentionDecisionTokenFromError,
+  isRetentionConfirmationError,
+  parseRetentionApiError,
+  type RetentionParsedError,
+} from '@/lib/retentionError'
+import {
   MaterialsApiService,
   type MaterialCategorySummary,
-  type MaterialChangeLogRecord,
   type MaterialReportSummary,
   type MaterialMutationPayload,
   type MaterialReminderRecord,
@@ -109,7 +116,7 @@ type MaterialGroup = {
   materials: ProjectMaterialRecord[]
 }
 
-type MaterialAiPlan = {
+type MaterialArrivalPlan = {
   recommendedBufferDays: number
   suggestedExpectedArrivalDate: string | null
   currentBufferDays: number | null
@@ -247,7 +254,7 @@ function buildCreatePayload(form: MaterialFormState): MaterialMutationPayload {
   return {
     participant_unit_id: form.participant_unit_id || null,
     material_name: form.material_name.trim(),
-    specialty_type: form.specialty_type.trim() || null,
+    specialty_type: form.specialty_type.trim(),
     expected_arrival_date: form.expected_arrival_date,
     actual_arrival_date: form.actual_arrival_date || null,
     requires_sample_confirmation: requiresSampleConfirmation,
@@ -255,6 +262,16 @@ function buildCreatePayload(form: MaterialFormState): MaterialMutationPayload {
     requires_inspection: requiresInspection,
     inspection_done: requiresInspection ? form.inspection_done : false,
   }
+}
+
+function notifyMaterialConditionUnlock(material: ProjectMaterialRecord) {
+  const unlockCount = Number(material.condition_unlock_count ?? 0)
+  if (!Number.isFinite(unlockCount) || unlockCount <= 0) return
+
+  toast({
+    title: '开工条件已自动满足',
+    description: `材料到场已联动解除 ${unlockCount} 条任务开工条件。`,
+  })
 }
 
 function formatDateTimeLabel(value?: string | null) {
@@ -334,6 +351,7 @@ function buildCategoryPieGradient(categories: MaterialCategorySummary[]) {
 }
 
 function MaterialCategoryPie({ categories }: { categories: MaterialCategorySummary[] }) {
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const total = categories.reduce((sum, item) => sum + item.count, 0)
 
   return (
@@ -449,39 +467,18 @@ function formatDelayRiskLabel(risk?: string | null) {
   }
 }
 
-function formatChangeFieldLabel(fieldName?: string | null) {
-  switch (String(fieldName ?? '').trim()) {
-    case 'material_name':
-      return '材料名称'
-    case 'participant_unit_id':
-      return '参建单位'
-    case 'specialty_type':
-      return '专项类型'
-    case 'requires_sample_confirmation':
-      return '需要定样'
-    case 'sample_confirmed':
-      return '定样完成'
-    case 'expected_arrival_date':
-      return '预计到场日期'
-    case 'actual_arrival_date':
-      return '实际到场日期'
-    case 'requires_inspection':
-      return '需要送检'
-    case 'inspection_done':
-      return '送检完成'
-    case 'lifecycle':
-      return '生命周期'
-    default:
-      return String(fieldName ?? '').trim() || '字段变更'
-  }
-}
-
-function formatChangeValue(value?: string | null) {
-  const normalized = String(value ?? '').trim()
-  if (!normalized) return '空'
-  if (normalized === 'true') return '是'
-  if (normalized === 'false') return '否'
-  return normalized
+function readMaterialTaskReferenceDays(suggestion: MaterialTaskDurationEstimate | null) {
+  if (!suggestion) return null
+  const outputCode = String(suggestion.durationOutputCode ?? '').trim()
+  const value = outputCode === 'contextual_reference'
+    ? suggestion.contextualReferenceDays
+    : outputCode === 'plan_reference'
+      ? suggestion.planReferenceDays
+      : outputCode === 'remaining_forecast'
+        ? suggestion.remainingForecastDays
+        : null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function shiftDate(value?: string | null, deltaDays = 0) {
@@ -531,18 +528,15 @@ function MaterialDetailDialog({
   units,
   readOnly,
   saving,
-  aiLoading,
-  aiDurationEstimate,
+  arrivalSuggestionLoading,
+  systemArrivalSuggestion,
   delayRiskInsight,
-  aiPlan,
-  changeLogs,
-  changeLogLoading,
+  arrivalPlan,
   onOpenChange,
   onChange,
   onSubmit,
-  onLoadAiInsight,
-  onApplyAiSuggestion,
-  onRefreshChangeLogs,
+  onLoadArrivalInsight,
+  onApplyArrivalSuggestion,
 }: {
   open: boolean
   material: ProjectMaterialRecord | null
@@ -550,18 +544,15 @@ function MaterialDetailDialog({
   units: ParticipantUnitSummary[]
   readOnly: boolean
   saving: boolean
-  aiLoading: boolean
-  aiDurationEstimate: MaterialTaskDurationEstimate | null
+  arrivalSuggestionLoading: boolean
+  systemArrivalSuggestion: MaterialTaskDurationEstimate | null
   delayRiskInsight: MaterialTaskDelayRisk | null
-  aiPlan: MaterialAiPlan | null
-  changeLogs: MaterialChangeLogRecord[]
-  changeLogLoading: boolean
+  arrivalPlan: MaterialArrivalPlan | null
   onOpenChange: (open: boolean) => void
   onChange: (patch: Partial<MaterialFormState>) => void
   onSubmit: () => void
-  onLoadAiInsight: () => void
-  onApplyAiSuggestion: () => void
-  onRefreshChangeLogs: () => void
+  onLoadArrivalInsight: () => void
+  onApplyArrivalSuggestion: () => void
 }) {
   const previewMaterial = {
     expected_arrival_date: form.expected_arrival_date,
@@ -601,6 +592,7 @@ function MaterialDetailDialog({
               onChange={(event) => onChange({ specialty_type: event.target.value })}
               disabled={readOnly}
               className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-50"
+              placeholder="如：幕墙、机电、土建"
             />
           </label>
           <label className="space-y-1 text-sm text-slate-600">
@@ -702,18 +694,18 @@ function MaterialDetailDialog({
             <div className="rounded-2xl border border-blue-100 bg-blue-50/70 px-4 py-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold text-blue-900">AI 到货建议</div>
+                  <div className="text-sm font-semibold text-blue-900">工期智能参考</div>
                 </div>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   className="border-blue-200 bg-white text-blue-700 hover:bg-blue-100"
-                  onClick={onLoadAiInsight}
-                  disabled={aiLoading || !material.linked_task_id}
-                  data-testid="materials-ai-fetch"
+                  onClick={onLoadArrivalInsight}
+                  disabled={arrivalSuggestionLoading || !material.linked_task_id}
+                  data-testid="materials-arrival-suggestion-fetch"
                 >
-                  {aiLoading ? '分析中...' : '获取 AI 建议'}
+                  {arrivalSuggestionLoading ? '分析中...' : '查看'}
                 </Button>
               </div>
 
@@ -730,29 +722,29 @@ function MaterialDetailDialog({
                     </div>
                   </div>
 
-                  {aiDurationEstimate ? (
+                  {systemArrivalSuggestion ? (
                     <div className="rounded-2xl border border-blue-100 bg-white px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-sm font-semibold text-slate-900">
-                          AI 工期估算：{aiDurationEstimate.estimated_duration} 天
+                          关联任务工期参考：{readMaterialTaskReferenceDays(systemArrivalSuggestion) ?? '--'} 天
                         </div>
-                        <span className={`rounded-full px-2 py-1 text-xs ring-1 ring-inset ${getConfidenceTone(aiDurationEstimate.confidence_level)}`}>
-                          置信度 {formatConfidenceLabel(aiDurationEstimate.confidence_level)}
-                          {typeof aiDurationEstimate.confidence_score === 'number'
-                            ? ` · ${formatRatioPercent(aiDurationEstimate.confidence_score)}`
+                        <span className={`rounded-full px-2 py-1 text-xs ring-1 ring-inset ${getConfidenceTone(systemArrivalSuggestion.confidence_level)}`}>
+                          置信度 {formatConfidenceLabel(systemArrivalSuggestion.confidence_level)}
+                          {typeof systemArrivalSuggestion.confidence_score === 'number'
+                            ? ` · ${formatRatioPercent(systemArrivalSuggestion.confidence_score)}`
                             : ''}
                         </span>
                       </div>
-                      {aiDurationEstimate.reasoning ? (
-                        <div className="mt-2 text-xs leading-5 text-slate-500">{aiDurationEstimate.reasoning}</div>
+                      {systemArrivalSuggestion.reasoning ? (
+                        <div className="mt-2 text-xs leading-5 text-slate-500">{systemArrivalSuggestion.reasoning}</div>
                       ) : null}
                     </div>
                   ) : (
-                    !aiLoading && (
+                    !arrivalSuggestionLoading && (
                       <EmptyState
                         icon={PackageSearch}
-                        title="暂无工期估算"
-                        description="当前材料还没有可展示的 AI 工期估算。"
+                        title="暂无建议"
+                        description="当前材料还没有可展示的系统建议。"
                         className="rounded-2xl empty-state-frame border-blue-200 bg-white/70 px-4 py-6"
                       />
                     )
@@ -761,13 +753,10 @@ function MaterialDetailDialog({
                   {delayRiskInsight ? (
                     <div className="rounded-2xl border border-blue-100 bg-white px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm font-semibold text-slate-900">AI 排程：{formatDelayRiskLabel(delayRiskInsight.delay_risk)}</div>
-                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">
-                          延期概率 {formatRatioPercent(delayRiskInsight.delay_probability)}
-                        </span>
+                        <div className="text-sm font-semibold text-slate-900">执行风险评估：{formatDelayRiskLabel(delayRiskInsight.delay_risk)}</div>
                       </div>
                       <div className="mt-2 text-xs leading-5 text-slate-500">
-                        风险因素：{delayRiskInsight.risk_factors.length > 0 ? delayRiskInsight.risk_factors.join('、') : '暂无额外风险因素'}
+                        关联因素：{delayRiskInsight.risk_factors.length > 0 ? delayRiskInsight.risk_factors.join('、') : '暂无额外关联因素'}
                       </div>
                       <div className="mt-2 space-y-1 text-xs text-slate-600">
                         {delayRiskInsight.recommendations.slice(0, 3).map((item, index) => (
@@ -777,23 +766,23 @@ function MaterialDetailDialog({
                     </div>
                   ) : null}
 
-                  {aiPlan?.suggestedExpectedArrivalDate ? (
+                  {arrivalPlan?.suggestedExpectedArrivalDate ? (
                     <div className="rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
                       <div className="font-medium">
-                        建议预计到场日：{aiPlan.suggestedExpectedArrivalDate}
+                        建议预计到场日：{arrivalPlan.suggestedExpectedArrivalDate}
                       </div>
                       <div className="mt-1 text-xs text-emerald-700">
-                        建议至少提前 {aiPlan.recommendedBufferDays} 天完成到货准备。
-                        {aiPlan.currentBufferDays == null ? '' : ` 当前缓冲为 ${aiPlan.currentBufferDays} 天。`}
+                        建议至少提前 {arrivalPlan.recommendedBufferDays} 天完成到货准备。
+                        {arrivalPlan.currentBufferDays == null ? '' : ` 当前缓冲为 ${arrivalPlan.currentBufferDays} 天。`}
                       </div>
                       {!readOnly && (
                         <Button
                           type="button"
                           size="sm"
                           className="mt-3"
-                          onClick={onApplyAiSuggestion}
+                          onClick={onApplyArrivalSuggestion}
                           disabled={saving}
-                          data-testid="materials-ai-adopt"
+                          data-testid="materials-arrival-suggestion-adopt"
                         >
                           采纳建议到场日
                         </Button>
@@ -811,43 +800,6 @@ function MaterialDetailDialog({
               )}
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-slate-900">变更日志</div>
-                </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={onRefreshChangeLogs}
-                  disabled={changeLogLoading}
-                  data-testid="materials-change-log-refresh"
-                >
-                  {changeLogLoading ? '刷新中...' : '刷新日志'}
-                </Button>
-              </div>
-              <div className="mt-4 space-y-2" data-testid="materials-change-log-list">
-                {changeLogs.length > 0 ? (
-                  changeLogs.slice(0, 6).map((entry) => (
-                    <div key={entry.id} className="rounded-2xl border border-white bg-white px-4 py-3 text-sm text-slate-700">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="font-medium text-slate-900">{formatChangeFieldLabel(entry.field_name)}</div>
-                        <div className="text-xs text-slate-500">{formatDateTimeLabel(entry.changed_at)}</div>
-                      </div>
-                      <div className="mt-1 text-xs leading-5 text-slate-500">
-                        {formatChangeValue(entry.old_value)} → {formatChangeValue(entry.new_value)}
-                        {entry.change_reason ? ` · ${entry.change_reason}` : ''}
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className="rounded-2xl empty-state-frame border-slate-200 bg-white px-4 py-6 text-sm text-slate-500">
-                    {changeLogLoading ? '加载中...' : '暂无记录'}
-                  </div>
-                )}
-              </div>
-            </div>
           </div>
         )}
 
@@ -856,7 +808,7 @@ function MaterialDetailDialog({
             {readOnly ? '关闭' : '取消'}
           </Button>
           {!readOnly && (
-            <Button onClick={onSubmit} disabled={saving} loading={saving} data-testid="material-detail-save">
+            <Button onClick={onSubmit} disabled={saving || !form.specialty_type.trim()} loading={saving} data-testid="material-detail-save">
               保存详情
             </Button>
           )}
@@ -874,7 +826,7 @@ export default function Materials() {
   const { id: projectId = '' } = useParams<{ id: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
   const currentProject = useCurrentProject()
-  const { canEdit, globalRole } = usePermissions({
+  const { canEdit } = usePermissions({
     projectId,
   })
 
@@ -891,12 +843,12 @@ export default function Materials() {
   const [specialtyFilter, setSpecialtyFilter] = useState(searchParams.get('specialty') || 'all')
   const [reminders, setReminders] = useState<MaterialReminderRecord[]>([])
   const [latestDigest, setLatestDigest] = useState<ProjectWeeklyDigestSnapshot | null>(null)
-  const [aiLoading, setAiLoading] = useState(false)
-  const [aiDurationEstimate, setAiDurationEstimate] = useState<MaterialTaskDurationEstimate | null>(null)
+  const [arrivalSuggestionLoading, setArrivalSuggestionLoading] = useState(false)
+  const [systemArrivalSuggestion, setSystemArrivalSuggestion] = useState<MaterialTaskDurationEstimate | null>(null)
   const [delayRiskInsight, setDelayRiskInsight] = useState<MaterialTaskDelayRisk | null>(null)
-  const [changeLogs, setChangeLogs] = useState<MaterialChangeLogRecord[]>([])
-  const [changeLogLoading, setChangeLogLoading] = useState(false)
   const [pendingDeleteMaterial, setPendingDeleteMaterial] = useState<ProjectMaterialRecord | null>(null)
+  const [pendingDeleteRetention, setPendingDeleteRetention] = useState<RetentionParsedError | null>(null)
+  const [retentionDecisionToken, setRetentionDecisionToken] = useState('')
 
   const [createMode, setCreateMode] = useState<CreateMode>('single')
   const [singleForm, setSingleForm] = useState<MaterialFormState>(EMPTY_FORM)
@@ -911,7 +863,7 @@ export default function Materials() {
 
   const isReadOnly = !canEdit
   const readOnlyActionReason = isReadOnly ? '只读成员无材料维护权限。' : null
-  const canReadAllMaterials = globalRole === 'company_admin'
+  const canReadAllMaterials = canEdit
 
   const loadPage = useCallback(async (signal?: AbortSignal, silent = false) => {
     if (!projectId) return
@@ -960,11 +912,17 @@ export default function Materials() {
   }, [searchParams])
 
   const summary = useMemo(() => buildMaterialSummaryCounts(materials), [materials])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const arrivedCount = useMemo(() => materials.filter((material) => Boolean(material.actual_arrival_date)).length, [materials])
-  const arrivalRate = materials.length > 0 ? Math.round((arrivedCount / materials.length) * 100) : 0
+  // v1.4.21: use backend summary, not local computation
+  const arrivalRate = materialSummary?.overview?.arrivalRate ?? (materials.length > 0 ? Math.round((arrivedCount / materials.length) * 100) : 0)
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const requiredSampleCount = useMemo(() => materials.filter((material) => material.requires_sample_confirmation).length, [materials])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const sampleConfirmedCount = useMemo(() => materials.filter((material) => material.requires_sample_confirmation && material.sample_confirmed).length, [materials])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const requiredInspectionCount = useMemo(() => materials.filter((material) => material.requires_inspection).length, [materials])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const inspectionDoneCount = useMemo(() => materials.filter((material) => material.requires_inspection && material.inspection_done).length, [materials])
   const weeklySummary = useMemo(() => {
     const overview = materialSummary?.overview ?? null
@@ -1030,7 +988,7 @@ export default function Materials() {
     () => materials.find((material) => material.id === detailMaterialId) ?? null,
     [detailMaterialId, materials],
   )
-  const detailAiPlan = useMemo<MaterialAiPlan | null>(() => {
+  const detailArrivalPlan = useMemo<MaterialArrivalPlan | null>(() => {
     if (!detailMaterial?.linked_task_start_date) return null
 
     const riskBuffer =
@@ -1059,25 +1017,6 @@ export default function Materials() {
         .sort((left, right) => left.expected_arrival_date.localeCompare(right.expected_arrival_date)),
     )
   }, [])
-
-  const loadMaterialChangeLogs = useCallback(async (materialId: string) => {
-    if (!projectId) return
-
-    setChangeLogLoading(true)
-    try {
-      const nextLogs = await MaterialsApiService.listChangeLogs(projectId, materialId)
-      setChangeLogs(nextLogs)
-    } catch (err) {
-      setChangeLogs([])
-      toast({
-        title: '变更日志加载失败',
-        description: getApiErrorMessage(err, '请稍后重试'),
-        variant: 'destructive',
-      })
-    } finally {
-      setChangeLogLoading(false)
-    }
-  }, [projectId])
 
   const updateSearchFilter = useCallback((key: 'unit' | 'specialty' | 'q', value: string) => {
     const next = new URLSearchParams(searchParams)
@@ -1108,6 +1047,7 @@ export default function Materials() {
     try {
       const updated = await MaterialsApiService.update(projectId, materialId, patch)
       syncMaterial(updated)
+      notifyMaterialConditionUnlock(updated)
     } catch (err) {
       toast({
         title: '保存失败',
@@ -1120,13 +1060,11 @@ export default function Materials() {
   const openDetailDialog = useCallback((material: ProjectMaterialRecord) => {
     setDetailMaterialId(material.id)
     setDetailForm(toFormState(material))
-    setAiDurationEstimate(null)
+    setSystemArrivalSuggestion(null)
     setDelayRiskInsight(null)
-    setChangeLogs([])
-    void loadMaterialChangeLogs(material.id)
-  }, [loadMaterialChangeLogs])
+  }, [])
 
-  const handleLoadAiInsight = useCallback(async () => {
+  const handleLoadArrivalInsight = useCallback(async () => {
     if (!projectId || !detailMaterial?.linked_task_id) {
       toast({
         title: '暂无关联任务',
@@ -1136,70 +1074,74 @@ export default function Materials() {
       return
     }
 
-    setAiLoading(true)
+    setArrivalSuggestionLoading(true)
     try {
       const [estimateResult, riskResult] = await Promise.allSettled([
-        MaterialsApiService.estimateLinkedTaskDuration(projectId, detailMaterial.linked_task_id),
+        MaterialsApiService.getSystemArrivalSuggestion(projectId, detailMaterial.linked_task_id),
         MaterialsApiService.analyzeLinkedTaskDelayRisk(detailMaterial.linked_task_id),
       ])
 
       const nextEstimate = estimateResult.status === 'fulfilled' ? estimateResult.value : null
       const nextRisk = riskResult.status === 'fulfilled' ? riskResult.value : null
 
-      setAiDurationEstimate(nextEstimate)
+      setSystemArrivalSuggestion(nextEstimate)
       setDelayRiskInsight(nextRisk)
 
       if (!nextEstimate && !nextRisk) {
-        throw new Error('当前材料关联任务暂无可用 AI 建议')
+        throw new Error('当前没有可用的系统建议')
       }
     } catch (err) {
-      setAiDurationEstimate(null)
+      setSystemArrivalSuggestion(null)
       setDelayRiskInsight(null)
       toast({
-        title: 'AI 建议获取失败',
+        title: '获取失败',
         description: getApiErrorMessage(err, '请稍后重试'),
         variant: 'destructive',
       })
     } finally {
-      setAiLoading(false)
+      setArrivalSuggestionLoading(false)
     }
   }, [detailMaterial?.linked_task_id, projectId, detailMaterial])
 
-  const handleApplyAiSuggestion = useCallback(async () => {
-    if (!projectId || !detailMaterial || !detailAiPlan?.suggestedExpectedArrivalDate) return
+  const handleApplyArrivalSuggestion = useCallback(async () => {
+    if (!projectId || !detailMaterial || !detailArrivalPlan?.suggestedExpectedArrivalDate) return
 
     setSaving(true)
     try {
       const updated = await MaterialsApiService.update(projectId, detailMaterial.id, {
-        expected_arrival_date: detailAiPlan.suggestedExpectedArrivalDate,
-        change_reason: '采纳 AI 排程建议',
+        expected_arrival_date: detailArrivalPlan.suggestedExpectedArrivalDate,
+        change_reason: '系统建议',
       })
       syncMaterial(updated)
       setDetailForm(toFormState(updated))
-      await loadMaterialChangeLogs(detailMaterial.id)
       toast({
-        title: '已采纳 AI 建议',
-        description: `预计到场日已调整为 ${detailAiPlan.suggestedExpectedArrivalDate}。`,
+        title: '采纳成功',
+        description: `预计到场日已调整为 ${detailArrivalPlan.suggestedExpectedArrivalDate}。`,
       })
     } catch (err) {
       toast({
-        title: '采纳建议失败',
+        title: '保存失败',
         description: getApiErrorMessage(err, '请稍后重试'),
         variant: 'destructive',
       })
     } finally {
       setSaving(false)
     }
-  }, [detailAiPlan?.suggestedExpectedArrivalDate, detailMaterial, loadMaterialChangeLogs, projectId, syncMaterial])
+  }, [detailArrivalPlan?.suggestedExpectedArrivalDate, detailMaterial, projectId, syncMaterial])
 
   const handleSaveDetail = useCallback(async () => {
     if (!projectId || !detailMaterial) return
+    if (!detailForm.specialty_type.trim()) {
+      toast({ title: '请填写专项类型', description: '材料专项类型来自工序模板或手工输入，不再绑定旧专业对象。', variant: 'destructive' })
+      return
+    }
 
     setSaving(true)
     try {
       const updated = await MaterialsApiService.update(projectId, detailMaterial.id, buildCreatePayload(detailForm))
       syncMaterial(updated)
       setDetailMaterialId(null)
+      notifyMaterialConditionUnlock(updated)
       toast({ title: '材料详情已保存', description: '材料记录已更新。' })
     } catch (err) {
       toast({
@@ -1214,6 +1156,10 @@ export default function Materials() {
 
   const handleCreateSingle = useCallback(async () => {
     if (!projectId) return
+    if (!singleForm.specialty_type.trim()) {
+      toast({ title: '请填写专项类型', description: '材料专项类型来自工序模板或手工输入，不再绑定旧专业对象。', variant: 'destructive' })
+      return
+    }
 
     setSaving(true)
     try {
@@ -1245,7 +1191,6 @@ export default function Materials() {
       })
       return
     }
-
     setSaving(true)
     try {
       const payload = selectedItems.map<MaterialMutationPayload>((item) => ({
@@ -1274,12 +1219,16 @@ export default function Materials() {
 
   const handleCreateBatch = useCallback(async () => {
     if (!projectId) return
-    const payload = batchRows
-      .filter((row) => row.material_name.trim() && row.expected_arrival_date.trim())
+    const submittableRows = batchRows.filter((row) => row.material_name.trim() && row.expected_arrival_date.trim())
+    if (submittableRows.some((row) => !row.specialty_type.trim())) {
+      toast({ title: '请填写专项类型', description: '批量录入的每条材料都必须填写专项类型。', variant: 'destructive' })
+      return
+    }
+    const payload = submittableRows
       .map<MaterialMutationPayload>((row) => ({
         participant_unit_id: row.participant_unit_id || null,
         material_name: row.material_name.trim(),
-        specialty_type: row.specialty_type.trim() || null,
+        specialty_type: row.specialty_type.trim(),
         expected_arrival_date: row.expected_arrival_date,
         requires_sample_confirmation: row.requires_sample_confirmation,
         requires_inspection: row.requires_inspection,
@@ -1322,6 +1271,12 @@ export default function Materials() {
       }
       toast({ title: '材料已删除', description: '清单已同步更新。' })
     } catch (err) {
+      if (isRetentionConfirmationError(err)) {
+        const decisionToken = getRetentionDecisionTokenFromError(err)
+        setRetentionDecisionToken(decisionToken)
+        setPendingDeleteRetention(parseRetentionApiError(err))
+        return
+      }
       toast({
         title: '删除失败',
         description: getApiErrorMessage(err, '材料删除失败，请稍后重试'),
@@ -1330,12 +1285,43 @@ export default function Materials() {
     }
   }, [detailMaterialId, isReadOnly, projectId])
 
-  const handleConfirmDeleteMaterial = useCallback(() => {
+  const handleConfirmDeleteMaterial = useCallback(async () => {
     if (!pendingDeleteMaterial) return
     const materialId = pendingDeleteMaterial.id
-    setPendingDeleteMaterial(null)
-    void handleDeleteMaterial(materialId)
-  }, [handleDeleteMaterial, pendingDeleteMaterial])
+    if (retentionDecisionToken && projectId) {
+      try {
+        await apiPost('/api/deletion-retention/confirm', {
+          projectId,
+          decisionToken: retentionDecisionToken,
+        })
+        setMaterials((current) => current.filter((material) => material.id !== materialId))
+        if (detailMaterialId === materialId) {
+          setDetailMaterialId(null)
+        }
+        setPendingDeleteMaterial(null)
+        setPendingDeleteRetention(null)
+        setRetentionDecisionToken('')
+        toast({ title: '材料保留处置已确认', description: '清单已同步刷新。' })
+      } catch (err) {
+        toast({
+          title: '保留处置确认失败',
+          description: getRetentionApiUserMessage(err, '请刷新后重试。'),
+          variant: 'destructive',
+        })
+      }
+      return
+    }
+    await handleDeleteMaterial(materialId)
+  }, [detailMaterialId, handleDeleteMaterial, pendingDeleteMaterial, projectId, retentionDecisionToken])
+
+  const retentionDialogModel = buildRetentionDecisionDialogModel({
+    title: '删除材料',
+    entityName: pendingDeleteMaterial?.material_name ?? '该材料',
+    fallbackDescription: pendingDeleteMaterial
+      ? `确认删除「${pendingDeleteMaterial.material_name}」吗？删除后将从材料清单移除。`
+      : '确认删除该材料吗？',
+    retention: pendingDeleteRetention,
+  })
 
   if (loading) {
     return (
@@ -1542,7 +1528,7 @@ export default function Materials() {
                       value={singleForm.specialty_type}
                       onChange={(event) => setSingleForm((current) => ({ ...current, specialty_type: event.target.value }))}
                       className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
-                      placeholder="如：幕墙"
+                      placeholder="如：幕墙、机电、土建"
                     />
                   </label>
                   <label className="space-y-1 text-sm text-slate-600">
@@ -1568,9 +1554,11 @@ export default function Materials() {
                     <input
                       data-testid="materials-create-single-requires-sample"
                       type="checkbox"
+                      aria-label="新增材料需要定样"
                       checked={singleForm.requires_sample_confirmation}
                       onChange={(event) => setSingleForm((current) => ({ ...current, requires_sample_confirmation: event.target.checked }))}
                     />
+                    需要定样
                   </label>
                   <label className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
                     <input
@@ -1582,7 +1570,7 @@ export default function Materials() {
                     需要送检
                   </label>
                   <div className="md:col-span-2 xl:col-span-3">
-                    <Button onClick={() => void handleCreateSingle()} disabled={saving} loading={saving} data-testid="materials-create-single-submit">
+                    <Button onClick={() => void handleCreateSingle()} disabled={saving || !singleForm.specialty_type.trim()} loading={saving} data-testid="materials-create-single-submit">
                       <Plus className="mr-2 h-4 w-4" />
                       新增材料
                     </Button>
@@ -1723,7 +1711,8 @@ export default function Materials() {
                                     ),
                                   )
                                 }
-                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5"
+                                className="w-full rounded-lg border border-slate-200 px-2 py-1.5 bg-white"
+                                placeholder="如：幕墙"
                               />
                             </TableCell>
                             <TableCell className="px-3 py-2" style={{ width: MATERIAL_BATCH_COLUMN_WIDTHS.unit }}>
@@ -1912,10 +1901,12 @@ export default function Materials() {
                                     <input
                                       data-testid={`material-inline-sample-confirmed-${material.id}`}
                                       type="checkbox"
+                                      aria-label={`确认${material.material_name}已完成定样`}
                                       checked={material.sample_confirmed}
                                       disabled={isReadOnly}
                                       onChange={(event) => void handleInlineUpdate(material.id, { sample_confirmed: event.target.checked })}
                                     />
+                                    已确认
                                   </label>
                                 ) : (
                                   <span
@@ -2075,35 +2066,39 @@ export default function Materials() {
         units={participantUnits}
         readOnly={isReadOnly}
         saving={saving}
-        aiLoading={aiLoading}
-        aiDurationEstimate={aiDurationEstimate}
+        arrivalSuggestionLoading={arrivalSuggestionLoading}
+        systemArrivalSuggestion={systemArrivalSuggestion}
         delayRiskInsight={delayRiskInsight}
-        aiPlan={detailAiPlan}
-        changeLogs={changeLogs}
-        changeLogLoading={changeLogLoading}
+        arrivalPlan={detailArrivalPlan}
         onOpenChange={(open) => {
           if (!open) {
             setDetailMaterialId(null)
-            setAiDurationEstimate(null)
+            setSystemArrivalSuggestion(null)
             setDelayRiskInsight(null)
-            setChangeLogs([])
           }
         }}
         onChange={(patch) => setDetailForm((current) => ({ ...current, ...patch }))}
         onSubmit={() => void handleSaveDetail()}
-        onLoadAiInsight={() => void handleLoadAiInsight()}
-        onApplyAiSuggestion={() => void handleApplyAiSuggestion()}
-        onRefreshChangeLogs={() => void (detailMaterial ? loadMaterialChangeLogs(detailMaterial.id) : Promise.resolve())}
+        onLoadArrivalInsight={() => void handleLoadArrivalInsight()}
+        onApplyArrivalSuggestion={() => void handleApplyArrivalSuggestion()}
       />
       <ConfirmActionDialog
         open={Boolean(pendingDeleteMaterial)}
         onOpenChange={(open) => {
-          if (!open) setPendingDeleteMaterial(null)
+          if (!open) {
+            setPendingDeleteMaterial(null)
+            setPendingDeleteRetention(null)
+            setRetentionDecisionToken('')
+          }
         }}
-        title="删除材料"
-        description={`确认删除“${pendingDeleteMaterial?.material_name ?? '该材料'}”？删除后将从材料清单移除，并写入变更日志。`}
-        confirmLabel="删除"
-        confirmTone="destructive"
+        title={retentionDecisionToken ? retentionDialogModel.title : '删除材料'}
+        description={
+          retentionDecisionToken
+            ? retentionDialogModel.description
+            : `确认删除“${pendingDeleteMaterial?.material_name ?? '该材料'}”？删除后将从材料清单移除，并记录本次操作。`
+        }
+        confirmLabel={retentionDecisionToken ? retentionDialogModel.confirmLabel : '删除'}
+        confirmTone={retentionDecisionToken ? retentionDialogModel.confirmTone : 'destructive'}
         testId="materials-delete-confirm-dialog"
         onConfirm={handleConfirmDeleteMaterial}
       />

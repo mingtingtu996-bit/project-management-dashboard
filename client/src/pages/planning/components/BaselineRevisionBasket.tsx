@@ -14,7 +14,7 @@ export function BaselineRevisionBasket({ items, onRemoveItem }: BaselineRevision
   return (
     <div data-testid="baseline-revision-basket" className="space-y-3">
       <div className="space-y-1">
-        <div className="text-sm font-semibold text-slate-900">修订篮</div>
+        <div className="text-sm font-semibold text-slate-900">已采纳建议</div>
       </div>
 
       <div className="space-y-3">
@@ -40,8 +40,8 @@ export function BaselineRevisionBasket({ items, onRemoveItem }: BaselineRevision
         ) : (
           <EmptyState
             variant="default"
-            title="修订篮为空"
-            description="从左侧候选项选择需要纳入本次基线修订的内容。"
+            title="未选择修订项"
+            description="可从系统建议中选择，也可以直接进入计划编辑。"
             className="rounded-2xl empty-state-frame border-slate-200 bg-slate-50 py-8"
           />
         )}

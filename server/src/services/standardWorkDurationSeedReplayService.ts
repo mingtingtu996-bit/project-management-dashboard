@@ -3,6 +3,7 @@ import {
   type AlgorithmSeedResolveContext,
 } from './algorithmSeedResolver.js'
 import type { AlgorithmSeedDiscoverySample } from './algorithmSeedCandidateDiscoveryService.js'
+import { inclusiveDurationDays } from '../utils/durationDays.js'
 
 export type StandardWorkDurationSeedReplayResolver = (
   text: string,
@@ -46,6 +47,20 @@ export interface StandardWorkDurationSeedReplayItem {
     | 'add_or_import_standard_work_duration_seed'
     | 'collect_more_samples'
   sampleIds: string[]
+  taskIds: string[]
+  observationStartedAt: string | null
+  observationEndedAt: string | null
+  observationWindowDays: number
+  automationQualityEvidence: StandardWorkDurationSeedAutomationQualityEvidence
+}
+
+export interface StandardWorkDurationSeedAutomationQualityEvidence {
+  qualityModel: 'numeric_holdout'
+  holdoutSampleCount: number
+  maeBefore: number | null
+  maeAfter: number | null
+  conflictRate: number | null
+  overcompensationRate: number | null
 }
 
 export interface StandardWorkDurationSeedReplayCalibrationQueueItem {
@@ -66,6 +81,11 @@ export interface StandardWorkDurationSeedReplayCalibrationQueueItem {
   selectedConditionCode: string | null
   seedConfidence: string | null
   sampleIds: string[]
+  taskIds: string[]
+  observationStartedAt: string | null
+  observationEndedAt: string | null
+  observationWindowDays: number
+  automationQualityEvidence: StandardWorkDurationSeedAutomationQualityEvidence
   promotionPolicy: 'review_required_before_seed_promotion'
   seedWritePolicy: 'never_write_seed_from_replay'
 }
@@ -189,6 +209,97 @@ function median(values: number[]) {
 
 function roundRatio(value: number) {
   return Number(value.toFixed(6))
+}
+
+function normalizeTimestamp(value: unknown) {
+  const parsed = new Date(normalizeText(value))
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : null
+}
+
+function replayLineage(group: ReplaySample[]) {
+  const timestamps = group
+    .map((item) => normalizeTimestamp(item.sample.completed_at))
+    .filter((value): value is string => Boolean(value))
+    .sort()
+  const observationStartedAt = timestamps[0] ?? null
+  const observationEndedAt = timestamps[timestamps.length - 1] ?? null
+  return {
+    taskIds: uniqueValues(group.map((item) => normalizeText(item.sample.task_id)).filter(Boolean)),
+    observationStartedAt,
+    observationEndedAt,
+    observationWindowDays: observationStartedAt && observationEndedAt
+      ? inclusiveDurationDays(observationStartedAt, observationEndedAt) ?? 0
+      : 0,
+  }
+}
+
+function numericHoldoutEvidence(
+  group: ReplaySample[],
+  seedP50Days: number | null,
+): StandardWorkDurationSeedAutomationQualityEvidence {
+  if (!seedP50Days) {
+    return {
+      qualityModel: 'numeric_holdout',
+      holdoutSampleCount: 0,
+      maeBefore: null,
+      maeAfter: null,
+      conflictRate: null,
+      overcompensationRate: null,
+    }
+  }
+  const ordered = [...group].sort((left, right) => {
+    const leftKey = `${normalizeTimestamp(left.sample.completed_at) ?? ''}:${normalizeText(left.sample.id)}`
+    const rightKey = `${normalizeTimestamp(right.sample.completed_at) ?? ''}:${normalizeText(right.sample.id)}`
+    return leftKey.localeCompare(rightKey)
+  })
+  const observations = ordered.flatMap((item, index) => {
+    const training = ordered
+      .filter((_, trainingIndex) => trainingIndex !== index)
+      .map((entry) => entry.actualDuration)
+    if (training.length < 3) return []
+    return [{
+      actualDays: item.actualDuration,
+      baselineDays: seedP50Days,
+      candidateDays: median(training),
+    }]
+  })
+  if (observations.length === 0) {
+    return {
+      qualityModel: 'numeric_holdout',
+      holdoutSampleCount: 0,
+      maeBefore: null,
+      maeAfter: null,
+      conflictRate: null,
+      overcompensationRate: null,
+    }
+  }
+  const maeBefore = observations.reduce(
+    (sum, item) => sum + Math.abs(item.baselineDays - item.actualDays),
+    0,
+  ) / observations.length
+  const maeAfter = observations.reduce(
+    (sum, item) => sum + Math.abs(item.candidateDays - item.actualDays),
+    0,
+  ) / observations.length
+  const conflictCount = observations.filter((item) => (
+    Math.abs(item.candidateDays - item.actualDays) > Math.abs(item.baselineDays - item.actualDays)
+  )).length
+  const overcompensationCount = observations.filter((item) => {
+    const before = item.baselineDays - item.actualDays
+    const after = item.candidateDays - item.actualDays
+    return before !== 0
+      && after !== 0
+      && Math.sign(before) !== Math.sign(after)
+      && Math.abs(after) >= Math.abs(before)
+  }).length
+  return {
+    qualityModel: 'numeric_holdout',
+    holdoutSampleCount: observations.length,
+    maeBefore: roundRatio(maeBefore),
+    maeAfter: roundRatio(maeAfter),
+    conflictRate: roundRatio(conflictCount / observations.length),
+    overcompensationRate: roundRatio(overcompensationCount / observations.length),
+  }
 }
 
 function uniqueValues<T extends string>(values: T[]): T[] {
@@ -367,6 +478,7 @@ async function buildReplayItem(
   const actualDurations = group.map((item) => item.actualDuration)
   const medianActualDays = median(actualDurations)
   const sampleIds = group.map((item) => normalizeText(item.sample.id)).filter(Boolean)
+  const lineage = replayLineage(group)
   if (group.length < options.minSamplesPerCode) {
     return {
       standardWorkCode: first.standardWorkCode,
@@ -383,6 +495,8 @@ async function buildReplayItem(
       replayStatus: 'insufficient_samples',
       recommendation: 'collect_more_samples',
       sampleIds,
+      ...lineage,
+      automationQualityEvidence: numericHoldoutEvidence(group, null),
     }
   }
 
@@ -407,6 +521,8 @@ async function buildReplayItem(
       replayStatus: 'unresolved_seed',
       recommendation: 'add_or_import_standard_work_duration_seed',
       sampleIds,
+      ...lineage,
+      automationQualityEvidence: numericHoldoutEvidence(group, null),
     }
   }
 
@@ -435,6 +551,8 @@ async function buildReplayItem(
     replayStatus,
     recommendation: replayStatus === 'trusted' ? 'keep_seed_p50' : 'review_p50_or_split_condition_band',
     sampleIds,
+    ...lineage,
+    automationQualityEvidence: numericHoldoutEvidence(group, seedP50Days),
   }
 }
 
@@ -457,6 +575,11 @@ function buildCalibrationQueueItem(
     selectedConditionCode: item.selectedConditionCode,
     seedConfidence: item.seedConfidence,
     sampleIds: item.sampleIds,
+    taskIds: item.taskIds,
+    observationStartedAt: item.observationStartedAt,
+    observationEndedAt: item.observationEndedAt,
+    observationWindowDays: item.observationWindowDays,
+    automationQualityEvidence: item.automationQualityEvidence,
     promotionPolicy: 'review_required_before_seed_promotion',
     seedWritePolicy: 'never_write_seed_from_replay',
   }

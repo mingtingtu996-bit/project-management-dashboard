@@ -2,7 +2,38 @@
  * 密码哈希和验证工具
  */
 
+import { randomInt } from 'node:crypto';
+
 import bcrypt from 'bcryptjs';
+
+const TEMPORARY_PASSWORD_GROUPS = [
+  'ABCDEFGHJKLMNPQRSTUVWXYZ',
+  'abcdefghijkmnopqrstuvwxyz',
+  '23456789',
+  '!@#$%^&*_-+=',
+] as const;
+
+function secureShuffle(value: string[]): string[] {
+  for (let index = value.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomInt(index + 1);
+    [value[index], value[swapIndex]] = [value[swapIndex], value[index]];
+  }
+  return value;
+}
+
+export function generateTemporaryPassword(length = 16): string {
+  if (!Number.isInteger(length) || length < TEMPORARY_PASSWORD_GROUPS.length) {
+    throw new RangeError(`Temporary password length must be at least ${TEMPORARY_PASSWORD_GROUPS.length}`);
+  }
+
+  const allCharacters = TEMPORARY_PASSWORD_GROUPS.join('');
+  const characters = TEMPORARY_PASSWORD_GROUPS.map((group) => group[randomInt(group.length)]);
+  while (characters.length < length) {
+    characters.push(allCharacters[randomInt(allCharacters.length)]);
+  }
+
+  return secureShuffle(characters).join('');
+}
 
 /**
  * 哈希密码

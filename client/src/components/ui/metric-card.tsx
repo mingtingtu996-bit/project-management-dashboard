@@ -2,12 +2,21 @@ import type { CSSProperties, KeyboardEvent, ReactNode } from 'react'
 
 import { Sparkline } from '@/components/Sparkline'
 import { Card, CardContent } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useCountUp } from '@/hooks/useCountUp'
 import { CHART_NEUTRAL, CHART_SERIES } from '@/lib/chartPalette'
 import { formatMetricValue } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 
 type MetricTone = 'primary' | 'success' | 'warning' | 'danger' | 'info' | 'slate'
+
+export type MetricAvailability =
+  | 'ready'
+  | 'insufficient_data'
+  | 'not_applicable'
+  | 'data_pending'
+  | 'source_unavailable'
+  | 'low_confidence'
 
 const toneClassMap: Record<MetricTone, { accent: string; icon: string; sparkline: string }> = {
   primary: {
@@ -51,12 +60,23 @@ export interface MetricCardProps {
   icon?: ReactNode
   unit?: string
   tone?: MetricTone
+  availability?: MetricAvailability
   sparkline?: Array<number | { value: number }>
   testId?: string
   className?: string
   style?: CSSProperties
   onClick?: () => void
   density?: 'regular' | 'compact'
+  animateValue?: boolean
+}
+
+const AVAILABILITY_LABELS: Record<MetricAvailability, string> = {
+  ready: '',
+  insufficient_data: '数据不足',
+  not_applicable: '不适用',
+  data_pending: '数据待完善',
+  source_unavailable: '数据源不可用',
+  low_confidence: '置信度低',
 }
 
 function normalizeSparkline(points?: Array<number | { value: number }>) {
@@ -79,21 +99,35 @@ export function MetricCard({
   icon,
   unit = '',
   tone = 'primary',
+  availability = 'ready',
   sparkline,
   testId,
   className,
   style,
   onClick,
   density = 'regular',
+  animateValue = true,
 }: MetricCardProps) {
   const isCompact = density === 'compact'
   const toneClass = toneClassMap[tone]
   const sparklineData = normalizeSparkline(sparkline)
   const sparklineColor = isFlatSparkline(sparklineData) ? CHART_NEUTRAL.border : toneClass.sparkline
   const numericValue = typeof value === 'number' && Number.isFinite(value) ? value : null
-  const countValue = useCountUp(numericValue ?? 0, { duration: 900 })
-  const displayValue = numericValue !== null ? countValue : value
-  const isZero = numericValue === 0
+  const countValue = useCountUp(numericValue ?? 0, { duration: 900, enabled: animateValue })
+  const metricValue = animateValue ? countValue : numericValue
+
+  const isUnavailable = availability === 'insufficient_data' || availability === 'source_unavailable' || availability === 'not_applicable'
+  const isPending = availability === 'data_pending'
+  const isLowConfidence = availability === 'low_confidence'
+
+  const displayValue = isUnavailable
+    ? '—'
+    : isPending
+      ? null
+      : numericValue !== null
+        ? metricValue
+        : value
+  const isZero = numericValue === 0 && !isUnavailable && !isPending
   const interactiveProps = onClick
     ? {
         role: 'button',
@@ -135,10 +169,26 @@ export function MetricCard({
 
         <div className="min-w-0">
           <div>
-            <span className={cn('metric-value-2xl num-display font-semibold leading-none text-slate-900', isZero && 'text-slate-400')}>
-              {formatMetricValue(displayValue, unit)}
-            </span>
+            {isPending ? (
+              <div className="h-7 w-20 animate-pulse rounded-md bg-slate-100" />
+            ) : isLowConfidence ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className={cn('metric-value-2xl num-display font-semibold leading-none text-slate-900 decoration-slate-300 decoration-dashed underline underline-offset-4', isZero && 'text-slate-600')}>
+                    {formatMetricValue(displayValue, unit)}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>{AVAILABILITY_LABELS.low_confidence}</TooltipContent>
+              </Tooltip>
+            ) : (
+              <span className={cn('metric-value-2xl num-display font-semibold leading-none text-slate-900', (isZero || isUnavailable) && 'text-slate-600')}>
+                {isUnavailable ? '—' : formatMetricValue(displayValue, unit)}
+              </span>
+            )}
           </div>
+          {isUnavailable ? (
+            <p className="meta-muted mt-1 text-xs">{AVAILABILITY_LABELS[availability]}</p>
+          ) : null}
         </div>
 
         {(trend || hint || sparklineData.length > 1) ? (

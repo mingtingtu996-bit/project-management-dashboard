@@ -40,6 +40,7 @@ export type UpdateOperation<T> = Partial<Omit<T, 'id' | 'created_at'>> & { versi
 export const ErrorCodes = {
   // 通用错误
   INTERNAL_ERROR: 'INTERNAL_ERROR',
+  SERVICE_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
   NOT_FOUND: 'NOT_FOUND',
   VALIDATION_ERROR: 'VALIDATION_ERROR',
   UNAUTHORIZED: 'UNAUTHORIZED',

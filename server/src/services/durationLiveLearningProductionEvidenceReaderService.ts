@@ -83,11 +83,7 @@ const FORECAST_SCOPE_EXCEPTION_ASSET_KEYS = new Set<DurationLiveLearningAssetKey
   'forecast_residual_overlay',
   'forecast_confidence_weight',
 ])
-async function defaultQueryExec<T = Record<string, unknown>>(
-  sql: string,
-  params: unknown[] = [],
-): Promise<T[]> {
-  const result = await rawQuery(sql, params)
+function normalizeQueryRows<T = Record<string, unknown>>(result: unknown): T[] {
   if (Array.isArray(result)) return result as T[]
   const rows = (result as { rows?: unknown }).rows
   return Array.isArray(rows) ? rows as T[] : []
@@ -382,57 +378,21 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
     `
   }
 
-  if (sourceTable === 'algorithm_seed_versions') {
+  if (sourceTable === 'duration_learning_runtime_publications') {
     return `
       select *
-      from public.algorithm_seed_versions
-      where seed_type = 'standard_work_duration'
-        and status = 'active'
-        and is_current = true
-        and published_at is not null
+      from public.duration_learning_runtime_publications
+      where publication_stage in ('canary', 'stable', 'rolled_back')
       order by published_at desc, updated_at desc
       limit $1
     `
   }
 
-  if (sourceTable === 'wbs_template_runtime_publications') {
+  if (sourceTable === 'duration_learning_runtime_consumptions') {
     return `
       select *
-      from public.wbs_template_runtime_publications
-      where runtime_publication_status = 'runtime_published'
-      order by published_at desc
-      limit $1
-    `
-  }
-
-  if (sourceTable === 'wbs_template_runtime_events') {
-    return `
-      select *
-      from public.wbs_template_runtime_events
-      where event_type in ('impact_monitoring', 'rollback_execution')
-        and event_status in ('monitoring_passed', 'rollback_executed')
-      order by executed_at desc
-      limit $1
-    `
-  }
-
-  if (sourceTable === 'construction_dependency_rule_runtime_publications') {
-    return `
-      select *
-      from public.construction_dependency_rule_runtime_publications
-      where runtime_publication_status = 'runtime_published'
-      order by published_at desc
-      limit $1
-    `
-  }
-
-  if (sourceTable === 'construction_dependency_rule_runtime_events') {
-    return `
-      select *
-      from public.construction_dependency_rule_runtime_events
-      where event_type in ('impact_monitoring', 'rollback_execution')
-        and event_status in ('monitoring_passed', 'rollback_executed')
-      order by executed_at desc
+      from public.duration_learning_runtime_consumptions
+      order by consumed_at desc, created_at desc
       limit $1
     `
   }
@@ -470,10 +430,125 @@ function queryForSourceTable(sourceTable: DurationLiveLearningProductionEvidence
   `
 }
 
+// workspace-isolation-system-job-approved: service-role production evidence audit intentionally samples canonical rows across tenants and performs no writes.
+async function queryCanonicalSourceTableRows<T = Record<string, unknown>>(
+  sourceTable: DurationLiveLearningProductionEvidenceSourceTable,
+  maxRowsPerSourceTable: number,
+): Promise<T[]> {
+  if (sourceTable === 'duration_experience_samples') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.duration_experience_samples
+      where sample_status = 'active'
+        and included_in_benchmark = true
+        and actual_duration is not null
+        and (
+          (learning_scope = 'project' and learning_scope_source = 'task_completion_writer')
+          or (learning_scope = 'company' and learning_scope_source = 'company_aggregate_evidence_job')
+          or (learning_scope = 'industry' and learning_scope_source = 'industry_shared_baseline_job')
+          or (learning_scope = 'global' and learning_scope_source = 'global_shared_baseline_job')
+        )
+      order by completed_at desc nulls last, created_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'duration_plan_network_outcomes') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.duration_plan_network_outcomes
+      where outcome_status in ('accepted', 'weak')
+        and writes_runtime_directly = false
+        and writes_fact_directly = false
+        and (
+          (learning_scope = 'project' and learning_scope_source = 'project_business_outcome_writer')
+          or (learning_scope = 'company' and learning_scope_source = 'plan_network_company_aggregate_job')
+          or (learning_scope = 'industry' and learning_scope_source = 'plan_network_industry_baseline_job')
+          or (learning_scope = 'global' and learning_scope_source = 'plan_network_global_baseline_job')
+        )
+      order by observed_at desc nulls last, created_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'algorithm_learnable_parameter_runtime_publications') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.algorithm_learnable_parameter_runtime_publications
+      where publication_status in ('published', 'canary')
+        and writes_seed_runtime_directly = false
+        and target_runtime_table = 'algorithm_learnable_parameter_runtime_publications'
+      order by published_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'algorithm_learnable_parameter_release_events') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.algorithm_learnable_parameter_release_events
+      where event_type in ('impact_monitoring', 'rollback_execution')
+        and event_status in ('monitoring_passed', 'rollback_executed')
+      order by executed_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'duration_learning_runtime_publications') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.duration_learning_runtime_publications
+      where publication_stage in ('canary', 'stable', 'rolled_back')
+      order by published_at desc, updated_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'duration_learning_runtime_consumptions') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.duration_learning_runtime_consumptions
+      order by consumed_at desc, created_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'duration_algorithm_accuracy_events') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.duration_algorithm_accuracy_events
+      where absolute_error_days is not null
+      order by backtested_at desc nulls last, predicted_at desc nulls last
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  if (sourceTable === 'runtime_consumer_runtime_calls') {
+    return normalizeQueryRows<T>(await rawQuery(`
+      select *
+      from public.runtime_consumer_runtime_calls
+      where call_status = 'called'
+        and writes_runtime_directly = false
+        and writes_fact_directly = false
+      order by called_at desc
+      limit $1
+    `, [maxRowsPerSourceTable]))
+  }
+
+  return normalizeQueryRows<T>(await rawQuery(`
+    select *
+    from public.runtime_consumer_observations
+    where observation_status = 'observed'
+      and writes_runtime_directly = false
+      and writes_fact_directly = false
+    order by observed_at desc
+    limit $1
+  `, [maxRowsPerSourceTable]))
+}
+
 export async function loadDurationLiveLearningProductionEvidenceSourceRows(
   input: DurationLiveLearningProductionEvidenceSourceQueryInput = {},
 ): Promise<DurationLiveLearningProductionEvidenceSourceQuery> {
-  const queryExec = input.queryExec ?? defaultQueryExec
   const maxRowsPerSourceTable = normalizePositiveInteger(
     input.maxRowsPerSourceTable,
     DEFAULT_MAX_ROWS_PER_SOURCE_TABLE,
@@ -482,9 +557,9 @@ export async function loadDurationLiveLearningProductionEvidenceSourceRows(
   const sourceRows: DurationLiveLearningProductionEvidenceSourceRow[] = []
 
   for (const sourceTable of sourceTables) {
-    const rows = await queryExec<Record<string, unknown>>(queryForSourceTable(sourceTable), [
-      maxRowsPerSourceTable,
-    ])
+    const rows = input.queryExec
+      ? await input.queryExec<Record<string, unknown>>(queryForSourceTable(sourceTable), [maxRowsPerSourceTable])
+      : await queryCanonicalSourceTableRows<Record<string, unknown>>(sourceTable, maxRowsPerSourceTable)
     for (const row of rows) sourceRows.push({ sourceTable, row })
   }
 

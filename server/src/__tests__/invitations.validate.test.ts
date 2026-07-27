@@ -7,7 +7,7 @@ const state = vi.hoisted(() => {
     id: 'invite-1',
     project_id: 'project-1',
     invitation_code: 'ABC12345',
-    permission_level: 'viewer',
+    permission_level: 'editor',
     expires_at: null,
     is_revoked: false,
     used_count: 1,

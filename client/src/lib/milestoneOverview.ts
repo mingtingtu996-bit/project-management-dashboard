@@ -1,5 +1,7 @@
 import type { Task } from './supabase'
 import { isCompletedTask } from './taskBusinessStatus'
+import { daysUntilLocalDate } from './dateDistance'
+import { normalizeDurationMetricDto, type DurationMetricDto } from './durationMetric'
 
 export type MilestoneLifecycleStatus = 'completed' | 'overdue' | 'soon' | 'upcoming'
 
@@ -10,13 +12,21 @@ export interface MilestoneSummaryStats {
   highRiskCount: number
 }
 
-export interface MilestoneHealthSummary {
-  status: 'normal' | 'needs_attention' | 'abnormal'
-  needsAttentionCount: number
-  mappingPendingCount: number
-  mergedCount: number
-  excessiveDeviationCount: number
-  incompleteDataCount: number
+export interface MilestoneKpiComparisonMetric {
+  current: number
+  previous: number | null
+  delta: number | null
+  periodLabel: '较上月'
+  status: 'ready' | 'insufficient_history'
+}
+
+export interface MilestoneKpiComparisons {
+  monthly: {
+    shifted: MilestoneKpiComparisonMetric
+    baselineOnTime: MilestoneKpiComparisonMetric
+    dueSoon30d: MilestoneKpiComparisonMetric
+    highRisk: MilestoneKpiComparisonMetric
+  }
 }
 
 export interface MilestoneOverviewItem {
@@ -27,10 +37,17 @@ export interface MilestoneOverviewItem {
   planned_date: string | null
   current_planned_date: string | null
   actual_date: string | null
+  planDateShift?: DurationMetricDto | null
+  futureDueWindow?: DurationMetricDto | null
+  actualOverdue?: DurationMetricDto | null
+  actualScheduleVariance?: DurationMetricDto | null
   progress: number
   status: MilestoneLifecycleStatus
   statusLabel: string
   updatedAt: string
+  milestone_level?: number | null
+  wbs_level?: number | null
+  wbs_code?: string | null
   parent_id?: string | null
   mapping_pending?: boolean
   merged_into?: string | null
@@ -51,7 +68,7 @@ export interface MilestoneOverview {
   items: MilestoneOverviewItem[]
   stats: MilestoneOverviewStats
   summaryStats?: MilestoneSummaryStats
-  healthSummary?: MilestoneHealthSummary
+  kpiComparisons?: MilestoneKpiComparisons
 }
 
 function pickTargetDate(task: Pick<Task, 'planned_end_date' | 'end_date'>): string | null {
@@ -80,10 +97,8 @@ export function getMilestoneLifecycleStatus(
   const targetDate = pickTargetDate(task)
   if (!targetDate) return 'upcoming'
 
-  const targetTime = new Date(targetDate).getTime()
-  if (Number.isNaN(targetTime)) return 'upcoming'
-
-  const daysUntil = Math.ceil((targetTime - now) / 86400000)
+  const daysUntil = daysUntilLocalDate(targetDate, new Date(now))
+  if (daysUntil == null) return 'upcoming'
   if (daysUntil < 0) return 'overdue'
   if (daysUntil <= 7) return 'soon'
   return 'upcoming'
@@ -111,19 +126,6 @@ function normalizeSummaryStats(value?: Partial<MilestoneSummaryStats> | null): M
   }
 }
 
-function normalizeHealthSummary(value?: Partial<MilestoneHealthSummary> | null): MilestoneHealthSummary | undefined {
-  if (!value) return undefined
-
-  return {
-    status: value.status ?? 'normal',
-    needsAttentionCount: Number(value.needsAttentionCount ?? 0),
-    mappingPendingCount: Number(value.mappingPendingCount ?? 0),
-    mergedCount: Number(value.mergedCount ?? 0),
-    excessiveDeviationCount: Number(value.excessiveDeviationCount ?? 0),
-    incompleteDataCount: Number(value.incompleteDataCount ?? 0),
-  }
-}
-
 export function createEmptyMilestoneOverview(): MilestoneOverview {
   return {
     items: [],
@@ -142,10 +144,17 @@ export function normalizeMilestoneOverview(value?: Partial<MilestoneOverview> | 
       planned_date: item.planned_date ?? null,
       current_planned_date: item.current_planned_date ?? null,
       actual_date: item.actual_date ?? null,
+      planDateShift: normalizeDurationMetricDto(item.planDateShift),
+      futureDueWindow: normalizeDurationMetricDto(item.futureDueWindow),
+      actualOverdue: normalizeDurationMetricDto(item.actualOverdue),
+      actualScheduleVariance: normalizeDurationMetricDto(item.actualScheduleVariance),
       progress: Number(item.progress ?? 0),
       status: item.status ?? 'upcoming',
       statusLabel: item.statusLabel ?? getStatusLabel(item.status ?? 'upcoming'),
       updatedAt: String(item.updatedAt ?? '').trim(),
+      milestone_level: item.milestone_level ?? null,
+      wbs_level: item.wbs_level ?? null,
+      wbs_code: item.wbs_code ?? null,
       parent_id: item.parent_id ?? null,
       mapping_pending: Boolean(item.mapping_pending),
       merged_into: item.merged_into ?? null,
@@ -158,6 +167,6 @@ export function normalizeMilestoneOverview(value?: Partial<MilestoneOverview> | 
     items,
     stats: normalizeMilestoneStats(value?.stats),
     summaryStats: normalizeSummaryStats(value?.summaryStats),
-    healthSummary: normalizeHealthSummary(value?.healthSummary),
+    kpiComparisons: value?.kpiComparisons,
   }
 }

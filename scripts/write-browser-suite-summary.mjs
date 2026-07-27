@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises'
+﻿import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -7,7 +7,7 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const manifestPath = process.argv[2]
   ? join(repoRoot, process.argv[2])
-  : join(repoRoot, 'artifacts', 'browser-checks', 'suite-manifest.json')
+  : join(repoRoot, 'project-testing', 'artifacts', 'browser-checks', 'suite-manifest.json')
 
 function statusIcon(status) {
   if (status === 'passed') return 'PASS'

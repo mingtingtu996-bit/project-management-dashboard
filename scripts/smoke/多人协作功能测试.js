@@ -102,7 +102,7 @@ collaborationScenarios.forEach(scenario => {
 });
 
 console.log('\n🎉 测试完成！\n');
-console.log('💡 建议:');
+console.log('? :');
 console.log('   1. 集成在线状态功能到ProjectDetail页面');
 console.log('   2. 完善项目成员加入流程（通过邀请码）');
 console.log('   3. 添加协作冲突解决机制');

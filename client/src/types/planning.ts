@@ -37,7 +37,7 @@ export interface PlanningTransitionContext {
 export interface PlanningVersionBase {
   id: string
   project_id: string
-  version: number
+  version: number | null
   status: PlanningStatus
   title: string
   description?: string | null
@@ -53,12 +53,29 @@ export interface BaselineVersion extends PlanningVersionBase {
   source_version_label?: string | null
   effective_from?: string | null
   effective_to?: string | null
+  business_version_label?: string
+  is_current_execution?: boolean
+  summary?: {
+    total_items: number
+    structure_items: number
+    work_items: number
+    top_level_items: number
+    division_items?: number
+    subdivision_items?: number
+    construction_task_items?: number
+    milestone_items: number
+    critical_path_items: number
+    planned_start_date: string | null
+    planned_end_date: string | null
+    duration_days: number | null
+  }
   revision_pool_count?: number
   observation_pool_count?: number
   modified_item_count?: number
   milestone_change_count?: number
   critical_path_change_count?: number
   mapping_affected_count?: number
+  governance_metadata?: Record<string, unknown> | null
 }
 
 export interface BaselineItem {
@@ -80,6 +97,21 @@ export interface BaselineItem {
   is_baseline_critical?: boolean
   mapping_status?: 'mapped' | 'pending' | 'missing' | 'merged'
   notes?: string | null
+  engineering_category_id?: string | null
+  engineering_category_type?: string | null
+  engineering_category_name?: string | null
+  wbs_node_type?: string | null
+  wbs_path?: string | null
+  is_wbs_summary?: boolean | null
+  is_executable?: boolean | null
+  standard_work_code?: string | null
+  standard_work_name?: string | null
+  source_chip?: 'rolling_in' | 'baseline' | 'site' | 'new' | null
+  source_reason?: string | null
+  missing_process_in_baseline?: boolean | null
+  manual_override_fields?: Record<string, boolean> | null
+  generation_metadata?: Record<string, unknown> | null
+  last_generated_at?: string | null
 }
 
 export interface MonthlyPlanVersion extends PlanningVersionBase {
@@ -87,6 +119,11 @@ export interface MonthlyPlanVersion extends PlanningVersionBase {
   baseline_version_id?: string | null
   source_version_id?: string | null
   source_version_label?: string | null
+  source_mode?: 'baseline' | 'schedule' | 'mixed' | 'manual' | 'imported' | null
+  temporary_without_baseline?: boolean | null
+  generation_cutoff_at?: string | null
+  confirmed_snapshot_at?: string | null
+  governance_metadata?: Record<string, unknown> | null
   auto_switched?: boolean | null
   closeout_at?: string | null
   carryover_item_count?: number
@@ -113,6 +150,21 @@ export interface MonthlyPlanItem {
   is_critical?: boolean
   commitment_status?: 'planned' | 'carried_over' | 'completed' | 'cancelled'
   notes?: string | null
+  engineering_category_id?: string | null
+  engineering_category_type?: string | null
+  engineering_category_name?: string | null
+  wbs_node_type?: string | null
+  wbs_path?: string | null
+  is_wbs_summary?: boolean | null
+  is_executable?: boolean | null
+  standard_work_code?: string | null
+  standard_work_name?: string | null
+  source_chip?: 'rolling_in' | 'baseline' | 'site' | 'new' | null
+  source_reason?: string | null
+  missing_process_in_baseline?: boolean | null
+  manual_override_fields?: Record<string, boolean> | null
+  generation_metadata?: Record<string, unknown> | null
+  last_generated_at?: string | null
 }
 
 export interface CarryoverItem {
@@ -156,7 +208,7 @@ export interface RevisionPoolCandidate {
 }
 
 export interface BaselineConfirmRequest {
-  version: number
+  version?: number | null
 }
 
 export interface BaselineConfirmResponse {

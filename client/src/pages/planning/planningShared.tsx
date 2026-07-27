@@ -1,9 +1,12 @@
 ﻿import type { NavigateFunction } from 'react-router-dom'
 
 import { Badge } from '@/components/ui/badge'
+import { MonthlySourceChip, type MonthlySourceMode } from '@/components/planning/MonthlySourceChip'
 import type { PlanningTreeRow } from '@/components/planning/PlanningTreeView'
 import { ApiClientError, getApiErrorMessage } from '@/lib/apiClient'
 import { safeJsonParse } from '@/lib/browserStorage'
+import { inclusiveDurationDays } from '@/lib/durationDays'
+import { getWbsNodeTypeLabel } from '@/lib/wbsLabels'
 import type {
   BaselineItem,
   BaselineVersion,
@@ -13,6 +16,7 @@ import type {
   PlanningDraftLockRecord,
 } from '@/types/planning'
 import type { Task } from '@/pages/GanttViewTypes'
+import type { TaskDurationForecast } from '@/services/durationSuggestionsApi'
 
 export const PLANNING_PAGE_TABS = [
   { key: 'baseline', label: '项目基线' },
@@ -30,7 +34,7 @@ export type PlanningGovernanceAlert = {
     | 'anomaly'
     | 'closeout_reminder'
     | 'closeout_escalation'
-    | 'closeout_unlock'
+    | 'closeout_owner_attention'
     | 'reorder_reminder'
     | 'ad_hoc_cross_month_reminder'
   severity: 'info' | 'warning' | 'critical'
@@ -131,10 +135,10 @@ interface BuildMonthlyPlanRowsOptions {
   readOnly: boolean
   tasks: Task[]
   baselineItems: BaselineItem[]
-  conditionTaskIds?: Set<string>
-  obstacleTaskIds?: Set<string>
-  delayedTaskIds?: Set<string>
-  draftSourceMode?: 'baseline' | 'schedule'
+  projectId?: string | null
+  draftSourceMode?: MonthlyPlanVersion['source_mode']
+  showDurationSuggestion?: boolean
+  durationForecastByTaskId?: Record<string, TaskDurationForecast>
 }
 
 interface ApiTaskLite extends Task {
@@ -171,6 +175,11 @@ export function formatDateRange(start?: string | null, end?: string | null) {
   return startLabel ?? endLabel ?? null
 }
 
+export function formatDurationDays(start?: string | null, end?: string | null) {
+  const duration = inclusiveDurationDays(start, end)
+  return duration == null ? undefined : `${duration}天`
+}
+
 export function formatMonthLabel(month: string) {
   const date = new Date(`${month}-01T00:00:00`)
   if (Number.isNaN(date.getTime())) return month
@@ -197,7 +206,7 @@ export function getFriendlyGovernanceErrorMessage(error: unknown): string {
   const rawMessage = getApiErrorMessage(error, '治理快照暂时不可用，请稍后重试。').trim()
 
   if (/change_logs/i.test(rawMessage)) {
-    return '治理快照暂时缺少变更记录数据源，系统已按空集降级；可先继续编制计划，并在补齐变更记录后重新校核。'
+    return '治理快照暂时缺少审计留痕数据源，系统已按空集降级；可先继续编制计划，并在补齐审计留痕后重新校核。'
   }
 
   const firstLine = rawMessage.split('\n')[0]?.trim()
@@ -220,7 +229,7 @@ export function extractApiErrorCode(error: unknown) {
 }
 
 export function formatCountdown(totalSeconds: number | null) {
-  if (totalSeconds === null) return '未持有锁'
+  if (totalSeconds === null) return '待同步'
   const safeSeconds = Math.max(0, Math.floor(totalSeconds))
   const minutes = Math.floor(safeSeconds / 60)
   const seconds = safeSeconds % 60
@@ -232,7 +241,7 @@ export function getPlanningStatusLabel(status: PlanningStatus) {
   if (status === 'confirmed') return '已确认'
   if (status === 'closed') return '已关闭'
   if (status === 'revising') return '修订中'
-  if (status === 'pending_realign') return '待编辑模式'
+  if (status === 'pending_realign') return '计划需要重新校准'
   if (status === 'archived') return '已归档'
   return '待重新校核'
 }
@@ -242,7 +251,9 @@ export function getBaselineStatusLabel(status: BaselineVersion['status']) {
 }
 
 export function getMonthlyPlanStatusLabel(status: MonthlyPlanVersion['status']) {
-  if (status === 'closed') return '已关账'
+  if (status === 'draft') return '未确认'
+  if (status === 'pending_realign') return '需复核'
+  if (status === 'closed') return '已归档'
   return getPlanningStatusLabel(status)
 }
 
@@ -256,12 +267,12 @@ export function getMonthlyCommitmentLabel(status?: MonthlyPlanItem['commitment_s
 export function sortMonthlyPlanVersions(versions: MonthlyPlanVersion[]) {
   return [...versions].sort((left, right) => {
     if (left.month !== right.month) return right.month.localeCompare(left.month)
-    return right.version - left.version
+    return Number(right.version ?? 0) - Number(left.version ?? 0)
   })
 }
 
 export function sortBaselineVersions(versions: BaselineVersion[]) {
-  return [...versions].sort((left, right) => right.version - left.version)
+  return [...versions].sort((left, right) => Number(right.version ?? 0) - Number(left.version ?? 0))
 }
 
 export function mapBaselineItemsToMonthlyItems(detail: BaselineDetail): MonthlyPlanPayloadItem[] {
@@ -281,6 +292,15 @@ export function mapBaselineItemsToMonthlyItems(detail: BaselineDetail): MonthlyP
       is_critical: Boolean(item.is_critical),
       commitment_status: 'planned',
       notes: item.notes ?? null,
+      engineering_category_id: item.engineering_category_id ?? null,
+      engineering_category_type: item.engineering_category_type ?? null,
+      engineering_category_name: item.engineering_category_name ?? null,
+      wbs_node_type: item.wbs_node_type ?? null,
+      wbs_path: item.wbs_path ?? null,
+      is_wbs_summary: item.is_wbs_summary ?? null,
+      is_executable: item.is_executable ?? null,
+      standard_work_code: item.standard_work_code ?? null,
+      standard_work_name: item.standard_work_name ?? null,
     }))
 }
 
@@ -298,8 +318,8 @@ export function mapTasksToMonthlyItems(tasks: ApiTaskLite[]): MonthlyPlanPayload
       const leftOrder = Number(left.sort_order ?? 0)
       const rightOrder = Number(right.sort_order ?? 0)
       if (leftOrder !== rightOrder) return leftOrder - rightOrder
-      return String(left.wbs_code ?? left.title ?? left.name ?? '').localeCompare(
-        String(right.wbs_code ?? right.title ?? right.name ?? ''),
+      return String(left.wbs_code ?? left.title ?? '').localeCompare(
+        String(right.wbs_code ?? right.title ?? ''),
         'zh-CN',
       )
     })
@@ -307,16 +327,25 @@ export function mapTasksToMonthlyItems(tasks: ApiTaskLite[]): MonthlyPlanPayload
       baseline_item_id: null,
       carryover_from_item_id: null,
       source_task_id: task.id,
-      title: task.title ?? task.name ?? `月度计划条目 ${index + 1}`,
+      title: task.title ?? `月度计划条目 ${index + 1}`,
       planned_start_date: normalizePlanningDate(task.planned_start_date),
       planned_end_date: normalizePlanningDate(task.planned_end_date),
       target_progress: normalizePlanningProgress(task.progress),
       current_progress: normalizePlanningProgress(task.progress),
       sort_order: Number(task.sort_order ?? index),
       is_milestone: Boolean(task.is_milestone),
-      is_critical: Boolean(task.is_critical),
+      is_critical: false,
       commitment_status: task.status === '已完成' || task.progress === 100 ? 'completed' : 'planned',
       notes: task.description ?? null,
+      engineering_category_id: task.engineering_category_id ?? null,
+      engineering_category_type: task.engineering_category_type ?? null,
+      engineering_category_name: task.engineering_category_name ?? null,
+      wbs_node_type: task.wbs_node_type ?? null,
+      wbs_path: task.wbs_path ?? null,
+      is_wbs_summary: task.is_wbs_summary ?? null,
+      is_executable: task.is_executable ?? null,
+      standard_work_code: task.standard_work_code ?? null,
+      standard_work_name: task.standard_work_name ?? null,
     }))
 }
 
@@ -394,46 +423,79 @@ function buildChildCountMap(plan: MonthlyPlanDetail, tasks: Task[], baselineItem
   return childCount
 }
 
+// v1.4.7.3 §12.4: enum aligned with spec — rolling_in/baseline/site/new
+function resolveMonthlyRowSourceMode(item: MonthlyPlanItem, planSourceMode?: MonthlyPlanVersion['source_mode']): MonthlySourceMode {
+  if (item.source_chip) return item.source_chip as MonthlySourceMode
+  if (item.commitment_status === 'carried_over' || item.carryover_from_item_id) return 'rolling_in'
+  if (item.baseline_item_id) return 'baseline'
+  if (item.source_task_id) return 'site'
+  if (planSourceMode === 'baseline') return 'baseline'
+  if (planSourceMode === 'schedule') return 'site'
+  return 'new'
+}
+
+function getMonthlyRowSourceReason(
+  item: MonthlyPlanItem,
+  sourceMode: MonthlySourceMode,
+  plan: MonthlyPlanDetail,
+) {
+  if (sourceMode === 'rolling_in') return '上月未完成项滚入本月'
+  if (sourceMode === 'baseline') return `来源：${plan.source_version_label ?? '项目基线'}`
+  if (sourceMode === 'site') {
+    return plan.temporary_without_baseline
+      ? '当前任务列表生成，项目暂未形成可用基线'
+      : '当前执行任务排期进入本月计划'
+  }
+  if (plan.source_mode === 'imported') return '外部导入后进入本月计划'
+  return item.source_task_id ? '现场任务补充进入本月计划' : '手动新增或编辑保存的本月计划项'
+}
+
 export function buildMonthlyPlanRows({
   plan,
   selectedItemIds,
   readOnly,
   tasks,
   baselineItems,
-  conditionTaskIds = new Set<string>(),
-  obstacleTaskIds = new Set<string>(),
-  delayedTaskIds = new Set<string>(),
+  projectId,
   draftSourceMode = 'baseline',
+  showDurationSuggestion = false,
+  durationForecastByTaskId = {},
 }: BuildMonthlyPlanRowsOptions): PlanningTreeRow[] {
   const resolveBaselineDepth = getBaselineDepthResolver(baselineItems)
   const resolveTaskDepth = getTaskDepthResolver(tasks)
+  const taskById = new Map(tasks.map((task) => [task.id, task]))
   const childCount = buildChildCountMap(plan, tasks, baselineItems)
+  const planSourceMode = plan.source_mode ?? draftSourceMode ?? 'baseline'
 
   return [...plan.items]
     .sort((left, right) => left.sort_order - right.sort_order)
     .map((item) => {
       const baselineDepth = item.baseline_item_id ? resolveBaselineDepth(item.baseline_item_id) : null
       const taskDepth = item.source_task_id ? resolveTaskDepth(item.source_task_id) : null
+      const sourceTask = item.source_task_id ? taskById.get(item.source_task_id) : null
+      const engineeringCategoryType = item.engineering_category_type ?? sourceTask?.engineering_category_type ?? null
+      const wbsNodeType = item.wbs_node_type ?? sourceTask?.wbs_node_type ?? engineeringCategoryType
+      const isExecutable = item.is_executable ?? sourceTask?.is_executable ?? null
+      const isWbsSummary = item.is_wbs_summary ?? sourceTask?.is_wbs_summary ?? null
       const depth = Math.max(1, Math.min(5, baselineDepth ?? taskDepth ?? (item.is_milestone ? 5 : 3)))
       const hasChildren = (childCount.get(item.id) ?? 0) > 0
+      const rowKind = item.is_milestone
+        ? 'milestone'
+        : hasChildren || isWbsSummary || isExecutable === false
+          ? 'structure'
+          : 'leaf'
       const progressLabel =
         typeof item.current_progress === 'number' && typeof item.target_progress === 'number'
           ? `当前 ${item.current_progress}% / 目标 ${item.target_progress}%`
           : typeof item.target_progress === 'number'
             ? `目标 ${item.target_progress}%`
             : null
-      const sourceTaskId = item.source_task_id ?? null
-      const sourceBadge =
-        draftSourceMode === 'baseline' && item.baseline_item_id ? '预编制' : '待重整'
-      const issueBadges = [
-        sourceTaskId && conditionTaskIds.has(sourceTaskId) ? '条件未满足' : null,
-        sourceTaskId && obstacleTaskIds.has(sourceTaskId) ? '阻碍处理中' : null,
-        sourceTaskId && delayedTaskIds.has(sourceTaskId) ? '延期信号' : null,
-      ].filter((badge): badge is string => Boolean(badge))
+      const rowSourceMode = resolveMonthlyRowSourceMode(item, planSourceMode)
       const dateRange = formatDateRange(item.planned_start_date, item.planned_end_date)
+      const wbsLabel = getWbsNodeTypeLabel(wbsNodeType, item.is_milestone ? '关键节点' : undefined)
       const subtitle =
         item.notes?.trim() ||
-        [dateRange, progressLabel].filter(Boolean).join(' · ') ||
+        [wbsLabel, dateRange, progressLabel].filter(Boolean).join(' · ') ||
         (item.is_milestone ? '关键节点' : hasChildren ? '结构层级' : '本月执行项')
 
       return {
@@ -441,27 +503,57 @@ export function buildMonthlyPlanRows({
         title: item.title,
         subtitle,
         depth,
-        rowType: item.is_milestone ? 'milestone' : hasChildren ? 'structure' : 'leaf',
+        engineeringCategoryId: item.engineering_category_id ?? sourceTask?.engineering_category_id ?? null,
+        engineeringCategoryType,
+        wbsNodeType,
+        isExecutable,
+        rowType: rowKind,
         statusLabel: item.is_critical ? '关键路径' : undefined,
         isMilestone: Boolean(item.is_milestone),
         isCritical: Boolean(item.is_critical),
         selected: selectedItemIds.includes(item.id),
         locked: readOnly,
+        isPersisted: !String(item.id).startsWith('local-'),
+        isNew: String(item.id).startsWith('local-'),
+        childCount: childCount.get(item.id) ?? 0,
         startDateLabel: formatDate(item.planned_start_date) ?? undefined,
         endDateLabel: formatDate(item.planned_end_date) ?? undefined,
+        durationLabel: formatDurationDays(item.planned_start_date, item.planned_end_date),
+        durationForecast: !showDurationSuggestion && item.source_task_id
+          ? durationForecastByTaskId[item.source_task_id] ?? null
+          : null,
+        durationSuggestionQuery: showDurationSuggestion && projectId
+          ? {
+            suggestionPurpose: 'monthly_commitment_window',
+            taskId: item.source_task_id ?? null,
+            projectId,
+            engineeringCategoryId: item.engineering_category_id ?? sourceTask?.engineering_category_id ?? null,
+            wbsNodeType,
+            standardWorkCode: item.standard_work_code ?? sourceTask?.standard_work_code ?? null,
+            standardWorkName: item.standard_work_name ?? sourceTask?.standard_work_name ?? null,
+            taskTitle: item.title,
+            plannedStartDate: item.planned_start_date ?? null,
+            plannedEndDate: item.planned_end_date ?? null,
+            currentProgress: item.current_progress ?? sourceTask?.progress ?? 0,
+            targetProgress: item.target_progress ?? null,
+            engineeringObjectId: sourceTask?.engineering_object_id ?? null,
+            buildingObjectId: sourceTask?.building_object_id ?? null,
+            floorObjectId: sourceTask?.floor_object_id ?? null,
+            zoneObjectId: sourceTask?.physical_zone_object_id ?? sourceTask?.functional_area_object_id ?? null,
+            responsibleUnitId: sourceTask?.participant_unit_id ?? null,
+            acceptanceRequired: sourceTask?.acceptance_required ?? null,
+            materialRequired: sourceTask?.material_required ?? null,
+          }
+          : null,
         progressLabel: progressLabel ?? undefined,
         extra: (
           <div className="flex items-center gap-2">
-            <Badge variant="outline">{sourceBadge}</Badge>
-            {issueBadges.map((badge) => (
-              <Badge
-                key={`${item.id}-${badge}`}
-                variant="outline"
-                className="border-amber-200 bg-amber-50 text-amber-700"
-              >
-                {badge}
+            <MonthlySourceChip sourceMode={rowSourceMode} reasonSummary={getMonthlyRowSourceReason(item, rowSourceMode, plan)} />
+            {item.missing_process_in_baseline ? (
+              <Badge variant="outline" className="cursor-pointer border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100">
+                基线缺工序
               </Badge>
-            ))}
+            ) : null}
             <Badge variant="secondary">{getMonthlyCommitmentLabel(item.commitment_status)}</Badge>
             <Badge variant="outline">L{depth}</Badge>
           </div>

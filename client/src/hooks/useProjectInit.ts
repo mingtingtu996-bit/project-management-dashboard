@@ -3,8 +3,6 @@ import { useParams } from 'react-router-dom'
 
 import { ApiClientError, apiGet, getApiErrorMessage, isAbortError } from '@/lib/apiClient'
 import {
-  type ChangeLogEntry,
-  type DelayRequestRecord,
   type IssueRecord,
   type TaskProgressSnapshotRecord,
   type WarningRecord,
@@ -13,7 +11,6 @@ import {
   useHydratedProjectId,
   useSetConditions,
   useSetCurrentProject,
-  useSetDelayRequests,
   useSetHydratedProjectId,
   useSetIssueRows,
   useSetMilestones,
@@ -25,8 +22,6 @@ import {
   useSetTaskProgressSnapshots,
   useSetWarnings,
 } from '@/hooks/useStore'
-import { projectDb, type Project as LocalProject } from '@/lib/localDb'
-import { toPersistedProject } from '@/lib/projectPersistence'
 import { prefetchProjectTasks } from '@/lib/projectTaskPrefetch'
 import type {
   Milestone,
@@ -36,13 +31,10 @@ import type {
   TaskCondition,
   TaskObstacle,
 } from '@/lib/supabase'
-import { buildProjectTaskProgressSnapshot } from '@/lib/taskBusinessStatus'
 
 type ApiTask = Partial<Task> & Record<string, unknown> & {
   assignee_id?: string | null
   assignee_name?: string | null
-  assignee_unit?: string | null
-  responsible_unit?: string | null
   progress?: number | string | null
   is_milestone?: boolean | null
 }
@@ -66,8 +58,6 @@ type ApiIssue = Partial<IssueRecord> &
     created_at?: string | null
     version?: number | null
   }
-type ApiDelayRequest = Partial<DelayRequestRecord> & Record<string, unknown>
-type ApiChangeLog = Partial<ChangeLogEntry> & Record<string, unknown>
 type ApiTaskProgressSnapshot = Partial<TaskProgressSnapshotRecord> & Record<string, unknown>
 
 function normalizeArray<T>(value: T[] | null | undefined): T[] {
@@ -82,7 +72,6 @@ function normalizeTask(task: ApiTask): Task {
   return {
     ...task,
     title: task.title ?? '',
-    name: task.title ?? '',
     start_date: task.start_date ?? task.planned_start_date ?? null,
     end_date: task.end_date ?? task.planned_end_date ?? null,
     planned_start_date: task.planned_start_date ?? task.start_date ?? null,
@@ -90,8 +79,7 @@ function normalizeTask(task: ApiTask): Task {
     assignee: task.assignee_name ?? '',
     assignee_user_id: task.assignee_user_id ?? task.assignee_id ?? null,
     assignee_name: task.assignee_name ?? '',
-    assignee_unit: task.assignee_unit ?? '',
-    responsible_unit: task.responsible_unit ?? '',
+    participant_unit_name: task.participant_unit_name ?? null,
     progress: Number(task.progress ?? 0),
   }
 }
@@ -211,46 +199,6 @@ function normalizeIssue(item: ApiIssue): IssueRecord {
   }
 }
 
-function normalizeDelayRequest(row: ApiDelayRequest): DelayRequestRecord {
-  return {
-    ...row,
-    id: String(row.id ?? ''),
-    task_id: row.task_id ? String(row.task_id) : undefined,
-    project_id: row.project_id ? String(row.project_id) : null,
-    baseline_version_id: row.baseline_version_id ? String(row.baseline_version_id) : null,
-    original_date: row.original_date ? String(row.original_date) : null,
-    delayed_date: row.delayed_date ? String(row.delayed_date) : null,
-    delay_days: Number(row.delay_days ?? 0),
-    reason: row.reason ? String(row.reason) : null,
-    delay_reason: row.delay_reason ? String(row.delay_reason) : null,
-    status: (String(row.status ?? 'pending').trim().toLowerCase() as 'pending' | 'approved' | 'rejected' | 'withdrawn') || 'pending',
-    requested_by: row.requested_by ? String(row.requested_by) : null,
-    requested_at: row.requested_at ? String(row.requested_at) : null,
-    reviewed_at: row.reviewed_at ? String(row.reviewed_at) : null,
-    withdrawn_at: row.withdrawn_at ? String(row.withdrawn_at) : null,
-    chain_id: row.chain_id ? String(row.chain_id) : null,
-    created_at: row.created_at ? String(row.created_at) : null,
-    updated_at: row.updated_at ? String(row.updated_at) : null,
-  }
-}
-
-function normalizeChangeLog(row: ApiChangeLog): ChangeLogEntry {
-  return {
-    ...row,
-    id: String(row.id ?? ''),
-    project_id: row.project_id ? String(row.project_id) : null,
-    entity_type: String(row.entity_type ?? ''),
-    entity_id: String(row.entity_id ?? ''),
-    field_name: String(row.field_name ?? ''),
-    old_value: row.old_value ?? null,
-    new_value: row.new_value ?? null,
-    change_reason: row.change_reason ? String(row.change_reason) : null,
-    changed_by: row.changed_by ? String(row.changed_by) : null,
-    change_source: row.change_source ? String(row.change_source) : null,
-    changed_at: row.changed_at ? String(row.changed_at) : null,
-  }
-}
-
 function normalizeTaskProgressSnapshot(row: ApiTaskProgressSnapshot): TaskProgressSnapshotRecord {
   return {
     ...row,
@@ -278,30 +226,15 @@ function normalizeTaskProgressSnapshot(row: ApiTaskProgressSnapshot): TaskProgre
 }
 
 function toMilestone(task: Task): Milestone {
-  const title = task.title ?? ''
   return {
-    id: task.id,
-    project_id: task.project_id,
-    title,
-    name: title,
-    description: task.description ?? '',
-    target_date: task.planned_end_date ?? task.end_date ?? '',
-    planned_end_date: task.planned_end_date ?? task.end_date ?? '',
-    status: task.status ?? 'pending',
-    completed_at: task.actual_end_date ?? undefined,
-    created_at: task.created_at ?? new Date().toISOString(),
-    updated_at: task.updated_at ?? new Date().toISOString(),
+    ...task,
+    title: task.title ?? '',
+    is_milestone: true,
   }
 }
 
-function cacheProject(project: StoreProject & { id: string }): StoreProject {
-  const persistedProject = toPersistedProject(project)
-  projectDb.upsert(persistedProject)
-  return persistedProject
-}
-
 type ProjectFetchResult =
-  | { kind: 'found'; project: StoreProject; source: 'api' | 'cache' }
+  | { kind: 'found'; project: StoreProject; source: 'api' }
   | { kind: 'not_found' }
   | { kind: 'error'; error: unknown }
 
@@ -313,8 +246,6 @@ type ProjectBootstrapPayload = {
   obstacles?: ApiObstacle[] | null
   warnings?: ApiWarning[] | null
   issues?: ApiIssue[] | null
-  delayRequests?: ApiDelayRequest[] | null
-  changeLogs?: ApiChangeLog[] | null
   taskProgressSnapshots?: ApiTaskProgressSnapshot[] | null
 }
 
@@ -331,29 +262,23 @@ type NormalizedProjectSlices = {
   obstaclesData: TaskObstacle[]
   warningsData: WarningRecord[]
   issuesData: IssueRecord[]
-  delayRequestsData: DelayRequestRecord[]
-  changeLogsData: ChangeLogEntry[]
   taskProgressSnapshotsData: TaskProgressSnapshotRecord[]
 }
 
 export type ProjectInitStatus = 'idle' | 'loading' | 'project_ready' | 'loaded' | 'not_found' | 'error'
 
-async function fetchAndCacheProject(id: string, signal: AbortSignal): Promise<ProjectFetchResult> {
-  const cachedProject = projectDb.getById(id) ?? null
-
+async function fetchProject(id: string, signal: AbortSignal): Promise<ProjectFetchResult> {
   try {
     const project = await apiGet<StoreProject>(`/api/projects/${id}`, { signal })
     if (!project?.id) {
-      return cachedProject
-        ? { kind: 'found', project: cachedProject, source: 'cache' }
-        : { kind: 'error', error: new Error('项目数据无效') }
+      return { kind: 'error', error: new Error('项目数据无效') }
     }
 
     const projectWithId: StoreProject & { id: string } = {
       ...project,
       id: project.id,
     }
-    return { kind: 'found', project: cacheProject(projectWithId), source: 'api' }
+    return { kind: 'found', project: projectWithId, source: 'api' }
   } catch (error) {
     if (isAbortError(error)) throw error
 
@@ -361,16 +286,12 @@ async function fetchAndCacheProject(id: string, signal: AbortSignal): Promise<Pr
       return { kind: 'not_found' }
     }
 
-    if (cachedProject) {
-      return { kind: 'found', project: cachedProject, source: 'cache' }
-    }
-
     return { kind: 'error', error }
   }
 }
 
 type UseProjectInitOptions = {
-  mode?: 'full' | 'materials' | 'gantt'
+  mode?: 'full' | 'materials' | 'gantt' | 'project_shell'
 }
 
 export function useProjectInit(options: UseProjectInitOptions = {}) {
@@ -387,7 +308,6 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
   const setWarnings = useSetWarnings()
   const setIssueRows = useSetIssueRows()
   const setProblemRows = useSetProblemRows()
-  const setDelayRequests = useSetDelayRequests()
   const setChangeLogs = useSetChangeLogs()
   const setTaskProgressSnapshots = useSetTaskProgressSnapshots()
   const setSharedSliceStatus = useSetSharedSliceStatus()
@@ -407,19 +327,22 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
     const controller = new AbortController()
 
     const loadProject = async () => {
-      setStatus('loading')
+      const hasSameProject = currentProject?.id === id
+      setStatus(hasSameProject ? 'project_ready' : 'loading')
       setErrorMessage(null)
-      setHydratedProjectId(null)
+      if (!hasSameProject) {
+        setHydratedProjectId(null)
+      }
 
       if (mode === 'materials') {
-        const cachedProject = projectDb.getById(id)
-        setCurrentProject(
-          cachedProject
-            ? cachedProject
-            : ({
-                id,
-              } as StoreProject),
-        )
+        setCurrentProject({ id } as StoreProject)
+        setHydratedProjectId(id)
+        setStatus('loaded')
+        return
+      }
+
+      if (mode === 'project_shell') {
+        setCurrentProject({ id } as StoreProject)
         setHydratedProjectId(id)
         setStatus('loaded')
         return
@@ -428,21 +351,6 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
       if (!currentProject || currentProject.id !== id) {
         setCurrentProject({ id } as StoreProject)
         setStatus('project_ready')
-      }
-
-      if (mode === 'gantt') {
-        void prefetchProjectTasks(id, { signal: controller.signal })
-          .then((tasks) => {
-            if (controller.signal.aborted) return
-            setTasks(tasks)
-            setHydratedProjectId(id)
-          })
-          .catch((error) => {
-            if (isAbortError(error)) return
-            if (import.meta.env.DEV) {
-              console.warn('[useProjectInit] gantt task prefetch failed', error)
-            }
-          })
       }
 
       try {
@@ -461,8 +369,6 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
             setSharedSliceStatus('warnings', { loading: true, error: null })
             setSharedSliceStatus('issueRows', { loading: true, error: null })
             setSharedSliceStatus('problemRows', { loading: true, error: null })
-            setSharedSliceStatus('delayRequests', { loading: true, error: null })
-            setSharedSliceStatus('changeLogs', { loading: true, error: null })
             setSharedSliceStatus('taskProgressSnapshots', { loading: true, error: null })
 
             const {
@@ -473,10 +379,8 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
               obstaclesData,
               warningsData,
               issuesData,
-              delayRequestsData,
-              changeLogsData,
               taskProgressSnapshotsData,
-            } = normalizeProjectSlices(id, bootstrapResult.payload, { useTaskProgressFallback: true })
+            } = normalizeProjectSlices(bootstrapResult.payload)
 
             if (controller.signal.aborted) return
 
@@ -488,14 +392,11 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
             setWarnings(warningsData)
             setIssueRows(issuesData)
             setProblemRows(obstaclesData)
-            setDelayRequests(delayRequestsData)
-            setChangeLogs(changeLogsData)
+            setChangeLogs([])
             setTaskProgressSnapshots(taskProgressSnapshotsData)
             setSharedSliceStatus('warnings', { loading: false, error: null })
             setSharedSliceStatus('issueRows', { loading: false, error: null })
             setSharedSliceStatus('problemRows', { loading: false, error: null })
-            setSharedSliceStatus('delayRequests', { loading: false, error: null })
-            setSharedSliceStatus('changeLogs', { loading: false, error: null })
             setSharedSliceStatus('taskProgressSnapshots', { loading: false, error: null })
             setHydratedProjectId(id)
             setStatus('loaded')
@@ -511,20 +412,20 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
                 obstacles: obstaclesData.length,
                 warnings: warningsData.length,
                 issues: issuesData.length,
-                delayRequests: delayRequestsData.length,
-                changeLogs: changeLogsData.length,
+                changeLogs: 0,
                 taskProgressSnapshots: taskProgressSnapshotsData.length,
               })
             }
             return
           }
 
-          if (import.meta.env.DEV) {
-            console.warn('[useProjectInit] bootstrap failed, falling back to legacy fan-out', bootstrapResult.error)
-          }
+          setCurrentProject(null)
+          setStatus('error')
+          setErrorMessage(getApiErrorMessage(bootstrapResult.error, '无法加载项目初始化数据，请稍后重试。'))
+          return
         }
 
-        const projectResult = await fetchAndCacheProject(id, controller.signal)
+        const projectResult = await fetchProject(id, controller.signal)
 
         if (projectResult.kind === 'not_found') {
           setCurrentProject(null)
@@ -543,160 +444,16 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
         setStatus('project_ready')
 
         if (mode === 'gantt') {
+          void prefetchProjectTasks(id, { signal: controller.signal, includeAcceptanceImpact: false })
+            .catch((error) => {
+              if (isAbortError(error)) return
+              if (import.meta.env.DEV) {
+                console.warn('[useProjectInit] gantt task prefetch failed', error)
+              }
+            })
           return
         }
 
-        setSharedSliceStatus('warnings', { loading: true, error: null })
-        setSharedSliceStatus('issueRows', { loading: true, error: null })
-        setSharedSliceStatus('problemRows', { loading: true, error: null })
-        setSharedSliceStatus('delayRequests', { loading: true, error: null })
-        setSharedSliceStatus('changeLogs', { loading: true, error: null })
-        setSharedSliceStatus('taskProgressSnapshots', { loading: true, error: null })
-
-        const [
-          tasksResult,
-          risksResult,
-          conditionsResult,
-          obstaclesResult,
-          warningsResult,
-          issuesResult,
-          delayRequestsResult,
-          changeLogsResult,
-          taskProgressSnapshotsResult,
-        ] = await Promise.allSettled([
-          apiGet<ApiTask[]>(`/api/tasks?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-          apiGet<ApiRisk[]>(`/api/risks?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-          apiGet<ApiCondition[]>(`/api/task-conditions?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-          apiGet<ApiObstacle[]>(`/api/task-obstacles?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-          apiGet<ApiWarning[]>(`/api/warnings?projectId=${encodeURIComponent(id)}&includeResolved=1`, { signal: controller.signal }),
-          apiGet<ApiIssue[]>(`/api/issues?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-          apiGet<ApiDelayRequest[]>(`/api/delay-requests?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-          apiGet<ApiChangeLog[]>(`/api/change-logs?projectId=${encodeURIComponent(id)}&limit=100`, { signal: controller.signal }),
-          apiGet<ApiTaskProgressSnapshot[]>(`/api/tasks/progress-snapshots?projectId=${encodeURIComponent(id)}`, { signal: controller.signal }),
-        ])
-
-        if (controller.signal.aborted) return
-
-        const tasksData =
-          tasksResult.status === 'fulfilled'
-            ? normalizeArray(tasksResult.value).map(normalizeTask)
-            : []
-        const risksData =
-          risksResult.status === 'fulfilled'
-            ? normalizeArray(risksResult.value).map(normalizeRisk)
-            : []
-        const conditionsData =
-          conditionsResult.status === 'fulfilled'
-            ? normalizeArray(conditionsResult.value).map(normalizeCondition)
-            : []
-        const obstaclesData =
-          obstaclesResult.status === 'fulfilled'
-            ? normalizeArray(obstaclesResult.value).map(normalizeObstacle)
-            : []
-
-        const milestonesData = tasksData.filter((task) => Boolean(task.is_milestone)).map(toMilestone)
-        const warningsData =
-          warningsResult.status === 'fulfilled'
-            ? normalizeArray(warningsResult.value).map(normalizeWarning)
-            : []
-        const issuesData =
-          issuesResult.status === 'fulfilled'
-            ? normalizeArray(issuesResult.value).map(normalizeIssue)
-            : []
-        const delayRequestsData =
-          delayRequestsResult.status === 'fulfilled'
-            ? normalizeArray(delayRequestsResult.value).map(normalizeDelayRequest)
-            : []
-        const changeLogsData =
-          changeLogsResult.status === 'fulfilled'
-            ? normalizeArray(changeLogsResult.value).map(normalizeChangeLog)
-            : []
-        const taskProgressSnapshotsData: TaskProgressSnapshotRecord[] =
-          taskProgressSnapshotsResult.status === 'fulfilled'
-            ? normalizeArray(taskProgressSnapshotsResult.value).map(normalizeTaskProgressSnapshot)
-            : tasksData
-                .filter((task): task is Task & { id: string } => Boolean(task.id))
-                .map((task) => {
-                  const snapshot = buildProjectTaskProgressSnapshot(
-                    [task],
-                    conditionsData.filter((condition) => condition.task_id === task.id),
-                    obstaclesData.filter((obstacle) => obstacle.task_id === task.id),
-                  )
-                  return {
-                    id: `local-${task.id}`,
-                    task_id: task.id,
-                    project_id: id,
-                    recorded_at: task.updated_at ?? task.created_at ?? new Date().toISOString(),
-                    progress: Number(task.progress ?? 0),
-                    status: String(task.status ?? 'todo'),
-                    condition_count: snapshot.taskConditionMap[task.id]?.total ?? 0,
-                    satisfied_condition_count: snapshot.taskConditionMap[task.id]?.satisfied ?? 0,
-                    active_obstacle_count: snapshot.obstacleCountMap[task.id] ?? 0,
-                    risk_count: 0,
-                    issue_count: 0,
-                    payload: null,
-                    created_at: task.created_at ?? null,
-                    updated_at: task.updated_at ?? null,
-                  }
-                })
-
-        setTasks(tasksData)
-        setRisks(risksData)
-        setMilestones(milestonesData)
-        setConditions(conditionsData)
-        setObstacles(obstaclesData)
-        setWarnings(warningsData)
-        setIssueRows(issuesData)
-        setProblemRows(obstaclesData)
-        setDelayRequests(delayRequestsData)
-        setChangeLogs(changeLogsData)
-        setTaskProgressSnapshots(taskProgressSnapshotsData)
-        setSharedSliceStatus('warnings', {
-          loading: false,
-          error: warningsResult.status === 'rejected' ? getApiErrorMessage(warningsResult.reason, '预警数据加载失败') : null,
-        })
-        setSharedSliceStatus('issueRows', {
-          loading: false,
-          error: issuesResult.status === 'rejected' ? getApiErrorMessage(issuesResult.reason, '问题数据加载失败') : null,
-        })
-        setSharedSliceStatus('problemRows', {
-          loading: false,
-          error: obstaclesResult.status === 'rejected' ? getApiErrorMessage(obstaclesResult.reason, '阻碍数据加载失败') : null,
-        })
-        setSharedSliceStatus('delayRequests', {
-          loading: false,
-          error: delayRequestsResult.status === 'rejected' ? getApiErrorMessage(delayRequestsResult.reason, '延期申请数据加载失败') : null,
-        })
-        setSharedSliceStatus('changeLogs', {
-          loading: false,
-          error: changeLogsResult.status === 'rejected' ? getApiErrorMessage(changeLogsResult.reason, '变更记录加载失败') : null,
-        })
-        setSharedSliceStatus('taskProgressSnapshots', {
-          loading: false,
-          error:
-            taskProgressSnapshotsResult.status === 'rejected'
-              ? getApiErrorMessage(taskProgressSnapshotsResult.reason, '进度快照加载失败，已使用当前任务态回填')
-              : null,
-        })
-        setHydratedProjectId(id)
-        setStatus('loaded')
-
-        if (import.meta.env.DEV) {
-          console.log('[useProjectInit] initialized project from unified backend data', {
-            projectId: id,
-            source: projectResult.source,
-            tasks: tasksData.length,
-            risks: risksData.length,
-            milestones: milestonesData.length,
-            conditions: conditionsData.length,
-            obstacles: obstaclesData.length,
-            warnings: warningsData.length,
-            issues: issuesData.length,
-            delayRequests: delayRequestsData.length,
-            changeLogs: changeLogsData.length,
-            taskProgressSnapshots: taskProgressSnapshotsData.length,
-          })
-        }
       } catch (error) {
         if (isAbortError(error)) return
 
@@ -704,8 +461,6 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
         setSharedSliceStatus('warnings', { loading: false, error: null })
         setSharedSliceStatus('issueRows', { loading: false, error: null })
         setSharedSliceStatus('problemRows', { loading: false, error: null })
-        setSharedSliceStatus('delayRequests', { loading: false, error: null })
-        setSharedSliceStatus('changeLogs', { loading: false, error: null })
         setSharedSliceStatus('taskProgressSnapshots', { loading: false, error: null })
         setCurrentProject(null)
         setStatus('error')
@@ -725,7 +480,6 @@ export function useProjectInit(options: UseProjectInitOptions = {}) {
     setConditions,
     setCurrentProject,
     setChangeLogs,
-    setDelayRequests,
     setHydratedProjectId,
     setIssueRows,
     setMilestones,
@@ -771,7 +525,7 @@ async function fetchProjectBootstrap(id: string, signal: AbortSignal): Promise<P
     return {
       kind: 'found',
       payload,
-      project: cacheProject(projectWithId),
+      project: projectWithId,
       source: 'bootstrap',
     }
   } catch (error) {
@@ -783,44 +537,7 @@ async function fetchProjectBootstrap(id: string, signal: AbortSignal): Promise<P
   }
 }
 
-function buildFallbackTaskProgressSnapshots(
-  projectId: string,
-  tasksData: Task[],
-  conditionsData: TaskCondition[],
-  obstaclesData: TaskObstacle[],
-): TaskProgressSnapshotRecord[] {
-  return tasksData
-    .filter((task): task is Task & { id: string } => Boolean(task.id))
-    .map((task) => {
-      const snapshot = buildProjectTaskProgressSnapshot(
-        [task],
-        conditionsData.filter((condition) => condition.task_id === task.id),
-        obstaclesData.filter((obstacle) => obstacle.task_id === task.id),
-      )
-      return {
-        id: `local-${task.id}`,
-        task_id: task.id,
-        project_id: projectId,
-        recorded_at: task.updated_at ?? task.created_at ?? new Date().toISOString(),
-        progress: Number(task.progress ?? 0),
-        status: String(task.status ?? 'todo'),
-        condition_count: snapshot.taskConditionMap[task.id]?.total ?? 0,
-        satisfied_condition_count: snapshot.taskConditionMap[task.id]?.satisfied ?? 0,
-        active_obstacle_count: snapshot.obstacleCountMap[task.id] ?? 0,
-        risk_count: 0,
-        issue_count: 0,
-        payload: null,
-        created_at: task.created_at ?? null,
-        updated_at: task.updated_at ?? null,
-      }
-    })
-}
-
-function normalizeProjectSlices(
-  projectId: string,
-  payload: ProjectBootstrapPayload,
-  options: { useTaskProgressFallback?: boolean } = {},
-): NormalizedProjectSlices {
+function normalizeProjectSlices(payload: ProjectBootstrapPayload): NormalizedProjectSlices {
   const tasksData = normalizeArray(payload.tasks).map(normalizeTask)
   const risksData = normalizeArray(payload.risks).map(normalizeRisk)
   const conditionsData = normalizeArray(payload.conditions).map(normalizeCondition)
@@ -828,13 +545,7 @@ function normalizeProjectSlices(
   const milestonesData = tasksData.filter((task) => Boolean(task.is_milestone)).map(toMilestone)
   const warningsData = normalizeArray(payload.warnings).map(normalizeWarning)
   const issuesData = normalizeArray(payload.issues).map(normalizeIssue)
-  const delayRequestsData = normalizeArray(payload.delayRequests).map(normalizeDelayRequest)
-  const changeLogsData = normalizeArray(payload.changeLogs).map(normalizeChangeLog)
-  const rawTaskProgressSnapshots = normalizeArray(payload.taskProgressSnapshots)
-  const taskProgressSnapshotsData =
-    options.useTaskProgressFallback && rawTaskProgressSnapshots.length === 0
-      ? buildFallbackTaskProgressSnapshots(projectId, tasksData, conditionsData, obstaclesData)
-      : rawTaskProgressSnapshots.map(normalizeTaskProgressSnapshot)
+  const taskProgressSnapshotsData = normalizeArray(payload.taskProgressSnapshots).map(normalizeTaskProgressSnapshot)
 
   return {
     tasksData,
@@ -844,8 +555,6 @@ function normalizeProjectSlices(
     obstaclesData,
     warningsData,
     issuesData,
-    delayRequestsData,
-    changeLogsData,
     taskProgressSnapshotsData,
   }
 }

@@ -13,7 +13,7 @@ const plans = [
   {
     id: 'plan-early',
     project_id: 'project-1',
-    milestone_id: 'milestone-1',
+    covered_task_ids: ['task-1'],
     type_id: 'pre_acceptance',
     type_name: 'Pre Acceptance',
     type_color: 'bg-sky-500',
@@ -34,7 +34,7 @@ const plans = [
   {
     id: 'plan-late-a',
     project_id: 'project-1',
-    milestone_id: 'milestone-2',
+    covered_task_ids: ['task-2'],
     type_id: 'fire',
     type_name: 'Fire',
     type_color: 'bg-rose-500',
@@ -55,7 +55,7 @@ const plans = [
   {
     id: 'plan-late-b',
     project_id: 'project-1',
-    milestone_id: 'milestone-3',
+    covered_task_ids: ['task-3'],
     type_id: 'planning',
     type_name: 'Planning',
     type_color: 'bg-emerald-500',
@@ -76,7 +76,7 @@ const plans = [
   {
     id: 'plan-elsewhere',
     project_id: 'project-1',
-    milestone_id: 'milestone-4',
+    covered_task_ids: ['task-4'],
     type_id: 'four_party',
     type_name: 'Four Party',
     type_color: 'bg-blue-600',
@@ -97,7 +97,7 @@ const plans = [
   {
     id: 'plan-mid-week',
     project_id: 'project-1',
-    milestone_id: 'milestone-6',
+    covered_task_ids: ['task-6'],
     type_id: 'planning',
     type_name: 'Planning',
     type_color: 'bg-emerald-500',
@@ -118,7 +118,7 @@ const plans = [
   {
     id: 'plan-unscheduled',
     project_id: 'project-1',
-    milestone_id: 'milestone-5',
+    covered_task_ids: ['task-5'],
     type_id: 'completion_record',
     type_name: 'Completion Record',
     type_color: 'bg-slate-500',
@@ -177,7 +177,7 @@ describe('Acceptance flow layout', () => {
       {
         id: 'plan-a',
         project_id: 'project-1',
-        milestone_id: 'milestone-a',
+        covered_task_ids: ['task-a'],
         type_id: 'pre_acceptance',
         type_name: 'Pre Acceptance',
         type_color: 'bg-sky-500',
@@ -198,7 +198,7 @@ describe('Acceptance flow layout', () => {
       {
         id: 'plan-b',
         project_id: 'project-1',
-        milestone_id: 'milestone-b',
+        covered_task_ids: ['task-b'],
         type_id: 'four_party',
         type_name: 'Four Party',
         type_color: 'bg-blue-600',
@@ -219,7 +219,7 @@ describe('Acceptance flow layout', () => {
       {
         id: 'plan-c',
         project_id: 'project-1',
-        milestone_id: 'milestone-c',
+        covered_task_ids: ['task-c'],
         type_id: 'planning',
         type_name: 'Planning',
         type_color: 'bg-emerald-500',

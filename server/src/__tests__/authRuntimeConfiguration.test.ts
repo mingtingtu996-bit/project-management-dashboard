@@ -1,0 +1,219 @@
+import type { Response } from 'express'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+type AuthConfigModule = typeof import('../auth/config.js')
+type AuthHttpModule = typeof import('../auth/http.js')
+
+const originalEnv = { ...process.env }
+
+let authConfig: AuthConfigModule
+let clearAuthTokenCookie: AuthHttpModule['clearAuthTokenCookie']
+let JWT_CONFIG: AuthConfigModule['JWT_CONFIG']
+let setAuthTokenCookie: AuthHttpModule['setAuthTokenCookie']
+
+function assertAuthRuntimeConfiguration() {
+  const assertion = (authConfig as unknown as {
+    assertAuthRuntimeConfiguration?: () => void
+  }).assertAuthRuntimeConfiguration
+  expect(typeof assertion, 'assertAuthRuntimeConfiguration must be exported').toBe('function')
+  assertion?.()
+}
+
+function setProductionEnvironment(target: 'production' | 'staging') {
+  process.env.NODE_ENV = 'production'
+  process.env.DEPLOY_TARGET = target
+  process.env.JWT_SECRET = `${target}-jwt-secret-with-at-least-32-bytes`
+  process.env.JWT_ISSUER = `workbuddy-${target}`
+  process.env.JWT_AUDIENCE = `workbuddy-${target}-api`
+  process.env.AUTH_COOKIE_NAME = `workbuddy_${target}_auth_token`
+  process.env.PUBLIC_INGRESS_MODE = 'temporary_ip_tls'
+  process.env.PUBLIC_HTTPS_ORIGIN = target === 'production'
+    ? 'https://124.222.54.190'
+    : 'https://124.222.54.190:8443'
+  process.env.CORS_ORIGIN = process.env.PUBLIC_HTTPS_ORIGIN
+}
+
+describe('auth runtime configuration', () => {
+  beforeEach(async () => {
+    process.env = { ...originalEnv }
+    vi.resetModules()
+    authConfig = await import('../auth/config.js')
+    const authHttp = await import('../auth/http.js')
+    clearAuthTokenCookie = authHttp.clearAuthTokenCookie
+    JWT_CONFIG = authConfig.JWT_CONFIG
+    setAuthTokenCookie = authHttp.setAuthTokenCookie
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+  })
+
+  it('selects distinct production and staging cookie names, issuers, and audiences', () => {
+    for (const target of ['production', 'staging'] as const) {
+      setProductionEnvironment(target)
+      expect(() => assertAuthRuntimeConfiguration()).not.toThrow()
+      expect(JWT_CONFIG.cookie.name).toBe(`workbuddy_${target}_auth_token`)
+      expect(JWT_CONFIG.issuer).toBe(`workbuddy-${target}`)
+      expect(JWT_CONFIG.audience).toBe(`workbuddy-${target}-api`)
+    }
+  })
+
+  it('rejects swapped cookie, issuer, audience, and implicit Supabase JWT fallback', () => {
+    setProductionEnvironment('production')
+    process.env.AUTH_COOKIE_NAME = 'workbuddy_staging_auth_token'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/AUTH_COOKIE_NAME/u)
+
+    setProductionEnvironment('staging')
+    process.env.JWT_ISSUER = 'workbuddy-production'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/JWT_ISSUER/u)
+
+    setProductionEnvironment('production')
+    process.env.JWT_AUDIENCE = 'workbuddy-staging-api'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/JWT_AUDIENCE/u)
+
+    setProductionEnvironment('production')
+    delete process.env.JWT_SECRET
+    process.env.SUPABASE_JWT_SECRET = 'must-not-be-used-as-runtime-auth-secret'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/JWT_SECRET/u)
+  })
+
+  it('rejects missing, multi-origin, and cross-environment CORS configuration', () => {
+    setProductionEnvironment('production')
+    delete process.env.CORS_ORIGIN
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/CORS_ORIGIN/u)
+
+    setProductionEnvironment('production')
+    process.env.CORS_ORIGIN = 'https://124.222.54.190,https://124.222.54.190:8443'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/CORS_ORIGIN/u)
+
+    setProductionEnvironment('production')
+    process.env.CORS_ORIGIN = 'https://124.222.54.190:8443'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/CORS_ORIGIN/u)
+
+    setProductionEnvironment('staging')
+    process.env.PUBLIC_HTTPS_ORIGIN = 'https://124.222.54.190'
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+  })
+
+  it('rejects malformed public HTTPS origins at runtime startup', () => {
+    for (const invalidOrigin of [
+      'http://124.222.54.190',
+      'https://user:password@124.222.54.190',
+      'https://124.222.54.190/api',
+      'https://124.222.54.190?environment=production',
+    ]) {
+      setProductionEnvironment('production')
+      process.env.PUBLIC_HTTPS_ORIGIN = invalidOrigin
+      process.env.CORS_ORIGIN = invalidOrigin
+      expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+    }
+  })
+
+  it('never classifies an IPv6 literal as a domain HSTS origin', () => {
+    setProductionEnvironment('production')
+    process.env.PUBLIC_INGRESS_MODE = 'domain_hsts'
+    process.env.PUBLIC_HTTPS_ORIGIN = 'https://[2001:db8::1]'
+    process.env.CORS_ORIGIN = process.env.PUBLIC_HTTPS_ORIGIN
+
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+  })
+
+  it('rejects production and staging domain origins when they are swapped', () => {
+    setProductionEnvironment('production')
+    process.env.PUBLIC_INGRESS_MODE = 'domain_hsts'
+    process.env.PUBLIC_HTTPS_ORIGIN = 'https://staging.zhuxucloud.com'
+    process.env.CORS_ORIGIN = process.env.PUBLIC_HTTPS_ORIGIN
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+
+    setProductionEnvironment('staging')
+    process.env.PUBLIC_INGRESS_MODE = 'domain_hsts'
+    process.env.PUBLIC_HTTPS_ORIGIN = 'https://zhuxucloud.com'
+    process.env.CORS_ORIGIN = process.env.PUBLIC_HTTPS_ORIGIN
+    expect(() => assertAuthRuntimeConfiguration()).toThrow(/PUBLIC_HTTPS_ORIGIN/u)
+  })
+
+  it('uses the configured cookie name for set and clear operations', () => {
+    setProductionEnvironment('production')
+    const response = {
+      clearCookie: vi.fn(),
+      cookie: vi.fn(),
+    } as unknown as Response
+
+    setAuthTokenCookie(response, 'token')
+    clearAuthTokenCookie(response)
+
+    expect(response.cookie).toHaveBeenCalledWith(
+      'workbuddy_production_auth_token',
+      'token',
+      expect.objectContaining({ httpOnly: true, secure: true, sameSite: 'strict' }),
+    )
+    expect(response.clearCookie).toHaveBeenCalledWith(
+      'workbuddy_production_auth_token',
+      expect.objectContaining({ httpOnly: true, secure: true, sameSite: 'strict' }),
+    )
+  })
+
+  it('keeps auth cookies HttpOnly when override attempts exist before module initialization', async () => {
+    for (const target of ['production', 'staging', 'test'] as const) {
+      process.env = { ...originalEnv }
+      if (target === 'test') {
+        process.env.NODE_ENV = 'test'
+        delete process.env.AUTH_COOKIE_NAME
+      } else {
+        setProductionEnvironment(target)
+      }
+      process.env.AUTH_COOKIE_HTTP_ONLY = 'false'
+      process.env.JWT_COOKIE_HTTP_ONLY = 'false'
+      process.env.COOKIE_HTTP_ONLY = 'false'
+
+      vi.resetModules()
+      const freshAuthConfig = await import('../auth/config.js')
+      const freshAuthHttp = await import('../auth/http.js')
+
+      const response = {
+        clearCookie: vi.fn(),
+        cookie: vi.fn(),
+      } as unknown as Response
+
+      freshAuthHttp.setAuthTokenCookie(response, 'token')
+      freshAuthHttp.clearAuthTokenCookie(response)
+
+      const expectedCookieName = target === 'test'
+        ? 'auth_token'
+        : `workbuddy_${target}_auth_token`
+      expect(freshAuthConfig.JWT_CONFIG.cookie.httpOnly).toBe(true)
+      expect(response.cookie).toHaveBeenCalledWith(
+        expectedCookieName,
+        'token',
+        expect.objectContaining({ httpOnly: true }),
+      )
+      expect(response.clearCookie).toHaveBeenCalledWith(
+        expectedCookieName,
+        expect.objectContaining({ httpOnly: true }),
+      )
+    }
+  })
+
+  it('retains the existing auth_token default in test mode', () => {
+    process.env.NODE_ENV = 'test'
+    delete process.env.AUTH_COOKIE_NAME
+    delete process.env.JWT_ISSUER
+    delete process.env.JWT_AUDIENCE
+
+    expect(JWT_CONFIG.cookie.name).toBe('auth_token')
+    expect(JWT_CONFIG.issuer).toBe('construction-management-system')
+    expect(JWT_CONFIG.audience).toBe('api-users')
+  })
+
+  it('rejects an invalid configured cookie name before a response cookie is written', () => {
+    process.env.NODE_ENV = 'test'
+    process.env.AUTH_COOKIE_NAME = 'bad cookie'
+    const response = {
+      clearCookie: vi.fn(),
+      cookie: vi.fn(),
+    } as unknown as Response
+
+    expect(() => setAuthTokenCookie(response, 'token')).toThrow(/AUTH_COOKIE_NAME/u)
+    expect(response.cookie).not.toHaveBeenCalled()
+  })
+})

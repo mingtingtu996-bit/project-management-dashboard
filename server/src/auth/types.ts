@@ -1,12 +1,14 @@
 export type GlobalRole = 'company_admin' | 'regular'
 
-export type ProjectPermissionLevel = 'owner' | 'editor' | 'viewer'
+export type ProjectPermissionLevel = 'owner' | 'editor'
 
 export interface JWTPayload {
   userId: string
   username: string
-  role?: string
   globalRole?: GlobalRole
+  currentCompanyRole?: GlobalRole
+  tokenVersion?: number
+  passwordResetRequired?: boolean
   iat?: number
   exp?: number
 }
@@ -21,8 +23,11 @@ export interface AuthUserView {
   username: string
   display_name: string
   email?: string | null
-  role?: string
   globalRole: GlobalRole
+  currentCompanyId?: string | null
+  currentCompanyRole?: GlobalRole | null
+  tokenVersion?: number
+  passwordResetRequired?: boolean
   joined_at?: string | null
   last_active?: string | null
 }
@@ -45,13 +50,19 @@ export interface PasswordResetData extends AuthMessageData {
   temporaryPassword: string
 }
 
+export interface PasswordChangeData extends AuthMessageData {
+  token: string
+}
+
 export interface AuthUser {
   id: string
   username: string
   display_name: string
   email?: string | null
-  role?: string
   globalRole: GlobalRole
+  currentCompanyRole?: GlobalRole | null
+  tokenVersion?: number
+  passwordResetRequired?: boolean
 }
 
 export interface AuthRequest extends Request {

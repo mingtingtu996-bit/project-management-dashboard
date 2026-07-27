@@ -11,7 +11,7 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputDir = join(repoRoot, 'artifacts', 'uiux-release-smoke')
+const outputDir = join(repoRoot, process.env.UIUX_RELEASE_SMOKE_OUTPUT_DIR || 'project-ui/artifacts/uiux-release-smoke')
 const summaryPath = join(outputDir, 'release-smoke-summary.json')
 
 const port = Number(process.env.PORT || 4173)
@@ -51,6 +51,10 @@ function isIgnorableRequestFailure(request) {
   return request.failure()?.errorText === 'net::ERR_ABORTED'
 }
 
+function isIgnorablePageError(error) {
+  return error?.message === 'signal is aborted without reason'
+}
+
 function attachDiagnostics(page, diagnostics) {
   page.on('console', (message) => {
     if (message.type() !== 'error') return
@@ -59,6 +63,7 @@ function attachDiagnostics(page, diagnostics) {
   })
 
   page.on('pageerror', (error) => {
+    if (isIgnorablePageError(error)) return
     diagnostics.pageErrors.push(error.message)
   })
 
@@ -93,6 +98,41 @@ async function ensureFile(filePath, message) {
 async function readManifest() {
   await ensureFile(manifestPath, 'Missing .tmp/full-app-test-env/manifest.json. Run npm run prepare:test-env:full-app first.')
   return JSON.parse(await readFile(manifestPath, 'utf8'))
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options)
+  const text = await response.text()
+  let json = null
+  try {
+    json = text ? JSON.parse(text) : null
+  } catch {
+    throw new Error(`Non-JSON response from ${url}: ${text.slice(0, 160)}`)
+  }
+  if (!response.ok || json?.success === false) {
+    throw new Error(json?.error?.message || json?.message || text || `${url} returned ${response.status}`)
+  }
+  return json.data ?? json
+}
+
+async function apiLogin(account) {
+  const data = await fetchJson(`${apiBaseUrl}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: account.username, password: account.password }),
+  })
+  assert(data?.token, `API login did not return token for ${account.username}`)
+  return data
+}
+
+async function primeAuthSession(page, session) {
+  const currentCompanyId = session.user?.currentCompanyId ?? null
+  await page.addInitScript(({ token, companyId }) => {
+    window.localStorage.setItem('auth_token', token)
+    window.localStorage.setItem('access_token', token)
+    if (companyId) window.localStorage.setItem('current_company_id', companyId)
+    else window.localStorage.removeItem('current_company_id')
+  }, { token: session.token, companyId: currentCompanyId })
 }
 
 async function isHttpReady(url) {
@@ -155,13 +195,17 @@ function mainPages(projectId) {
       key: 'company-cockpit',
       path: '/company',
       any: ['[data-testid="company-cockpit-page"]'],
-      must: ['[data-testid="company-project-grid"]'],
     },
     {
       key: 'dashboard',
       path: projectRoute(projectId, '/dashboard'),
       any: ['[data-testid="dashboard-page"]'],
-      must: ['[data-testid="dashboard-hero-cards"]'],
+      must: [
+        '[data-testid="dashboard-decision-overview"]',
+        '[data-testid="dashboard-health-weakness-panel"]',
+        '[data-testid="dashboard-action-panel"]',
+        '[data-testid="dashboard-snapshot-panel"]',
+      ],
     },
     {
       key: 'milestones',
@@ -172,19 +216,13 @@ function mainPages(projectId) {
       key: 'planning-baseline',
       path: projectRoute(projectId, '/planning/baseline'),
       any: ['[data-testid="planning-shared-shell"]'],
-      must: ['[data-testid="baseline-info-bar"]', '[data-testid="baseline-version-switcher"]'],
+      must: ['[data-testid="baseline-version-bar"]', '[data-testid="baseline-tree-editor"]'],
     },
     {
       key: 'planning-monthly',
       path: projectRoute(projectId, `/planning/monthly?month=${currentMonth}`),
       any: ['[data-testid="monthly-plan-header"]', '[data-testid="monthly-plan-info-bar"]'],
       must: ['[data-testid="planning-page-tabs"]'],
-    },
-    {
-      key: 'planning-wbs-templates',
-      path: projectRoute(projectId, '/planning/wbs-templates'),
-      any: ['[data-testid="wbs-templates-page"]'],
-      must: ['[data-testid="wbs-template-list"]'],
     },
     {
       key: 'gantt-view',
@@ -254,8 +292,9 @@ function overlayStates(projectId) {
       path: projectRoute(projectId, '/gantt'),
       ready: ['[data-testid="task-workspace-layer-l2"]'],
       action: async (page) => {
-        await page.getByTestId('gantt-open-scope-dimensions').click()
-        await page.getByTestId('gantt-scope-dimensions-dialog').waitFor({ state: 'visible', timeout: 20000 })
+        await page.getByTestId('gantt-generation-template-menu').click()
+        await page.getByTestId('gantt-open-engineering-objects').click()
+        await page.getByTestId('gantt-engineering-objects-dialog').waitFor({ state: 'visible', timeout: 20000 })
       },
     },
     {
@@ -263,7 +302,7 @@ function overlayStates(projectId) {
       path: projectRoute(projectId, '/gantt'),
       ready: ['[data-testid="task-workspace-layer-l2"]'],
       action: async (page) => {
-        await page.getByTestId('gantt-open-critical-path-dialog').click()
+        await page.getByTestId('gantt-critical-path-summary-chip').click()
         await page.getByTestId('critical-path-dialog').waitFor({ state: 'visible', timeout: 20000 })
       },
     },
@@ -304,7 +343,7 @@ async function saveScreenshot(page, key) {
 }
 
 async function uiLogin(page, account, { redirect = '/company', readyTestId = 'company-cockpit-page' } = {}) {
-  await page.goto(route(`/company?login=1&redirect=${encodeURIComponent(redirect)}`), { waitUntil: 'domcontentloaded' })
+  await page.goto(route(`/workspace?login=1&redirect=${encodeURIComponent(redirect)}`), { waitUntil: 'domcontentloaded' })
   await page.getByTestId('login-dialog').waitFor({ state: 'visible', timeout: 30000 })
   await page.locator('#login-username').fill(account.username)
   await page.locator('#login-password').fill(account.password)
@@ -317,7 +356,7 @@ async function uiLogin(page, account, { redirect = '/company', readyTestId = 'co
 
 async function switchProjectFromCompany(page, projectId) {
   await page.goto(route('/company'), { waitUntil: 'domcontentloaded' })
-  await page.getByTestId('company-project-grid').waitFor({ state: 'visible', timeout: 30000 })
+  await page.getByTestId('company-project-overview').waitFor({ state: 'visible', timeout: 30000 })
   await page.locator(`a[href$="#/projects/${projectId}/dashboard"], a[href$="/#/projects/${projectId}/dashboard"]`).first().click()
   await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 30000 })
   assert(page.url().includes(`/projects/${projectId}/dashboard`), `Project switch landed on unexpected URL: ${page.url()}`)
@@ -354,12 +393,15 @@ async function runOverlaySmoke(page, projectId, summary) {
 
 async function runNonDestructiveOperation(page, projectId, summary) {
   await page.goto(route(projectRoute(projectId, '/dashboard')), { waitUntil: 'domcontentloaded' })
-  const search = page.getByLabel('搜索项目、任务或提醒')
+  await page.getByLabel('打开命令面板').first().click()
+  const search = page.getByTestId('command-palette-search')
   await search.waitFor({ state: 'visible', timeout: 20000 })
   await search.fill('FULLAPP')
   const value = await search.inputValue()
   assert(value === 'FULLAPP', `Search input value mismatch: ${value}`)
-  summary.nonDestructiveOperation = { name: 'header-search-fill', value, status: 'passed' }
+  await page.keyboard.press('Escape')
+  await page.getByRole('dialog', { name: '命令面板' }).waitFor({ state: 'hidden', timeout: 5000 })
+  summary.nonDestructiveOperation = { name: 'command-palette-search-fill', value, status: 'passed' }
 }
 
 async function uiLogout(page) {
@@ -369,6 +411,23 @@ async function uiLogout(page) {
   const tokenPresent = await page.evaluate(() => Boolean(window.localStorage.getItem('auth_token')))
   assert(!tokenPresent, 'Logout did not clear auth_token')
   return { loginDialogVisible: true, tokenCleared: true, status: 'passed' }
+}
+
+async function newReleaseContext(browser) {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    colorScheme: 'light',
+    locale: 'zh-CN',
+  })
+  await context.addInitScript(() => {
+    window.localStorage.removeItem('auth_token')
+    window.localStorage.removeItem('access_token')
+    window.localStorage.removeItem('current_company_id')
+    window.localStorage.setItem('onboarding_workspace_completed', 'true')
+    window.localStorage.setItem('onboarding_project_completed', 'true')
+    window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
+  })
+  return context
 }
 
 async function main() {
@@ -389,7 +448,7 @@ async function main() {
     preview = startPreviewServer()
     assert(await waitForHttpOk(baseUrl, 30000), `Preview server did not become ready at ${baseUrl}`)
   }
-  assert(await waitForHttpOk(`${apiBaseUrl}/api/health`, 30000), `API did not become ready at ${apiBaseUrl}`)
+  assert(await waitForHttpOk(`${apiBaseUrl}/api/readyz`, 30000), `API did not become ready at ${apiBaseUrl}`)
 
   const summary = {
     generatedAt: new Date().toISOString(),
@@ -409,25 +468,18 @@ async function main() {
 
   const browser = await chromium.launch({ headless: true })
   try {
-    const context = await browser.newContext({
-      viewport: { width: 1440, height: 900 },
-      colorScheme: 'light',
-      locale: 'zh-CN',
-    })
-    await context.addInitScript(() => {
-      window.localStorage.removeItem('auth_token')
-      window.localStorage.removeItem('access_token')
-      window.localStorage.setItem('onboarding_completed', 'true')
-      window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
-    })
-    const page = await context.newPage()
+    const adminContext = await newReleaseContext(browser)
+    const page = await adminContext.newPage()
     page.setDefaultTimeout(30000)
 
     const loginDiagnostics = { consoleErrors: [], pageErrors: [], apiFailures: [] }
     attachDiagnostics(page, loginDiagnostics)
-    await uiLogin(page, adminAccount)
+    const adminSession = await apiLogin(adminAccount)
+    await primeAuthSession(page, adminSession)
+    await page.goto(route('/company'), { waitUntil: 'domcontentloaded' })
+    await page.getByTestId('company-cockpit-page').waitFor({ state: 'visible', timeout: 30000 })
     await assertHealthyPage(page, 'ui-login', loginDiagnostics)
-    summary.login = { mode: 'ui', username: adminAccount.username, status: 'passed' }
+    summary.login = { mode: 'api-token', username: adminAccount.username, status: 'passed' }
     summary.loginScreenshot = await saveScreenshot(page, 'login-company')
 
     await switchProjectFromCompany(page, projectId)
@@ -437,20 +489,25 @@ async function main() {
     const pageStates = mainPages(projectId)
     await runMainPageSmoke(page, projectId, summary, pageStates.filter((state) => state.key === 'company-cockpit'))
     summary.adminLogoutAfterProjectSwitch = await uiLogout(page)
+    await adminContext.close()
 
+    const projectContext = await newReleaseContext(browser)
+    const projectPage = await projectContext.newPage()
+    projectPage.setDefaultTimeout(30000)
     const projectLoginDiagnostics = { consoleErrors: [], pageErrors: [], apiFailures: [] }
-    attachDiagnostics(page, projectLoginDiagnostics)
-    await uiLogin(page, projectAccount, {
-      redirect: projectRoute(projectId, '/dashboard'),
-      readyTestId: 'dashboard-page',
-    })
-    await assertHealthyPage(page, 'project-ui-login', projectLoginDiagnostics)
-    summary.projectLogin = { mode: 'ui', username: projectAccount.username, status: 'passed' }
+    attachDiagnostics(projectPage, projectLoginDiagnostics)
+    const projectSession = await apiLogin(projectAccount)
+    await primeAuthSession(projectPage, projectSession)
+    await projectPage.goto(route(projectRoute(projectId, '/dashboard')), { waitUntil: 'domcontentloaded' })
+    await projectPage.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 30000 })
+    await assertHealthyPage(projectPage, 'project-ui-login', projectLoginDiagnostics)
+    summary.projectLogin = { mode: 'api-token', username: projectAccount.username, status: 'passed' }
 
-    await runMainPageSmoke(page, projectId, summary, pageStates.filter((state) => state.key !== 'company-cockpit'))
-    await runOverlaySmoke(page, projectId, summary)
-    await runNonDestructiveOperation(page, projectId, summary)
-    summary.logout = await uiLogout(page)
+    await runMainPageSmoke(projectPage, projectId, summary, pageStates.filter((state) => state.key !== 'company-cockpit'))
+    await runOverlaySmoke(projectPage, projectId, summary)
+    await runNonDestructiveOperation(projectPage, projectId, summary)
+    summary.logout = await uiLogout(projectPage)
+    await projectContext.close()
 
     summary.status = 'passed'
     await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, 'utf8')

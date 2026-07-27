@@ -137,6 +137,8 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
   })
 
   it('builds base duration benchmark live evidence from production source rows', () => {
+    const publicationKey = 'duration_learning_runtime:base_duration_benchmark:benchmark-blend-v2'
+    const artifactKey = 'base-duration-benchmark:benchmark-blend-v2'
     const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
       sourceRows: [
@@ -157,31 +159,38 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
           },
         })),
         {
-          sourceTable: 'algorithm_learnable_parameter_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'duration_benchmark_runtime:benchmark-blend-v2',
+            publication_key: publicationKey,
             asset_key: 'base_duration_benchmark',
-            publication_status: 'published',
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:duration_benchmark_runtime:benchmark-blend-v2:armed',
-            },
+            artifact_key: artifactKey,
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['duration_samples:base-sample-project'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 1 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
           },
         },
         {
-          sourceTable: 'runtime_consumer_observations',
+          sourceTable: 'duration_learning_runtime_consumptions',
           row: {
-            id: 'consumer-base-duration-1',
+            consumption_key: 'base-duration-consumption-1',
+            company_id: 'company-1',
+            project_id: 'project-1',
+            publication_key: publicationKey,
             asset_key: 'base_duration_benchmark',
+            artifact_key: artifactKey,
             consumer_key: 'durationSuggestionService',
-            publication_key: 'duration_benchmark_runtime:benchmark-blend-v2',
-            observation_status: 'observed',
-            writes_runtime_directly: false,
-            writes_fact_directly: false,
+            consumer_surface: 'duration_suggestion',
+            task_id: 'task-1',
+            duration_day_basis: 'construction_production_day',
+            source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+            consumption_context: { standardWorkCode: 'STD-BASE-001' },
           },
         },
         {
@@ -191,7 +200,7 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'base_duration_benchmark',
-              publicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
+              publicationKey,
             },
             actual_context: {
               assetKey: 'base_duration_benchmark',
@@ -214,8 +223,8 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
       accuracyMetricsAvailable: true,
     }))
     expect(decision.benchmarkLineage).toEqual(expect.objectContaining({
-      runtimePublicationKey: 'duration_benchmark_runtime:benchmark-blend-v2',
-      rollbackTarget: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+      runtimePublicationKey: publicationKey,
+      rollbackTarget: `rollback:${publicationKey}:rollback_verified`,
       acceptedSampleCounts: {
         global: 1,
         industry: 1,
@@ -225,10 +234,11 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
     }))
     expect(decision.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
       productionSampleEvidenceRef: 'duration_samples:base-sample-global',
-      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:benchmark-blend-v2',
-      runtimeConsumerObservationRef: 'runtime_consumer:consumer-base-duration-1',
-      impactMonitoringEvidenceRef: 'impact_monitoring:duration_benchmark_runtime:benchmark-blend-v2:armed',
-      rollbackDrillEvidenceRef: 'rollback:duration_benchmark_runtime:benchmark-blend-v2:verified',
+      publicationExecutionRef: `duration_learning_runtime_publications:${publicationKey}`,
+      runtimeConsumerObservationRef: 'runtime_consumption:base-duration-consumption-1',
+      runtimeConsumerPublicationKey: publicationKey,
+      impactMonitoringEvidenceRef: `impact_monitoring:${publicationKey}:monitoring_passed`,
+      rollbackDrillEvidenceRef: `rollback:${publicationKey}:rollback_verified`,
       accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-base-duration-1',
     }))
     expect(decision.productionLineage.rejectedRows).toEqual([])

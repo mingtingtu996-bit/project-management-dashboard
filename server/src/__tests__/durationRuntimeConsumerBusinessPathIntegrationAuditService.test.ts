@@ -15,6 +15,10 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           'projectRemainingDurationForecastService',
           'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
         ],
+        [
+          'projectCriticalPathService',
+          'projectCriticalPathService:resolveCriticalPathLearningPublications',
+        ],
         ['wbsTemplateGenerationService', 'wbsTemplateGenerationService:generateWbsTemplateRows'],
         [
           'scheduleAccelerationService',
@@ -74,7 +78,19 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
           `,
         },
         {
-          sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+          sourcePath: 'server/src/services/projectCriticalPathService.ts',
+          sourceText: `
+            import { recordProjectCriticalPathConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            const PROJECT_CRITICAL_PATH_CONSUMER_ASSET_KEYS = new Set([
+              'critical_path_rule_candidate',
+            ])
+            async function resolveCriticalPathLearningPublications() {
+              await recordProjectCriticalPathConsumedArtifacts({ queryExec, artifacts: [] })
+            }
+          `,
+        },
+        {
+          sourcePath: 'server/src/services/wbsTemplateGenerationOrchestrator.ts',
           sourceText: `
             import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
             const WBS_TEMPLATE_GENERATION_CONSUMER_ASSET_KEYS = new Set([
@@ -105,6 +121,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
             import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
             const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
               'critical_path_rule_candidate',
+              'construction_organization_plan_network',
             ])
             export async function evaluateRuntimeScheduleAcceleration() {
               await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
@@ -119,6 +136,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
       'durationSuggestionService',
       'taskDurationForecastService',
       'projectRemainingDurationForecastService',
+      'projectCriticalPathService',
       'wbsTemplateGenerationService',
       'scheduleAccelerationService',
       'scheduleAccelerationRuntimeService',
@@ -286,6 +304,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
             import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
             const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
               'critical_path_rule_candidate',
+              'construction_organization_plan_network',
             ])
             export async function evaluateRuntimeScheduleAcceleration(params: {
               projectId: string
@@ -381,6 +400,38 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
     }))
   })
 
+  it('counts registered runtime-only asset constants as business path asset coverage', async () => {
+    const {
+      evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
+    } = await import('../services/durationRuntimeConsumerBusinessPathIntegrationAuditService.js')
+
+    const coverage = evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage({
+      sourceFiles: [
+        {
+          sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
+          sourceText: `
+            import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+            import { CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY } from './constructionOrganizationRuntimeLineageService.js'
+            const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
+              'critical_path_rule_candidate',
+              CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+            ])
+            export async function evaluateRuntimeScheduleAcceleration() {
+              await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
+            }
+          `,
+        },
+      ],
+    })
+
+    expect(coverage.observedIntegrations).toContainEqual(expect.objectContaining({
+      consumerKey: 'scheduleAccelerationRuntimeService',
+    }))
+    expect(coverage.missingIntegrations).not.toContainEqual(expect.objectContaining({
+      consumerKey: 'scheduleAccelerationRuntimeService',
+    }))
+  })
+
   it('recognizes all facade calls in the current source runtime entries', async () => {
     const {
       evaluateDurationRuntimeConsumerBusinessPathIntegrationCoverage,
@@ -394,6 +445,7 @@ describe('durationRuntimeConsumerBusinessPathIntegrationAuditService', () => {
     expect(coverage.missingIntegrations).toEqual([])
     expect(coverage.observedIntegrations.map((item) => item.consumerKey).sort()).toEqual([
       'durationSuggestionService',
+      'projectCriticalPathService',
       'projectRemainingDurationForecastService',
       'scheduleAccelerationRuntimeService',
       'scheduleAccelerationService',

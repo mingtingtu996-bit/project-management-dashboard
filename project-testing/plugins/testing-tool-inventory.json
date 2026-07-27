@@ -1,0 +1,168 @@
+{
+  "schemaVersion": "workbuddy-testing-tool-inventory/v1",
+  "generatedAt": "2026-06-29T00:00:00+08:00",
+  "scope": "Phase 4 testing tooling boundaries. Inventory only; do not install dependencies or run live/browser/DB checks from this file.",
+  "tools": [
+    {
+      "id": "cloakbrowser",
+      "name": "CloakBrowser",
+      "layer": "browser-runtime",
+      "stage": "active-local",
+      "purpose": "Provide a stable real browser executable for Playwright browser suites and UIUX evidence.",
+      "releaseEvidencePolicy": "supports-repeatable-automation",
+      "check": {
+        "type": "executable",
+        "envVar": "CLOAK_BROWSER_EXECUTABLE",
+        "fallbackPath": "C:\\Users\\jjj64\\.codex\\tools\\CloakBrowser-release\\chromium-v146.0.7680.177.4\\chrome.exe"
+      },
+      "productionMutation": false,
+      "governance": "Use as browser runtime only; assertions, traces, screenshots, and pass/fail decisions belong to Playwright scripts and release dashboard reports."
+    },
+    {
+      "id": "yingdao-rpa",
+      "name": "Yingdao RPA",
+      "layer": "uat-rpa",
+      "stage": "manual-assisted",
+      "purpose": "Replay human-like UAT paths across browser, desktop files, uploads, downloads, and external workflows.",
+      "releaseEvidencePolicy": "manual-assisted-evidence",
+      "check": {
+        "type": "manual"
+      },
+      "productionMutation": false,
+      "governance": "Treat as UAT assistance. Findings must be converted into repeatable Playwright, Vitest, API, or contract tests before becoming hard release gates."
+    },
+    {
+      "id": "playwright-mcp",
+      "name": "Playwright MCP",
+      "layer": "exploratory-agent-browser",
+      "stage": "available-if-mcp-configured",
+      "purpose": "Drive exploratory browser investigation and help convert findings into repeatable scripts.",
+      "releaseEvidencePolicy": "exploratory-only",
+      "check": {
+        "type": "mcp-reference",
+        "configHints": [
+          "Codex MCP tool discovery",
+          "Playwright MCP server availability"
+        ]
+      },
+      "productionMutation": false,
+      "governance": "Do not count exploratory MCP observations as pass. Convert stable findings into versioned scripts and dashboard reports."
+    },
+    {
+      "id": "msw",
+      "name": "MSW",
+      "layer": "deterministic-test-data",
+      "stage": "active-local",
+      "purpose": "Provide deterministic frontend/component/page data when backend or DB state is unstable.",
+      "releaseEvidencePolicy": "local-browser-msw-support",
+      "check": {
+        "type": "package-reference",
+        "packageName": "msw"
+      },
+      "productionMutation": false,
+      "governance": "Use for local_browser_msw gates only. MSW can prove deterministic UI behavior against mocked API contracts, but it cannot close live or DB readiness gates."
+    },
+    {
+      "id": "github-actions-postgres-service-container",
+      "name": "GitHub Actions Postgres service container",
+      "layer": "ci-container-db",
+      "stage": "planned-ci",
+      "purpose": "Run backend integration slices against an ephemeral PostgreSQL service instead of a real Supabase database.",
+      "releaseEvidencePolicy": "container-db-support",
+      "check": {
+        "type": "future-prerequisite",
+        "requires": [
+          "workflow promotion from project-testing/plugins/github-actions-postgres-service-container.example.yml",
+          "migration and seed command that targets DB_CONNECTION_STRING",
+          "artifact retention path under project-testing/reports"
+        ]
+      },
+      "productionMutation": false,
+      "governance": "Use only for container_db gates after the workflow and migration command are reviewed. This does not replace Supabase RLS, Advisor, storage, or live migration evidence."
+    },
+    {
+      "id": "testcontainers-postgresql",
+      "name": "Testcontainers PostgreSQL",
+      "layer": "local-container-db",
+      "stage": "future",
+      "purpose": "Start disposable PostgreSQL containers for backend integration tests in local and CI environments.",
+      "releaseEvidencePolicy": "future-container-db-support",
+      "check": {
+        "type": "package-reference",
+        "packageName": "@testcontainers/postgresql"
+      },
+      "productionMutation": false,
+      "governance": "Do not add until local Docker capacity and disk budget are acceptable. Prefer GitHub Actions service containers first on this machine."
+    },
+    {
+      "id": "schemathesis",
+      "name": "Schemathesis",
+      "layer": "api-contract-fuzz",
+      "stage": "future",
+      "purpose": "Run OpenAPI contract and fuzz tests after an authoritative API artifact exists.",
+      "releaseEvidencePolicy": "future-api-contract-gate",
+      "check": {
+        "type": "future-prerequisite",
+        "requires": [
+          "authoritative OpenAPI artifact",
+          "safe test API target"
+        ]
+      },
+      "productionMutation": false,
+      "governance": "Do not add before API contracts are authoritative. Fuzz only against a safe test target."
+    },
+    {
+      "id": "argos-or-lost-pixel",
+      "name": "Argos or Lost Pixel",
+      "layer": "visual-review",
+      "stage": "future",
+      "purpose": "Provide PR-level visual diff review when Playwright screenshot volume exceeds local review capacity.",
+      "releaseEvidencePolicy": "future-visual-review-gate",
+      "check": {
+        "type": "future-prerequisite",
+        "requires": [
+          "stable screenshot baselines",
+          "visual diff ownership"
+        ]
+      },
+      "productionMutation": false,
+      "governance": "Use after local visual baselines stabilize. Do not replace semantic/UI assertions."
+    },
+    {
+      "id": "k6-or-artillery",
+      "name": "k6 or Artillery",
+      "layer": "load-performance",
+      "stage": "future",
+      "purpose": "Exercise critical API flows under load after budgets and safe test targets are stable.",
+      "releaseEvidencePolicy": "future-performance-gate",
+      "check": {
+        "type": "future-prerequisite",
+        "requires": [
+          "critical API flow list",
+          "performance budgets",
+          "safe load target"
+        ]
+      },
+      "productionMutation": false,
+      "governance": "Never point load tests at production without explicit environment ownership, budget, and rollback controls."
+    },
+    {
+      "id": "zap-baseline",
+      "name": "OWASP ZAP Baseline",
+      "layer": "security-smoke",
+      "stage": "future",
+      "purpose": "Run pre-release security smoke scans with explicit false-positive review.",
+      "releaseEvidencePolicy": "future-security-smoke-gate",
+      "check": {
+        "type": "future-prerequisite",
+        "requires": [
+          "safe test URL",
+          "auth strategy",
+          "false-positive triage owner"
+        ]
+      },
+      "productionMutation": false,
+      "governance": "Security findings require triage. A clean smoke scan is not a full penetration test."
+    }
+  ]
+}

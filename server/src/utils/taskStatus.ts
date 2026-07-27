@@ -3,6 +3,7 @@ import { normalizeStatus } from './statusHelpers.js'
 export type TaskStatusLike = {
   status?: string | null
   progress?: number | null
+  actual_end_date?: string | Date | null
   is_milestone?: boolean | null
 }
 
@@ -19,12 +20,20 @@ export type TaskObstacleLike = {
 export const COMPLETED_TASK_STATUSES = new Set(['completed', 'done', '已完成'])
 export const IN_PROGRESS_TASK_STATUSES = new Set(['in_progress', 'active', '进行中'])
 
+// SQL 形式的已完成状态列表，供原始 SQL（如 task-summaries 的 CTE）引用，
+// 与 COMPLETED_TASK_STATUSES 同源，避免手写副本再次漏掉 '已完成' 造成口径分叉。
+export const COMPLETED_TASK_STATUS_SQL_LIST = Array.from(COMPLETED_TASK_STATUSES)
+  .map((s) => `'${s.replace(/'/g, "''")}'`)
+  .join(', ')
+
 export function isCompletedTaskStatus(status?: string | null): boolean {
   return COMPLETED_TASK_STATUSES.has(normalizeStatus(status))
 }
 
 export function isCompletedTask(task: TaskStatusLike): boolean {
-  return isCompletedTaskStatus(task.status) || Number(task.progress ?? 0) >= 100
+  return isCompletedTaskStatus(task.status)
+    || Number(task.progress ?? 0) >= 100
+    || Boolean(task.actual_end_date)
 }
 
 export function isInProgressTask(task: TaskStatusLike): boolean {

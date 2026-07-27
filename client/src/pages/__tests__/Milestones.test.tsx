@@ -4,7 +4,6 @@ import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Milestones from '../Milestones'
-import { PROJECT_NAVIGATION_LABELS } from '@/config/navigation'
 import { apiGet } from '@/lib/apiClient'
 import { useStore } from '@/hooks/useStore'
 import { DashboardApiService } from '@/services/dashboardApi'
@@ -60,6 +59,34 @@ function findButton(container: HTMLElement, label: string) {
   ) as HTMLButtonElement | undefined
 }
 
+function findLink(container: HTMLElement, label: string) {
+  return Array.from(container.querySelectorAll('a')).find((anchor) =>
+    anchor.textContent?.includes(label),
+  ) as HTMLAnchorElement | undefined
+}
+
+function findTab(container: HTMLElement, label: string) {
+  return Array.from(container.querySelectorAll('[role="tab"]')).find((tab) =>
+    tab.textContent?.trim() === label,
+  ) as HTMLButtonElement | undefined
+}
+
+function availableDurationMetric(
+  value: number,
+  unit: 'calendar_day' | 'construction_production_day',
+) {
+  return {
+    value,
+    unit,
+    calendarRef: unit === 'calendar_day' ? 'gregorian' : 'construction-calendar-project-1',
+    calendarVersion: unit === 'calendar_day' ? 'ISO-8601' : 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-04-04',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 describe('Milestones page story coverage', () => {
   const projectId = 'project-1'
   const navigateMock = vi.fn()
@@ -70,6 +97,12 @@ describe('Milestones page story coverage', () => {
     container = document.createElement('div')
     document.body.appendChild(container)
     root = createRoot(container)
+    if (!HTMLElement.prototype.scrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+        configurable: true,
+        value: vi.fn(),
+      })
+    }
 
     mockedUseNavigate.mockReturnValue(navigateMock)
     mockedGetProjectSummary.mockResolvedValue({
@@ -77,12 +110,12 @@ describe('Milestones page story coverage', () => {
       name: '示例项目',
       milestoneOverview: {
         stats: {
-          total: 3,
-          pending: 2,
+          total: 5,
+          pending: 4,
           completed: 1,
           overdue: 1,
           upcomingSoon: 1,
-          completionRate: 33,
+          completionRate: 20,
         },
         summaryStats: {
           shiftedCount: 1,
@@ -90,13 +123,13 @@ describe('Milestones page story coverage', () => {
           dueSoon30dCount: 2,
           highRiskCount: 2,
         },
-        healthSummary: {
-          status: 'needs_attention',
-          needsAttentionCount: 2,
-          mappingPendingCount: 1,
-          mergedCount: 0,
-          excessiveDeviationCount: 1,
-          incompleteDataCount: 1,
+        kpiComparisons: {
+          monthly: {
+            shifted: { current: 1, previous: 0, delta: 1, periodLabel: '较上月', status: 'ready' },
+            baselineOnTime: { current: 1, previous: 1, delta: 0, periodLabel: '较上月', status: 'ready' },
+            dueSoon30d: { current: 2, previous: 3, delta: -1, periodLabel: '较上月', status: 'ready' },
+            highRisk: { current: 2, previous: null, delta: null, periodLabel: '较上月', status: 'insufficient_history' },
+          },
         },
         items: [
           {
@@ -107,9 +140,12 @@ describe('Milestones page story coverage', () => {
             planned_date: '2026-04-01',
             current_planned_date: '2026-04-03',
             actual_date: '2026-04-04',
+            planDateShift: availableDurationMetric(2, 'calendar_day'),
+            actualScheduleVariance: availableDurationMetric(1, 'construction_production_day'),
             progress: 100,
             status: 'completed',
             statusLabel: '已兑现',
+            milestone_level: 1,
             non_base_labels: ['偏差过大'],
             updatedAt: '2026-04-01T00:00:00.000Z',
           },
@@ -118,12 +154,13 @@ describe('Milestones page story coverage', () => {
             name: '地上结构封顶',
             description: '当前推进中的节点',
             targetDate: '2026-04-06',
-            planned_date: '2026-04-06',
+            planned_date: null,
             current_planned_date: '2026-04-08',
             actual_date: null,
             progress: 60,
             status: 'soon',
             statusLabel: '临近节点',
+            milestone_level: 2,
             parent_id: 'm1',
             mapping_pending: true,
             non_base_labels: ['待补映射'],
@@ -137,7 +174,34 @@ describe('Milestones page story coverage', () => {
             progress: 0,
             status: 'upcoming',
             statusLabel: '待完成',
+            milestone_level: 1,
             updatedAt: '2026-04-03T00:00:00.000Z',
+            non_base_labels: [],
+          },
+          {
+            id: 'm4',
+            name: '室外管网完成',
+            description: '只有当前计划',
+            targetDate: '2026-05-20',
+            current_planned_date: '2026-05-20',
+            actual_date: null,
+            progress: 0,
+            status: 'upcoming',
+            statusLabel: '待完成',
+            milestone_level: 3,
+            non_base_labels: [],
+          },
+          {
+            id: 'm5',
+            name: '幕墙封闭',
+            description: '只有基线日期',
+            targetDate: '2026-05-30',
+            planned_date: '2026-05-30',
+            actual_date: null,
+            progress: 0,
+            status: 'upcoming',
+            statusLabel: '待完成',
+            milestone_level: 1,
             non_base_labels: [],
           },
         ],
@@ -176,7 +240,6 @@ describe('Milestones page story coverage', () => {
       obstacles: [] as never,
       acceptancePlans: [] as never,
       participantUnits: [] as never,
-      scopeDimensions: [] as never,
     } as never)
   })
 
@@ -195,7 +258,6 @@ describe('Milestones page story coverage', () => {
       obstacles: [] as never,
       acceptancePlans: [] as never,
       participantUnits: [] as never,
-      scopeDimensions: [] as never,
     } as never)
 
     act(() => {
@@ -217,38 +279,100 @@ describe('Milestones page story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['里程碑', '节点偏差表', PROJECT_NAVIGATION_LABELS.dashboard, '任务管理'])
+    await waitForText(container, ['里程碑', '节点偏差表', '任务管理', '+1 较上月'])
     expect(container.querySelector('.page-shell')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestones-page-title"]')).toBeTruthy()
     expect(container.querySelector('[data-testid="milestones-summary-grid"]')?.className).toContain('xl:grid-cols-4')
     expect(container.querySelectorAll('[data-testid^="milestone-summary-card-"]')).toHaveLength(4)
-    expect(container.querySelector('[data-testid="milestone-health-summary"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="milestone-health-top3"]')?.textContent).toContain('更多(4)')
-    expect(container.querySelector('[data-testid="milestone-child-group"]')).toBeTruthy()
-    expect(container.querySelector('[data-testid="milestone-card-m1"] .badge-micro')?.className).toContain('ring-emerald-200')
-    expect(container.querySelector('[data-testid="milestone-card-m2"] .badge-micro')?.className).toContain('ring-amber-200')
-    expect(container.querySelector('[data-testid="milestone-progress-m1"]')?.innerHTML).toContain('duration-700')
-
-    const milestoneButton = findButton(container, '地下室施工')
-    expect(milestoneButton).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestone-summary-card-当前已偏移数"]')?.textContent).toContain('+1 较上月')
+    expect(container.querySelector('[data-testid="milestone-summary-card-施工效率"]')).toBeNull()
+    expect(container.textContent).toContain('持平 较上月')
+    expect(container.textContent).toContain('-1 较上月')
+    expect(container.textContent).toContain('待积累 较上月')
+    expect(container.querySelector('[data-testid="milestone-card-m2"]')).toBeTruthy()
+    expect(findTab(container, '全部')).toBeTruthy()
+    expect(findTab(container, '待完成')).toBeTruthy()
+    expect(findTab(container, '7 个日历天内')).toBeTruthy()
+    expect(findTab(container, '已逾期')).toBeTruthy()
+    expect(findTab(container, '已完成')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestone-level-group-1"]')?.textContent).toContain('一级里程碑')
+    expect(container.querySelector('[data-testid="milestone-level-group-1"]')?.textContent).toContain('· 3')
+    expect(container.querySelector('[data-testid="milestone-level-group-2"]')?.textContent).toContain('二级里程碑')
+    expect(container.querySelector('[data-testid="milestone-level-group-3"]')?.textContent).toContain('三级里程碑')
+    const levelOneGroup = container.querySelector('[data-testid="milestone-level-group-1"]')
+    const levelOnePending = levelOneGroup?.querySelector('[data-testid="milestone-card-m5"]')
+    const levelOneLaterPending = levelOneGroup?.querySelector('[data-testid="milestone-card-m3"]')
+    const levelOneCompleted = levelOneGroup?.querySelector('[data-testid="milestone-card-m1"]')
+    expect(levelOnePending && levelOneLaterPending && levelOneCompleted).toBeTruthy()
+    expect((levelOnePending!.compareDocumentPosition(levelOneLaterPending!) & Node.DOCUMENT_POSITION_FOLLOWING) > 0).toBe(true)
+    expect((levelOneLaterPending!.compareDocumentPosition(levelOneCompleted!) & Node.DOCUMENT_POSITION_FOLLOWING) > 0).toBe(true)
+    expect(container.querySelector('[data-testid="milestone-card-m2"]')?.textContent).not.toContain('L2')
+    expect(container.textContent).toContain('主体结构封顶')
+    expect(container.textContent).toContain('待完成 · 日期待补齐')
+    expect(container.textContent).toContain('按当前计划推进 · 当前')
+    expect(container.textContent).toContain('按基线推进 · 基线')
+    expect(container.querySelector('[data-testid="milestone-detail-panel"]')).toBeNull()
+    expect(container.querySelector('[data-testid="milestone-status-m1"]')?.className).toContain('ring-emerald-200')
+    expect(container.querySelector('[data-testid="milestone-status-m2"]')?.className).toContain('ring-amber-200')
+    expect(container.querySelector('[data-testid="milestones-three-time"]')).toBeTruthy()
+    const planCardButton = container.querySelector('[data-testid="milestone-card-m2"] button') as HTMLButtonElement | null
+    expect(planCardButton).toBeTruthy()
 
     await act(async () => {
-      milestoneButton?.click()
+      planCardButton?.click()
+      await flush()
+    })
+    expect(container.textContent).toContain('计划未对齐')
+    expect(container.textContent).toContain('地上结构封顶')
+    expect(container.querySelector('[data-testid="milestone-card-m2"]')?.textContent).toContain('偏差分析')
+    expect(container.querySelector('[data-testid="milestone-card-m2"]')?.textContent).toContain('实际尚未完成')
+    expect(container.querySelector('[data-testid="milestone-level-group-2"]')?.textContent).toContain('· 1')
+    expect(container.querySelector('[data-testid="milestone-detail-panel"]')).toBeTruthy()
+    expect(container.querySelector('[data-testid="milestone-detail-hierarchy"]')?.textContent).toContain('地下室施工')
+    expect(container.querySelector('[data-testid="milestone-detail-hierarchy"]')?.textContent).not.toContain('属于：')
+    const detailTime = container.querySelector('[data-testid="milestone-detail-time"]')
+    expect(detailTime?.textContent).toContain('时间线')
+    expect(detailTime?.textContent).toContain('基线')
+    expect(detailTime?.textContent).toContain('当前计划')
+    expect(detailTime?.textContent).toContain('实际')
+    expect(container.querySelector('[data-testid="milestone-detail-time-current"]')?.className).not.toContain('border-l-2')
+    expect(container.querySelector('[data-testid="milestone-detail-time-current-label"]')?.className).toContain('text-slate-600')
+    expect(container.querySelector('[data-testid="milestone-detail-time-actual-label"]')?.className).toContain('text-slate-300')
+    expect(container.textContent).toContain('未完成')
+    expect(container.textContent).not.toContain('待补映射')
+
+    await act(async () => {
+      const completedCardButton = container.querySelector('[data-testid="milestone-card-m1"] button') as HTMLButtonElement | null
+      completedCardButton?.click()
       await flush()
     })
 
-    await waitForText(container, ['偏差结果', '异常与对应关系', '关联执行'])
-    expect(container.textContent).toContain('进入任务管理')
-    expect(container.textContent).toContain('地下室模板安装')
+    expect(container.textContent).toContain('地下室施工')
+    expect(container.textContent).toContain('主体结构封顶')
+    expect(container.querySelector('[data-testid="milestone-detail-deviation-current"]')?.className).not.toContain('border-red-500')
+    expect(container.querySelector('[data-testid="milestone-detail-deviation-current"]')?.className).not.toContain('pl-2.5')
+    expect(container.querySelector('[data-testid="milestone-detail-deviation-current"]')?.className).not.toContain('bg-')
+    expect(container.querySelector('[data-testid="milestone-detail-deviation-current"]')?.className).not.toContain('ring-')
 
-    const goToTasksButton = findButton(container, '进入任务管理')
-    expect(goToTasksButton).toBeTruthy()
+    expect(document.body.querySelector('[data-testid="milestone-detail-panel"]')).toBeTruthy()
+    await waitForText(document.body, ['偏差分析', '计划偏差', '实际偏差', '关联执行'])
+    expect(document.body.textContent).not.toContain('对应关系')
+    expect(document.body.textContent).not.toContain('最近更新')
+    expect(document.body.textContent).toContain('进入任务管理')
+
+    expect(document.body.querySelector('[data-testid="milestone-detail-panel"]')).toBeTruthy()
+    expect(document.body.textContent).toContain('关联任务 1 个 · 已完成 0 个')
+
+    const goToTasksLink = findLink(document.body, '进入任务管理')
+    expect(goToTasksLink).toBeTruthy()
+    expect(goToTasksLink?.getAttribute('href')).toContain(`/projects/${projectId}/gantt?`)
 
     await act(async () => {
-      goToTasksButton?.click()
+      goToTasksLink?.click()
       await flush()
     })
 
-    expect(navigateMock).toHaveBeenCalledWith(`/projects/${projectId}/gantt?highlight=m1`)
+    expect(navigateMock).toHaveBeenCalledWith(`/projects/${projectId}/gantt?milestoneId=m1&milestoneName=${encodeURIComponent('地下室施工')}`)
   })
 
   it('keeps upcoming milestones visible under the pending tab', async () => {
@@ -263,9 +387,9 @@ describe('Milestones page story coverage', () => {
       await flush()
     })
 
-    await waitForText(container, ['主体结构封顶', '待完成 2'])
+    await waitForText(container, ['主体结构封顶', '待完成'])
 
-    const pendingTab = findButton(container, '待完成 2')
+    const pendingTab = findTab(container, '待完成')
     expect(pendingTab).toBeTruthy()
 
     await act(async () => {
@@ -275,5 +399,118 @@ describe('Milestones page story coverage', () => {
 
     expect(container.textContent).toContain('主体结构封顶')
     expect(container.textContent).not.toContain('暂无匹配的节点')
+  })
+
+  it('renders calendar-day plan shifts and fails closed production-day overdue facts from typed milestone metrics', async () => {
+    const calendarMetric = (value: number) => ({
+      value,
+      unit: 'calendar_day' as const,
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'available' as const,
+      unavailableReason: null,
+    })
+    const unavailableProductionMetric = {
+      value: null,
+      unit: 'construction_production_day' as const,
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'unavailable' as const,
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+    const unavailableCalendarMetric = {
+      value: null,
+      unit: 'calendar_day' as const,
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-20',
+      availability: 'unavailable' as const,
+      unavailableReason: 'duration_value_missing',
+    }
+    mockedGetProjectSummary.mockResolvedValueOnce({
+      id: projectId,
+      name: 'typed milestone project',
+      milestoneOverview: {
+        stats: { total: 3, pending: 3, completed: 0, overdue: 1, upcomingSoon: 0, completionRate: 0 },
+        summaryStats: { shiftedCount: 1, baselineOnTimeCount: 0, dueSoon30dCount: 0, highRiskCount: 1 },
+        items: [
+          {
+            id: 'typed-shift',
+            name: 'Typed plan shift',
+            description: 'typed calendar fact wins',
+            targetDate: '2026-08-10',
+            planned_date: '2026-04-01',
+            current_planned_date: '2026-04-10',
+            actual_date: null,
+            progress: 0,
+            status: 'upcoming',
+            statusLabel: '待完成',
+            updatedAt: '2026-07-20T00:00:00.000Z',
+            milestone_level: 1,
+            planDateShift: calendarMetric(-2),
+            futureDueWindow: calendarMetric(21),
+            actualOverdue: unavailableProductionMetric,
+            actualScheduleVariance: unavailableProductionMetric,
+          },
+          {
+            id: 'typed-overdue',
+            name: 'Typed overdue',
+            description: 'missing production calendar',
+            targetDate: '2026-04-01',
+            planned_date: '2026-03-01',
+            current_planned_date: '2026-04-01',
+            actual_date: null,
+            progress: 30,
+            status: 'overdue',
+            statusLabel: '已逾期',
+            updatedAt: '2026-07-20T00:00:00.000Z',
+            milestone_level: 1,
+            planDateShift: calendarMetric(31),
+            futureDueWindow: calendarMetric(-110),
+            actualOverdue: unavailableProductionMetric,
+            actualScheduleVariance: unavailableProductionMetric,
+          },
+          {
+            id: 'typed-unavailable-shift',
+            name: 'Unavailable plan shift',
+            description: 'missing calendar-day value',
+            targetDate: '2026-08-20',
+            planned_date: '2026-04-01',
+            current_planned_date: '2026-04-10',
+            actual_date: null,
+            progress: 0,
+            status: 'upcoming',
+            statusLabel: '待完成',
+            updatedAt: '2026-07-20T00:00:00.000Z',
+            milestone_level: 1,
+            planDateShift: unavailableCalendarMetric,
+            futureDueWindow: calendarMetric(31),
+            actualOverdue: unavailableProductionMetric,
+            actualScheduleVariance: unavailableProductionMetric,
+          },
+        ],
+      },
+    } as never)
+
+    await act(async () => {
+      root?.render(
+        <MemoryRouter initialEntries={[`/projects/${projectId}/milestones`]}>
+          <Routes>
+            <Route path="/projects/:id/milestones" element={<Milestones />} />
+          </Routes>
+        </MemoryRouter>,
+      )
+      await flush()
+    })
+
+    await waitForText(container, ['较基线提前 2 个日历天', '生产日口径不可用', '日历天口径不可用'])
+    expect(container.querySelector('[data-testid="milestone-card-typed-shift"]')?.textContent).not.toContain('较基线延后 9 天')
+    expect(container.querySelector('[data-testid="milestone-card-typed-overdue"]')?.textContent).not.toMatch(/已逾期\s*\d+\s*天/)
+    expect(container.querySelector('[data-testid="milestone-card-typed-unavailable-shift"]')?.textContent).not.toContain('按基线推进')
   })
 })

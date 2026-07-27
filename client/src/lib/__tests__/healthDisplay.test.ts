@@ -4,6 +4,8 @@ import {
   getHealthCardDisplay,
   getHealthDimensionDisplay,
   getHealthProgressDisplay,
+  getProjectHealthPill,
+  getProjectHealthStatus,
   getHealthTrendDisplay,
 } from '../healthDisplay'
 
@@ -29,6 +31,22 @@ describe('healthDisplay', () => {
       badgeClass: 'bg-red-50 text-red-600',
       textClass: 'text-red-600',
     })
+    expect(getHealthCardDisplay(Number.NaN)).toEqual({
+      label: '待完善',
+      badgeClass: 'bg-slate-100 text-slate-600',
+      textClass: 'text-slate-500',
+    })
+  })
+
+  it('uses the backend project health thresholds for status and pill mapping', () => {
+    expect(getProjectHealthStatus(80)).toBe('健康')
+    expect(getProjectHealthStatus(60)).toBe('亚健康')
+    expect(getProjectHealthStatus(40)).toBe('预警')
+    expect(getProjectHealthStatus(39)).toBe('危险')
+    expect(getProjectHealthStatus(Number.NaN)).toBe('待完善')
+
+    expect(getProjectHealthPill(60)).toEqual({ label: '亚健康', variant: 'info' })
+    expect(getProjectHealthPill(39)).toEqual({ label: '危险', variant: 'danger' })
   })
 
   it('maps trend labels and tones', () => {

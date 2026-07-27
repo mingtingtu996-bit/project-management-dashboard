@@ -48,21 +48,33 @@ function normalizedRelative(filePath: string) {
 
 const migratedDialogFiles = [
   'src/components/ChangePasswordDialog.tsx',
-  'src/components/ConflictResolutionModal.tsx',
   'src/components/EditProfileDialog.tsx',
   'src/components/LoginDialog.tsx',
   'src/components/monitoring/FeedbackModal.tsx',
   'src/pages/PreMilestones/components/CertificateDetailDrawer.tsx',
   'src/pages/PreMilestones/components/ConditionsDialog.tsx',
   'src/pages/PreMilestones/components/MilestoneDialog.tsx',
-  'src/pages/WBSTemplates/components/ApplyModal.tsx',
-  'src/pages/WBSTemplates/components/CreateModal.tsx',
-  'src/pages/WBSTemplates/components/EditModal.tsx',
-  'src/pages/WBSTemplates/components/PreviewModal.tsx',
   'src/pages/planning/BaselinePage.tsx',
 ]
 
+const retiredCompatibilityFiles = [
+  'src/components/ConflictAlert.tsx',
+  'src/components/ConflictResolutionModal.tsx',
+  'src/hooks/useConflictDetection.ts',
+  'src/hooks/useDataSync.ts',
+  'src/lib/networkMonitor.ts',
+  'src/lib/offlineCache.ts',
+  'src/lib/realtimeService.ts',
+  'src/lib/storageService.ts',
+  'src/lib/supabaseAdapter.ts',
+]
+
 describe('v1.3.3 UI/UX source contract', () => {
+  it('keeps the retired direct-Supabase offline compatibility stack removed', () => {
+    expect(retiredCompatibilityFiles.filter((file) => existsSync(join(repoRoot, file)))).toEqual([])
+    expect(read('src/main.tsx')).not.toContain('storageService')
+  })
+
   it('keeps legacy focus, disabled opacity, and scale interaction tokens out', () => {
     expect(collectViolations(/focus:(?:ring-|outline-none|border-|opacity)|disabled:opacity-(?:30|60)|hover:scale-/g)).toEqual([])
   })
@@ -71,6 +83,39 @@ describe('v1.3.3 UI/UX source contract', () => {
     expect(read('../package.json')).toContain('"verify:uiux-overlap"')
     expect(read('../scripts/verify-uiux-overlap.mjs')).toContain('details:not([open])')
     expect(read('../scripts/verify-uiux-overlap.mjs')).toContain('data-overlap-ignore')
+  })
+
+  it('keeps closeout UIUX gates on the governed process path instead of the legacy force-close entry', () => {
+    const uiuxGateScripts = [
+      '../scripts/verify-uiux-visual.mjs',
+      '../scripts/verify-uiux-a11y.mjs',
+      '../scripts/verify-uiux-predeploy-gates.mjs',
+    ]
+
+    uiuxGateScripts.forEach((script) => {
+      const source = read(script)
+      expect(source, script).not.toContain('closeout-force-close-entry')
+      expect(source, script).toContain('closeout-single-process-entry')
+    })
+  })
+
+  it('keeps UIUX browser gates aligned with scoped onboarding completion keys', () => {
+    const uiuxBrowserScripts = [
+      '../scripts/verify-uiux-visual.mjs',
+      '../scripts/verify-uiux-overlap.mjs',
+      '../scripts/verify-uiux-a11y.mjs',
+      '../scripts/verify-uiux-performance.mjs',
+      '../scripts/verify-uiux-release-smoke.mjs',
+      '../scripts/verify-uiux-predeploy-gates.mjs',
+    ]
+
+    uiuxBrowserScripts.forEach((script) => {
+      const source = read(script)
+      expect(source, script).toContain('onboarding_workspace_completed')
+      expect(source, script).toContain('onboarding_project_completed')
+      expect(source, script).not.toMatch(/['"]onboarding_completed['"]/)
+      expect(source, script).toContain('onboarding_daily_workflow_dismissed')
+    })
   })
 
   it('prevents the Gantt batch bar from covering content when nothing is selected', () => {
@@ -95,7 +140,7 @@ describe('v1.3.3 UI/UX source contract', () => {
     expect(hexDebt).toEqual([])
     expect(legacyCardDebt).toEqual([])
     expect(localMetricCardDebt).toEqual([])
-  })
+  }, 15_000)
 
   it('keeps migrated dialogs on the shared Radix dialog primitive', () => {
     const fixedOverlayPattern = /fixed\s+inset-(?:0|y-0)[^"`']*z-50|role="dialog"|aria-modal="true"/

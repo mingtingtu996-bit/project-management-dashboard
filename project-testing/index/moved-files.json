@@ -1,0 +1,116 @@
+{
+  "schemaVersion": "workbuddy-testing-moved-files.v1",
+  "generatedAt": "2026-06-29T13:30:00+08:00",
+  "compatibility": {
+    "legacyRoot": "artifacts/",
+    "strategy": "Historical artifact paths under artifacts/ are kept as Windows junctions where practical. Real files for testing evidence now live under project-testing/artifacts/.",
+    "boundary": "Do not write new testing, release, browser, smoke, live diagnostic, DB diagnostic, package, log, or legacy report artifacts directly into artifacts/."
+  },
+  "entries": [
+    {
+      "id": "browser-checks",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/browser-checks",
+      "newPath": "project-testing/artifacts/browser-checks",
+      "reason": "Browser suite manifests, screenshots, and verification JSON are release-testing evidence."
+    },
+    {
+      "id": "test-runs",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/test-runs",
+      "newPath": "project-testing/artifacts/test-runs",
+      "reason": "Historical and current diagnostic run evidence belongs under the testing center; a junction preserves existing hardcoded evidence references."
+    },
+    {
+      "id": "smoke-test-results",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/test-results",
+      "newPath": "project-testing/artifacts/test-results",
+      "reason": "Ad hoc smoke-test output is testing evidence."
+    },
+    {
+      "id": "smoke-test-results-edge",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/test-results-edge",
+      "newPath": "project-testing/artifacts/test-results-edge",
+      "reason": "Edge-case smoke-test output is testing evidence."
+    },
+    {
+      "id": "smoke-test-results-phase3",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/test-results-phase3",
+      "newPath": "project-testing/artifacts/test-results-phase3",
+      "reason": "Historical phase 3 smoke-test output is testing evidence."
+    },
+    {
+      "id": "smoke-test-results-phase4",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/test-results-phase4",
+      "newPath": "project-testing/artifacts/test-results-phase4",
+      "reason": "Historical phase 4 smoke-test output is testing evidence."
+    },
+    {
+      "id": "live-diagnostics",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/live-diagnostics",
+      "newPath": "project-testing/artifacts/live-diagnostics",
+      "reason": "Live diagnostic captures are governed by the testing cockpit."
+    },
+    {
+      "id": "live-page-check",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/live-page-check",
+      "newPath": "project-testing/artifacts/live-page-check",
+      "reason": "Live page probe artifacts are testing evidence."
+    },
+    {
+      "id": "audit-snapshots",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/audit-snapshots",
+      "newPath": "project-testing/artifacts/audit-snapshots",
+      "reason": "Browser/runtime audit snapshots are verification evidence."
+    },
+    {
+      "id": "screenshots",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/screenshots",
+      "newPath": "project-testing/artifacts/screenshots",
+      "reason": "General debug screenshots are test/debug evidence unless already classified as UI-specific."
+    },
+    {
+      "id": "legacy-reports",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/reports",
+      "newPath": "project-testing/artifacts/legacy-reports",
+      "reason": "Legacy generated reports are preserved in the testing center as historical verification/governance artifacts; their business meaning remains governed by the original source code and docs."
+    },
+    {
+      "id": "logs",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/logs",
+      "newPath": "project-testing/artifacts/logs/legacy-artifacts-logs",
+      "reason": "Generated server/client process logs are testing/debug evidence."
+    },
+    {
+      "id": "dev-server",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/dev-server",
+      "newPath": "project-testing/artifacts/logs/dev-server",
+      "reason": "Generated local dev-server logs are testing/debug evidence."
+    },
+    {
+      "id": "temp",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/temp",
+      "newPath": "project-testing/artifacts/logs/temp",
+      "reason": "Generated temporary logs are testing/debug evidence."
+    },
+    {
+      "id": "packages",
+      "status": "moved-with-junction",
+      "oldPath": "artifacts/packages",
+      "newPath": "project-testing/artifacts/packages",
+      "reason": "Generated deployment/test packages are release artifacts."
+    }
+  ]
+}

@@ -93,7 +93,17 @@ function criticalPathRuleObservationMatchesPublication(
   const observedPublicationKey = normalizeText(evidenceRefs.runtimeConsumerPublicationKey)
   return Boolean(publicationKey)
     && Boolean(observedPublicationKey)
-    && publicationKey === observedPublicationKey
+    && (
+      publicationKey === observedPublicationKey
+      || publicationKey.endsWith(`:${observedPublicationKey}`)
+    )
+}
+
+function criticalPathRuntimePublicationKeyFromExecutionRef(value: unknown) {
+  const executionRef = normalizeText(value)
+  if (!executionRef) return null
+  const prefix = 'duration_learning_runtime_publications:'
+  return executionRef.startsWith(prefix) ? executionRef.slice(prefix.length) : executionRef
 }
 
 function readRowText(row: Record<string, unknown>, ...keys: string[]) {
@@ -104,34 +114,19 @@ function readRowText(row: Record<string, unknown>, ...keys: string[]) {
   return ''
 }
 
-function readRowRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
 function findCurrentPublishedCriticalPathRuleVersionId(
   sourceRows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
 ) {
   for (const source of sourceRows ?? []) {
-    if (source.sourceTable !== 'construction_dependency_rule_runtime_publications') continue
+    if (source.sourceTable !== 'duration_learning_runtime_publications') continue
     const row = source.row
-    const lineage = readRowRecord(row.dependency_rule_lineage ?? row.dependencyRuleLineage)
-    const criticalPathRuleVersionId = readRowText(
-      row,
-      'critical_path_rule_version_id',
-      'criticalPathRuleVersionId',
-      'dependency_rule_version_id',
-      'dependencyRuleVersionId',
-    )
+    const criticalPathRuleVersionId = readRowText(row, 'artifact_key', 'artifactKey')
     const publicationKey = readRowText(row, 'publication_key', 'publicationKey')
-    const lineageAssetType = readRowText(lineage, 'assetType', 'asset_type')
     if (
       criticalPathRuleVersionId
       && publicationKey
-      && publicationKey.startsWith('critical_path_rule_runtime:')
-      && readRowText(row, 'runtime_publication_status', 'runtimePublicationStatus') === 'runtime_published'
-      && (!lineageAssetType || lineageAssetType === CRITICAL_PATH_RULE_CANDIDATE_ASSET_KEY)
+      && readRowText(row, 'asset_key', 'assetKey') === CRITICAL_PATH_RULE_CANDIDATE_ASSET_KEY
+      && ['canary', 'stable'].includes(readRowText(row, 'publication_stage', 'publicationStage'))
     ) {
       return criticalPathRuleVersionId
     }
@@ -249,7 +244,9 @@ export function buildCriticalPathRulePublicationReadinessFromProductionRows(
   const productionLineage = criticalPathRuleProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
   const criticalPathRuleVersionId = findCurrentPublishedCriticalPathRuleVersionId(input.sourceRows)
-  const runtimePublicationKey = normalizeText(evidenceRefs.publicationExecutionRef)
+  const runtimePublicationKey = criticalPathRuntimePublicationKeyFromExecutionRef(
+    evidenceRefs.publicationExecutionRef,
+  )
   const rollbackTarget = normalizeText(evidenceRefs.rollbackDrillEvidenceRef)
   const hasRuntimeConsumerObservation = Boolean(evidenceRefs.runtimeConsumerObservationRef)
   const runtimeConsumerObservationMatchesPublication = hasRuntimeConsumerObservation

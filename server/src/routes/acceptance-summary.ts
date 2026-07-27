@@ -1,14 +1,16 @@
 import { Router } from 'express'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { buildAcceptanceProjectSummary, getAcceptanceFlowSnapshot } from '../services/acceptanceFlowService.js'
 import type { ApiResponse } from '../types/index.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
 
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', requireProjectMember((req) => (
+  String(req.params.projectId ?? req.query.projectId ?? req.query.project_id ?? '').trim() || undefined
+)), asyncHandler(async (req, res) => {
   const projectId = String(req.params.projectId ?? req.query.projectId ?? req.query.project_id ?? '').trim()
   if (!projectId) {
     const response: ApiResponse = {

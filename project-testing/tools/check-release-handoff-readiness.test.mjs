@@ -13,21 +13,29 @@ import {
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const matrixPath = path.join(repoRoot, 'project-testing/matrix/release-test-matrix.json');
-const templatePath = path.join(repoRoot, 'project-testing/runbooks/release-handoff-template.json');
 
 test('handoff template is intentionally not ready because unlock flags and required refs are blank', async () => {
-  const report = await checkReleaseHandoffReadiness({
-    handoffFile: templatePath,
-    matrixPath,
-    now: new Date('2026-06-29T03:20:00+08:00'),
-  });
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-template-'));
+  const handoffFile = path.join(root, 'handoff-template.json');
 
-  assert.equal(report.status, 'fail');
-  assert.equal(report.readyToRun, false);
-  assert.equal(report.blockedGateCount, 4);
-  assert.ok(report.gates.some((gate) => gate.missingFlags.includes('--include-live')));
-  assert.ok(report.gates.some((gate) => gate.missingFields.includes('live.authTokenRef')));
-  assert.equal(report.secretLeakCount, 0);
+  try {
+    await writeJson(handoffFile, incompleteHandoffTemplate());
+
+    const report = await checkReleaseHandoffReadiness({
+      handoffFile,
+      matrixPath,
+      now: new Date('2026-06-29T03:20:00+08:00'),
+    });
+
+    assert.equal(report.status, 'fail');
+    assert.equal(report.readyToRun, false);
+    assert.equal(report.blockedGateCount, 4);
+    assert.ok(report.gates.some((gate) => gate.missingFlags.includes('--include-live')));
+    assert.ok(report.gates.some((gate) => gate.missingFields.includes('live.authTokenRef')));
+    assert.equal(report.secretLeakCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('complete handoff declaration passes readiness without embedding secrets', async () => {
@@ -169,6 +177,44 @@ test('readiness check supports scoped gate selection and argument parsing', asyn
   }
 });
 
+test('readiness check accepts server-side sanitized env presence without a runner-local production env file', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-server-env-'));
+  const handoffFile = path.join(root, 'handoff.json');
+  const handoff = completeHandoff();
+  handoff.boundary = {
+    serverSideDiscovery: true,
+    envFileUploaded: false,
+  };
+  handoff.envPresence = {
+    source: 'server-side-sanitized-signals',
+    envFile: 'deploy/env/server.production.env',
+    keyStatus: {
+      SUPABASE_SERVICE_KEY: { present: true, nonEmpty: true },
+      SUPABASE_MIGRATION_URL: { present: true, nonEmpty: true },
+    },
+  };
+  handoff.gates['c18-l07-l15-live-diagnostics'].live.authTokenRef = 'env://deploy/env/server.production.env#SUPABASE_SERVICE_KEY';
+  handoff.gates['old-object-physical-drop-closeout'].db.databaseTargetRef = 'env://deploy/env/server.production.env#SUPABASE_MIGRATION_URL';
+
+  try {
+    await writeJson(handoffFile, handoff);
+
+    const report = await checkReleaseHandoffReadiness({
+      handoffFile,
+      matrixPath,
+      gateIds: [
+        'c18-l07-l15-live-diagnostics',
+        'old-object-physical-drop-closeout',
+      ],
+    });
+
+    assert.equal(report.status, 'pass');
+    assert.equal(report.refIssueCount, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('old-object readiness accepts no-safe-candidate closeout refs without physical DROP refs', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'workbuddy-handoff-no-safe-'));
   const handoffFile = path.join(root, 'handoff.json');
@@ -200,6 +246,44 @@ test('old-object readiness accepts no-safe-candidate closeout refs without physi
 
 async function writeJson(filePath, value) {
   await writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+function incompleteHandoffTemplate() {
+  return {
+    schemaVersion: 'workbuddy-release-handoff-input/v1',
+    unlockFlags: {
+      includeLive: false,
+      confirmLiveHandoff: false,
+      includeDb: false,
+      confirmDbReady: false,
+    },
+    gates: {
+      'c18-l07-l15-live-diagnostics': {
+        live: {},
+        targets: {},
+        evidenceOwners: {},
+      },
+      'c15-live-learning-closeout': {
+        live: {},
+        targets: {},
+        approvals: {},
+        owners: {},
+        evidenceOwners: {},
+      },
+      'c19-runtime-publication-release-rollback': {
+        live: {},
+        targets: {},
+        release: {},
+        approvals: {},
+        owners: {},
+      },
+      'old-object-physical-drop-closeout': {
+        db: {},
+        approvals: {},
+        owners: {},
+      },
+    },
+  };
 }
 
 function completeHandoff() {

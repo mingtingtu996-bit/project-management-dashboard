@@ -1,21 +1,12 @@
 import { logger } from '../middleware/logger.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
+import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 import { createStandardWorkDurationReplayUpgradeCandidates } from '../services/standardWorkDurationSeedReplayCandidateBridgeService.js'
 import { buildStandardWorkDurationSeedReplayGovernanceReport } from '../services/standardWorkDurationSeedReplayGovernanceService.js'
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000
-
 function createJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-function nextDailyRunAt(hour: number, minute: number) {
-  const now = new Date()
-  const nextRun = new Date(now)
-  nextRun.setHours(hour, minute, 0, 0)
-  if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1)
-  return nextRun
 }
 
 export type StandardWorkDurationSeedReplayJobResult = {
@@ -138,46 +129,34 @@ export async function runStandardWorkDurationSeedReplaySweep(params: {
 }
 
 export class StandardWorkDurationSeedReplayJob {
-  private timer: NodeJS.Timeout | null = null
-  private startTimer: NodeJS.Timeout | null = null
   private isRunning = false
   private lastRun: Date | null = null
   private nextRun: Date | null = null
+  private wallClockTimer = new PersistentWallClockJobTimer({
+    jobName: 'standardWorkDurationSeedReplayJob',
+    schedule: { kind: 'daily', hour: 6, minute: 15 },
+    execute: () => this.execute('scheduler'),
+    onScheduled: ({ nextRun, delayMs }) => {
+      this.nextRun = nextRun
+      logger.info('standardWorkDurationSeedReplayJob scheduled', {
+        nextRun: nextRun.toISOString(),
+        trigger: 'daily_06_15',
+        initialDelay: delayMs,
+      })
+    },
+    onError: (error) => logger.error('standardWorkDurationSeedReplayJob scheduler failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
 
   start() {
-    if (this.timer || this.startTimer) {
+    if (!this.wallClockTimer.start()) {
       logger.warn('standardWorkDurationSeedReplayJob is already running')
-      return
     }
-
-    const nextRun = nextDailyRunAt(6, 15)
-    this.nextRun = nextRun
-    const initialDelay = Math.max(nextRun.getTime() - Date.now(), 0)
-    logger.info('standardWorkDurationSeedReplayJob scheduled', {
-      nextRun: nextRun.toISOString(),
-      trigger: 'daily_06_15',
-      initialDelay,
-    })
-
-    this.startTimer = setTimeout(() => {
-      this.startTimer = null
-      void this.execute('scheduler')
-      this.timer = setInterval(() => {
-        this.nextRun = new Date(Date.now() + DAY_IN_MS)
-        void this.execute('scheduler')
-      }, DAY_IN_MS)
-    }, initialDelay)
   }
 
   stop() {
-    if (this.startTimer) {
-      clearTimeout(this.startTimer)
-      this.startTimer = null
-    }
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
+    this.wallClockTimer.stop()
     this.nextRun = null
     logger.info('standardWorkDurationSeedReplayJob stopped')
   }
@@ -185,7 +164,7 @@ export class StandardWorkDurationSeedReplayJob {
   getStatus() {
     return {
       isRunning: this.isRunning,
-      isScheduled: this.timer !== null || this.startTimer !== null,
+      isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
     }
@@ -229,6 +208,7 @@ export class StandardWorkDurationSeedReplayJob {
         jobId,
         error: error instanceof Error ? error.message : String(error),
       })
+      if (triggeredBy === 'scheduler') throw error
       return null
     } finally {
       this.isRunning = false

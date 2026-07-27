@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@supabase/mcp-server-supabase": "0.8.2",
+    "@toolbox-sdk/server": "1.6.0"
+  }
+}

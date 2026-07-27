@@ -132,7 +132,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                     >
                       {t === 'bug' && '🐛 缺陷'}
                       {t === 'feature' && '✨ 新功能'}
-                      {t === 'improvement' && '💡 改进建议'}
+                      {t === 'improvement' && '? Ľ'}
                       {t === 'other' && '💬 其他'}
                     </Button>
                   ))}
@@ -146,7 +146,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  placeholder="请简要描述问题或建议"
+                  placeholder="请输入反馈标题"
                   required
                   className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
                 />
@@ -158,7 +158,7 @@ export default function FeedbackModal({ isOpen, onClose, onSubmit }: FeedbackMod
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="请详细描述您遇到的问题或建议..."
+                  placeholder="ϸ..."
                   required
                   rows={4}
                   className="w-full px-3 py-2 border rounded-md bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary resize-none"

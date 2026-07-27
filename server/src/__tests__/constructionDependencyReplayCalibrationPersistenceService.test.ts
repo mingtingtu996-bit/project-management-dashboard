@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 import {
   listConstructionDependencySeedPromotionReviewPackageReport,
@@ -5,6 +8,8 @@ import {
   persistConstructionDependencyReplayCalibrationReport,
 } from '../services/constructionDependencyReplayCalibrationPersistenceService.js'
 import type { ConstructionDependencyReplayCalibrationReport } from '../services/constructionDependencyReplayCalibrationService.js'
+
+const serviceSourcePath = fileURLToPath(new URL('../services/constructionDependencyReplayCalibrationPersistenceService.ts', import.meta.url))
 
 function buildReport(): ConstructionDependencyReplayCalibrationReport {
   return {
@@ -54,6 +59,17 @@ function buildReport(): ConstructionDependencyReplayCalibrationReport {
 }
 
 describe('construction dependency replay calibration persistence service', () => {
+  it('keeps production persistence reads and writes on fixed SQL literals', () => {
+    const source = readFileSync(serviceSourcePath, 'utf8')
+
+    expect(source).not.toContain('buildDefaultQueryExec')
+    expect(source).not.toContain('rawQuery(sql')
+    expect(source).not.toContain('ensureConstructionDependencyReplayCalibrationReportsTableDirect')
+    expect(source).not.toContain('CREATE TABLE IF NOT EXISTS public.construction_dependency_replay_calibration_reports')
+    expect(source).toContain('insertConstructionDependencyReplayCalibrationReportDirect')
+    expect(source).toContain('listConstructionDependencyReplayCalibrationRowsDirect')
+  })
+
   it('persists report-only L3/L4 calibration snapshots without mutating seeds or task dependencies', async () => {
     const calls: Array<{ sql: string; params: unknown[] }> = []
     const result = await persistConstructionDependencyReplayCalibrationReport({
@@ -68,7 +84,8 @@ describe('construction dependency replay calibration persistence service', () =>
     })
 
     expect(result).toEqual({ persisted: true, reportId: 'report-1' })
-    expect(calls[0].sql).toContain('CREATE TABLE IF NOT EXISTS public.construction_dependency_replay_calibration_reports')
+    expect(calls[0].sql).toContain('INSERT INTO public.construction_dependency_replay_calibration_reports')
+    expect(calls.every((call) => !/CREATE\s+TABLE/i.test(call.sql))).toBe(true)
     expect(calls.some((call) => call.sql.includes('INSERT INTO public.construction_dependency_replay_calibration_reports'))).toBe(true)
     expect(calls.every((call) => !/INSERT INTO\s+public\.task_dependencies/i.test(call.sql))).toBe(true)
     expect(calls.every((call) => !/UPDATE\s+public\.task_dependencies/i.test(call.sql))).toBe(true)

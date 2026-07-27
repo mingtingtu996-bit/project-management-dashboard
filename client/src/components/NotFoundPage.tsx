@@ -10,7 +10,7 @@ export function NotFoundPage() {
       <h2 className="text-lg font-semibold text-slate-900">页面不存在</h2>
       <p className="text-sm text-slate-500">请检查地址是否正确</p>
       <Button asChild>
-        <Link to="/company">返回首页</Link>
+        <Link to="/workspace">返回首页</Link>
       </Button>
     </div>
   )

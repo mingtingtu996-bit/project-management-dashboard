@@ -3,6 +3,9 @@ import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
+  const governanceMuteWarningMock = vi.fn(async () => true)
+  const governanceAcknowledgeWarningMock = vi.fn(async () => true)
+
   const warningServiceInstance = {
     syncConditionExpiredIssues: vi.fn(async () => undefined),
     syncAcceptanceExpiredIssues: vi.fn(async () => undefined),
@@ -25,8 +28,14 @@ const mocks = vi.hoisted(() => {
     updateNotificationById: vi.fn(async () => undefined),
     updateNotificationsByIds: vi.fn(async () => undefined),
     deleteNotificationById: vi.fn(async () => undefined),
+    upsertNotificationUserState: vi.fn(async (
+      _payload: Record<string, unknown>,
+      _options: { onConflict: string },
+    ) => ({ data: null, error: null })),
     muteWarningNotification: vi.fn(async () => undefined),
     acknowledgeWarningNotification: vi.fn(async () => undefined),
+    governanceMuteWarningMock,
+    governanceAcknowledgeWarningMock,
     warningServiceInstance,
     logger: {
       info: vi.fn(),
@@ -42,6 +51,8 @@ vi.mock('../middleware/auth.js', () => ({
     req.user = { id: 'user-1' }
     next()
   }),
+  requireProjectMember: vi.fn((_getProjectId: any) => (req: any, _res: any, next: () => void) => next()),
+  requireProjectEditor: vi.fn((_getProjectId: any) => (req: any, _res: any, next: () => void) => next()),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -85,16 +96,37 @@ vi.mock('../services/upgradeChainService.js', () => ({
   loadAcknowledgedWarningsForUser: vi.fn(async () => []),
 }))
 
+vi.mock('../services/riskIssueWarningGovernanceService.js', () => ({
+  buildWarningSignature: vi.fn(() => 'test-signature'),
+  buildSourceHash: vi.fn(() => 'test-hash'),
+  governanceAcknowledgeWarning: mocks.governanceAcknowledgeWarningMock,
+  governanceMuteWarning: mocks.governanceMuteWarningMock,
+  confirmWarningAsRisk: vi.fn(async () => null),
+  upsertWarningLifecycle: vi.fn(async () => null),
+  markSourceResolved: vi.fn(async () => undefined),
+  markSourceDeleted: vi.fn(async () => undefined),
+  isActiveWarningLifecycle: vi.fn(() => true),
+}))
+
 vi.mock('../services/dbService.js', () => ({
   supabase: {
     from: vi.fn(() => {
       const builder: Record<string, any> = {
         select: vi.fn(() => builder),
         eq: vi.fn(() => builder),
-        single: vi.fn(async () => ({ data: null, error: null })),
+        single: vi.fn(async () => ({ data: { project_id: 'project-1' }, error: null })),
+        update: vi.fn(() => builder),
+        insert: vi.fn(() => builder),
+        upsert: mocks.upsertNotificationUserState,
+        maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+        limit: vi.fn(() => builder),
+        in: vi.fn(() => builder),
       }
       return builder
     }),
+    update: vi.fn(),
+    query: vi.fn(async () => []),
+    delete: vi.fn(),
   },
 }))
 
@@ -111,32 +143,38 @@ describe('notification and warning mute durations', () => {
     mocks.findNotification.mockResolvedValue({
       id: 'notification-1',
       source_entity_type: 'system',
+      recipients: ['user-1'],
       metadata: { origin: 'test' },
     })
     mocks.warningServiceInstance.muteWarning.mockResolvedValue({ id: 'warning-1' })
   })
 
   it('stores selected mute hours on notification mute', async () => {
+    const requestStartedAt = Date.now()
     const { default: router } = await import('../routes/notifications.js')
     const response = await request(buildApp('/api/notifications', router))
       .put('/api/notifications/notification-1/mute')
       .send({ mutedHours: 4 })
+    const requestFinishedAt = Date.now()
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
     expect(response.body.data.message).toContain('4')
-    expect(mocks.updateNotificationById).toHaveBeenCalledWith(
-      'notification-1',
+    expect(mocks.updateNotificationById).not.toHaveBeenCalled()
+    expect(mocks.upsertNotificationUserState).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'muted',
+        notification_id: 'notification-1',
+        user_id: 'user-1',
+        is_muted: true,
+        muted_at: expect.any(String),
         muted_until: expect.any(String),
-        metadata: expect.objectContaining({
-          origin: 'test',
-          muted_hours: 4,
-          mute_duration: '4h',
-        }),
+        updated_at: expect.any(String),
       }),
+      { onConflict: 'notification_id,user_id' },
     )
+    const mutedUntil = String(mocks.upsertNotificationUserState.mock.calls[0]?.[0]?.muted_until ?? '')
+    expect(new Date(mutedUntil).getTime()).toBeGreaterThanOrEqual(requestStartedAt + 4 * 60 * 60 * 1000)
+    expect(new Date(mutedUntil).getTime()).toBeLessThanOrEqual(requestFinishedAt + 4 * 60 * 60 * 1000)
   })
 
   it('rejects unsupported notification mute duration', async () => {
@@ -149,6 +187,7 @@ describe('notification and warning mute durations', () => {
     expect(response.body.error.code).toBe('VALIDATION_ERROR')
     expect(response.body.error.details.allowed_hours).toEqual([1, 4, 24, 168])
     expect(mocks.updateNotificationById).not.toHaveBeenCalled()
+    expect(mocks.upsertNotificationUserState).not.toHaveBeenCalled()
   })
 
   it('passes multi-duration mute hours through warning mute route', async () => {
@@ -160,7 +199,7 @@ describe('notification and warning mute durations', () => {
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
     expect(response.body.data.message).toContain('7')
-    expect(mocks.warningServiceInstance.muteWarning).toHaveBeenCalledWith('warning-1', 168, 'user-1')
+    expect(mocks.governanceMuteWarningMock).toHaveBeenCalledWith('project-1', 'warning-1', 168, 'user-1')
   })
 
   it('rejects unsupported warning mute duration', async () => {
@@ -190,5 +229,6 @@ describe('notification and warning mute durations', () => {
     })
     expect(mocks.updateNotificationsByIds).not.toHaveBeenCalled()
     expect(mocks.acknowledgeWarningNotification).not.toHaveBeenCalled()
+    expect(mocks.upsertNotificationUserState).not.toHaveBeenCalled()
   })
 })

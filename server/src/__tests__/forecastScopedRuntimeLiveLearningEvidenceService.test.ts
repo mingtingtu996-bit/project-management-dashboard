@@ -132,6 +132,8 @@ describe('forecastScopedRuntimeLiveLearningEvidenceService', () => {
               publication_key: asset.publicationKey,
               asset_key: asset.assetKey,
               publication_status: 'published',
+              writes_seed_runtime_directly: false,
+              target_runtime_table: 'algorithm_learnable_parameter_runtime_publications',
               impact_monitoring: {
                 status: 'monitoring_armed',
                 eventRef: `impact_monitoring:${asset.publicationKey}:armed`,

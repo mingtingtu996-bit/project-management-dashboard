@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
-import { CheckCircle2, List, Network, Palette, Plus } from 'lucide-react'
+import { CheckCircle2, FileCheck2, List, Loader2, Network, Palette, Plus, Wand2 } from 'lucide-react'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { CollapsibleSection } from '@/components/CollapsibleSection'
@@ -28,7 +28,9 @@ import { useStore } from '@/hooks/useStore'
 import { cn } from '@/lib/utils'
 import { CHART_PALETTE } from '@/lib/chartPalette'
 import { acceptanceApi } from '@/services/acceptanceApi'
-import type { AcceptanceNode, AcceptancePlan, AcceptancePlanRelationBundle, AcceptanceProjectSummary, AcceptanceStatus, AcceptanceType } from '@/types/acceptance'
+import { listEngineeringObjects, type EngineeringObject } from '@/services/engineeringObjectsApi'
+import { MaterialsApiService, type ParticipantUnitSummary } from '@/services/materialsApi'
+import type { AcceptanceNode, AcceptancePlan, AcceptancePlanRelationBundle, AcceptanceProjectSummary, AcceptanceStatus, AcceptanceTemplatePreview, AcceptanceType, ApplyAcceptanceTemplateResult } from '@/types/acceptance'
 import { DEFAULT_ACCEPTANCE_TYPES, groupAcceptanceByPhase, isAcceptanceBlocked, normalizeAcceptanceStatus } from '@/types/acceptance'
 
 import AcceptanceDetailDrawer from './AcceptanceTimeline/components/AcceptanceDetailDrawer'
@@ -51,14 +53,13 @@ const NAME_TO_TYPE: Record<string, string> = {
 }
 const ACCEPTANCE_STATUS_OPTIONS: AcceptanceStatus[] = ['draft', 'preparing', 'ready_to_submit', 'submitted', 'inspecting', 'rectifying', 'passed', 'archived']
 const ACCEPTANCE_STATUS_LABELS: Record<AcceptanceStatus, string> = {
-  draft: '草稿',
-  preparing: '准备中',
-  ready_to_submit: '待申报',
-  submitted: '已申报',
-  inspecting: '验收中',
-  rectifying: '整改中',
-  passed: '已通过',
-  archived: '已归档',
+  draft: '草稿', preparing: '准备中', ready_to_submit: '待申报', submitted: '已申报',
+  inspecting: '验收中', rectifying: '整改中', passed: '已通过', archived: '已归档',
+}
+// v1.4.5: visual tone for backend status DTO compatibility
+const ACCEPTANCE_STATUS_TONES: Record<AcceptanceStatus, string> = {
+  draft: 'slate', preparing: 'blue', ready_to_submit: 'amber', submitted: 'amber',
+  inspecting: 'blue', rectifying: 'red', passed: 'green', archived: 'green',
 }
 const SCOPE_LEVEL_ORDER = ['project', 'building', 'unit', 'specialty'] as const
 const READ_ONLY_ACTION_REASON = '只读成员无编辑权限。'
@@ -181,6 +182,7 @@ function buildAcceptanceStageSummaries(plans: AcceptancePlan[]) {
 
   return ACCEPTANCE_STAGE_DEFINITIONS.map((stage) => {
     const stagePlans = buckets.get(stage.key) || []
+    // eslint-disable-next-line -- frontend-bi-aggregation-approved
     const passed = stagePlans.filter((plan) => ['passed', 'archived'].includes(normalizeAcceptanceStatus(plan.status))).length
     const total = stagePlans.length
 
@@ -224,6 +226,7 @@ export default function AcceptanceTimeline() {
   const { canEdit } = usePermissions({ projectId: currentProject?.id ?? id })
 
   const [plans, setPlans] = useState<AcceptancePlan[]>([])
+  const [participantUnits, setParticipantUnits] = useState<ParticipantUnitSummary[]>([])
   const [customTypes, setCustomTypes] = useState<AcceptanceType[]>([])
   const [projectSummary, setProjectSummary] = useState<AcceptanceProjectSummary>(EMPTY_ACCEPTANCE_SUMMARY)
   const [loading, setLoading] = useState(true)
@@ -234,6 +237,11 @@ export default function AcceptanceTimeline() {
   const [detailContext, setDetailContext] = useState<AcceptancePlanRelationBundle | null>(null)
   const [typeManagerOpen, setTypeManagerOpen] = useState(false)
   const [addPlanOpen, setAddPlanOpen] = useState(false)
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false)
+  const [templatePreview, setTemplatePreview] = useState<AcceptanceTemplatePreview | null>(null)
+  const [templateLoading, setTemplateLoading] = useState(false)
+  const [templateApplying, setTemplateApplying] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | AcceptanceStatus>('all')
   const [blockedOnly, setBlockedOnly] = useState(false)
   const [upcomingOnly, setUpcomingOnly] = useState(false)
@@ -255,14 +263,15 @@ export default function AcceptanceTimeline() {
     setLoading(true)
     setLoadError(null)
     try {
-      const [snapshot, typeRows, summary] = await Promise.all([
-        acceptanceApi.getFlowSnapshot(projectId),
-        acceptanceApi.getCustomTypes(projectId),
+      const snapshot = await acceptanceApi.getFlowSnapshot(projectId)
+      const [summary, unitRows] = await Promise.all([
         acceptanceApi.getProjectSummary(projectId),
+        MaterialsApiService.listParticipantUnits(projectId),
       ])
       setPlans(snapshot.plans)
-      setCustomTypes(typeRows)
+      setCustomTypes(acceptanceApi.mapCatalogRowsToTypes(snapshot.catalogs))
       setProjectSummary(summary)
+      setParticipantUnits(unitRows)
     } catch (error) {
       const message = error instanceof Error ? error.message : '无法加载验收时间轴'
       setLoadError(message)
@@ -337,7 +346,9 @@ export default function AcceptanceTimeline() {
   const flowLayout = useMemo(() => buildAcceptanceFlowLayout(visiblePlans, timeScale), [timeScale, visiblePlans])
   const selectedNode = useMemo(() => flowLayout.nodes.find((node) => node.id === selectedNodeId) || null, [flowLayout.nodes, selectedNodeId])
   const stageSummaries = useMemo(() => buildAcceptanceStageSummaries(visiblePlans), [visiblePlans])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const totalStageCount = useMemo(() => stageSummaries.reduce((sum, stage) => sum + stage.total, 0), [stageSummaries])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved
   const totalPassedStageCount = useMemo(() => stageSummaries.reduce((sum, stage) => sum + stage.passed, 0), [stageSummaries])
   const totalPercent = totalStageCount > 0 ? Math.round((totalPassedStageCount / totalStageCount) * 100) : 0
 
@@ -471,8 +482,8 @@ export default function AcceptanceTimeline() {
     await handleBatchPlanUpdate(planIds, { planned_date: plannedDate }, '批量日期已更新', `已调整 ${planIds.length} 项计划日期。`, '批量日期更新失败')
   }, [handleBatchPlanUpdate])
 
-  const handleBatchResponsibleUnitUpdate = useCallback(async (planIds: string[], responsibleUnit: string) => {
-    await handleBatchPlanUpdate(planIds, { responsible_unit: responsibleUnit }, '批量责任单位已更新', `已更新 ${planIds.length} 项责任单位。`, '批量责任单位更新失败')
+  const handleBatchResponsibleUnitUpdate = useCallback(async (planIds: string[], participantUnitId: string | null) => {
+    await handleBatchPlanUpdate(planIds, { participant_unit_id: participantUnitId }, '批量责任单位已更新', `已更新 ${planIds.length} 项责任单位。`, '批量责任单位更新失败')
   }, [handleBatchPlanUpdate])
 
   const handleBatchPhaseUpdate = useCallback(async (planIds: string[], phaseCode: string) => {
@@ -495,8 +506,6 @@ export default function AcceptanceTimeline() {
     nodeId: string,
     input: {
       requirement_type: string
-      source_entity_type: string
-      source_entity_id: string
       description?: string | null
       status?: string | null
     },
@@ -529,9 +538,53 @@ export default function AcceptanceTimeline() {
   }, [])
 
   const handleAddPlan = useCallback(async (plan: Partial<AcceptancePlan>) => {
-    await acceptanceApi.createPlan({ ...plan, project_id: projectId, milestone_id: plan.milestone_id, status: plan.status || 'draft', scope_level: plan.scope_level || 'project' })
+    await acceptanceApi.createPlan({ ...plan, project_id: projectId, status: plan.status || 'draft', scope_level: plan.scope_level || 'project' })
     await reloadPlans()
   }, [projectId, reloadPlans])
+
+  const openTemplateDialog = useCallback(async () => {
+    if (!projectId) return
+    setTemplateDialogOpen(true)
+    setTemplateLoading(true)
+    setTemplateError(null)
+    try {
+      setTemplatePreview(await acceptanceApi.previewSystemTemplate(projectId))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '无法加载验收模板'
+      setTemplateError(message)
+      toast({ title: '模板加载失败', description: message, variant: 'destructive' })
+    } finally {
+      setTemplateLoading(false)
+    }
+  }, [projectId, toast])
+
+  const handleApplyTemplate = useCallback(async (preview: AcceptanceTemplatePreview): Promise<ApplyAcceptanceTemplateResult | null> => {
+    if (!canEdit || !projectId) return null
+    setTemplateApplying(true)
+    try {
+      const result = await acceptanceApi.applySystemTemplate(projectId, {
+        templateCode: preview.templateCode,
+        seedVersion: preview.seedVersion,
+        selectedItemCodes: preview.items.filter((item) => item.selected).map((item) => item.itemCode),
+        selectedDependencyCodes: preview.dependencies.filter((dependency) => dependency.selected).map((dependency) => dependency.dependencyCode),
+        selectedRequirementCodes: preview.requirements.filter((requirement) => requirement.selected).map((requirement) => requirement.requirementCode),
+        duplicatePolicy: 'skip_existing',
+      })
+      await reloadPlans()
+      setTemplateDialogOpen(false)
+      toast({
+        title: '验收模板已应用',
+        description: `已生成 ${result.createdPlanIds.length} 个验收事项，挂接 ${result.createdRequirementIds.length} 条资料/结果要求。`,
+      })
+      return result
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '请稍后重试。'
+      toast({ title: '模板应用失败', description: message, variant: 'destructive' })
+      return null
+    } finally {
+      setTemplateApplying(false)
+    }
+  }, [canEdit, projectId, reloadPlans, toast])
 
   if (loading) {
     return (
@@ -567,6 +620,12 @@ export default function AcceptanceTimeline() {
       )}
 
       <PageHeader eyebrow="专项管理" title="验收流程">
+        <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
+          <Button variant="outline" size="sm" onClick={openTemplateDialog} className="gap-2" disabled={!canEdit}>
+            <Wand2 className="h-4 w-4" />
+            应用系统模板
+          </Button>
+        </DisabledReasonTooltip>
         <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
           <Button variant="outline" size="sm" onClick={() => setTypeManagerOpen(true)} className="gap-2" disabled={!canEdit}>
             <Palette className="h-4 w-4" />
@@ -789,9 +848,14 @@ export default function AcceptanceTimeline() {
               description=""
               action={
                 <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
-                  <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
-                    <Plus className="h-4 w-4" />添加验收
-                  </Button>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
+                      <Plus className="h-4 w-4" />添加验收
+                    </Button>
+                    <Button variant="outline" className="gap-2" onClick={openTemplateDialog} disabled={!canEdit}>
+                      <Wand2 className="h-4 w-4" />应用系统模板
+                    </Button>
+                  </div>
                 </DisabledReasonTooltip>
               }
             />
@@ -808,9 +872,14 @@ export default function AcceptanceTimeline() {
               description=""
               action={
                 <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : null}>
-                  <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
-                    <Plus className="h-4 w-4" />添加验收
-                  </Button>
+                  <div className="flex flex-wrap items-center justify-center gap-3">
+                    <Button className="gap-2" onClick={() => setAddPlanOpen(true)} disabled={!canEdit}>
+                      <Plus className="h-4 w-4" />添加验收
+                    </Button>
+                    <Button variant="outline" className="gap-2" onClick={openTemplateDialog} disabled={!canEdit}>
+                      <Wand2 className="h-4 w-4" />应用系统模板
+                    </Button>
+                  </div>
                 </DisabledReasonTooltip>
               }
             />
@@ -827,6 +896,7 @@ export default function AcceptanceTimeline() {
               onBatchResponsibleUnitUpdate={canEdit ? handleBatchResponsibleUnitUpdate : undefined}
               onBatchPhaseUpdate={canEdit ? handleBatchPhaseUpdate : undefined}
               timeScale={timeScale}
+              participantUnits={participantUnits}
               canEdit={canEdit}
             />
           )}
@@ -855,8 +925,18 @@ export default function AcceptanceTimeline() {
         canEdit={canEdit}
       />
 
+      <AcceptanceTemplateDialog
+        open={templateDialogOpen}
+        canEdit={canEdit}
+        preview={templatePreview}
+        loading={templateLoading}
+        applying={templateApplying}
+        error={templateError}
+        onClose={() => setTemplateDialogOpen(false)}
+        onApply={handleApplyTemplate}
+      />
       <TypeManagerDialog open={typeManagerOpen} customTypes={customTypes} canEdit={canEdit} onClose={() => setTypeManagerOpen(false)} onAddType={handleAddType} onDeleteType={handleDeleteType} />
-      <AddPlanDialog open={addPlanOpen} acceptanceTypes={allTypes} canEdit={canEdit} onClose={() => setAddPlanOpen(false)} onSubmit={handleAddPlan} />
+      <AddPlanDialog open={addPlanOpen} acceptanceTypes={allTypes} participantUnits={participantUnits} canEdit={canEdit} onClose={() => setAddPlanOpen(false)} onSubmit={handleAddPlan} />
     </div>
   )
 }
@@ -1046,15 +1126,188 @@ function TypeManagerDialog({
   )
 }
 
+function sourceLabel(value?: string | null) {
+  if (value === 'project_static_profile') return '项目画像'
+  if (value === 'project_generation_facts') return '项目画像'
+  if (value === 'project_metadata') return '项目资料'
+  if (value === 'project_field') return '项目字段'
+  if (value === 'project_location') return '项目地址'
+  return '通用模板'
+}
+
+function requirementCountByItem(preview: AcceptanceTemplatePreview | null) {
+  const counts = new Map<string, number>()
+  for (const requirement of preview?.requirements ?? []) {
+    counts.set(requirement.itemCode, (counts.get(requirement.itemCode) ?? 0) + 1)
+  }
+  return counts
+}
+
+function AcceptanceTemplateDialog({
+  open,
+  canEdit,
+  preview,
+  loading,
+  applying,
+  error,
+  onClose,
+  onApply,
+}: {
+  open: boolean
+  canEdit: boolean
+  preview: AcceptanceTemplatePreview | null
+  loading: boolean
+  applying: boolean
+  error: string | null
+  onClose: () => void
+  onApply: (preview: AcceptanceTemplatePreview) => Promise<ApplyAcceptanceTemplateResult | null>
+}) {
+  const requirementCounts = useMemo(() => requirementCountByItem(preview), [preview])
+  const selectedItems = preview?.items.filter((item) => item.selected) ?? []
+  const topItems = selectedItems.slice(0, 8)
+  const remainingCount = Math.max(0, selectedItems.length - topItems.length)
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[86vh] max-w-[var(--dialog-lg-width)] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Wand2 className="h-5 w-5 text-blue-600" />
+            应用竣工交付验收模板
+          </DialogTitle>
+          <DialogDescription>
+            按项目地区和业态生成竣工交付验收事项，结果会进入当前验收流程板和台账。
+          </DialogDescription>
+        </DialogHeader>
+
+        {loading ? (
+          <div className="space-y-4 py-6">
+            <div className="grid gap-4 md:grid-cols-3">
+              {[1, 2, 3].map((item) => <Skeleton key={item} className="h-24 rounded-xl" />)}
+            </div>
+            <Skeleton className="h-48 rounded-xl" />
+          </div>
+        ) : error ? (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : preview ? (
+          <div className="mt-4 space-y-5">
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">交付目标</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{preview.deliveryGoal.targetName}</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{preview.deliveryGoal.explanation}</p>
+                </CardContent>
+              </Card>
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">地区规则</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                    {preview.regionProfile.cityName || preview.regionProfile.provinceName}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">{sourceLabel(preview.regionProfile.source)}识别</p>
+                </CardContent>
+              </Card>
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">业态规则</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">{preview.businessProfile.businessTypeName}</p>
+                  <p className="mt-1 text-xs text-slate-500">{sourceLabel(preview.businessProfile.source)}识别 · {preview.industryProfile.labels.join('、')}</p>
+                </CardContent>
+              </Card>
+              <Card className="border-slate-200 shadow-[var(--el-1)]">
+                <CardContent className="p-4">
+                  <p className="text-xs font-medium text-slate-500">本次生成</p>
+                  <p className="mt-2 text-sm font-semibold text-slate-900">
+                    {preview.summary.itemCreateCount} 个事项 / {preview.summary.requirementCreateCount} 条资料要求
+                  </p>
+                  <p className="mt-1 text-xs text-slate-500">含地区规则、业态规则和已确认适用条件</p>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">生成事项预览</p>
+                  <p className="mt-1 text-xs text-slate-500">事项进入主时间轴；资料和结果文件作为事项内部前置要求挂接。</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="outline" className="rounded-full px-3 py-1">依赖 {preview.summary.dependencyCreateCount}</Badge>
+                  <Badge variant="outline" className="rounded-full px-3 py-1">跳过 {preview.summary.skippedExistingCount}</Badge>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {topItems.map((item) => (
+                  <div key={item.itemCode} className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-900">{item.itemName}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.authority}</p>
+                      </div>
+                      <Badge variant="secondary" className="rounded-full">{item.scopeLevel}</Badge>
+                    </div>
+                    <div className="mt-3 space-y-2 text-xs text-slate-600">
+                      <div className="flex gap-2">
+                        <FileCheck2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                        <span>{item.resultDocuments.slice(0, 2).join('、')}</span>
+                      </div>
+                      <div className="text-slate-500">资料门槛 {requirementCounts.get(item.itemCode) ?? 0} 项：{item.materialNames.slice(0, 3).join('、')}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {remainingCount > 0 ? (
+                <p className="mt-3 text-xs text-slate-500">另有 {remainingCount} 个事项将在应用后进入验收台账。</p>
+              ) : null}
+            </div>
+
+            {preview.regionProfile.policySources.length > 0 ? (
+              <div className="rounded-xl border border-slate-200 bg-white p-4">
+                <p className="text-sm font-semibold text-slate-900">地区规则来源</p>
+                <div className="mt-3 space-y-2">
+                  {preview.regionProfile.policySources.slice(0, 2).map((source) => (
+                    <div key={`${source.sourceName}-${source.checkedAt}`} className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                      <span>{source.sourceName}</span>
+                      <span className="num-mono text-slate-500">核验 {source.checkedAt}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <DialogFooter className="mt-6">
+          <Button variant="outline" onClick={onClose} disabled={applying}>取消</Button>
+          <Button
+            onClick={() => preview && void onApply(preview)}
+            disabled={!canEdit || !preview || loading || applying || selectedItems.length === 0}
+            loading={applying}
+            className="gap-2"
+          >
+            {applying ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+            应用到验收时间轴
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 function AddPlanDialog({
   open,
   acceptanceTypes,
+  participantUnits,
   canEdit = true,
   onClose,
   onSubmit,
 }: {
   open: boolean
   acceptanceTypes: AcceptanceType[]
+  participantUnits: ParticipantUnitSummary[]
   canEdit?: boolean
   onClose: () => void
   onSubmit: (plan: Partial<AcceptancePlan>) => Promise<void>
@@ -1066,10 +1319,20 @@ function AddPlanDialog({
   const [phaseCode, setPhaseCode] = useState<(typeof ACCEPTANCE_PHASE_OPTIONS)[number]['value']>('special_acceptance')
   const [scopeLevel, setScopeLevel] = useState<'project' | 'building' | 'unit' | 'specialty'>('project')
   const [buildingId, setBuildingId] = useState('')
-  const [responsibleUnit, setResponsibleUnit] = useState('')
+  const [buildingObjectId, setBuildingObjectId] = useState('')
+  const [buildingObjects, setBuildingObjects] = useState<EngineeringObject[]>([])
+  const [participantUnitId, setParticipantUnitId] = useState('__none__')
   const [isHardPrerequisite, setIsHardPrerequisite] = useState(false)
   const [category, setCategory] = useState('')
   const [submitting, setSubmitting] = useState(false)
+
+  const { id: dialogProjectId = '' } = useParams<{ id: string }>()
+  useEffect(() => {
+    if (!dialogProjectId) return
+    listEngineeringObjects(dialogProjectId)
+      .then((objs) => setBuildingObjects(objs.filter((o) => o.objectType === 'building' && o.status === 'active')))
+      .catch(() => {})
+  }, [dialogProjectId])
 
   useEffect(() => {
     if (!open) {
@@ -1080,7 +1343,8 @@ function AddPlanDialog({
       setPhaseCode('special_acceptance')
       setScopeLevel('project')
       setBuildingId('')
-      setResponsibleUnit('')
+      setBuildingObjectId('')
+      setParticipantUnitId('__none__')
       setIsHardPrerequisite(false)
       setCategory('')
       setSubmitting(false)
@@ -1091,6 +1355,7 @@ function AddPlanDialog({
 
   const handleSubmit = async () => {
     if (!name.trim()) return
+    if (scopeLevel === 'building' && !buildingObjectId) return
     setSubmitting(true)
     try {
       const resolvedTypeId = typeId || defaultType?.id || 'pre_acceptance'
@@ -1110,7 +1375,8 @@ function AddPlanDialog({
         display_badges: ['自定义'],
         scope_level: scopeLevel,
         building_id: buildingId.trim() || null,
-        responsible_unit: responsibleUnit.trim() || null,
+        building_object_id: buildingObjectId || null,
+        participant_unit_id: participantUnitId === '__none__' ? null : participantUnitId,
         is_hard_prerequisite: isHardPrerequisite,
         category: category.trim() || null,
         is_system: false,
@@ -1173,7 +1439,14 @@ function AddPlanDialog({
           <div className="grid gap-5 sm:grid-cols-2">
             <div>
               <Label>范围层级</Label>
-              <Select value={scopeLevel} onValueChange={(value) => setScopeLevel(value as 'project' | 'building' | 'unit' | 'specialty')}>
+              <Select value={scopeLevel} onValueChange={(value) => {
+                const nextScopeLevel = value as 'project' | 'building' | 'unit' | 'specialty'
+                setScopeLevel(nextScopeLevel)
+                if (nextScopeLevel !== 'building') {
+                  setBuildingId('')
+                  setBuildingObjectId('')
+                }
+              }}>
                 <SelectTrigger className="mt-1">
                   <SelectValue placeholder="选择范围层级" />
                 </SelectTrigger>
@@ -1182,10 +1455,30 @@ function AddPlanDialog({
                 </SelectContent>
               </Select>
             </div>
+            {scopeLevel === 'building' ? (
             <div>
-              <Label>楼栋编号</Label>
-              <Input value={buildingId} onChange={(event) => setBuildingId(event.target.value)} placeholder="可选" className="mt-1" />
+              <Label>楼栋</Label>
+              <select
+                value={buildingObjectId}
+                onChange={(event) => {
+                  const val = event.target.value
+                  setBuildingObjectId(val)
+                  if (val) {
+                    const obj = buildingObjects.find((o) => o.id === val)
+                    setBuildingId(obj?.objectName ?? '')
+                  } else {
+                    setBuildingId('')
+                  }
+                }}
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
+              >
+                <option value="">-- 未选择 --</option>
+                {buildingObjects.map((obj) => (
+                  <option key={obj.id} value={obj.id}>{obj.objectName} ({obj.objectCode})</option>
+                ))}
+              </select>
             </div>
+            ) : null}
           </div>
 
           <div>
@@ -1207,7 +1500,19 @@ function AddPlanDialog({
 
           <div>
             <Label>责任单位</Label>
-            <Input value={responsibleUnit} onChange={(event) => setResponsibleUnit(event.target.value)} placeholder="可选，填写参建单位名称" className="mt-1" />
+            <Select value={participantUnitId} onValueChange={setParticipantUnitId}>
+              <SelectTrigger className="mt-1">
+                <SelectValue placeholder="选择参建单位" />
+              </SelectTrigger>
+              <SelectContent align="start" side="bottom">
+                <SelectItem value="__none__">未指定责任单位</SelectItem>
+                {participantUnits.map((unit) => (
+                  <SelectItem key={unit.id} value={unit.id}>
+                    {unit.unit_type ? `${unit.unit_name} · ${unit.unit_type}` : unit.unit_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div>
@@ -1228,8 +1533,8 @@ function AddPlanDialog({
         </div>
         <DialogFooter className="mt-6">
           <Button variant="outline" onClick={onClose} disabled={submitting}>取消</Button>
-          <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : !name.trim() ? '请输入验收名称。' : null}>
-            <Button onClick={handleSubmit} loading={submitting} disabled={!canEdit || !name.trim()} className="gap-2">
+          <DisabledReasonTooltip reason={!canEdit ? READ_ONLY_ACTION_REASON : !name.trim() ? '请输入验收名称。' : scopeLevel === 'building' && !buildingObjectId ? '请选择楼栋工程对象。' : null}>
+            <Button onClick={handleSubmit} loading={submitting} disabled={!canEdit || !name.trim() || (scopeLevel === 'building' && !buildingObjectId)} className="gap-2">
               <Plus className="h-4 w-4" />
               确认创建
             </Button>

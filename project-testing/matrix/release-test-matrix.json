@@ -1,7 +1,7 @@
 {
   "schemaVersion": "workbuddy-release-test-matrix/v1",
   "generatedAt": "2026-06-29T01:45:00+08:00",
-  "scope": "Release dashboard inventory for local gates plus deferred live/db closeout gates. Local profiles are runnable when dependencies and target environments are available; real-environment gates still require explicit unlock and evidence discipline.",
+  "scope": "Release dashboard inventory for local gates, personal solo-live readiness, plus deferred live/db closeout gates. Local profiles are runnable when dependencies and target environments are available; real-environment gates still require explicit unlock and evidence discipline.",
   "concurrencyPolicy": {
     "activeLiveThread": false,
     "doNotModify": [
@@ -44,10 +44,94 @@
       "purpose": "Vitest unit, route, contract, and governance tests.",
       "commands": [
         "npx vitest run --config client/vitest.config.ts",
-        "npx vitest run --config server/vitest.config.ts",
+        "npm run testing:server-vitest:slices -- --project server-default --output <artifact-root>/server-vitest-default-slices.json",
         "npm run acceptance:v1"
       ],
       "mutationBoundary": "test harness only"
+    },
+    {
+      "id": "local-deterministic-readiness",
+      "tier": "tooling_readiness",
+      "status": "ready",
+      "purpose": "Read-only readiness check for deterministic non-live testing: MSW handlers, DB_CONNECTION_STRING override, boot validation switch, and GitHub Actions Postgres service-container template.",
+      "commands": [
+        "node project-testing/tools/check-local-deterministic-readiness.mjs --output project-testing/reports/local-deterministic-readiness.json"
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "read-only repo inspection; no app server, live Supabase, DB connection, migration, or production write"
+    },
+    {
+      "id": "msw-deterministic-page-data",
+      "tier": "local_browser_msw",
+      "status": "ready",
+      "purpose": "Deterministic frontend/page gates backed by MSW fixtures instead of real backend or live Supabase data.",
+      "commands": [
+        "npm exec --workspace=client -- vitest run src/pages/__tests__/CompanyCockpit.msw.test.tsx"
+      ],
+      "commandTemplates": [
+        "npm exec --workspace=client -- vitest run <selected-msw-backed-page-test>",
+        "npx playwright test <selected-page-smoke> --config <msw-enabled-playwright-config>"
+      ],
+      "recommendedTools": [
+        "msw",
+        "Playwright"
+      ],
+      "blockingPrerequisites": [
+        "Additional pages should define their API fixture contract before being added to this gate.",
+        "Each promoted page should cover loading, empty, success, permission-denied, and error states where applicable.",
+        "Exploratory or manual observations must be converted into repeatable Vitest or Playwright assertions before being counted here."
+      ],
+      "mutationBoundary": "mocked API responses only; cannot close live, DB, RLS, storage, or production-readiness gates"
+    },
+    {
+      "id": "local-api-contract-boundary",
+      "tier": "local_api_contract",
+      "status": "inventory_only",
+      "purpose": "Future route/client-service contract checks that validate API shape and error semantics without a live Supabase dependency.",
+      "commands": [],
+      "commandTemplates": [
+        "npm exec --workspace=server -- vitest run <selected-route-contract-test>",
+        "npm exec --workspace=client -- vitest run <selected-api-client-contract-test>"
+      ],
+      "blockingPrerequisites": [
+        "Identify authoritative request/response contracts for the selected route.",
+        "Keep contract fixtures in source-controlled test files or project-testing artifacts without secrets.",
+        "Do not use contract-only evidence to close live data, RLS, concurrency, or migration gates."
+      ],
+      "mutationBoundary": "local contract assertions only; no live service and no production writes"
+    },
+    {
+      "id": "container-postgres-integration",
+      "tier": "container_db",
+      "status": "inventory_only",
+      "purpose": "Future backend integration slice against an ephemeral PostgreSQL database through DB_CONNECTION_STRING, using GitHub Actions service containers first and Testcontainers later if local Docker capacity is acceptable.",
+      "commands": [],
+      "commandTemplates": [
+        "Use project-testing/plugins/github-actions-postgres-service-container.example.yml as the workflow promotion template.",
+        "DB_CONNECTION_STRING=postgresql://workbuddy_runtime_login:<password>@127.0.0.1:5432/workbuddy_test npm run testing:server-vitest:slices -- --project server-default --output <artifact-root>/server-vitest-container-db-slices.json"
+      ],
+      "recommendedTools": [
+        "GitHub Actions service containers",
+        "@testcontainers/postgresql"
+      ],
+      "blockingPrerequisites": [
+        "An ephemeral schema migration and seed command must be selected before this becomes ready.",
+        "The CI workflow must not use SUPABASE_MIGRATION_URL, service-role secrets, or production Supabase credentials.",
+        "Container evidence can support SQL integration readiness but cannot close Supabase-specific RLS, Advisor, storage, or live migration evidence."
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "ephemeral container database only; no live Supabase, no production database, no persistent mutation"
+    },
+    {
+      "id": "server-wbs-long-observable",
+      "tier": "planned",
+      "status": "inventory_only",
+      "purpose": "Heavy server WBS, generation, and scheduling Vitest files run through observable per-file slices instead of a silent all-project Vitest run.",
+      "commands": [
+        "npm run testing:server-vitest:slices -- --project server-wbs-long --timeout-ms 420000 --output <artifact-root>/server-vitest-wbs-long-slices.json"
+      ],
+      "artifactRoot": "project-testing/reports",
+      "mutationBoundary": "local heavy test execution only; no live or DB commands run"
     },
     {
       "id": "backend-governance-guards",
@@ -67,6 +151,17 @@
       "mutationBoundary": "guard scripts only"
     },
     {
+      "id": "duration-assets-admin-local-browser",
+      "tier": "local_browser",
+      "status": "ready",
+      "purpose": "Deterministic local Vite and Playwright verification for the duration asset queue, published, monitoring, accuracy, read-only shared scope, company approval dialog, responsive width, and visible-control overlap behavior.",
+      "commands": [
+        "node project-testing/tools/verify-duration-assets-admin-ui.mjs"
+      ],
+      "artifactRoot": "project-testing/artifacts/browser-checks/duration-assets",
+      "mutationBoundary": "intercepted local fixtures only; opens the approval dialog but submits no command, performs no database or external-environment access, and cannot establish live readiness"
+    },
+    {
       "id": "browser-suite-shell-and-collab",
       "tier": "local_browser",
       "status": "ready",
@@ -78,11 +173,12 @@
         "verify:company-cockpit",
         "verify:responsibility",
         "verify:dashboard",
-        "verify:notifications",
-        "verify:task-summary",
-        "verify:team-members",
-        "verify:join-project"
-      ],
+          "verify:notifications",
+          "verify:task-summary",
+          "verify:team-members",
+          "verify:workspace-company-create-switch",
+          "verify:join-project"
+        ],
       "artifactRoot": "project-testing/artifacts/browser-checks",
       "mutationBoundary": "local browser/test API behavior only"
     },
@@ -167,13 +263,13 @@
       "id": "v14231-closeout-local",
       "tier": "local_static",
       "status": "ready",
-      "purpose": "Non-live v1.4.23.1 closeout contracts and client contracts.",
+      "purpose": "Non-live v1.4.23.1 capability closeout contracts and client contracts; `production-ready` rows here are capability-status rows, not realTestEnvironmentReady, soloLiveReady, or live production outcome evidence.",
       "commands": [
         "npm run verify:v14231-non-live-closeout",
         "npm run verify:v14231-client-contracts",
         "npm run verify:v14231-closeout"
       ],
-      "mutationBoundary": "non-live closeout contract verification"
+      "mutationBoundary": "non-live capability closeout contract verification; cannot close realTestEnvironmentReady, soloLiveReady, or productionReady environment gates"
     },
     {
       "id": "testing-tool-readiness",
@@ -185,6 +281,96 @@
       ],
       "artifactRoot": "project-testing/reports",
       "mutationBoundary": "read-only local file/env/package inspection; no app, live, DB, or browser execution"
+    },
+    {
+      "id": "default-master-plan-executable-generation-quality",
+      "tier": "local_static",
+      "status": "ready",
+      "purpose": "Generate all 11 wizard default master-plan business types and fail closed on method conflicts, duration-asset semantic mismatches, dependency cycles, disconnected primary networks, multiple roots or terminals, and critical paths that do not continuously cover project start through handover.",
+      "commands": [
+        "npm run verify:default-master-plan:executable-simulation",
+        "npm run verify:default-master-plan:construction-quality",
+        "npm exec --workspace=server -- vitest run src/__tests__/defaultMasterPlanFinalNetworkEvaluation.test.ts",
+        "npm exec --workspace=server -- vitest run src/__tests__/wizardGenerationSideEffects.test.ts -t \"claimed-ready master plan|executable assembly|executable default master plan\""
+      ],
+      "artifactRoot": "project-testing/reports/executable-default-master-plan-20260710",
+      "expectedArtifacts": [
+        "all-business-type-plans.json",
+        "all-business-type-summary.md",
+        "general_civil-complete-plan.json",
+        "general_civil-complete-plan.md"
+      ],
+      "mutationBoundary": "local static wizard generation and report-file writes only; no DB, task, dependency, runtime seed, publication, staging, or production writes"
+    },
+    {
+      "id": "default-master-plan-evidence-source-kit",
+      "tier": "tooling_readiness",
+      "status": "ready",
+      "purpose": "Read-only source-kit inventory for default master-plan review, duration calibration, dependency writer, runtime publication, and post-publish smoke source inputs.",
+      "commands": [
+        "npm run evidence:default-master-plan:candidate-hygiene",
+        "npm run evidence:default-master-plan:sources",
+        "npm run evidence:default-master-plan:real-outcome-package",
+        "npm run evidence:default-master-plan:completed-task-export",
+        "npm run evidence:default-master-plan:real-duration-sample-template",
+        "npm run evidence:default-master-plan:real-duration-sample-from-task-export",
+        "npm run evidence:default-master-plan:real-duration-sample-preflight",
+        "npm run evidence:default-master-plan:candidate-refresh-db-repair-readiness",
+        "node project-testing/tools/check-default-master-plan-real-duration-sample-collection-kit-preflight.mjs --collection-kit project-testing/reports/default-master-plan-production-readiness/real-duration-sample-collection-kit.json --output project-testing/reports/default-master-plan-production-readiness/real-duration-sample-collection-kit-preflight.json --checked-by <operator-id>",
+        "node project-testing/tools/build-default-master-plan-real-duration-sample-material-from-collection-kit-preflight.mjs --collection-package project-testing/reports/default-master-plan-production-readiness/duration-sample-collection-package.json --collection-kit-preflight project-testing/reports/default-master-plan-production-readiness/real-duration-sample-collection-kit-preflight.json --output project-testing/reports/default-master-plan-production-readiness/real-duration-sample-material.json --prepared-by <operator-id>",
+        "npm run evidence:default-master-plan:real-duration-sample-export",
+        "node project-testing/tools/check-default-master-plan-runtime-seed-import-readiness.mjs",
+        "node project-testing/tools/check-default-master-plan-candidate-baseline-materialization-readiness.mjs",
+        "npm run evidence:default-master-plan:real-evidence-gaps",
+        "npm run evidence:default-master-plan:blocked-gate-checklist",
+        "npm run evidence:default-master-plan:blocked-gate-checklist-freshness",
+        "node project-testing/tools/plan-default-master-plan-read-only-evidence-queue.mjs --input project-testing/reports/default-master-plan-production-readiness/real-evidence-gap-summary.json --output project-testing/reports/default-master-plan-production-readiness/read-only-evidence-queue-plan.json --markdown project-testing/reports/default-master-plan-production-readiness/read-only-evidence-queue-plan.md --plan-only",
+        "npm run evidence:default-master-plan:test-concurrent"
+      ],
+      "artifactRoot": "project-testing/reports/default-master-plan-production-readiness",
+      "mutationBoundary": "read-only source export, no-write material preflight, and no-write readiness seal inspection; no runtime seed import, no duration sample writes, no runtime writers, no publication, no smoke"
+    },
+    {
+      "id": "solo-live-personal-real-environment",
+      "tier": "solo_live",
+      "status": "deferred_live",
+      "purpose": "Personal real-environment readiness lane for a single-owner staging or personal live deployment. It separates realTestEnvironmentReady and soloLiveReady from company-grade productionReady.",
+      "commands": [
+        "npm run testing:solo-live-readiness -- --handoff-file project-testing/runbooks/solo-live-handoff-template.json --output project-testing/reports/solo-live-readiness.json"
+      ],
+      "unlockPolicy": {
+        "profile": "solo-live",
+        "requiredFlags": [
+          "--include-solo-live",
+          "--confirm-solo-live-owner"
+        ],
+        "soloOwnerRequired": true,
+        "selfApprovalRequired": true,
+        "rollbackOwnerRequired": true,
+        "monitoringOwnerRequired": true,
+        "operationMode": "personal_real_environment_readiness"
+      },
+      "artifactRoot": "project-testing/reports",
+      "expectedArtifacts": [
+        "solo-live-readiness.json",
+        "solo-live-handoff.json",
+        "api-health.json",
+        "api-read-smoke.json",
+        "ui-smoke.json",
+        "rollback-plan.md",
+        "monitoring-plan.md"
+      ],
+      "blockingPrerequisites": [
+        "A personal handoff file must name the operator, Supabase project ref, environment, and API health evidence before realTestEnvironmentReady can pass.",
+        "soloLiveReady requires a non-local base URL, deployment ref, self-approval ref, rollback owner, monitoring owner, rollback plan, monitoring plan, API read smoke, and UI smoke.",
+        "This lane must keep productionReady=false and must not be used to bypass production/live real outcome evidence."
+      ],
+      "passCriteria": [
+        "The solo-live readiness checker exits with status staging_real_test_ready or solo_live_ready.",
+        "staging_real_test_ready may close personal real-test environment setup only.",
+        "solo_live_ready may close personal live readiness only; productionReady remains false."
+      ],
+      "mutationBoundary": "read-only handoff and evidence reference check; no live write, no production mutation, no runtime publication, no rollback execution, and no production-ready claim"
     },
     {
       "id": "live-evidence-and-workspace-isolation",
@@ -420,120 +606,101 @@
       "id": "c19-runtime-publication-release-rollback",
       "tier": "live_only",
       "status": "deferred_live",
-      "purpose": "C-19 runtime publication closeout for T2 rhythm and construction organization: replay, release package, manual approval, apply, impact monitoring, monitoring, rollback.",
+      "purpose": "C-19 canonical wizard/WBS closeout: generated tasks, dependency readback, CPM, initial baseline, user adjustment, confirmed baseline, idempotent revision, rollback, and disposable-project cleanup.",
       "closeoutTargets": [
-        "C-19.replay-samples",
-        "C-19.phase1-l5-release-closure",
-        "C-19.manual-approval",
-        "C-19.runtime-publication-apply",
-        "C-19.impact-monitoring",
-        "C-19.monitoring-rollback",
-        "C-19.construction-organization-e1-e3-e5"
+        "C-19.wizard-generation-commit",
+        "C-19.task-dependency-readback",
+        "C-19.critical-path-readback",
+        "C-19.baseline-confirmation",
+        "C-19.baseline-revision-rollback",
+        "C-19.disposable-project-cleanup"
       ],
       "unlockPolicy": {
-        "profile": "live",
+        "profile": "production",
         "requiredFlags": [
-          "--include-live",
-          "--confirm-live-handoff"
+          "includeLive",
+          "confirmLiveHandoff",
+          "includeDb",
+          "confirmDbReady"
         ],
         "liveHandoffRequired": true,
-        "dbReadyRequired": false,
+        "dbReadyRequired": true,
         "writeApprovalRequired": true,
-        "manualApprovalRequired": true,
-        "monitoringOwnerRequired": true,
+        "manualApprovalRequired": false,
+        "monitoringOwnerRequired": false,
         "rollbackOwnerRequired": true,
-        "operationMode": "runtime_publication_apply_with_rollback"
+        "operationMode": "canonical_wizard_wbs_disposable_project_smoke"
       },
       "artifactValidationPolicy": {
         "requiredMetadata": [
-          "environment",
+          "environmentClassification",
+          "productionLive",
+          "releaseSha",
+          "supabaseProjectRef",
+          "source",
           "projectId",
-          "releasePackageId",
-          "phase1L5Ref",
-          "approvalRef",
-          "runtimePublicationId",
-          "monitoringWindow",
-          "rollbackRef",
-          "consumerObservationRef"
+          "generationBatchId",
+          "status",
+          "commitWizardGeneration",
+          "taskDependencyReadback",
+          "criticalPathReadback",
+          "publishBaseline",
+          "rollbackRevisionDraft",
+          "cleanup",
+          "projectResidueReadback",
+          "runtimeConsumerLedgerReadback"
         ],
         "rejectIf": [
-          "dry-run-only",
-          "generated-package-only",
-          "missing-manual-approval",
-          "missing-runtime-apply",
-          "missing-impact-monitoring",
-          "missing-rollback-or-saved-outcome"
+          "wizard-commit-failed",
+          "dependency-readback-mismatch",
+          "critical-path-stale-or-empty",
+          "baseline-confirmation-failed",
+          "revision-not-idempotent",
+          "revision-rollback-failed",
+          "disposable-project-residue"
         ],
-        "requiredArtifactPatterns": [
-          "c19-t2-rhythm-live-replay.json",
-          "c19-release-closure-*.json",
-          "c19-runtime-publication-*.json",
-          "c19-impact-monitoring-*.json",
-          "c19-runtime-rollback-*.json",
-          "c19-construction-organization-*.json"
-        ]
+        "requiredArtifactPatterns": []
       },
       "commands": [
-        "npm run diagnose:t2-rhythm-live-replay --workspace=server -- --allow-live --project-id=<project-id> --environment=staging --evidence-ref=release-dashboard-live-profile --output-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json",
-        "npm run generate:t2-rhythm-release-closure --workspace=server -- --live-replay-evidence-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json --phase1-selection-gate-file=<artifact-root-from-server>/phase1-evaluation.json --l5-release-gate-file=<artifact-root-from-server>/l5-release-gate.json --output-file=<artifact-root-from-server>/c19-release-closure-artifact.json",
-        "npm run verify:t2-rhythm-release-closure --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --output-file=<artifact-root-from-server>/c19-release-closure-verification.json",
-        "npm run preflight:t2-rhythm-release-review --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --verification-file=<artifact-root-from-server>/c19-release-closure-verification.json --output-file=<artifact-root-from-server>/c19-manual-approval-preflight.json",
-        "npm run package:t2-rhythm-release-review --workspace=server -- --artifact-file=<artifact-root-from-server>/c19-release-closure-artifact.json --verification-file=<artifact-root-from-server>/c19-release-closure-verification.json --live-replay-evidence-file=<artifact-root-from-server>/c19-t2-rhythm-live-replay.json --phase1-selection-gate-file=<artifact-root-from-server>/phase1-evaluation.json --l5-release-gate-file=<artifact-root-from-server>/l5-release-gate.json --output-dir=<artifact-root>/c19-release-review-package",
-        "npm run diagnose:construction-organization-closeout-live --workspace=server -- --company-id=<company-id> --project-id=<project-id> --output-file=<artifact-root-from-server>/c19-construction-organization-e1-e3-e5.json"
+        "node scripts/run-wizard-baseline-revision-staging.mjs --env-file <production.env> --api-base-url <same-sha-production-private-api-url> --report <artifact-root>/wizard-baseline-revision-live.json --release-sha <sha>",
+        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <production.env> --project-id <project-id> --wizard-smoke-file <artifact-root>/inputs/c19-wizard-smoke-<sha256>.json --expected-environment production --expected-release-sha <sha> --expected-project-ref <production-project-ref> --output <artifact-root>/c19-canonical-wizard-preflight.json"
       ],
       "commandTemplates": [
-        "npm run diagnose:t2-rhythm-live-replay --workspace=server -- --project-id=<project-id> --output-file=<json>",
-        "npm run generate:t2-rhythm-release-closure --workspace=server -- --live-replay-evidence-file=<c19-t2-rhythm-live-replay.json> --phase1-selection-gate-file=<phase1-selection-gate.json> --l5-release-gate-file=<l5-release-gate.json> --output-file=<c19-release-closure-artifact.json>",
-        "npm run verify:t2-rhythm-release-closure --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --output-file=<c19-release-closure-verification.json>",
-        "npm run preflight:t2-rhythm-release-review --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --verification-file=<c19-release-closure-verification.json> --output-file=<c19-manual-approval-preflight.json>",
-        "npm run package:t2-rhythm-release-review --workspace=server -- --artifact-file=<c19-release-closure-artifact.json> --verification-file=<c19-release-closure-verification.json> --live-replay-evidence-file=<c19-t2-rhythm-live-replay.json> --phase1-selection-gate-file=<phase1-selection-gate.json> --l5-release-gate-file=<l5-release-gate.json> --output-dir=<dir>",
-        "node project-testing/tools/check-c19-runtime-input.mjs --handoff-file <handoff.json> --runtime-input-file <runtime-input.json> --output <c19-runtime-input-check.json>",
-        "node project-testing/tools/run-c19-runtime-publication-evidence.mjs --handoff-file <handoff.json> --artifact-root <artifact-root> --include-live --confirm-live-handoff --allow-write --release-artifact-file <c19-release-closure-artifact.json> --release-verification-file <c19-release-closure-verification.json> --phase1-evaluation-file <phase1-evaluation.json> --runtime-input-file <runtime-input.json> --migration-governance-file <migration-governance.json>",
-        "npm run diagnose:construction-organization-closeout-live --workspace=server -- --company-id=<company-id> --project-id=<project-id> --output-file=<c19-construction-organization-e1-e3-e5.json>"
+        "node scripts/run-wizard-baseline-revision-staging.mjs --env-file <production.env> --api-base-url <same-sha-production-private-api-url> --report <wizard-baseline-revision-live.json> --release-sha <sha>",
+        "node project-testing/tools/check-c19-runtime-preflight.mjs --env-file <production.env> --project-id <project-id> --wizard-smoke-file <immutable-wizard-input.json> --expected-environment production --expected-release-sha <sha> --expected-project-ref <project-ref> --output <c19-canonical-wizard-preflight.json>"
       ],
       "requiredEvidence": [
-        "Replay samples, phase-1/L5 handoff, release closure artifact, verification pass, and manual approval.",
-        "Runtime publication apply evidence, impact monitoring, consumer observation, monitoring, rollback, and saved outcome.",
-        "Construction organization E1/E3/E5 runtime evidence and release-exit evidence."
+        "Canonical wizard commit created the expected tasks and dependencies in one transaction.",
+        "Dependency inventory/readback, CPM, candidate baseline, adjustment, confirmation, revision idempotency, and rollback all passed.",
+        "Disposable project cleanup readback shows no business residue; environment classification remains explicit."
       ],
       "handoffChecklist": [
-        "Live environment ownership is handed off with target project/company and artifact root recorded.",
-        "Phase-1/L5 handoff, release closure artifact, verification command, and manual approval reference are available before apply.",
-        "Publication apply owner, consumer observation owner, monitoring owner, and rollback owner are named.",
-        "Rollback target and impact monitoring window are recorded before runtime publication apply."
+        "Production environment, same-SHA private API endpoint, login company context, explicit approval, and disposable-project boundary are recorded.",
+        "Migration state and runtime RLS required by the canonical wizard chain are read back before smoke.",
+        "Cleanup owner and residue scan are defined before creating the disposable project."
       ],
       "blockingPrerequisites": [
-        "Missing live handoff flags, phase-1/L5 evidence, release closure artifact, verification pass, or manual approval reference.",
-        "No approved runtime publication apply window, impact-monitoring plan, or rollback owner.",
-        "No consumer observation path for published T2 rhythm or construction organization runtime output.",
-        "Generated package exists without apply, monitoring, rollback, and saved-outcome evidence."
+        "Current code is not running against the intended staging database or login company context is ambiguous.",
+        "Wizard commit, task/dependency readback, CPM, baseline confirmation, revision rollback, or cleanup fails.",
+        "The smoke report belongs to another project or omits environment classification."
       ],
       "passCriteria": [
-        "Replay samples, phase-1/L5 handoff, release closure artifact, verification pass, and approval reference are archived together.",
-        "Runtime publication apply produces apply evidence, consumer observation, impact monitoring, monitoring outcome, rollback evidence, and saved outcome.",
-        "Construction organization E1/E3/E5 runtime evidence and release-exit evidence are present and linked to the same release package.",
-        "Any manual-assisted UAT evidence is labeled supporting evidence and does not replace apply/monitoring/rollback artifacts."
+        "Wizard commit, task/dependency readback, fresh CPM, baseline confirmation, revision idempotency, and revision rollback are all pass.",
+        "Dependency readback matches inventory with zero dangling edges.",
+        "Disposable project deletion and residue readback pass; local-current-code, deployed staging, and production/live remain separately classified."
       ],
       "expectedArtifacts": [
-        "c19-t2-rhythm-live-replay.json",
-        "c19-release-closure-artifact.json",
-        "c19-release-closure-verification.json",
-        "c19-manual-approval-preflight.json",
-        "c19-runtime-publication-apply.json",
-        "c19-impact-monitoring-observation.json",
-        "c19-runtime-rollback-saved-outcome.json",
-        "c19-construction-organization-e1-e3-e5.json",
-        "c19-live-evidence-summary.json"
+        "wizard-baseline-revision-live.json",
+        "wizard-baseline-revision-cleanup-readback.json",
+        "c19-canonical-wizard-preflight.json"
       ],
       "evidenceOwners": [
-        "live-environment-owner",
-        "runtime-publication-owner",
-        "approval-owner",
-        "consumer-observation-owner",
-        "monitoring-owner",
-        "rollback-owner"
+        "production-environment-owner",
+        "wizard-smoke-owner",
+        "database-readback-owner",
+        "cleanup-owner"
       ],
-      "mutationBoundary": "requires live environment ownership handoff, manual approval, monitoring owner, and rollback owner before publication apply"
+      "mutationBoundary": "writes only an explicitly approved disposable production project through canonical product APIs, then confirms revision rollback and physical project cleanup; append-only runtime consumer ledgers are read but never deleted, and duplicate T2 runtime publication tables are never written"
     },
     {
       "id": "database-migration-and-recovery",
@@ -544,8 +711,19 @@
         "npm run migrate:check --workspace=server",
         "npm run migrate:diagnose --workspace=server",
         "npm run migrate:drift --workspace=server",
-        "npm run migrate:production-governance:evidence --workspace=server -- --output-file <artifact-root-from-server>/production-migration-governance-evidence.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:management-api-preflight -- --env-file deploy/env/staging.env --output <artifact-root>/supabase-advisor-management-api-preflight.json --advisor-output <artifact-root>/supabase-advisor-management-api-export.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:management-api -- --env-file deploy/env/staging.env --output <artifact-root>/supabase-advisor-management-api-export.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:dashboard-ui-template -- --env-file deploy/env/staging.env --output <artifact-root>/supabase-advisor-dashboard-ui-capture.template.json --operator release-dashboard-db-profile",
+        "npm run evidence:supabase-advisor:dashboard-ui-normalize -- --input <operator-captured-dashboard-advisor-json> --output <artifact-root>/supabase-advisor-management-api-export.json --project-ref <project-ref> --dashboard-url <supabase-dashboard-project-advisor-url> --operator release-dashboard-db-profile",
+        "npm run migrate:production-governance:evidence --workspace=server -- --output-file <artifact-root-from-server>/production-migration-governance-evidence.json --operator release-dashboard-db-profile --advisor-export-file <artifact-root-from-server>/supabase-advisor-management-api-export.json",
         "npm run migrate:production-governance --workspace=server -- --evidence-file <artifact-root-from-server>/production-migration-governance-evidence.json"
+      ],
+      "blockingPrerequisites": [
+        "A Supabase Management API token, provided as SUPABASE_MANAGEMENT_API_TOKEN, SUPABASE_ACCESS_TOKEN, or SUPABASE_API_TOKEN outside the repository, must be available before the formal Management API Advisor export can run.",
+        "If no Management API token is available, use the Dashboard UI Advisor JSON capture fallback: generate the fill-in Dashboard UI capture template with evidence:supabase-advisor:dashboard-ui-template, populate it from the logged-in Supabase Dashboard Advisor page, then normalize it with evidence:supabase-advisor:dashboard-ui-normalize; it must include the dashboard project URL, project ref, current security/performance issue counts, and must not be derived from CLI db advisors.",
+        "A Dashboard UI capture template is not evidence. It must have templateOnly=false and current Dashboard counts before normalization.",
+        "A CLI Advisor rescan file is supporting evidence only; it cannot replace the Dashboard UI or Management API Advisor export required by MG-07.",
+        "The production governance evidence command must receive --advisor-export-file pointing at the current-run formal Advisor export artifact."
       ],
       "mutationBoundary": "database access required; may be read-only or migration-affecting depending on command"
     },

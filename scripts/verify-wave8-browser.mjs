@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
+﻿import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -153,7 +153,7 @@ async function createProject(ownerToken, name, description) {
 async function ensurePerfProject(ownerSession) {
   let project = await getProjectByName(PERF_PROJECT_NAME)
   if (!project) {
-    project = await createProject(ownerSession.token, PERF_PROJECT_NAME, '§6 性能与批量操作专用 300 任务项目')
+    project = await createProject(ownerSession.token, PERF_PROJECT_NAME, '§6 性能与批量操作专300 任务项目')
   }
 
   const { count, error } = await supabase
@@ -430,7 +430,6 @@ function isGanttRefreshRequest(url, projectId) {
     (url.includes('/api/tasks?') && url.includes(`projectId=${projectId}`))
     || url.includes(`/api/task-conditions?projectId=${projectId}`)
     || url.includes(`/api/task-obstacles?projectId=${projectId}`)
-    || url.includes(`/api/delay-requests?projectId=${projectId}`)
   )
 }
 
@@ -468,6 +467,9 @@ async function main() {
 
   const dashboardFallbackSelectors = [
     '[data-testid="dashboard-page"]',
+    '[data-testid="dashboard-decision-overview"]',
+    '[data-testid="dashboard-health-weakness-panel"]',
+    '[data-testid="dashboard-action-panel"]',
     '[data-testid="dashboard-critical-path-summary"]',
     '[data-testid="dashboard-empty-state"]',
     '[data-testid="dashboard-governance-signal"]',
@@ -514,18 +516,18 @@ async function main() {
       attachDiagnostics(adminPage, diagnostics)
       attachDiagnostics(ownerPage, diagnostics)
 
-      await timedGoto(adminPage, `${BASE_URL}/#/company`, '[data-testid="company-project-card"]', { extraWaitMs: 250 })
+      await timedGoto(adminPage, `${BASE_URL}/#/company`, '[data-testid="company-project-overview"]', { extraWaitMs: 250 })
       const newProjectVisible = await adminPage.getByText('新建项目').first().isVisible()
 
       await timedGoto(ownerPage, `${BASE_URL}/#/projects/${manifest.projects.standard.id}/dashboard`, '[data-testid="dashboard-page"]', {
         extraWaitMs: 250,
         fallbackSelectors: dashboardFallbackSelectors,
       })
-      const dashboardShellVisible = await ownerPage.locator('[data-testid="dashboard-hero-cards"]').isVisible()
+      const dashboardShellVisible = await ownerPage.locator('[data-testid="dashboard-decision-overview"]').isVisible()
         && await ownerPage.locator('[data-testid="dashboard-snapshot-panel"]').isVisible()
 
       if (viewport.width === 375) {
-        await ownerPage.locator('button[aria-label="打开导航菜单"]').click()
+        await ownerPage.locator('button[aria-label="鎵撳紑瀵艰埅鑿滃崟"]').click()
         await ownerPage.waitForSelector('#app-sidebar', { state: 'visible' })
       }
 
@@ -587,7 +589,7 @@ async function main() {
       const headerButtons = page.locator('header button')
       const count = await headerButtons.count()
       await headerButtons.nth(count - 1).click()
-      await page.locator('[role="menuitem"]').filter({ hasText: '登录' }).click()
+      await page.locator('[role="menuitem"]').filter({ hasText: '鐧诲綍' }).click()
       await page.waitForSelector('[data-testid="login-dialog"]')
       await page.keyboard.press('Escape')
       await page.waitForTimeout(300)
@@ -690,8 +692,8 @@ async function main() {
       await waitForAny(page, [
         '[data-testid="monthly-plan-tree-block"]',
         '[data-testid="monthly-plan-review-block"]',
-        'text=尚未生成月度草稿',
-        'text=生成本月草稿',
+        'text=尚未生成月度草',
+        'text=生成本月草',
         'text=改为按当前任务列表预编制',
       ], 20000)
 
@@ -702,11 +704,11 @@ async function main() {
       }
 
       let generated = null
-      if (await waitForButtonText(page, '生成本月草稿', 15000)) {
+      if (await waitForButtonText(page, '生成本月草', 15000)) {
         const startedAt = Date.now()
-        const clicked = await clickButtonByText(page, '生成本月草稿')
+        const clicked = await clickButtonByText(page, '生成本月草')
         if (!clicked) {
-          throw new Error('Could not click visible 生成本月草稿 action')
+          throw new Error('Could not click visible 生成本月草 action')
         }
         await waitForAny(page, [
           '[data-testid="monthly-plan-tree-block"]',

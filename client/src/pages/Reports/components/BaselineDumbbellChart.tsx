@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
+import { readAvailableDurationValue, type DurationMetricDto } from '@/lib/durationMetric'
 import {
   CartesianGrid,
   ComposedChart,
@@ -21,7 +22,7 @@ type DeviationRowLike = {
   id: string
   title: string
   planned_date?: string | null
-  deviation_days: number
+  deviation_duration: DurationMetricDto | null
   deviation_rate: number
   actual_date?: string | null
   status?: string
@@ -52,7 +53,13 @@ export function BaselineDumbbellChart({
   rows: DeviationRowLike[]
   mainlineLabel: string
 }) {
-  const points = useMemo(() => rows.slice(0, 8), [rows])
+  const points = useMemo(() => rows
+    .map((row) => ({
+      ...row,
+      deviationValue: readAvailableDurationValue(row.deviation_duration, 'construction_production_day'),
+    }))
+    .filter((row): row is DeviationRowLike & { deviationValue: number } => row.deviationValue !== null)
+    .slice(0, 8), [rows])
   const dateDomain = useMemo(() => {
     const values = points.flatMap((row) => {
       const planned = toDateValue(row.planned_date) ?? toDateValue(row.actual_date)
@@ -74,7 +81,7 @@ export function BaselineDumbbellChart({
     row.title,
     formatDateLabel(row.planned_date ?? row.actual_date),
     formatDateLabel(row.actual_date ?? row.planned_date),
-    row.deviation_days,
+    row.deviationValue,
     row.deviation_rate,
     row.status || 'unknown',
   ])
@@ -111,7 +118,7 @@ export function BaselineDumbbellChart({
       <CardContent className="space-y-4">
         {points.length > 0 ? (
           <ChartAccessibleWrapper
-            columns={['任务', '计划日期', '实际日期', '偏差天数', '偏差率(%)', '状态']}
+            columns={['任务', '计划日期', '实际日期', '偏差生产日', '偏差率(%)', '状态']}
             rows={chartRows}
             summary="查看基线哑铃图数据"
           >

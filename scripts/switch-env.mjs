@@ -113,8 +113,8 @@ function switchToLocal() {
     CORS_ORIGIN: 'http://localhost:5173,http://127.0.0.1:5173',
   });
 
-  console.log('✅ 已切换到本地联调模式');
-  console.log('   前端统一走 /api 代理，后端放行 localhost 与 127.0.0.1');
+  console.log('已切换到本地联调模式');
+  console.log('   前端统一使用 /api 代理，后端放行 localhost 和 127.0.0.1');
 }
 
 function switchToProduction(options) {
@@ -146,7 +146,7 @@ function switchToProduction(options) {
     CORS_ORIGIN: origin,
   });
 
-  console.log('✅ 已切换到上线模式');
+  console.log('已切换到上线模式');
   console.log(`   前端 API 基地址：${apiBase}`);
   console.log(`   后端 CORS 放行域名：${origin}`);
 }

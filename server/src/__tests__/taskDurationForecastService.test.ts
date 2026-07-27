@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
@@ -16,6 +19,7 @@ const state = vi.hoisted(() => ({
   preMilestones: [] as Array<Record<string, unknown>>,
   projects: [] as Array<Record<string, unknown>>,
   modelProfiles: [] as Array<Record<string, unknown>>,
+  projectOverlays: [] as Array<Record<string, unknown>>,
   residualOverlays: [] as Array<Record<string, unknown>>,
   seedRecords: [] as Array<Record<string, unknown>>,
   insertedForecasts: [] as Array<Record<string, unknown>>,
@@ -24,11 +28,13 @@ const state = vi.hoisted(() => ({
 
 const mocks = vi.hoisted(() => ({
   getTaskDurationSuggestion: vi.fn(),
-  buildProjectProgressVelocityLearning: vi.fn(),
+  loadPublishedProgressVelocityRuntime: vi.fn(),
   recordDurationAccuracyPrediction: vi.fn(),
   loadAlgorithmAssetLearnableParameterRuntimeValue: vi.fn(),
+  readPlanningReplayCalibrationReadback: vi.fn(),
+  listCurrentExecutionFacts: vi.fn(),
   from: vi.fn(),
-  rawQuery: vi.fn(async () => ({ rows: [] })),
+  rawQuery: vi.fn(async (_sql?: string, _params?: unknown[]) => ({ rows: [] })),
 }))
 
 vi.mock('../database.js', () => ({
@@ -59,10 +65,13 @@ function createBuilder(table: string) {
     if (table === 'pre_milestones') data = state.preMilestones
     if (table === 'projects') data = state.projects
     if (table === 'duration_forecast_model_profiles') data = state.modelProfiles
+    if (table === 'duration_forecast_project_overlays') data = state.projectOverlays
     if (table === 'duration_forecast_residual_overlays') data = state.residualOverlays
 
     let result = data.filter((row) => (
-      filters.every((filter) => row[filter.column] === filter.value)
+      filters.every((filter) => filter.value === null
+        ? row[filter.column] == null
+        : row[filter.column] === filter.value)
       && inFilters.every((filter) => filter.values.includes(row[filter.column]))
       && ltFilters.every((filter) => {
         const value = Number(row[filter.column])
@@ -79,6 +88,10 @@ function createBuilder(table: string) {
   const builder: any = {
     select: vi.fn(() => builder),
     eq: vi.fn((column: string, value: unknown) => {
+      filters.push({ column, value })
+      return builder
+    }),
+    is: vi.fn((column: string, value: unknown) => {
       filters.push({ column, value })
       return builder
     }),
@@ -132,8 +145,8 @@ vi.mock('../services/durationSuggestionService.js', () => ({
   getTaskDurationSuggestion: mocks.getTaskDurationSuggestion,
 }))
 
-vi.mock('../services/progressVelocityLearningService.js', () => ({
-  buildProjectProgressVelocityLearning: mocks.buildProjectProgressVelocityLearning,
+vi.mock('../services/progressVelocityRuntimePublicationService.js', () => ({
+  loadPublishedProgressVelocityRuntime: mocks.loadPublishedProgressVelocityRuntime,
 }))
 
 vi.mock('../services/algorithmAssetLearnableParameterRuntimeConsumptionService.js', () => ({
@@ -142,6 +155,14 @@ vi.mock('../services/algorithmAssetLearnableParameterRuntimeConsumptionService.j
 
 vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
   recordDurationAccuracyPrediction: mocks.recordDurationAccuracyPrediction,
+}))
+
+vi.mock('../services/planningReplayCalibrationService.js', () => ({
+  readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
 }))
 
 vi.mock('../services/algorithmSeedResolver.js', () => ({
@@ -163,11 +184,34 @@ vi.mock('../middleware/logger.js', () => ({
 }))
 
 const {
-  forecastTaskDuration,
-  analyzeTaskDelayRiskWithDurationForecast,
+  forecastTaskDuration: forecastTaskDurationWithScope,
+  listCurrentTaskDurationForecasts,
+  analyzeTaskDelayRiskWithDurationForecast: analyzeTaskDelayRiskWithDurationForecastWithScope,
   refreshDailyActiveTaskDurationForecasts,
   recordTaskDurationForecastRuntimeConsumption,
 } = await import('../services/taskDurationForecastService.js')
+
+function projectIdForTask(taskId: string) {
+  return String(state.tasks.find((task) => task.id === taskId)?.project_id ?? 'project-1')
+}
+
+function forecastTaskDuration(
+  taskId: string,
+  options: NonNullable<Parameters<typeof forecastTaskDurationWithScope>[1]> = {},
+) {
+  return forecastTaskDurationWithScope(taskId, {
+    projectId: projectIdForTask(taskId),
+    ...options,
+  })
+}
+
+function analyzeTaskDelayRiskWithDurationForecast(taskId: string) {
+  return analyzeTaskDelayRiskWithDurationForecastWithScope(taskId, {
+    projectId: projectIdForTask(taskId),
+  })
+}
+
+const serviceSourcePath = fileURLToPath(new URL('../services/taskDurationForecastService.ts', import.meta.url))
 
 function createRecordingQueryExec() {
   const calls: Array<{ sql: string, params: unknown[] }> = []
@@ -218,13 +262,22 @@ describe('taskDurationForecastService', () => {
     state.preMilestones = []
     state.projects = []
     state.modelProfiles = []
+    state.projectOverlays = []
     state.residualOverlays = []
-    state.seedRecords = []
+    state.seedRecords = [{
+      holidayCode: 'test_calendar_identity',
+      holidayName: 'Test construction calendar identity',
+      calendarKind: 'forecast_calendar_window',
+      startDate: '2099-01-01',
+      endDate: '2099-01-01',
+      counts_as_construction_shutdown: false,
+      __resolverVersionId: 'calendar-test-v1',
+    }]
     state.insertedForecasts = []
     state.updatedForecasts = []
     mocks.from.mockImplementation((table: string) => createBuilder(table))
     mocks.getTaskDurationSuggestion.mockResolvedValue(baseSuggestion())
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValue(null)
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValue(null)
     mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockResolvedValue({
       status: 'runtime_parameter_not_found',
       runtimeConsumable: false,
@@ -240,10 +293,95 @@ describe('taskDurationForecastService', () => {
       reasons: ['runtime_parameter_publication_not_found'],
       writesSeedRuntimeDirectly: false,
     })
+    mocks.readPlanningReplayCalibrationReadback.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
+  })
+
+  it('rejects a task that is outside the explicit project scope', async () => {
+    state.tasks = [{
+      id: 'task-cross-project',
+      project_id: 'project-2',
+      title: 'Cross-project task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-10',
+      progress: 0,
+      status: 'todo',
+    }]
+
+    await expect(forecastTaskDurationWithScope('task-cross-project', {
+      projectId: 'project-1',
+    })).rejects.toThrow('TASK_DURATION_FORECAST_PROJECT_SCOPE_MISMATCH')
+    expect(state.insertedForecasts).toEqual([])
+  })
+
+  it('fails closed when the construction calendar identity is unavailable', async () => {
+    state.seedRecords = []
+    state.tasks = [{
+      id: 'task-calendar-unavailable',
+      project_id: 'project-1',
+      title: 'Calendar unavailable task',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-24',
+      actual_start_date: '2026-05-10',
+      progress: 50,
+      status: 'in_progress',
+    }]
+
+    const forecast = await forecastTaskDuration('task-calendar-unavailable')
+
+    expect(forecast).toMatchObject({
+      remainingDurationDays: null,
+      remainingForecastDays: null,
+      forecastFinishDate: null,
+      forecastDelayDays: null,
+      confidenceLevel: 'unavailable',
+      remainingDuration: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-18',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+      forecastDelay: {
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+      probabilityDurationMetrics: {
+        p20RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+        p50RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+        p80RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+      },
+    })
+    expect(state.insertedForecasts).toEqual([
+      expect.objectContaining({
+        remaining_duration_days: null,
+        forecast_finish_date: null,
+        metadata: expect.objectContaining({
+          remainingDuration: expect.objectContaining({
+            value: null,
+            availability: 'unavailable',
+            unavailableReason: 'construction_calendar_identity_missing',
+          }),
+        }),
+      }),
+    ])
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('keeps runtime consumer evidence production persistence on a fixed SQL executor', () => {
+    const source = readFileSync(serviceSourcePath, 'utf8')
+
+    expect(source).not.toContain('buildTaskDurationForecastRuntimeConsumerObservationQueryExec')
+    expect(source).toContain('createDurationRuntimeConsumerObservationQueryExec')
   })
 
   it('records a v1.4.22.4 prediction event for task remaining duration forecasts', async () => {
@@ -290,6 +428,59 @@ describe('taskDurationForecastService', () => {
     }))
   })
 
+  it('records the forecast runtime call without fabricating observations when no publication is consumed', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+    state.tasks = [{
+      id: 'task-call-only',
+      project_id: 'project-1',
+      title: 'Call-only forecast task',
+      standard_work_code: 'cast_in_place_concrete',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-24',
+      actual_start_date: '2026-05-10',
+      progress: 50,
+    }]
+
+    await forecastTaskDuration('task-call-only', {
+      runtimeConsumerObservationQueryExec: queryExec,
+    })
+
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toHaveLength(0)
+    const runtimeCall = callsForTable(calls, 'runtime_consumer_runtime_calls')[0]
+    expect(runtimeCall?.sql).toContain('$4::jsonb')
+    expect(JSON.parse(String(runtimeCall?.params[3]))).toEqual(expect.objectContaining({
+      runtimeAssetMode: 'no_published_artifact',
+      runtimeArtifactCount: 0,
+    }))
+  })
+
+  it('uses a stable daily dedupe key for task remaining forecast accuracy snapshots', async () => {
+    vi.setSystemTime(new Date('2026-06-15T08:00:00.123Z'))
+    state.tasks = [{
+      id: 'task-remaining-dedupe',
+      project_id: 'project-1',
+      title: 'Dedupe-stable forecast task',
+      standard_work_code: 'cast_in_place_concrete',
+      planned_start_date: '2026-06-01',
+      planned_end_date: '2026-06-20',
+      actual_start_date: '2026-06-01',
+      progress: 40,
+    }]
+
+    await forecastTaskDuration('task-remaining-dedupe')
+    vi.setSystemTime(new Date('2026-06-15T08:00:00.987Z'))
+    await forecastTaskDuration('task-remaining-dedupe')
+
+    const dedupeKeys = mocks.recordDurationAccuracyPrediction.mock.calls
+      .map(([event]) => event.dedupeKey)
+
+    expect(dedupeKeys).toEqual([
+      'project-1:task-remaining-dedupe:remaining_duration_forecast:api_request:2026-06-15',
+      'project-1:task-remaining-dedupe:remaining_duration_forecast:api_request:2026-06-15',
+    ])
+  })
+
   it('records v1.4.22.5 runtime consumer evidence for task duration forecast artifacts', async () => {
     const { calls, queryExec } = createRecordingQueryExec()
 
@@ -302,13 +493,65 @@ describe('taskDurationForecastService', () => {
         recommendedDurationDays: 10,
         conservativeDurationDays: 14,
         remainingDurationDays: 6,
+        remainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
+        forecastDelay: {
+          value: 2,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastDelayDays: 2,
         confidenceLevel: 'medium',
         confidenceScore: 68,
         forecastSource: 'task_remaining_forecast',
         businessReason: 'Runtime forecast from residual overlay.',
+        probabilityDurationMetrics: {
+          p20RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p50RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p80RemainingDuration: {
+            value: 9,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
       },
       observedAt: '2026-06-15T11:00:00.000Z',
       runtimeArtifactPublications: [
@@ -316,16 +559,19 @@ describe('taskDurationForecastService', () => {
           assetKey: 'forecast_residual_overlay',
           publicationKey: 'forecast_residual_overlay_runtime:overlay-v8',
           publicationStatus: 'published',
+          sourceEvidenceRefs: ['runtime_publication:forecast-residual-overlay:overlay-v8'],
         },
         {
           assetKey: 'forecast_confidence_weight',
           publicationKey: 'forecast_confidence_weight_runtime:weight-v8',
           publicationStatus: 'runtime_published',
+          sourceEvidenceRefs: ['runtime_publication:forecast-confidence-weight:weight-v8'],
         },
         {
           assetKey: 'wbs_reference_days',
-          publicationKey: 'wbs_reference_days_runtime:reference-v8',
+          publicationKey: 'duration_learning_runtime:wbs_reference_days:reference-v8',
           publicationStatus: 'published',
+          sourceEvidenceRefs: ['runtime_publication:wbs-reference-days:reference-v8'],
         },
       ],
     })
@@ -355,6 +601,102 @@ describe('taskDurationForecastService', () => {
         'task_duration_forecast',
       ],
     ])
+  })
+
+  it('blocks task duration forecast artifact observations when artifact lineage evidence is missing', async () => {
+    const { calls, queryExec } = createRecordingQueryExec()
+
+    const result = await recordTaskDurationForecastRuntimeConsumption({
+      queryExec,
+      projectId: 'project-1',
+      taskId: 'task-no-artifact-lineage',
+      forecast: {
+        taskId: 'task-no-artifact-lineage',
+        recommendedDurationDays: 10,
+        conservativeDurationDays: 14,
+        remainingDurationDays: 6,
+        remainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        conservativeRemainingDays: 9,
+        forecastFinishDate: '2026-06-22',
+        forecastDelay: {
+          value: 2,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        forecastDelayDays: 2,
+        confidenceLevel: 'medium',
+        confidenceScore: 68,
+        forecastSource: 'task_remaining_forecast',
+        businessReason: 'Runtime forecast from residual overlay.',
+        probabilityDurationMetrics: {
+          p20RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p50RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p80RemainingDuration: {
+            value: 9,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
+      },
+      observedAt: '2026-06-15T11:00:00.000Z',
+      runtimeArtifactPublications: [
+        {
+          assetKey: 'forecast_residual_overlay',
+          publicationKey: 'forecast_residual_overlay_runtime:overlay-no-lineage',
+          publicationStatus: 'published',
+        },
+      ],
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_observations_blocked',
+      recordedCount: 0,
+      blockedCount: 1,
+      reasons: ['runtime_consumer_observation_source_evidence_required'],
+    }))
+    expect(result.runtimeCallResult).toEqual(expect.objectContaining({
+      status: 'runtime_consumer_runtime_call_recorded',
+      canPersist: true,
+    }))
+    expect(callsForTable(calls, 'runtime_consumer_runtime_calls')).toHaveLength(1)
+    expect(callsForTable(calls, 'runtime_consumer_observations')).toEqual([])
   })
 
   it('records runtime consumer evidence from forecastTaskDuration when confidence weight artifacts are consumed', async () => {
@@ -635,6 +977,229 @@ describe('taskDurationForecastService', () => {
       taskId: 'task-thin-residual-overlay',
       predictedDurationDays: 10,
     }))
+  })
+
+  it('prefers mature company residual overlays over project-local overlays for coarse-first runtime calibration', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 26,
+    })
+    state.modelProfiles = [{
+      id: 'profile-residual-overlay-coarse-first',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'residual_overlay_contract_v1',
+        candidateWeights: {
+          L0: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L1: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L2: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+        },
+      },
+    }]
+    state.projects = [{
+      id: 'project-coarse-first-overlay',
+      company_id: 'company-coarse-first',
+    }]
+    state.tasks = [{
+      id: 'task-coarse-first-overlay',
+      project_id: 'project-coarse-first-overlay',
+      title: 'Generic linear task',
+      standard_work_code: 'generic_linear_task',
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-06-06',
+      actual_start_date: '2026-05-18',
+      progress: 50,
+    }]
+    state.residualOverlays = [{
+      overlay_key: 'project-fine-overlay-plus-nine',
+      asset_key: 'task_remaining_forecast',
+      scope_level: 'project',
+      company_id: 'company-coarse-first',
+      project_id: 'project-coarse-first-overlay',
+      learning_target: 'forecast_residual',
+      learning_maturity: 'guarded_live_tuning',
+      publish_anchor: 'guarded_runtime_auto_publish',
+      automation_maturity: 'auto_canary',
+      runtime_publication_status: 'canary',
+      original_mae: 8,
+      overlay_mae: 1,
+      mae_improvement_ratio: 0.875,
+      overcompensation_ratio: 0.08,
+      residual_payload: { residualCorrectionDays: 9, sampleCount: 12 },
+      writes_base_duration_seed: false,
+      target_table: 'duration_forecast_residual_overlays',
+      publication_key: 'forecast_residual_overlay_runtime:project-fine-plus-nine',
+      rollback_target: { action: 'disable_overlay', overlayKey: 'project-fine-overlay-plus-nine' },
+    }, {
+      overlay_key: 'company-coarse-overlay-plus-two',
+      asset_key: 'task_remaining_forecast',
+      scope_level: 'company',
+      company_id: 'company-coarse-first',
+      project_id: null,
+      learning_target: 'forecast_residual',
+      learning_maturity: 'guarded_live_tuning',
+      publish_anchor: 'guarded_runtime_auto_publish',
+      automation_maturity: 'auto_publish',
+      runtime_publication_status: 'published',
+      original_mae: 7,
+      overlay_mae: 4,
+      mae_improvement_ratio: 0.43,
+      overcompensation_ratio: 0.1,
+      residual_payload: { residualCorrectionDays: 2, sampleCount: 18 },
+      writes_base_duration_seed: false,
+      target_table: 'duration_forecast_residual_overlays',
+      publication_key: 'forecast_residual_overlay_runtime:company-coarse-plus-two',
+      rollback_target: { action: 'disable_overlay', overlayKey: 'company-coarse-overlay-plus-two' },
+    }]
+
+    const forecast = await forecastTaskDuration('task-coarse-first-overlay')
+
+    expect(forecast.remainingDurationDays).toBe(12)
+    expect(forecast.forecastSources?.residualOverlay).toEqual(expect.objectContaining({
+      runtimeApplied: true,
+      overlayKey: 'company-coarse-overlay-plus-two',
+      scopeLevel: 'company',
+      sampleCount: 18,
+      minSampleCount: 10,
+    }))
+  })
+
+  it('does not apply project forecast overlays before the minimum forecast-error sample gate is met', async () => {
+    state.modelProfiles = [{
+      id: 'profile-thin-project-overlay',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'project_overlay_sample_gate_v1',
+        candidateWeights: {
+          L0: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L1: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L2: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+        },
+      },
+    }]
+    state.projectOverlays = [{
+      id: 'thin-project-overlay-1',
+      project_id: 'project-thin-project-overlay',
+      model_key: 'remaining_duration_forecast',
+      model_version: 'project_overlay_sample_gate_v1',
+      overlay_status: 'candidate',
+      sample_count: 1,
+      mean_absolute_error_days: 8,
+      bias_error_days: 6,
+      threshold_overlay: {
+        confidenceWeightMultiplier: 0.5,
+        candidateWeights: {
+          L0: { reference_ratio: 1 },
+          L1: { reference_ratio: 0, spi_eac: 0, recent_velocity: 1, history_velocity: 0 },
+          L2: { reference_ratio: 0, spi_eac: 0, recent_velocity: 1, history_velocity: 0 },
+        },
+      },
+      metadata: {
+        generatedBy: 'test',
+      },
+    }]
+    state.tasks = [{
+      id: 'task-thin-project-overlay',
+      project_id: 'project-thin-project-overlay',
+      title: 'Thin project overlay must not steer forecast',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 50,
+    }]
+    state.snapshots = [
+      { task_id: 'task-thin-project-overlay', progress: 0, snapshot_date: '2026-05-01', created_at: '2026-05-01T08:00:00.000Z' },
+      { task_id: 'task-thin-project-overlay', progress: 25, snapshot_date: '2026-05-10', created_at: '2026-05-10T08:00:00.000Z' },
+      { task_id: 'task-thin-project-overlay', progress: 50, snapshot_date: '2026-05-18', created_at: '2026-05-18T08:00:00.000Z' },
+    ]
+
+    const forecast = await forecastTaskDuration('task-thin-project-overlay')
+
+    expect(forecast.remainingDurationDays).toBe(5)
+    expect(forecast.forecastSources?.modelProfile).toEqual(expect.objectContaining({
+      source: 'table',
+      projectOverlay: expect.objectContaining({
+        runtimeApplied: false,
+        ignoredReason: 'project_forecast_overlay_sample_gate_not_met',
+        sampleCount: 1,
+        minSampleCount: 5,
+      }),
+    }))
+    expect((forecast.forecastSources?.confidenceInputs as any)?.modelConfidenceWeight).toBe(1)
+    expect(mocks.recordDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: 'task-thin-project-overlay',
+      predictedDurationDays: 5,
+    }))
+  })
+
+  it('applies project forecast overlays after the forecast-error sample gate is met', async () => {
+    state.modelProfiles = [{
+      id: 'profile-mature-project-overlay',
+      model_key: 'remaining_duration_forecast',
+      model_status: 'active',
+      confidence_weight: 1,
+      metadata: {
+        modelVersion: 'project_overlay_sample_gate_v1',
+        candidateWeights: {
+          L0: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L1: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+          L2: { reference_ratio: 1, spi_eac: 0, recent_velocity: 0, history_velocity: 0 },
+        },
+      },
+    }]
+    state.projectOverlays = [{
+      id: 'mature-project-overlay-1',
+      project_id: 'project-mature-project-overlay',
+      model_key: 'remaining_duration_forecast',
+      model_version: 'project_overlay_sample_gate_v1',
+      overlay_status: 'active_candidate',
+      sample_count: 5,
+      mean_absolute_error_days: 8,
+      bias_error_days: 6,
+      threshold_overlay: {
+        confidenceWeightMultiplier: 0.5,
+        candidateWeights: {
+          L0: { reference_ratio: 1 },
+          L1: { reference_ratio: 0, spi_eac: 0, recent_velocity: 1, history_velocity: 0 },
+          L2: { reference_ratio: 0, spi_eac: 0, recent_velocity: 1, history_velocity: 0 },
+        },
+      },
+      metadata: {
+        generatedBy: 'test',
+      },
+    }]
+    state.tasks = [{
+      id: 'task-mature-project-overlay',
+      project_id: 'project-mature-project-overlay',
+      title: 'Mature project overlay can steer forecast',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 50,
+    }]
+    state.snapshots = [
+      { task_id: 'task-mature-project-overlay', progress: 0, snapshot_date: '2026-05-01', created_at: '2026-05-01T08:00:00.000Z' },
+      { task_id: 'task-mature-project-overlay', progress: 25, snapshot_date: '2026-05-10', created_at: '2026-05-10T08:00:00.000Z' },
+      { task_id: 'task-mature-project-overlay', progress: 50, snapshot_date: '2026-05-18', created_at: '2026-05-18T08:00:00.000Z' },
+    ]
+
+    const forecast = await forecastTaskDuration('task-mature-project-overlay')
+
+    expect(forecast.remainingDurationDays).toBe(18)
+    expect(forecast.forecastSources?.modelProfile).toEqual(expect.objectContaining({
+      source: 'table_project_overlay',
+      projectOverlay: expect.objectContaining({
+        runtimeApplied: true,
+        sampleCount: 5,
+        minSampleCount: 5,
+      }),
+    }))
+    expect((forecast.forecastSources?.confidenceInputs as any)?.modelConfidenceWeight).toBe(0.5)
   })
 
   it('records learnable parameter governance state with task remaining forecast predictions', async () => {
@@ -920,10 +1485,10 @@ describe('taskDurationForecastService', () => {
         highestBuildingFloorCount: 16,
         structureTypeCode: 'steel_structure',
         businessType: 'residential',
-        methodVariantCodes: ['cast_in_place'],
+        methodVariantCodes: ['modular_mic'],
       }),
       structureTypeCode: 'steel_structure',
-      methodVariantCodes: ['cast_in_place'],
+      methodVariantCodes: ['modular_mic'],
     }))
     expect(state.tasks[0].standard_task_metadata).toEqual(expect.objectContaining({
       projectGenerationFacts: expect.objectContaining({
@@ -931,6 +1496,193 @@ describe('taskDurationForecastService', () => {
         structureTypeCode: 'cast_in_place',
       }),
     }))
+  })
+
+  it('hydrates duration suggestions with current progress and obstacle facts before forecasting', async () => {
+    state.tasks = [{
+      id: 'task-current-runtime-facts',
+      project_id: 'project-1',
+      title: 'Current runtime facts task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 45,
+    }]
+    state.snapshots = [{
+      task_id: 'task-current-runtime-facts',
+      progress: 45,
+      snapshot_date: '2026-05-18',
+      created_at: '2026-05-18T08:00:00.000Z',
+    }]
+    state.obstacles = [{
+      id: 'obstacle-current-runtime-facts',
+      task_id: 'task-current-runtime-facts',
+      status: 'open',
+      severity: 'high',
+      created_at: '2026-05-17T08:00:00.000Z',
+    }]
+
+    await forecastTaskDuration('task-current-runtime-facts')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(1)
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeExecutionFacts: expect.objectContaining({
+        progressCompletionRatio: 0.45,
+        blockedTaskCount: 1,
+        hardBlockerCount: 1,
+        evidenceCodes: expect.arrayContaining(['progress_snapshots', 'open_obstacles']),
+      }),
+    }))
+  })
+
+  it('uses current execution facts instead of stale task compatibility columns when forecasting', async () => {
+    state.tasks = [{
+      id: 'task-execution-fact-authority',
+      project_id: 'project-1',
+      title: 'Execution fact authority task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 15,
+      status: 'todo',
+    }]
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.actual_start_date',
+        value: '2026-05-06',
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.progress',
+        value: 60,
+      },
+      {
+        entityId: 'task-execution-fact-authority',
+        entityType: 'task',
+        factType: 'task.status',
+        value: 'in_progress',
+      },
+    ])
+
+    await forecastTaskDuration('task-execution-fact-authority')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-execution-fact-authority'],
+      factTypes: expect.arrayContaining([
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.progress',
+        'task.status',
+      ]),
+    }))
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      actualStartDate: '2026-05-06',
+      progress: 60,
+      runtimeExecutionFacts: expect.objectContaining({
+        progressCompletionRatio: 0.6,
+      }),
+    }))
+  })
+
+  it('passes the one exact confirmed canonical task primary into the duration suggestion caller', async () => {
+    state.tasks = [{
+      id: 'task-confirmed-cause',
+      project_id: 'project-1',
+      title: 'Confirmed material delay task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-02',
+      progress: 45,
+    }]
+    state.projects = [{ id: 'project-1', company_id: 'company-1' }]
+    mocks.rawQuery.mockImplementation(async (sql = '') => {
+      if (sql.includes('FROM public.structured_cause_attributions')) {
+        return { rows: [{
+          id: '00000000-0000-4000-8000-000000000091',
+          company_id: 'company-1',
+          project_id: 'project-1',
+          subject_type: 'task',
+          subject_id: 'task-confirmed-cause',
+          event_type: 'delay',
+          status: 'confirmed',
+          cause_code: 'material_shortage',
+          cause_role: 'primary',
+          taxonomy_version: 'v1.0.0',
+          confirmation_source: 'user_confirmed',
+          confirmed_at: '2026-05-18T08:00:00.000Z',
+        }] }
+      }
+      return { rows: [] }
+    })
+
+    await forecastTaskDuration('task-confirmed-cause')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      structuredCauseAuthority: {
+        state: 'confirmed',
+        causeCode: 'material_shortage',
+        taxonomyVersion: 'v1.0.0',
+        reasonCodes: [],
+      },
+    }))
+    expect(mocks.getTaskDurationSuggestion.mock.calls.at(-1)?.[0]).not.toHaveProperty('confirmedCauseCode')
+  })
+
+  it.each([
+    {
+      name: 'no cause',
+      rows: [],
+      readFails: false,
+      expected: { state: 'no_cause', causeCode: null, taxonomyVersion: 'v1.0.0', reasonCodes: [] },
+    },
+    {
+      name: 'review required',
+      rows: [{
+        id: '00000000-0000-4000-8000-000000000092', company_id: 'company-1', project_id: 'project-1',
+        subject_type: 'task', subject_id: 'task-authority-state', event_type: 'delay', status: 'candidate',
+        cause_code: 'quality_rework', cause_role: 'primary', taxonomy_version: 'v1.0.0',
+        confirmation_source: 'candidate', confirmed_at: null,
+        review_reason_codes: ['manual_text_requires_user_confirmation'],
+      }],
+      readFails: false,
+      expected: {
+        state: 'review_required', causeCode: 'quality_rework', taxonomyVersion: 'v1.0.0',
+        reasonCodes: ['manual_text_requires_user_confirmation'],
+      },
+    },
+    {
+      name: 'unavailable',
+      rows: [],
+      readFails: true,
+      expected: {
+        state: 'unavailable', causeCode: null, taxonomyVersion: 'v1.0.0',
+        reasonCodes: ['structured_cause_read_failed'],
+      },
+    },
+  ])('passes the discriminated $name authority state into duration suggestion', async ({ rows, readFails, expected }) => {
+    state.tasks = [{
+      id: 'task-authority-state', project_id: 'project-1', title: 'Authority state task',
+      planned_start_date: '2026-05-01', planned_end_date: '2026-05-20', actual_start_date: '2026-05-02', progress: 45,
+    }]
+    state.projects = [{ id: 'project-1', company_id: 'company-1' }]
+    mocks.rawQuery.mockImplementation(async (sql = '') => {
+      if (!sql.includes('FROM public.structured_cause_attributions')) return { rows: [] }
+      if (readFails) throw new Error('rls denied')
+      return { rows }
+    })
+
+    await forecastTaskDuration('task-authority-state')
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledWith(expect.objectContaining({
+      structuredCauseAuthority: expected,
+    }))
+    expect(mocks.getTaskDurationSuggestion.mock.calls.at(-1)?.[0]).not.toHaveProperty('confirmedCauseCode')
   })
 
   it('uses SPI and recent velocity when execution facts show the task is slower than the reference ratio', async () => {
@@ -1028,7 +1780,6 @@ describe('taskDurationForecastService', () => {
     state.acceptancePlans = [{
       id: 'acceptance-plan-1',
       project_id: 'project-1',
-      task_id: 'task-gate-style',
       status: 'pending',
       planned_date: '2026-05-24',
       actual_date: null,
@@ -1037,6 +1788,15 @@ describe('taskDurationForecastService', () => {
       upstream_unfinished_count: 1,
       requirement_ready_percent: 40,
       is_overdue: false,
+    }]
+    state.projectEntityLinks = [{
+      project_id: 'project-1',
+      source_entity_type: 'acceptance_plan',
+      source_entity_id: 'acceptance-plan-1',
+      target_entity_type: 'task',
+      target_entity_id: 'task-gate-style',
+      relation_type: 'covers_task',
+      status: 'active',
     }]
 
     const forecast = await forecastTaskDuration('task-gate-style')
@@ -1307,6 +2067,37 @@ describe('taskDurationForecastService', () => {
     ]))
   })
 
+  it('orders forecast path durations so the optimistic path cannot exceed the recommended remaining forecast', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 55,
+      conservativeDurationDays: 70,
+    })
+    state.tasks = [{
+      id: 'task-s-curve-optimistic-order',
+      project_id: 'project-1',
+      title: 'MEP installation task',
+      standard_work_code: 'mep_installation_task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      progress: 70,
+    }]
+
+    const forecast = await forecastTaskDuration('task-s-curve-optimistic-order')
+
+    expect(forecast.optimisticRemainingDays).toBeLessThanOrEqual(forecast.remainingDurationDays ?? 0)
+    expect(forecast.forecastSources?.forecastPaths).toMatchObject({
+      optimistic: { remainingDays: forecast.optimisticRemainingDays },
+      recommended: { remainingDays: forecast.remainingDurationDays },
+    })
+    expect((forecast.calculationContext as any).durationPlausibilityWarnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ruleId: 'duration.forecast_paths.optimistic_order',
+        severity: 'warning',
+      }),
+    ]))
+  })
+
   it('keeps an SPI/EAC remaining candidate after planned value reaches 100 percent but work is unfinished', async () => {
     vi.setSystemTime(new Date('2026-06-20T08:00:00.000Z'))
     state.tasks = [{
@@ -1346,6 +2137,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-02-23',
       adjustedWorkDates: ['2026-02-14', '2026-02-28'],
       productivity: 0.45,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-spring',
@@ -1379,6 +2171,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-05-03',
       counts_as_construction_shutdown: true,
       productivity: 0,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-explicit-shutdown',
@@ -1411,6 +2204,7 @@ describe('taskDurationForecastService', () => {
       startDate: '2026-06-01',
       endDate: '2026-06-10',
       productivity: 0.8,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-climate-window',
@@ -1440,6 +2234,7 @@ describe('taskDurationForecastService', () => {
       endDate: '2026-02-23',
       calendarKind: 'statutory_holiday',
       productivity: 0.45,
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-spring-unstarted',
@@ -1650,6 +2445,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.dependencyForecasts = [{
       task_id: 'task-parent',
+      project_id: 'project-1',
       forecast_finish_date: '2026-05-29',
       remaining_duration_days: 9,
       forecast_delay_days: 8,
@@ -1668,6 +2464,85 @@ describe('taskDurationForecastService', () => {
       blockingDependencies: expect.arrayContaining([
         expect.objectContaining({
           dependencyTaskId: 'task-parent',
+          source: 'current_dependency_forecast',
+        }),
+      ]),
+    })
+  })
+
+  it('uses current execution facts when deciding whether a predecessor still blocks the forecast', async () => {
+    state.tasks = [
+      {
+        id: 'task-authority-child',
+        project_id: 'project-1',
+        title: 'Authority child task',
+        planned_start_date: '2026-05-18',
+        planned_end_date: '2026-05-22',
+        progress: 0,
+      },
+      {
+        id: 'task-authority-parent',
+        project_id: 'project-1',
+        title: 'Stale completed predecessor',
+        planned_start_date: '2026-05-11',
+        planned_end_date: '2026-05-15',
+        actual_end_date: '2026-05-15',
+        status: 'completed',
+        progress: 100,
+      },
+    ]
+    state.dependencies = [{
+      task_id: 'task-authority-child',
+      project_id: 'project-1',
+      dependency_task_id: 'task-authority-parent',
+      dependency_type: 'FS',
+      lag_days: 2,
+      required_for_start: true,
+      status: 'active',
+    }]
+    state.dependencyForecasts = [{
+      task_id: 'task-authority-parent',
+      project_id: 'project-1',
+      forecast_finish_date: '2026-05-29',
+      remaining_duration_days: 9,
+      forecast_delay_days: 8,
+      is_current: true,
+    }]
+    mocks.listCurrentExecutionFacts.mockImplementation(async (input: { entityIds: string[] }) => (
+      input.entityIds.includes('task-authority-parent')
+        ? [
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.actual_end_date',
+              value: null,
+            },
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.progress',
+              value: 60,
+            },
+            {
+              entityId: 'task-authority-parent',
+              entityType: 'task',
+              factType: 'task.status',
+              value: 'in_progress',
+            },
+          ]
+        : []
+    ))
+
+    const forecast = await forecastTaskDuration('task-authority-child')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityIds: ['task-authority-parent'],
+    }))
+    expect(forecast.forecastSources?.dependencyPropagation).toMatchObject({
+      count: 1,
+      blockingDependencies: expect.arrayContaining([
+        expect.objectContaining({
+          dependencyTaskId: 'task-authority-parent',
           source: 'current_dependency_forecast',
         }),
       ]),
@@ -1705,6 +2580,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.dependencyForecasts = [{
       task_id: 'task-ss-parent',
+      project_id: 'project-1',
       forecast_finish_date: '2026-06-15',
       remaining_duration_days: 20,
       forecast_delay_days: 20,
@@ -1759,6 +2635,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.dependencyForecasts = [{
       task_id: 'task-ff-parent',
+      project_id: 'project-1',
       forecast_finish_date: '2026-06-15',
       remaining_duration_days: 20,
       forecast_delay_days: 20,
@@ -1870,6 +2747,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.dependencyForecasts = [{
       task_id: 'task-predecessor',
+      project_id: 'project-1',
       forecast_finish_date: '2026-05-20',
       remaining_duration_days: 3,
       forecast_delay_days: 3,
@@ -1986,6 +2864,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.materials = [{
       id: 'material-unknown',
+      project_id: 'project-1',
       linked_task_id: 'task-unstarted-unknown',
       actual_arrival_date: null,
       expected_arrival_date: null,
@@ -2214,6 +3093,7 @@ describe('taskDurationForecastService', () => {
       holidayName: 'Labor Day',
       startDate: '2026-05-01',
       endDate: '2026-05-05',
+      __resolverVersionId: 'calendar-v1',
     }]
     state.tasks = [{
       id: 'task-unstarted-window-overflow',
@@ -2273,6 +3153,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.materials = [{
       id: 'material-stale',
+      project_id: 'project-1',
       linked_task_id: 'task-unstarted-stale-dates',
       actual_arrival_date: null,
       expected_arrival_date: '2026-05-10',
@@ -2346,6 +3227,7 @@ describe('taskDurationForecastService', () => {
     ]
     state.dependencyForecasts = [{
       task_id: 'task-c',
+      project_id: 'project-1',
       forecast_finish_date: '2026-06-05',
       remaining_duration_days: 14,
       forecast_delay_days: 10,
@@ -2400,6 +3282,7 @@ describe('taskDurationForecastService', () => {
     }]
     state.materials = [{
       id: 'material-1',
+      project_id: 'project-1',
       linked_task_id: 'task-external',
       actual_arrival_date: null,
       expected_arrival_date: '2026-05-16',
@@ -2408,10 +3291,19 @@ describe('taskDurationForecastService', () => {
     }]
     state.acceptancePlans = [{
       id: 'acceptance-1',
-      task_id: 'task-external',
+      project_id: 'project-1',
       status: 'pending',
       planned_date: '2026-05-17',
       actual_date: null,
+    }]
+    state.projectEntityLinks = [{
+      project_id: 'project-1',
+      source_entity_type: 'acceptance_plan',
+      source_entity_id: 'acceptance-1',
+      target_entity_type: 'task',
+      target_entity_id: 'task-external',
+      relation_type: 'covers_task',
+      status: 'active',
     }]
 
     const forecast = await forecastTaskDuration('task-external')
@@ -2590,10 +3482,19 @@ describe('taskDurationForecastService', () => {
     ]
     state.acceptancePlans = [{
       id: 'acceptance-finish',
-      task_id: 'task-acceptance-gate',
+      project_id: 'project-1',
       status: 'submitted',
       planned_date: '2026-05-25',
       actual_date: null,
+    }]
+    state.projectEntityLinks = [{
+      project_id: 'project-1',
+      source_entity_type: 'acceptance_plan',
+      source_entity_id: 'acceptance-finish',
+      target_entity_type: 'task',
+      target_entity_id: 'task-acceptance-gate',
+      relation_type: 'covers_task',
+      status: 'active',
     }]
 
     const forecast = await forecastTaskDuration('task-acceptance-gate')
@@ -2913,8 +3814,54 @@ describe('taskDurationForecastService', () => {
 
     expect(forecast.executionReferenceDays).toBe(14)
     expect(forecast.recommendedDurationDays).toBe(14)
+    expect(forecast.remainingDuration).toMatchObject({
+      value: null,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+    expect(forecast.remainingDurationDays).toBeNull()
+    expect(forecast.remainingForecastDays).toBeNull()
+    expect(forecast.forecastFinishDate).toBeNull()
     expect(state.insertedForecasts).toHaveLength(0)
     expect(state.updatedForecasts).toHaveLength(0)
+  })
+
+  it('maps PostgreSQL DATE objects from current forecasts without losing the calendar date', async () => {
+    state.dependencyForecasts = [{
+      id: 'forecast-current-date-object',
+      task_id: 'task-date-object',
+      project_id: 'project-1',
+      recommended_duration_days: 8,
+      execution_reference_days: 8,
+      conservative_duration_days: 12,
+      remaining_duration_days: 8,
+      forecast_finish_date: new Date(2026, 3, 20),
+      forecast_delay_days: 0,
+      confidence_level: 'high',
+      confidence_score: 90,
+      forecast_source: 'cached_current',
+      is_current: true,
+      created_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        remainingDuration: {
+          value: 8,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-18',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-date-object'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.forecastFinishDate).toBe('2026-04-20')
   })
 
   it('applies duration context factors to remaining forecast and lowers forecast confidence', async () => {
@@ -2969,6 +3916,307 @@ describe('taskDurationForecastService', () => {
     expect(forecast.confidenceScore).toBeLessThan(62)
   })
 
+  it('applies planning replay calibration readback to E2 remaining forecasts as candidate-only correction', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 10,
+      conservativeDurationDays: 14,
+      confidenceScore: 70,
+    })
+    mocks.readPlanningReplayCalibrationReadback.mockResolvedValueOnce({
+      status: 'ready',
+      coarseProcessKey: 'generic_task',
+      evidenceRefs: ['planning_replay_calibration_events:event-e2'],
+      writePolicy: 'candidate_overlay_only_no_fact_mutation',
+      acceptedSampleCount: 22,
+      originalMae: 6,
+      replayMae: 3,
+      maeImprovement: 3,
+      overcompensationRate: 0.1,
+      e1DurationAdjustmentDays: null,
+      e2ResidualCorrectionDays: 4,
+      capacityBudgetFactor: null,
+      priorityWeightAdjustment: null,
+      e2TargetDiscountFactor: null,
+      rejectedEvidence: [],
+    })
+    state.tasks = [{
+      id: 'task-e2-replay',
+      project_id: 'project-1',
+      title: 'Generic task',
+      standard_work_code: 'generic_task',
+      standard_work_name: 'Generic task',
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-05-30',
+      actual_start_date: '2026-05-18',
+      progress: 50,
+    }]
+
+    const forecast = await forecastTaskDuration('task-e2-replay')
+
+    expect(mocks.readPlanningReplayCalibrationReadback).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      standardWorkCode: 'generic_task',
+      standardWorkName: 'Generic task',
+    }))
+    expect(forecast.remainingDurationDays).toBe(10)
+    expect(forecast.forecastSources?.planningReplayCalibrationReadback).toMatchObject({
+      applied: true,
+      e2ResidualCorrectionDays: 4,
+      writePolicy: 'candidate_overlay_only_no_fact_mutation',
+      acceptedSampleCount: 22,
+      evidenceRefs: ['planning_replay_calibration_events:event-e2'],
+    })
+    expect((forecast.calculationContext as any)?.remaining_duration_forecast).toEqual(expect.objectContaining({
+      planningReplayCalibrationReadback: expect.objectContaining({
+        applied: true,
+        e2ResidualCorrectionDays: 4,
+      }),
+    }))
+    expect(state.insertedForecasts[0]?.metadata).toEqual(expect.objectContaining({
+      planningReplayCalibrationReadback: expect.objectContaining({
+        applied: true,
+        e2ResidualCorrectionDays: 4,
+      }),
+    }))
+  })
+
+  it('surfaces T2 rhythm assembly context in E2 remaining forecasts without applying template days or writing dependencies', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 12,
+      conservativeDurationDays: 18,
+      confidenceScore: 72,
+      factorSummary: {
+        businessReasons: ['T2 rhythm candidate package is visible through L3 assembly.'],
+        calculationContext: {
+          durationInputAssembly: {
+            source: 'duration_input_assembler',
+            assemblyGate: {
+              status: 'compatible_candidate',
+              canEnterC1913Phase1Selection: true,
+              requiresManualReview: false,
+              canWriteTaskDependencies: false,
+              canWritePlanDates: false,
+              priorityOverrideBlocked: false,
+              conflictCodes: [],
+            },
+            inputChannels: {
+              t2RhythmScheduleCandidatePackage: {
+                source: 'project_metadata',
+                status: 'ready',
+                tier: 'T2',
+                selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+              },
+              t2RhythmScheduleCandidateNetworkEvaluation: {
+                source: 'project_metadata',
+                status: 'ready',
+                tier: 'T2',
+                candidateId: 't2-network-residential-standard-floor',
+              },
+            },
+            mutationBoundary: {
+              writesTaskDependencies: false,
+              writesPlanDates: false,
+              writesCriticalPathFacts: false,
+              writesSeed: false,
+              writesBaseline: false,
+              writesRuntimePublications: false,
+            },
+          },
+          t2RhythmScheduleCandidatePackage: {
+            source: 't2_division_rhythm_schedule_candidate_package',
+            tier: 'T2',
+            status: 'schedulable_candidate',
+            selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+            durationContextCandidateCount: 6,
+            dependencyCandidateCount: 5,
+            hardGateCount: 3,
+            scheduleTrustPolicy: {
+              autoApply: false,
+              writesTaskDependencies: false,
+              writesPlanDates: false,
+              requiresAssemblyCompatibility: true,
+              requiresL5Publication: true,
+            },
+          },
+          t2RhythmScheduleCandidateNetworkEvaluation: {
+            source: 't2_rhythm_schedule_candidate_network_phase1_evaluation',
+            status: 'phase1_readonly_evaluation_ready',
+            candidateId: 't2-network-residential-standard-floor',
+            canEnterC1913Phase1Selection: true,
+            networkSpanDays: 7,
+            criticalWindowCodes: ['floor_rebar_formwork_mep_embed', 'concrete_pour_curing'],
+            mutationBoundary: {
+              writesTaskDependencies: false,
+              writesPlanDates: false,
+              writesCriticalPathFacts: false,
+            },
+          },
+        },
+      },
+      calculationContext: {
+        durationInputAssembly: {
+          source: 'duration_input_assembler',
+          assemblyGate: {
+            status: 'compatible_candidate',
+            canEnterC1913Phase1Selection: true,
+            requiresManualReview: false,
+            canWriteTaskDependencies: false,
+            canWritePlanDates: false,
+            priorityOverrideBlocked: false,
+            conflictCodes: [],
+          },
+          mutationBoundary: {
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesCriticalPathFacts: false,
+            writesSeed: false,
+            writesBaseline: false,
+            writesRuntimePublications: false,
+          },
+        },
+        t2RhythmScheduleCandidatePackage: {
+          source: 't2_division_rhythm_schedule_candidate_package',
+          tier: 'T2',
+          status: 'schedulable_candidate',
+          selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+          durationContextCandidateCount: 6,
+          dependencyCandidateCount: 5,
+          hardGateCount: 3,
+          scheduleTrustPolicy: {
+            autoApply: false,
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            requiresAssemblyCompatibility: true,
+            requiresL5Publication: true,
+          },
+        },
+        t2RhythmScheduleCandidateNetworkEvaluation: {
+          source: 't2_rhythm_schedule_candidate_network_phase1_evaluation',
+          status: 'phase1_readonly_evaluation_ready',
+          candidateId: 't2-network-residential-standard-floor',
+          canEnterC1913Phase1Selection: true,
+          networkSpanDays: 7,
+          criticalWindowCodes: ['floor_rebar_formwork_mep_embed', 'concrete_pour_curing'],
+          mutationBoundary: {
+            writesTaskDependencies: false,
+            writesPlanDates: false,
+            writesCriticalPathFacts: false,
+          },
+        },
+      },
+    })
+    state.tasks = [{
+      id: 'task-e2-t2-rhythm',
+      project_id: 'project-1',
+      title: '标准层结构节奏跟踪',
+      standard_work_code: 'residential.standard_floor.structure',
+      planned_start_date: '2026-05-18',
+      planned_end_date: '2026-05-31',
+      actual_start_date: '2026-05-18',
+      progress: 50,
+    }]
+
+    const forecast = await forecastTaskDuration('task-e2-t2-rhythm')
+
+    expect(forecast.remainingDurationDays).toBe(6)
+    expect(forecast.executionReferenceDays).toBe(12)
+    expect(forecast.forecastSources?.t2RhythmScheduleCandidatePackage).toEqual(expect.objectContaining({
+      source: 't2_division_rhythm_schedule_candidate_package',
+      tier: 'T2',
+      status: 'schedulable_candidate',
+      selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+      durationContextCandidateCount: 6,
+      dependencyCandidateCount: 5,
+    }))
+    expect(forecast.forecastSources?.durationInputAssembly).toEqual(expect.objectContaining({
+      source: 'duration_input_assembler',
+      assemblyGate: expect.objectContaining({
+        status: 'compatible_candidate',
+        canEnterC1913Phase1Selection: true,
+      }),
+      mutationBoundary: expect.objectContaining({
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        writesCriticalPathFacts: false,
+      }),
+    }))
+    expect((forecast.calculationContext as any)?.remaining_duration_forecast).toEqual(expect.objectContaining({
+      t2RhythmScheduleCandidatePackage: expect.objectContaining({
+        selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+      }),
+      durationInputAssembly: expect.objectContaining({
+        source: 'duration_input_assembler',
+      }),
+    }))
+    expect(state.insertedForecasts[0]).toEqual(expect.objectContaining({
+      remaining_duration_days: 6,
+      execution_reference_days: 12,
+    }))
+    expect(state.insertedForecasts[0]).not.toHaveProperty('recommended_duration_days')
+    expect(state.insertedForecasts[0]?.metadata).toEqual(expect.objectContaining({
+      t2RhythmScheduleCandidatePackage: expect.objectContaining({
+        selectedTemplateIds: ['t2-residential-standard-floor-structure-rhythm-v1'],
+      }),
+      durationInputAssembly: expect.objectContaining({
+        source: 'duration_input_assembler',
+      }),
+    }))
+    expect(state.dependencies).toHaveLength(0)
+  })
+
+  it('assembles E2 actual execution facts into remaining forecast evidence even without upstream E1 assembly', async () => {
+    state.tasks = [{
+      id: 'task-e2-own-assembly',
+      project_id: 'project-1',
+      title: 'E2 assembly task',
+      standard_work_code: 'cast_in_place_concrete',
+      planned_start_date: '2026-05-10',
+      planned_end_date: '2026-05-24',
+      actual_start_date: '2026-05-12',
+      progress: 40,
+    }]
+    state.snapshots = [{
+      task_id: 'task-e2-own-assembly',
+      progress: 25,
+      snapshot_date: '2026-05-15',
+      created_at: '2026-05-15T12:00:00.000Z',
+    }]
+
+    const forecast = await forecastTaskDuration('task-e2-own-assembly')
+
+    expect(forecast.forecastSources?.durationInputAssembly).toEqual(expect.objectContaining({
+      source: 'duration_input_assembler',
+      inputChannels: expect.objectContaining({
+        actualExecutionFacts: expect.objectContaining({
+          source: 'explicit_input',
+          status: 'ready',
+          assetSource: 'runtime_execution_facts',
+        }),
+      }),
+      mutationBoundary: expect.objectContaining({
+        writesTaskDependencies: false,
+        writesPlanDates: false,
+        writesCriticalPathFacts: false,
+      }),
+    }))
+    expect((forecast.calculationContext as any)?.remaining_duration_forecast?.durationInputAssembly).toEqual(expect.objectContaining({
+      source: 'duration_input_assembler',
+      inputChannels: expect.objectContaining({
+        actualExecutionFacts: expect.objectContaining({
+          status: 'ready',
+        }),
+      }),
+    }))
+    expect(state.insertedForecasts[0]?.metadata).toEqual(expect.objectContaining({
+      durationInputAssembly: expect.objectContaining({
+        source: 'duration_input_assembler',
+      }),
+    }))
+    expect(state.dependencies).toHaveLength(0)
+  })
+
   it('uses history_velocity as the sole duration multiplier when context progress velocity is candidate-only', async () => {
     mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
       ...baseSuggestion(),
@@ -2989,7 +4237,7 @@ describe('taskDurationForecastService', () => {
         }],
       },
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValueOnce({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValueOnce({
       durationRatio: 1.2,
       multiplier: 1.2,
       confidenceLevel: 'high',
@@ -3087,7 +4335,7 @@ describe('taskDurationForecastService', () => {
       recommendedDurationDays: 20,
       conservativeDurationDays: 28,
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValueOnce({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValueOnce({
       durationRatio: 1.2,
       multiplier: 1.2,
       confidenceLevel: 'high',
@@ -3138,7 +4386,7 @@ describe('taskDurationForecastService', () => {
       recommendedDurationDays: 20,
       conservativeDurationDays: 28,
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValueOnce({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValueOnce({
       durationRatio: 1.2,
       multiplier: 1.2,
       confidenceLevel: 'high',
@@ -3194,7 +4442,7 @@ describe('taskDurationForecastService', () => {
       recommendedDurationDays: 20,
       conservativeDurationDays: 28,
     })
-    mocks.buildProjectProgressVelocityLearning.mockResolvedValueOnce({
+    mocks.loadPublishedProgressVelocityRuntime.mockResolvedValueOnce({
       durationRatio: 1.2,
       multiplier: 1.2,
       confidenceLevel: 'high',
@@ -3489,11 +4737,105 @@ describe('taskDurationForecastService', () => {
       p80RemainingDays: 16,
       source: 'duration_benchmarks',
     }))
+    expect(forecast.probabilityDurationMetrics).toEqual({
+      p20RemainingDuration: expect.objectContaining({
+        value: 8,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+      p50RemainingDuration: expect.objectContaining({
+        value: 10,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+      p80RemainingDuration: expect.objectContaining({
+        value: 16,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+    })
+    expect(forecast.forecastDelay).toEqual(expect.objectContaining({
+      value: forecast.forecastDelayDays,
+      unit: 'construction_production_day',
+      availability: 'available',
+    }))
     expect(probabilityDuration.p80RemainingDays).toBeGreaterThan(forecast.remainingDurationDays ?? 0)
     expect(forecast.forecastSources?.forecastPaths).toMatchObject({
       recommended: { remainingDays: 15 },
       conservative: { remainingDays: expect.any(Number) },
     })
+  })
+
+  it('keeps probability duration windows ordered when source percentiles are inverted', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 20,
+      conservativeDurationDays: 12,
+      businessReasonParams: {
+        companyBenchmarkP20: 36,
+        companyBenchmarkP50: 20,
+        companyBenchmarkP80: 12,
+      },
+      calculationContext: {
+        duration_source: 'standard_work_duration_seed+company_history_sample',
+        durationDistribution: {
+          p20: 36,
+          p50: 20,
+          p80: 12,
+          source: 'duration_benchmarks',
+        },
+      },
+    })
+    state.tasks = [{
+      id: 'task-probability-inverted-window',
+      project_id: 'project-1',
+      title: 'Concrete pour with inverted distribution',
+      standard_work_code: 'cast_in_place_concrete',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 50,
+    }]
+
+    const forecast = await forecastTaskDuration('task-probability-inverted-window')
+    const probabilityDuration = (forecast as any).probabilityDuration
+
+    expect(probabilityDuration.p20RemainingDays).toBeLessThanOrEqual(probabilityDuration.p50RemainingDays)
+    expect(probabilityDuration.p50RemainingDays).toBeLessThanOrEqual(probabilityDuration.p80RemainingDays)
+    expect((forecast.calculationContext as any).durationPlausibilityWarnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ ruleId: 'duration.band.order' }),
+    ]))
+  })
+
+  it('caps implausible remaining forecasts relative to the planned task duration', async () => {
+    mocks.getTaskDurationSuggestion.mockResolvedValueOnce({
+      ...baseSuggestion(),
+      recommendedDurationDays: 1000,
+      conservativeDurationDays: 1200,
+    })
+    state.tasks = [{
+      id: 'task-relative-cap',
+      project_id: 'project-1',
+      title: 'Short planned task with bad reference duration',
+      standard_work_code: 'short_planned_task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-05',
+      actual_start_date: '2026-05-01',
+      progress: 10,
+    }]
+
+    const forecast = await forecastTaskDuration('task-relative-cap')
+
+    expect(forecast.remainingDurationDays).toBe(50)
+    expect(forecast.conservativeRemainingDays).toBeGreaterThanOrEqual(50)
+    expect((forecast.calculationContext as any).durationPlausibilityWarnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        ruleId: 'duration.max.task_remaining_relative_to_plan',
+        severity: 'clamped',
+        originalDays: 365,
+        adjustedDays: 50,
+      }),
+    ]))
   })
 
   it('sharpens the optimistic probability side from benchmark variance when explicit P20 is absent', async () => {
@@ -3641,5 +4983,25 @@ describe('taskDurationForecastService', () => {
       }),
     ]))
     expect(state.dependencyForecasts[0]?.forecast_error_days).toBeGreaterThan(0)
+  })
+
+  it('treats actual_end_date as completion even when progress synchronization lags', async () => {
+    state.tasks = [{
+      id: 'task-actual-end-complete',
+      project_id: 'project-1',
+      title: 'Actual end complete task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-10',
+      actual_start_date: '2026-05-01',
+      actual_end_date: '2026-05-12',
+      status: 'in_progress',
+      progress: 99,
+    }]
+
+    const forecast = await forecastTaskDuration('task-actual-end-complete')
+
+    expect(forecast.remainingDurationDays).toBe(0)
+    expect(forecast.forecastFinishDate).toBe('2026-05-12')
+    expect(forecast.forecastSources).toEqual(expect.objectContaining({ completed: true }))
   })
 })

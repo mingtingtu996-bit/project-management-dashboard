@@ -1,11 +1,12 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { CertificateDependency } from '../types/db.js'
+import { markPreMilestoneProjectChanged } from '../services/preMilestoneReadCache.js'
 
 const router = Router({ mergeParams: true })
 router.use(authenticate)
@@ -55,6 +56,30 @@ function wouldIntroduceDependencyCycle(
   return false
 }
 
+async function resolveDependencyEntityProjectId(entityType: unknown, entityId: unknown) {
+  const type = String(entityType ?? '').trim()
+  const id = String(entityId ?? '').trim()
+  if (!type || !id) return null
+
+  if (type === 'certificate') {
+    const row = await executeSQLOne<{ project_id?: string | null }>(
+      'SELECT project_id FROM pre_milestones WHERE id = ? LIMIT 1',
+      [id],
+    )
+    return row?.project_id ?? null
+  }
+
+  if (type === 'work_item') {
+    const row = await executeSQLOne<{ project_id?: string | null }>(
+      'SELECT project_id FROM certificate_work_items WHERE id = ? LIMIT 1',
+      [id],
+    )
+    return row?.project_id ?? null
+  }
+
+  return null
+}
+
 export const certificateDependencyContracts = {
   types: ['CertificateDependency'],
   endpoints: [
@@ -84,6 +109,7 @@ export const certificateDependencyContracts = {
 
 router.get(
   '/',
+  requireProjectMember((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const certificateId = req.query.certificate_id as string | undefined
@@ -122,6 +148,7 @@ router.get(
 
 router.post(
   '/',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const {
@@ -149,6 +176,27 @@ router.post(
       'SELECT * FROM certificate_dependencies WHERE project_id = ? ORDER BY created_at ASC',
       [projectId],
     )) as CertificateDependency[]
+
+    const [predecessorProjectId, successorProjectId] = await Promise.all([
+      resolveDependencyEntityProjectId(predecessor_type, predecessor_id),
+      resolveDependencyEntityProjectId(successor_type, successor_id),
+    ])
+    const invalidEntityIds = [
+      predecessorProjectId !== projectId ? predecessor_id : null,
+      successorProjectId !== projectId ? successor_id : null,
+    ].filter(Boolean)
+    if (invalidEntityIds.length > 0) {
+      const response: ApiResponse = {
+        success: false,
+        error: {
+          code: 'DEPENDENCY_ENTITY_PROJECT_MISMATCH',
+          message: 'Certificate dependency entities must belong to the current project',
+          details: { invalidEntityIds },
+        },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(400).json(response)
+    }
 
     if (wouldIntroduceDependencyCycle(existingDependencies, {
       predecessor_type,
@@ -186,6 +234,7 @@ router.post(
         now,
       ]
     )
+    markPreMilestoneProjectChanged(projectId)
 
     const data = await executeSQLOne('SELECT * FROM certificate_dependencies WHERE id = ? LIMIT 1', [id])
     const response: ApiResponse<CertificateDependency> = {
@@ -199,6 +248,7 @@ router.post(
 
 router.delete(
   '/:id',
+  requireProjectEditor((req) => req.params.projectId),
   asyncHandler(async (req, res) => {
     const projectId = req.params.projectId as string | undefined
     const { id } = req.params
@@ -212,7 +262,15 @@ router.delete(
       return res.status(400).json(response)
     }
 
+    // v1.4.15: retention decision must block unsafe physical deletes.
+    const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+    const retention = await enforceRetentionOrBlock({ entityType: 'certificate_dependency', entityId: id, projectId, userId: req.user?.id ?? null, userAction: 'delete' })
+    if (retention.blocked) {
+      return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+    }
+
     await executeSQL('DELETE FROM certificate_dependencies WHERE id = ? AND project_id = ?', [id, projectId])
+    markPreMilestoneProjectChanged(projectId)
 
     const response: ApiResponse = {
       success: true,

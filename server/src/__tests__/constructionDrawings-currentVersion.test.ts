@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import express from 'express'
 import supertest from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -96,24 +97,159 @@ type CertificateDependencyRow = {
   created_at: string
 }
 
+type PreMilestoneRow = {
+  id: string
+  project_id: string
+}
+
+function joinedSql(calls: [unknown, ...unknown[]][]) {
+  return calls.map(([sql]) => String(sql).toLowerCase()).join('\n')
+}
+
 const db = vi.hoisted(() => {
   const packages: PackageRow[] = []
   const drawings: DrawingRow[] = []
   const versions: VersionRow[] = []
   const certificateWorkItems: CertificateWorkItemRow[] = []
   const certificateDependencies: CertificateDependencyRow[] = []
+  const preMilestones: PreMilestoneRow[] = []
+  type TestTransaction = { id: number; packageLocks: Set<string> }
+  type TransactionStorage = {
+    getStore: () => TestTransaction | undefined
+    run: <T>(store: TestTransaction, work: () => T) => T
+  }
+  let transactionStorage: TransactionStorage | null = null
+  let transactionActive = false
+  let serializePackageLocks = false
+  let nextTransactionId = 1
+  const packageLockOwners = new Map<string, TestTransaction>()
+  const packageLockWaiters = new Map<string, Array<() => void>>()
+  let pauseKind: 'package-drawing-read' | 'drawing-lock' | null = null
+  let pauseReachedPromise = Promise.resolve()
+  let resolvePauseReached: (() => void) | null = null
+  let pauseReleasePromise = Promise.resolve()
+  let resolvePauseRelease: (() => void) | null = null
+  let contentionPromise = Promise.resolve()
+  let resolveContention: (() => void) | null = null
+  const lockEvents: string[] = []
+  const enforceRetentionOrBlock = vi.fn(async () => ({
+    blocked: false,
+    reason: 'physical_delete_allowed',
+    result: { resolvedAction: 'physical_delete' },
+  }))
   const persistNotification = vi.fn(async (payload: Record<string, unknown>) => payload)
   const getMembers = vi.fn(async () => ([
     { id: 'member-1', project_id: 'project-1', user_id: 'owner-1', role: 'owner', joined_at: '2026-04-15T00:00:00.000Z' },
   ]))
+  const factTransactionStates: boolean[] = []
+  const recordDrawingVersionCurrentFactChanges = vi.fn(async () => {
+    factTransactionStates.push(serializePackageLocks
+      ? Boolean(transactionStorage?.getStore())
+      : transactionActive)
+  })
 
   const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase()
   const isCurrent = (value: unknown) => value === true || value === 1 || value === '1' || value === 'true'
+
+  function configureTransactionStorage(storage: TransactionStorage) {
+    transactionStorage = storage
+  }
+
+  function prepareConcurrentPackageMutation(
+    kind: 'package-drawing-read' | 'drawing-lock',
+  ) {
+    serializePackageLocks = true
+    pauseKind = kind
+    pauseReachedPromise = new Promise<void>((resolve) => {
+      resolvePauseReached = resolve
+    })
+    pauseReleasePromise = new Promise<void>((resolve) => {
+      resolvePauseRelease = resolve
+    })
+    contentionPromise = new Promise<void>((resolve) => {
+      resolveContention = resolve
+    })
+  }
+
+  async function waitForPausedQuery() {
+    await pauseReachedPromise
+  }
+
+  function releasePausedQuery() {
+    resolvePauseRelease?.()
+  }
+
+  async function waitForPackageContention() {
+    await contentionPromise
+  }
+
+  async function acquirePackageLock(packageId: string) {
+    if (!serializePackageLocks) return
+    const transaction = transactionStorage?.getStore()
+    if (!transaction) {
+      throw new Error(`Package row lock requested outside transaction: ${packageId}`)
+    }
+
+    while (true) {
+      const owner = packageLockOwners.get(packageId)
+      if (!owner || owner === transaction) {
+        packageLockOwners.set(packageId, transaction)
+        transaction.packageLocks.add(packageId)
+        lockEvents.push(`acquired:${packageId}:tx-${transaction.id}`)
+        return
+      }
+
+      lockEvents.push(`contention:${packageId}:tx-${transaction.id}:owner-${owner.id}`)
+      resolveContention?.()
+      await new Promise<void>((resolve) => {
+        const waiters = packageLockWaiters.get(packageId) ?? []
+        waiters.push(resolve)
+        packageLockWaiters.set(packageId, waiters)
+      })
+    }
+  }
+
+  function releasePackageLocks(transaction: TestTransaction) {
+    for (const packageId of transaction.packageLocks) {
+      if (packageLockOwners.get(packageId) !== transaction) continue
+      lockEvents.push(`released:${packageId}:tx-${transaction.id}`)
+      packageLockOwners.delete(packageId)
+      const waiters = packageLockWaiters.get(packageId) ?? []
+      packageLockWaiters.delete(packageId)
+      for (const wake of waiters) wake()
+    }
+  }
+
+  async function applyPackageLock(sql: string, params: unknown[]) {
+    if (
+      serializePackageLocks
+      && sql.includes('from drawing_packages')
+      && sql.includes('for update')
+    ) {
+      await acquirePackageLock(String(params[0] ?? ''))
+    }
+  }
+
+  async function pauseMatchingQuery(sql: string) {
+    const matches = pauseKind === 'package-drawing-read'
+      ? sql.includes('from construction_drawings')
+        && sql.includes('project_id = ? and package_id = ?')
+        && sql.includes('order by created_at asc')
+      : pauseKind === 'drawing-lock'
+        ? sql.includes('from construction_drawings where id = ? limit 1 for update')
+        : false
+    if (!matches) return
+
+    pauseKind = null
+    resolvePauseReached?.()
+    await pauseReleasePromise
+  }
 
   const clonePackage = (row: PackageRow | undefined) => (row ? { ...row } : null)
   const cloneDrawing = (row: DrawingRow | undefined) => (row ? { ...row } : null)
   const cloneVersion = (row: VersionRow | undefined) => (row ? { ...row } : null)
   const cloneWorkItem = (row: CertificateWorkItemRow | undefined) => (row ? { ...row } : null)
+  const clonePreMilestone = (row: PreMilestoneRow | undefined) => (row ? { ...row } : null)
   const groupCount = <T extends string>(values: T[]) =>
     Array.from(values.reduce((bucket, value) => {
       bucket.set(value, (bucket.get(value) ?? 0) + 1)
@@ -281,6 +417,14 @@ const db = vi.hoisted(() => {
 
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
+    await applyPackageLock(normalized, params)
+    await pauseMatchingQuery(normalized)
+
+    if (normalized.includes('from construction_drawings where id = ? and project_id = ? limit 1')) {
+      const id = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      return cloneDrawing(drawings.find((row) => row.id === id && row.project_id === projectId))
+    }
 
     if (normalized.includes('from construction_drawings where id = ? limit 1')) {
       return cloneDrawing(findDrawingById(params[0]))
@@ -312,6 +456,19 @@ const db = vi.hoisted(() => {
       return current ? { id: current.id } : null
     }
 
+    if (normalized === 'select id from construction_drawings where package_id = ? and project_id = ? and is_current_version = ? order by created_at desc, sort_order desc limit 1') {
+      const packageId = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      const current = currentDrawingsForPackage(packageId).find((row) => row.project_id === projectId) ?? null
+      return current ? { id: current.id } : null
+    }
+
+    if (normalized.includes('from drawing_packages where id = ? and project_id = ? limit 1')) {
+      const packageId = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      return clonePackage(packages.find((row) => row.id === packageId && row.project_id === projectId))
+    }
+
     if (normalized.includes('from drawing_packages where id = ? limit 1')) {
       return clonePackage(packages.find((row) => row.id === String(params[0] ?? '')))
     }
@@ -338,6 +495,10 @@ const db = vi.hoisted(() => {
           (row) => row.project_id === String(params[0] ?? '') && row.item_code === String(params[1] ?? ''),
         ),
       )
+    }
+
+    if (normalized.startsWith('select project_id from pre_milestones where id = ? limit 1')) {
+      return clonePreMilestone(preMilestones.find((row) => row.id === String(params[0] ?? '')))
     }
 
     if (
@@ -372,8 +533,20 @@ const db = vi.hoisted(() => {
       return drawingsForPackage(params[0], params[0])
     }
 
+    if (normalized.includes('from construction_drawings where project_id = ? and package_id = ? order by created_at asc')) {
+      const projectId = String(params[0] ?? '')
+      const packageId = String(params[1] ?? '')
+      return drawingsForPackage(packageId, packageId).filter((row) => row.project_id === projectId)
+    }
+
     if (normalized.includes('from construction_drawings where package_code = ? order by created_at asc')) {
       return drawingsForPackage(params[0], params[0])
+    }
+
+    if (normalized.includes('from construction_drawings where project_id = ? and package_code = ? order by created_at asc')) {
+      const projectId = String(params[0] ?? '')
+      const packageCode = String(params[1] ?? '')
+      return drawingsForPackage(packageCode, packageCode).filter((row) => row.project_id === projectId)
     }
 
     if (normalized.includes('from drawing_versions where project_id = ? order by created_at desc')) {
@@ -395,6 +568,17 @@ const db = vi.hoisted(() => {
 
     if (
       normalized.includes('from drawing_versions') &&
+      normalized.includes('project_id = ?') &&
+      normalized.includes('package_id = ?') &&
+      normalized.includes('order by is_current_version desc, created_at desc')
+    ) {
+      const projectId = String(params[0] ?? '')
+      const packageId = String(params[1] ?? '')
+      return versionsForPackage(packageId).filter((row) => row.project_id === projectId)
+    }
+
+    if (
+      normalized.includes('from drawing_versions') &&
       normalized.includes('package_id = ?') &&
       normalized.includes('order by is_current_version desc, created_at desc')
     ) {
@@ -406,6 +590,20 @@ const db = vi.hoisted(() => {
 
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
+    await applyPackageLock(normalized, params)
+    await pauseMatchingQuery(normalized)
+
+    if (normalized.includes('from construction_drawings where project_id = ? and package_id = ? order by created_at asc')) {
+      const projectId = String(params[0] ?? '')
+      const packageId = String(params[1] ?? '')
+      return drawingsForPackage(packageId, packageId).filter((row) => row.project_id === projectId)
+    }
+
+    if (normalized.includes('from construction_drawings where project_id = ? and package_code = ? order by created_at asc')) {
+      const projectId = String(params[0] ?? '')
+      const packageCode = String(params[1] ?? '')
+      return drawingsForPackage(packageCode, packageCode).filter((row) => row.project_id === projectId)
+    }
 
     if (normalized.includes('from construction_drawings where package_id = ? order by created_at asc')) {
       return drawingsForPackage(params[0], params[0])
@@ -418,6 +616,19 @@ const db = vi.hoisted(() => {
     if (normalized.includes('from construction_drawings where project_id = ? order by sort_order asc, created_at asc')) {
       const projectId = String(params[0] ?? '')
       return drawings.filter((row) => row.project_id === projectId)
+    }
+
+    if (normalized === 'select drawing_type, status, review_status, discipline_type, document_purpose from construction_drawings where project_id = ?') {
+      const projectId = String(params[0] ?? '')
+      return drawings
+        .filter((row) => row.project_id === projectId)
+        .map(({ drawing_type, status, review_status, discipline_type, document_purpose }) => ({
+          drawing_type,
+          status,
+          review_status,
+          discipline_type,
+          document_purpose,
+        }))
     }
 
     if (normalized === "select drawing_type, count(*) as count from construction_drawings where project_id = ? group by drawing_type") {
@@ -477,6 +688,17 @@ const db = vi.hoisted(() => {
     }
 
     if (
+      normalized.includes('from drawing_versions') &&
+      normalized.includes('project_id = ?') &&
+      normalized.includes('package_id = ?') &&
+      normalized.includes('order by is_current_version desc, created_at desc')
+    ) {
+      const projectId = String(params[0] ?? '')
+      const packageId = String(params[1] ?? '')
+      return versionsForPackage(packageId).filter((row) => row.project_id === projectId)
+    }
+
+    if (
       normalized.includes('from construction_drawings') &&
       normalized.includes('package_id = ? or package_code = ?') &&
       normalized.includes('order by created_at asc')
@@ -492,6 +714,39 @@ const db = vi.hoisted(() => {
       return versionsForPackage(params[0])
     }
 
+    if (
+      normalized === 'update construction_drawings set is_current_version = case when id = ? then ? else ? end where project_id = ? and package_id = ?'
+    ) {
+      const targetDrawingId = String(params[0] ?? '')
+      const projectId = String(params[3] ?? '')
+      const packageId = String(params[4] ?? '')
+      for (const row of drawings) {
+        if (row.project_id === projectId && row.package_id === packageId) {
+          row.is_current_version = row.id === targetDrawingId
+        }
+      }
+      return []
+    }
+
+    if (
+      normalized === 'update construction_drawings set is_current_version = case when id = ? then ? else ? end where project_id = ? and package_code = ? and package_id is distinct from ?'
+    ) {
+      const targetDrawingId = String(params[0] ?? '')
+      const projectId = String(params[3] ?? '')
+      const packageCode = String(params[4] ?? '')
+      const packageId = String(params[5] ?? '')
+      for (const row of drawings) {
+        if (
+          row.project_id === projectId
+          && row.package_code === packageCode
+          && row.package_id !== packageId
+        ) {
+          row.is_current_version = row.id === targetDrawingId
+        }
+      }
+      return []
+    }
+
     if (normalized === 'update construction_drawings set is_current_version = ? where package_id = ? and id <> ?') {
       const nextCurrent = isCurrent(params[0])
       const packageId = String(params[1] ?? '')
@@ -500,18 +755,41 @@ const db = vi.hoisted(() => {
       return []
     }
 
+    if (normalized === 'update construction_drawings set is_current_version = ? where package_id = ? and project_id = ? and id <> ?') {
+      const nextCurrent = isCurrent(params[0])
+      const packageId = String(params[1] ?? '')
+      const projectId = String(params[2] ?? '')
+      const excludedId = String(params[3] ?? '')
+      for (const row of drawings) {
+        if (row.package_id === packageId && row.project_id === projectId && row.id !== excludedId) {
+          row.is_current_version = nextCurrent
+        }
+      }
+      return []
+    }
+
     if (normalized === 'update construction_drawings set is_current_version = ? where id = ?') {
       setDrawingCurrent(String(params[1] ?? ''), isCurrent(params[0]))
       return []
     }
 
-    if (normalized.startsWith('update construction_drawings set ') && normalized.includes(' where id = ? and lock_version = ?')) {
-      const targetId = String(params[params.length - 2] ?? '')
+    if (normalized === 'update construction_drawings set is_current_version = ? where id = ? and project_id = ?') {
+      const drawingId = String(params[1] ?? '')
+      const projectId = String(params[2] ?? '')
+      const target = drawings.find((row) => row.id === drawingId && row.project_id === projectId)
+      if (target) target.is_current_version = isCurrent(params[0])
+      return []
+    }
+
+    if (normalized.startsWith('update construction_drawings set ') && (normalized.includes(' where id = ? and lock_version = ?') || normalized.includes(' where id = ? and project_id = ? and lock_version = ?'))) {
+      const withProject = normalized.includes(' where id = ? and project_id = ? and lock_version = ?')
+      const targetId = String(params[params.length - (withProject ? 3 : 2)] ?? '')
+      const projectId = withProject ? String(params[params.length - 2] ?? '') : null
       const expectedLockVersion = Number(params[params.length - 1] ?? 1)
-      const target = drawings.find((row) => row.id === targetId)
+      const target = drawings.find((row) => row.id === targetId && (!projectId || row.project_id === projectId))
       if (target && (target.lock_version ?? 1) === expectedLockVersion) {
         const clauseList = normalized
-          .slice('update construction_drawings set '.length, normalized.lastIndexOf(' where id = ? and lock_version = ?'))
+          .slice('update construction_drawings set '.length, normalized.lastIndexOf(withProject ? ' where id = ? and project_id = ? and lock_version = ?' : ' where id = ? and lock_version = ?'))
           .split(',')
           .map((clause) => clause.trim())
 
@@ -536,6 +814,21 @@ const db = vi.hoisted(() => {
       return []
     }
 
+    if (
+      normalized === 'update drawing_versions set is_current_version = case when id = ? then ? else ? end, superseded_at = case when id = ? then ? else current_timestamp end where package_id = ? and project_id = ?'
+    ) {
+      const targetVersionId = String(params[0] ?? '')
+      const packageId = String(params[5] ?? '')
+      const projectId = String(params[6] ?? '')
+      for (const row of versions) {
+        if (row.package_id === packageId && row.project_id === projectId) {
+          row.is_current_version = row.id === targetVersionId
+          row.superseded_at = row.id === targetVersionId ? null : '2026-04-16 00:00:00'
+        }
+      }
+      return []
+    }
+
     if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where drawing_id = ? and package_id = ? and id <> ?') {
       const nextCurrent = isCurrent(params[0])
       const drawingId = String(params[1] ?? '')
@@ -543,6 +836,21 @@ const db = vi.hoisted(() => {
       const excludedId = String(params[3] ?? '')
       for (const row of versions) {
         if (row.drawing_id === drawingId && row.package_id === packageId && row.id !== excludedId) {
+          row.is_current_version = nextCurrent
+          row.superseded_at = nextCurrent ? null : '2026-04-16 00:00:00'
+        }
+      }
+      return []
+    }
+
+    if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where drawing_id = ? and package_id = ? and project_id = ? and id <> ?') {
+      const nextCurrent = isCurrent(params[0])
+      const drawingId = String(params[1] ?? '')
+      const packageId = String(params[2] ?? '')
+      const projectId = String(params[3] ?? '')
+      const excludedId = String(params[4] ?? '')
+      for (const row of versions) {
+        if (row.drawing_id === drawingId && row.package_id === packageId && row.project_id === projectId && row.id !== excludedId) {
           row.is_current_version = nextCurrent
           row.superseded_at = nextCurrent ? null : '2026-04-16 00:00:00'
         }
@@ -611,6 +919,20 @@ const db = vi.hoisted(() => {
       return []
     }
 
+    if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where drawing_id = ? and package_id = ? and project_id = ?') {
+      const nextCurrent = isCurrent(params[0])
+      const drawingId = String(params[1] ?? '')
+      const packageId = String(params[2] ?? '')
+      const projectId = String(params[3] ?? '')
+      for (const row of versions) {
+        if (row.drawing_id === drawingId && row.package_id === packageId && row.project_id === projectId) {
+          row.is_current_version = nextCurrent
+          row.superseded_at = nextCurrent ? null : '2026-04-16 00:00:00'
+        }
+      }
+      return []
+    }
+
     if (normalized === 'update drawing_versions set is_current_version = ? where package_id = ? and id <> ?') {
       const nextCurrent = isCurrent(params[0])
       const packageId = String(params[1] ?? '')
@@ -623,6 +945,33 @@ const db = vi.hoisted(() => {
       const nextCurrent = isCurrent(params[0])
       const packageId = String(params[1] ?? '')
       setVersionsCurrentByPackage(packageId, nextCurrent)
+      return []
+    }
+
+    if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where package_id = ? and project_id = ?') {
+      const nextCurrent = isCurrent(params[0])
+      const packageId = String(params[1] ?? '')
+      const projectId = String(params[2] ?? '')
+      for (const row of versions) {
+        if (row.package_id === packageId && row.project_id === projectId) {
+          row.is_current_version = nextCurrent
+          row.superseded_at = nextCurrent ? null : '2026-04-16 00:00:00'
+        }
+      }
+      return []
+    }
+
+    if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = current_timestamp where package_id = ? and project_id = ? and id <> ?') {
+      const nextCurrent = isCurrent(params[0])
+      const packageId = String(params[1] ?? '')
+      const projectId = String(params[2] ?? '')
+      const excludedId = String(params[3] ?? '')
+      for (const row of versions) {
+        if (row.package_id === packageId && row.project_id === projectId && row.id !== excludedId) {
+          row.is_current_version = nextCurrent
+          row.superseded_at = nextCurrent ? null : '2026-04-16 00:00:00'
+        }
+      }
       return []
     }
 
@@ -643,23 +992,51 @@ const db = vi.hoisted(() => {
       return []
     }
 
-    if (normalized === 'update drawing_versions set package_id = ?, updated_at = current_timestamp where drawing_id = ?') {
+    if (normalized === 'update drawing_versions set is_current_version = ?, superseded_at = ? where id = ? and project_id = ?') {
+      const versionId = String(params[2] ?? '')
+      const projectId = String(params[3] ?? '')
+      const version = versions.find((row) => row.id === versionId && row.project_id === projectId)
+      if (version) {
+        version.is_current_version = isCurrent(params[0])
+        version.superseded_at = params[1] == null ? null : String(params[1])
+      }
+      return []
+    }
+
+    if (normalized === 'update drawing_versions set package_id = ?, updated_at = current_timestamp where drawing_id = ?'
+      || normalized === 'update drawing_versions set package_id = ?, updated_at = current_timestamp where drawing_id = ? and project_id = ?') {
       const packageId = String(params[0] ?? '')
       const drawingId = String(params[1] ?? '')
+      const projectId = normalized.endsWith('and project_id = ?') ? String(params[2] ?? '') : null
       for (const row of versions) {
-        if (row.drawing_id === drawingId) {
+        if (row.drawing_id === drawingId && (!projectId || row.project_id === projectId)) {
           row.package_id = packageId
         }
       }
       return []
     }
 
-    if (normalized === 'update drawing_packages set current_version_drawing_id = ?, updated_at = current_timestamp where id = ?') {
+    if (
+      normalized === 'update drawing_packages set current_version_drawing_id = ?, updated_at = current_timestamp where id = ?'
+      || normalized === 'update drawing_packages set current_version_drawing_id = ?, updated_at = current_timestamp where id = ? and project_id = ?'
+    ) {
       const currentVersionDrawingId = params[0] == null ? null : String(params[0])
       const packageId = String(params[1] ?? '')
-      const pkg = packages.find((row) => row.id === packageId)
+      const projectId = normalized.endsWith('and project_id = ?') ? String(params[2] ?? '') : null
+      const pkg = packages.find((row) => row.id === packageId && (!projectId || row.project_id === projectId))
       if (pkg) {
         pkg.current_version_drawing_id = currentVersionDrawingId
+      }
+      return []
+    }
+
+    if (normalized === 'delete from construction_drawings where id = ? and project_id = ?') {
+      const drawingId = String(params[0] ?? '')
+      const projectId = String(params[1] ?? '')
+      const index = drawings.findIndex((row) => row.id === drawingId && row.project_id === projectId)
+      if (index >= 0) drawings.splice(index, 1)
+      for (let versionIndex = versions.length - 1; versionIndex >= 0; versionIndex -= 1) {
+        if (versions[versionIndex]?.drawing_id === drawingId) versions.splice(versionIndex, 1)
       }
       return []
     }
@@ -889,6 +1266,10 @@ const db = vi.hoisted(() => {
       return []
     }
 
+    if (normalized.startsWith('insert into public.algorithm_sample_health_events')) {
+      return []
+    }
+
     if (normalized === 'delete from certificate_work_items where id = ? and project_id = ?') {
       const index = certificateWorkItems.findIndex(
         (row) => row.id === String(params[0] ?? '') && row.project_id === String(params[1] ?? ''),
@@ -906,13 +1287,54 @@ const db = vi.hoisted(() => {
     versions: VersionRow[]
     certificateWorkItems?: CertificateWorkItemRow[]
     certificateDependencies?: CertificateDependencyRow[]
+    preMilestones?: PreMilestoneRow[]
   }) {
     packages.splice(0, packages.length, ...seed.packages.map((row) => ({ ...row })))
     drawings.splice(0, drawings.length, ...seed.drawings.map((row) => ({ ...row })))
     versions.splice(0, versions.length, ...seed.versions.map((row) => ({ ...row })))
     certificateWorkItems.splice(0, certificateWorkItems.length, ...(seed.certificateWorkItems ?? []).map((row) => ({ ...row })))
     certificateDependencies.splice(0, certificateDependencies.length, ...(seed.certificateDependencies ?? []).map((row) => ({ ...row })))
+    preMilestones.splice(0, preMilestones.length, ...(seed.preMilestones ?? []).map((row) => ({ ...row })))
+    serializePackageLocks = false
+    packageLockOwners.clear()
+    packageLockWaiters.clear()
+    pauseKind = null
+    resolvePauseReached = null
+    resolvePauseRelease = null
+    resolveContention = null
+    lockEvents.splice(0)
+    factTransactionStates.splice(0)
   }
+
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+    if (!serializePackageLocks) {
+      transactionActive = true
+      try {
+        return await work()
+      } finally {
+        transactionActive = false
+      }
+    }
+    if (!transactionStorage) throw new Error('Transaction storage was not configured')
+    if (transactionStorage.getStore()) {
+      lockEvents.push(`nested:tx-${transactionStorage.getStore()?.id}`)
+      return work()
+    }
+
+    const transaction: TestTransaction = {
+      id: nextTransactionId,
+      packageLocks: new Set(),
+    }
+    nextTransactionId += 1
+    lockEvents.push(`started:tx-${transaction.id}`)
+    return transactionStorage.run(transaction, async () => {
+      try {
+        return await work()
+      } finally {
+        releasePackageLocks(transaction)
+      }
+    })
+  })
 
   return {
     packages,
@@ -920,13 +1342,26 @@ const db = vi.hoisted(() => {
     versions,
     certificateWorkItems,
     certificateDependencies,
+    preMilestones,
+    enforceRetentionOrBlock,
     persistNotification,
     getMembers,
+    recordDrawingVersionCurrentFactChanges,
+    factTransactionStates,
     executeSQL,
     executeSQLOne,
+    withDatabaseTransaction,
+    configureTransactionStorage,
+    prepareConcurrentPackageMutation,
+    waitForPausedQuery,
+    releasePausedQuery,
+    waitForPackageContention,
+    lockEvents,
     reset,
   }
 })
+
+db.configureTransactionStorage(new AsyncLocalStorage())
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
@@ -935,9 +1370,20 @@ vi.mock('../middleware/auth.js', () => ({
   }),
   optionalAuthenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
   requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
-  requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectEditor: vi.fn((resolveProjectId: (req: any) => string | undefined | Promise<string | undefined>) => (
+    async (req: any, _res: unknown, next: () => void) => {
+      const projectId = await resolveProjectId(req)
+      if (projectId) req.authorizedProjectIds = [projectId]
+      next()
+    }
+  )),
   requireProjectOwner: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
   checkResourceAccess: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  getAuthorizedRequestProjectId: vi.fn((req: any, expectedProjectId?: string | null) => {
+    const projectIds = req.authorizedProjectIds ?? []
+    if (expectedProjectId) return projectIds.includes(expectedProjectId) ? expectedProjectId : null
+    return projectIds.at(-1) ?? null
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -955,8 +1401,26 @@ vi.mock('../services/dbService.js', () => ({
   getMembers: db.getMembers,
 }))
 
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: db.withDatabaseTransaction,
+}))
+
+vi.mock('../auth/access.js', () => ({
+  getProjectCompanyId: vi.fn(async (projectId: string) => (projectId ? 'company-1' : null)),
+}))
+
+vi.mock('../services/drawingVersionExecutionFactService.js', () => ({
+  recordDrawingVersionCurrentFactChanges: db.recordDrawingVersionCurrentFactChanges,
+}))
+
 vi.mock('../services/warningChainService.js', () => ({
   persistNotification: db.persistNotification,
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: db.enforceRetentionOrBlock,
+  buildRetentionBlockedApiError: vi.fn(),
+  buildRetentionBlockedHttpStatus: vi.fn(),
 }))
 
 const { default: constructionDrawingsRouter } = await import('../routes/construction-drawings.js')
@@ -1045,6 +1509,10 @@ function seedBaseState() {
         created_by: 'system',
       },
     ],
+    preMilestones: [
+      { id: 'cert-a', project_id: 'project-1' },
+      { id: 'cert-b', project_id: 'project-1' },
+    ],
   }
 }
 
@@ -1106,6 +1574,19 @@ describe('construction drawing current-version write path', () => {
     expect(db.drawings.find((row) => row.id === 'draw-1')?.is_current_version).toBe(false)
     expect(db.drawings.find((row) => row.id === 'draw-2')?.is_current_version).toBe(true)
     expect(db.drawings.find((row) => row.id === 'draw-2')?.lock_version).toBe(2)
+    expect(db.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      sourceModule: 'construction-drawings',
+      before: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: true }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: false }),
+      ]),
+      after: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: false }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: true }),
+      ]),
+    }))
+    expect(db.factTransactionStates).toEqual([true])
   })
 
   it('rejects stale drawing updates when lock_version is outdated', async () => {
@@ -1118,7 +1599,7 @@ describe('construction drawing current-version write path', () => {
     const response = await request
       .put('/api/construction-drawings/draw-2')
       .send({
-        drawing_name: '姊佹澘閰嶇瓔鍥?-stale',
+        drawing_name: '梁板配筋-stale',
         version_no: '1.1',
         lock_version: 1,
       })
@@ -1183,6 +1664,7 @@ describe('construction drawing current-version write path', () => {
       ]),
     )
     expect(response.body.data.planned_submit_this_month_count).toBe(1)
+    expect(joinedSql(db.executeSQL.mock.calls as [unknown, ...unknown[]][])).not.toContain('coalesce')
   })
 
   it('synchronizes drawing_packages.current_version_drawing_id on the new main path', async () => {
@@ -1204,6 +1686,63 @@ describe('construction drawing current-version write path', () => {
     expect(db.packages[0]?.current_version_drawing_id).toBe('draw-2')
     expect(db.versions.find((row) => row.id === 'ver-2')?.is_current_version).toBe(true)
     expect(db.versions.find((row) => row.id === 'ver-1')?.is_current_version).toBe(false)
+    expect(db.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      sourceModule: 'drawing-packages',
+      before: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: true }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: false }),
+      ]),
+      after: expect.arrayContaining([
+        expect.objectContaining({ id: 'ver-1', is_current_version: false }),
+        expect.objectContaining({ id: 'ver-2', is_current_version: true }),
+      ]),
+    }))
+    expect(db.factTransactionStates).toEqual([true])
+  })
+
+  it('records drawing current-version changes as sample health evidence without publishing runtime assets', async () => {
+    const request = supertest(buildApp())
+
+    const response = await request
+      .post('/api/drawing-packages/packages/pkg-1/set-current-version')
+      .send({
+        drawingId: 'draw-2',
+      })
+
+    expect(response.status).toBe(200)
+    const sampleHealthInsert = db.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).toLowerCase().includes('insert into public.algorithm_sample_health_events')
+    ))
+    expect(sampleHealthInsert).toBeDefined()
+    expect(sampleHealthInsert?.[1]).toEqual(expect.arrayContaining([
+      'drawing_version:ver-2',
+      'business_completion.sample_health',
+      'businessCompletionSampleHealthAdapterService',
+      'project',
+      'company-1',
+      'project-1',
+      'governance_report',
+      'governed_candidate',
+      'accepted',
+    ]))
+    expect(sampleHealthInsert?.[1]).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        domain: 'drawing_version',
+        businessCode: '1.1',
+        nonDurationBusinessCompletionSample: true,
+        benchmarkEligible: false,
+        drawingId: 'draw-2',
+        versionId: 'ver-2',
+        versionNo: '1.1',
+      }),
+    ]))
+
+    const sqlText = joinedSql(db.executeSQL.mock.calls as [unknown, ...unknown[]][])
+    expect(sqlText).not.toContain('standard_work_duration')
+    expect(sqlText).not.toContain('algorithm_seed_records')
+    expect(sqlText).not.toContain('algorithm_seed_overrides')
+    expect(sqlText).not.toContain('insert into drawing_versions')
   })
 
   it('rejects invalid review modes when creating a drawing package', async () => {
@@ -1236,6 +1775,7 @@ describe('construction drawing current-version write path', () => {
       current_version_drawing_id: null,
       updated_at: '2026-04-15T00:00:00.000Z',
     })
+    db.preMilestones.push({ id: 'cert-construction', project_id: projectId })
 
     const request = supertest(buildApp())
 
@@ -1271,6 +1811,16 @@ describe('construction drawing current-version write path', () => {
       effective_date: '2026-04-18',
       is_current_version: true,
     })
+    expect(db.recordDrawingVersionCurrentFactChanges).toHaveBeenCalledWith(expect.objectContaining({
+      projectId,
+      sourceModule: 'construction-drawings',
+      before: [],
+      after: [expect.objectContaining({
+        id: expect.any(String),
+        is_current_version: true,
+      })],
+    }))
+    expect(db.factTransactionStates).toEqual([true])
     expect(db.packages.find((row) => row.id === packageId)?.current_version_drawing_id).toBe(response.body.data.id)
     expect(db.persistNotification).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1346,6 +1896,62 @@ describe('construction drawing current-version write path', () => {
     expect(mandatoryResponse.body.data.review_status).toBe('未提交')
   })
 
+  it('rejects cross-project drawing package, parent drawing, and license references', async () => {
+    db.packages.push({
+      id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      project_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      package_code: 'pkg-other',
+      current_version_drawing_id: null,
+      updated_at: '2026-04-15T00:00:00.000Z',
+    })
+    db.preMilestones.push({ id: 'cert-other', project_id: 'project-other' })
+    db.drawings.push({
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      project_id: 'project-other',
+      package_id: 'pkg-other',
+      package_code: 'pkg-other',
+      drawing_name: 'other parent',
+      version_no: '1.0',
+      version: '1.0',
+      is_current_version: true,
+      created_at: '2026-04-15T00:00:00.000Z',
+    })
+
+    const request = supertest(buildApp())
+
+    const packageResponse = await request
+      .post('/api/construction-drawings')
+      .send({
+        project_id: '11111111-1111-4111-8111-111111111111',
+        package_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        drawing_name: 'cross package drawing',
+      })
+
+    expect(packageResponse.status).toBe(400)
+    expect(packageResponse.body.error.code).toBe('DRAWING_PACKAGE_PROJECT_MISMATCH')
+
+    const parentResponse = await request
+      .post('/api/construction-drawings')
+      .send({
+        project_id: '11111111-1111-4111-8111-111111111111',
+        parent_drawing_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        drawing_name: 'cross parent drawing',
+      })
+
+    expect(parentResponse.status).toBe(400)
+    expect(parentResponse.body.error.code).toBe('PARENT_DRAWING_PROJECT_MISMATCH')
+
+    const licenseResponse = await request
+      .put('/api/construction-drawings/draw-1')
+      .send({
+        related_license_id: 'cert-other',
+        lock_version: 1,
+      })
+
+    expect(licenseResponse.status).toBe(400)
+    expect(licenseResponse.body.error.code).toBe('RELATED_LICENSE_PROJECT_MISMATCH')
+  })
+
   it('keeps drawing creation placeholders generated from insertValues length', async () => {
     const source = await readFile(new URL('../routes/construction-drawings.ts', import.meta.url), 'utf8')
     expect(source).toContain("VALUES (${insertValues.map(() => '?').join(', ')})")
@@ -1393,5 +1999,147 @@ describe('construction drawing current-version write path', () => {
     })
     expect(db.certificateDependencies).toHaveLength(1)
     expect(db.certificateDependencies[0]?.predecessor_id).toBe('cert-b')
+  })
+
+  it('rejects standalone deletion of a package current drawing before retention or mutation', async () => {
+    const request = supertest(buildApp())
+    const drawingsBefore = db.drawings.map((drawing) => ({ ...drawing }))
+    const versionsBefore = db.versions.map((version) => ({ ...version }))
+
+    const response = await request.delete('/api/construction-drawings/draw-1')
+
+    expect(response.status).toBe(400)
+    expect(response.body).toMatchObject({
+      success: false,
+      error: {
+        code: 'MISSING_TARGET_DRAWING',
+        message: '当前有效版不能为空',
+      },
+    })
+    expect(db.drawings).toEqual(drawingsBefore)
+    expect(db.versions).toEqual(versionsBefore)
+    expect(db.packages[0]?.current_version_drawing_id).toBe('draw-1')
+    expect(db.enforceRetentionOrBlock).not.toHaveBeenCalled()
+    expect(db.executeSQL.mock.calls.some(([sql]) => (
+      String(sql).toLowerCase().includes('delete from construction_drawings')
+    ))).toBe(false)
+  })
+
+  it('allows standalone deletion of a non-current drawing and preserves the package current pointer', async () => {
+    const request = supertest(buildApp())
+
+    const response = await request.delete('/api/construction-drawings/draw-2')
+
+    expect(response.status).toBe(200)
+    expect(db.drawings.map((drawing) => drawing.id)).toEqual(['draw-1'])
+    expect(db.versions.map((version) => version.id)).toEqual(['ver-1'])
+    expect(currentDrawingIds()).toEqual(['draw-1'])
+    expect(db.packages[0]?.current_version_drawing_id).toBe('draw-1')
+    expect(db.enforceRetentionOrBlock).toHaveBeenCalledTimes(1)
+  })
+
+  it('serializes a current-version switch before a concurrent drawing POST', async () => {
+    const request = supertest(buildApp())
+    const projectId = '11111111-1111-4111-8111-111111111111'
+    const packageId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    db.packages[0] = { ...db.packages[0], id: packageId, project_id: projectId }
+    for (const drawing of db.drawings) {
+      drawing.project_id = projectId
+      drawing.package_id = packageId
+    }
+    for (const version of db.versions) {
+      version.project_id = projectId
+      version.package_id = packageId
+    }
+    db.prepareConcurrentPackageMutation('package-drawing-read')
+
+    const switchPromise = request
+      .post(`/api/drawing-packages/packages/${packageId}/set-current-version`)
+      .send({ drawingId: 'draw-2' })
+      .then((response) => response)
+    await db.waitForPausedQuery()
+
+    const createPromise = request
+      .post('/api/construction-drawings')
+      .send({
+        project_id: projectId,
+        package_id: packageId,
+        package_code: 'pkg-1',
+        package_name: 'Concurrent package',
+        drawing_name: 'Concurrent drawing',
+        version: '2.0',
+        version_no: '2.0',
+        review_mode: 'none',
+        is_current_version: true,
+      })
+      .then((response) => response)
+
+    const observed = await Promise.race([
+      db.waitForPackageContention().then(() => 'contention' as const),
+      createPromise.then(() => 'settled' as const),
+    ])
+    db.releasePausedQuery()
+    const [switchResponse, createResponse] = await Promise.all([switchPromise, createPromise])
+
+    expect(observed, db.lockEvents.join('\n')).toBe('contention')
+    expect(switchResponse.status).toBe(200)
+    expect(createResponse.status).toBe(201)
+    expect(currentDrawingIds()).toEqual([createResponse.body.data.id])
+  })
+
+  it('keeps a drawing PUT package lock ahead of a concurrent current-version switch', async () => {
+    const request = supertest(buildApp())
+    db.prepareConcurrentPackageMutation('drawing-lock')
+
+    const updatePromise = request
+      .put('/api/construction-drawings/draw-1')
+      .send({ drawing_name: 'Concurrent update', lock_version: 1 })
+      .then((response) => response)
+    await db.waitForPausedQuery()
+
+    const switchPromise = request
+      .post('/api/drawing-packages/packages/pkg-1/set-current-version')
+      .send({ drawingId: 'draw-2' })
+      .then((response) => response)
+
+    const observed = await Promise.race([
+      db.waitForPackageContention().then(() => 'contention' as const),
+      switchPromise.then(() => 'settled' as const),
+    ])
+    db.releasePausedQuery()
+    const [updateResponse, switchResponse] = await Promise.all([updatePromise, switchPromise])
+
+    expect(observed).toBe('contention')
+    expect(updateResponse.status).toBe(200)
+    expect(switchResponse.status).toBe(200)
+    expect(currentDrawingIds()).toEqual(['draw-2'])
+  })
+
+  it('keeps a drawing DELETE package lock ahead of a concurrent current-version switch', async () => {
+    const request = supertest(buildApp())
+    db.prepareConcurrentPackageMutation('drawing-lock')
+
+    const deletePromise = request
+      .delete('/api/construction-drawings/draw-2')
+      .then((response) => response)
+    await db.waitForPausedQuery()
+
+    const switchPromise = request
+      .post('/api/drawing-packages/packages/pkg-1/set-current-version')
+      .send({ drawingId: 'draw-1' })
+      .then((response) => response)
+
+    const observed = await Promise.race([
+      db.waitForPackageContention().then(() => 'contention' as const),
+      switchPromise.then(() => 'settled' as const),
+    ])
+    db.releasePausedQuery()
+    const [deleteResponse, switchResponse] = await Promise.all([deletePromise, switchPromise])
+
+    expect(observed).toBe('contention')
+    expect(deleteResponse.status).toBe(200)
+    expect(switchResponse.status).toBe(200)
+    expect(db.drawings.some((drawing) => drawing.id === 'draw-2')).toBe(false)
+    expect(currentDrawingIds()).toEqual(['draw-1'])
   })
 })

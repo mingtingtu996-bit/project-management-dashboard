@@ -14,6 +14,82 @@ const state = vi.hoisted(() => {
     return JSON.parse(JSON.stringify(value))
   }
 
+  let transactionSnapshot: Record<TableName, Row[]> | null = null
+  const clientQuery = vi.fn(async (sql: string, values: unknown[] = []) => {
+    const normalizedSql = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (normalizedSql === 'begin') {
+      transactionSnapshot = clone(tables)
+      return { rows: [], rowCount: 0 }
+    }
+    if (normalizedSql === 'commit') {
+      transactionSnapshot = null
+      return { rows: [], rowCount: 0 }
+    }
+    if (normalizedSql === 'rollback') {
+      if (transactionSnapshot) {
+        for (const table of Object.keys(tables) as TableName[]) {
+          tables[table].splice(0, tables[table].length, ...clone(transactionSnapshot[table]))
+        }
+      }
+      transactionSnapshot = null
+      return { rows: [], rowCount: 0 }
+    }
+    if (normalizedSql.startsWith('select pg_advisory_xact_lock')) {
+      return { rows: [], rowCount: 1 }
+    }
+    if (
+      normalizedSql.startsWith('select * from public.task_baselines')
+      && normalizedSql.includes('where id = $1')
+      && normalizedSql.includes('project_id = $2')
+    ) {
+      const [id, projectId] = values
+      const baseline = tables.task_baselines.find((row) => row.id === id && row.project_id === projectId)
+      return { rows: baseline ? [clone(baseline)] : [], rowCount: baseline ? 1 : 0 }
+    }
+    if (
+      normalizedSql.startsWith('select * from public.task_baseline_items')
+      && normalizedSql.includes('baseline_version_id = $1')
+      && normalizedSql.includes('project_id = $2')
+    ) {
+      const [baselineId, projectId] = values
+      const items = tables.task_baseline_items
+        .filter((row) => row.baseline_version_id === baselineId && row.project_id === projectId)
+        .sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0))
+      return { rows: clone(items), rowCount: items.length }
+    }
+    if (
+      normalizedSql.startsWith('select count(*)::int as item_count from public.task_baseline_items')
+      && normalizedSql.includes('baseline_version_id = $1')
+      && normalizedSql.includes('project_id = $2')
+    ) {
+      const [baselineId, projectId] = values
+      const itemCount = tables.task_baseline_items.filter(
+        (row) => row.baseline_version_id === baselineId && row.project_id === projectId,
+      ).length
+      return { rows: [{ item_count: itemCount }], rowCount: 1 }
+    }
+    if (normalizedSql.startsWith('update public.revision_pool_candidates')) {
+      const [projectId, baselineId, candidateIds, timestamp] = values as [string, string, string[], string]
+      const updated = tables.revision_pool_candidates.filter(
+        (row) => row.project_id === projectId
+          && row.baseline_version_id === baselineId
+          && candidateIds.includes(String(row.id))
+          && row.status === 'open',
+      )
+      for (const row of updated) {
+        Object.assign(row, { status: 'submitted', submitted_at: timestamp, updated_at: timestamp })
+      }
+      return { rows: updated.map((row) => clone(row)), rowCount: updated.length }
+    }
+    return { rows: [], rowCount: 0 }
+  })
+  const clientRelease = vi.fn()
+  const insertRowsReturning = vi.fn(async (_client: unknown, tableName: TableName, rows: Row[]) => {
+    const inserted = clone(rows)
+    tables[tableName].push(...inserted)
+    return inserted
+  })
+
   function matchesFilters(row: Row, filters: Array<{ type: 'eq' | 'in'; column: string; value: unknown }>) {
     return filters.every((filter) => {
       if (filter.type === 'eq') {
@@ -97,6 +173,9 @@ const state = vi.hoisted(() => {
       }
 
       let selected = rows.filter((row) => matchesFilters(row, this.filters)).map((row) => clone(row))
+      if (this.table === 'task_baseline_items' && state.hideBaselineItemsFromRest) {
+        selected = []
+      }
       if (this.orderBy) {
         const { column, ascending } = this.orderBy
         selected.sort((left, right) => {
@@ -130,7 +209,12 @@ const state = vi.hoisted(() => {
     supabase: {
       from: vi.fn((table: string) => new QueryBuilder(table)),
     },
+    getClient: vi.fn(async () => ({ query: clientQuery, release: clientRelease })),
+    clientQuery,
+    clientRelease,
+    insertRowsReturning,
     writeLog: vi.fn(),
+    hideBaselineItemsFromRest: false,
   }
 })
 
@@ -138,22 +222,38 @@ vi.mock('../services/dbService.js', () => ({
   supabase: state.supabase,
 }))
 
+vi.mock('../database.js', () => ({
+  getClient: state.getClient,
+}))
+
+vi.mock('../services/transactionInsertService.js', () => ({
+  insertRowReturning: vi.fn(async (client: unknown, tableName: TableName, row: Row) => {
+    const rows = await state.insertRowsReturning(client, tableName, [row])
+    return rows[0]
+  }),
+  insertRowsReturning: state.insertRowsReturning,
+}))
+
 vi.mock('../services/changeLogs.js', () => ({
   writeLog: state.writeLog,
 }))
 
+const planningRevisionPoolService = await import('../services/planningRevisionPoolService.js')
+
 const {
   evaluateBaselinePublishReadiness,
+  evaluateBaselineConfirmationGate,
   evaluateProjectBaselineValidity,
   listRevisionPoolCandidates,
   PlanningRevisionPoolServiceError,
   startRevisionFromBaseline,
   submitObservationPoolItems,
-} = await import('../services/planningRevisionPoolService.js')
+} = planningRevisionPoolService
 
 describe('planning revision pool service', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    state.hideBaselineItemsFromRest = false
     for (const table of Object.keys(state.tables) as TableName[]) {
       state.tables[table].splice(0, state.tables[table].length)
     }
@@ -283,6 +383,7 @@ describe('planning revision pool service', () => {
         { id: 'milestone-2', baseline_date: '2026-04-12', current_plan_date: '2026-05-23' },
         { id: 'milestone-3', baseline_date: '2026-04-13', current_plan_date: '2026-05-25' },
       ] as any,
+      asOf: '2026-05-25',
     })
 
     expect(validity).toMatchObject({
@@ -291,12 +392,286 @@ describe('planning revision pool service', () => {
       deviatedTaskRatio: 1,
       shiftedMilestoneCount: 3,
       averageMilestoneShiftDays: 41,
+      averageMilestoneShift: {
+        value: 41,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-25',
+        availability: 'available',
+        unavailableReason: null,
+      },
       state: 'needs_realign',
       isValid: false,
     })
     expect(validity.triggeredRules).toEqual(
       expect.arrayContaining(['task_deviation_ratio', 'milestone_shift', 'duration_deviation']),
     )
+  })
+
+  it('accepts a valid leap-day milestone comparison as a Gregorian calendar-day fact', () => {
+    const validity = evaluateProjectBaselineValidity({
+      baselineItems: [
+        {
+          id: 'baseline-leap',
+          source_milestone_id: 'milestone-leap',
+        },
+      ] as any,
+      tasks: [],
+      milestones: [
+        { id: 'milestone-leap', baseline_date: '2024-02-29', current_plan_date: '2024-03-01' },
+      ] as any,
+      asOf: '2024-03-01',
+    })
+
+    expect(validity.shiftedMilestoneCount).toBe(1)
+    expect(validity.averageMilestoneShiftDays).toBe(1)
+    expect(validity.averageMilestoneShift).toEqual({
+      value: 1,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2024-03-01',
+      availability: 'available',
+      unavailableReason: null,
+    })
+  })
+
+  it('keeps a real zero-day milestone shift available instead of treating zero as missing', () => {
+    const validity = evaluateProjectBaselineValidity({
+      baselineItems: [
+        {
+          id: 'baseline-same-day',
+          source_milestone_id: 'milestone-same-day',
+        },
+      ] as any,
+      tasks: [],
+      milestones: [
+        { id: 'milestone-same-day', baseline_date: '2024-02-29', current_plan_date: '2024-02-29' },
+      ] as any,
+      asOf: '2024-02-29',
+    })
+
+    expect(validity.averageMilestoneShift).toMatchObject({
+      value: 0,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(validity.averageMilestoneShiftDays).toBe(0)
+  })
+
+  it.each([
+    ['an impossible date', '2026-02-30'],
+    ['a missing date', null],
+  ])('fails average milestone shift closed for %s', (_label, currentPlanDate) => {
+    const validity = evaluateProjectBaselineValidity({
+      baselineItems: [
+        {
+          id: 'baseline-invalid',
+          source_milestone_id: 'milestone-invalid',
+        },
+      ] as any,
+      tasks: [],
+      milestones: [
+        { id: 'milestone-invalid', baseline_date: '2026-02-28', current_plan_date: currentPlanDate },
+      ] as any,
+      asOf: '2026-03-02',
+    })
+
+    expect(validity.averageMilestoneShift).toMatchObject({
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    })
+    expect(validity.averageMilestoneShiftDays).toBeNull()
+    expect(validity.triggeredRules).not.toContain('milestone_shift')
+  })
+
+  it('builds structured validity details and never formats unavailable shift as zero days', () => {
+    const averageMilestoneShift = {
+      value: null,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-03-02',
+      availability: 'unavailable',
+      unavailableReason: 'duration_value_missing',
+    } as const
+    const validity = {
+      comparedTaskCount: 3,
+      deviatedTaskCount: 2,
+      deviatedTaskRatio: 0.67,
+      shiftedMilestoneCount: 0,
+      averageMilestoneShift,
+      averageMilestoneShiftDays: null,
+      totalDurationDeviationRatio: 0.2,
+      triggeredRules: ['task_deviation_ratio', 'duration_deviation'],
+      state: 'needs_realign',
+      isValid: false,
+    } as const
+
+    const details = (planningRevisionPoolService as any).buildProjectBaselineValidityDetails(validity)
+    const message = (planningRevisionPoolService as any).buildProjectBaselineValidityMessage(validity)
+
+    expect(details).toEqual({
+      validity: {
+        deviatedTaskRatio: 0.67,
+        shiftedMilestoneCount: 0,
+        averageMilestoneShift,
+        averageMilestoneShiftDays: null,
+        totalDurationDeviationRatio: 0.2,
+        triggeredRules: ['task_deviation_ratio', 'duration_deviation'],
+      },
+    })
+    expect(message).toContain('calendar-day metric unavailable')
+    expect(message).not.toContain('average 0 days')
+  })
+
+  it('blocks baseline confirmation on milestone order, resource cap, compression, and mutually exclusive process conflicts', () => {
+    const gate = evaluateBaselineConfirmationGate({
+      baselineItems: [
+        {
+          id: 'milestone-late',
+          title: '结构封顶',
+          planned_start_date: '2026-06-10',
+          planned_end_date: '2026-06-10',
+          is_milestone: true,
+          sort_order: 1,
+        },
+        {
+          id: 'milestone-early',
+          title: '基础验收',
+          planned_start_date: '2026-05-10',
+          planned_end_date: '2026-05-10',
+          is_milestone: true,
+          sort_order: 2,
+        },
+        {
+          id: 'tower-1',
+          title: 'A楼混凝土浇筑',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-01',
+          is_milestone: false,
+          sort_order: 3,
+          generation_metadata: {
+            resource_class: 'tower_crane',
+            resourceClass: 'tower_crane',
+            resource_limits: { sameBuildingDailyLimit: 1, parallelCapacity: 1 },
+            scope_key: { building: 'A' },
+          },
+        },
+        {
+          id: 'tower-2',
+          title: 'A楼钢构吊装',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-01',
+          is_milestone: false,
+          sort_order: 4,
+          generation_metadata: {
+            resource_class: 'tower_crane',
+            resource_limits: { sameBuildingDailyLimit: 1, parallelCapacity: 1 },
+            scope_keys: { building: 'A' },
+          },
+        },
+        {
+          id: 'waterproof',
+          title: '卫生间防水',
+          planned_start_date: '2026-05-02',
+          planned_end_date: '2026-05-04',
+          is_milestone: false,
+          sort_order: 5,
+          generation_metadata: {
+            process_constraint: {
+              stableCode: 'bathroom_waterproof_to_tile_room_overlap',
+              source: 'v1474ProcessConstraintSeed',
+              overlapAllowed: false,
+              scope_key: 'room-101',
+            },
+          },
+        },
+        {
+          id: 'tile',
+          title: '卫生间铺贴',
+          planned_start_date: '2026-05-03',
+          planned_end_date: '2026-05-05',
+          is_milestone: false,
+          sort_order: 6,
+          generation_metadata: {
+            process_constraint: {
+              stableCode: 'bathroom_waterproof_to_tile_room_overlap',
+              source: 'v1474ProcessConstraintSeed',
+              overlapAllowed: false,
+              scope_key: 'room-101',
+            },
+          },
+        },
+      ] as any,
+      sourceItems: [
+        {
+          id: 'old-1',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-07-30',
+          is_milestone: false,
+        },
+      ] as any,
+      maxCompressionRatio: 0.2,
+    })
+
+    expect(gate.isReady).toBe(false)
+    expect(gate.blockers.map((blocker) => blocker.code)).toEqual(expect.arrayContaining([
+      'milestone_order_reversed',
+      'resource_peak_over_limit',
+      'total_duration_compression_over_cap',
+      'mutually_exclusive_process_overlap',
+    ]))
+    expect(gate.blockers.find((blocker) => blocker.code === 'resource_peak_over_limit')?.detail).toContain('tower_crane')
+    expect(gate.blockers.find((blocker) => blocker.code === 'mutually_exclusive_process_overlap')?.detail).toContain('v1474ProcessConstraintSeed')
+  })
+
+  it('blocks resource peak conflicts on partially overlapping daily windows', () => {
+    const gate = evaluateBaselineConfirmationGate({
+      baselineItems: [
+        {
+          id: 'tower-window-a',
+          title: 'Tower crane work A',
+          planned_start_date: '2026-05-01',
+          planned_end_date: '2026-05-03',
+          is_milestone: false,
+          sort_order: 1,
+          generation_metadata: {
+            resource_class: 'tower_crane',
+            resource_limits: { sameBuildingDailyLimit: 1 },
+            scope_keys: { building: 'A' },
+          },
+        },
+        {
+          id: 'tower-window-b',
+          title: 'Tower crane work B',
+          planned_start_date: '2026-05-02',
+          planned_end_date: '2026-05-04',
+          is_milestone: false,
+          sort_order: 2,
+          generation_metadata: {
+            resource_class: 'tower_crane',
+            resource_limits: { sameBuildingDailyLimit: 1 },
+            scope_keys: { building: 'A' },
+          },
+        },
+      ] as any,
+    })
+
+    expect(gate.isReady).toBe(false)
+    expect(gate.blockers.map((blocker) => blocker.code)).toContain('resource_peak_over_limit')
+    expect(gate.blockers.find((blocker) => blocker.code === 'resource_peak_over_limit')?.detail)
+      .toContain('2026-05-02')
   })
 
   it('submits observation pool candidates and reads them back', async () => {
@@ -320,7 +695,7 @@ describe('planning revision pool service', () => {
     expect(submitted.submitted_count).toBe(1)
     expect(submitted.candidate_ids).toHaveLength(1)
 
-    const listed = await listRevisionPoolCandidates('baseline-1')
+    const listed = await listRevisionPoolCandidates('baseline-1', 'project-1')
     expect(listed.total).toBe(1)
     expect(listed.items[0]).toMatchObject({
       baseline_version_id: 'baseline-1',
@@ -405,14 +780,27 @@ describe('planning revision pool service', () => {
     const clonedBaseline = state.tables.task_baselines.find((row) => row.id === result.revision_id)
     expect(clonedBaseline).toMatchObject({
       project_id: 'project-1',
-      version: 4,
+      version: null,
       status: 'revising',
       source_version_id: 'baseline-1',
+      source_version_label: 'v3',
     })
     expect(
       state.tables.task_baseline_items.filter((row) => row.baseline_version_id === result.revision_id)
     ).toHaveLength(2)
     expect(state.tables.revision_pool_candidates.every((row) => row.status === 'submitted')).toBe(true)
+    expect(state.clientQuery).toHaveBeenCalledWith('BEGIN')
+    expect(state.clientQuery).toHaveBeenCalledWith(
+      expect.stringMatching(/UPDATE public\.revision_pool_candidates[\s\S]+project_id = \$1[\s\S]+baseline_version_id = \$2/i),
+      expect.arrayContaining(['project-1', 'baseline-1']),
+    )
+    expect(state.insertRowsReturning).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.any(Function) }),
+      'task_baseline_items',
+      expect.arrayContaining([
+        expect.objectContaining({ baseline_version_id: result.revision_id, project_id: 'project-1' }),
+      ]),
+    )
     expect(state.writeLog).toHaveBeenCalledWith(
       expect.objectContaining({
         project_id: 'project-1',
@@ -423,18 +811,76 @@ describe('planning revision pool service', () => {
     )
   })
 
-  it('rejects revision start when the observation pool is empty', async () => {
+  it('clones source baseline rows through the scoped transaction when REST cannot see them', async () => {
+    state.hideBaselineItemsFromRest = true
+    const baseline = state.tables.task_baselines[0] as any
+
+    const result = await startRevisionFromBaseline({
+      baseline,
+      actorUserId: 'owner-1',
+      reason: 'REST visibility regression',
+      idempotencyKey: 'revision-direct-source-read',
+    })
+
+    expect(
+      state.tables.task_baseline_items.filter((row) => row.baseline_version_id === result.revision_id),
+    ).toHaveLength(2)
+    expect(state.clientQuery).toHaveBeenCalledWith(
+      expect.stringMatching(/SELECT \*\s+FROM public\.task_baseline_items[\s\S]+baseline_version_id = \$1[\s\S]+project_id = \$2/i),
+      ['baseline-1', 'project-1'],
+    )
+  })
+
+  it('starts a direct revision draft when the observation pool is empty', async () => {
+    const baseline = state.tables.task_baselines[0] as any
+
+    const result = await startRevisionFromBaseline({
+      baseline,
+      actorUserId: 'owner-1',
+      reason: '常规修订',
+      sourceCandidateIds: [],
+    })
+
+    expect(result.status).toBe('revising')
+    expect(result.source_version_id).toBe('baseline-1')
+    expect(state.tables.revision_pool_candidates).toHaveLength(0)
+    expect(
+      state.tables.task_baseline_items.filter((row) => row.baseline_version_id === result.revision_id),
+    ).toHaveLength(2)
+  })
+
+  it('reuses the same completed revision on an idempotent retry without cloning rows again', async () => {
+    const baseline = state.tables.task_baselines[0] as any
+    const input = {
+      baseline,
+      actorUserId: 'owner-1',
+      reason: 'idempotent revision',
+      sourceCandidateIds: [],
+      idempotencyKey: 'revision-op-1',
+    }
+
+    const first = await startRevisionFromBaseline(input)
+    const second = await startRevisionFromBaseline(input)
+
+    expect(second).toEqual(first)
+    expect(state.tables.task_baselines.filter((row) => row.id === first.revision_id)).toHaveLength(1)
+    expect(state.tables.task_baseline_items.filter((row) => row.baseline_version_id === first.revision_id)).toHaveLength(2)
+    expect(state.writeLog).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects revision start when selected candidates do not belong to the baseline', async () => {
     const baseline = state.tables.task_baselines[0] as any
 
     await expect(
       startRevisionFromBaseline({
         baseline,
         actorUserId: 'owner-1',
-        reason: 'empty',
+        reason: 'invalid candidates',
+        sourceCandidateIds: ['missing-candidate'],
       }),
     ).rejects.toMatchObject({
-      code: 'OBSERVATION_POOL_EMPTY',
-      statusCode: 409,
+      code: 'VALIDATION_ERROR',
+      statusCode: 422,
     })
   })
 })

@@ -1,14 +1,21 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
+import {
+  isIgnorableBrowserConsoleError,
+  primeBrowserAuth,
+  readFullAppTestManifest,
+  resolveBrowserVerifyAuthToken,
+} from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -17,8 +24,17 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
+
+const mockProject = {
+  id: projectId,
+  name: '偏差分析联调项目',
+  description: 'Planning deviation browser verification fixture project',
+  status: 'active',
+  created_at: now,
+  updated_at: now,
+}
 
 const governanceSnapshot = {
   project_id: projectId,
@@ -26,7 +42,7 @@ const governanceSnapshot = {
     project_id: projectId,
     score: 82,
     status: 'healthy',
-    label: '鏁翠綋绋冲畾',
+    label: '整体稳定',
     breakdown: {
       data_integrity_score: 90,
       mapping_integrity_score: 80,
@@ -83,8 +99,8 @@ const governanceSnapshot = {
     {
       kind: 'integrity',
       severity: 'warning',
-      title: '瀛樺湪 1 鏉″緟琛ラ綈璐ｄ换鍗曚綅鐨勬暟鎹」',
-      detail: '璇峰湪娌荤悊闈㈡澘涓‘璁ゅ苟琛ラ綈鍚庡啀閲嶆柊鏍℃牳銆?',
+      title: '存在 1 条待补齐责任单位的数据项',
+      detail: '请在治理面板中确认并补齐后再重新校核',
       source_id: `${projectId}:integrity`,
     },
   ],
@@ -94,8 +110,8 @@ const mockTasks = [
   {
     id: 'task-1',
     project_id: projectId,
-    title: '涓讳綋缁撴瀯鏂藉伐',
-    description: '娌荤悊鑱旇皟浠诲姟',
+    title: '主体结构施工',
+    description: '治理联调任务',
     status: 'in_progress',
     progress: 52,
     planned_start_date: '2026-04-01',
@@ -114,8 +130,8 @@ const mockWarnings = [
     source_type: 'condition_expired',
     warning_type: 'condition_due',
     warning_level: 'warning',
-    title: '寮€宸ユ潯浠跺嵆灏嗗埌鏈?',
-    description: '璇风‘璁ょ幇鍦哄紑宸ユ潯浠?',
+    title: '开工条件即将到',
+    description: '请确认现场开工条',
     is_acknowledged: false,
     created_at: now,
   },
@@ -126,8 +142,8 @@ const mockRisks = [
     id: 'risk-1',
     project_id: projectId,
     task_id: 'task-1',
-    title: '缁撴瀯璧勬簮鍒囨崲椋庨櫓',
-    description: '闇€瑕佸崗璋冨钩琛屽伐搴忕獥鍙?',
+    title: '结构资源切换风险',
+    description: '需要协调平行工序窗',
     level: 'high',
     probability: 70,
     impact: 80,
@@ -143,8 +159,8 @@ const mockIssues = [
     id: 'issue-1',
     project_id: projectId,
     task_id: 'task-1',
-    title: '缁撴瀯绉讳氦鍋忔櫄',
-    description: '璇峰叧娉ㄧЩ浜ょ獥鍙ｅ啿绐?',
+    title: '结构移交偏晚',
+    description: '请关注移交窗口冲',
     severity: 'high',
     priority: 3,
     status: 'investigating',
@@ -156,9 +172,9 @@ const mockIssues = [
 
 const mockProjectSummary = {
   id: projectId,
-  name: '鍋忓樊鍒嗘瀽鑱旇皟椤圭洰',
+  name: '偏差分析联调项目',
   status: 'active',
-  statusLabel: '杩涜涓?',
+  statusLabel: '进行',
   overallProgress: 52,
   taskProgress: 52,
   totalTasks: 6,
@@ -170,7 +186,7 @@ const mockProjectSummary = {
   activeRiskCount: 1,
   activeObstacleCount: 0,
   pendingConditionTaskCount: 1,
-  highestWarningSummary: '娌荤悊淇″彿浠嶆湁 1 鏉″緟澶勭悊',
+  highestWarningSummary: '治理信号仍有 1 条待处理',
   healthScore: 82,
 }
 
@@ -180,7 +196,7 @@ const mockDataQualitySummary = {
   confidence: {
     score: 87,
     flag: 'high',
-    note: '娌荤悊鏁版嵁鍙洿鎺ョ敤浜庤仈璋冦€?',
+    note: '治理数据可直接用于联调',
     timelinessScore: 90,
     anomalyScore: 84,
     consistencyScore: 86,
@@ -194,7 +210,7 @@ const mockDataQualitySummary = {
   },
   prompt: {
     count: 0,
-    summary: '褰撳墠娌℃湁棰濆鏁版嵁璐ㄩ噺鎻愮ず銆?',
+    summary: '当前没有额外数据质量提示',
     items: [],
   },
   ownerDigest: {
@@ -202,7 +218,7 @@ const mockDataQualitySummary = {
     severity: 'info',
     scopeLabel: null,
     findingCount: 1,
-    summary: '鏁版嵁璐ㄩ噺绋冲畾',
+    summary: '数据质量稳定',
   },
   findings: [],
 }
@@ -213,12 +229,25 @@ const mockBaselineVersions = [
     project_id: projectId,
     version: 2,
     status: 'confirmed',
-    title: '椤圭洰鍩虹嚎',
+    title: '项目基线',
     source_type: 'manual',
     confirmed_at: '2026-04-01T00:00:00.000Z',
     updated_at: now,
   },
 ]
+
+const mockExecutionDeviationRow = {
+  id: 'execution-row-1',
+  title: '主体结构施工',
+  mainline: 'execution',
+  planned_progress: 72,
+  actual_progress: 58,
+  actual_date: '2026-04-15',
+  deviation_days: 4,
+  deviation_rate: 14,
+  status: 'delayed',
+  reason: '现场资源切换导致执行进度低于计划',
+}
 
 const mockProgressDeviation = {
   project_id: projectId,
@@ -234,8 +263,15 @@ const mockProgressDeviation = {
     monthly_plan_items: 1,
     execution_items: 1,
   },
-  rows: [],
-  mainlines: [],
+  rows: [mockExecutionDeviationRow],
+  mainlines: [
+    {
+      key: 'execution',
+      label: '执行偏差',
+      summary: { total_items: 1, deviated_items: 1, delayed_items: 1, unresolved_items: 0 },
+      rows: [mockExecutionDeviationRow],
+    },
+  ],
   trend_events: [],
 }
 
@@ -245,7 +281,7 @@ const mockMonthlyPlanDetail = {
   version: 9,
   status: 'draft',
   month: '2026-04',
-  title: '2026-04 鏈堝害璁″垝',
+  title: '2026-04 月度计划',
   baseline_version_id: 'baseline-v2',
   source_version_id: 'baseline-v2',
   carryover_item_count: 1,
@@ -260,7 +296,7 @@ const mockCloseoutPlan = {
   version: 8,
   status: 'confirmed',
   month: '2026-03',
-  title: '2026-03 鏈堝害璁″垝',
+  title: '2026-03 月度计划',
   baseline_version_id: 'baseline-v2',
   source_version_id: 'baseline-v2',
   carryover_item_count: 1,
@@ -273,7 +309,7 @@ const mockCloseoutPlan = {
       project_id: projectId,
       monthly_plan_version_id: 'monthly-v8',
       source_task_id: 'task-1',
-      title: '涓讳綋缁撴瀯鏂藉伐',
+      title: '主体结构施工',
       planned_start_date: '2026-03-01',
       planned_end_date: '2026-03-30',
       target_progress: 100,
@@ -299,7 +335,7 @@ const mockCriticalPathSnapshot = {
     source: 'auto',
     taskIds: ['task-1'],
     totalDurationDays: 45,
-    displayLabel: '涓诲叧閿矾寰?',
+    displayLabel: '主关键路',
   },
   alternateChains: [],
   displayTaskIds: ['task-1'],
@@ -307,7 +343,7 @@ const mockCriticalPathSnapshot = {
   tasks: [
     {
       taskId: 'task-1',
-      title: '涓讳綋缁撴瀯鏂藉伐',
+      title: '主体结构施工',
       floatDays: 0,
       durationDays: 45,
       isAutoCritical: true,
@@ -369,6 +405,41 @@ function startPreviewServer() {
   })
 }
 
+export function resolvePlanningDeviationProjectId({
+  envProjectId = process.env.PROJECT_ID,
+  mockApi = shouldUseMockApi,
+  currentProjectId = projectId,
+  manifest,
+} = {}) {
+  return resolveGanttProjectId({ envProjectId, mockApi, currentProjectId, manifest })
+}
+
+export function resolvePlanningDeviationRoutes(targetProjectId) {
+  const encodedProjectId = encodeURIComponent(targetProjectId)
+  return {
+    retiredPath: `/projects/${encodedProjectId}/planning/deviation`,
+    canonicalPath: `/projects/${encodedProjectId}/reports?view=progress_deviation`,
+  }
+}
+
+export function resolveDefaultPlanningDeviationRows(analysis) {
+  const mainlines = Array.isArray(analysis?.mainlines) ? analysis.mainlines : []
+  const executionMainline = mainlines.find((mainline) => mainline?.key === 'execution')
+  if (Array.isArray(executionMainline?.rows)) {
+    return executionMainline.rows
+  }
+
+  const rows = Array.isArray(analysis?.rows) ? analysis.rows : []
+  return rows.filter((row) => row?.mainline === 'execution')
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolvePlanningDeviationProjectId({ manifest })
+  return projectId
+}
+
 function buildMockResponse(urlString) {
   const url = new URL(urlString)
   const { pathname } = url
@@ -391,7 +462,7 @@ function buildMockResponse(urlString) {
       success: true,
       data: [{
         id: projectId,
-        name: '鍋忓樊鍒嗘瀽鑱旇皟椤圭洰',
+        name: '偏差分析联调项目',
         description: 'Planning deviation browser verification fixture project',
         status: 'active',
         created_at: now,
@@ -401,15 +472,21 @@ function buildMockResponse(urlString) {
   }
 
   if (pathname === `/api/projects/${projectId}`) {
+    return json({ success: true, data: mockProject })
+  }
+
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
     return json({
       success: true,
       data: {
-        id: projectId,
-        name: '鍋忓樊鍒嗘瀽鑱旇皟椤圭洰',
-        description: 'Planning deviation browser verification fixture project',
-        status: 'active',
-        created_at: now,
-        updated_at: now,
+        project: mockProject,
+        tasks: mockTasks,
+        risks: mockRisks,
+        conditions: [],
+        obstacles: [],
+        warnings: mockWarnings,
+        issues: mockIssues,
+        taskProgressSnapshots: [],
       },
     })
   }
@@ -464,7 +541,6 @@ function buildMockResponse(urlString) {
 
   if (
     pathname === '/api/milestones'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
     return json({ success: true, data: [] })
@@ -501,6 +577,8 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
+  const authToken = shouldUseMockApi ? null : await resolveBrowserVerifyAuthToken()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -517,14 +595,21 @@ async function main() {
   const consoleErrors = []
   const pageErrors = []
   const apiFailures = []
+  let page = null
+  let pageBodyText = null
+  let failureScreenshot = null
 
   try {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
+    page = await browser.newPage({ viewport: { width: 1440, height: 1800 } })
     page.setDefaultTimeout(30000)
+    await primeBrowserAuth(page, authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
-        consoleErrors.push(message.text())
+        const text = message.text()
+        if (!isIgnorableBrowserConsoleError(text)) {
+          consoleErrors.push(text)
+        }
       }
     })
 
@@ -543,10 +628,20 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
-        await route.fulfill({ response })
+        const responseBody = response.status() >= 400 ? await response.text() : undefined
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+            body: responseBody ? responseBody.slice(0, 2000) : '',
+          })
+        }
+        await route.fulfill(responseBody === undefined ? { response } : { response, body: responseBody })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -557,50 +652,37 @@ async function main() {
       }
     })
 
-    const targetUrl = `${baseUrl}/#/projects/${projectId}/planning/deviation`
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('planning-governance-workspace').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('planning-governance-banner').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('planning-governance-quick-links').waitFor({ state: 'visible', timeout: 20000 })
+    const routes = resolvePlanningDeviationRoutes(projectId)
+    const retiredUrl = `${baseUrl}/#${routes.retiredPath}`
+    await page.goto(retiredUrl, { waitUntil: 'domcontentloaded' })
+    await page.getByRole('heading', { name: '页面不存在' }).waitFor({ state: 'visible', timeout: 20000 })
+    const retiredWorkspaceCount = await page.getByTestId('planning-governance-workspace').count()
+    assert(retiredWorkspaceCount === 0, 'Retired planning governance workspace must not reappear')
+    await page.screenshot({ path: join(outputDir, 'planning-deviation-retired-route.png'), fullPage: true })
 
-    const initialUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'planning-deviation-page.png'), fullPage: true })
-
-    await page.getByTestId('planning-governance-snooze').click()
-    await page.getByText('已稍后处理').waitFor({ state: 'visible', timeout: 10000 })
-    await page.getByTestId('planning-governance-recheck').click()
-    await page.getByTestId('planning-governance-banner').waitFor({ state: 'visible', timeout: 10000 })
-    await page.screenshot({ path: join(outputDir, 'planning-deviation-snoozed.png'), fullPage: true })
-
-    await page.getByTestId('planning-quick-link-gantt').click()
-    await page.waitForFunction(() => window.location.hash.includes('/gantt'))
-    await page.getByTestId('task-workspace-layer-l1').waitFor({ state: 'visible', timeout: 20000 })
-    const ganttUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'planning-deviation-to-gantt.png'), fullPage: true })
-
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('planning-governance-workspace').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('planning-quick-link-risks').click()
-    await page.waitForFunction(() => window.location.hash.includes('/risks'))
-    await page.getByTestId('risk-summary-band').waitFor({ state: 'visible', timeout: 20000 })
-    const risksUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'planning-deviation-to-risks.png'), fullPage: true })
-
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('planning-governance-workspace').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('planning-quick-link-change-log').click()
-    await page.waitForFunction(() => window.location.hash.includes('/reports?view=change_log'))
-    await page.getByTestId('change-log-view').waitFor({ state: 'visible', timeout: 20000 })
+    const canonicalUrl = `${baseUrl}/#${routes.canonicalPath}`
+    await page.goto(canonicalUrl, { waitUntil: 'domcontentloaded' })
+    await page.getByTestId('deviation-shell').waitFor({ state: 'visible', timeout: 20000 })
+    const deviationTable = page.getByTestId('deviation-detail-table')
+    await deviationTable.waitFor({ state: 'visible', timeout: 20000 })
+    const deviationRowCount = await deviationTable.locator('tr[role="button"]').count()
+    const emptyStateVisible = await deviationTable.getByText('暂无详情表数据').isVisible().catch(() => false)
+    if (shouldUseMockApi) {
+      const expectedRowCount = resolveDefaultPlanningDeviationRows(mockProgressDeviation).length
+      assert(expectedRowCount > 0, 'Mock progress deviation fixture must contain execution rows')
+      assert(
+        deviationRowCount === expectedRowCount,
+        `Mock progress deviation row mismatch: expected ${expectedRowCount}, got ${deviationRowCount}`,
+      )
+    } else {
+      assert(
+        deviationRowCount > 0 || emptyStateVisible,
+        'Canonical progress deviation report must render detail rows or its controlled empty state',
+      )
+    }
     const reportsUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'planning-deviation-to-change-log.png'), fullPage: true })
-
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('planning-governance-workspace').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('planning-quick-link-closeout').click()
-    await page.waitForFunction(() => window.location.hash.includes('/tasks/closeout'))
-    await page.getByTestId('closeout-filter-bar').waitFor({ state: 'visible', timeout: 20000 })
-    const closeoutUrl = page.url()
-    await page.screenshot({ path: join(outputDir, 'planning-deviation-to-closeout.png'), fullPage: true })
+    assert(reportsUrl.includes(routes.canonicalPath), `Unexpected canonical deviation URL: ${reportsUrl}`)
+    await page.screenshot({ path: join(outputDir, 'planning-deviation-report.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
     assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
@@ -608,31 +690,42 @@ async function main() {
 
     const result = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
-      initialUrl,
-      snoozed: true,
-      ganttUrl,
-      risksUrl,
+      retiredUrl,
+      retiredRouteNotFound: true,
       reportsUrl,
-      closeoutUrl,
+      deviationRowCount,
+      emptyStateVisible,
       apiFailures,
       consoleErrors,
       pageErrors,
       screenshots: {
-        page: join(outputDir, 'planning-deviation-page.png'),
-        snoozed: join(outputDir, 'planning-deviation-snoozed.png'),
-        gantt: join(outputDir, 'planning-deviation-to-gantt.png'),
-        risks: join(outputDir, 'planning-deviation-to-risks.png'),
-        reports: join(outputDir, 'planning-deviation-to-change-log.png'),
-        closeout: join(outputDir, 'planning-deviation-to-closeout.png'),
+        retiredRoute: join(outputDir, 'planning-deviation-retired-route.png'),
+        reports: join(outputDir, 'planning-deviation-report.png'),
       },
     }
 
     await writeFile(join(outputDir, 'planning-deviation-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
+    if (page) {
+      try {
+        pageBodyText = await page.locator('body').innerText({ timeout: 2000 })
+      } catch {
+        pageBodyText = null
+      }
+      try {
+        failureScreenshot = join(outputDir, 'planning-deviation-failure.png')
+        await page.screenshot({ path: failureScreenshot, fullPage: true })
+      } catch {
+        failureScreenshot = null
+      }
+    }
     const failurePayload = {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       error: error instanceof Error ? error.message : String(error),
+      projectId,
+      pageBodyText,
+      failureScreenshot,
       apiFailures,
       consoleErrors,
       pageErrors,
@@ -642,13 +735,15 @@ async function main() {
     throw error
   } finally {
     await browser.close()
-    if (previewProcess) {
+    if (previewProcess && !previewProcess.killed) {
       previewProcess.kill()
     }
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

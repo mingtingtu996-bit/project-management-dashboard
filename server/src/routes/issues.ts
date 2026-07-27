@@ -2,16 +2,22 @@
 // 10.1 base model and route skeleton; no upgrade-chain resolution logic yet.
 import { Router } from 'express'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { validate, validateIdParam, issueSchema, issueUpdateSchema } from '../middleware/validation.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import { validate, validateIdParam, issueSchema, issueUpdateSchema, riskIssueClosureOutcomeSchema } from '../middleware/validation.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
+import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
+import { query as rawQuery } from '../database.js'
 import {
+  executeSQL,
+  executeSQLOne,
   getIssues,
   getIssue,
+  supabase,
 } from '../services/dbService.js'
 import { isActiveIssue } from '../utils/issueStatus.js'
 import {
   confirmIssuePendingManualCloseInMainChain,
+  closeIssueByRetentionInMainChain,
   createIssueInMainChain,
   deleteIssueInMainChain,
   keepIssueProcessingInMainChain,
@@ -19,11 +25,18 @@ import {
   updateIssueInMainChain,
 } from '../services/issueWriteChainService.js'
 import { isProtectedIssue } from '../services/upgradeChainService.js'
-import { getVisibleProjectIds } from '../auth/access.js'
+import { assertTransition } from '../services/statusDictionaryService.js'
+import { getProjectCompanyId, getVisibleProjectIds } from '../auth/access.js'
+import {
+  buildAndPersistBusinessCompletionSampleHealthReport,
+  buildRiskIssueCloseoutCompletionSamples,
+} from '../services/businessCompletionSampleHealthAdapterService.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Issue } from '../types/db.js'
 
 const router = Router()
+const ISSUE_SUMMARY_CACHE_TTL_MS = 15_000
+const issueSummaryCache = new Map<string, { expiresAt: number; payload: ApiResponse }>()
 
 function parseExpectedVersion(input: unknown) {
   if (input === undefined || input === null || input === '') return undefined
@@ -76,11 +89,48 @@ function buildUpgradeChainProtectedResponse(issue: Issue): ApiResponse {
   }
 }
 
+async function validateIssueProjectReferences(projectId: string, payload: Record<string, unknown>) {
+  const taskId = String(payload.task_id ?? '').trim()
+  if (taskId) {
+    const task = await executeSQLOne<{ project_id?: string | null }>('SELECT project_id FROM tasks WHERE id = ? LIMIT 1', [taskId])
+    if (!task || String(task.project_id ?? '') !== projectId) {
+      return {
+        success: false,
+        error: {
+          code: 'TASK_PROJECT_MISMATCH',
+          message: '问题关联的任务必须属于当前项目',
+          details: { taskId, projectId },
+        },
+        timestamp: new Date().toISOString(),
+      } satisfies ApiResponse
+    }
+  }
+
+  const sourceType = normalizeIssueKey(payload.source_type as string | null)
+  const sourceId = String(payload.source_id ?? '').trim()
+  if (sourceId && (sourceType === 'risk_converted' || sourceType === 'risk_auto_escalated')) {
+    const risk = await executeSQLOne<{ project_id?: string | null }>('SELECT project_id FROM risks WHERE id = ? LIMIT 1', [sourceId])
+    if (!risk || String(risk.project_id ?? '') !== projectId) {
+      return {
+        success: false,
+        error: {
+          code: 'RISK_PROJECT_MISMATCH',
+          message: '问题来源风险必须属于当前项目',
+          details: { riskId: sourceId, projectId },
+        },
+        timestamp: new Date().toISOString(),
+      } satisfies ApiResponse
+    }
+  }
+
+  return null
+}
+
 function normalizeIssueStatus(value?: string | null) {
   return normalizeIssueKey(value).toLowerCase()
 }
 
-function getIssueSourceLabel(sourceType?: string | null) {
+function getIssueSourceLabel(sourceType?: string | null, sourceEntityType?: string | null) {
   switch (normalizeIssueKey(sourceType)) {
     case 'manual':
       return '手动创建'
@@ -91,6 +141,9 @@ function getIssueSourceLabel(sourceType?: string | null) {
     case 'obstacle_escalated':
       return '阻碍上卷'
     case 'condition_expired':
+      if (sourceEntityType === 'acceptance_plan') {
+        return '验收逾期'
+      }
       return '条件过期'
     case 'source_deleted':
       return '来源已删除'
@@ -119,18 +172,111 @@ function createDateRange(startDateStr: string, endDateStr: string) {
   return dates
 }
 
+async function getIssuesForSummary(projectId?: string): Promise<Issue[]> {
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const params: unknown[] = []
+      const projectFilter = projectId ? ' WHERE project_id = $1' : ''
+      if (projectId) params.push(projectId)
+      const result = await rawQuery(
+        'SELECT * FROM public.issues' + projectFilter + ' ORDER BY created_at DESC',
+        params,
+      )
+      return (result.rows ?? []) as Issue[]
+    } catch (error) {
+      logger.warn('Direct issue summary read failed, falling back to Supabase REST', {
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  return getIssues(projectId)
+}
+
+async function recordIssueCloseoutSampleHealthEvidence(input: {
+  issue: Issue
+  sourceRoute: string
+}) {
+  const projectId = normalizeIssueKey(input.issue.project_id)
+  const issueId = normalizeIssueKey(input.issue.id)
+  if (!projectId || !issueId) return
+
+  try {
+    const companyId = await getProjectCompanyId(projectId)
+    if (!companyId) {
+      logger.warn('[issues] skip issue closeout sample health evidence without company scope', {
+        projectId,
+        issueId,
+      })
+      return
+    }
+
+    const closedAt = normalizeIssueKey(input.issue.closed_at)
+      || normalizeIssueKey(input.issue.updated_at)
+      || new Date().toISOString()
+    const issueCode = normalizeIssueKey(input.issue.title) || issueId
+    const samples = buildRiskIssueCloseoutCompletionSamples([
+      {
+        companyId,
+        projectId,
+        issueId,
+        issueCode,
+        resolvedAt: closedAt,
+        closedAt,
+        startedAt: closedAt,
+        updatedAt: normalizeIssueKey(input.issue.updated_at),
+        qualitySignal: 'verified',
+        metadata: {
+          sourceRoute: input.sourceRoute,
+          riskIssueId: issueId,
+          issueTitle: normalizeIssueKey(input.issue.title),
+          sourceType: normalizeIssueKey(input.issue.source_type),
+          sourceId: normalizeIssueKey(input.issue.source_id),
+          sourceEntityType: normalizeIssueKey(input.issue.source_entity_type),
+          sourceEntityId: normalizeIssueKey(input.issue.source_entity_id),
+          severity: normalizeIssueKey(input.issue.severity),
+          status: normalizeIssueKey(input.issue.status),
+          closedReason: normalizeIssueKey(input.issue.closed_reason),
+          closedAt,
+        },
+      },
+    ])
+
+    await buildAndPersistBusinessCompletionSampleHealthReport({
+      companyId,
+      projectId,
+      queryExec: executeSQL,
+      samples,
+    })
+  } catch (error) {
+    logger.warn('[issues] failed to record issue closeout sample health evidence', {
+      projectId,
+      issueId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 router.use(authenticate)
 
 router.get('/', asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string | undefined
   logger.info('Fetching issues', { projectId })
 
-  let issues = await getIssues(projectId)
+  let issues = await getIssuesForSummary(projectId)
 
-  if (!projectId && req.user?.id) {
-    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+  if (req.user?.id) {
+    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole, getRequestCompanyId(req))
     if (visibleProjectIds) {
       const visibleProjectIdSet = new Set(visibleProjectIds)
+      if (projectId && !visibleProjectIdSet.has(projectId)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: '您没有权限访问此项目问题' },
+          timestamp: new Date().toISOString(),
+        })
+      }
       issues = issues.filter((issue) => visibleProjectIdSet.has(String(issue.project_id ?? '')))
     }
   }
@@ -146,13 +292,25 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/summary', asyncHandler(async (req, res) => {
   const projectId = req.query.projectId as string | undefined
   logger.info('Fetching issue summary', { projectId })
+  const cacheKey = String(projectId ?? 'all')
+  const cached = issueSummaryCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return res.json(cached.payload)
+  }
 
-  let issues = await getIssues(projectId)
+  let issues = await getIssuesForSummary(projectId)
 
-  if (!projectId && req.user?.id) {
-    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole)
+  if (req.user?.id) {
+    const visibleProjectIds = await getVisibleProjectIds(req.user.id, req.user.globalRole, getRequestCompanyId(req))
     if (visibleProjectIds) {
       const visibleProjectIdSet = new Set(visibleProjectIds)
+      if (projectId && !visibleProjectIdSet.has(projectId)) {
+        return res.status(403).json({
+          success: false,
+          error: { code: 'FORBIDDEN', message: '您没有权限访问此项目问题' },
+          timestamp: new Date().toISOString(),
+        })
+      }
       issues = issues.filter((issue) => visibleProjectIdSet.has(String(issue.project_id ?? '')))
     }
   }
@@ -197,6 +355,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
     }
 
     if (activeIssueStatuses.has(normalizeIssueStatus(issue.status))) {
+      // eslint-disable-next-line -- route-level-aggregation-approved
       activeIssues += 1
     }
   }
@@ -229,13 +388,17 @@ router.get('/summary', asyncHandler(async (req, res) => {
     // eslint-disable-next-line -- route-level-aggregation-approved
     issues.reduce((map, issue) => {
       const key = String(issue.source_type || 'manual')
-      map.set(key, (map.get(key) || 0) + 1)
+      const entityType = String((issue as unknown as Record<string, unknown>).source_entity_type ?? '')
+      const bucketKey = key === 'condition_expired' && entityType === 'acceptance_plan'
+        ? 'acceptance_expired'
+        : key
+      map.set(bucketKey, (map.get(bucketKey) || 0) + 1)
       return map
     }, new Map<string, number>()),
   )
     .map(([key, count]) => ({
       key,
-      label: getIssueSourceLabel(key),
+      label: key === 'acceptance_expired' ? '验收逾期' : getIssueSourceLabel(key),
       count,
     }))
     .sort((left, right) => right.count - left.count)
@@ -268,10 +431,17 @@ router.get('/summary', asyncHandler(async (req, res) => {
     timestamp: new Date().toISOString(),
   }
 
+  issueSummaryCache.set(cacheKey, {
+    expiresAt: Date.now() + ISSUE_SUMMARY_CACHE_TTL_MS,
+    payload: response,
+  })
   res.json(response)
 }))
 
-router.get('/:id', validateIdParam, asyncHandler(async (req, res) => {
+router.get('/:id', validateIdParam, requireProjectMember(async (req) => {
+  const issue = await getIssue(req.params.id)
+  return issue?.project_id
+}), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching issue', { id })
 
@@ -295,6 +465,9 @@ router.get('/:id', validateIdParam, asyncHandler(async (req, res) => {
 
 router.post('/', requireProjectEditor((req) => req.body?.project_id), validate(issueSchema), asyncHandler(async (req, res) => {
   logger.info('Creating issue', req.body)
+  const projectId = String(req.body?.project_id ?? '').trim()
+  const referenceError = await validateIssueProjectReferences(projectId, req.body ?? {})
+  if (referenceError) return res.status(400).json(referenceError)
 
   const duplicate = await findDuplicateIssue(req.body)
   if (duplicate) {
@@ -338,6 +511,17 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
     return res.status(404).json(response)
   }
 
+  const projectId = String(updates.project_id ?? existing.project_id ?? '').trim()
+  if (updates.project_id !== undefined && projectId !== String(existing.project_id ?? '').trim()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'PROJECT_ID_IMMUTABLE', message: '问题所属项目不能通过更新接口变更' },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse)
+  }
+  const referenceError = await validateIssueProjectReferences(projectId, updates)
+  if (referenceError) return res.status(400).json(referenceError)
+
   const updated = await updateIssueInMainChain(id, updates, version)
 
   const response: ApiResponse<Issue> = {
@@ -351,7 +535,7 @@ router.put('/:id', validateIdParam, requireProjectEditor(async (req) => {
 router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (req) => {
   const existing = await getIssue(req.params.id)
   return existing?.project_id
-}), asyncHandler(async (req, res) => {
+}), validate(riskIssueClosureOutcomeSchema), asyncHandler(async (req, res) => {
   const { id } = req.params
   const version = parseExpectedVersion(req.body?.version)
   if (version === null) {
@@ -363,7 +547,13 @@ router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (r
   }
   logger.info('Confirming issue pending manual close', { id, version })
 
-  const issue = await confirmIssuePendingManualCloseInMainChain(id, version)
+  const issue = await confirmIssuePendingManualCloseInMainChain(id, {
+    resultCode: req.body.resultCode,
+    resultSummary: req.body.resultSummary,
+    effectiveness: req.body.effectiveness,
+    evidenceRefs: req.body.evidenceRefs,
+    causeAttributionId: req.body.causeAttributionId,
+  }, String(req.user?.id ?? ''), version)
   if (!issue) {
     const response: ApiResponse = {
       success: false,
@@ -372,6 +562,11 @@ router.post('/:id/confirm-close', validateIdParam, requireProjectEditor(async (r
     }
     return res.status(404).json(response)
   }
+
+  await recordIssueCloseoutSampleHealthEvidence({
+    issue,
+    sourceRoute: 'issues.confirm-close',
+  })
 
   const response: ApiResponse<Issue> = {
     success: true,
@@ -435,7 +630,24 @@ router.delete('/:id', validateIdParam, requireProjectEditor(async (req) => {
     return res.status(422).json(buildUpgradeChainProtectedResponse(existing))
   }
 
-  await deleteIssueInMainChain(id)
+  // v1.4.15: enforce retention — close instead of physical delete when protected
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({
+    entityType: 'issue',
+    entityId: id,
+    projectId: existing.project_id ?? null,
+    userId: req.user?.id ?? null,
+    userAction: 'delete',
+  })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+  if (retention.result.resolvedAction === 'close') {
+    await assertTransition('issue.lifecycle', String(existing.status ?? 'open'), 'closed')
+    await closeIssueByRetentionInMainChain(id, existing.project_id, { actorId: req.user?.id ?? null })
+  } else {
+    await deleteIssueInMainChain(id)
+  }
 
   const response: ApiResponse = {
     success: true,

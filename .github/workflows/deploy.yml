@@ -8,16 +8,64 @@ on:
       environment:
         description: Deployment environment
         required: true
-        default: production
+        default: preview
         type: choice
         options:
           - preview
           - staging
           - production
+      public_ingress_mode:
+        description: Public ingress authority mode for staging or production
+        required: true
+        default: domain_hsts
+        type: choice
+        options:
+          - domain_hsts
+          - temporary_ip_tls
+      initial_runtime_bootstrap_confirmation:
+        description: Type INGRESS_READY_UPSTREAM_UNAVAILABLE when enabling the one-time bootstrap path
+        required: false
+        default: ''
+        type: string
+      production_confirmation:
+        description: Type DEPLOY_PRODUCTION to authorize a production migration and deployment
+        required: false
+        default: ''
+        type: string
+      migration_skip_confirmation:
+        description: Type EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO for break-glass only
+        required: false
+        default: ''
+        type: string
+      migration_skip_reason:
+        description: Why CI cannot run migrations directly
+        required: false
+        default: ''
+        type: string
+      external_migration_evidence_ref:
+        description: External migration execution evidence reference or URL
+        required: false
+        default: ''
+        type: string
+      migration_maintenance_window_confirmed:
+        description: Confirm staging or production is in a controlled low-traffic migration window
+        required: true
+        default: false
+        type: boolean
+      duration_learning_legacy_runtime_retirement_confirmation:
+        description: Type RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322 only when explicitly authorizing pending migration 322
+        required: false
+        default: ''
+        type: string
+      production_migration_governance_evidence:
+        description: Repository-relative path to MG-01..MG-07 production migration governance evidence JSON
+        required: false
+        default: ''
+        type: string
 
 concurrency:
-  group: deploy-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview' && 'lighthouse-host-runtime-mutation' || format('deploy-{0}-{1}', github.workflow, github.event_name == 'workflow_dispatch' && format('target-{0}', github.event.inputs.environment) || format('preview-{0}', github.ref)) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.environment == 'preview' }}
 
 permissions:
   contents: read
@@ -34,10 +82,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Enable pnpm via Corepack
         run: |
@@ -53,13 +101,19 @@ jobs:
       - name: Client typecheck
         run: pnpm --dir client run typecheck
 
+      - name: Client frontend BI aggregation guard
+        run: pnpm --dir client run guard:frontend-bi-aggregation
+
+      - name: v1.4.23.1 Client Contract Gate
+        run: npm run verify:v14231-client-contracts --workspace=client
+
       - name: Client tests
         run: pnpm --dir client run test:run
 
   server-quality:
     name: Server Quality Check
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: server
@@ -67,15 +121,32 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: server/package-lock.json
 
+      - name: Repository Secret Scan
+        working-directory: .
+        run: node scripts/guard-repository-secrets.mjs
+
       - name: Install server dependencies
         run: npm ci --workspaces=false
+
+      - name: Server tracked relative import closure guard
+        run: npm run guard:tracked-relative-imports
+
+      - name: Enable pnpm for the combined governance gate
+        working-directory: .
+        run: |
+          corepack enable
+          corepack prepare pnpm@9 --activate
+
+      - name: Install client dependencies for the combined governance gate
+        working-directory: .
+        run: pnpm --dir client install --frozen-lockfile --ignore-workspace
 
       - name: Server typecheck
         run: npm run typecheck
@@ -83,12 +154,96 @@ jobs:
       - name: Server route aggregation guard
         run: npm run guard:route-aggregation
 
+      - name: Server summary service aggregation guard
+        run: npm run guard:summary-service-aggregation
+
+      - name: Server route auth guard
+        run: npm run guard:route-auth
+
+      - name: Server route ownership guard
+        run: npm run guard:route-ownership
+
+      - name: Server governance admin membership guard
+        run: npm run guard:governance-admin-membership
+
+      - name: Server architecture boundary guard
+        run: npm run guard:architecture-boundaries
+
+      - name: Server workspace isolation guard
+        run: npm run guard:workspace-isolation
+
+      - name: Server construction organization hydration guard
+        run: npm run guard:construction-organization-hydration
+
+      - name: Server system registry guard
+        run: npm run guard:system-registry
+
+      - name: Server system surface ownership guard
+        run: npm run guard:system-surface-ownership
+
+      - name: Server duration architecture boundary guard
+        run: npm run guard:duration-architecture
+
+      - name: Server business-type registry guard
+        run: npm run guard:business-type-registry
+
+      - name: Server spatial semantic guard
+        run: npm run guard:spatial-semantic
+
+      - name: Server legacy scope runtime surface guard
+        run: npm run guard:legacy-scope-runtime-surface
+
+      - name: Server legacy object drop guard
+        run: npm run guard:legacy-object-drop -- --ci-no-drop-candidates-ok --from-retired-object-audit --scan-migration-drops --migration-drop-baseline-version 310 --allow-target-catalog-preflight
+
+      - name: Server retired object reference audit
+        run: npm run audit:retired-object-references
+
+      - name: Server delete mutation classification audit
+        run: npm run audit:delete-mutation-classification
+
+      - name: Server public RLS audit guard
+        run: npm run guard:public-rls
+
+      - name: Server raw date math guard
+        run: npm run guard:raw-date-math
+
+      - name: Server metric SSOT guard
+        run: npm run guard:metric-ssot
+
+      - name: Server production-ready claims guard
+        run: npm run guard:production-ready-claims
+
+      - name: Server runtime consumer lineage guard
+        run: npm run guard:runtime-consumer-lineage
+
+      - name: Server status machine registry guard
+        run: npm run guard:status-machine-registry
+
+      - name: Server AI naming guard
+        run: npm run guard:ai-naming
+
       - name: Server executeSQL guard
         run: npm run guard:execute-sql
 
+      - name: v1.4.23.1 Non-live Closeout Gate
+        run: npm run verify:v14231-non-live-closeout
+
+      - name: Extended schema drift contract gate
+        run: npm run verify:schema-drift-extended
+
+      - name: v1.4.23.1 C-18.L Evidence Contract Gate
+        run: npm run verify:c18-live-evidence-contracts
+
+      - name: Install server Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Server tests
+        run: npm run test:release
+
+      - name: v1.4.22.3 Governance Gate
         working-directory: .
-        run: npx --prefix server vitest run --root server
+        run: npm run verify:v14223-governance
 
       - name: Server build
         run: npm run build
@@ -98,14 +253,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [client-quality, server-quality]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
+    env:
+      VITE_STORAGE_MODE: backend
+      VITE_API_BASE_URL: /api
+      # Required: PREVIEW_*, STAGING_*, and PRODUCTION_SUPABASE_URL / _ANON_KEY.
+      VITE_SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event_name != 'workflow_dispatch' && 'PREVIEW' || github.event.inputs.environment == 'preview' && 'PREVIEW' || github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets[format('{0}_SUPABASE_ANON_KEY', github.event_name != 'workflow_dispatch' && 'PREVIEW' || github.event.inputs.environment == 'preview' && 'PREVIEW' || github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Enable pnpm via Corepack
         run: |
@@ -117,9 +279,13 @@ jobs:
 
       - name: Build frontend
         run: pnpm --dir client run build
+
+      - name: Stamp frontend build provenance
         env:
-          VITE_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
+        run: |
+          node -e "const fs=require('fs'); fs.writeFileSync('client/dist/workbuddy-build.json', JSON.stringify({releaseSha:process.env.RELEASE_SHA, environment:process.env.DEPLOY_TARGET, builtAt:new Date().toISOString()}, null, 2)+'\n')"
 
       - name: Check frontend bundle budget
         run: node scripts/check-client-bundle-budget.mjs client/dist --entry-gzip-kb 350 --max-chunk-gzip-kb 900 --total-gzip-kb 1600
@@ -152,10 +318,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -181,6 +347,7 @@ jobs:
         run: npm run ${{ matrix.suite.script }}
         env:
           BROWSER_SUITE_KEY: ${{ matrix.suite.key }}
+          BROWSER_ARTIFACTS_DIR: artifacts/browser-checks
 
       - name: Publish browser suite summary
         if: always()
@@ -204,10 +371,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: package-lock.json
 
@@ -224,92 +391,840 @@ jobs:
       - name: Publish browser checks overview
         run: node scripts/write-browser-overview-summary.mjs browser-artifacts >> $GITHUB_STEP_SUMMARY
 
+      - name: Build current release readiness gate
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'preview' }}
+        run: >-
+          node scripts/write-v14231-readiness-gate.mjs
+          --artifacts-root browser-artifacts
+          --output runtime-evidence/v14231-readiness/gate.json
+          --release-sha "$RELEASE_SHA"
+          --target "$DEPLOY_TARGET"
+          --expected-suite-count 3
+
+      - name: Upload current release readiness gate
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: v14231-readiness-gate
+          path: runtime-evidence/v14231-readiness/gate.json
+          if-no-files-found: error
+          retention-days: 14
+
+  deployment-target-preflight:
+    name: Deployment Target Preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: ${{ github.event.inputs.environment }}
+    if: >
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
+    env:
+      DEPLOY_TARGET: ${{ github.event.inputs.environment }}
+      PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+      INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
+      INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation }}
+      EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Check target deployment and runtime secrets
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_ANON_KEY: ${{ secrets[format('{0}_SUPABASE_ANON_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          RUNTIME_DATABASE_URL: ${{ secrets[format('{0}_RUNTIME_DATABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in \
+            DEPLOY_HOST \
+            DEPLOY_USER \
+            DEPLOY_PATH \
+            DEPLOY_SSH_PRIVATE_KEY \
+            DEPLOY_KNOWN_HOSTS \
+            DEPLOY_HEALTH_URL \
+            DEPLOY_HTTP_REDIRECT_URL \
+            EXPECTED_PUBLIC_HOST \
+            SUPABASE_URL \
+            SUPABASE_ANON_KEY \
+            SUPABASE_MIGRATION_URL \
+            RUNTIME_DATABASE_URL \
+            SUPABASE_ADVISOR_EXPORT_JSON \
+            EXPECTED_JWT_SECRET_SHA256 \
+            PEER_JWT_SECRET_SHA256 \
+            PEER_DEPLOY_PATH; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+
+          health_url_invalid=false
+          if [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+            health_url_invalid=true
+          fi
+          redirect_url_invalid=false
+          if [[ "$DEPLOY_HTTP_REDIRECT_URL" != http://* ]]; then
+            redirect_url_invalid=true
+          fi
+
+          if [ "${#missing[@]}" -gt 0 ] || [ "$health_url_invalid" = "true" ] || [ "$redirect_url_invalid" = "true" ]; then
+            {
+              echo "### Target deployment preflight blocked"
+              echo ""
+              if [ "${#missing[@]}" -gt 0 ]; then
+                printf '%s\n' "- Missing target-specific deployment values: ${missing[*]}"
+              fi
+              if [[ "$DEPLOY_HEALTH_URL" != https://* ]]; then
+                echo "- External HTTPS health URL is required and must begin with https://."
+              fi
+              if [[ "$DEPLOY_HTTP_REDIRECT_URL" != http://* ]]; then
+                echo "- External HTTP redirect source URL is required and must begin with http://."
+              fi
+              echo "- Database migrations were not started."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          ingress_classification="$(node scripts/classify-public-ingress-url.mjs --url "$DEPLOY_HEALTH_URL" --redirect-url "$DEPLOY_HTTP_REDIRECT_URL" --environment "$DEPLOY_TARGET" --expected-host "$EXPECTED_PUBLIC_HOST" --expected-mode "$PUBLIC_INGRESS_MODE")"
+
+          if [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ]; then
+            [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ] || {
+              echo "Initial runtime bootstrap requires domain_hsts ingress." >&2
+              exit 1
+            }
+            [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ] || {
+              echo "Initial runtime bootstrap confirmation is missing or invalid." >&2
+              exit 1
+            }
+          fi
+
+          public_readyz_file="$RUNNER_TEMP/predeploy-public-readyz.json"
+          public_readyz_status="$(curl --silent --show-error --max-time 15 --output "$public_readyz_file" --write-out '%{http_code}' "$DEPLOY_HEALTH_URL")"
+          predeploy_runtime_classification="runtime_ready"
+          if [ "$public_readyz_status" = "200" ]; then
+            node --input-type=module - "$public_readyz_file" <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const expectedProjectRef = new URL(process.env.SUPABASE_URL).hostname.split('.')[0];
+          if (readiness.status !== 'ready') {
+            console.error('Public predeploy readyz status is not ready');
+            process.exit(1);
+          }
+          if (readiness.build?.deployTarget !== process.env.DEPLOY_TARGET) {
+            console.error('Public predeploy readyz target mismatch');
+            process.exit(1);
+          }
+          if (readiness.build?.supabaseProjectRef !== expectedProjectRef) {
+            console.error('Public predeploy readyz Supabase project mismatch');
+            process.exit(1);
+          }
+          if (readiness.build?.databaseProjectRef !== expectedProjectRef) {
+            console.error('Public predeploy readyz database project mismatch');
+            process.exit(1);
+          }
+          NODE
+          elif [ "$public_readyz_status" = "502" ] \
+            && [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ] \
+            && [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ]; then
+            predeploy_runtime_classification="ingress_ready_upstream_unavailable"
+          else
+            echo "Public predeploy readyz is unavailable or returned an unsupported status: $public_readyz_status" >&2
+            exit 1
+          fi
+
+          redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$DEPLOY_HTTP_REDIRECT_URL")"
+          redirect_status="${redirect_result%% *}"
+          redirect_url="${redirect_result#* }"
+          case "$redirect_status" in
+            301|302|307|308) ;;
+            *)
+              echo "Public predeploy redirect source did not return a redirect." >&2
+              exit 1
+              ;;
+          esac
+          if [ "$redirect_url" != "$DEPLOY_HEALTH_URL" ]; then
+            echo "Public predeploy redirect target mismatch." >&2
+            exit 1
+          fi
+
+          hsts_header_present=false
+          hsts_headers="$RUNNER_TEMP/predeploy-hsts.headers"
+          curl --silent --show-error --head --max-time 15 --output "$hsts_headers" "$DEPLOY_HEALTH_URL"
+          if tr -d '\r' < "$hsts_headers" | grep -qi '^strict-transport-security:'; then
+            hsts_header_present=true
+          elif [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ]; then
+            echo "Domain HSTS mode requires a Strict-Transport-Security header." >&2
+            exit 1
+          fi
+          if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
+            ingress_readiness="transportTlsReady=true temporaryIngressReady=true hstsHeaderPresent=$hsts_header_present hstsUserAgentPolicyApplicable=false domainHstsReady=false"
+          else
+            ingress_readiness="transportTlsReady=true temporaryIngressReady=false hstsHeaderPresent=true hstsUserAgentPolicyApplicable=true domainHstsReady=true"
+          fi
+          {
+            echo "### Public ingress policy accepted"
+            echo ""
+            echo "- $ingress_readiness"
+            echo "- Classification: $ingress_classification"
+            echo "- Runtime preflight: $predeploy_runtime_classification"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify deployment host Python runtime
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
+          chmod 600 ~/.ssh/project-management-deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          ssh -i ~/.ssh/project-management-deploy -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          command -v python3 >/dev/null 2>&1
+          python3 - <<'PY'
+          import ipaddress
+          import json
+          import re
+          import sys
+          from urllib.parse import urlsplit
+
+          if sys.version_info < (3, 10):
+              raise SystemExit('python3 >= 3.10 is required')
+          json.loads('{"ready":true}')
+          ipaddress.ip_address('127.0.0.1')
+          re.fullmatch(r'[0-9a-f]{40}', '0' * 40)
+          urlsplit('https://zhuxucloud.com/api/readyz')
+          PY
+          REMOTE
+
+      - name: Verify remote runtime JWT fingerprint
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+          DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PEER_JWT_SECRET_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [ "$EXPECTED_JWT_SECRET_SHA256" != "$PEER_JWT_SECRET_SHA256" ]
+          [ -n "$PEER_DEPLOY_PATH" ]
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
+          chmod 600 ~/.ssh/project-management-deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          remote_command="$(printf 'bash -s -- %q %q %q %q' "$DEPLOY_PATH" "$PEER_DEPLOY_PATH" "$EXPECTED_JWT_SECRET_SHA256" "$PEER_JWT_SECRET_SHA256")"
+          ssh -i ~/.ssh/project-management-deploy -p "$DEPLOY_PORT" -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$remote_command" <<'REMOTE'
+          set -euo pipefail
+          APP_DIR="$1"
+          PEER_APP_DIR="$2"
+          EXPECTED_JWT_SECRET_SHA256="$3"
+          PEER_JWT_SECRET_SHA256="$4"
+          case "$APP_DIR" in "~") APP_DIR="$HOME" ;; "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;; esac
+          case "$PEER_APP_DIR" in "~") PEER_APP_DIR="$HOME" ;; "~/"*) PEER_APP_DIR="$HOME/${PEER_APP_DIR#"~/"}" ;; esac
+          ENV_FILE="$APP_DIR/deploy/env/server.production.env"
+          PEER_ENV_FILE="$PEER_APP_DIR/deploy/env/server.production.env"
+          [ -f "$ENV_FILE" ]
+          [ -f "$PEER_ENV_FILE" ]
+          [ "$(readlink -f "$ENV_FILE")" != "$(readlink -f "$PEER_ENV_FILE")" ]
+          jwt_secret="$(awk -F= '$1 == "JWT_SECRET" { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$ENV_FILE")"
+          peer_jwt_secret="$(awk -F= '$1 == "JWT_SECRET" { sub(/^[^=]*=/, ""); sub(/\r$/, ""); value = $0 } END { print value }' "$PEER_ENV_FILE")"
+          [ "${#jwt_secret}" -ge 32 ]
+          [ "${#peer_jwt_secret}" -ge 32 ]
+          actual_fingerprint="$(printf '%s' "$jwt_secret" | sha256sum | awk '{print $1}')"
+          peer_actual_fingerprint="$(printf '%s' "$peer_jwt_secret" | sha256sum | awk '{print $1}')"
+          [ "$actual_fingerprint" = "$EXPECTED_JWT_SECRET_SHA256" ]
+          [ "$peer_actual_fingerprint" = "$PEER_JWT_SECRET_SHA256" ]
+          [ "$actual_fingerprint" != "$peer_actual_fingerprint" ]
+          REMOTE
+
+      - name: Verify deployment target database identity
+        env:
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          RUNTIME_DATABASE_URL: ${{ secrets[format('{0}_RUNTIME_DATABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          node scripts/check-deployment-target-identity.mjs
+          {
+            echo "### Target deployment preflight passed"
+            echo ""
+            echo "- Target: $DEPLOY_TARGET"
+            echo "- Runtime API, runtime database, migration, and advisor project identities match; database roles are separated."
+            echo "- External HTTPS health URL is required; remote internal readiness and performance checks also remain mandatory."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   database-migration:
     name: Apply Pending Database Migrations
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [server-quality]
+    needs: [server-quality, deployment-target-preflight]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+    env:
+      DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
     if: >
-      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview')
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
     defaults:
       run:
         working-directory: server
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-      - name: Setup Node.js 20
+      - name: Setup Node.js 22
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: server/package-lock.json
 
       - name: Install server dependencies
         run: npm ci --workspaces=false
 
+      - name: Confirm production deployment
+        if: github.event.inputs.environment == 'production'
+        env:
+          PRODUCTION_CONFIRMATION: ${{ github.event.inputs.production_confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$PRODUCTION_CONFIRMATION" != "DEPLOY_PRODUCTION" ]; then
+            {
+              echo "### Production deployment blocked"
+              echo ""
+              echo "- Re-run this workflow manually and type \`DEPLOY_PRODUCTION\` in the production confirmation field."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Check migration connection secret
         id: migration-config
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          MIGRATION_SKIP_REASON: ${{ github.event.inputs.migration_skip_reason }}
+          EXTERNAL_MIGRATION_EVIDENCE_REF: ${{ github.event.inputs.external_migration_evidence_ref }}
+          MIGRATION_SKIP_CONFIRMATION: ${{ github.event.inputs.migration_skip_confirmation }}
+        run: |
+          migration_skip_reason="$MIGRATION_SKIP_REASON"
+          external_migration_evidence_ref="$EXTERNAL_MIGRATION_EVIDENCE_REF"
+          migration_skip_confirmation="$MIGRATION_SKIP_CONFIRMATION"
+
+          if [ -n "${DATABASE_URL}" ]; then
+            echo "can_run=true" >> "$GITHUB_OUTPUT"
+            echo "break_glass=false" >> "$GITHUB_OUTPUT"
+          else
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+              && [ -n "$migration_skip_reason" ] \
+              && [ -n "$external_migration_evidence_ref" ] \
+              && [ "$migration_skip_confirmation" = "EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO" ]; then
+              echo "can_run=false" >> "$GITHUB_OUTPUT"
+              echo "break_glass=true" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Break-glass migration skip approved"
+                echo ""
+                echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret, so CI did not connect to the database directly."
+                echo "- Reason: ${migration_skip_reason}"
+                echo "- Evidence: ${external_migration_evidence_ref}"
+                echo "- Exact external pending-zero and blocking-schema-drift-zero confirmation accepted."
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "can_run=false" >> "$GITHUB_OUTPUT"
+              echo "break_glass=false" >> "$GITHUB_OUTPUT"
+              {
+                echo "### Database migration blocked"
+                echo ""
+                echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
+                echo "- Manual releases cannot skip migration gates without complete break-glass inputs."
+                echo "- Manual break-glass requires \`migration_skip_confirmation=EXTERNAL_PENDING_ZERO_AND_BLOCKING_SCHEMA_DRIFT_ZERO\`, \`migration_skip_reason\`, and \`external_migration_evidence_ref\`."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+
+      - name: Confirm controlled migration maintenance window
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          MIGRATION_MAINTENANCE_WINDOW_CONFIRMED: ${{ github.event.inputs.migration_maintenance_window_confirmed }}
+        run: |
+          set -euo pipefail
+          if [ "$MIGRATION_MAINTENANCE_WINDOW_CONFIRMED" != "true" ]; then
+            {
+              echo "### Database migration blocked"
+              echo ""
+              echo "- Staging and production migration writes require a controlled low-traffic window."
+              echo "- Re-run with \`migration_maintenance_window_confirmed=true\` after checking active traffic and long-running transactions."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Preflight current migration governance inputs
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_ADVISOR_EXPORT_JSON" ]; then
+            echo "Missing target-specific SUPABASE_ADVISOR_EXPORT_JSON secret; refusing to mutate the database before governance evidence can be generated." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          advisor_export="$RUNNER_TEMP/supabase-advisor-export-preflight.json"
+          printf '%s' "$SUPABASE_ADVISOR_EXPORT_JSON" > "$advisor_export"
+          npm run migrate:production-governance:evidence -- \
+            --verify-advisor-export-only \
+            --advisor-export-file "$advisor_export" \
+            --expected-environment "$DEPLOY_TARGET" \
+            --advisor-max-age-hours 24
+
+      - name: Check migration structural safety before apply
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -o pipefail
+          npm run migrate:check -- --allow-pending | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Diagnose migration release readiness before apply
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -o pipefail
+          npm run migrate:diagnose | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Authorize duration learning legacy runtime retirement 322
+        id: duration-learning-retirement-322
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_CONFIRMATION: ${{ github.event.inputs.duration_learning_legacy_runtime_retirement_confirmation }}
+        run: |
+          set -euo pipefail
+          plan_output="$(npm run --silent migrate:plan)"
+          retirement_boundary='"deferredMigrations":["322_duration_learning_legacy_runtime_retirement.sql"]'
+          if grep -Fq -- "$retirement_boundary" <<< "$plan_output"; then
+            if [ "$DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_CONFIRMATION" != "RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322" ]; then
+              {
+                echo "### Migration 322 blocked"
+                echo ""
+                echo "- Migration 322 is pending and retires legacy duration-learning runtime tables."
+                echo "- Re-run with \`duration_learning_legacy_runtime_retirement_confirmation=RETIRE_DURATION_LEARNING_LEGACY_RUNTIME_322\` after reviewing the controlled backup and rollback contract."
+                echo "- No database migration writes were started."
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            echo "pending=true" >> "$GITHUB_OUTPUT"
+            echo "Migration 322 explicit authorization accepted for this protected workflow run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "pending=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Preflight pending migration DROP targets
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PENDING: ${{ steps.duration-learning-retirement-322.outputs.pending }}
+        run: |
+          set -euo pipefail
+          plan_output="$(npm run --silent migrate:plan)"
+          drop_guard_args=()
+          for migration in \
+            311_retire_product_runtime_progress_knowledge_governance.sql \
+            321_retire_duplicate_t2_schedule_runtime.sql; do
+            if grep -Fqx -- "- $migration" <<< "$plan_output"; then
+              drop_guard_args+=(--approve-existing-drop-targets-for "$migration")
+            fi
+          done
+          if [ "$DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_PENDING" = "true" ]; then
+            drop_guard_args+=(--approve-existing-drop-targets-for "322_duration_learning_legacy_runtime_retirement.sql")
+          fi
+          npm run guard:pending-migration-drop-targets -- "${drop_guard_args[@]}" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Backup progress knowledge retirement data
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/progress-knowledge-retirement-311-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:progress-knowledge-retirement -- --if-pending --output "$backup_file"
+          if [ -f "$backup_file" ] && [ -f "$backup_file.sha256" ]; then
+            echo "PROGRESS_KNOWLEDGE_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload progress knowledge retirement backup
+        if: steps.migration-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: progress-knowledge-retirement-311-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/progress-knowledge-retirement-311-*.json
+            ${{ runner.temp }}/progress-knowledge-retirement-311-*.json.sha256
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Backup orphan notification task references
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/notification-task-reference-retirement-320-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:notification-task-reference-retirement -- --if-pending --output "$backup_file"
+          if [ -f "$backup_file" ] && [ -f "$backup_file.sha256" ]; then
+            echo "NOTIFICATION_TASK_REFERENCE_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload orphan notification task reference backup
+        if: steps.migration-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: notification-task-reference-retirement-320-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/notification-task-reference-retirement-320-*.json
+            ${{ runner.temp }}/notification-task-reference-retirement-320-*.json.sha256
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Backup retired T2 schedule runtime data
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/t2-schedule-runtime-retirement-321-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:t2-schedule-runtime-retirement -- --if-pending --output "$backup_file"
+          if [ -f "$backup_file" ] && [ -f "$backup_file.sha256" ]; then
+            echo "T2_SCHEDULE_RUNTIME_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload retired T2 schedule runtime backup
+        if: steps.migration-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: t2-schedule-runtime-retirement-321-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/t2-schedule-runtime-retirement-321-*.json
+            ${{ runner.temp }}/t2-schedule-runtime-retirement-321-*.json.sha256
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Apply pending migrations
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: npm run migrate:pending
+
+      - name: Backup duration learning legacy runtime retirement data
+        if: steps.migration-config.outputs.can_run == 'true' && steps.duration-learning-retirement-322.outputs.pending == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          backup_file="$RUNNER_TEMP/duration-learning-legacy-runtime-retirement-322-${DEPLOY_TARGET}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          npm run backup:duration-learning-legacy-runtime-retirement -- --output "$backup_file"
+          test -s "$backup_file"
+          test -s "$backup_file.sha256"
+          echo "DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_BACKUP_FILE=$backup_file" >> "$GITHUB_ENV"
+          echo "DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_AUTHORIZATION_REF=change:github-actions:${GITHUB_REPOSITORY}:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+
+      - name: Upload duration learning legacy runtime retirement backup
+        if: steps.migration-config.outputs.can_run == 'true' && steps.duration-learning-retirement-322.outputs.pending == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: duration-learning-legacy-runtime-retirement-322-${{ github.event.inputs.environment }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/duration-learning-legacy-runtime-retirement-322-*.json
+            ${{ runner.temp }}/duration-learning-legacy-runtime-retirement-322-*.json.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Apply and verify duration learning legacy runtime retirement 322
+        if: steps.migration-config.outputs.can_run == 'true' && steps.duration-learning-retirement-322.outputs.pending == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          readback_log="$RUNNER_TEMP/duration-learning-legacy-runtime-retirement-322-readback.log"
+          npm run migrate:duration-learning-legacy-runtime-retirement | tee "$readback_log"
+          grep -Fq 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE' "$readback_log"
+          cat "$readback_log" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify committed duration learning legacy runtime retirement 322
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          WORKBUDDY_TARGET_ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          readback_log="$RUNNER_TEMP/duration-learning-legacy-runtime-retirement-322-committed-readback.log"
+          npm run verify:duration-learning-legacy-runtime-retirement | tee "$readback_log"
+          grep -Fq 'DURATION_LEARNING_LEGACY_RUNTIME_RETIREMENT_READBACK_COMPLETE' "$readback_log"
+          cat "$readback_log" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check migration pending zero after apply
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -o pipefail
+          npm run migrate:check | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Check schema drift
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -o pipefail
+          npm run migrate:drift | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate current migration governance evidence
+        if: steps.migration-config.outputs.can_run == 'true'
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_MIGRATION_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          RUNTIME_DATABASE_URL: ${{ secrets[format('{0}_RUNTIME_DATABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          SUPABASE_ADVISOR_EXPORT_JSON: ${{ secrets[format('{0}_SUPABASE_ADVISOR_EXPORT_JSON', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_ADVISOR_EXPORT_JSON" ]; then
+            echo "Missing target-specific SUPABASE_ADVISOR_EXPORT_JSON secret." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          mkdir -p runtime-evidence/production-migration-governance
+          advisor_export="$RUNNER_TEMP/supabase-advisor-export.json"
+          printf '%s' "$SUPABASE_ADVISOR_EXPORT_JSON" > "$advisor_export"
+          npm run migrate:production-governance:evidence -- \
+            --output-file runtime-evidence/production-migration-governance/current-release.json \
+            --advisor-export-file "$advisor_export" \
+            --expected-environment "$DEPLOY_TARGET" \
+            --advisor-max-age-hours 24 \
+            --operator "github-actions:${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+
+      - name: Check v1.4.23.1 production migration governance evidence
+        if: steps.migration-config.outputs.can_run == 'true' || steps.migration-config.outputs.break_glass == 'true'
+        env:
+          BREAK_GLASS_GOVERNANCE_EVIDENCE: ${{ github.event.inputs.production_migration_governance_evidence }}
+        run: |
+          set -euo pipefail
+          current_evidence="runtime-evidence/production-migration-governance/current-release.json"
+          if [ "${{ steps.migration-config.outputs.can_run }}" != "true" ]; then
+            break_glass_evidence="${BREAK_GLASS_GOVERNANCE_EVIDENCE}"
+            if [ -z "$break_glass_evidence" ]; then
+              echo "Missing production_migration_governance_evidence input for break-glass." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            if [ -f "$break_glass_evidence" ]; then
+              source_evidence="$break_glass_evidence"
+            elif [ -f "../$break_glass_evidence" ]; then
+              source_evidence="../$break_glass_evidence"
+            else
+              echo "Break-glass production migration governance evidence file was not found: $break_glass_evidence" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+            mkdir -p "$(dirname "$current_evidence")"
+            cp "$source_evidence" "$current_evidence"
+          fi
+          if [ ! -f "$current_evidence" ]; then
+            {
+              echo "### Production migration governance blocked"
+              echo ""
+              echo "- Current-release MG-01..MG-07 evidence was not generated or supplied."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          npm run migrate:production-governance -- --evidence-file "$current_evidence" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Upload current migration governance evidence
+        if: steps.migration-config.outputs.can_run == 'true' || steps.migration-config.outputs.break_glass == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: production-migration-governance-evidence
+          path: server/runtime-evidence/production-migration-governance/current-release.json
+          if-no-files-found: error
+          retention-days: 14
+
+  workspace-isolation-live:
+    name: Live Workspace Isolation Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [database-migration]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
+    if: >
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Check live database secret
+        id: isolation-config
+        env:
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           if [ -n "${DATABASE_URL}" ]; then
             echo "can_run=true" >> "$GITHUB_OUTPUT"
           else
             echo "can_run=false" >> "$GITHUB_OUTPUT"
             {
-              echo "### Database migration skipped"
+              echo "### Live workspace isolation gate blocked"
               echo ""
               echo "- Missing \`SUPABASE_MIGRATION_URL\` GitHub secret."
-              echo "- Hosted GitHub runners cannot reach the current IPv6-only direct Supabase database host."
-              echo "- Deployment will continue without applying migrations in CI."
+              echo "- The static workspace isolation tests still run in server-quality."
+              echo "- Live database isolation must run before promoting a staging or production release."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
-        env:
-          DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
 
-      - name: Apply pending migrations
-        if: steps.migration-config.outputs.can_run == 'true'
-        run: npm run migrate:pending
+      - name: Install root dependencies
+        if: steps.isolation-config.outputs.can_run == 'true'
+        run: npm ci --no-fund
+
+      - name: Run live workspace isolation regression
+        if: steps.isolation-config.outputs.can_run == 'true'
         env:
-          DATABASE_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+          DATABASE_URL: ${{ secrets[format('{0}_SUPABASE_MIGRATION_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: npm run verify:workspace-isolation:live
+
+      - name: Publish live isolation summary
+        if: steps.isolation-config.outputs.can_run == 'true'
+        run: |
+          latest="$(ls -t artifacts/reports/live-workspace-isolation-regression-*.json | head -n 1)"
+          node -e "const fs=require('fs'); const p=process.argv[1]; const r=JSON.parse(fs.readFileSync(p,'utf8')); console.log('### Live workspace isolation gate'); console.log(''); console.log('- Status: '+r.summary.status); console.log('- Errors: '+r.summary.errors); console.log('- Warnings: '+r.summary.warnings); console.log('- Report: '+p);" "$latest" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload live isolation report
+        if: steps.isolation-config.outputs.can_run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-workspace-isolation-report
+          path: artifacts/reports/live-workspace-isolation-regression-*.json
+          if-no-files-found: error
+          retention-days: 14
 
   deploy-server:
     name: Deploy To Self-hosted Server
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    needs: [build-frontend, browser-checks, browser-checks-summary, database-migration]
+    timeout-minutes: 60
+    needs: [build-frontend, browser-checks, browser-checks-summary, database-migration, workspace-isolation-live]
+    environment: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
     env:
       DEPLOY_TARGET: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || 'production' }}
-      HAS_SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK != '' }}
+      HAS_SLACK_WEBHOOK: ${{ secrets[format('{0}_SLACK_WEBHOOK', github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] != '' }}
     if: >
       always() &&
       needs.build-frontend.result == 'success' &&
       needs.browser-checks.result == 'success' &&
       needs.browser-checks-summary.result == 'success' &&
-      (needs.database-migration.result == 'success' || needs.database-migration.result == 'skipped') &&
-      (
-        (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
-        (github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview')
-      )
+      needs.database-migration.result == 'success' &&
+      needs.workspace-isolation-live.result == 'success' &&
+      github.event_name == 'workflow_dispatch' && github.event.inputs.environment != 'preview'
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Download tested frontend build
+        uses: actions/download-artifact@v7
+        with:
+          name: frontend-build
+          path: client/dist
+
+      - name: Download current release readiness gate
+        uses: actions/download-artifact@v7
+        with:
+          name: v14231-readiness-gate
+          path: runtime-evidence/v14231-readiness
+
+      - name: Download current migration governance evidence
+        uses: actions/download-artifact@v7
+        with:
+          name: production-migration-governance-evidence
+          path: runtime-evidence/production-migration-governance
+
       - name: Check server deployment credentials
         id: deployment-eligibility
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+          EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
-          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ]; then
+          health_url_valid=false
+          if [[ "$DEPLOY_HEALTH_URL" == https://* ]]; then
+            health_url_valid=true
+          fi
+          redirect_url_valid=false
+          if [[ "$DEPLOY_HTTP_REDIRECT_URL" == http://* ]]; then
+            redirect_url_valid=true
+          fi
+
+          if [ -n "$DEPLOY_HOST" ] && [ -n "$DEPLOY_USER" ] && [ -n "$DEPLOY_PATH" ] && [ -n "$PEER_DEPLOY_PATH" ] && [ -n "$DEPLOY_SSH_PRIVATE_KEY" ] && [ -n "$DEPLOY_KNOWN_HOSTS" ] && [ -n "$DEPLOY_HEALTH_URL" ] && [ "$health_url_valid" = "true" ] && [ -n "$DEPLOY_HTTP_REDIRECT_URL" ] && [ "$redirect_url_valid" = "true" ] && [ -n "$EXPECTED_PUBLIC_HOST" ] && [ -n "$EXPECTED_JWT_SECRET_SHA256" ] && [ -n "$PEER_JWT_SECRET_SHA256" ]; then
             echo "can_deploy=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Self-hosted deployment eligible"
+              echo ""
+              echo "- Public TLS health, explicit HTTP-to-HTTPS redirect, remote internal readiness, and performance checks are mandatory."
+              if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
+                echo "- Temporary IP TLS is selected; domain HSTS closure remains false."
+              else
+                echo "- Domain HSTS mode is selected and must pass the public header probe."
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
           else
             echo "can_deploy=false" >> "$GITHUB_OUTPUT"
             {
               echo "### Self-hosted deployment blocked"
               echo ""
-              echo "- Missing one or more required GitHub secrets: \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`."
+              echo "- \`DEPLOY_HOST\`, \`DEPLOY_USER\`, \`DEPLOY_PATH\`, \`DEPLOY_SSH_PRIVATE_KEY\`, and pinned \`DEPLOY_KNOWN_HOSTS\` are required."
+              echo "- \`DEPLOY_HEALTH_URL\` is required and must begin with \`https://\`."
+              echo "- \`DEPLOY_HTTP_REDIRECT_URL\` is required and must begin with \`http://\`."
               echo "- Quality gates and browser checks completed, but no server deployment was attempted."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
@@ -318,34 +1233,41 @@ jobs:
       - name: Configure SSH
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_SSH_PRIVATE_KEY: ${{ secrets[format('{0}_DEPLOY_SSH_PRIVATE_KEY', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets[format('{0}_DEPLOY_KNOWN_HOSTS', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/project-management-deploy
           chmod 600 ~/.ssh/project-management-deploy
 
-          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
-            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
-          fi
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
 
       - name: Deploy to self-hosted server
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
           RELEASE_SHA: ${{ github.sha }}
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+          DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HEALTH_URL: ${{ secrets[format('{0}_DEPLOY_HEALTH_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HTTP_REDIRECT_URL: ${{ secrets[format('{0}_DEPLOY_HTTP_REDIRECT_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PUBLIC_INGRESS_MODE: ${{ github.event.inputs.public_ingress_mode }}
+          EXPECTED_PUBLIC_HOST: ${{ vars[format('{0}_DEPLOY_PUBLIC_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          INITIAL_RUNTIME_BOOTSTRAP: ${{ github.event.inputs.initial_runtime_bootstrap_confirmation == 'INGRESS_READY_UPSTREAM_UNAVAILABLE' && 'true' || 'false' }}
+          EXPECTED_JWT_SECRET_SHA256: ${{ secrets[format('{0}_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
           RELEASE_ARCHIVE="/tmp/project-management-${RELEASE_SHA}.tar.gz"
-          git archive --format=tar.gz --output "$RELEASE_ARCHIVE" "$RELEASE_SHA"
+          RELEASE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$RELEASE_DIR"' EXIT
+          git archive --format=tar "$RELEASE_SHA" | tar -xf - -C "$RELEASE_DIR"
+          mkdir -p "$RELEASE_DIR/client/dist"
+          cp -a client/dist/. "$RELEASE_DIR/client/dist/"
+          tar -czf "$RELEASE_ARCHIVE" -C "$RELEASE_DIR" .
           scp \
             -i ~/.ssh/project-management-deploy \
             -P "$DEPLOY_PORT" \
@@ -358,13 +1280,205 @@ jobs:
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-http://127.0.0.1/api/health}\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" INITIAL_RUNTIME_BOOTSTRAP=\"$INITIAL_RUNTIME_BOOTSTRAP\" EXPECTED_JWT_SECRET_SHA256=\"$EXPECTED_JWT_SECRET_SHA256\" PEER_JWT_SECRET_SHA256=\"$PEER_JWT_SECRET_SHA256\" PEER_RUNTIME_ENV_FILE=\"$PEER_DEPLOY_PATH/deploy/env/server.production.env\" bash -s" < scripts/deploy-lighthouse-server.sh
+
+      - name: Verify API port is not externally reachable
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
+        env:
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          if timeout 5 bash -c "</dev/tcp/$DEPLOY_HOST/3001" 2>/dev/null; then
+            echo "API port 3001 is externally reachable; refusing to accept a TLS/proxy bypass." >&2
+            exit 1
+          fi
+          echo "Direct external access to API port 3001 is blocked." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify deployed release through SSH tunnel
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_DEPLOY_SUPABASE_URL: ${{ secrets[format('{0}_SUPABASE_URL', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_USER: ${{ secrets[format('{0}_DEPLOY_USER', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+          DEPLOY_PORT: ${{ secrets[format('{0}_DEPLOY_PORT', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] || '22' }}
+          DEPLOY_PATH: ${{ secrets[format('{0}_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
+        run: |
+          set -euo pipefail
+          remote_web_port="$(ssh \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "awk -F= '\$1 == \"WEB_PORT\" { value=\$2 } END { gsub(/\\r/, \"\", value); print value }' \"$DEPLOY_PATH/deploy/env/server.production.env\"")"
+          remote_web_port="${remote_web_port:-8080}"
+          if [[ ! "$remote_web_port" =~ ^[0-9]{2,5}$ ]]; then
+            echo "Invalid remote WEB_PORT; refusing to open a release tunnel." >&2
+            exit 1
+          fi
+
+          local_smoke_port=18080
+          ssh -N -L "127.0.0.1:${local_smoke_port}:127.0.0.1:${remote_web_port}" \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            -o ExitOnForwardFailure=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" &
+          tunnel_pid=$!
+          trap 'kill "$tunnel_pid" 2>/dev/null || true' EXIT
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error "http://127.0.0.1:${local_smoke_port}/api/readyz" > "$RUNNER_TEMP/deployed-readyz.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              echo "Remote readiness tunnel did not become healthy." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          curl --fail --silent --show-error \
+            --header "X-Forwarded-Proto: https" \
+            "http://127.0.0.1:${local_smoke_port}/api/performance-reports/summary" \
+            > "$RUNNER_TEMP/deployed-performance-summary.json"
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:${local_smoke_port}/workbuddy-build.json" \
+            > "$RUNNER_TEMP/deployed-build.json"
+          node -e "const fs=require('fs'); const readiness=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const expectedDatabaseProjectRef=new URL(process.env.EXPECTED_DEPLOY_SUPABASE_URL).hostname.split('.')[0]; if (readiness.build?.releaseSha !== process.env.RELEASE_SHA) { console.error('Deployed API release SHA mismatch'); process.exit(1) } if (readiness.build?.deployTarget !== process.env.DEPLOY_TARGET) { console.error('Deployed API target mismatch'); process.exit(1) } if (readiness.build?.supabaseProjectRef !== expectedDatabaseProjectRef) { console.error('Deployed API Supabase target mismatch'); process.exit(1) } if (readiness.build?.databaseProjectRef !== expectedDatabaseProjectRef) { console.error('Deployed API database target mismatch'); process.exit(1) }" \
+            "$RUNNER_TEMP/deployed-readyz.json"
+          node -e "const fs=require('fs'); const manifest=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (manifest.releaseSha !== process.env.RELEASE_SHA) { console.error('Deployed release SHA mismatch'); process.exit(1) }" \
+            "$RUNNER_TEMP/deployed-build.json"
+
+          {
+            echo "### Remote release readback passed"
+            echo ""
+            echo "- Internal readiness: pass"
+            echo "- Performance summary: pass"
+            echo "- Release SHA: \`$RELEASE_SHA\`"
+            echo "- Public HTTPS was not inferred from the private SSH tunnel."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run authenticated staging wizard and baseline smoke through SSH tunnel
+        id: staging-smoke
+        if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' && env.DEPLOY_TARGET == 'staging' }}
+        env:
+          RELEASE_SHA: ${{ github.sha }}
+          DEPLOY_HOST: ${{ secrets.STAGING_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.STAGING_DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.STAGING_DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.STAGING_DEPLOY_PATH }}
+          DEPLOY_HEALTH_URL: ${{ secrets.STAGING_DEPLOY_HEALTH_URL }}
+          STAGING_SMOKE_SUPABASE_URL: ${{ secrets.STAGING_SUPABASE_URL }}
+          STAGING_SMOKE_TEST_USER_EMAIL: ${{ secrets.STAGING_TEST_USER_EMAIL }}
+          STAGING_SMOKE_TEST_USER_PASSWORD: ${{ secrets.STAGING_TEST_USER_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for required_name in DEPLOY_HEALTH_URL STAGING_SMOKE_SUPABASE_URL STAGING_SMOKE_TEST_USER_EMAIL STAGING_SMOKE_TEST_USER_PASSWORD; do
+            if [ -z "${!required_name}" ]; then
+              echo "Missing required authenticated staging smoke secret: $required_name" >&2
+              exit 1
+            fi
+          done
+
+          remote_web_port="$(ssh \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "awk -F= '\$1 == \"WEB_PORT\" { value=\$2 } END { gsub(/\\r/, \"\", value); print value }' \"$DEPLOY_PATH/deploy/env/server.production.env\"")"
+          remote_web_port="${remote_web_port:-8080}"
+          if [[ ! "$remote_web_port" =~ ^[0-9]{2,5}$ ]]; then
+            echo "Invalid remote WEB_PORT; refusing authenticated staging smoke." >&2
+            exit 1
+          fi
+
+          local_smoke_port=18081
+          smoke_env="$RUNNER_TEMP/staging-wizard-smoke.env"
+          smoke_report="$RUNNER_TEMP/staging-wizard-baseline-revision.json"
+          smoke_cleanup_report="$RUNNER_TEMP/staging-wizard-baseline-revision.cleanup.json"
+          public_origin="$(node -e "process.stdout.write(new URL(process.argv[1]).origin)" "$DEPLOY_HEALTH_URL")"
+          smoke_completed=false
+          tunnel_pid=""
+          cleanup() {
+            if [ "$smoke_completed" != "true" ] && [ -f "$smoke_env" ] && [ -f "$smoke_report" ]; then
+              node scripts/run-wizard-baseline-revision-staging.mjs \
+                --env-file "$smoke_env" \
+                --api-base-url "http://127.0.0.1:${local_smoke_port}" \
+                --public-origin "$public_origin" \
+                --cleanup-report "$smoke_report" \
+                --report "$smoke_cleanup_report" \
+                --request-timeout-ms 20000 \
+                || true
+            fi
+            rm -f "$smoke_env"
+            if [ -n "$tunnel_pid" ]; then kill "$tunnel_pid" 2>/dev/null || true; fi
+          }
+          trap cleanup EXIT
+
+          printf 'SUPABASE_URL=%s\nTEST_USERNAME=%s\nTEST_USER_PASSWORD=%s\n' \
+            "$STAGING_SMOKE_SUPABASE_URL" \
+            "$STAGING_SMOKE_TEST_USER_EMAIL" \
+            "$STAGING_SMOKE_TEST_USER_PASSWORD" \
+            > "$smoke_env"
+          chmod 600 "$smoke_env"
+
+          ssh -N -L "127.0.0.1:${local_smoke_port}:127.0.0.1:${remote_web_port}" \
+            -i ~/.ssh/project-management-deploy \
+            -p "$DEPLOY_PORT" \
+            -o IdentitiesOnly=yes \
+            -o ExitOnForwardFailure=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" &
+          tunnel_pid=$!
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error \
+              "http://127.0.0.1:${local_smoke_port}/workbuddy-build.json" \
+              > "$RUNNER_TEMP/staging-smoke-build.json"; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              echo "Authenticated staging smoke tunnel did not become ready." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          curl --fail --silent --show-error \
+            "http://127.0.0.1:${local_smoke_port}/api/readyz" \
+            > "$RUNNER_TEMP/staging-smoke-readyz.json"
+          node -e "const fs=require('fs'); const readiness=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const expectedDatabaseProjectRef=new URL(process.env.STAGING_SMOKE_SUPABASE_URL).hostname.split('.')[0]; if (readiness.build?.releaseSha !== process.env.RELEASE_SHA) { console.error('Authenticated staging API release SHA mismatch'); process.exit(1) } if (readiness.build?.deployTarget !== process.env.DEPLOY_TARGET) { console.error('Authenticated staging API target mismatch'); process.exit(1) } if (readiness.build?.supabaseProjectRef !== expectedDatabaseProjectRef) { console.error('Authenticated staging API Supabase target mismatch'); process.exit(1) } if (readiness.build?.databaseProjectRef !== expectedDatabaseProjectRef) { console.error('Authenticated staging API database target mismatch'); process.exit(1) }" \
+            "$RUNNER_TEMP/staging-smoke-readyz.json"
+          node -e "const fs=require('fs'); const manifest=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if (manifest.releaseSha !== process.env.RELEASE_SHA) { console.error('Authenticated staging smoke release SHA mismatch'); process.exit(1) }" \
+            "$RUNNER_TEMP/staging-smoke-build.json"
+
+          node scripts/run-wizard-baseline-revision-staging.mjs \
+            --env-file "$smoke_env" \
+            --api-base-url "http://127.0.0.1:${local_smoke_port}" \
+            --public-origin "$public_origin" \
+            --report "$smoke_report" \
+            --deployed-staging-code \
+            --release-sha "$RELEASE_SHA"
+          smoke_completed=true
+
+          node -e "const fs=require('fs'); const report=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const sha=process.argv[2]; if (report.status !== 'pass' || report.deployedStagingCode !== true || report.releaseSha !== sha || report.cleanup?.projectPhysicallyDeleted !== true) { console.error('Authenticated staging wizard smoke report failed closed'); process.exit(1) } const task=report.steps?.taskDependencyReadback ?? {}; const cpm=report.steps?.criticalPathReadback ?? {}; console.log('### Authenticated staging wizard and baseline smoke passed'); console.log(''); console.log('- Release SHA: `'+sha+'`'); console.log('- Tasks: '+task.taskCount); console.log('- Dependencies: '+task.dependencyReadbackCount); console.log('- CPM edges: '+cpm.dependencyEdgeCount); console.log('- Project duration days: '+cpm.projectDurationDays); console.log('- Cleanup: physically deleted');" \
+            "$smoke_report" "$RELEASE_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload authenticated staging wizard smoke
+        if: ${{ always() && env.DEPLOY_TARGET == 'staging' && (steps.staging-smoke.outcome == 'success' || steps.staging-smoke.outcome == 'failure') }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: staging-wizard-baseline-revision-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/staging-wizard-baseline-revision.json
+            ${{ runner.temp }}/staging-wizard-baseline-revision.cleanup.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Send deployment notification
         if: ${{ env.HAS_SLACK_WEBHOOK == 'true' }}
         uses: rtCamp/action-slack-notify@v2
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_WEBHOOK: ${{ secrets[format('{0}_SLACK_WEBHOOK', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           SLACK_CHANNEL: '#deployments'
           SLACK_COLOR: good
           SLACK_TITLE: 'Project Management System deployed to self-hosted server'

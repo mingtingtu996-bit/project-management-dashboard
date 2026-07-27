@@ -1,0 +1,118 @@
+{
+  "schemaVersion": "workbuddy-ui-tool-inventory.v1",
+  "generatedAt": "2026-07-12T00:00:00+08:00",
+  "decision": "The current implementation, design collection, and browser verification categories are sufficient for this release.",
+  "layers": [
+    {
+      "layer": "rules-and-governance",
+      "tools": [
+        {
+          "name": "WorkBuddy UI project skills",
+          "status": "ready-local",
+          "paths": [
+            "project-ui/skills/workbuddy-ui-implementation/SKILL.md",
+            "project-ui/skills/workbuddy-component-state-catalog/SKILL.md"
+          ],
+          "verificationCommand": "npm run ui:center:check",
+          "lastVerified": "2026-07-12"
+        },
+        {
+          "name": "UI dashboard orchestrator",
+          "status": "ready-local",
+          "path": "project-ui/tools/run-ui-dashboard.mjs",
+          "verificationCommand": "node --test project-ui/tools/ui-center.test.mjs",
+          "lastVerified": "2026-07-12",
+          "governance": "Dry-run is read-only unless --report-root is explicit and inside project-ui/artifacts or project-ui/reports. Unknown execution classes fail closed; browser, external, and delegated execution require matching allow flags; blocked entry gates reject execution; hosted success remains review-pending."
+        }
+      ]
+    },
+    {
+      "layer": "design-collection",
+      "tools": [
+        {
+          "name": "Figma Connector",
+          "status": "available-via-codex",
+          "verificationCommand": "Codex tool discovery",
+          "lastVerified": "2026-07-12",
+          "governance": "Use for the first approved exemplar of a page mode and candidate comparison, not as production truth."
+        }
+      ]
+    },
+    {
+      "layer": "page-and-release-evidence",
+      "tools": [
+        {
+          "name": "Playwright scripts with CloakBrowser/Chromium",
+          "status": "configured-dry-run-only",
+          "path": "project-testing",
+          "verificationCommand": "node project-testing/tools/run-release-dashboard.mjs --profile uiux --dry-run",
+          "blocker": "No current page-level live run was executed in this audit phase.",
+          "governance": "Exploration and dry-run configuration are not pass evidence; repeatable assertions, traces, screenshots, console and network results must be written by project-testing."
+        },
+        {
+          "name": "project-testing release cockpit",
+          "status": "configured-dry-run-only",
+          "path": "project-testing/tools/run-release-dashboard.mjs",
+          "verificationCommand": "node project-testing/tools/run-release-dashboard.mjs --profile uiux --dry-run",
+          "blocker": "A dry-run proves routing/configuration only; no local, CI, staging, or live release verdict was produced.",
+          "governance": "This is the only page-release cockpit. project-ui must not duplicate it."
+        },
+        {
+          "name": "Browser/Figma MCP tools",
+          "status": "available-exploratory",
+          "governance": "Use to investigate or collect candidate evidence, then convert stable findings into versioned scripts or reviewed artifacts."
+        }
+      ]
+    },
+    {
+      "layer": "implementation-stack",
+      "tools": [
+        {
+          "name": "React 18 + TypeScript + Vite",
+          "status": "installed"
+        },
+        {
+          "name": "Tailwind CSS",
+          "status": "installed"
+        },
+        {
+          "name": "Radix/shadcn-style primitives",
+          "status": "installed"
+        },
+        {
+          "name": "lucide-react",
+          "status": "installed"
+        },
+        {
+          "name": "Recharts / Chart.js / D3",
+          "status": "installed-with-backend-contract-boundary"
+        }
+      ]
+    },
+    {
+      "layer": "deferred-not-required-for-current-audit",
+      "tools": [
+        {
+          "name": "@playwright/test",
+          "status": "deferred",
+          "reason": "Direct Playwright and project-testing cover the current audit; do not add a second runner until page implementation demonstrates a missing capability."
+        },
+        {
+          "name": "eslint-plugin-jsx-a11y",
+          "status": "deferred",
+          "reason": "@axe-core/playwright covers the current browser path; reassess only if lint-time coverage is required."
+        },
+        {
+          "name": "Lighthouse CI",
+          "status": "future",
+          "reason": "Add only after stable authenticated staging URLs and performance budgets exist."
+        },
+        {
+          "name": "Style Dictionary",
+          "status": "future",
+          "reason": "Add only after the runtime token single source of truth is settled; do not create another token source."
+        }
+      ]
+    }
+  ]
+}

@@ -4,18 +4,17 @@ import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
 import type { Notification, Task } from '../types/db.js'
 import type { PlanningIntegrityMappingSummary, PlanningIntegrityReport } from '../types/planning.js'
+import { query as rawQuery } from '../database.js'
 import { executeSQL, executeSQLOne } from './dbService.js'
 import { listActiveProjectIds } from './activeProjectService.js'
 import { MilestoneIntegrityService } from './milestoneIntegrityService.js'
 import { PlanningIntegrityService } from './planningIntegrityService.js'
 import { isCompletedTask, isInProgressTask } from '../utils/taskStatus.js'
 import {
-  insertNotification,
   listNotifications,
   updateNotificationById,
 } from './notificationStore.js'
-
-const DAY_MS = 24 * 60 * 60 * 1000
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 
 // Keep the legacy snapshot source type in the cleanup set so old rows are
 // auto-resolved after 6.4 removes the duplicate write path.
@@ -33,7 +32,6 @@ interface ProjectOwnerRow {
 interface ProjectMemberRow {
   project_id: string
   user_id: string
-  role?: string | null
   permission_level?: string | null
 }
 
@@ -60,6 +58,19 @@ interface MappingOrphanPointerNotificationDefinition {
 }
 
 type ProjectRecipientsCache = Map<string, Promise<string[]>>
+
+const OPERATIONAL_TASK_SIGNAL_COLUMNS = [
+  'id',
+  'title',
+  'status',
+  'progress',
+  'planned_start_date',
+  'planned_end_date',
+  'end_date',
+  'actual_start_date',
+  'actual_end_date',
+] as const
+const OPERATIONAL_TASK_SIGNAL_SELECT = OPERATIONAL_TASK_SIGNAL_COLUMNS.join(', ')
 
 function nowIso() {
   return new Date().toISOString()
@@ -107,8 +118,8 @@ function buildMappingOrphanPointerNotificationDefinition(
     type: 'planning_gov_mapping_orphan_pointer',
     notificationType: 'system-exception',
     severity: pendingCount > 0 || mergedCount > 0 ? 'critical' : 'warning',
-    title: '规划映射存在孤立指针',
-    content: `映射孤立指针 ${total} 条，其中 baseline pending/missing ${pendingCount} 条、baseline merged ${mergedCount} 条、monthly carryover ${carryoverCount} 条。`,
+    title: '计划映射存在孤立指针',
+    content: `映射孤立指针 ${total} 条，其中 baseline pending/missing ${pendingCount} 条，baseline merged ${mergedCount} 条，monthly carryover ${carryoverCount} 条。`,
     metadata: {
       category: 'planning_mapping_orphan',
       alert_kind: 'mapping_orphan_pointer',
@@ -126,8 +137,8 @@ function detectDateInversionSignals(tasks: Task[]): OperationalSignalDefinition[
     const inversions: string[] = []
     const plannedStartAt = toTimestamp(task.planned_start_date ?? null)
     const plannedEndAt = toTimestamp(task.planned_end_date ?? task.end_date ?? null)
-    const actualStartAt = toTimestamp(task.start_date ?? task.actual_start_date ?? null)
-    const actualEndAt = toTimestamp(task.actual_end_date ?? task.end_date ?? null)
+    const actualStartAt = toTimestamp(task.actual_start_date ?? null)
+    const actualEndAt = toTimestamp(task.actual_end_date ?? null)
 
     if (Number.isFinite(plannedStartAt) && Number.isFinite(plannedEndAt) && plannedStartAt > plannedEndAt) {
       inversions.push('planned_start_date > planned_end_date')
@@ -145,15 +156,15 @@ function detectDateInversionSignals(tasks: Task[]): OperationalSignalDefinition[
       type: 'date_inversion',
       severity: 'critical',
       title: '任务日期存在逆序异常',
-      content: `任务“${task.title}”存在日期逆序：${inversions.join('；')}。请立即修正计划/实际日期。`,
+      content: `任务“${task.title}”存在日期逆序：${inversions.join('、')}。请立即修正计划/实际日期。`,
       taskId: task.id,
       metadata: {
         task_id: task.id,
         inversions,
         planned_start_date: task.planned_start_date ?? null,
         planned_end_date: task.planned_end_date ?? task.end_date ?? null,
-        actual_start_date: task.start_date ?? task.actual_start_date ?? null,
-        actual_end_date: task.actual_end_date ?? task.end_date ?? null,
+        actual_start_date: task.actual_start_date ?? null,
+        actual_end_date: task.actual_end_date ?? null,
       },
     })
   }
@@ -186,7 +197,7 @@ function detectStatusProgressMismatchSignals(tasks: Task[]): OperationalSignalDe
       type: 'status_progress_mismatch',
       severity: 'warning',
       title: '任务状态与进度不一致',
-      content: `任务“${task.title}”存在状态/进度不一致：${mismatches.join('；')}。`,
+      content: `任务“${task.title}”存在状态/进度不一致：${mismatches.join('、')}。`,
       taskId: task.id,
       metadata: {
         task_id: task.id,
@@ -201,20 +212,79 @@ function detectStatusProgressMismatchSignals(tasks: Task[]): OperationalSignalDe
 }
 
 async function loadProjectRecipients(projectId: string): Promise<string[]> {
-  const [project, members] = await Promise.all([
-    executeSQLOne<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
-    executeSQL<ProjectMemberRow>('SELECT project_id, user_id, role, permission_level FROM project_members WHERE project_id = ?', [projectId]),
-  ])
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const projectResult = await rawQuery(
+        'SELECT id, owner_id FROM public.projects WHERE id = $1 LIMIT 1',
+        [projectId],
+      )
+      const membersResult = await rawQuery(
+        'SELECT project_id, user_id, permission_level FROM public.project_members WHERE project_id = $1',
+        [projectId],
+      )
+      const project = (projectResult.rows[0] as ProjectOwnerRow | undefined) ?? null
+      const members = membersResult.rows as ProjectMemberRow[]
+      return uniqueStrings([
+        project?.owner_id ?? null,
+        ...(members ?? [])
+          .filter((member) => {
+            const role = normalizeProjectPermissionLevel(member.permission_level)
+            return role === 'owner'
+          })
+          .map((member) => member.user_id),
+      ])
+    } catch (error) {
+      logger.warn('[operationalNotificationService] direct project recipients read failed, falling back to dbService', {
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  const project = await executeSQLOne<ProjectOwnerRow>(
+    'SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1',
+    [projectId],
+  )
+  const members = await executeSQL<ProjectMemberRow>(
+    'SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?',
+    [projectId],
+  )
 
   return uniqueStrings([
     project?.owner_id ?? null,
     ...(members ?? [])
       .filter((member) => {
-        const role = normalizeProjectPermissionLevel(member.permission_level ?? member.role)
+        const role = normalizeProjectPermissionLevel(member.permission_level)
         return role === 'owner'
       })
       .map((member) => member.user_id),
   ])
+}
+
+async function loadProjectTasksForSignals(projectId: string): Promise<Task[]> {
+  if (process.env.NODE_ENV === 'test') {
+    return executeSQL<Task>(
+      `SELECT ${OPERATIONAL_TASK_SIGNAL_SELECT} FROM tasks WHERE project_id = ?`,
+      [projectId],
+    )
+  }
+
+  try {
+    const result = await rawQuery(
+      `SELECT ${OPERATIONAL_TASK_SIGNAL_SELECT} FROM public.tasks WHERE project_id = $1`,
+      [projectId],
+    )
+    return result.rows as Task[]
+  } catch (error) {
+    logger.warn('[operationalNotificationService] direct task signal read failed, falling back to dbService', {
+      projectId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return executeSQL<Task>(
+      `SELECT ${OPERATIONAL_TASK_SIGNAL_SELECT} FROM tasks WHERE project_id = ?`,
+      [projectId],
+    )
+  }
 }
 
 async function getProjectRecipients(projectId: string, cache?: ProjectRecipientsCache) {
@@ -328,7 +398,7 @@ export class OperationalNotificationService {
           status: 'resolved',
           is_read: true,
           updated_at: timestamp,
-        })
+        }, row)
       }
       return []
     }
@@ -337,7 +407,14 @@ export class OperationalNotificationService {
     if (!row) return []
 
     if (!existing) {
-      return [await insertNotification(row)]
+      return [await notificationTouchpointService.emit({
+        ...row,
+        touchpoint_type: 'system_record',
+        scope_type: 'project',
+        dedupe_key: `planning_mapping_orphan:${projectId}:${definition.sourceEntityId}`,
+        target_route: `/projects/${projectId}/planning`,
+        target_label: '查看计划映射',
+      })]
     }
 
     const normalizedStatus = String(existing.status ?? '').trim().toLowerCase()
@@ -358,12 +435,12 @@ export class OperationalNotificationService {
       },
       updated_at: timestamp,
     }
-    await updateNotificationById(String(existing.id), patch)
+    await updateNotificationById(String(existing.id), patch, existing)
     return [{ ...existing, ...patch }]
   }
 
   async collectProjectSignals(projectId: string): Promise<OperationalSignalDefinition[]> {
-    const tasks = await executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId])
+    const tasks = await loadProjectTasksForSignals(projectId)
 
     return [
       ...detectDateInversionSignals(tasks),
@@ -399,7 +476,14 @@ export class OperationalNotificationService {
 
       const existing = existingByKey.get(key)
       if (!existing) {
-        persisted.push(await insertNotification(notification))
+        persisted.push(await notificationTouchpointService.emit({
+          ...notification,
+          touchpoint_type: 'system_record',
+          scope_type: 'project',
+          dedupe_key: buildNotificationKey(signal),
+          target_route: `/projects/${projectId}/gantt`,
+          target_label: '查看任务',
+        }))
         continue
       }
 
@@ -427,7 +511,7 @@ export class OperationalNotificationService {
         updated_at: timestamp,
       } satisfies Partial<Notification>
 
-      await updateNotificationById(existing.id, patch)
+      await updateNotificationById(existing.id, patch, existing)
       persisted.push({
         ...existing,
         ...patch,
@@ -450,43 +534,51 @@ export class OperationalNotificationService {
         resolved_at: timestamp,
         is_read: true,
         updated_at: timestamp,
-      })
+      }, existing)
     }
 
     return persisted
   }
 
-  async syncAllProjectNotifications(): Promise<Notification[]> {
-    const projectIds = await listActiveProjectIds()
-    const CONCURRENCY = 4
+  async syncAllProjectNotifications(projectIds?: string[] | null): Promise<Notification[]> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const results: Notification[] = []
     const recipientsCache: ProjectRecipientsCache = new Map()
 
-    for (let i = 0; i < projectIds.length; i += CONCURRENCY) {
-      const batch = projectIds.slice(i, i + CONCURRENCY)
-      const batchResults = await Promise.all(
-        batch.map(async (projectId) => {
-          try {
-            const integrityReport = await this.planningIntegrityService.scanProjectIntegrity(projectId)
-            const notifications = await Promise.all([
-              this.syncProjectNotifications(projectId, recipientsCache),
-              this.syncMappingOrphanPointerNotifications(projectId, integrityReport, recipientsCache),
-              this.milestoneIntegrityService.syncProjectMilestoneNotifications(
-                projectId,
-                integrityReport.milestone_integrity,
-              ),
-            ])
-            return notifications.flat()
-          } catch (error) {
-            logger.warn('[operationalNotificationService] sync failed', {
-              projectId,
-              error: error instanceof Error ? error.message : String(error),
-            })
-            return []
-          }
-        }),
-      )
-      results.push(...batchResults.flat())
+    for (const projectId of activeProjectIds) {
+      let integrityReport: Awaited<ReturnType<PlanningIntegrityService['scanProjectIntegrity']>>
+      try {
+        integrityReport = await this.planningIntegrityService.scanProjectIntegrity(projectId)
+      } catch (error) {
+        logger.warn('[operationalNotificationService] sync failed', {
+          projectId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        continue
+      }
+
+      const runStage = async (stage: string, operation: () => Promise<Notification[]>) => {
+        try {
+          results.push(...await operation())
+        } catch (error) {
+          logger.warn('[operationalNotificationService] notification stage failed', {
+            projectId,
+            stage,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      await runStage('operational', () => this.syncProjectNotifications(projectId, recipientsCache))
+      await runStage('mapping_orphan', () => this.syncMappingOrphanPointerNotifications(
+        projectId,
+        integrityReport,
+        recipientsCache,
+      ))
+      await runStage('milestone', () => this.milestoneIntegrityService.syncProjectMilestoneNotifications(
+        projectId,
+        integrityReport.milestone_integrity,
+      ))
     }
 
     return results

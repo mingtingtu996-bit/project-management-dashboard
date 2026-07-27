@@ -35,7 +35,7 @@ describe('DashboardApiService cache policy', () => {
     await DashboardApiService.getProjectSummary('project-1', { signal: controller.signal })
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
-      '/api/dashboard/project-summary?projectId=project-1',
+      '/api/projects/project-1/dashboard/project-summary',
       expect.objectContaining({
         cache: 'no-store',
         signal: controller.signal,
@@ -49,7 +49,7 @@ describe('DashboardApiService cache policy', () => {
     await DashboardApiService.getAllProjectsSummary()
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
-      '/api/dashboard/projects-summary',
+      '/api/company/dashboard/projects-summary',
       expect.objectContaining({
         cache: 'no-store',
       }),
@@ -69,6 +69,8 @@ describe('DashboardApiService cache policy', () => {
       averageHealth: 0,
       averageProgress: 0,
       attentionProjectCount: 0,
+      totalUnreadWarningCount: 0,
+      totalDelayedTaskCount: 0,
       lowHealthProjectCount: 0,
       overdueMilestoneProjectCount: 0,
       healthHistory: {
@@ -85,7 +87,7 @@ describe('DashboardApiService cache policy', () => {
     await DashboardApiService.getCompanySummary()
 
     expect(mocks.apiGet).toHaveBeenCalledWith(
-      '/api/dashboard/company-summary',
+      '/api/company/dashboard/company-summary',
       expect.objectContaining({
         cache: 'no-store',
       }),
@@ -106,22 +108,59 @@ describe('DashboardApiService cache policy', () => {
     expect(summary).toMatchObject({
       projectCount: 1,
       statusCounts: {
-        total: 1,
-        inProgress: 0,
-        completed: 0,
-        paused: 0,
-        notStarted: 0,
+        total: null,
+        inProgress: null,
+        completed: null,
+        paused: null,
+        notStarted: null,
       },
-      averageHealth: 0,
-      averageProgress: 0,
-      attentionProjectCount: 0,
-      ranking: [],
+      averageHealth: null,
+      averageProgress: null,
+      attentionProjectCount: null,
+      totalUnreadWarningCount: null,
+      totalDelayedTaskCount: null,
+      ranking: null,
       healthHistory: {
         thisMonth: 72,
         lastMonth: null,
         change: null,
         periods: [],
       },
+    })
+  })
+
+  it('does not synthesize company status counts from ranking when the backend omits them', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      projectCount: 2,
+      averageHealth: 72,
+      averageProgress: 41,
+      attentionProjectCount: 1,
+      totalUnreadWarningCount: 3,
+      totalDelayedTaskCount: 2,
+      lowHealthProjectCount: 1,
+      overdueMilestoneProjectCount: 0,
+      healthHistory: {
+        thisMonth: 72,
+        lastMonth: 70,
+        change: 2,
+        thisMonthPeriod: '2026-07',
+        lastMonthPeriod: '2026-06',
+        periods: [],
+      },
+      ranking: [
+        { id: 'project-1', name: '项目一', status: 'active', statusLabel: '进行中' },
+        { id: 'project-2', name: '项目二', status: 'completed', statusLabel: '已完成' },
+      ],
+    })
+
+    const summary = await DashboardApiService.getCompanySummary()
+
+    expect(summary.statusCounts).toEqual({
+      total: null,
+      inProgress: null,
+      completed: null,
+      paused: null,
+      notStarted: null,
     })
   })
 })

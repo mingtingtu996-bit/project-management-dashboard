@@ -18,6 +18,7 @@ export interface ProjectMaterialRecord {
   linked_task_start_date?: string | null
   linked_task_status?: string | null
   linked_task_buffer_days?: number | null
+  condition_unlock_count?: number | null
   version: number
   created_at: string
   updated_at: string
@@ -96,37 +97,15 @@ export interface ParticipantUnitSummary {
   unit_type: string
 }
 
-type ChangeLogApiRecord = {
-  id: string
-  entity_type?: string | null
-  entity_id?: string | null
-  field_name?: string | null
-  old_value?: string | null
-  new_value?: string | null
-  change_reason?: string | null
-  change_source?: string | null
-  changed_at?: string | null
-  changed_by?: string | null
-}
-
-export interface MaterialChangeLogRecord {
-  id: string
-  entity_type: string
-  entity_id: string
-  field_name: string
-  old_value: string | null
-  new_value: string | null
-  change_reason: string | null
-  change_source: string | null
-  changed_at: string
-  changed_by: string | null
-}
-
 export interface MaterialTaskDurationEstimate {
   id?: string
   task_id?: string
   project_id?: string
-  estimated_duration: number
+  durationOutputCode?: string | null
+  durationOutputSemanticFieldName?: string | null
+  contextualReferenceDays?: number | null
+  planReferenceDays?: number | null
+  remainingForecastDays?: number | null
   confidence_level?: number | string | null
   confidence_score?: number | null
   reasoning?: string | null
@@ -136,7 +115,9 @@ export interface MaterialTaskDelayRisk {
   task_id: string
   task_title: string
   progress_deviation: number
-  remaining_days: number
+  durationOutputCode?: 'remaining_forecast' | string | null
+  durationOutputSemanticFieldName?: 'remainingForecastDays' | string | null
+  remainingForecastDays: number
   obstacle_count: number
   delay_probability: number
   delay_risk: 'low' | 'medium' | 'high'
@@ -168,7 +149,7 @@ export class MaterialsApiService {
 
   static async listReminders(projectId: string, options?: RequestInit) {
     const notifications = await apiGet<NotificationApiRecord[]>(
-      `/api/notifications?projectId=${encodeURIComponent(projectId)}&limit=100`,
+      `/api/notifications?projectId=${encodeURIComponent(projectId)}&category=materials&types=material_arrival_reminder,material_arrival_overdue&limit=6`,
       options,
     )
 
@@ -195,9 +176,10 @@ export class MaterialsApiService {
     )
   }
 
-  static async estimateLinkedTaskDuration(projectId: string, taskId: string, options?: RequestInit) {
+  // v1.4.21: system arrival suggestion from unified duration service
+  static async getSystemArrivalSuggestion(projectId: string, taskId: string, options?: RequestInit) {
     return apiPost<MaterialTaskDurationEstimate>(
-      '/api/ai-duration/estimate-duration',
+      '/api/duration-suggestions/task',
       {
         task_id: taskId,
         project_id: projectId,
@@ -209,33 +191,10 @@ export class MaterialsApiService {
 
   static async analyzeLinkedTaskDelayRisk(taskId: string, options?: RequestInit) {
     return apiPost<MaterialTaskDelayRisk>(
-      '/api/ai-schedule/analyze-delay-risk',
+      '/api/duration-suggestions/delay-risk/task',
       { task_id: taskId },
       options,
     )
-  }
-
-  static async listChangeLogs(projectId: string, materialId: string, options?: RequestInit) {
-    const logs = await apiGet<ChangeLogApiRecord[]>(
-      `/api/change-logs?projectId=${encodeURIComponent(projectId)}&limit=100`,
-      options,
-    )
-
-    return (logs ?? [])
-      .filter((item) => String(item.entity_type ?? '').trim() === 'project_material' && String(item.entity_id ?? '').trim() === materialId)
-      .map<MaterialChangeLogRecord>((item) => ({
-        id: item.id,
-        entity_type: String(item.entity_type ?? '').trim(),
-        entity_id: String(item.entity_id ?? '').trim(),
-        field_name: String(item.field_name ?? '').trim(),
-        old_value: item.old_value ?? null,
-        new_value: item.new_value ?? null,
-        change_reason: item.change_reason ?? null,
-        change_source: item.change_source ?? null,
-        changed_at: String(item.changed_at ?? '').trim(),
-        changed_by: item.changed_by ?? null,
-      }))
-      .sort((left, right) => right.changed_at.localeCompare(left.changed_at))
   }
 
   static async create(projectId: string, payload: MaterialMutationPayload | MaterialMutationPayload[]) {

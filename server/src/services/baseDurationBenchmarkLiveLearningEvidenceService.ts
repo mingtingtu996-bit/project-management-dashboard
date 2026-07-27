@@ -198,18 +198,12 @@ function countAcceptedBaseDurationSamplesByScope(
   return counts
 }
 
-function runtimePublicationKeyFromProductionRows(
-  rows: readonly DurationLiveLearningProductionEvidenceSourceRow[] | undefined,
-) {
-  for (const source of rows ?? []) {
-    if (source.sourceTable !== 'algorithm_learnable_parameter_runtime_publications') continue
-    const row = source.row
-    if (readText(row, 'asset_key', 'assetKey') !== BASE_DURATION_BENCHMARK_ASSET_KEY) continue
-    if (readText(row, 'publication_status', 'publicationStatus') !== 'published') continue
-    const publicationKey = readText(row, 'publication_key', 'publicationKey')
-    if (publicationKey) return publicationKey
-  }
-  return null
+function runtimePublicationKeyFromExecutionRef(value: unknown) {
+  const executionRef = normalizeText(value)
+  const prefix = 'duration_learning_runtime_publications:'
+  return executionRef?.startsWith(prefix)
+    ? normalizeText(executionRef.slice(prefix.length))
+    : null
 }
 
 function baseDurationProductionLineageFromProductionInput(
@@ -310,8 +304,7 @@ export function buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows
   const acceptedSampleCounts = countAcceptedBaseDurationSamplesByScope(input.sourceRows)
   const productionLineage = baseDurationProductionLineageFromProductionInput(input)
   const evidenceRefs = productionLineage.evidenceRefs
-  const rawRuntimePublicationKey = runtimePublicationKeyFromProductionRows(input.sourceRows)
-  const runtimePublicationKey = rawRuntimePublicationKey
+  const runtimePublicationKey = runtimePublicationKeyFromExecutionRef(evidenceRefs.publicationExecutionRef)
   const decision = buildBaseDurationBenchmarkLiveLearningEvidence({
     predictionEventRecorded: Boolean(evidenceRefs.accuracyEvidenceRef || evidenceRefs.publicationExecutionRef),
     actualOutcomeEventRecorded: Boolean(evidenceRefs.productionSampleEvidenceRef),

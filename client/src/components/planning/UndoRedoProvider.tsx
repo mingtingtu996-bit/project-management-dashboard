@@ -1,5 +1,8 @@
 import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from 'react'
 
+// v1.4.7.1: Max history size to prevent memory leaks
+const MAX_HISTORY_SIZE = 100
+
 interface UndoRedoContextValue {
   snapshotCount: number
   canUndo: boolean
@@ -7,6 +10,7 @@ interface UndoRedoContextValue {
   pushSnapshot: (snapshot: unknown) => void
   undo: () => unknown | undefined
   redo: () => unknown | undefined
+  clearHistory: () => void
 }
 
 const UndoRedoContext = createContext<UndoRedoContextValue | null>(null)
@@ -21,8 +25,13 @@ export function UndoRedoProvider({ children }: UndoRedoProviderProps) {
   const [, forceRender] = useState(0)
 
   const pushSnapshot = useCallback((snapshot: unknown) => {
+    // Truncate forward history on new action
     historyRef.current = historyRef.current.slice(0, cursorRef.current + 1)
     historyRef.current.push(snapshot)
+    // Cap history size
+    if (historyRef.current.length > MAX_HISTORY_SIZE) {
+      historyRef.current = historyRef.current.slice(-MAX_HISTORY_SIZE)
+    }
     cursorRef.current = historyRef.current.length - 1
     forceRender((value) => value + 1)
   }, [])
@@ -41,6 +50,12 @@ export function UndoRedoProvider({ children }: UndoRedoProviderProps) {
     return historyRef.current[cursorRef.current]
   }, [])
 
+  const clearHistory = useCallback(() => {
+    historyRef.current = []
+    cursorRef.current = -1
+    forceRender((value) => value + 1)
+  }, [])
+
   const value: UndoRedoContextValue = {
     snapshotCount: historyRef.current.length,
     canUndo: cursorRef.current > 0,
@@ -48,6 +63,7 @@ export function UndoRedoProvider({ children }: UndoRedoProviderProps) {
     pushSnapshot,
     undo,
     redo,
+    clearHistory,
   }
 
   return <UndoRedoContext.Provider value={value}>{children}</UndoRedoContext.Provider>

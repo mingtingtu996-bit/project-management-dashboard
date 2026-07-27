@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const serverRoot = process.cwd().endsWith('\\server') ? process.cwd() : resolve(process.cwd(), 'server')
+const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server') ? process.cwd() : resolve(process.cwd(), 'server')
 const migrationsRoot = resolve(serverRoot, 'migrations')
 
 function migrationFileNames() {
@@ -20,7 +20,7 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
   it('uses a dedicated migration number after the v1.4.22.3 runtime publication migrations', () => {
     const fileNames = migrationFileNames()
 
-    expect(fileNames).toContain('204_v14225_runtime_consumer_observations.sql')
+    expect(fileNames).toContain('204a_v14225_runtime_consumer_observations.sql')
     expect(fileNames).toContain('205_v14225_runtime_consumer_runtime_calls.sql')
     expect(fileNames).toContain('207_v14225_plan_network_outcomes.sql')
     expect(fileNames).toContain('209_v14225_forecast_residual_overlay_publication_key.sql')
@@ -71,6 +71,8 @@ describe('v1.4.22.5 runtime consumer observation migration', () => {
     expect(source).toContain("'wbs_reference_days'")
     expect(source).toContain("'dependency_rule_candidate'")
     expect(source).toContain("'critical_path_rule_candidate'")
+    expect(source).toContain("'construction_organization_plan_network'")
+    expect(source).toContain('construction_organization_plan_network rows are read-side saved-network outcomes')
     expect(source).toContain("outcome_status TEXT NOT NULL")
     expect(source).toContain("CHECK (outcome_status IN ('accepted', 'weak', 'rejected'))")
     expect(source).toContain('learning_scope TEXT NOT NULL')

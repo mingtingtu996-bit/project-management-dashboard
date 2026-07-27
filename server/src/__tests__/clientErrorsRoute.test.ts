@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import express from 'express'
 import supertest from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -62,5 +64,15 @@ describe('client errors route', () => {
     expect(response.body.success).toBe(false)
     expect(response.body.error?.code).toBe('VALIDATION_ERROR')
     expect(loggerMocks.error).not.toHaveBeenCalled()
+  })
+
+  it('keeps public client error telemetry mounted before broad api auth routers', () => {
+    const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server')
+      ? process.cwd()
+      : resolve(process.cwd(), 'server')
+    const indexSource = readFileSync(resolve(serverRoot, 'src', 'index.ts'), 'utf8')
+
+    expect(indexSource.indexOf("app.use('/api/client-errors', clientErrorsRouter)"))
+      .toBeLessThan(indexSource.indexOf("app.use('/api', metricsRouter)"))
   })
 })

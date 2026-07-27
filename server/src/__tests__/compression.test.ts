@@ -8,9 +8,9 @@ process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || 'test-ser
 const { default: app } = await import('../index.js')
 
 describe('response compression', () => {
-  it('compresses health responses when gzip is accepted', async () => {
+  it('compresses liveness responses when gzip is accepted', async () => {
     const response = await supertest(app)
-      .get('/api/health')
+      .get('/api/livez')
       .set('Accept-Encoding', 'gzip')
 
     expect(response.status).toBe(200)

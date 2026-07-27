@@ -11,7 +11,17 @@ vi.mock('@/hooks/use-toast', () => ({
   }),
 }))
 
-import { apiGet, apiPost, bindApiErrorToToast, clearApiClientRuntimeCache } from '../apiClient'
+import {
+  AUTH_SESSION_EXPIRED_EVENT,
+  COMMERCIAL_UPGRADE_REQUIRED_EVENT,
+  apiGet,
+  apiDelete,
+  apiPost,
+  bindApiErrorToToast,
+  clearApiClientRuntimeCache,
+  getAuthToken,
+  persistAuthToken,
+} from '../apiClient'
 
 describe('apiClient global error toasts', () => {
   beforeAll(() => {
@@ -189,5 +199,84 @@ describe('apiClient global error toasts', () => {
     ])
 
     expect(fetch).toHaveBeenCalledTimes(3)
+  })
+
+  it('treats 204 empty DELETE responses as success', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(null, {
+        status: 204,
+      }),
+    )
+
+    await expect(apiDelete<void>('/api/projects/project-1/wizard/draft')).resolves.toBeUndefined()
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/projects/project-1/wizard/draft',
+      expect.objectContaining({
+        cache: 'no-store',
+        credentials: 'include',
+        method: 'DELETE',
+      }),
+    )
+  })
+
+  it('clears expired auth tokens and emits a session expired event on invalid token responses', async () => {
+    const sessionExpiredListener = vi.fn()
+    window.addEventListener(AUTH_SESSION_EXPIRED_EVENT, sessionExpiredListener)
+    persistAuthToken('expired-token-for-test')
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response('{"error":{"code":"INVALID_TOKEN","message":"无效的认证token或token已过期"}}', {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(apiGet('/api/company-summary')).rejects.toMatchObject({
+      code: 'http_error',
+      status: 401,
+    })
+
+    expect(getAuthToken()).toBe('')
+    expect(sessionExpiredListener).toHaveBeenCalledWith(expect.objectContaining({
+      detail: expect.objectContaining({
+        url: '/api/company-summary',
+      }),
+    }))
+
+    window.removeEventListener(AUTH_SESSION_EXPIRED_EVENT, sessionExpiredListener)
+  })
+
+  it('emits a structured upgrade event for commercial admission failures', async () => {
+    const listener = vi.fn()
+    window.addEventListener(COMMERCIAL_UPGRADE_REQUIRED_EVENT, listener)
+    vi.mocked(fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        error: {
+          code: 'COMMERCIAL_PROJECT_LIMIT_REACHED',
+          message: '项目数量已达上限',
+          details: {
+            activeProjectLimit: 2,
+            activeProjectCount: 2,
+            upgradePath: '/settings/billing',
+          },
+        },
+      }), {
+        status: 402,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(apiPost('/api/projects', { name: 'blocked' })).rejects.toMatchObject({
+      status: 402,
+      serverCode: 'COMMERCIAL_PROJECT_LIMIT_REACHED',
+      upgradePath: '/settings/billing',
+    })
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+      detail: expect.objectContaining({
+        code: 'COMMERCIAL_PROJECT_LIMIT_REACHED',
+        upgradePath: '/settings/billing',
+      }),
+    }))
+    window.removeEventListener(COMMERCIAL_UPGRADE_REQUIRED_EVENT, listener)
   })
 })

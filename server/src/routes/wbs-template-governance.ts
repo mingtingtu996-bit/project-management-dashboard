@@ -3,7 +3,7 @@ import { z } from 'zod'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
-import { getCurrentCompanyMembership, getProjectPermissionLevel, getVisibleProjectIds, isCompanyAdminRole } from '../auth/access.js'
+import { getCurrentCompanyMembership, getProjectPermissionLevel, getVisibleProjectIds } from '../auth/access.js'
 import { getRequestCompanyId } from '../auth/companyContext.js'
 import { validate } from '../middleware/validation.js'
 import { collectStandardInternalFlowGovernanceReport } from '../seeds/chinaGb50300TemplateCatalog.js'
@@ -70,10 +70,30 @@ function isSystemTemplate(template: any): boolean {
     || Boolean(String(template?.standard_catalog_code ?? '').trim())
 }
 
+function isPublicUnscopedTemplate(template: any): boolean {
+  return !normalizeTemplateProjectId(template)
+    && !String(template?.company_id ?? '').trim()
+    && isTruthy(template?.is_public)
+}
+
+function isPublishedUnscopedProjectCatalogTemplate(template: any): boolean {
+  if (normalizeTemplateProjectId(template)) return false
+  if (String(template?.company_id ?? '').trim()) return false
+  if (String(template?.catalog_scope ?? '').trim().toLowerCase() !== 'project') return false
+  if (template?.deleted_at !== null && template?.deleted_at !== undefined) return false
+
+  const status = String(template?.status ?? template?.lifecycle_status ?? '').trim().toLowerCase()
+  return status === 'published' || status === 'active'
+}
+
 async function ensureTemplateVisible(req: any, res: any, template: any): Promise<boolean> {
   const projectId = normalizeTemplateProjectId(template)
   if (!projectId) {
-    if (isSystemTemplate(template)) return true
+    if (
+      isSystemTemplate(template)
+      || isPublicUnscopedTemplate(template)
+      || isPublishedUnscopedProjectCatalogTemplate(template)
+    ) return true
     const membership = req.user?.id
       ? await getCurrentCompanyMembership(req.user.id, getRequestCompanyId(req))
       : null
@@ -133,7 +153,6 @@ async function getFeedbackProjectScope(req: any) {
 }
 
 async function ensureCompanyGovernanceVisible(req: any, res: any): Promise<boolean> {
-  if (isCompanyAdminRole(req.user?.globalRole)) return true
   const membership = req.user?.id
     ? await getCurrentCompanyMembership(req.user.id, getRequestCompanyId(req))
     : null
@@ -210,7 +229,9 @@ router.get('/semantic-precision/report', validate(internalFlowReportQuerySchema,
 
 router.get('/seed-architecture/report', asyncHandler(async (req, res) => {
   if (!await ensureCompanyGovernanceVisible(req, res)) return
-  const report = await collectWbsTemplateSeedArchitectureGovernanceReport()
+  const report = await collectWbsTemplateSeedArchitectureGovernanceReport({
+    projectIds: await getFeedbackProjectScope(req),
+  })
   const response: ApiResponse<typeof report> = {
     success: true,
     data: report,

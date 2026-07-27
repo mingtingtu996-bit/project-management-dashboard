@@ -1,0 +1,129 @@
+{
+  "schemaVersion": "duration-accuracy-frozen-samples.v1",
+  "fixtureVersion": "2026-07-11.candidate-readonly.1",
+  "frozenAt": "2026-07-11T12:00:00.000Z",
+  "environmentClassification": "candidate_readonly",
+  "sourcePolicy": "accepted_engineering_reference_fixture_not_real_project_or_live_outcome",
+  "samples": [
+    {
+      "sampleId": "accepted-concrete-01",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111111",
+      "standardWorkCode": "cast_in_place_concrete",
+      "taskTitle": "Standard floor concrete placement A",
+      "actualDurationDays": 5,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 5,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:cast_in_place_concrete:ordinary-workface:A",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-concrete-02",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111112",
+      "standardWorkCode": "cast_in_place_concrete",
+      "taskTitle": "Standard floor concrete placement B",
+      "actualDurationDays": 4,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 5,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:cast_in_place_concrete:ordinary-workface:B",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-curing-01",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111113",
+      "standardWorkCode": "concrete_curing_wait",
+      "taskTitle": "Concrete curing and strength report A",
+      "actualDurationDays": 8,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 8,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:concrete_curing_wait:standard-strength:A",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-curing-02",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111114",
+      "standardWorkCode": "concrete_curing_wait",
+      "taskTitle": "Concrete curing and strength report B",
+      "actualDurationDays": 7,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 8,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:concrete_curing_wait:standard-strength:B",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-masonry-01",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111115",
+      "standardWorkCode": "masonry_infill_wall",
+      "taskTitle": "Standard floor masonry infill A",
+      "actualDurationDays": 9,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 9,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:masonry_infill_wall:ordinary-workface:A",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-masonry-02",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111116",
+      "standardWorkCode": "masonry_infill_wall",
+      "taskTitle": "Standard floor masonry infill B",
+      "actualDurationDays": 10,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 9,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:masonry_infill_wall:ordinary-workface:B",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-plastering-01",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111117",
+      "standardWorkCode": "plastering_wall_ceiling",
+      "taskTitle": "Interior wall plastering A",
+      "actualDurationDays": 8,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 8,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:plastering_wall_ceiling:ordinary-workface:A",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    },
+    {
+      "sampleId": "accepted-plastering-02",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "taskId": "31111111-1111-4111-8111-111111111118",
+      "standardWorkCode": "plastering_wall_ceiling",
+      "taskTitle": "Interior wall plastering B",
+      "actualDurationDays": 9,
+      "baselineAbsoluteErrorDays": 2,
+      "expectedPredictedDurationDays": 8,
+      "provenance": {
+        "sourceType": "accepted_engineering_reference",
+        "sourceRef": "standardWorkDurationSeed:plastering_wall_ceiling:ordinary-workface:B",
+        "acceptedBy": "construction-expert-review-v1"
+      }
+    }
+  ]
+}

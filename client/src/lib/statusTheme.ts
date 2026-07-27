@@ -88,6 +88,18 @@ const STATUS_THEME: Record<string, StatusTheme> = {
     label: '待开工',
     className: 'bg-orange-100 text-orange-700 border border-orange-200',
   },
+  progress_warning: {
+    label: '执行预警',
+    className: 'bg-amber-50 text-amber-700 border border-amber-200',
+  },
+  partial_blocked: {
+    label: '部分受影响',
+    className: 'bg-amber-100 text-amber-700 border border-amber-200',
+  },
+  blocked_by_obstacle: {
+    label: '受阻',
+    className: 'bg-red-100 text-red-700 border border-red-200',
+  },
   published: {
     label: '已发布',
     className: 'bg-emerald-100 text-emerald-700 border border-emerald-200',

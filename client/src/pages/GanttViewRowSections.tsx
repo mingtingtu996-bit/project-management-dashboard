@@ -1,11 +1,11 @@
 import { type MouseEvent } from 'react'
 import {
   AlertOctagon,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   Flag,
-  FileText,
   MoreHorizontal,
   Pencil,
   Play,
@@ -19,13 +19,14 @@ import {
   SHARED_TREE_LAYOUT,
   TreeDiamondIcon,
 } from '@/components/tree/SharedTreePrimitives'
-import type { CriticalTaskSnapshot } from '@/lib/criticalPath'
+import type { CriticalTaskNetworkSchedule, CriticalTaskSnapshot } from '@/lib/criticalPath'
+import { formatDurationMetric } from '@/lib/durationMetric'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingState } from '@/components/ui/loading-state'
 import { getTaskLagLevel } from '@/lib/taskBusinessStatus'
 import { cn } from '@/lib/utils'
 
-import { MILESTONE_LEVEL_CONFIG, SPECIALTY_TYPES, getWBSNodeIcon, type Task, type TaskCondition, type WBSNode } from './GanttViewTypes'
+import { MILESTONE_LEVEL_CONFIG, getWBSNodeIcon, type Task, type TaskCondition, type WBSNode } from './GanttViewTypes'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import {
@@ -61,6 +62,7 @@ export function TaskRowIdentityCell({
   conditionSummary,
   obstacleCount,
   criticalTask,
+  criticalSchedule,
   inlineTitleTaskId,
   inlineTitleValue,
   expandedConditionTaskId,
@@ -87,6 +89,7 @@ export function TaskRowIdentityCell({
   conditionSummary: TaskConditionSummary | undefined
   obstacleCount: number
   criticalTask: CriticalTaskSnapshot | null
+  criticalSchedule: CriticalTaskNetworkSchedule | null
   inlineTitleTaskId: string | null
   inlineTitleValue: string
   expandedConditionTaskId: string | null
@@ -103,7 +106,7 @@ export function TaskRowIdentityCell({
 }) {
   const iconInfo = getWBSNodeIcon(node)
   const lagLevel = getTaskLagLevel(task)
-  const taskTitle = task.title || task.name || '未命名任务'
+  const taskTitle = task.title || '未命名任务'
 
   return (
     <div className={cn('flex h-full min-w-0 shrink-0 items-center overflow-hidden', SHARED_TREE_LAYOUT.firstColumnClass)}>
@@ -177,19 +180,33 @@ export function TaskRowIdentityCell({
         )}
         {task.wbs_code && <span className="flex-shrink-0 text-xs num-mono text-slate-500 font-mono min-w-6">{task.wbs_code}</span>}
         {inlineTitleTaskId === task.id ? (
-          <input
-            type="text"
-            value={inlineTitleValue}
-            onChange={(event) => onInlineTitleValueChange(event.target.value)}
-            onBlur={() => onInlineTitleSave(task.id)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') onInlineTitleSave(task.id)
-              if (event.key === 'Escape') onCancelInlineTitleEdit()
-            }}
-            autoFocus
-            className="text-sm font-medium w-40 border-b border-blue-400 bg-transparent outline-none px-0.5 py-0 text-slate-800"
-            onClick={(event) => event.stopPropagation()}
-          />
+          <span className="flex min-w-0 items-center gap-1">
+            <input
+              type="text"
+              value={inlineTitleValue}
+              onChange={(event) => onInlineTitleValueChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') onInlineTitleSave(task.id)
+                if (event.key === 'Escape') onCancelInlineTitleEdit()
+              }}
+              autoFocus
+              className="w-40 border-b border-blue-400 bg-transparent px-0.5 py-0 text-sm font-medium text-slate-800 outline-none"
+              onClick={(event) => event.stopPropagation()}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-blue-600 hover:bg-blue-50"
+              aria-label={`保存 ${taskTitle} 名称`}
+              onClick={(event) => {
+                event.stopPropagation()
+                onInlineTitleSave(task.id)
+              }}
+            >
+              <Check className="h-3.5 w-3.5" />
+            </Button>
+          </span>
         ) : (
           <Tooltip>
   <TooltipTrigger asChild>
@@ -220,7 +237,7 @@ export function TaskRowIdentityCell({
             } group/title inline-flex items-center gap-1`}
             
           >
-            <span className="min-w-0 truncate">{task.title || task.name}</span>
+            <span className="min-w-0 truncate">{task.title}</span>
             <Pencil className="h-3.5 w-3.5 shrink-0 text-slate-500 opacity-0 transition-opacity group-hover/title:opacity-60" />
           </Button>
   </TooltipTrigger>
@@ -234,6 +251,7 @@ export function TaskRowIdentityCell({
           conditionSummary={conditionSummary}
           obstacleCount={obstacleCount}
           criticalTask={criticalTask}
+          criticalSchedule={criticalSchedule}
           specialtyType={task.specialty_type}
           expandedConditionTaskId={expandedConditionTaskId}
           onToggleInlineConditions={onToggleInlineConditions}
@@ -251,6 +269,7 @@ export function TaskRowMetaChips({
   conditionSummary,
   obstacleCount,
   criticalTask,
+  criticalSchedule,
   specialtyType,
   expandedConditionTaskId,
   onToggleInlineConditions,
@@ -261,11 +280,11 @@ export function TaskRowMetaChips({
   conditionSummary: TaskConditionSummary | undefined
   obstacleCount: number
   criticalTask: CriticalTaskSnapshot | null
+  criticalSchedule: CriticalTaskNetworkSchedule | null
   specialtyType?: string | null
   expandedConditionTaskId: string | null
   onToggleInlineConditions: (taskId: string, event: MouseEvent) => void
 }) {
-  const specialtyConfig = specialtyType ? SPECIALTY_TYPES.find(s => s.value === specialtyType) : null
   const showBusinessChip = !['进行中', '已完成', '待开始'].includes(bizStatus.label)
   return (
     <span className="hidden min-w-0 shrink items-center gap-1 overflow-hidden 2xl:inline-flex">
@@ -278,9 +297,9 @@ export function TaskRowMetaChips({
         </span>
       )}
       {bizStatus.badge && <span className={`flex-shrink-0 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-xs font-medium ${bizStatus.badge.cls}`}>{bizStatus.badge.text}</span>}
-      {specialtyConfig && (
-        <span className={`flex-shrink-0 px-1.5 py-0.5 rounded text-xs ${specialtyConfig.color}`}>
-          {specialtyConfig.label}
+      {specialtyType && (
+        <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs bg-slate-100 text-slate-600">
+          {specialtyType}
         </span>
       )}
       {overdueDays > 0 && !bizStatus.badge && <span className="flex-shrink-0 inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200">逾期{overdueDays}天</span>}
@@ -323,9 +342,9 @@ export function TaskRowMetaChips({
 </Tooltip>
       )}
 
-      {criticalTask && (
+      {(criticalTask || criticalSchedule) && (
         <>
-          {criticalTask.isAutoCritical && (
+          {(criticalTask?.isAutoCritical || criticalSchedule?.isAutoCritical) && (
             <Tooltip>
   <TooltipTrigger asChild>
     <span
@@ -333,13 +352,13 @@ export function TaskRowMetaChips({
               className="flex-shrink-0 px-1.5 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 border border-red-200 cursor-help"
               
               >
-                关键 +{criticalTask.floatDays}天
+                关键 · {formatDurationMetric(criticalSchedule?.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}
               </span>
   </TooltipTrigger>
-  <TooltipContent>{'关键任务 浮动时间: ' + criticalTask.floatDays + '天'}</TooltipContent>
+  <TooltipContent>{`关键任务 浮动时间: ${formatDurationMetric(criticalSchedule?.float, { expectedUnit: 'construction_production_day', unavailableLabel: '生产日口径不可用' })}`}</TooltipContent>
 </Tooltip>
           )}
-          {criticalTask.isManualAttention && (
+          {criticalTask?.isManualAttention && (
             <Tooltip>
   <TooltipTrigger asChild>
     <span
@@ -353,7 +372,7 @@ export function TaskRowMetaChips({
   <TooltipContent>手动关注任务</TooltipContent>
 </Tooltip>
           )}
-          {criticalTask.isManualInserted && (
+          {criticalTask?.isManualInserted && (
             <Tooltip>
   <TooltipTrigger asChild>
     <span
@@ -384,7 +403,6 @@ export function TaskRowDetailCells({
   onOpenEditDialog,
   onDeleteTask,
   onSelectTask,
-  onViewTaskSummary,
   onStatusChange,
 }: {
   task: Task
@@ -397,7 +415,6 @@ export function TaskRowDetailCells({
   onOpenEditDialog: (task?: Task, parentId?: string) => void
   onDeleteTask: (taskId: string) => void
   onSelectTask: (task: Task) => void
-  onViewTaskSummary: (taskId: string) => void
   onStatusChange?: (taskId: string, status: string) => void
 }) {
   const isMilestoneLeaf = Boolean(task.is_milestone && !hasChildren)
@@ -529,7 +546,7 @@ export function TaskRowDetailCells({
       <div className="flex-shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
         <Tooltip>
   <TooltipTrigger asChild>
-    <Button variant="ghost" aria-label={`展开任务 ${task.title || task.name || '未命名任务'} 详情`} onClick={() => onSelectTask(task)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600 hover:text-blue-700 transition-colors">
+    <Button variant="ghost" aria-label={`展开任务 ${task.title || '未命名任务'} 详情`} onClick={() => onSelectTask(task)} className="p-1.5 hover:bg-blue-50 rounded text-blue-600 hover:text-blue-700 transition-colors">
           <ChevronRight className="h-3.5 w-3.5" />
         </Button>
   </TooltipTrigger>
@@ -537,7 +554,7 @@ export function TaskRowDetailCells({
 </Tooltip>
         <Tooltip>
   <TooltipTrigger asChild>
-    <Button variant="ghost" aria-label={`编辑任务 ${task.title || task.name || '未命名任务'}`} onClick={() => onOpenEditDialog(task)} className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-700 transition-colors">
+    <Button variant="ghost" aria-label={`编辑任务 ${task.title || '未命名任务'}`} onClick={() => onOpenEditDialog(task)} className="p-1.5 hover:bg-slate-100 rounded text-slate-500 hover:text-slate-700 transition-colors">
           <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
           </svg>
@@ -556,7 +573,7 @@ export function TaskRowDetailCells({
             </TooltipTrigger>
             <TooltipContent>更多操作</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" className="w-48 rounded-2xl border-slate-200 p-1.5 shadow-[var(--el-3)]">
+          <DropdownMenuContent align="end" className="w-48 rounded-2xl border-slate-200 p-1.5 shadow-[var(--el-2)]">
             <DropdownMenuLabel className="px-2 py-1 text-xs text-slate-500">任务操作</DropdownMenuLabel>
             {onStatusChange && task.status !== 'in_progress' && task.status !== 'completed' ? (
               <DropdownMenuItem data-testid={`row-start-task-${task.id}`} onSelect={() => onStatusChange(task.id, 'in_progress')} className="gap-2">
@@ -574,12 +591,6 @@ export function TaskRowDetailCells({
               <Plus className="h-3.5 w-3.5 text-blue-500" />
               添加子任务
             </DropdownMenuItem>
-            {task.status === 'completed' ? (
-              <DropdownMenuItem onSelect={() => onViewTaskSummary(task.id)} className="gap-2">
-                <FileText className="h-3.5 w-3.5 text-orange-500" />
-                查看任务总结
-              </DropdownMenuItem>
-            ) : null}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onDeleteTask(task.id)} className="gap-2 text-red-600 focus:text-red-600">
               <Trash2 className="h-3.5 w-3.5" />
@@ -641,12 +652,12 @@ export function TaskRowConditionPanel({
                 : <XCircle className="h-3.5 w-3.5 text-orange-400 flex-shrink-0" />}
               <span className={condition.is_satisfied ? 'text-slate-500 line-through' : 'text-slate-700'}>{condition.name}</span>
               {condition.condition_type && <span className="px-1 py-0.5 rounded text-xs bg-slate-100 text-slate-600">{condition.condition_type}</span>}
-              {condition.is_satisfied && condition.satisfied_reason === 'admin_force' && (
+              {condition.is_satisfied && condition.satisfied_reason_note && (
                 <Tooltip>
   <TooltipTrigger asChild>
-    <span className="px-1 py-0.5 rounded text-xs bg-indigo-100 text-indigo-700 border border-indigo-200" >强制</span>
+    <span className="px-1 py-0.5 rounded text-xs bg-indigo-100 text-indigo-700 border border-indigo-200" >已确认</span>
   </TooltipTrigger>
-  <TooltipContent>{condition.satisfied_reason_note || '管理员强制满足'}</TooltipContent>
+  <TooltipContent>{condition.satisfied_reason_note || '已确认满足'}</TooltipContent>
 </Tooltip>
               )}
               {condition.target_date && <span className="text-slate-500">{condition.target_date}</span>}

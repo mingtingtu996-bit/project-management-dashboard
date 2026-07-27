@@ -56,8 +56,8 @@ function formatTimelineMoment(value: string): string {
   return value ? new Date(value).toLocaleString('zh-CN') : '时间未知'
 }
 
-function formatTaskTitle(task: Pick<Task, 'title' | 'name'>): string {
-  return String(task.title || task.name || '未命名任务').trim() || '未命名任务'
+function formatTaskTitle(task: Pick<Task, 'title'>): string {
+  return String(task.title || '未命名任务').trim() || '未命名任务'
 }
 
 function compareEvents(a: TaskTimelineEvent, b: TaskTimelineEvent): number {

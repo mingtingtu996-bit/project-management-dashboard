@@ -83,12 +83,30 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
       },
       {
         assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'projectCriticalPathService',
+        consumerSurface: 'critical_path_watch_prior',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'critical_path_rule_candidate',
         consumerKey: 'projectRemainingDurationForecastService',
         consumerSurface: 'remaining_duration_forecast',
         acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
       },
       {
         assetKey: 'critical_path_rule_candidate',
+        consumerKey: 'scheduleAccelerationRuntimeService',
+        consumerSurface: 'schedule_acceleration_runtime',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'construction_organization_plan_network',
+        consumerKey: 'projectWizard',
+        consumerSurface: 'project_wizard_commit',
+        acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
+      },
+      {
+        assetKey: 'construction_organization_plan_network',
         consumerKey: 'scheduleAccelerationRuntimeService',
         consumerSurface: 'schedule_acceleration_runtime',
         acceptedPublicationStatuses: ['published', 'canary', 'runtime_published'],
@@ -104,9 +122,9 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
     const emptyAudit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage()
 
     expect(emptyAudit.status).toBe('runtime_consumer_observation_integration_not_ready')
-    expect(emptyAudit.requiredContracts).toHaveLength(14)
+    expect(emptyAudit.requiredContracts).toHaveLength(17)
     expect(emptyAudit.integratedContracts).toEqual([])
-    expect(emptyAudit.missingContracts).toHaveLength(14)
+    expect(emptyAudit.missingContracts).toHaveLength(17)
 
     const partialAudit = evaluateDurationRuntimeConsumerObservationIntegrationCoverage({
       adapterRegistrations: [
@@ -191,6 +209,10 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
         ],
       },
       {
+        consumerKey: 'projectCriticalPathService',
+        assetKeys: ['critical_path_rule_candidate'],
+      },
+      {
         consumerKey: 'wbsTemplateGenerationService',
         assetKeys: [
           'special_work_duration_seed',
@@ -204,7 +226,16 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
       },
       {
         consumerKey: 'scheduleAccelerationRuntimeService',
-        assetKeys: ['critical_path_rule_candidate'],
+        assetKeys: [
+          'critical_path_rule_candidate',
+          'construction_organization_plan_network',
+        ],
+      },
+      {
+        consumerKey: 'projectWizard',
+        assetKeys: [
+          'construction_organization_plan_network',
+        ],
       },
     ])
 
@@ -213,7 +244,7 @@ describe('durationRuntimeConsumerObservationIntegrationService', () => {
     })
 
     expect(audit.status).toBe('runtime_consumer_observation_integration_ready')
-    expect(audit.integratedContracts).toHaveLength(14)
+    expect(audit.integratedContracts).toHaveLength(17)
     expect(audit.missingContracts).toEqual([])
     expect(audit.rejectedRegistrations).toEqual([])
   })

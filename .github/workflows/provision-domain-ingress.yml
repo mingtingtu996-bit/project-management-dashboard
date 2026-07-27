@@ -1,0 +1,212 @@
+name: Provision Domain Ingress
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Immutable main SHA containing the ingress release
+        required: true
+        type: string
+      bootstrap_mode:
+        description: Use initial only while one or both loopback runtimes are absent
+        required: true
+        default: initial
+        type: choice
+        options:
+          - initial
+          - upgrade
+      confirmation:
+        description: Type PROVISION_DOMAIN_INGRESS
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-host-runtime-mutation
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    name: Validate And Provision Domain Ingress
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: Production
+    env:
+      RELEASE_SHA: ${{ inputs.release_sha }}
+      BOOTSTRAP_MODE: ${{ inputs.bootstrap_mode }}
+      PRODUCTION_HOST: ${{ vars.PRODUCTION_DEPLOY_PUBLIC_HOST || 'zhuxucloud.com' }}
+      STAGING_HOST: ${{ vars.STAGING_DEPLOY_PUBLIC_HOST || 'staging.zhuxucloud.com' }}
+      PRODUCTION_PROJECT_REF: wwdrkjnbvcbfytwnnyvs
+      STAGING_PROJECT_REF: xemqmqpifsstkovbkatp
+      DEPLOY_HOST: ${{ secrets.PRODUCTION_DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.PRODUCTION_DEPLOY_USER }}
+      DEPLOY_PORT: ${{ secrets.PRODUCTION_DEPLOY_PORT || '22' }}
+      DEPLOY_SSH_PRIVATE_KEY: ${{ secrets.PRODUCTION_DEPLOY_SSH_PRIVATE_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.PRODUCTION_DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - name: Check immutable release and inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "${{ inputs.confirmation }}" = PROVISION_DOMAIN_INGRESS ]
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$PRODUCTION_HOST" = zhuxucloud.com ]
+          [ "$STAGING_HOST" = staging.zhuxucloud.com ]
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
+            [ -n "${!name}" ] || { echo "Missing required production SSH value: $name" >&2; exit 1; }
+          done
+
+      - name: Checkout immutable main release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Verify release is current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$RELEASE_SHA" ]
+          remote_main="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          [ "$remote_main" = "$RELEASE_SHA" ] || {
+            echo "Ingress provisioning requires the current main SHA." >&2
+            exit 1
+          }
+          node --test scripts/domain-sni-ingress.contract.test.mjs
+
+      - name: Configure strict SSH identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_PRIVATE_KEY" > ~/.ssh/workbuddy-domain-ingress
+          chmod 600 ~/.ssh/workbuddy-domain-ingress
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Activate validated ingress candidate
+        id: activate
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/workbuddy-domain-ingress-$RELEASE_SHA.tgz"
+          remote_archive="/tmp/workbuddy-domain-ingress-$RELEASE_SHA.tgz"
+          tar -czf "$archive" deploy/ingress/Caddyfile deploy/docker-compose.ingress.yml
+          scp -P "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
+            "$archive" "$DEPLOY_USER@$DEPLOY_HOST:$remote_archive"
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo -n env ACTION=activate RELEASE_SHA=$RELEASE_SHA RELEASE_ARCHIVE=$remote_archive PRODUCTION_HOST=$PRODUCTION_HOST STAGING_HOST=$STAGING_HOST BOOTSTRAP_MODE=$BOOTSTRAP_MODE bash -s" \
+            < scripts/provision-lighthouse-domain-ingress.sh
+
+      - name: Verify both domains from the public runner
+        id: public-probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_domain() {
+            local host="$1"
+            local expected_target="$2"
+            local expected_project_ref="$3"
+            local headers="$RUNNER_TEMP/$host.headers"
+            local body="$RUNNER_TEMP/$host.readyz.json"
+            local result status location https_status attempt
+            echo "Probing $host from the public runner"
+            getent ahostsv4 "$host" || true
+            for attempt in $(seq 1 12); do
+              result="$(curl --silent --show-error --connect-timeout 5 --max-time 20 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "http://$host/api/readyz" 2>&1)" || true
+              status="${result%% *}"
+              location="${result#* }"
+              if [ "$status" = 308 ] && [ "$location" = "https://$host/api/readyz" ]; then
+                break
+              fi
+              echo "HTTP probe attempt $attempt for $host: status=$status location=$location"
+              if [ "$attempt" -eq 12 ]; then
+                return 1
+              fi
+              sleep 5
+            done
+            for attempt in $(seq 1 12); do
+              https_status="$(curl --silent --show-error --connect-timeout 5 --max-time 30 --dump-header "$headers" --output "$body" --write-out '%{http_code}' "https://$host/api/readyz" 2>&1)" || true
+              if tr -d '\r' < "$headers" 2>/dev/null | grep -qi '^Strict-Transport-Security:'; then
+                break
+              fi
+              echo "HTTPS probe attempt $attempt for $host: status=$https_status"
+              if [ "$attempt" -eq 12 ]; then
+                return 1
+              fi
+              sleep 5
+            done
+            if [ "$https_status" = 200 ]; then
+              node --input-type=module - "$body" "$expected_target" "$expected_project_ref" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const expectedTarget = process.argv[3];
+          const expectedProjectRef = process.argv[4];
+          if (readiness.status !== 'ready'
+            || readiness.build?.deployTarget !== expectedTarget
+            || readiness.build?.supabaseProjectRef !== expectedProjectRef
+            || readiness.build?.databaseProjectRef !== expectedProjectRef) process.exit(1);
+          NODE
+            fi
+            if [ "$BOOTSTRAP_MODE" = initial ]; then
+              case "$https_status" in 200|502) ;; *) return 1 ;; esac
+            else
+              [ "$https_status" = 200 ]
+            fi
+          }
+          probe_domain "$PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF"
+          probe_domain "$STAGING_HOST" staging "$STAGING_PROJECT_REF"
+
+      - name: Finalize public probe outcome
+        id: finalize
+        if: ${{ always() && steps.activate.outcome == 'success' }}
+        continue-on-error: true
+        shell: bash
+        env:
+          PUBLIC_PROBE_OUTCOME: ${{ steps.public-probe.outcome }}
+        run: |
+          if [ "$PUBLIC_PROBE_OUTCOME" = success ]; then
+            remote_action="ACTION=commit RELEASE_SHA=$RELEASE_SHA"
+          else
+            remote_action="ACTION=rollback FAILED_RELEASE_SHA=$RELEASE_SHA"
+          fi
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "sudo -n env $remote_action bash -s" \
+            < scripts/provision-lighthouse-domain-ingress.sh
+
+      - name: Recover pending activation after finalize failure
+        if: ${{ always() && steps.activate.outcome == 'success' && steps.finalize.outcome == 'failure' }}
+        shell: bash
+        run: |
+          ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo -n env ACTION=rollback FAILED_RELEASE_SHA=$RELEASE_SHA bash -s" \
+            < scripts/provision-lighthouse-domain-ingress.sh
+
+      - name: Publish committed ingress summary
+        if: ${{ success() && steps.public-probe.outcome == 'success' && steps.finalize.outcome == 'success' }}
+        shell: bash
+        run: |
+          {
+            echo '### Domain ingress provisioned'
+            echo ''
+            echo "- Release SHA: \`$RELEASE_SHA\`"
+            echo '- Public TLS: pass'
+            echo '- Exact HTTP 308 redirects: pass'
+            echo '- HSTS header and domain policy applicability: pass'
+            echo '- Application/database/source mutations: none'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce finalization result
+        if: ${{ always() && steps.activate.outcome == 'success' }}
+        shell: bash
+        run: |
+          [ "${{ steps.finalize.outcome }}" = success ]

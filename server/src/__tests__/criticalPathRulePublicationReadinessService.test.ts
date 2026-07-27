@@ -5,6 +5,19 @@ import {
 } from '../services/criticalPathRulePublicationReadinessService.js'
 import type { CriticalPathSnapshot } from '../services/projectCriticalPathService.js'
 
+function productionDayMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: null,
+    calendarVersion: null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-14',
+    availability: 'unavailable' as const,
+    unavailableReason: 'construction_calendar_identity_missing',
+  }
+}
+
 function buildCriticalPathSnapshot(): CriticalPathSnapshot {
   return {
     projectId: 'project-1',
@@ -16,6 +29,7 @@ function buildCriticalPathSnapshot(): CriticalPathSnapshot {
       source: 'auto' as const,
       taskIds: ['task-b'],
       totalDurationDays: 8,
+      totalDuration: productionDayMetric(null),
       displayLabel: 'A',
     },
     alternateChains: [],
@@ -26,12 +40,16 @@ function buildCriticalPathSnapshot(): CriticalPathSnapshot {
       taskId: 'task-b',
       title: 'B',
       floatDays: 0,
+      float: productionDayMetric(null),
       durationDays: 8,
+      duration: productionDayMetric(null),
+      freeFloat: productionDayMetric(null),
       isAutoCritical: true,
       isManualAttention: false,
       isManualInserted: false,
     }],
     projectDurationDays: 8,
+    projectDuration: productionDayMetric(null),
     calculatedAt: '2026-06-14T00:00:00.000Z',
     calculationStatus: 'fresh' as const,
     networkLineage: {
@@ -55,10 +73,10 @@ describe('criticalPathRulePublicationReadinessService', () => {
       criticalPathOutcomeEventRecorded: true,
       approvedCandidateEventIds: ['critical-path-candidate-1', 'critical-path-candidate-1'],
       criticalPathRuleVersionId: 'critical-path-rule-version-v2',
-      runtimePublicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+      runtimePublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-critical-path-rule-1',
-      runtimeConsumerPublicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
-      rollbackTarget: 'critical_path_rule_runtime:critical-path-rule-version-v1',
+      runtimeConsumerPublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
+      rollbackTarget: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v1',
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
       releaseExitApproved: true,
       impactMonitoringReady: true,
@@ -85,8 +103,8 @@ describe('criticalPathRulePublicationReadinessService', () => {
     expect(readiness.criticalPathRuleLineage).toEqual({
       assetType: 'critical_path_rule_candidate',
       criticalPathRuleVersionId: 'critical-path-rule-version-v2',
-      runtimePublicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
-      rollbackTarget: 'critical_path_rule_runtime:critical-path-rule-version-v1',
+      runtimePublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
+      rollbackTarget: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v1',
       approvedCandidateEventIds: ['critical-path-candidate-1'],
       criticalPathInputHash: 'sha256:critical-path-input',
       criticalSetHash: 'sha256:critical-set',
@@ -110,19 +128,20 @@ describe('criticalPathRulePublicationReadinessService', () => {
       }],
       sourceRows: [
         {
-          sourceTable: 'construction_dependency_rule_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
-            critical_path_rule_version_id: 'critical-path-rule-version-v2',
-            runtime_publication_status: 'runtime_published',
-            dependency_rule_lineage: { assetType: 'critical_path_rule_candidate' },
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:critical_path_rule_runtime:critical-path-rule-version-v2:armed',
-            },
+            publication_key: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
+            asset_key: 'critical_path_rule_candidate',
+            artifact_key: 'critical-path-rule-version-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:critical-path-rule-version-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
           },
         },
@@ -132,8 +151,12 @@ describe('criticalPathRulePublicationReadinessService', () => {
             id: 'consumer-critical-path-rule-1',
             asset_key: 'critical_path_rule_candidate',
             consumer_key: 'projectRemainingDurationForecastService',
-            publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+            publication_key: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'critical-path-rule-version-v2' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
           },
@@ -145,7 +168,7 @@ describe('criticalPathRulePublicationReadinessService', () => {
             absolute_error_days: 1,
             prediction_context: {
               assetKey: 'critical_path_rule_candidate',
-              publicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+              publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
             },
             actual_context: {
               assetKey: 'critical_path_rule_candidate',
@@ -171,18 +194,18 @@ describe('criticalPathRulePublicationReadinessService', () => {
     }))
     expect(readiness.criticalPathRuleLineage).toEqual(expect.objectContaining({
       criticalPathRuleVersionId: 'critical-path-rule-version-v2',
-      runtimePublicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
-      rollbackTarget: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+      runtimePublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
+      rollbackTarget: 'rollback:duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2:rollback_verified',
       approvedCandidateEventIds: ['critical-path-candidate-1'],
       criticalPathInputHash: 'sha256:critical-path-input',
       criticalSetHash: 'sha256:critical-set',
     }))
     expect(readiness.productionLineage.evidenceRefs).toEqual(expect.objectContaining({
       productionSampleEvidenceRef: 'network_outcomes:critical-path-outcome-1',
-      publicationExecutionRef: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+      publicationExecutionRef: 'duration_learning_runtime_publications:duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:consumer-critical-path-rule-1',
-      impactMonitoringEvidenceRef: 'impact_monitoring:critical_path_rule_runtime:critical-path-rule-version-v2:armed',
-      rollbackDrillEvidenceRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+      impactMonitoringEvidenceRef: 'impact_monitoring:duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2:monitoring_passed',
+      rollbackDrillEvidenceRef: 'rollback:duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2:rollback_verified',
       accuracyEvidenceRef: 'duration_algorithm_accuracy_events:accuracy-critical-path-rule-1',
     }))
     expect(readiness.productionLineage.rejectedRows).toEqual([])
@@ -202,20 +225,34 @@ describe('criticalPathRulePublicationReadinessService', () => {
       }],
       sourceRows: [
         {
-          sourceTable: 'construction_dependency_rule_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
-            critical_path_rule_version_id: 'critical-path-rule-version-v2',
-            runtime_publication_status: 'runtime_published',
-            dependency_rule_lineage: { assetType: 'critical_path_rule_candidate' },
-            impact_monitoring: {
-              status: 'monitoring_armed',
-              eventRef: 'impact_monitoring:critical_path_rule_runtime:critical-path-rule-version-v2:armed',
-            },
+            publication_key: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v2',
+            asset_key: 'critical_path_rule_candidate',
+            artifact_key: 'critical-path-rule-version-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:critical-path-rule-version-v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
             rollback_execution: {
               status: 'rollback_verified',
-              eventRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
             },
+          },
+        },
+        {
+          sourceTable: 'duration_learning_runtime_publications',
+          row: {
+            publication_key: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v1',
+            asset_key: 'critical_path_rule_candidate',
+            artifact_key: 'critical-path-rule-version-v1',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:critical-path-rule-version-v1'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'failed',
           },
         },
         {
@@ -224,8 +261,12 @@ describe('criticalPathRulePublicationReadinessService', () => {
             id: 'consumer-critical-path-rule-1',
             asset_key: 'critical_path_rule_candidate',
             consumer_key: 'projectRemainingDurationForecastService',
-            publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v1',
+            publication_key: 'duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v1',
             observation_status: 'observed',
+            observation_context: { artifactKey: 'critical-path-rule-version-v1' },
+            source_evidence_refs: [
+              'duration_learning_runtime_publications:duration_learning_runtime:critical_path_rule_candidate:critical-path-rule-version-v1',
+            ],
             writes_runtime_directly: false,
             writes_fact_directly: false,
           },
@@ -267,6 +308,7 @@ describe('criticalPathRulePublicationReadinessService', () => {
         edges: [],
         tasks: [],
         projectDurationDays: 0,
+        projectDuration: productionDayMetric(null),
         calculationStatus: 'empty_after_failure',
       },
       criticalPathOutcomeEventRecorded: false,

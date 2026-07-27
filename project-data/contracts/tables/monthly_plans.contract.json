@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "workbuddy-table-contract/v1",
+  "tableId": "monthly_plans",
+  "authorityLevel": "business_fact",
+  "grain": "one row per project monthly plan or monthly plan version",
+  "owner": "monthly planning services",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "requiredConcepts": [
+    "id",
+    "project_id",
+    "month",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "forbiddenDirectWriters": [
+    "project-search",
+    "external public data",
+    "candidate knowledge assets"
+  ],
+  "allowedWriterRegistryIds": [
+    "monthly_planning_route_writer",
+    "official_holiday_calendar_service",
+    "full_app_test_env_fixture_writer",
+    "v11_chapter6_7_fixture_writer"
+  ],
+  "qualityRules": [
+    "project_id_required",
+    "monthly_plan_month_required",
+    "monthly_plan_status_required"
+  ]
+}

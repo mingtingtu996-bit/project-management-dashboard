@@ -3,11 +3,22 @@
 PORT=3001
 HOST=0.0.0.0
 NODE_ENV=production
-WEB_PORT=80
+COMPOSE_PROJECT_NAME=project-management
+WEB_PORT=8080
 TRUST_PROXY_HOPS=1
 
+# A host-level CDN/LB/Caddy/Nginx must terminate TLS and proxy to
+# 127.0.0.1:${WEB_PORT}. The compose web port is intentionally not public.
+PUBLIC_INGRESS_MODE=domain_hsts
+PUBLIC_HTTPS_ORIGIN=https://zhuxucloud.com
+CORS_ORIGIN=https://zhuxucloud.com
+AUTH_COOKIE_NAME=workbuddy_production_auth_token
+JWT_ISSUER=workbuddy-production
+JWT_AUDIENCE=workbuddy-production-api
+JWT_SECRET=
+
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=YOUR_SUPABASE_SERVICE_KEY_HERE
+SUPABASE_RUNTIME_KEY=YOUR_NON_BYPASSRLS_RUNTIME_JWT_HERE
 SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY_HERE
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY_HERE
@@ -15,23 +26,69 @@ VITE_SUPABASE_ANON_KEY=YOUR_SUPABASE_ANON_KEY_HERE
 SUPABASE_HOST=db.your-project.supabase.co
 SUPABASE_PORT=5432
 SUPABASE_DATABASE=postgres
-SUPABASE_USER=postgres
-SUPABASE_PASSWORD=YOUR_DATABASE_PASSWORD_HERE
+SUPABASE_USER=workbuddy_runtime_login
+SUPABASE_PASSWORD=YOUR_RUNTIME_DATABASE_PASSWORD_HERE
 
-CORS_ORIGIN=http://YOUR_SERVER_IP
-JWT_SECRET=CHANGE_ME_TO_A_STRONG_RANDOM_SECRET
+# Supabase direct db.<project>.supabase.co is often IPv6-only. Use the Supabase
+# pooler/session URL. Runtime must use a non-BYPASSRLS application role; reserve
+# postgres/service_role credentials for migrations and diagnostics only.
+#
+# The checked-in migration creates workbuddy_runtime as a NOLOGIN group role.
+# Create the secret-bearing login role outside source control, then grant:
+#   CREATE ROLE workbuddy_runtime_login LOGIN PASSWORD '<secret>' NOBYPASSRLS;
+#   GRANT workbuddy_runtime TO workbuddy_runtime_login;
+DB_CONNECTION_STRING=postgresql://workbuddy_runtime_login.<tenant-or-ref>:YOUR_RUNTIME_DATABASE_PASSWORD_HERE@aws-<pooler-shard>-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+SUPABASE_MIGRATION_URL=postgresql://postgres.<tenant-or-ref>:YOUR_DATABASE_PASSWORD_HERE@aws-<pooler-shard>-<region>.pooler.supabase.com:5432/postgres?sslmode=require
+OFFICIAL_WORK_CALENDAR_DB_DRIVER=postgres
+OFFICIAL_WORK_CALENDAR_DB_TIMEOUT_MS=12000
+OFFICIAL_HOLIDAY_NOTICE_FETCH_TIMEOUT_MS=15000
+# Weather forecast lookup: query public web weather at use time, no authorized key required.
+WEATHER_LOOKUP_PROVIDER=cma_public_weather
+WEATHER_LOOKUP_PROVIDER_FALLBACKS=cma_public_weather,smartweatherapi,generic,on_demand_web
+WEATHER_LOOKUP_USER_AGENT=WorkBuddy/1.0 weather-lookup
+WEATHER_LOOKUP_TIMEOUT_MS=10000
+WEATHER_LOOKUP_MAX_RESPONSE_BYTES=1048576
+OPEN_METEO_GEOCODING_BASE_URL=https://geocoding-api.open-meteo.com/v1/search
+OPEN_METEO_FORECAST_BASE_URL=https://api.open-meteo.com/v1/forecast
+ON_DEMAND_WEATHER_FORECAST_DAYS=10
+PROJECT_WEATHER_SYNC_INTERVAL_HOURS=3
+
+# Optional enterprise authorized channel. Keep empty unless the company later buys this service.
+OFFICIAL_WEATHER_PROVIDER=
+OFFICIAL_WEATHER_USER_AGENT=WorkBuddy/1.0 weather-lookup
+SMARTWEATHER_API_BASE_URL=https://open.weather.com.cn/data/
+SMARTWEATHER_API_TYPE=forecast_f
+SMARTWEATHER_API_APP_ID=
+SMARTWEATHER_API_PRIVATE_KEY=
+OFFICIAL_WEATHER_AREA_ID_MAP_JSON={}
+# Default mainland public weather source; station ids can be omitted for built-in priority cities.
+OFFICIAL_WEATHER_STATION_ID_MAP_JSON={"310000":"58367","上海市":"58367","北京市":"54511"}
+CMA_PUBLIC_WEATHER_BASE_URL=https://weather.cma.cn/api/weather/view
+
 LOG_LEVEL=info
-LOG_PERSIST=true
-LOG_DIR=/app/logs
-LOG_FILE_PATH=/app/logs/server.log
+LOG_PERSIST=false
+PDF_RENDER_CONCURRENCY=2
+PDF_RENDER_MAX_QUEUE=10
+PDF_RENDER_TIMEOUT_MS=30000
+PDF_RENDER_MAX_HTML_BYTES=2097152
+PDF_EXPORT_RATE_LIMIT_MAX=10
 NOTIFICATION_READ_SYNC_TTL_MS=60000
 NOTIFICATION_READ_SYNC_DELAY_MS=250
 PROJECT_LIST_CACHE_TTL_MS=15000
 API_RATE_LIMIT_MAX=2000
 AUTH_RATE_LIMIT_MAX=20
 
+# Production scheduler/read-model warmup is open only when the mounted
+# MG-01..MG-07 evidence file evaluates to status=closed and MG-07=pass.
+SKIP_SCHEDULER_BOOT=false
+SKIP_READ_MODEL_WARMUP=false
+
 # Keep the Postgres pool warm between normal user interactions.
-DB_POOL_MAX=20
-DB_POOL_WARM_CONNECTIONS=2
+DB_POOL_MAX=8
+DB_POOL_WARM_CONNECTIONS=4
 DB_IDLE_TIMEOUT_MS=300000
 DB_CONNECTION_TIMEOUT_MS=5000
+DB_DIRECT_QUERY_TIMEOUT_MS=4000
+SUPABASE_REST_QUERY_TIMEOUT_MS=4000
+TASK_READ_DIRECT_FIRST=false
+PROJECT_HEALTH_READ_CONCURRENCY=4

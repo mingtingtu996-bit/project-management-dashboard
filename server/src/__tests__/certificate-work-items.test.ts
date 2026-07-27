@@ -9,16 +9,24 @@ process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = 'test-jwt-secret'
 
 const state = vi.hoisted(() => {
+  let transactionActive = false
+  let createFailure: Error | null = null
   const rpc = vi.fn()
   const workItems: Array<Record<string, any>> = []
   const dependencies: Array<Record<string, any>> = []
+  const preMilestones: Array<Record<string, any>> = []
+  const factTransactionStates: boolean[] = []
+  const recordChangedExecutionFacts = vi.fn(async () => {
+    factTransactionStates.push(transactionActive)
+    return []
+  })
 
   const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase()
 
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
 
-    if (normalized === 'select * from certificate_work_items where id = ? and project_id = ? limit 1') {
+    if (normalized.includes('select * from certificate_work_items where id = ? and project_id = ? limit 1')) {
       return workItems.find((item) => item.id === params[0] && item.project_id === params[1]) ?? null
     }
 
@@ -31,6 +39,49 @@ const state = vi.hoisted(() => {
 
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
+
+    if (normalized.startsWith('select * from create_certificate_work_item_atomic')) {
+      if (createFailure) throw createFailure
+      const [id, projectId, itemCode, itemName, itemStage, status, plannedFinishDate, actualFinishDate,
+        approvingAuthority, isShared, nextAction, nextActionDueDate, isBlocked, blockReason,
+        sortOrder, notes, latestRecordAt, certificateIds] = params
+      const row = {
+        id,
+        project_id: projectId,
+        item_code: itemCode,
+        item_name: itemName,
+        item_stage: itemStage,
+        status,
+        planned_finish_date: plannedFinishDate,
+        actual_finish_date: actualFinishDate,
+        approving_authority: approvingAuthority,
+        is_shared: isShared,
+        next_action: nextAction,
+        next_action_due_date: nextActionDueDate,
+        is_blocked: isBlocked,
+        block_reason: blockReason,
+        sort_order: sortOrder,
+        notes,
+        latest_record_at: latestRecordAt,
+        certificate_ids: Array.isArray(certificateIds) ? certificateIds : [],
+        created_at: '2026-04-15T00:00:00.000Z',
+        updated_at: '2026-04-15T00:00:00.000Z',
+      }
+      workItems.push(row)
+      for (const certificateId of row.certificate_ids) {
+        dependencies.push({
+          id: `dep-${String(certificateId)}-${String(id)}`,
+          project_id: projectId,
+          predecessor_type: 'certificate',
+          predecessor_id: certificateId,
+          successor_type: 'work_item',
+          successor_id: id,
+          dependency_kind: 'hard',
+          created_at: '2026-04-15T00:00:00.000Z',
+        })
+      }
+      return [row]
+    }
 
     if (normalized === 'select * from certificate_dependencies where project_id = ? and predecessor_type = ? and successor_type = ?') {
       return dependencies.filter(
@@ -46,6 +97,12 @@ const state = vi.hoisted(() => {
         .filter((item) => item.project_id === params[0])
         .slice()
         .sort((left, right) => Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0))
+    }
+
+    if (normalized.startsWith('select id from pre_milestones where project_id = ? and id in (')) {
+      const projectId = String(params[0] ?? '')
+      const ids = new Set(params.slice(1).map((value) => String(value)))
+      return preMilestones.filter((row) => row.project_id === projectId && ids.has(String(row.id)))
     }
 
     if (normalized.startsWith('select * from certificate_work_items where project_id = ? and id in (')) {
@@ -126,20 +183,48 @@ const state = vi.hoisted(() => {
     return []
   })
 
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+    const workItemsSnapshot = workItems.map((item) => ({ ...item }))
+    const dependenciesSnapshot = dependencies.map((dependency) => ({ ...dependency }))
+    const parentActive = transactionActive
+    transactionActive = true
+    try {
+      return await work()
+    } catch (error) {
+      workItems.splice(0, workItems.length, ...workItemsSnapshot)
+      dependencies.splice(0, dependencies.length, ...dependenciesSnapshot)
+      throw error
+    } finally {
+      transactionActive = parentActive
+    }
+  })
+
   return {
     rpc,
     executeSQL,
     executeSQLOne,
     workItems,
     dependencies,
+    preMilestones,
+    withDatabaseTransaction,
+    recordChangedExecutionFacts,
+    factTransactionStates,
+    setCreateFailure(error: Error | null) {
+      createFailure = error
+    },
     supabase: {
       rpc,
     },
   }
 })
 
+function joinedSql(calls: [unknown, ...unknown[]][]) {
+  return calls.map(([sql]) => String(sql).toLowerCase()).join('\n')
+}
+
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
   requireProjectEditor: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
 }))
 
@@ -156,6 +241,30 @@ vi.mock('../services/dbService.js', () => ({
   executeSQL: state.executeSQL,
   executeSQLOne: state.executeSQLOne,
   supabase: state.supabase,
+}))
+
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: state.withDatabaseTransaction,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: state.recordChangedExecutionFacts,
+}))
+
+vi.mock('../auth/access.js', () => ({
+  getProjectCompanyId: vi.fn(async (projectId: string) => (projectId ? 'company-1' : null)),
+}))
+
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  enforceRetentionOrBlock: vi.fn(async () => ({ blocked: false, reason: null, result: null })),
+  buildRetentionBlockedApiError: vi.fn((reason: string, result: Record<string, unknown>) => ({
+    code: 'RETENTION_REJECTED',
+    message: reason,
+    details: result,
+  })),
+  buildRetentionBlockedHttpStatus: vi.fn((result: Record<string, unknown>) => (
+    result.requiresUserConfirmation ? 409 : 422
+  )),
 }))
 
 const { default: certificateWorkItemsRouter } = await import('../routes/certificate-work-items.js')
@@ -183,8 +292,17 @@ function buildApp() {
 describe('certificate work items route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    state.setCreateFailure(null)
     state.workItems.splice(0, state.workItems.length)
     state.dependencies.splice(0, state.dependencies.length)
+    state.factTransactionStates.splice(0, state.factTransactionStates.length)
+    state.preMilestones.splice(0, state.preMilestones.length)
+    state.preMilestones.push(
+      { id: 'cert-a', project_id: 'project-1' },
+      { id: 'cert-b', project_id: 'project-1' },
+      { id: 'cert-c', project_id: 'project-1' },
+      { id: 'cert-old', project_id: 'project-1' },
+    )
   })
 
   it('documents the atomic transaction function in the migration', () => {
@@ -195,7 +313,7 @@ describe('certificate work items route', () => {
     expect(migration).toContain('certificate_approvals')
   })
 
-  it('creates a work item by delegating the full write to the atomic RPC', async () => {
+  it('creates a work item through the atomic transaction function and records initial facts', async () => {
     state.rpc.mockImplementation(async (_fnName: string, payload: Record<string, any>) => ({
       data: {
         id: payload.p_id,
@@ -238,20 +356,20 @@ describe('certificate work items route', () => {
       status: 'internal_review',
       is_shared: true,
     })
-    expect(state.rpc).toHaveBeenCalledTimes(1)
-    expect(state.rpc).toHaveBeenCalledWith(
-      'create_certificate_work_item_atomic',
-      expect.objectContaining({
-        p_project_id: 'project-1',
-        p_item_name: '共享资料收集',
-        p_item_stage: '资料准备',
-        p_status: 'internal_review',
-        p_certificate_ids: ['cert-a', 'cert-b'],
-      })
-    )
+    expect(state.withDatabaseTransaction).toHaveBeenCalledTimes(1)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(1)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'certificate_work_item',
+      entityId: response.body.data.id,
+      changes: expect.arrayContaining([
+        expect.objectContaining({ factType: 'certificate_work_item.status', force: true }),
+        expect.objectContaining({ factType: 'certificate_work_item.actual_finish_date', force: true }),
+      ]),
+    }))
+    expect(state.factTransactionStates).toEqual([true])
   })
 
-  it('supports bulk import through the same atomic RPC contract', async () => {
+  it('supports bulk import through the same atomic transaction contract', async () => {
     state.rpc.mockImplementation(async (_fnName: string, payload: Record<string, any>) => ({
       data: {
         id: payload.p_id,
@@ -308,7 +426,24 @@ describe('certificate work items route', () => {
       item_name: '会签盖章',
       is_shared: false,
     })
-    expect(state.rpc).toHaveBeenCalledTimes(2)
+    expect(state.withDatabaseTransaction).toHaveBeenCalledTimes(2)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(2)
+    expect(state.factTransactionStates).toEqual([true, true])
+  })
+
+  it('rejects certificate links outside the current project', async () => {
+    state.preMilestones.push({ id: 'cert-other', project_id: 'project-other' })
+
+    const request = supertest(buildApp())
+    const response = await request.post('/api/projects/project-1/certificate-work-items').send({
+      item_name: 'cross certificate',
+      item_stage: '资料准备',
+      certificate_ids: ['cert-other'],
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error.code).toBe('CERTIFICATE_PROJECT_MISMATCH')
+    expect(state.rpc).not.toHaveBeenCalled()
   })
 
   it('rejects bulk import requests larger than the sync ceiling', async () => {
@@ -331,11 +466,8 @@ describe('certificate work items route', () => {
     expect(state.rpc).not.toHaveBeenCalled()
   })
 
-  it('fails fast when the atomic RPC returns an error', async () => {
-    state.rpc.mockResolvedValueOnce({
-      data: null,
-      error: { message: 'rpc failed' },
-    })
+  it('fails fast when the atomic transaction function returns an error', async () => {
+    state.setCreateFailure(new Error('rpc failed'))
 
     const request = supertest(buildApp())
     const response = await request.post('/api/projects/project-1/certificate-work-items').send({
@@ -387,6 +519,69 @@ describe('certificate work items route', () => {
       certificate_ids: ['cert-a', 'cert-b'],
     })
     expect(state.dependencies.map((dependency) => dependency.predecessor_id)).toEqual(['cert-a', 'cert-b'])
+    expect(state.workItems.find((item) => item.id === 'item-1')).toMatchObject({
+      certificate_ids: ['cert-a', 'cert-b'],
+      is_shared: true,
+    })
+    expect(joinedSql(state.executeSQL.mock.calls as [unknown, ...unknown[]][])).toContain('certificate_ids = ?')
+  })
+
+  it('records certificate work item completion as sample health evidence without publishing runtime assets', async () => {
+    state.workItems.push({
+      id: 'item-1',
+      project_id: 'project-1',
+      item_code: 'CERT-WI-1',
+      item_name: 'Construction permit materials',
+      item_stage: 'external_submission',
+      status: 'internal_review',
+      actual_finish_date: null,
+      sort_order: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    })
+
+    const request = supertest(buildApp())
+    const response = await request
+      .patch('/api/projects/project-1/certificate-work-items/item-1')
+      .send({
+        status: 'completed',
+        actual_finish_date: '2026-05-20',
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+
+    const sampleHealthInserts = state.executeSQL.mock.calls.filter(([sql]) =>
+      String(sql).toLowerCase().includes('insert into public.algorithm_sample_health_events')
+    )
+    expect(sampleHealthInserts).toHaveLength(1)
+    expect(sampleHealthInserts[0]?.[1]).toEqual(expect.arrayContaining([
+      'certificate_milestone:item-1',
+      'business_completion.sample_health',
+      'businessCompletionSampleHealthAdapterService',
+      'company-1',
+      'project-1',
+      'governance_report',
+      expect.objectContaining({
+        workCode: 'certificate_milestone:CERT-WI-1',
+        benchmarkEligible: false,
+        candidateEvidenceEligible: true,
+        domain: 'certificate_milestone',
+        businessCode: 'CERT-WI-1',
+        nonDurationBusinessCompletionSample: true,
+        certificateId: 'item-1',
+        certificateWorkItemId: 'item-1',
+        milestoneCode: 'CERT-WI-1',
+        sourceRoute: 'certificate-work-items.patch',
+      }),
+    ]))
+
+    const sqlText = joinedSql(state.executeSQL.mock.calls as [unknown, ...unknown[]][])
+    expect(sqlText).not.toContain('standard_work_duration')
+    expect(sqlText).not.toContain('algorithm_seed_records')
+    expect(sqlText).not.toContain('algorithm_seed_overrides')
+    expect(sqlText).not.toContain('algorithm_learnable_parameter_runtime_publications')
+    expect(sqlText).not.toContain('policy_template_entity_runtime_publications')
   })
 
   it('supports batch patch for ledger maintenance', async () => {
@@ -435,6 +630,75 @@ describe('certificate work items route', () => {
       next_action: '统一补齐送审材料',
     })
     expect(state.workItems.every((item) => item.status === 'internal_review')).toBe(true)
+  })
+
+  it('records batch certificate work item completions as sample health evidence', async () => {
+    state.workItems.push(
+      {
+        id: 'item-1',
+        project_id: 'project-1',
+        item_code: 'CERT-WI-1',
+        item_name: 'Construction permit materials',
+        item_stage: 'external_submission',
+        status: 'pending',
+        actual_finish_date: null,
+        sort_order: 1,
+        created_at: '2026-04-15T00:00:00.000Z',
+        updated_at: '2026-04-15T00:00:00.000Z',
+      },
+      {
+        id: 'item-2',
+        project_id: 'project-1',
+        item_code: 'CERT-WI-2',
+        item_name: 'Fire review opinion',
+        item_stage: 'external_submission',
+        status: 'pending',
+        actual_finish_date: null,
+        sort_order: 2,
+        created_at: '2026-04-15T00:10:00.000Z',
+        updated_at: '2026-04-15T00:10:00.000Z',
+      },
+    )
+
+    const request = supertest(buildApp())
+    const response = await request
+      .patch('/api/projects/project-1/certificate-work-items/batch')
+      .send({
+        ids: ['item-1', 'item-2'],
+        updates: {
+          status: 'issued',
+          actual_finish_date: '2026-05-21',
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+
+    const sampleHealthInserts = state.executeSQL.mock.calls.filter(([sql]) =>
+      String(sql).toLowerCase().includes('insert into public.algorithm_sample_health_events')
+    )
+    expect(sampleHealthInserts).toHaveLength(2)
+    const insertedParams = sampleHealthInserts.map((call) => call[1])
+    expect(insertedParams).toEqual(expect.arrayContaining([
+      expect.arrayContaining([
+        'certificate_milestone:item-1',
+        expect.objectContaining({
+          domain: 'certificate_milestone',
+          certificateWorkItemId: 'item-1',
+          sourceRoute: 'certificate-work-items.batch-patch',
+          benchmarkEligible: false,
+        }),
+      ]),
+      expect.arrayContaining([
+        'certificate_milestone:item-2',
+        expect.objectContaining({
+          domain: 'certificate_milestone',
+          certificateWorkItemId: 'item-2',
+          sourceRoute: 'certificate-work-items.batch-patch',
+          benchmarkEligible: false,
+        }),
+      ]),
+    ]))
   })
 
   it('supports batch delete for ledger maintenance', async () => {

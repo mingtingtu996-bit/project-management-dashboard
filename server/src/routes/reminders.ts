@@ -1,8 +1,7 @@
 ﻿// 弹窗提醒API路由 - Phase 2
 
-import { Router } from 'express'
+import { Router, type Request } from 'express'
 import { WarningService } from '../services/warningService.js'
-import { findNotification, insertNotification } from '../services/notificationStore.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { authenticate } from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
@@ -10,6 +9,18 @@ import { validate } from '../middleware/validation.js'
 import { z } from 'zod'
 import type { ApiResponse } from '../types/index.js'
 import type { Reminder } from '../types/db.js'
+import {
+  getCurrentCompanyId,
+  getCurrentCompanyMembership,
+  getProjectPermissionLevel,
+  getVisibleProjectIds,
+} from '../auth/access.js'
+import { getRequestCompanyId } from '../auth/companyContext.js'
+import {
+  dismissReminder,
+  getReminderPreference,
+  upsertReminderPreference,
+} from '../services/reminderPreferencesService.js'
 
 const router = Router()
 router.use(authenticate)
@@ -36,8 +47,10 @@ const reminderSettingsBodySchema = z.object({
   enable_notification: z.boolean().optional(),
 }).passthrough()
 
-const REMINDER_SETTINGS_SOURCE_ENTITY_TYPE = 'reminder_settings'
-const REMINDER_SETTINGS_NOTIFICATION_TYPE = 'reminder_settings_updated'
+const REMINDER_SETTINGS_CACHE_TTL_MS = Number(process.env.REMINDER_SETTINGS_CACHE_TTL_MS ?? 300_000)
+const REMINDER_COMPANY_ID_CACHE_TTL_MS = Number(process.env.REMINDER_COMPANY_ID_CACHE_TTL_MS ?? 300_000)
+const reminderSettingsCache = new Map<string, { expiresAt: number; value: ReminderSettings }>()
+const reminderCompanyIdCache = new Map<string, { expiresAt: number; value: string | null }>()
 
 const DEFAULT_REMINDER_SETTINGS = {
   condition_reminder_days: [3, 1],
@@ -73,52 +86,95 @@ function normalizeReminderSettings(value: Partial<ReminderSettings> | null | und
   }
 }
 
-function parseReminderSettingsContent(content?: string | null): ReminderSettings {
-  if (!content) return normalizeReminderSettings(null)
-
-  try {
-    const parsed = JSON.parse(content) as Partial<ReminderSettings>
-    return normalizeReminderSettings(parsed)
-  } catch {
-    return normalizeReminderSettings(null)
-  }
-}
-
-function buildReminderSettingsScope(projectId?: string) {
-  const sourceEntityId = projectId || 'company'
-  return {
-    projectId: projectId || null,
-    sourceEntityId,
-  }
-}
-
-async function loadStoredReminderSettings(projectId?: string): Promise<ReminderSettings> {
-  const scope = buildReminderSettingsScope(projectId)
-
-  const projectSettings = await findNotification({
-    projectId: scope.projectId ?? undefined,
-    sourceEntityType: REMINDER_SETTINGS_SOURCE_ENTITY_TYPE,
-    sourceEntityId: scope.sourceEntityId,
-    type: REMINDER_SETTINGS_NOTIFICATION_TYPE,
+function normalizeReminderSettingsFromPreference(preference: Record<string, unknown> | null | undefined): ReminderSettings | null {
+  if (!preference) return null
+  const reminderDaysBefore = Number(preference.reminder_days_before)
+  return normalizeReminderSettings({
+    condition_reminder_days: Number.isInteger(reminderDaysBefore) && reminderDaysBefore > 0
+      ? [reminderDaysBefore]
+      : undefined,
+    enable_popup: typeof preference.popup_enabled === 'boolean' ? preference.popup_enabled : undefined,
+    enable_notification: typeof preference.email_enabled === 'boolean' ? preference.email_enabled : undefined,
   })
+}
 
-  if (projectSettings) {
-    return parseReminderSettingsContent(projectSettings.content)
-  }
+async function loadPreferenceSettings(userId: string | undefined, projectId?: string, companyId?: string | null) {
+  if (!userId) return null
+  const projectPreference = await getReminderPreference(userId, projectId ?? null, companyId ?? null)
+  const projectSettings = normalizeReminderSettingsFromPreference(projectPreference)
+  if (projectSettings) return projectSettings
 
   if (projectId) {
-    const companySettings = await findNotification({
-      sourceEntityType: REMINDER_SETTINGS_SOURCE_ENTITY_TYPE,
-      sourceEntityId: 'company',
-      type: REMINDER_SETTINGS_NOTIFICATION_TYPE,
-    })
+    const companyPreference = await getReminderPreference(userId, null, companyId ?? null)
+    return normalizeReminderSettingsFromPreference(companyPreference)
+  }
+  return null
+}
 
-    if (companySettings) {
-      return parseReminderSettingsContent(companySettings.content)
-    }
+async function loadStoredReminderSettings(userId: string | undefined, projectId?: string, companyId?: string | null): Promise<ReminderSettings> {
+  const cacheKey = JSON.stringify({ userId: userId ?? null, projectId: projectId ?? null, companyId: companyId ?? null })
+  const cached = reminderSettingsCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value
   }
 
-  return normalizeReminderSettings(null)
+  const settings = await loadPreferenceSettings(userId, projectId, companyId) ?? normalizeReminderSettings(null)
+
+  reminderSettingsCache.set(cacheKey, {
+    expiresAt: Date.now() + REMINDER_SETTINGS_CACHE_TTL_MS,
+    value: settings,
+  })
+  return settings
+}
+
+async function resolveReminderCompanyIdForUser(userId: string | undefined, requestedCompanyId?: string | null) {
+  if (!userId) return requestedCompanyId ?? null
+  const normalizedRequestedCompanyId = requestedCompanyId?.trim() || null
+  const cacheKey = JSON.stringify({ userId, requestedCompanyId: normalizedRequestedCompanyId })
+  const cached = reminderCompanyIdCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value
+  }
+
+  const companyId = await getCurrentCompanyId(userId, normalizedRequestedCompanyId)
+  reminderCompanyIdCache.set(cacheKey, {
+    expiresAt: Date.now() + REMINDER_COMPANY_ID_CACHE_TTL_MS,
+    value: companyId ?? null,
+  })
+  return companyId ?? null
+}
+
+export async function warmReminderSettingsCache(userId: string | undefined, projectId?: string, companyId?: string | null) {
+  const resolvedCompanyId = companyId === undefined
+    ? await resolveReminderCompanyIdForUser(userId)
+    : companyId
+  return loadStoredReminderSettings(userId, projectId, resolvedCompanyId)
+}
+
+async function getReminderCompanyId(req: Request) {
+  return resolveReminderCompanyIdForUser(
+    req.user?.id,
+    getRequestCompanyId(req) || req.user?.currentCompanyId || null,
+  )
+}
+
+async function getVisibleReminderProjectIds(req: Request) {
+  if (!req.user?.id) return []
+  return getVisibleProjectIds(req.user.id, req.user.globalRole, getRequestCompanyId(req))
+}
+
+async function canEditReminderSettings(req: Request, projectId?: string | null) {
+  const userId = req.user?.id
+  if (!userId) return false
+
+  const companyId = getRequestCompanyId(req)
+  if (projectId) {
+    const permission = await getProjectPermissionLevel(userId, projectId, companyId)
+    return permission === 'owner' || permission === 'editor'
+  }
+
+  const membership = await getCurrentCompanyMembership(userId, companyId)
+  return membership?.role === 'company_admin'
 }
 
 /**
@@ -130,8 +186,25 @@ router.get('/active', validate(reminderProjectQuerySchema, 'query'), asyncHandle
 
   logger.info('Fetching active reminders', { projectId })
 
-  // 生成弹窗提醒
-  const reminders = await warningService.generateReminders(projectId)
+  const visibleProjectIds = await getVisibleReminderProjectIds(req)
+  if (visibleProjectIds !== null) {
+    if (projectId && !visibleProjectIds.includes(projectId)) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '您没有权限访问此项目提醒' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+    if (!projectId && visibleProjectIds.length === 0) {
+      return res.json({ success: true, data: [], timestamp: new Date().toISOString() })
+    }
+  }
+
+  const reminders = projectId
+    ? await warningService.generateReminders(projectId)
+    : visibleProjectIds === null
+      ? await warningService.generateReminders()
+      : (await Promise.all(visibleProjectIds.map((id) => warningService.generateReminders(id)))).flat()
 
   // 筛选未关闭的提醒
   const activeReminders = reminders.filter(r => !r.is_dismissed)
@@ -155,22 +228,8 @@ router.put('/:id/dismiss', validate(reminderIdParamSchema, 'params'), validate(d
 
   logger.info('Dismissing reminder', { id, dismissed_by })
 
-  // 将关闭状态写入 notifications 表作为持久化记录
-  const now = new Date().toISOString()
-  await insertNotification({
-    project_id: null,
-    type: 'reminder_dismissed',
-    notification_type: 'flow-reminder',
-    severity: 'info',
-    title: '弹窗已关闭',
-    content: dismissed_by ? `由 ${dismissed_by} 关闭` : '已关闭',
-    is_read: true,
-    is_broadcast: false,
-    source_entity_type: 'reminder',
-    source_entity_id: id,
-    status: 'read',
-    created_at: now,
-  })
+  // v1.4.13: use reminder_dismissals table — no longer write notification records
+  await dismissReminder(req.user?.id ?? 'system', id)
 
   const response: ApiResponse<{ message: string }> = {
     success: true,
@@ -191,7 +250,19 @@ router.get('/settings', validate(reminderProjectQuerySchema, 'query'), asyncHand
   const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || undefined
 
   logger.info('Fetching reminder settings', { projectId })
-  const settings = await loadStoredReminderSettings(projectId)
+  if (projectId) {
+    const visibleProjectIds = await getVisibleReminderProjectIds(req)
+    if (visibleProjectIds !== null && !visibleProjectIds.includes(projectId)) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: '您没有权限访问此项目提醒设置' },
+        timestamp: new Date().toISOString(),
+      })
+    }
+  }
+
+  const companyId = getRequestCompanyId(req) || req.user?.currentCompanyId || await getReminderCompanyId(req)
+  const settings = await loadStoredReminderSettings(req.user?.id, projectId, companyId)
 
   const response: ApiResponse<typeof settings> = {
     success: true,
@@ -211,24 +282,36 @@ router.put('/settings', validate(reminderProjectQuerySchema, 'query'), validate(
   const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim() || null
 
   logger.info('Updating reminder settings', settings)
+  const visibleProjectIds = await getVisibleReminderProjectIds(req)
+  if (projectId && visibleProjectIds !== null && !visibleProjectIds.includes(projectId)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: '您没有权限更新此项目提醒设置' },
+      timestamp: new Date().toISOString(),
+    })
+  }
 
-  // 将设置序列化后写入 notifications 表持久化
-  const now = new Date().toISOString()
-  const scope = buildReminderSettingsScope(projectId || undefined)
-  await insertNotification({
-    project_id: scope.projectId,
-    type: REMINDER_SETTINGS_NOTIFICATION_TYPE,
-    notification_type: 'flow-reminder',
-    severity: 'info',
-    title: '提醒设置已更新',
-    content: JSON.stringify(settings),
-    is_read: true,
-    is_broadcast: false,
-    source_entity_type: REMINDER_SETTINGS_SOURCE_ENTITY_TYPE,
-    source_entity_id: scope.sourceEntityId,
-    status: 'read',
-    created_at: now,
+  if (!await canEditReminderSettings(req, projectId)) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: projectId ? '您没有权限更新此项目提醒设置' : '只有公司管理员可以更新公司提醒设置' },
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  // v1.4.13: write to reminder_preferences, not notifications
+  const companyId = await getReminderCompanyId(req)
+  const normalizedSettings = normalizeReminderSettings(settings)
+  await upsertReminderPreference({
+    userId: req.user?.id ?? 'system',
+    projectId: projectId || null,
+    companyId: companyId || null,
+    reminderDaysBefore: normalizedSettings.condition_reminder_days[0] ?? DEFAULT_REMINDER_SETTINGS.condition_reminder_days[0],
+    popupEnabled: normalizedSettings.enable_popup,
+    emailEnabled: normalizedSettings.enable_notification,
   })
+  reminderSettingsCache.clear()
+  reminderCompanyIdCache.clear()
 
   const response: ApiResponse<{ message: string }> = {
     success: true,

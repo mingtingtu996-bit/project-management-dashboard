@@ -1,4 +1,9 @@
-import type { CriticalPathEdge, CriticalPathSnapshot, CriticalTaskSnapshot } from './criticalPath'
+import {
+  formatCriticalPathDurationMetric,
+  type CriticalPathEdge,
+  type CriticalPathSnapshot,
+  type CriticalTaskSnapshot,
+} from './criticalPath'
 import type { Task } from '@/pages/GanttViewTypes'
 
 export const CRITICAL_PATH_NODE_WIDTH = 180
@@ -83,12 +88,12 @@ function buildFallbackLayout(): CriticalPathLayout {
 
 function getTaskTitle(taskMap: Map<string, Task>, taskId: string, snapshotTask?: CriticalTaskSnapshot) {
   const task = taskMap.get(taskId)
-  return task?.title || task?.name || snapshotTask?.title || taskId
+  return task?.title || snapshotTask?.title || taskId
 }
 
 function getTaskSubtitle(snapshotTask?: CriticalTaskSnapshot) {
   if (!snapshotTask) return '等待快照补充'
-  return `浮动 ${snapshotTask.floatDays} 天 · 工期 ${snapshotTask.durationDays} 天`
+  return `浮动 ${formatCriticalPathDurationMetric(snapshotTask.float)} · 工期 ${formatCriticalPathDurationMetric(snapshotTask.duration)}`
 }
 
 function getTaskBadges(snapshotTask?: CriticalTaskSnapshot) {

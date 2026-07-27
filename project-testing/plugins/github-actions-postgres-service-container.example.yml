@@ -1,0 +1,51 @@
+# Example only. Do not copy secrets into this file.
+# If promoted into .github/workflows, review owners, runtime cost, migration scope,
+# and whether the selected tests are safe against an ephemeral Postgres database.
+
+name: workbuddy-local-deterministic-postgres
+
+on:
+  workflow_dispatch:
+
+jobs:
+  server-container-db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: workbuddy_runtime_login
+          POSTGRES_PASSWORD: workbuddy_test_password
+          POSTGRES_DB: workbuddy_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U workbuddy_runtime_login -d workbuddy_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DB_CONNECTION_STRING: postgresql://workbuddy_runtime_login:workbuddy_test_password@127.0.0.1:5432/workbuddy_test
+      SKIP_DATABASE_VALIDATE: "false"
+      SKIP_SCHEDULER_BOOT: "true"
+      SKIP_REFERENCE_DATA_BOOTSTRAP: "true"
+      SKIP_READ_MODEL_WARMUP: "true"
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_ANON_KEY: test-anon-key
+      SUPABASE_SERVICE_KEY: test-service-key
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Add the project-specific migration/seed command before enabling this gate.
+      # The command must target DB_CONNECTION_STRING and must not use production Supabase credentials.
+      - name: Run container DB integration slice
+        run: npm run testing:server-vitest:slices -- --project server-default --output project-testing/reports/server-vitest-container-db-slices.json

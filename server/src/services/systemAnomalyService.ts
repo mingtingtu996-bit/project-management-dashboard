@@ -1,6 +1,7 @@
 import { supabase } from './dbService.js'
 import type { PassiveReorderDetectionReport, PassiveReorderWindowResult } from '../types/planning.js'
-import { isProjectActiveStatus } from '../utils/projectStatus.js'
+import { listActiveProjectIds } from './activeProjectService.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
 
 export interface PassiveReorderLogRow {
   entity_id?: string | null
@@ -15,7 +16,6 @@ export interface PassiveReorderLogRow {
 
 const PASSIVE_REORDER_FIELDS = ['planned_end_date', 'current_plan_date', 'actual_end_date', 'start_date', 'end_date']
 const PASSIVE_REORDER_WINDOWS = [3, 5, 7] as const
-const DAY_MS = 24 * 60 * 60 * 1000
 
 function toTimestamp(value?: string | null): number | null {
   if (!value) return null
@@ -24,12 +24,7 @@ function toTimestamp(value?: string | null): number | null {
 }
 
 function toOffsetDays(row: PassiveReorderLogRow): number {
-  const oldTime = toTimestamp(row.old_value)
-  const newTime = toTimestamp(row.new_value)
-
-  if (oldTime === null || newTime === null) return 0
-
-  return Math.abs(newTime - oldTime) / DAY_MS
+  return Math.abs(signedDurationDayDelta(row.old_value, row.new_value) ?? 0)
 }
 
 export function detectPassiveReorderWindows(
@@ -46,10 +41,11 @@ export function detectPassiveReorderWindows(
   const keyTaskSet = new Set(options.keyTaskIds ?? [])
 
   const windows = PASSIVE_REORDER_WINDOWS.map((windowDays) => {
-    const cutoff = now.getTime() - windowDays * 24 * 60 * 60 * 1000
     const windowRows = relevantRows.filter((row) => {
       const eventAt = toTimestamp(row.changed_at ?? row.created_at ?? null)
-      return eventAt !== null && eventAt >= cutoff
+      if (eventAt === null) return false
+      const ageDays = signedDurationDayDelta(new Date(eventAt), now)
+      return ageDays !== null && ageDays >= 0 && ageDays <= windowDays
     })
     const offsetSamples = windowRows.map((row) => toOffsetDays(row)).filter((value) => Number.isFinite(value))
     const averageOffsetDays = offsetSamples.length > 0
@@ -95,18 +91,11 @@ export class SystemAnomalyService {
     return detectPassiveReorderWindows(projectId, (data ?? []) as PassiveReorderLogRow[], now)
   }
 
-  async scanAllProjectPassiveReorder(): Promise<PassiveReorderDetectionReport[]> {
-    const { data, error } = await supabase.from('projects').select('id, status')
-
-    if (error) {
-      throw new Error(error.message)
-    }
-
+  async scanAllProjectPassiveReorder(projectIds?: string[] | null): Promise<PassiveReorderDetectionReport[]> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const reports: PassiveReorderDetectionReport[] = []
-    for (const project of ((data ?? []) as Array<{ id: string; status?: string | null }>).filter((item) =>
-      isProjectActiveStatus(item.status),
-    )) {
-      reports.push(await this.scanProjectPassiveReorder(project.id))
+    for (const projectId of activeProjectIds) {
+      reports.push(await this.scanProjectPassiveReorder(projectId))
     }
 
     return reports

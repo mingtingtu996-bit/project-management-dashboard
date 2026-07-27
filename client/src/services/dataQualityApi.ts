@@ -13,7 +13,7 @@ export interface DataQualityProjectSettings {
 }
 
 export interface DataQualityConfidenceDimension {
-  key: DataQualityWeightKey
+  key: string
   label: string
   score: number
   weight: number
@@ -68,8 +68,12 @@ export interface DataQualityProjectSummary {
     id: string
     finding_key: string
     task_id?: string | null
+    entity_type?: string | null
+    entity_id?: string | null
     rule_code: string
-    rule_type: 'trend' | 'anomaly' | 'cross_check'
+    rule_type: string
+    quality_dimension?: string | null
+    resolved_type?: string | null
     severity: 'info' | 'warning' | 'critical'
     summary: string
     detected_at: string
@@ -81,6 +85,17 @@ export interface DataQualityLiveCheckSummary {
   count: number
   summary: string
   items: DataQualityPromptItem[]
+}
+
+export interface DataQualitySourceDeletedResolution {
+  projectId: string
+  resolvedCount: number
+  findings: Array<{
+    id: string
+    entity_type?: string | null
+    entity_id?: string | null
+    resolved_type?: string | null
+  }>
 }
 
 export class DataQualityApiService {
@@ -111,5 +126,19 @@ export class DataQualityApiService {
   ): Promise<DataQualityLiveCheckSummary | null> {
     if (!projectId) return null
     return await apiPost<DataQualityLiveCheckSummary>('/api/data-quality/live-check', { projectId, taskId, draft }, options)
+  }
+
+  static async recomputeSnapshot(projectId: string, month?: string, options?: RequestInit): Promise<DataQualityProjectSummary | null> {
+    if (!projectId) return null
+    return await apiPost<DataQualityProjectSummary>('/api/data-quality/recompute-snapshot', { projectId, month }, options)
+  }
+
+  static async resolveSourceDeleted(
+    projectId: string,
+    payload: { findingIds?: string[]; entityType?: string; entityId?: string },
+    options?: RequestInit,
+  ): Promise<DataQualitySourceDeletedResolution | null> {
+    if (!projectId) return null
+    return await apiPost<DataQualitySourceDeletedResolution>('/api/data-quality/resolve-source-deleted', { projectId, ...payload }, options)
   }
 }

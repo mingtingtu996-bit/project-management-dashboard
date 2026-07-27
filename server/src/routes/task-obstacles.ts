@@ -8,13 +8,80 @@ import { validate, obstacleSchema, obstacleUpdateSchema } from '../middleware/va
 import { logger } from '../middleware/logger.js'
 import type { ApiResponse } from '../types/index.js'
 import type { Issue } from '../types/db.js'
+import { query as rawQuery } from '../database.js'
 import { v4 as uuidv4 } from 'uuid'
 import { writeLifecycleLog, writeStatusTransitionLog } from '../services/changeLogs.js'
 import { WarningService } from '../services/warningService.js'
 import { enqueueProjectHealthUpdate } from '../services/projectHealthService.js'
+import { evaluateTaskConstraint } from '../services/taskConstraintGovernanceService.js'
 
 const router = Router()
 const warningService = new WarningService()
+
+router.use(authenticate)
+
+const TASK_OBSTACLE_SELECT_COLUMNS = [
+  'id',
+  'task_id',
+  'project_id',
+  'obstacle_type',
+  'description',
+  'severity',
+  'status',
+  'resolution',
+  'resolved_at',
+  'resolved_by',
+  'estimated_resolve_date',
+  'attachments',
+  'notes',
+  'created_by',
+  'created_at',
+  'updated_at',
+  'is_resolved',
+  'obstacle_code',
+  'impact_level',
+  'source_type',
+  'source_ref_id',
+  'inference_confidence',
+  'inference_reason',
+  'evaluated_at',
+  'governance_metadata',
+  'severity_escalated_at',
+  'severity_manually_overridden',
+  'progress_impact_level',
+  'blocking_scope',
+  'blocking_level',
+].join(', ')
+
+async function readObstacleRowsByTaskId(taskId: string, limit: number, offset: number) {
+  if (process.env.NODE_ENV === 'test') {
+    return await executeSQL<ObstacleRow>(
+      `SELECT ${TASK_OBSTACLE_SELECT_COLUMNS} FROM task_obstacles WHERE task_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [taskId, limit, offset],
+    )
+  }
+
+  const result = await rawQuery(
+    `SELECT ${TASK_OBSTACLE_SELECT_COLUMNS} FROM task_obstacles WHERE task_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+    [taskId, limit, offset],
+  )
+  return result.rows as ObstacleRow[]
+}
+
+async function readObstacleRowsByProjectId(projectId: string, limit: number, offset: number) {
+  if (process.env.NODE_ENV === 'test') {
+    return await executeSQL<ObstacleRow>(
+      `SELECT ${TASK_OBSTACLE_SELECT_COLUMNS} FROM task_obstacles WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [projectId, limit, offset],
+    )
+  }
+
+  const result = await rawQuery(
+    `SELECT ${TASK_OBSTACLE_SELECT_COLUMNS} FROM task_obstacles WHERE project_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+    [projectId, limit, offset],
+  )
+  return result.rows as ObstacleRow[]
+}
 
 type TaskProjectRow = {
   project_id?: string | null
@@ -54,6 +121,40 @@ type MappedObstacleRecord = ObstacleRow & {
   is_resolved: boolean
   severity_escalated_at: string | null
   severity_manually_overridden: boolean
+}
+
+async function resolveTaskProjectId(taskId?: string | null) {
+  const normalizedTaskId = String(taskId ?? '').trim()
+  if (!normalizedTaskId) return undefined
+  const task = await executeSQLOne<TaskProjectRow>('SELECT project_id FROM tasks WHERE id = ? LIMIT 1', [normalizedTaskId])
+  return task?.project_id ?? undefined
+}
+
+async function resolveObstacleProjectId(obstacleId?: string | null) {
+  const normalizedObstacleId = String(obstacleId ?? '').trim()
+  if (!normalizedObstacleId) return undefined
+  const obstacle = await executeSQLOne<TaskProjectRow>('SELECT project_id FROM task_obstacles WHERE id = ? LIMIT 1', [normalizedObstacleId])
+  return obstacle?.project_id ?? undefined
+}
+
+async function readObstacleRowById(id: string, projectId?: string | null) {
+  if (projectId) {
+    return executeSQLOne<ObstacleRow>(
+      `SELECT ${TASK_OBSTACLE_SELECT_COLUMNS} FROM task_obstacles WHERE id = ? AND project_id = ? LIMIT 1`,
+      [id, projectId],
+    )
+  }
+  return executeSQLOne<ObstacleRow>(
+    `SELECT ${TASK_OBSTACLE_SELECT_COLUMNS} FROM task_obstacles WHERE id = ? LIMIT 1`,
+    [id],
+  )
+}
+
+async function resolveObstacleListProjectId(req: any) {
+  const projectId = String(req.query.projectId ?? req.query.project_id ?? '').trim()
+  if (projectId) return projectId
+  const taskId = String(req.query.taskId ?? req.query.task_id ?? '').trim()
+  return resolveTaskProjectId(taskId)
 }
 
 type WarningObstacleInput = {
@@ -121,6 +222,10 @@ function normalizeObstacleStatus(value: unknown, isResolved?: unknown): string {
     return OBSTACLE_STATUS_MAP[value]
   }
   return isResolved ? OBSTACLE_STATUS_RESOLVED : OBSTACLE_STATUS_PENDING
+}
+
+function hasOwn(source: Record<string, unknown>, key: string) {
+  return Object.prototype.hasOwnProperty.call(source, key)
 }
 
 function normalizeTextField(value: unknown): string | null {
@@ -221,6 +326,7 @@ async function closeObstacleRecord(id: string, userId?: string | null, reqBody?:
     id,
     resolution: normalizedResolution,
     resolved_by: resolvedBy || userId || null,
+    project_id: previous?.project_id ?? null,
   }))
   if (!obstacle) {
     throw new Error('阻碍记录不存在')
@@ -240,7 +346,24 @@ async function closeObstacleRecord(id: string, userId?: string | null, reqBody?:
     })
   }
 
-  const businessStatus = await BusinessStatusService.calculateBusinessStatus(obstacle.task_id)
+  const task = await executeSQLOne(
+    `SELECT id, project_id, status, progress,
+            ready_for_start, dependency_status, condition_status,
+            obstacle_status, progress_impact_level, blocked_for_progress,
+            readiness_summary, planned_start_date, planned_end_date, start_date, end_date
+       FROM tasks
+      WHERE id = ? AND project_id = ?
+      LIMIT 1`,
+    [obstacle.task_id, obstacle.project_id],
+  )
+  const businessStatus = await BusinessStatusService.evaluateBusinessStatusForTaskFromLoadedFact(
+    obstacle.task_id,
+    {
+      task: task as any,
+      obstacles: [obstacle as any],
+      projectId: obstacle.project_id,
+    },
+  )
   await warningService.evaluate({
     type: 'obstacle',
     obstacle: toWarningObstacle(obstacle),
@@ -248,6 +371,9 @@ async function closeObstacleRecord(id: string, userId?: string | null, reqBody?:
   const projectId = obstacle.project_id ?? null
   if (projectId) {
     enqueueProjectHealthUpdate(projectId, 'task_obstacle_resolved')
+  }
+  if (obstacle.task_id) {
+    await evaluateTaskConstraint(String(obstacle.task_id), { projectId: String(obstacle.project_id ?? ''), sourceEventType: 'task_obstacle_resolved' })
   }
 
   return {
@@ -257,7 +383,7 @@ async function closeObstacleRecord(id: string, userId?: string | null, reqBody?:
 }
 
 // 获取任务的所有阻碍记录（支持 taskId 和 projectId 两种查询方式）
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', requireProjectMember(resolveObstacleListProjectId), asyncHandler(async (req, res) => {
   const taskId = req.query.taskId as string
   const projectId = req.query.projectId as string
   const limit = parseInt(req.query.limit as string) || 200
@@ -275,16 +401,10 @@ router.get('/', asyncHandler(async (req, res) => {
   let data: ObstacleRow[]
   if (taskId) {
     logger.info('Fetching task obstacles by taskId', { taskId, limit, offset })
-    data = await executeSQL<ObstacleRow>(
-      'SELECT * FROM task_obstacles WHERE task_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
-      [taskId, limit, offset]
-    )
+    data = await readObstacleRowsByTaskId(taskId, limit, offset)
   } else {
     logger.info('Fetching task obstacles by projectId', { projectId, limit, offset })
-    data = await executeSQL<ObstacleRow>(
-      'SELECT * FROM task_obstacles WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?',
-      [projectId, limit, offset]
-    )
+    data = await readObstacleRowsByProjectId(projectId, limit, offset)
   }
 
   const response: ApiResponse = {
@@ -296,11 +416,11 @@ router.get('/', asyncHandler(async (req, res) => {
 }))
 
 // 获取单个阻碍记录
-router.get('/:id', asyncHandler(async (req, res) => {
+router.get('/:id', requireProjectMember((req) => resolveObstacleProjectId(req.params.id)), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Fetching task obstacle', { id })
 
-  const data = await executeSQLOne<ObstacleRow>('SELECT * FROM task_obstacles WHERE id = ? LIMIT 1', [id])
+  const data = await readObstacleRowById(id)
 
   if (!data) {
     const response: ApiResponse = {
@@ -321,24 +441,37 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // 创建阻碍记录
 // P1修复：添加XSS防护验证，使用统一认证中间件
-router.post('/', authenticate, requireProjectEditor(req => req.body.project_id), validate(obstacleSchema), asyncHandler(async (req, res) => {
+router.post('/', authenticate, requireProjectEditor(req => req.body.project_id || resolveTaskProjectId(req.body.task_id)), validate(obstacleSchema), asyncHandler(async (req, res) => {
   logger.info('Creating task obstacle', req.body)
 
-  // [F5]: 兼容 GanttView 发送的 title 字段 → description
-  const description = normalizeTextField(req.body.description ?? req.body.title)
-  // [F5]: 兼容 GanttView 发送的 is_resolved 字段 → status
-  const status = normalizeObstacleStatus(req.body.status, req.body.is_resolved)
+  const description = normalizeTextField(req.body.description)
+  const status = normalizeObstacleStatus(req.body.status)
   const obstacleType = normalizeObstacleType(req.body.obstacle_type)
 
   const id = uuidv4()
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
 
-  // [F2]: 从 tasks 表获取 project_id（如果没有传入，兼容旧前端）
   let projectId = req.body.project_id
-  if (!projectId) {
-    const taskRows = await executeSQL<TaskProjectRow>('SELECT project_id FROM tasks WHERE id = ?', [req.body.task_id])
-    projectId = taskRows?.[0]?.project_id ?? null
+  const taskProjectId = await resolveTaskProjectId(req.body.task_id)
+  if (!taskProjectId) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'TASK_NOT_FOUND', message: 'task_id must reference an existing task' },
+      timestamp: new Date().toISOString(),
+    })
   }
+  if (projectId && projectId !== taskProjectId) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'TASK_PROJECT_MISMATCH',
+        message: 'task_id must belong to the submitted project_id',
+        details: { taskId: req.body.task_id, taskProjectId, projectId },
+      },
+      timestamp: new Date().toISOString(),
+    })
+  }
+  projectId = taskProjectId
 
   await executeSQL(
     `INSERT INTO task_obstacles (id, task_id, project_id, obstacle_type, description, status,
@@ -365,7 +498,7 @@ router.post('/', authenticate, requireProjectEditor(req => req.body.project_id),
     ]
   )
 
-  const data = await executeSQLOne<ObstacleRow>('SELECT * FROM task_obstacles WHERE id = ? LIMIT 1', [id])
+  const data = await readObstacleRowById(id)
 
   await writeLifecycleLog({
     project_id: projectId ?? data?.project_id ?? null,
@@ -389,6 +522,9 @@ router.post('/', authenticate, requireProjectEditor(req => req.body.project_id),
     if (data.project_id) {
       enqueueProjectHealthUpdate(data.project_id, 'task_obstacle_created')
     }
+    if (data.task_id) {
+      await evaluateTaskConstraint(String(data.task_id), { projectId: String(data.project_id ?? ''), sourceEventType: 'task_obstacle_created' })
+    }
   }
   res.status(201).json(response)
 }))
@@ -407,26 +543,16 @@ router.put('/:id', authenticate, requireProjectEditor(async (req) => {
 
   logger.info('Updating task obstacle', { id, userId })
 
-  if (req.body.is_resolved === true && req.body.status === undefined) {
-    req.body.status = OBSTACLE_STATUS_RESOLVED
-  } else if (req.body.is_resolved === false && req.body.status === undefined) {
-    req.body.status = OBSTACLE_STATUS_PENDING
-  }
-
   if (req.body.status !== undefined) {
-    req.body.status = normalizeObstacleStatus(req.body.status, req.body.is_resolved)
+    req.body.status = normalizeObstacleStatus(req.body.status)
   }
 
   if (req.body.obstacle_type !== undefined) {
     req.body.obstacle_type = normalizeObstacleType(req.body.obstacle_type)
   }
 
-  if (req.body.title !== undefined && req.body.description === undefined) {
-    req.body.description = req.body.title
-  }
-
   // 获取当前阻碍信息
-  const current = await executeSQLOne<ObstacleRow>('SELECT * FROM task_obstacles WHERE id = ? LIMIT 1', [id])
+  const current = await readObstacleRowById(id)
 
   if (!current) {
     const response: ApiResponse = {
@@ -449,39 +575,51 @@ router.put('/:id', authenticate, requireProjectEditor(async (req) => {
   }
 
   const ts = new Date().toISOString().slice(0, 19).replace('T', ' ')
-  const setClauses: string[] = ['updated_at = ?']
-  const params: any[] = [ts]
-  const nextDescription = req.body.description !== undefined
+  const body = req.body as Record<string, unknown>
+  const nextDescription = hasOwn(body, 'description')
     ? normalizeTextField(req.body.description) ?? normalizeTextField(current?.description) ?? normalizeTextField(current?.title) ?? ''
-    : undefined
+    : current.description ?? null
   const normalizedSeverity = req.body.severity
-  const severityChanged = normalizedSeverity !== undefined
+  const severityChanged = hasOwn(body, 'severity')
     && String(normalizedSeverity).trim() !== String(current?.severity ?? '').trim()
 
-  const fieldMap: Record<string, unknown> = {
-    obstacle_type: req.body.obstacle_type,
-    description: nextDescription,
-    status: req.body.status,
-    severity: normalizedSeverity,
-    severity_manually_overridden: severityChanged ? true : undefined,
-    estimated_resolve_date: normalizeTextField(req.body.expected_resolution_date),
-    notes: normalizeTextField(req.body.resolution_notes),
-    resolution: normalizeTextField(req.body.resolution),
-    resolved_by: req.body.resolved_by,
-    resolved_at: req.body.resolved_at,
-  }
+  const currentProjectId = String(current?.project_id ?? '').trim()
+  await executeSQL(
+    `UPDATE task_obstacles
+     SET obstacle_type = ?,
+         description = ?,
+         status = ?,
+         severity = ?,
+         severity_manually_overridden = ?,
+         estimated_resolve_date = ?,
+         notes = ?,
+         resolution = ?,
+         resolved_by = ?,
+         resolved_at = ?,
+         updated_at = ?
+     WHERE id = ? AND project_id = ?`,
+    [
+      hasOwn(body, 'obstacle_type') ? req.body.obstacle_type : current.obstacle_type ?? null,
+      nextDescription,
+      hasOwn(body, 'status') ? req.body.status : current.status ?? null,
+      hasOwn(body, 'severity') ? normalizedSeverity : current.severity ?? null,
+      severityChanged ? true : current.severity_manually_overridden ?? false,
+      hasOwn(body, 'expected_resolution_date')
+        ? normalizeTextField(req.body.expected_resolution_date)
+        : current.estimated_resolve_date ?? current.expected_resolution_date ?? null,
+      hasOwn(body, 'resolution_notes')
+        ? normalizeTextField(req.body.resolution_notes)
+        : current.notes ?? current.resolution_notes ?? null,
+      hasOwn(body, 'resolution') ? normalizeTextField(req.body.resolution) : current.resolution ?? null,
+      hasOwn(body, 'resolved_by') ? req.body.resolved_by : current.resolved_by ?? null,
+      hasOwn(body, 'resolved_at') ? req.body.resolved_at : current.resolved_at ?? null,
+      ts,
+      id,
+      currentProjectId,
+    ],
+  )
 
-  for (const [col, val] of Object.entries(fieldMap)) {
-    if (val !== undefined) {
-      setClauses.push(`${col} = ?`)
-      params.push(val)
-    }
-  }
-
-  params.push(id)
-  await executeSQL(`UPDATE task_obstacles SET ${setClauses.join(', ')} WHERE id = ?`, params)
-
-  const data = await executeSQLOne<ObstacleRow>('SELECT * FROM task_obstacles WHERE id = ? LIMIT 1', [id])
+  const data = await readObstacleRowById(id, currentProjectId)
 
   const oldStatus = normalizeObstacleStatus(current?.status, current?.is_resolved)
   const newStatus = normalizeObstacleStatus(data?.status, data?.is_resolved)
@@ -510,6 +648,9 @@ router.put('/:id', authenticate, requireProjectEditor(async (req) => {
     if (data.project_id) {
       enqueueProjectHealthUpdate(data.project_id, 'task_obstacle_updated')
     }
+    if (data.task_id) {
+      await evaluateTaskConstraint(String(data.task_id), { projectId: String(data.project_id ?? ''), sourceEventType: 'task_obstacle_updated' })
+    }
   }
   res.json(response)
 }))
@@ -525,7 +666,7 @@ router.delete('/:id', authenticate, requireProjectEditor(async (req) => {
 }), asyncHandler(async (req, res) => {
   const { id } = req.params
   logger.info('Deleting task obstacle', { id })
-  const existing = await executeSQLOne<ObstacleRow>('SELECT * FROM task_obstacles WHERE id = ? LIMIT 1', [id])
+  const existing = await readObstacleRowById(id)
   if (!existing) {
     const response: ApiResponse = {
       success: false,
@@ -548,6 +689,19 @@ router.delete('/:id', authenticate, requireProjectEditor(async (req) => {
 
   if (!normalizedExisting.is_resolved || linkedIssue) {
     return res.status(422).json(buildObstacleDeleteProtectionResponse(normalizedExisting, linkedIssue ?? null))
+  }
+
+  // v1.4.15: retention decision must block unsafe physical deletes.
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({
+    entityType: 'task_obstacle',
+    entityId: id,
+    projectId: existing?.project_id ?? null,
+    userId: req.user?.id ?? null,
+    userAction: 'delete',
+  })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
   }
 
   const { data, error } = await supabase.rpc('delete_task_obstacle_with_source_backfill_atomic', {
@@ -579,6 +733,9 @@ router.delete('/:id', authenticate, requireProjectEditor(async (req) => {
   }
   if (existing?.project_id) {
     enqueueProjectHealthUpdate(existing.project_id, 'task_obstacle_deleted')
+  }
+  if (existing?.task_id) {
+    await evaluateTaskConstraint(String(existing.task_id), { projectId: String(existing.project_id ?? ''), sourceEventType: 'task_obstacle_deleted' })
   }
   res.json(response)
 }))

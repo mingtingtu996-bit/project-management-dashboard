@@ -35,6 +35,7 @@ export interface MonthlyPlanConfirmDialogProps {
   onOpenChange: (open: boolean) => void
   mode: MonthlyPlanConfirmMode
   state?: MonthlyPlanConfirmState
+  monthLabel?: string
   summary: MonthlyPlanConfirmSummary
   canConfirm?: boolean
   onConfirm?: () => void
@@ -46,6 +47,7 @@ export function MonthlyPlanConfirmDialog({
   onOpenChange,
   mode,
   state = 'ready',
+  monthLabel = '当前月份',
   summary,
   canConfirm = state !== 'failed',
   onConfirm,
@@ -63,9 +65,9 @@ export function MonthlyPlanConfirmDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-base">
             <Clock3 className="h-4 w-4 text-blue-500" />
-            月度计划确认
+            {monthLabel} 月度计划确认
           </DialogTitle>
-          <DialogDescription className="sr-only">月度计划确认</DialogDescription>
+          <DialogDescription className="sr-only">{monthLabel} 月度计划确认</DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
@@ -83,7 +85,7 @@ export function MonthlyPlanConfirmDialog({
             </Card>
             <Card className="surface-card">
               <CardContent className="space-y-1 p-5">
-                <div className="text-xs text-slate-500">本月新增数</div>
+                <div className="text-xs text-slate-500">{monthLabel} 新增数</div>
                 <div className="text-2xl font-semibold text-slate-900">{summary.newlyAddedCount}</div>
               </CardContent>
             </Card>
@@ -123,7 +125,7 @@ export function MonthlyPlanConfirmDialog({
                 <div className="text-2xl font-semibold text-slate-900">{summary.blockingIssueCount}</div>
                 {summary.blockingIssueCount > 0 ? (
                   <div className="text-xs leading-5 text-amber-700">
-                    条件 {summary.conditionIssueCount} · 障碍 {summary.obstacleIssueCount} · 延期 {summary.delayIssueCount} · 映射 {summary.mappingIssueCount} · 必填 {summary.requiredFieldIssueCount}
+                    条件 {summary.conditionIssueCount} · 障碍 {summary.obstacleIssueCount} · 延期 {summary.delayIssueCount} · 计划依据 {summary.mappingIssueCount} · 必填 {summary.requiredFieldIssueCount}
                   </div>
                 ) : null}
               </CardContent>
@@ -141,7 +143,10 @@ export function MonthlyPlanConfirmDialog({
               关闭
             </Button>
             <Button type="button" onClick={onConfirm} disabled={!canConfirm}>
-              {mode === 'quick' ? '快速确认' : '确认月度计划'}
+              {mode === 'quick' ? '快速确认月度计划' : '确认月度计划'}
+              <span className="sr-only">
+                {mode === 'quick' ? `快速确认 ${monthLabel} 计划` : `确认 ${monthLabel} 计划`}
+              </span>
             </Button>
           </div>
         </div>

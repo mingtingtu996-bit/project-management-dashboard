@@ -1,23 +1,32 @@
-import type { DurationLiveLearningAssetKey } from './durationLiveLearningClosureService.js'
+import { query as rawQuery } from '../database.js'
 import {
   isDurationRuntimeConsumerPublicationKeyAllowedForAsset,
   listDurationRuntimeConsumerObservationIntegrationContracts,
   type DurationRuntimeConsumerPublicationStatus,
+  type DurationRuntimeConsumerObservedAssetKey,
 } from './durationRuntimeConsumerObservationIntegrationService.js'
 import {
   listDurationRuntimeConsumerBusinessPathRequiredIntegrations,
 } from './durationRuntimeConsumerBusinessPathIntegrationAuditService.js'
+import {
+  CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+} from './constructionOrganizationRuntimeLineageService.js'
+import {
+  constructionOrganizationProductOutcomeProjectionOnlyContextReasons,
+} from './constructionOrganizationProductOutcomeEvidenceActionGuard.js'
 
 export type DurationRuntimeConsumerObservationQueryExec = <T = Record<string, unknown>>(
   sql: string,
   params?: unknown[],
 ) => Promise<T[]>
 
+const approvedRuntimeConsumerObservationQueryExecs = new WeakSet<DurationRuntimeConsumerObservationQueryExec>()
+
 export type DurationRuntimeConsumerObservationStatus = 'observed' | 'rejected'
 export type DurationRuntimeConsumerRuntimeCallStatus = 'called' | 'rejected'
 
 export interface DurationRuntimeConsumerObservation {
-  assetKey: DurationLiveLearningAssetKey
+  assetKey: DurationRuntimeConsumerObservedAssetKey
   publicationKey: string
   consumerKey: string
   consumerSurface: string
@@ -54,7 +63,7 @@ export interface RecordDurationRuntimeConsumerRuntimeCallInput {
 
 export interface RecordDurationRuntimeConsumerObservationInput {
   queryExec: DurationRuntimeConsumerObservationQueryExec
-  assetKey: DurationLiveLearningAssetKey
+  assetKey: DurationRuntimeConsumerObservedAssetKey
   publicationKey: string
   consumerKey: string
   consumerSurface: string
@@ -67,7 +76,7 @@ export interface RecordDurationRuntimeConsumerObservationInput {
 }
 
 export interface DurationRuntimeConsumerObservedArtifact {
-  assetKey: DurationLiveLearningAssetKey
+  assetKey: DurationRuntimeConsumerObservedAssetKey
   publicationKey: string
   publicationStatus?: string | null
   observationContext?: Record<string, unknown> | null
@@ -128,8 +137,111 @@ export interface DurationRuntimeConsumerObservedArtifactsResult {
   reasons: string[]
 }
 
+function normalizeRuntimeConsumerObservationSql(sql: string) {
+  return sql.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+export function createDurationRuntimeConsumerObservationQueryExec(
+  queryExec?: DurationRuntimeConsumerObservationQueryExec,
+): DurationRuntimeConsumerObservationQueryExec {
+  if (queryExec && approvedRuntimeConsumerObservationQueryExecs.has(queryExec)) return queryExec
+
+  const executeQuery: DurationRuntimeConsumerObservationQueryExec = queryExec
+    ?? (async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+      // database-query-dynamic-approved: this adapter receives only the two exact, normalized ledger INSERT shapes approved below.
+      const result = await rawQuery(sql, params as any[])
+      return result.rows as T[]
+    })
+
+  const approvedQueryExec: DurationRuntimeConsumerObservationQueryExec = async <T = Record<string, unknown>>(
+    sql: string,
+    params: unknown[] = [],
+  ) => {
+    const normalized = normalizeRuntimeConsumerObservationSql(sql)
+
+    if (normalized === normalizeRuntimeConsumerObservationSql(`
+      insert into public.runtime_consumer_runtime_calls (
+        consumer_key,
+        runtime_entry_ref,
+        call_status,
+        call_context,
+        source_evidence_refs,
+        writes_runtime_directly,
+        writes_fact_directly,
+        called_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8)
+    `)) {
+      const serializedParams = [...params]
+      serializedParams[3] = JSON.stringify(params[3] ?? {})
+      serializedParams[4] = JSON.stringify(params[4] ?? [])
+      return executeQuery<T>(`
+        insert into public.runtime_consumer_runtime_calls (
+          consumer_key,
+          runtime_entry_ref,
+          call_status,
+          call_context,
+          source_evidence_refs,
+          writes_runtime_directly,
+          writes_fact_directly,
+          called_at
+        ) values ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
+      `, serializedParams as any[])
+    }
+
+    if (normalized === normalizeRuntimeConsumerObservationSql(`
+      insert into public.runtime_consumer_observations (
+        asset_key,
+        publication_key,
+        consumer_key,
+        consumer_surface,
+        observation_status,
+        observation_context,
+        source_evidence_refs,
+        writes_runtime_directly,
+        writes_fact_directly,
+        observed_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `)) {
+      const serializedParams = [...params]
+      serializedParams[5] = JSON.stringify(params[5] ?? {})
+      serializedParams[6] = JSON.stringify(params[6] ?? [])
+      return executeQuery<T>(`
+        insert into public.runtime_consumer_observations (
+          asset_key,
+          publication_key,
+          consumer_key,
+          consumer_surface,
+          observation_status,
+          observation_context,
+          source_evidence_refs,
+          writes_runtime_directly,
+          writes_fact_directly,
+          observed_at
+        ) values ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)
+      `, serializedParams as any[])
+    }
+
+    throw new Error('unapproved_duration_runtime_consumer_observation_sql')
+  }
+
+  approvedRuntimeConsumerObservationQueryExecs.add(approvedQueryExec)
+  return approvedQueryExec
+}
+
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function readStructuredBusinessType(value: Record<string, unknown> | null | undefined) {
+  return normalizeText(value?.businessType)
+}
+
+function readStructuredProjectId(value: Record<string, unknown> | null | undefined) {
+  return normalizeText(value?.projectId)
+}
+
+function hasStructuredOptionNetworkIdentity(value: Record<string, unknown> | null | undefined) {
+  return Boolean(normalizeText(value?.draftNetworkKey) || normalizeText(value?.optionId))
 }
 
 function normalizeConsumerKey(value: unknown) {
@@ -162,6 +274,17 @@ function isDeclaredRuntimeEntryForConsumer(consumerKey: unknown, runtimeEntryRef
   const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
   const normalizedRuntimeEntryRef = normalizeText(runtimeEntryRef)
   if (!normalizedConsumerKey || !normalizedRuntimeEntryRef) return true
+  const allowedRuntimeEntryRefsByConsumerKey: Record<string, string[]> = {
+    projectWizard: [
+      'projectWizard:commitWizardGeneration',
+    ],
+    scheduleAccelerationRuntimeService: [
+      'scheduleAccelerationRuntimeService:recordScheduleAccelerationRecommendationAdoption',
+    ],
+  }
+  if ((allowedRuntimeEntryRefsByConsumerKey[normalizedConsumerKey] ?? []).includes(normalizedRuntimeEntryRef)) {
+    return true
+  }
   return listDurationRuntimeConsumerBusinessPathRequiredIntegrations()
     .some((integration) => integration.consumerKey === normalizedConsumerKey
       && integration.runtimeEntryRef === normalizedRuntimeEntryRef)
@@ -211,8 +334,22 @@ function validateInput(input: RecordDurationRuntimeConsumerObservationInput) {
   if (!normalizeText(input.publicationKey)) reasons.push('runtime_consumer_observation_publication_key_required')
   if (!normalizeText(input.consumerKey)) reasons.push('runtime_consumer_observation_consumer_key_required')
   if (!normalizeText(input.consumerSurface)) reasons.push('runtime_consumer_observation_consumer_surface_required')
+  if (normalizeEvidenceRefs(input.sourceEvidenceRefs).length === 0) {
+    reasons.push('runtime_consumer_observation_source_evidence_required')
+  }
   if (input.writesRuntimeDirectly) reasons.push('runtime_consumer_observation_must_not_write_runtime_directly')
   if (input.writesFactDirectly) reasons.push('runtime_consumer_observation_must_not_write_fact_directly')
+  if (
+    normalizeText(input.assetKey) === CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY
+    && !readStructuredBusinessType(input.observationContext)
+  ) {
+    reasons.push('business_type_required')
+  }
+  if (normalizeText(input.assetKey) === CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY) {
+    if (!readStructuredProjectId(input.observationContext)) reasons.push('project_id_required')
+    if (!hasStructuredOptionNetworkIdentity(input.observationContext)) reasons.push('option_network_identity_required')
+    reasons.push(...constructionOrganizationProductOutcomeProjectionOnlyContextReasons(input.observationContext))
+  }
   if (
     normalizeText(input.assetKey)
     && normalizeText(input.publicationKey)
@@ -260,7 +397,7 @@ function buildRuntimeCall(input: RecordDurationRuntimeConsumerRuntimeCallInput):
 
 function buildObservation(input: RecordDurationRuntimeConsumerObservationInput): DurationRuntimeConsumerObservation {
   return {
-    assetKey: normalizeText(input.assetKey) as DurationLiveLearningAssetKey,
+    assetKey: normalizeText(input.assetKey) as DurationRuntimeConsumerObservedAssetKey,
     publicationKey: normalizeText(input.publicationKey),
     consumerKey: normalizeConsumerKey(input.consumerKey),
     consumerSurface: normalizeText(input.consumerSurface),
@@ -341,6 +478,11 @@ export async function recordDurationRuntimeConsumerObservedArtifacts(
   const results: DurationRuntimeConsumerObservationResult[] = []
 
   for (const artifact of input.artifacts) {
+    if (normalizeEvidenceRefs(artifact.sourceEvidenceRefs).length === 0) {
+      results.push(buildBlockResult(['runtime_consumer_observation_source_evidence_required']))
+      continue
+    }
+
     if (!isPublishedOrCanaryArtifact(artifact.publicationStatus)) {
       results.push(buildBlockResult(['runtime_consumer_observation_published_or_canary_artifact_required']))
       continue
@@ -369,6 +511,11 @@ export async function recordDurationRuntimeConsumerObservedContractArtifacts(
   const results: DurationRuntimeConsumerObservationResult[] = []
 
   for (const artifact of input.artifacts) {
+    if (normalizeEvidenceRefs(artifact.sourceEvidenceRefs).length === 0) {
+      results.push(buildBlockResult(['runtime_consumer_observation_source_evidence_required']))
+      continue
+    }
+
     const contract = findRuntimeConsumerContract(artifact.assetKey, input.consumerKey)
     if (!contract) {
       results.push(buildBlockResult(['runtime_consumer_observation_contract_not_found']))

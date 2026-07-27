@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import Notifications from '../Notifications'
 import { useApi } from '@/hooks/useApi'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { useStore } from '@/hooks/useStore'
 
@@ -17,9 +17,10 @@ vi.mock('@/hooks/useApi', () => ({
   useApi: vi.fn(),
 }))
 
-vi.mock('@/hooks/useAuth', () => ({
-  useAuth: vi.fn(),
-}))
+vi.mock('@/context/AuthContext', async () => {
+  const actual = await vi.importActual<typeof import('@/context/AuthContext')>('@/context/AuthContext')
+  return { ...actual, useAuth: vi.fn() }
+})
 
 vi.mock('@/hooks/useAuthDialog', () => ({
   useAuthDialog: vi.fn(),
@@ -352,7 +353,7 @@ describe('Notifications', () => {
     await waitForCondition(() => container.textContent?.includes('规划映射存在孤立指针'))
 
     expect(container.textContent).toContain('规划映射存在孤立指针')
-    expect(container.textContent).toContain('S2 mapping')
+    expect(container.textContent).toContain('系统关联')
     expect(container.textContent).toContain('系统异常')
     expect(container.textContent).not.toContain('映射孤立指针2 条')
 
@@ -370,8 +371,8 @@ describe('Notifications', () => {
     expect(navigateMock).toHaveBeenCalledWith(`/projects/${projectId}/planning/baseline`)
   })
 
-  it('opens the delete guard and removes the reminder only after confirm', async () => {
-    let notificationsData = [
+  it('does not expose physical delete actions for reminders', async () => {
+    const notificationsData = [
       {
         id: 'risk-1',
         title: '风险预警',
@@ -405,12 +406,6 @@ describe('Notifications', () => {
       throw new Error(`Unexpected url: ${url}`)
     })
 
-    apiMock.delete.mockImplementation(async (url: string) => {
-      const deletedId = url.split('/').filter(Boolean).at(-1)
-      notificationsData = notificationsData.filter((item) => item.id !== deletedId)
-      return {}
-    })
-
     await act(async () => {
       renderNotifications(root)
       await flush()
@@ -419,30 +414,9 @@ describe('Notifications', () => {
     await waitForCondition(() => container.textContent?.includes('风险预警') === true)
 
     const deleteButton = container.querySelector('[data-testid="notification-delete-action-risk-1"]') as HTMLButtonElement | null
-    expect(deleteButton).toBeTruthy()
-
-    await act(async () => {
-      deleteButton?.click()
-      await flush()
-    })
-
-    await waitForCondition(
-      () => Boolean(document.body.querySelector('[data-testid="notification-delete-guard"]')),
-    )
-
-    const confirmButton = Array.from(document.body.querySelectorAll('button')).find((button) =>
-      button.textContent?.includes('确认删除'),
-    ) as HTMLButtonElement | undefined
-    expect(confirmButton).toBeTruthy()
-
-    await act(async () => {
-      confirmButton?.click()
-      await flush()
-      await flush()
-    })
-
-    expect(apiMock.delete).toHaveBeenCalledWith('/api/notifications/risk-1')
-    await waitForCondition(() => container.textContent?.includes('风险预警') === false)
+    expect(deleteButton).toBeNull()
+    expect(document.body.querySelector('[data-testid="notification-delete-guard"]')).toBeNull()
+    expect(apiMock.delete).not.toHaveBeenCalled()
   })
 
   it('shows login guidance instead of requesting protected notifications when unauthenticated', async () => {

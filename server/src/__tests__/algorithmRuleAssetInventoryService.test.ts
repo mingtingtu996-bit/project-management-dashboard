@@ -87,6 +87,37 @@ describe('algorithmRuleAssetInventoryService', () => {
       recommendation: 'evaluate_before_seed_inclusion',
       boundaryPolicy: expect.arrayContaining(['forecast_fact_candidate_only']),
     }))
+    expect(getAlgorithmRuleAsset('constructionOrganizationScenarioSelector')).toEqual(expect.objectContaining({
+      lifecycleType: 'candidate_for_algorithm_seed',
+      governanceSystem: 'wbs_task_structure_governance',
+      ownerService: 'constructionOrganizationScenarioSelector/constructionOrganizationScenarioGovernanceService/wbsTemplateGenerationService/scheduleAccelerationService',
+      recommendation: 'evaluate_before_seed_inclusion',
+      learningTarget: 'candidate_weight',
+      learningMaturity: 'governed_candidate',
+      publishAnchor: 'manual_governance_required',
+      automationMaturity: 'auto_review_package',
+      boundaryPolicy: expect.arrayContaining([
+        'uses_existing_project_generation_facts_only',
+        'scenario_candidates_are_evaluated_as_virtual_networks_before_any_write',
+        'e1_e3_e5_candidate_evaluation_only_until_governed_publication',
+        'scenario_candidates_do_not_write_seed_or_task_dependencies_directly',
+        'resources_are_sidecar_feasibility_signals_not_primary_schedule_driver',
+      ]),
+    }))
+    expect(getAlgorithmRuleAsset('constructionOrganizationScenarioGovernanceService')).toEqual(expect.objectContaining({
+      lifecycleType: 'service_governance',
+      governanceSystem: 'algorithm_asset_candidate_events',
+      ownerService: 'constructionOrganizationScenarioGovernanceService',
+      recommendation: 'keep_independent_governance',
+      learningTarget: 'candidate_weight',
+      learningMaturity: 'governed_candidate',
+      publishAnchor: 'manual_governance_required',
+      automationMaturity: 'auto_review_package',
+      boundaryPolicy: expect.arrayContaining([
+        'persists_plan_options_to_algorithm_asset_candidate_events_only',
+        'does_not_write_task_dependencies_plan_dates_baseline_seed_or_critical_path',
+      ]),
+    }))
   })
 
   it('registers the WBS template golden benchmark as an independent blocking gate', () => {
@@ -405,6 +436,30 @@ describe('algorithmRuleAssetInventoryService', () => {
         'replay_summary_includes_original_actual_overlay_mae_and_overcompensation',
         'shadow_report_only_replay_cannot_write_runtime',
         'replay_service_does_not_write_runtime',
+      ]),
+    }))
+  })
+
+  it('registers planning replay calibration as a shared baseline and monthly candidate loop', () => {
+    expect(getAlgorithmRuleAsset('planningReplayCalibrationService')).toEqual(expect.objectContaining({
+      lifecycleType: 'service_governance',
+      governanceSystem: 'planning_replay_calibration_governance',
+      ownerService: 'planningReplayCalibrationService',
+      learningTarget: 'candidate_weight',
+      learningMaturity: 'governed_candidate',
+      publishAnchor: 'manual_governance_required',
+      automationMaturity: 'auto_review_package',
+      consumers: expect.arrayContaining([
+        'baselineGenerationService',
+        'monthlyPlanGenerationService',
+        'algorithmAssetReplayService',
+      ]),
+      boundaryPolicy: expect.arrayContaining([
+        'unified_replay_machine_serves_baseline_and_monthly_plan',
+        'coarse_process_grouping_precedes_project_type_building_climate_and_workface_splits',
+        'min_sample_gate_required_per_coarse_process',
+        'does_not_write_baseline_monthly_plan_tasks_actuals_or_progress',
+        'does_not_mutate_seed_records_runtime_overrides_or_forecast_residual_overlays',
       ]),
     }))
   })
@@ -748,6 +803,12 @@ describe('algorithmRuleAssetInventoryService', () => {
     }))
     expect(getAlgorithmRuleAsset('algorithmSeedCandidateDiscoveryJob')).toEqual(expect.objectContaining({
       source: 'server/src/jobs/algorithmSeedCandidateDiscoveryJob.ts',
+      lifecycleType: 'service_governance',
+      recommendation: 'keep_independent_governance',
+      boundaryPolicy: expect.arrayContaining(['auto_discovered_phase_1_3_asset']),
+    }))
+    expect(getAlgorithmRuleAsset('utils.workCalendarForecastBuilder')).toEqual(expect.objectContaining({
+      source: 'server/src/utils/workCalendarForecastBuilder.ts',
       lifecycleType: 'service_governance',
       recommendation: 'keep_independent_governance',
       boundaryPolicy: expect.arrayContaining(['auto_discovered_phase_1_3_asset']),

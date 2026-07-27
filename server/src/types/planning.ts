@@ -1,3 +1,5 @@
+import type { DurationMetricDto } from '../services/durationMetricService.js'
+
 export const PLANNING_STATUSES = ['draft', 'confirmed', 'closed', 'revising', 'pending_realign', 'archived'] as const
 export type PlanningStatus = (typeof PLANNING_STATUSES)[number]
 
@@ -18,11 +20,18 @@ export const PLANNING_ERROR_CODES = [
   'LOCK_HELD',
   'LOCK_EXPIRED',
   'FORBIDDEN',
+  'FIELD_REGISTRY_STALE',
   'NOT_FOUND',
   'VALIDATION_ERROR',
   'REQUIRES_REALIGNMENT',
   'OBSERVATION_POOL_EMPTY',
   'DEVIATION_ANALYSIS_UNAVAILABLE',
+  'COMPARISON_BASELINE_UNAVAILABLE',
+  'PROJECT_MISMATCH',
+  'INDEPENDENT_TASK_NETWORK_PLAN_BLOCKED',
+  'INDEPENDENT_TASK_NETWORK_SCOPE_INVALID',
+  'INDEPENDENT_TASK_NETWORK_EXECUTION_NOT_AUTHORIZED',
+  'APPROVED_DURATION_MAPPING_SAMPLE_INVALID',
   'MANUAL_REORDER_ALREADY_ACTIVE',
   'MANUAL_REORDER_NOT_ACTIVE',
 ] as const
@@ -64,7 +73,7 @@ export interface PlanningTransitionContext {
 export interface PlanningVersionBase {
   id: string
   project_id: string
-  version: number
+  version: number | null
   status: PlanningStatus
   title: string
   description?: string | null
@@ -106,12 +115,38 @@ export interface BaselineItem {
   notes?: string | null
   template_id?: string | null
   template_node_id?: string | null
+  engineering_category_id?: string | null
+  engineering_category_type?: string | null
+  engineering_category_name?: string | null
+  wbs_node_type?: string | null
+  wbs_path?: string | null
+  is_wbs_summary?: boolean | null
+  is_executable?: boolean | null
+  standard_work_code?: string | null
+  standard_work_name?: string | null
+  scope_snapshot?: Record<string, unknown> | null
+  wbs_snapshot?: Record<string, unknown> | null
+  task_fact_snapshot?: Record<string, unknown> | null
+  task_code_snapshot?: string | null
+  status_snapshot?: Record<string, unknown> | null
+  seed_versions?: Array<Record<string, unknown>> | null
+  snapshot_source?: string | null
+  snapshot_captured_at?: string | null
+  manual_override_fields?: Record<string, boolean> | null
+  generation_metadata?: Record<string, unknown> | null
+  last_generated_at?: string | null
 }
 
 export interface MonthlyPlanVersion extends PlanningVersionBase {
   month: string
   baseline_version_id?: string | null
   source_version_id?: string | null
+  source_version_label?: string | null
+  source_mode?: 'baseline' | 'schedule' | 'mixed' | 'manual' | 'imported' | null
+  temporary_without_baseline?: boolean | null
+  generation_cutoff_at?: string | null
+  confirmed_snapshot_at?: string | null
+  governance_metadata?: Record<string, unknown> | null
   closeout_at?: string | null
   carryover_item_count?: number
   data_confidence_score?: number | null
@@ -136,6 +171,26 @@ export interface MonthlyPlanItem {
   is_critical?: boolean
   commitment_status?: 'planned' | 'carried_over' | 'completed' | 'cancelled'
   notes?: string | null
+  engineering_category_id?: string | null
+  engineering_category_type?: string | null
+  engineering_category_name?: string | null
+  wbs_node_type?: string | null
+  wbs_path?: string | null
+  is_wbs_summary?: boolean | null
+  is_executable?: boolean | null
+  standard_work_code?: string | null
+  standard_work_name?: string | null
+  scope_snapshot?: Record<string, unknown> | null
+  wbs_snapshot?: Record<string, unknown> | null
+  task_fact_snapshot?: Record<string, unknown> | null
+  task_code_snapshot?: string | null
+  status_snapshot?: Record<string, unknown> | null
+  seed_versions?: Array<Record<string, unknown>> | null
+  snapshot_source?: string | null
+  snapshot_captured_at?: string | null
+  manual_override_fields?: Record<string, boolean> | null
+  generation_metadata?: Record<string, unknown> | null
+  last_generated_at?: string | null
 }
 
 export interface CarryoverItem {
@@ -179,7 +234,7 @@ export interface RevisionPoolCandidate {
 }
 
 export interface BaselineConfirmRequest {
-  version: number
+  version?: number | null
 }
 
 export interface BaselineConfirmResponse {
@@ -283,6 +338,13 @@ export interface MilestoneIntegrityRow {
   actual_date: string | null
   state: MilestoneIntegrityState
   issues: string[]
+  scenario_type?: string | null
+  scenario_label?: string | null
+  suggested_action?: string | null
+  gate_level?: PlanningGovernanceGateLevel
+  target_surface?: PlanningGovernanceTargetSurface
+  commitment_anchor?: 'baseline' | 'monthly_plan' | 'manual' | 'unanchored'
+  critical_context?: boolean
 }
 
 export interface MilestoneIntegritySummary {
@@ -327,7 +389,7 @@ export interface PlanningGovernanceAlert {
     | 'milestone_needs_attention'
     | 'closeout_reminder'
     | 'closeout_escalation'
-    | 'closeout_unlock'
+    | 'closeout_owner_attention'
     | 'reorder_reminder'
     | 'reorder_escalation'
     | 'reorder_summary'
@@ -337,7 +399,6 @@ export interface PlanningGovernanceAlert {
   detail: string
   source_id: string
   task_id?: string | null
-  delay_request_id?: string | null
 }
 
 export interface PlanningGovernanceState {
@@ -348,7 +409,7 @@ export interface PlanningGovernanceState {
   kind:
     | 'closeout_reminder'
     | 'closeout_overdue_signal'
-    | 'closeout_force_unlock'
+    | 'closeout_owner_attention'
     | 'reorder_reminder'
     | 'reorder_escalation'
     | 'reorder_summary'
@@ -369,6 +430,50 @@ export interface PlanningGovernanceState {
   updated_at: string
 }
 
+export type PlanningGovernanceGateLevel = 'block_save' | 'confirm' | 'hint' | 'explain'
+
+export type PlanningGovernanceTargetSurface =
+  | 'task_list'
+  | 'baseline'
+  | 'monthly_plan'
+  | 'planning_governance'
+  | 'data_quality'
+  | 'reports'
+
+export type PlanningGovernanceSourceAlgorithm =
+  | 'data_quality'
+  | 'data_lineage'
+  | 'wbs_plan_rollup'
+  | 'planning_integrity'
+  | 'planning_health'
+  | 'planning_revision_pool'
+  | 'milestone_integrity'
+  | 'system_anomaly'
+  | 'progress_anomaly'
+  | 'task_constraint'
+  | 'task_condition_linkage'
+  | 'drawing_package'
+  | 'pre_milestone'
+  | 'acceptance_flow'
+  | 'progress_deviation'
+  | 'project_schedule_state'
+  | 'duration_context'
+  | 'task_duration_forecast'
+  | 'construction_rhythm'
+
+export interface PlanningGovernanceSignal {
+  id: string
+  sourceAlgorithm: PlanningGovernanceSourceAlgorithm
+  gateLevel: PlanningGovernanceGateLevel
+  targetSurface: PlanningGovernanceTargetSurface
+  title: string
+  detail: string
+  evidence: Record<string, unknown>
+  recommendation: string
+  sourceId?: string | null
+  taskId?: string | null
+}
+
 export interface PlanningGovernanceSnapshot {
   project_id: string
   health: PlanningHealthReport
@@ -376,6 +481,7 @@ export interface PlanningGovernanceSnapshot {
   anomaly: PassiveReorderDetectionReport
   alerts: PlanningGovernanceAlert[]
   states: PlanningGovernanceState[]
+  governanceSignals: PlanningGovernanceSignal[]
 }
 
 export interface WbsTemplateReferenceDayFeedbackNode {
@@ -452,10 +558,20 @@ export interface PlanningIntegrityInput {
     title: string
     status?: string | null
     participant_unit_id?: string | null
-    responsible_unit?: string | null
-    assignee_unit?: string | null
+    participant_unit_name?: string | null
     specialty_type?: string | null
-    phase_id?: string | null
+    phase_object_id?: string | null
+    section_object_id?: string | null
+    building_object_id?: string | null
+    basement_object_id?: string | null
+    floor_object_id?: string | null
+    physical_zone_object_id?: string | null
+    functional_area_object_id?: string | null
+    scope_object_id?: string | null
+    wbs_node_type?: string | null
+    is_wbs_summary?: boolean | null
+    is_executable?: boolean | null
+    duration_contribution_mode?: string | null
   }>
   milestones: Array<{
     id: string
@@ -476,6 +592,9 @@ export interface PlanningIntegrityInput {
   }>
   monthly_plan_items: Array<{
     id: string
+    baseline_item_id?: string | null
+    carryover_from_item_id?: string | null
+    source_task_id?: string | null
     commitment_status?: 'planned' | 'carried_over' | 'completed' | 'cancelled' | string | null
   }>
   snapshots: Array<{
@@ -588,10 +707,68 @@ export interface ProgressDeviationAttribution {
   delay_reasons: Array<{
     id: string
     reason: string
+    canonicalCauseAvailability: 'available' | 'unavailable'
+    canonicalCauseCode: string | null
+    canonicalCauseTaxonomyVersion: string | null
     delay_reason?: string | null
     status?: string | null
     delayed_date?: string | null
+    reason_type?: string | null
+    source?: string | null
+    confidence?: string | null
+    impact_duration?: DurationMetricDto
+    /** @deprecated Use impact_duration. Removed after one compatibility release. */
+    impact_days?: number | null
+    priority?: number | null
+    responsibility_basis?: string | null
+    quantification_basis?: string | null
+    attribution_role?: string | null
+    review_status?: string | null
+    evidence?: Record<string, unknown>
   }>
+  cause_chain?: ProgressDeviationCauseChainItem[]
+}
+
+export interface ProgressDeviationCauseChainItem {
+  id: string
+  cause_type: 'dependency_wait' | string
+  reason: string
+  affected_task_id: string
+  affected_task_title?: string | null
+  upstream_task_id?: string | null
+  upstream_task_title?: string | null
+  direct_blocker_task_id?: string | null
+  direct_blocker_owner?: string | null
+  direct_blocker_owner_id?: string | null
+  root_cause_task_id?: string | null
+  root_cause_owner?: string | null
+  root_cause_owner_id?: string | null
+  causal_depth?: number | null
+  causal_path_task_ids?: string[]
+  transmission_task_ids?: string[]
+  impacted_owner: string
+  impacted_owner_id?: string | null
+  accountable_owner: string
+  accountable_owner_id?: string | null
+  responsibility_basis: 'upstream_dependency' | string
+  responsibility_role?: string | null
+  impact_duration?: DurationMetricDto
+  /** @deprecated Use impact_duration. Removed after one compatibility release. */
+  impact_days?: number | null
+  confidence?: string | null
+  evidence_source: string
+  critical_path_impact?: {
+    is_critical: boolean
+    total_float_days?: number | null
+    free_float_days?: number | null
+    weight: number
+    basis?: string | null
+  } | null
+  evidence?: Record<string, unknown> & {
+    wait_duration?: DurationMetricDto
+    /** @deprecated Use wait_duration. Removed after one compatibility release. */
+    wait_days?: number | null
+  }
 }
 
 export interface ProgressDeviationMonthlyBucket {
@@ -605,21 +782,41 @@ export interface ProgressDeviationMonthlyBucket {
 
 export interface ProgressDeviationResponsibilityContribution {
   owner: string
+  owner_id?: string | null
   count: number
   percentage: number
   task_ids: string[]
+  causal_task_ids?: string[]
+  basis?: string | null
+  confidence?: number | null
+  responsibility_role?: 'accountable_subject' | 'execution_owner' | 'impacted_subject' | string
+  adjudication_role?: string | null
+  transmission_task_ids?: string[]
+  impact_duration?: DurationMetricDto
+  /** @deprecated Use impact_duration. Removed after one compatibility release. */
+  impact_days?: number | null
+  critical_path_weight?: number | null
+  priority_score?: number | null
+  weighted_count?: number | null
+  weighted_percentage?: number | null
+  evidence_sources?: string[]
 }
 
 export interface ProgressDeviationCauseSummary {
   reason: string
   count: number
   percentage: number
+  impact_duration?: DurationMetricDto
+  /** @deprecated Use impact_duration. Removed after one compatibility release. */
+  impact_days?: number | null
+  confidence?: number | null
+  score?: number | null
 }
 
 export interface ProgressDeviationChartData {
-  baselineDeviation: ProgressDeviationRow[]
+  baselineDeviation: ProgressDeviationFactRow[]
   monthlyFulfillment: ProgressDeviationMonthlyBucket[]
-  executionDeviation: ProgressDeviationRow[]
+  executionDeviation: ProgressDeviationFactRow[]
   monthly_buckets: ProgressDeviationMonthlyBucket[]
 }
 
@@ -642,15 +839,49 @@ export interface ProgressDeviationRow {
   planned_progress?: number | null
   actual_progress?: number | null
   actual_date?: string | null
-  deviation_days: number
+  deviation_duration?: DurationMetricDto
+  /** @deprecated Use deviation_duration. Removed after one compatibility release. */
+  deviation_days: number | null
   deviation_rate: number
   status: ProgressDeviationRowStatus
   reason?: string | null
+  duration_contribution_mode?: string | null
   mapping_status?: ProgressDeviationMappingStatus | null
   merged_into?: ProgressDeviationMergedInto | null
   child_group?: ProgressDeviationChildGroup | null
   attribution?: ProgressDeviationAttribution | null
   data_completeness?: ProgressDeviationDataCompleteness | null
+}
+
+export type ProgressDeviationFactDelayReason = ProgressDeviationAttribution['delay_reasons'][number] & {
+  impact_duration: DurationMetricDto
+}
+
+export type ProgressDeviationFactCauseChainItem = Omit<ProgressDeviationCauseChainItem, 'impact_duration' | 'evidence'> & {
+  impact_duration: DurationMetricDto
+  evidence?: Record<string, unknown> & {
+    wait_duration: DurationMetricDto
+    /** @deprecated Use wait_duration. Removed after one compatibility release. */
+    wait_days?: number | null
+  }
+}
+
+export type ProgressDeviationFactAttribution = Omit<ProgressDeviationAttribution, 'delay_reasons' | 'cause_chain'> & {
+  delay_reasons: ProgressDeviationFactDelayReason[]
+  cause_chain?: ProgressDeviationFactCauseChainItem[]
+}
+
+export type ProgressDeviationFactRow = Omit<ProgressDeviationRow, 'deviation_duration' | 'attribution'> & {
+  deviation_duration: DurationMetricDto
+  attribution?: ProgressDeviationFactAttribution | null
+}
+
+export type ProgressDeviationFactResponsibilityContribution = ProgressDeviationResponsibilityContribution & {
+  impact_duration: DurationMetricDto
+}
+
+export type ProgressDeviationFactCauseSummary = ProgressDeviationCauseSummary & {
+  impact_duration: DurationMetricDto
 }
 
 export interface ProgressDeviationMainline {
@@ -662,7 +893,7 @@ export interface ProgressDeviationMainline {
     delayed_items: number
     unresolved_items: number
   }
-  rows: ProgressDeviationRow[]
+  rows: ProgressDeviationFactRow[]
 }
 
 export interface ProgressDeviationSummary {
@@ -703,13 +934,13 @@ export interface ProgressDeviationAnalysisResponse {
   monthly_plan_version_id?: string | null
   version_lock?: BaselineVersionLock | null
   summary: ProgressDeviationSummary
-  rows: ProgressDeviationRow[]
+  rows: ProgressDeviationFactRow[]
   mainlines: ProgressDeviationMainline[]
   mapping_monitoring: ProgressDeviationMappingMonitoring
   trend_events: ProgressDeviationTrendEvent[]
   chart_data?: ProgressDeviationChartData | null
-  responsibility_contribution?: ProgressDeviationResponsibilityContribution[]
-  top_deviation_causes?: ProgressDeviationCauseSummary[]
+  responsibility_contribution?: ProgressDeviationFactResponsibilityContribution[]
+  top_deviation_causes?: ProgressDeviationFactCauseSummary[]
   m1_m9_consistency?: MilestoneIntegrityReport
 }
 

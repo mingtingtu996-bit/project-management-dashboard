@@ -1,11 +1,14 @@
 ﻿import type { ReactNode } from 'react'
 
 import { act } from 'react'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createRoot, type Root } from 'react-dom/client'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RiskManagement from '../RiskManagement'
+import { resetStructuredCauseTaxonomyCacheForTests } from '@/hooks/useStructuredCauseTaxonomy'
 import { useStore } from '@/hooks/useStore'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
 
@@ -51,8 +54,38 @@ const fetchMock = vi.fn()
 const originalConsoleError = console.error
 let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null
 
+const causeTaxonomyFixture = {
+  version: 'v1.0.0',
+  entries: [
+    ['predecessor_delay', '前置工作传导'], ['material_shortage', '材料短缺或晚到'],
+    ['labor_shortage', '劳动力不足'], ['equipment_unavailable', '设备机械不可用'],
+    ['design_change', '设计变更'], ['drawing_delay', '图纸或审批延误'],
+    ['quality_rework', '质量返工'], ['weather_impact', '天气影响'],
+    ['owner_decision', '业主决策等待'], ['government_inspection', '政府检查审批'],
+    ['site_capacity_pressure', '现场承载不足'], ['workflow_sequence', '工序顺序约束'],
+    ['external_readiness', '外部条件未就绪'], ['other', '其他'],
+  ].map(([code, label], priority) => ({ code, label, category: 'test', linkedDeviationReasonTypes: [], priority })),
+}
+
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+function readRiskManagementSource() {
+  const candidates = [
+    join(process.cwd(), 'src/pages/RiskManagement.tsx'),
+    join(process.cwd(), 'client/src/pages/RiskManagement.tsx'),
+  ]
+
+  for (const candidate of candidates) {
+    try {
+      return readFileSync(candidate, 'utf8')
+    } catch {
+      // Try the next workspace root.
+    }
+  }
+
+  throw new Error(`Unable to locate RiskManagement.tsx in: ${candidates.join(', ')}`)
 }
 
 async function waitForCondition(condition: () => boolean, container?: HTMLElement) {
@@ -173,6 +206,7 @@ describe('RiskManagement', () => {
   let obstaclesData: Array<Record<string, unknown>>
 
   beforeEach(() => {
+    resetStructuredCauseTaxonomyCacheForTests()
     document.body.appendChild(container)
     container.innerHTML = ''
     root = createRoot(container)
@@ -269,6 +303,7 @@ describe('RiskManagement', () => {
     })
 
     mockedApiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/cause-attributions/taxonomy') return causeTaxonomyFixture as never
       if (url.includes('/api/risk-statistics/trend')) {
         return {
           trend: [
@@ -282,7 +317,6 @@ describe('RiskManagement', () => {
       if (url.includes('/api/issues')) return issuesData as never
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/task-obstacles')) return obstaclesData as never
-      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -319,6 +353,29 @@ describe('RiskManagement', () => {
     container.remove()
     consoleErrorSpy?.mockRestore()
     consoleErrorSpy = null
+  })
+
+  it('keeps retention confirmation as a second explicit step for risk and issue deletes', () => {
+    const source = readRiskManagementSource()
+
+    expect(source).toContain("from '@/lib/retentionError'")
+    expect(source).toContain('parseRetentionApiError')
+    expect(source).toContain('buildRetentionDecisionDialogModel')
+    expect(source).toContain('getRetentionDecisionTokenFromError')
+    expect(source).toContain('isRetentionConfirmationError')
+    expect(source).toContain("apiPost('/api/deletion-retention/confirm'")
+    expect(source).toContain('retentionDecisionToken')
+    expect(source).toContain('retentionDialogModel.confirmLabel')
+  })
+
+  it('keeps governance and audit data out of the ordinary risk workspace', () => {
+    const source = readRiskManagementSource()
+
+    expect(source).not.toContain('/api/change-logs')
+    expect(source).not.toContain('DataQualityApiService')
+    expect(source).not.toContain('DataConfidenceBreakdown')
+    expect(source).not.toContain('showDataQualityBanner')
+    expect(source).not.toContain('linkedChangeLogs')
   })
 
   it('renders the consolidated workspace without restoring the removed overview columns', async () => {
@@ -763,7 +820,6 @@ describe('RiskManagement', () => {
       if (url.includes('/api/risks')) return risksData as never
       if (url.includes('/api/warnings')) return [] as never
       if (url.includes('/api/task-obstacles')) return [] as never
-      if (url.includes('/api/change-logs')) return [] as never
       throw new Error(`Unexpected url: ${url}`)
     })
 
@@ -943,7 +999,7 @@ describe('RiskManagement', () => {
         Boolean(document.body.querySelector('[data-testid="risk-detail-dialog"]')) &&
         document.body.textContent?.includes('记录详情') &&
         document.body.textContent?.includes('塔楼结构进度风险') &&
-        document.body.textContent?.includes('chain-summary-1'),
+        document.body.textContent?.includes('查看关联过程'),
       document.body,
     )
   })
@@ -1134,6 +1190,7 @@ describe('RiskManagement', () => {
     issuesData = []
     warningsData = []
     obstaclesData = []
+    mockedApiPost.mockResolvedValueOnce({ id: 'cause-risk-guard-1', status: 'confirmed' } as never)
     mockedApiPut.mockRejectedValueOnce(
       Object.assign(new Error('当前风险仍在待处理链路中，暂不能确认关闭。'), { status: 422 }),
     )
@@ -1150,11 +1207,203 @@ describe('RiskManagement', () => {
     clickButtonText(container, '关闭风险')
 
     await waitForCondition(
+      () => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')),
+      document.body,
+    )
+    const summary = document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement | null
+    expect(summary).not.toBeNull()
+    setElementValue(summary!, '材料到场后已恢复施工，风险已解除。')
+    clickTestId(document.body, 'structured-close-submit')
+
+    await waitForCondition(
       () =>
         Boolean(document.body.querySelector('[data-testid="risk-action-guard-dialog"]')) &&
-        document.body.textContent?.includes('更新风险') &&
+        document.body.textContent?.includes('确认关闭风险') &&
         document.body.textContent?.includes('当前风险仍在待处理链路中，暂不能确认关闭。'),
       document.body,
+    )
+  })
+
+  it('records a controlled cause before submitting a structured risk closure outcome', async () => {
+    risksData = [
+      {
+        id: 'risk-close-1',
+        project_id: projectId,
+        task_id: 'task-7',
+        title: '材料到货延期风险',
+        description: '幕墙材料未按计划到场',
+        source_type: 'obstacle_escalated',
+        level: 'high',
+        probability: 70,
+        impact: 80,
+        status: 'mitigating',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-03T00:00:00.000Z',
+        version: 5,
+      },
+    ]
+    issuesData = []
+    warningsData = []
+    obstaclesData = []
+    mockedApiPost.mockResolvedValueOnce({ id: 'cause-risk-close-1', status: 'confirmed' } as never)
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('材料到货延期风险'), container)
+    clickButtonText(container, '关闭风险')
+
+    await waitForCondition(
+      () => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')),
+      document.body,
+    )
+    const summary = document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement | null
+    expect(summary).not.toBeNull()
+    setElementValue(summary!, '材料已到场并完成复验，现场施工已恢复。')
+    clickTestId(document.body, 'structured-close-submit')
+
+    await waitForCondition(
+      () => mockedApiPut.mock.calls.some(([url]) => String(url).includes('/api/risks/risk-close-1')),
+      document.body,
+    )
+
+    expect(mockedApiPost).toHaveBeenCalledWith(
+      '/api/cause-attributions/projects/project-1/subjects/risk/risk-close-1/confirm',
+      expect.objectContaining({
+        causeCode: 'material_shortage',
+        causeRole: 'primary',
+        rawText: '材料已到场并完成复验，现场施工已恢复。',
+      }),
+    )
+    expect(mockedApiPut).toHaveBeenCalledWith(
+      '/api/risks/risk-close-1',
+      expect.objectContaining({
+        status: 'closed',
+        version: 5,
+        closure_result_code: 'mitigated',
+        closure_result_summary: '材料已到场并完成复验，现场施工已恢复。',
+        closure_effectiveness: 'resolved',
+        closure_cause_attribution_id: 'cause-risk-close-1',
+      }),
+    )
+  })
+
+  it('keeps structured closure submission disabled when the current taxonomy is empty', async () => {
+    risksData = [{
+      id: 'risk-empty-taxonomy', project_id: projectId, task_id: 'task-7', title: '材料到货延期风险',
+      description: '幕墙材料未按计划到场', source_type: 'obstacle_escalated', level: 'high', probability: 70,
+      impact: 80, status: 'mitigating', created_at: '2026-04-01T00:00:00.000Z',
+      updated_at: '2026-04-03T00:00:00.000Z', version: 5,
+    }]
+    issuesData = []
+    warningsData = []
+    obstaclesData = []
+    const defaultGet = mockedApiGet.getMockImplementation()
+    mockedApiGet.mockImplementation(async (url: string) => (
+      url === '/api/cause-attributions/taxonomy'
+        ? { version: 'v1.0.0', entries: [] } as never
+        : defaultGet?.(url) as never
+    ))
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('材料到货延期风险'), container)
+    clickButtonText(container, '关闭风险')
+    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')))
+    setElementValue(
+      document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement,
+      '材料已到场。',
+    )
+
+    const submit = document.body.querySelector('[data-testid="structured-close-submit"]') as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    expect(mockedApiPost.mock.calls.some(([url]) => String(url).includes('/cause-attributions/'))).toBe(false)
+  })
+
+  it('records a controlled cause before submitting a structured issue closure outcome', async () => {
+    risksData = []
+    issuesData = [
+      {
+        id: 'issue-close-1',
+        project_id: projectId,
+        task_id: 'task-7',
+        title: '材料复验问题',
+        description: '材料到场后复验未通过',
+        source_type: 'manual',
+        severity: 'high',
+        priority: 3,
+        status: 'investigating',
+        created_at: '2026-04-01T00:00:00.000Z',
+        updated_at: '2026-04-03T00:00:00.000Z',
+        version: 6,
+      },
+    ]
+    warningsData = []
+    obstaclesData = []
+    mockedApiPost.mockResolvedValueOnce({ id: 'cause-issue-close-1', status: 'confirmed' } as never)
+    mockedApiPut.mockImplementationOnce(async () => {
+      issuesData = issuesData.map((item) => item.id === 'issue-close-1'
+        ? { ...item, status: 'resolved' }
+        : item)
+      return {} as never
+    })
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+
+    clickTestId(container, 'risk-stream-issues')
+    await waitForCondition(() => container.textContent?.includes('材料复验问题'), container)
+    clickButtonText(container, '标记已解决')
+    await waitForCondition(
+      () => Array.from(container.querySelectorAll('button')).some((button) => button.textContent?.trim() === '确认关闭'),
+      container,
+    )
+    clickExactButtonText(container, '确认关闭')
+
+    await waitForCondition(
+      () => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')),
+      document.body,
+    )
+    const summary = document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement | null
+    expect(summary).not.toBeNull()
+    setElementValue(summary!, '更换材料后复验通过，问题已处理完成。')
+    clickTestId(document.body, 'structured-close-submit')
+
+    await waitForCondition(
+      () => mockedApiPut.mock.calls.some(([url]) => String(url).includes('/api/issues/issue-close-1')),
+      document.body,
+    )
+
+    expect(mockedApiPost).toHaveBeenCalledWith(
+      '/api/cause-attributions/projects/project-1/subjects/issue/issue-close-1/confirm',
+      expect.objectContaining({
+        causeCode: 'material_shortage',
+        causeRole: 'primary',
+        rawText: '更换材料后复验通过，问题已处理完成。',
+      }),
+    )
+    expect(mockedApiPut).toHaveBeenCalledWith(
+      '/api/issues/issue-close-1',
+      expect.objectContaining({
+        status: 'closed',
+        version: 6,
+        closed_reason: '更换材料后复验通过，问题已处理完成。',
+        closure_result_code: 'resolved',
+        closure_result_summary: '更换材料后复验通过，问题已处理完成。',
+        closure_effectiveness: 'resolved',
+        closure_cause_attribution_id: 'cause-issue-close-1',
+      }),
     )
   })
 })

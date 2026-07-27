@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   CornerDownLeft,
-  FolderKanban,
   Plus,
   Search,
   Settings,
@@ -11,9 +10,11 @@ import {
 } from 'lucide-react'
 
 import { COMPANY_NAVIGATION, PROJECT_NAVIGATION } from '@/config/navigation'
+import { useCurrentCompanyRole } from '@/hooks/useCurrentCompanyRole'
 import { toast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 interface CommandPaletteProps {
   open: boolean
@@ -52,6 +53,7 @@ function shortcutLabel() {
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const navigate = useNavigate()
   const location = useLocation()
+  const currentCompanyRole = useCurrentCompanyRole()
   const { currentProject } = useStore()
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
@@ -60,18 +62,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   const commands = useMemo<CommandItem[]>(() => {
     const navigationCommands: CommandItem[] = COMPANY_NAVIGATION.map((item) => {
+      if ((item.key === 'company' || item.key === 'duration-assets') && currentCompanyRole !== 'company_admin') {
+        return null
+      }
       const href = item.href
       return {
         id: `company-${item.key}`,
         group: NAVIGATION_GROUP,
         label: `前往 ${item.label}`,
-        hint: item.key === 'company' ? 'Company' : 'Notifications',
+        hint: item.key === 'company' ? 'Company' : item.key === 'duration-assets' ? 'Duration assets' : 'Notifications',
         icon: item.icon,
         keywords: `${item.label} ${item.key}`,
         href,
         action: () => navigate(href),
       }
-    })
+    }).filter(Boolean) as CommandItem[]
 
     if (currentProjectId) {
       PROJECT_NAVIGATION.forEach((item) => {
@@ -122,15 +127,6 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         action: () => showPlaceholder('新建任务'),
       },
       {
-        id: 'quick-new-project',
-        group: QUICK_ACTION_GROUP,
-        label: '新建项目',
-        hint: 'P',
-        icon: FolderKanban,
-        keywords: '新建项目 project add create',
-        action: () => showPlaceholder('新建项目'),
-      },
-      {
         id: 'quick-team',
         group: QUICK_ACTION_GROUP,
         label: '邀请成员',
@@ -146,10 +142,10 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         hint: 'S',
         icon: Settings,
         keywords: '系统设置 settings preferences',
-        action: () => showPlaceholder('系统设置'),
+        action: () => navigate('/settings/billing'),
       },
     ]
-  }, [currentProjectId, navigate])
+  }, [currentCompanyRole, currentProjectId, navigate])
 
   const filteredCommands = useMemo(() => {
     const term = normalizeSearch(query)
@@ -249,6 +245,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            aria-label="搜索命令"
+            data-testid="command-palette-search"
             placeholder="搜索任务、项目、成员..."
             className="command-input-text h-full min-w-0 flex-1 border-0 bg-transparent text-slate-800 outline-none placeholder:text-slate-400"
           />
@@ -267,9 +265,9 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 {items.map((item) => {
                   const Icon = item.icon
                   const isActive = item.index === activeIndex
-                  const isCurrent = Boolean(item.href && location.pathname === item.href)
+                  const isCurrent = Boolean(item.href && location.pathname === item.href.split('?')[0])
                   return (
-                    <button
+                    <Button unstyled
                       key={item.id}
                       type="button"
                       onMouseEnter={() => setActiveIndex(item.index)}
@@ -290,7 +288,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                         className={cn('h-3 w-3 transition-opacity duration-150', isActive ? 'text-slate-500 opacity-100' : 'text-slate-300 opacity-0')}
                         strokeWidth={1.7}
                       />
-                    </button>
+                    </Button>
                   )
                 })}
               </div>

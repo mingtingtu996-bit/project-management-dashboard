@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "workbuddy-runtime-writer-contract/v1",
+  "writerId": "default_master_plan_staging_runtime_evidence",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "allowedMode": "staging_controlled_replay",
+  "requiresUnlock": true,
+  "mayWriteBusinessFacts": true,
+  "mayWriteRuntimeAssets": true,
+  "productionAllowed": false,
+  "requiredEvidence": [
+    "staging_authorization_file",
+    "env_file_fingerprint",
+    "target_ids",
+    "rollback_plan",
+    "readback_evidence"
+  ]
+}

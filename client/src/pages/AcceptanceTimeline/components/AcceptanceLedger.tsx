@@ -9,6 +9,7 @@ import { CHART_SERIES } from '@/lib/chartPalette'
 import { cn } from '@/lib/utils'
 import { CheckSquare, ChevronDown, ChevronRight, GripVertical, Search, Square, X } from 'lucide-react'
 import type { AcceptanceNode, AcceptancePlan, AcceptanceStatus, AcceptanceType } from '@/types/acceptance'
+import type { ParticipantUnitSummary } from '@/services/materialsApi'
 import { getAcceptanceDisplayBadges, ACCEPTANCE_STATUSES } from '@/types/acceptance'
 import {
   DndContext,
@@ -43,9 +44,10 @@ interface AcceptanceLedgerProps {
   onReorder?: (planIds: string[]) => void
   onBatchStatusChange?: (planIds: string[], status: AcceptanceStatus) => void | Promise<void>
   onBatchDateUpdate?: (planIds: string[], plannedDate: string) => void | Promise<void>
-  onBatchResponsibleUnitUpdate?: (planIds: string[], responsibleUnit: string) => void | Promise<void>
+  onBatchResponsibleUnitUpdate?: (planIds: string[], participantUnitId: string | null) => void | Promise<void>
   onBatchPhaseUpdate?: (planIds: string[], phaseCode: string) => void | Promise<void>
   timeScale: AcceptanceTimelineScale
+  participantUnits: ParticipantUnitSummary[]
   canEdit?: boolean
 }
 
@@ -66,7 +68,7 @@ function SortablePlanRow({ planId, children }: { planId: string; children: (drag
   )
 }
 
-export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClick, onStatusChange, onDateUpdate, onReorder, onBatchStatusChange, onBatchDateUpdate, onBatchResponsibleUnitUpdate, onBatchPhaseUpdate, timeScale, canEdit = true }: AcceptanceLedgerProps) {
+export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClick, onStatusChange, onDateUpdate, onReorder, onBatchStatusChange, onBatchDateUpdate, onBatchResponsibleUnitUpdate, onBatchPhaseUpdate, timeScale, participantUnits, canEdit = true }: AcceptanceLedgerProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [groupMode, setGroupMode] = useState<GroupMode>('phase')
@@ -74,11 +76,15 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   const [selectedPlanIds, setSelectedPlanIds] = useState<Set<string>>(new Set())
   const [batchStatus, setBatchStatus] = useState<AcceptanceStatus>('passed')
   const [batchDate, setBatchDate] = useState('')
-  const [batchUnit, setBatchUnit] = useState('')
+  const [batchUnit, setBatchUnit] = useState('__clear__')
   const [batchPhase, setBatchPhase] = useState('preparation')
   const [batchActionLoading, setBatchActionLoading] = useState(false)
   const editable = canEdit !== false
   const readOnlyActionReason = editable ? undefined : '只读成员无编辑权限。'
+  const participantUnitNameById = useMemo(
+    () => new Map(participantUnits.map((unit) => [unit.id, unit.unit_name])),
+    [participantUnits],
+  )
 
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -233,9 +239,9 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
   }
 
   async function handleBatchUnit() {
-    if (!onBatchResponsibleUnitUpdate || selectedPlanIds.size === 0 || !batchUnit.trim()) return
+    if (!onBatchResponsibleUnitUpdate || selectedPlanIds.size === 0) return
     setBatchActionLoading(true)
-    try { await onBatchResponsibleUnitUpdate([...selectedPlanIds], batchUnit.trim()) } finally { setBatchActionLoading(false) }
+    try { await onBatchResponsibleUnitUpdate([...selectedPlanIds], batchUnit === '__clear__' ? null : batchUnit) } finally { setBatchActionLoading(false) }
   }
 
   async function handleBatchPhase() {
@@ -325,9 +331,19 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
             )}
             {onBatchResponsibleUnitUpdate && (
               <div className="flex items-center gap-2">
-                <input value={batchUnit} onChange={(e) => setBatchUnit(e.target.value)} disabled={!editable} placeholder="责任单位" className="rounded-md border border-blue-200 bg-white px-2 py-1 text-sm disabled:cursor-not-allowed disabled:opacity-50" />
+                <Select value={batchUnit} onValueChange={setBatchUnit} disabled={!editable}>
+                  <SelectTrigger className="h-9 min-w-40 border-blue-200 bg-white text-sm">
+                    <SelectValue placeholder="责任单位" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__clear__">清空责任单位</SelectItem>
+                    {participantUnits.map((unit) => (
+                      <SelectItem key={unit.id} value={unit.id}>{unit.unit_name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <DisabledReasonTooltip reason={readOnlyActionReason}>
-                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading || !batchUnit.trim()} loading={batchActionLoading} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
+                  <Button size="sm" variant="outline" disabled={!editable || batchActionLoading} loading={batchActionLoading} onClick={() => void handleBatchUnit()} data-testid="acceptance-batch-unit-apply">批量改责任单位</Button>
                 </DisabledReasonTooltip>
               </div>
             )}
@@ -392,6 +408,11 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                 const StatusIcon = getIcon(statusMeta.config.icon)
                 const hasPlannedDate = Boolean(plan.planned_date)
                 const overlayBadges = getAcceptanceDisplayBadges(plan)
+                const unitLabel = plan.participant_unit_id
+                  ? participantUnitNameById.get(plan.participant_unit_id) || '责任单位待确认'
+                  : plan.responsible_user_id
+                    ? plan.responsible_user_id.slice(-6)
+                    : '—'
 
                 return (
                   <SortablePlanRow key={plan.id} planId={plan.id}>
@@ -465,10 +486,10 @@ export default function AcceptanceLedger({ plans, nodes, customTypes, onNodeClic
                         <Tooltip>
   <TooltipTrigger asChild>
     <div className="mt-0.5 truncate text-xs font-medium text-slate-700 num-mono" >
-                          {plan.responsible_unit || (plan.responsible_user_id ? plan.responsible_user_id.slice(-6) : '—')}
+                          {unitLabel}
                         </div>
   </TooltipTrigger>
-  <TooltipContent>{plan.responsible_unit || plan.responsible_user_id || ''}</TooltipContent>
+  <TooltipContent>{unitLabel === '—' ? '' : unitLabel}</TooltipContent>
 </Tooltip>
                       </div>
                       <div className="w-20 flex-shrink-0 text-center">

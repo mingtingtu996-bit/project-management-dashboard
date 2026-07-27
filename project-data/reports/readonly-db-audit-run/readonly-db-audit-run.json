@@ -1,0 +1,1388 @@
+{
+  "schemaVersion": "workbuddy-readonly-db-audit-run/v1",
+  "generatedAt": "2026-07-07T15:38:56.722Z",
+  "sourcePackageSchemaVersion": "workbuddy-readonly-db-audit-package/v1",
+  "sourcePackageGeneratedAt": "2026-07-07T15:31:39.065Z",
+  "mutationBoundary": "readonly_db_audit_execution_only_no_db_mutation",
+  "executionMode": "read-only-db",
+  "target": {
+    "environmentBoundary": "explicitly supplied PostgreSQL target via environment variables",
+    "connectionDetailsRedacted": true
+  },
+  "summary": {
+    "plannedQueries": 35,
+    "executedQueries": 35,
+    "failedQueryCount": 0,
+    "tableContracts": 10,
+    "qualityChecks": 32,
+    "missingTableCount": 0,
+    "missingColumnCount": 0,
+    "failedQualityCheckCount": 0
+  },
+  "results": [
+    {
+      "id": "schema_inventory",
+      "kind": "schema",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:50.487Z",
+      "completedAt": "2026-07-07T15:38:50.840Z",
+      "rowCount": 3182,
+      "summary": {
+        "publicColumnCount": 3182,
+        "publicTableCount": 191
+      },
+      "rows": [
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "project_id",
+          "data_type": "uuid",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "catalog_code",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "catalog_name",
+          "data_type": "text",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "phase_code",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "scope_level",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "planned_finish_date",
+          "data_type": "date",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "description",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "is_system",
+          "data_type": "boolean",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "created_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_catalog",
+          "column_name": "updated_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "project_id",
+          "data_type": "uuid",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "source_plan_id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "target_plan_id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "dependency_kind",
+          "data_type": "text",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "status",
+          "data_type": "text",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "created_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_dependencies",
+          "column_name": "updated_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "acceptance_plan_id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "node_name",
+          "data_type": "character varying",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "node_type",
+          "data_type": "character varying",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "description",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "status",
+          "data_type": "character varying",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "planned_date",
+          "data_type": "date",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "actual_date",
+          "data_type": "date",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "result",
+          "data_type": "jsonb",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "documents",
+          "data_type": "jsonb",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "notes",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "accepted_by",
+          "data_type": "uuid",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "accepted_at",
+          "data_type": "timestamp without time zone",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "created_at",
+          "data_type": "timestamp without time zone",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "updated_at",
+          "data_type": "timestamp without time zone",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "plan_id",
+          "data_type": "uuid",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_nodes",
+          "column_name": "created_by",
+          "data_type": "uuid",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "project_id",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "task_id",
+          "data_type": "uuid",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "acceptance_type",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "acceptance_name",
+          "data_type": "text",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "planned_date",
+          "data_type": "date",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "actual_date",
+          "data_type": "date",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "status",
+          "data_type": "text",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "documents",
+          "data_type": "jsonb",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "notes",
+          "data_type": "text",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "created_by",
+          "data_type": "uuid",
+          "is_nullable": "NO"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "created_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "updated_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "YES"
+        },
+        {
+          "table_schema": "public",
+          "table_name": "acceptance_plans",
+          "column_name": "deleted_at",
+          "data_type": "timestamp with time zone",
+          "is_nullable": "YES"
+        }
+      ],
+      "truncated": true
+    },
+    {
+      "id": "catalog_table_presence",
+      "kind": "catalog",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:50.892Z",
+      "completedAt": "2026-07-07T15:38:50.988Z",
+      "rowCount": 14,
+      "summary": {
+        "missingTableCount": 0,
+        "missingTables": []
+      },
+      "rows": [
+        {
+          "table_id": "duration_experience_samples",
+          "table_schema": "public",
+          "table_name": "duration_experience_samples",
+          "table_exists": true
+        },
+        {
+          "table_id": "monthly_plan_items",
+          "table_schema": "public",
+          "table_name": "monthly_plan_items",
+          "table_exists": true
+        },
+        {
+          "table_id": "monthly_plans",
+          "table_schema": "public",
+          "table_name": "monthly_plans",
+          "table_exists": true
+        },
+        {
+          "table_id": "progress_asset_calibration_results",
+          "table_schema": "public",
+          "table_name": "progress_asset_calibration_results",
+          "table_exists": true
+        },
+        {
+          "table_id": "progress_asset_calibration_runs",
+          "table_schema": "public",
+          "table_name": "progress_asset_calibration_runs",
+          "table_exists": true
+        },
+        {
+          "table_id": "progress_asset_candidates",
+          "table_schema": "public",
+          "table_name": "progress_asset_candidates",
+          "table_exists": true
+        },
+        {
+          "table_id": "progress_asset_publication_readiness",
+          "table_schema": "public",
+          "table_name": "progress_asset_publication_readiness",
+          "table_exists": true
+        },
+        {
+          "table_id": "progress_knowledge_documents",
+          "table_schema": "public",
+          "table_name": "progress_knowledge_documents",
+          "table_exists": true
+        },
+        {
+          "table_id": "progress_knowledge_sources",
+          "table_schema": "public",
+          "table_name": "progress_knowledge_sources",
+          "table_exists": true
+        },
+        {
+          "table_id": "project_daily_snapshot",
+          "table_schema": "public",
+          "table_name": "project_daily_snapshot",
+          "table_exists": true
+        },
+        {
+          "table_id": "task_baseline_items",
+          "table_schema": "public",
+          "table_name": "task_baseline_items",
+          "table_exists": true
+        },
+        {
+          "table_id": "task_baselines",
+          "table_schema": "public",
+          "table_name": "task_baselines",
+          "table_exists": true
+        },
+        {
+          "table_id": "task_dependencies",
+          "table_schema": "public",
+          "table_name": "task_dependencies",
+          "table_exists": true
+        },
+        {
+          "table_id": "tasks",
+          "table_schema": "public",
+          "table_name": "tasks",
+          "table_exists": true
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "contract_column_presence",
+      "kind": "contract",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:51.043Z",
+      "completedAt": "2026-07-07T15:38:51.177Z",
+      "rowCount": 72,
+      "summary": {
+        "missingColumnCount": 0,
+        "missingColumns": []
+      },
+      "rows": [
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "actual_duration",
+          "column_exists": true
+        },
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "created_at",
+          "column_exists": true
+        },
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "id",
+          "column_exists": true
+        },
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "planned_duration",
+          "column_exists": true
+        },
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "project_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "sample_status",
+          "column_exists": true
+        },
+        {
+          "table_name": "duration_experience_samples",
+          "column_name": "source_type",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "id",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "monthly_plan_version_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "planned_end_date",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "planned_start_date",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "project_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "source_task_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plan_items",
+          "column_name": "title",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plans",
+          "column_name": "created_at",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plans",
+          "column_name": "id",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plans",
+          "column_name": "month",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plans",
+          "column_name": "project_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plans",
+          "column_name": "status",
+          "column_exists": true
+        },
+        {
+          "table_name": "monthly_plans",
+          "column_name": "updated_at",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "content_hash",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "document_key",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "document_type",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "document_url",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "extraction_quality",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "extraction_status",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "id",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "source_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "storage_path",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_documents",
+          "column_name": "title",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "access_level",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "connector_type",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "governance_status",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "source_key",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "source_metadata",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "source_name",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "source_trust_level",
+          "column_exists": true
+        },
+        {
+          "table_name": "progress_knowledge_sources",
+          "column_name": "source_url",
+          "column_exists": true
+        },
+        {
+          "table_name": "project_daily_snapshot",
+          "column_name": "health_score",
+          "column_exists": true
+        },
+        {
+          "table_name": "project_daily_snapshot",
+          "column_name": "overall_progress",
+          "column_exists": true
+        },
+        {
+          "table_name": "project_daily_snapshot",
+          "column_name": "planned_cumulative",
+          "column_exists": true
+        },
+        {
+          "table_name": "project_daily_snapshot",
+          "column_name": "project_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "project_daily_snapshot",
+          "column_name": "snapshot_date",
+          "column_exists": true
+        },
+        {
+          "table_name": "project_daily_snapshot",
+          "column_name": "task_progress",
+          "column_exists": true
+        },
+        {
+          "table_name": "task_baseline_items",
+          "column_name": "baseline_version_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "task_baseline_items",
+          "column_name": "id",
+          "column_exists": true
+        },
+        {
+          "table_name": "task_baseline_items",
+          "column_name": "planned_end_date",
+          "column_exists": true
+        },
+        {
+          "table_name": "task_baseline_items",
+          "column_name": "planned_start_date",
+          "column_exists": true
+        },
+        {
+          "table_name": "task_baseline_items",
+          "column_name": "project_id",
+          "column_exists": true
+        },
+        {
+          "table_name": "task_baseline_items",
+          "column_name": "source_task_id",
+          "column_exists": true
+        }
+      ],
+      "truncated": true
+    },
+    {
+      "id": "tasks.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:51.225Z",
+      "completedAt": "2026-07-07T15:38:51.350Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "tasks.progress_range_0_100",
+      "kind": "quality",
+      "ruleId": "progress_range_0_100",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:51.401Z",
+      "completedAt": "2026-07-07T15:38:51.499Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "invalid_progress",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "invalid_progress": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_baselines.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:51.548Z",
+      "completedAt": "2026-07-07T15:38:51.647Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_baselines.baseline_version_required",
+      "kind": "quality",
+      "ruleId": "baseline_version_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:51.700Z",
+      "completedAt": "2026-07-07T15:38:51.796Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_baseline_version",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_baseline_version": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_baseline_items.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:51.845Z",
+      "completedAt": "2026-07-07T15:38:51.947Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_baseline_items.baseline_version_required",
+      "kind": "quality",
+      "ruleId": "baseline_version_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.001Z",
+      "completedAt": "2026-07-07T15:38:52.102Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_baseline_version_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_baseline_version_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_baseline_items.baseline_dates_required_for_published_baseline",
+      "kind": "quality",
+      "ruleId": "baseline_dates_required_for_published_baseline",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.163Z",
+      "completedAt": "2026-07-07T15:38:52.271Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "published_items_missing_dates",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "published_items_missing_dates": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plans.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.324Z",
+      "completedAt": "2026-07-07T15:38:52.423Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plans.monthly_plan_month_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_month_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.476Z",
+      "completedAt": "2026-07-07T15:38:52.602Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_month",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_month": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plans.monthly_plan_status_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_status_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.670Z",
+      "completedAt": "2026-07-07T15:38:52.770Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_status",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_status": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plan_items.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.819Z",
+      "completedAt": "2026-07-07T15:38:52.926Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plan_items.monthly_plan_item_plan_ref_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_item_plan_ref_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:52.979Z",
+      "completedAt": "2026-07-07T15:38:53.083Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_monthly_plan_version_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_monthly_plan_version_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "monthly_plan_items.monthly_plan_item_task_or_title_required",
+      "kind": "quality",
+      "ruleId": "monthly_plan_item_task_or_title_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:53.133Z",
+      "completedAt": "2026-07-07T15:38:53.231Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_task_or_title",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_task_or_title": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_dependencies.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:53.283Z",
+      "completedAt": "2026-07-07T15:38:53.384Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_dependencies.dependency_endpoints_required",
+      "kind": "quality",
+      "ruleId": "dependency_endpoints_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:53.434Z",
+      "completedAt": "2026-07-07T15:38:53.538Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_dependency_endpoint",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_dependency_endpoint": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "task_dependencies.dependency_no_self_loop",
+      "kind": "quality",
+      "ruleId": "dependency_no_self_loop",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:53.591Z",
+      "completedAt": "2026-07-07T15:38:53.692Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "self_loop_count",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "self_loop_count": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:53.742Z",
+      "completedAt": "2026-07-07T15:38:53.845Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.progress_range_0_100",
+      "kind": "quality",
+      "ruleId": "progress_range_0_100",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:53.897Z",
+      "completedAt": "2026-07-07T15:38:54.003Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "invalid_progress",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "invalid_progress": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.snapshot_date_required",
+      "kind": "quality",
+      "ruleId": "snapshot_date_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.053Z",
+      "completedAt": "2026-07-07T15:38:54.152Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_snapshot_date",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_snapshot_date": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "project_daily_snapshot.one_snapshot_per_project_per_day",
+      "kind": "quality",
+      "ruleId": "one_snapshot_per_project_per_day",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.206Z",
+      "completedAt": "2026-07-07T15:38:54.306Z",
+      "rowCount": 0,
+      "summary": {
+        "rowCount": 0,
+        "passed": true
+      },
+      "rows": [],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.project_id_required",
+      "kind": "quality",
+      "ruleId": "project_id_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.357Z",
+      "completedAt": "2026-07-07T15:38:54.460Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_project_id",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_project_id": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.duration_sample_source_required",
+      "kind": "quality",
+      "ruleId": "duration_sample_source_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.514Z",
+      "completedAt": "2026-07-07T15:38:54.614Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_source_type",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_source_type": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.duration_days_non_negative",
+      "kind": "quality",
+      "ruleId": "duration_days_non_negative",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.663Z",
+      "completedAt": "2026-07-07T15:38:54.772Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "negative_duration_count",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "negative_duration_count": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "duration_experience_samples.duration_sample_status_required",
+      "kind": "quality",
+      "ruleId": "duration_sample_status_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.823Z",
+      "completedAt": "2026-07-07T15:38:54.923Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_sample_status",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_sample_status": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.source_key_required",
+      "kind": "quality",
+      "ruleId": "source_key_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:54.972Z",
+      "completedAt": "2026-07-07T15:38:55.079Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_source_key",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_source_key": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.source_url_or_locator_required",
+      "kind": "quality",
+      "ruleId": "source_url_or_locator_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:55.129Z",
+      "completedAt": "2026-07-07T15:38:55.232Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_source_locator",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_source_locator": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.trust_level_required",
+      "kind": "quality",
+      "ruleId": "trust_level_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:55.281Z",
+      "completedAt": "2026-07-07T15:38:55.382Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_trust_level",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_trust_level": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_sources.source_governance_status_required",
+      "kind": "quality",
+      "ruleId": "source_governance_status_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:55.434Z",
+      "completedAt": "2026-07-07T15:38:55.537Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_governance_status",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_governance_status": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.document_key_required",
+      "kind": "quality",
+      "ruleId": "document_key_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:56.011Z",
+      "completedAt": "2026-07-07T15:38:56.122Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_document_key",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_document_key": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.document_type_required",
+      "kind": "quality",
+      "ruleId": "document_type_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:56.172Z",
+      "completedAt": "2026-07-07T15:38:56.269Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_document_type",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_document_type": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.extraction_status_required",
+      "kind": "quality",
+      "ruleId": "extraction_status_required",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:56.317Z",
+      "completedAt": "2026-07-07T15:38:56.421Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "missing_extraction_status",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "missing_extraction_status": 0
+        }
+      ],
+      "truncated": false
+    },
+    {
+      "id": "progress_knowledge_documents.hash_required_when_downloaded",
+      "kind": "quality",
+      "ruleId": "hash_required_when_downloaded",
+      "status": "passed",
+      "startedAt": "2026-07-07T15:38:56.470Z",
+      "completedAt": "2026-07-07T15:38:56.571Z",
+      "rowCount": 1,
+      "summary": {
+        "metric": "downloaded_without_hash",
+        "value": 0,
+        "passed": true
+      },
+      "rows": [
+        {
+          "downloaded_without_hash": 0
+        }
+      ],
+      "truncated": false
+    }
+  ]
+}

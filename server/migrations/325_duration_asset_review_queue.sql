@@ -1,6 +1,16 @@
--- BEGIN MIGRATION 325
+-- Durable review projection for non-automatic duration-learning asset decisions.
+
 BEGIN;
 
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'workbuddy_runtime') THEN
+    RAISE EXCEPTION 'workbuddy_runtime role is required before applying migration 325';
+  END IF;
+END
+$$;
+
+-- BEGIN MIGRATION 325
 CREATE TABLE IF NOT EXISTS public.duration_asset_review_items (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   scope_level TEXT NOT NULL CHECK (scope_level IN ('project','company','industry','global')),
@@ -27,13 +37,14 @@ CREATE TABLE IF NOT EXISTS public.duration_asset_review_items (
   resolution_source TEXT NULL CHECK (resolution_source IN ('automatic_publication','manual_approval','manual_rejection','manual_supersession')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (source_key),
+  CHECK (NULLIF(BTRIM(source_key), '') IS NOT NULL),
   CHECK (
     (scope_level = 'project' AND company_id IS NOT NULL AND project_id IS NOT NULL AND industry_key IS NULL)
     OR (scope_level = 'company' AND company_id IS NOT NULL AND project_id IS NULL AND industry_key IS NULL)
     OR (scope_level = 'industry' AND company_id IS NULL AND project_id IS NULL AND NULLIF(BTRIM(industry_key), '') IS NOT NULL)
     OR (scope_level = 'global' AND company_id IS NULL AND project_id IS NULL AND industry_key IS NULL)
   ),
-  UNIQUE (source_key),
   CONSTRAINT duration_asset_review_items_resolution_state_check CHECK (
     (
       status = 'open'
@@ -45,24 +56,28 @@ CREATE TABLE IF NOT EXISTS public.duration_asset_review_items (
     )
     OR (
       status = 'approved' AND resolution_source = 'manual_approval'
+      AND resolution_source IS NOT NULL
       AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
       AND resolved_publication_key IS NULL
     )
     OR (
       status = 'rejected' AND resolution_source = 'manual_rejection'
+      AND resolution_source IS NOT NULL
       AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
       AND resolved_publication_key IS NULL
     )
     OR (
       status = 'superseded' AND resolution_source = 'manual_supersession'
+      AND resolution_source IS NOT NULL
       AND reviewed_by_user_id IS NOT NULL AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
       AND resolved_publication_key IS NULL
     )
     OR (
       status = 'resolved_by_publication'
+      AND resolution_source IS NOT NULL
       AND resolution_source IN ('automatic_publication','manual_approval')
       AND reviewed_at IS NOT NULL
       AND NULLIF(BTRIM(decision_reason), '') IS NOT NULL
@@ -89,7 +104,10 @@ CREATE TRIGGER set_duration_asset_review_items_updated_at
 ALTER TABLE public.duration_asset_review_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.duration_asset_review_items FORCE ROW LEVEL SECURITY;
 
-REVOKE ALL ON TABLE public.duration_asset_review_items FROM PUBLIC, anon, authenticated, workbuddy_runtime;
+REVOKE ALL ON TABLE public.duration_asset_review_items FROM PUBLIC, anon;
+REVOKE ALL ON TABLE public.duration_asset_review_items FROM authenticated;
+REVOKE ALL ON TABLE public.duration_asset_review_items FROM workbuddy_runtime;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
@@ -97,9 +115,12 @@ BEGIN
   END IF;
 END
 $$;
+
 GRANT SELECT ON TABLE public.duration_asset_review_items TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.duration_asset_review_items TO workbuddy_runtime;
 
+DROP POLICY IF EXISTS duration_asset_review_items_member_read
+  ON public.duration_asset_review_items;
 CREATE POLICY duration_asset_review_items_member_read
   ON public.duration_asset_review_items
   FOR SELECT
@@ -130,6 +151,8 @@ CREATE POLICY duration_asset_review_items_member_read
     )
   );
 
+DROP POLICY IF EXISTS duration_asset_review_items_backend_runtime
+  ON public.duration_asset_review_items;
 CREATE POLICY duration_asset_review_items_backend_runtime
   ON public.duration_asset_review_items
   FOR ALL
@@ -143,7 +166,10 @@ CREATE POLICY duration_asset_review_items_backend_runtime
     OR pg_has_role(current_user, 'workbuddy_runtime', 'member')
   );
 
+COMMENT ON TABLE public.duration_asset_review_items IS
+  'Durable review projection for six duration-learning runtime asset families; payloads remain bounded and source authorities stay external.';
+
+-- END MIGRATION 325
 NOTIFY pgrst, 'reload schema';
 
 COMMIT;
--- END MIGRATION 325

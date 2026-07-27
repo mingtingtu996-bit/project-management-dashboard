@@ -1,8 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { logger } from '../middleware/logger.js'
+import { query as rawQuery } from '../database.js'
 import { calculateDueStatus } from './dueDateService.js'
 import { generateId } from '../utils/id.js'
 import type { CertificateDependency, CertificateWorkItem, Warning } from '../types/db.js'
+import { upsertWarningLifecycle, markSourceResolved } from './riskIssueWarningGovernanceService.js'
 
 let cachedClient: SupabaseClient | null = null
 
@@ -63,8 +65,23 @@ type SupplementContext = {
   linkedSupplementWorkItems: CertificateWorkItem[]
 }
 
+type PreMilestoneWarningScanOptions = {
+  asOfDate?: string | Date
+  systemJob?: boolean
+}
+
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function normalizeDirectRows<T>(rows: Array<Record<string, unknown>>): T[] {
+  return rows.map((row) => {
+    const normalized: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(row)) {
+      normalized[key] = value instanceof Date ? value.toISOString() : value
+    }
+    return normalized as T
+  })
 }
 
 function isClosedCertificateStatus(status: unknown) {
@@ -77,7 +94,39 @@ function isSupplementStatus(status: unknown) {
   return ['supplement_required', '补正', '待补正', 'returned', 'rejected'].includes(normalized)
 }
 
-async function queryExpiringPermits(projectId?: string) {
+function assertPreMilestoneScanScope(projectId?: string, systemJob = false) {
+  if (!String(projectId ?? '').trim() && !systemJob) {
+    throw new Error('pre-milestone warning scan requires projectId or systemJob capability')
+  }
+}
+
+// workspace-isolation-system-job-approved: global permit scans are restricted to explicit scheduled-job capability.
+async function queryExpiringPermits(projectId?: string, systemJob = false) {
+  assertPreMilestoneScanScope(projectId, systemJob)
+  try {
+    const { rows } = projectId
+      ? await rawQuery(
+          `SELECT *
+           FROM pre_milestones
+           WHERE project_id::text = $1
+             AND expiry_date IS NOT NULL
+             AND (status IS NULL OR lower(status::text) NOT IN ('issued', 'voided', 'completed', 'cancelled', 'done', 'closed'))
+           ORDER BY expiry_date ASC`,
+          [projectId],
+        )
+      : await rawQuery(
+          `SELECT *
+           FROM pre_milestones
+           WHERE expiry_date IS NOT NULL
+             AND (status IS NULL OR lower(status::text) NOT IN ('issued', 'voided', 'completed', 'cancelled', 'done', 'closed'))
+           ORDER BY expiry_date ASC`,
+          [],
+        )
+    return normalizeDirectRows<PreMilestoneRow>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone expiry warning scan', { projectId, error })
+  }
+
   let query = getClient()
     .from('pre_milestones')
     .select('*')
@@ -95,7 +144,31 @@ async function queryExpiringPermits(projectId?: string) {
   return (data ?? []) as PreMilestoneRow[]
 }
 
-async function queryActiveCertificates(projectId?: string) {
+// workspace-isolation-system-job-approved: global certificate scans are restricted to explicit scheduled-job capability.
+async function queryActiveCertificates(projectId?: string, systemJob = false) {
+  assertPreMilestoneScanScope(projectId, systemJob)
+  try {
+    const { rows } = projectId
+      ? await rawQuery(
+          `SELECT *
+           FROM pre_milestones
+           WHERE project_id::text = $1
+             AND (status IS NULL OR lower(status::text) NOT IN ('issued', 'voided', 'completed', 'cancelled', 'done', 'closed'))
+           ORDER BY created_at ASC`,
+          [projectId],
+        )
+      : await rawQuery(
+          `SELECT *
+           FROM pre_milestones
+           WHERE (status IS NULL OR lower(status::text) NOT IN ('issued', 'voided', 'completed', 'cancelled', 'done', 'closed'))
+           ORDER BY created_at ASC`,
+          [],
+        )
+    return normalizeDirectRows<PreMilestoneRow>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for active pre-milestone warning scan', { projectId, error })
+  }
+
   let query = getClient()
     .from('pre_milestones')
     .select('*')
@@ -112,7 +185,29 @@ async function queryActiveCertificates(projectId?: string) {
   return (data ?? []) as PreMilestoneRow[]
 }
 
-async function queryProjectWorkItems(projectId?: string) {
+// workspace-isolation-system-job-approved: global work-item scans are restricted to explicit scheduled-job capability.
+async function queryProjectWorkItems(projectId?: string, systemJob = false) {
+  assertPreMilestoneScanScope(projectId, systemJob)
+  try {
+    const { rows } = projectId
+      ? await rawQuery(
+          `SELECT *
+           FROM certificate_work_items
+           WHERE project_id::text = $1
+           ORDER BY sort_order ASC NULLS LAST, created_at ASC`,
+          [projectId],
+        )
+      : await rawQuery(
+          `SELECT *
+           FROM certificate_work_items
+           ORDER BY sort_order ASC NULLS LAST, created_at ASC`,
+          [],
+        )
+    return normalizeDirectRows<CertificateWorkItem>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone work item warning scan', { projectId, error })
+  }
+
   let query = getClient()
     .from('certificate_work_items')
     .select('*')
@@ -129,7 +224,29 @@ async function queryProjectWorkItems(projectId?: string) {
   return (data ?? []) as CertificateWorkItem[]
 }
 
-async function queryProjectDependencies(projectId?: string) {
+// workspace-isolation-system-job-approved: global dependency scans are restricted to explicit scheduled-job capability.
+async function queryProjectDependencies(projectId?: string, systemJob = false) {
+  assertPreMilestoneScanScope(projectId, systemJob)
+  try {
+    const { rows } = projectId
+      ? await rawQuery(
+          `SELECT *
+           FROM certificate_dependencies
+           WHERE project_id::text = $1
+           ORDER BY created_at ASC`,
+          [projectId],
+        )
+      : await rawQuery(
+          `SELECT *
+           FROM certificate_dependencies
+           ORDER BY created_at ASC`,
+          [],
+        )
+    return normalizeDirectRows<CertificateDependency>(rows)
+  } catch (error) {
+    logger.warn('Falling back to Supabase REST for pre-milestone dependency warning scan', { projectId, error })
+  }
+
   let query = getClient()
     .from('certificate_dependencies')
     .select('*')
@@ -145,7 +262,7 @@ async function queryProjectDependencies(projectId?: string) {
   return (data ?? []) as CertificateDependency[]
 }
 
-function buildPermitWarning(permit: PreMilestoneRow): PermitWarning | null {
+function buildPermitWarning(permit: PreMilestoneRow, options: PreMilestoneWarningScanOptions = {}): PermitWarning | null {
   if (!permit.expiry_date) return null
 
   const dueResult = calculateDueStatus(permit.expiry_date, {
@@ -154,6 +271,7 @@ function buildPermitWarning(permit: PreMilestoneRow): PermitWarning | null {
     overdueLabel: '已过期',
     dueLabel: '天后过期',
     todayLabel: '今天过期',
+    asOfDate: options.asOfDate,
   })
 
   if (dueResult.due_status === 'normal') {
@@ -179,8 +297,8 @@ function buildPermitWarning(permit: PreMilestoneRow): PermitWarning | null {
   }
 }
 
-function buildPermitWarningRecord(permit: PreMilestoneRow): Warning | null {
-  const warning = buildPermitWarning(permit)
+function buildPermitWarningRecord(permit: PreMilestoneRow, options: PreMilestoneWarningScanOptions = {}): Warning | null {
+  const warning = buildPermitWarning(permit, options)
   if (!warning) return null
 
   const suffix = warning.is_overdue
@@ -269,7 +387,7 @@ export async function scanExpiringPermits(): Promise<PermitWarning[]> {
   logger.info('Starting expiring permits scan')
 
   try {
-    const permits = await queryExpiringPermits()
+    const permits = await queryExpiringPermits(undefined, true)
     const warnings = permits
       .map((permit) => buildPermitWarning(permit))
       .filter((warning): warning is PermitWarning => Boolean(warning))
@@ -282,16 +400,20 @@ export async function scanExpiringPermits(): Promise<PermitWarning[]> {
   }
 }
 
-export async function scanPreMilestoneWarnings(projectId?: string): Promise<Warning[]> {
+export async function scanPreMilestoneWarnings(
+  projectId?: string,
+  options: PreMilestoneWarningScanOptions = {},
+): Promise<Warning[]> {
+  assertPreMilestoneScanScope(projectId, options.systemJob === true)
   const [expiringPermits, certificates, workItems, dependencies] = await Promise.all([
-    queryExpiringPermits(projectId),
-    queryActiveCertificates(projectId),
-    queryProjectWorkItems(projectId),
-    queryProjectDependencies(projectId),
+    queryExpiringPermits(projectId, options.systemJob === true),
+    queryActiveCertificates(projectId, options.systemJob === true),
+    queryProjectWorkItems(projectId, options.systemJob === true),
+    queryProjectDependencies(projectId, options.systemJob === true),
   ])
 
   const expiryWarnings = expiringPermits
-    .map((permit) => buildPermitWarningRecord(permit))
+    .map((permit) => buildPermitWarningRecord(permit, options))
     .filter((warning): warning is Warning => Boolean(warning))
   const supplementWarnings = buildSupplementWarnings(
     buildSupplementContexts(certificates, workItems, dependencies),
@@ -302,42 +424,22 @@ export async function scanPreMilestoneWarnings(projectId?: string): Promise<Warn
 
 export async function createWarning(warning: Omit<PermitWarning, 'id' | 'created_at'>): Promise<void> {
   try {
-    const { data: existing } = await getClient()
-      .from('warnings')
-      .select('id')
-      .eq('warning_type', 'permit_expiry')
-      .eq('task_id', warning.pre_milestone_id)
-      .single()
-
     const title = `${warning.permit_name} ${warning.is_overdue ? '已逾期' : '临期预警'}`
     const description = warning.is_overdue
       ? `证照 ${warning.permit_name} 到期日为 ${warning.expiry_date}，已逾期，请尽快处理。`
       : `证照 ${warning.permit_name} 到期日为 ${warning.expiry_date}，距离到期还有 ${Math.abs(warning.days_until_expiry)} 天。`
 
-    if (existing) {
-      await getClient()
-        .from('warnings')
-        .update({
-          title,
-          description,
-          warning_level: warning.warning_level,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', existing.id)
-    } else {
-      await getClient()
-        .from('warnings')
-        .insert({
-          project_id: warning.project_id,
-          task_id: warning.pre_milestone_id,
-          warning_type: 'permit_expiry',
-          warning_level: warning.warning_level,
-          title,
-          description,
-          is_acknowledged: false,
-          created_at: new Date().toISOString(),
-        })
-    }
+    // v1.4.12: write to notifications warning projection via governance service
+    await upsertWarningLifecycle({
+      projectId: warning.project_id,
+      warningType: 'permit_expiry',
+      severity: warning.warning_level === 'critical' ? 'critical' : warning.warning_level === 'warning' ? 'warning' : 'info',
+      title,
+      message: description,
+      sourceEntityType: 'pre_milestone',
+      sourceEntityId: warning.pre_milestone_id,
+      taskId: warning.pre_milestone_id,
+    })
 
     logger.info('Warning created', { permitId: warning.pre_milestone_id, level: warning.warning_level })
   } catch (error) {
@@ -448,7 +550,7 @@ export async function cleanupExpiredWarnings(): Promise<number> {
   try {
     const { data: completedPermits, error } = await getClient()
       .from('pre_milestones')
-      .select('id')
+      .select('id, project_id')
       .in('status', ['已完成', '已取消'])
 
     if (error) throw error
@@ -458,16 +560,15 @@ export async function cleanupExpiredWarnings(): Promise<number> {
       return 0
     }
 
-    const { error: deleteError } = await getClient()
-      .from('warnings')
-      .delete()
-      .eq('warning_type', 'permit_expiry')
-      .in('task_id', completedPermits.map((permit) => permit.id))
+    // v1.4.12: mark source resolved instead of physical delete
+    let resolvedCount = 0
+    for (const permit of completedPermits) {
+      await markSourceResolved('pre_milestone', permit.id, permit.project_id ?? null)
+      resolvedCount++
+    }
 
-    if (deleteError) throw deleteError
-
-    logger.info(`Cleaned up ${completedPermits.length} expired warnings`)
-    return completedPermits.length
+    logger.info(`Resolved ${resolvedCount} expired warnings`)
+    return resolvedCount
   } catch (error) {
     logger.error('Failed to cleanup expired warnings', { error })
     throw error

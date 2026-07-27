@@ -66,7 +66,7 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
                 <span
                   className={cn(
                     'max-w-[160px] truncate',
-                    isLast ? 'font-medium text-slate-700' : 'text-slate-400',
+                    isLast ? 'font-medium text-slate-700' : 'text-slate-600',
                     needsTruncate && 'cursor-default',
                   )}
                 >
@@ -78,7 +78,7 @@ export function Breadcrumb({ items, className, showHome = false }: BreadcrumbPro
                 <Link
                   to={item.href}
                   className={cn(
-                    'max-w-[160px] truncate text-slate-400 underline-offset-2 transition-colors hover:text-slate-700 hover:underline',
+                    'max-w-[160px] truncate text-slate-600 underline-offset-2 transition-colors hover:text-slate-800 hover:underline',
                     needsTruncate && 'cursor-pointer',
                   )}
                 >

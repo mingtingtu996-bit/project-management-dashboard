@@ -1,6 +1,5 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
-import { safeStorageGet, safeStorageSet } from '@/lib/browserStorage'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -31,15 +30,6 @@ export function generateUuid(): string {
   }
 
   return fallbackUuid()
-}
-
-export function generateDeviceId(): string {
-  let deviceId = safeStorageGet(localStorage, 'device_id')
-  if (!deviceId) {
-    deviceId = generateUuid()
-    safeStorageSet(localStorage, 'device_id', deviceId)
-  }
-  return deviceId
 }
 
 export function generateId(): string {

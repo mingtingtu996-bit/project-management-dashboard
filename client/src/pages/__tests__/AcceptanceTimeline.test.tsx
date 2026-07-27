@@ -7,6 +7,16 @@ import AcceptanceTimeline from '../AcceptanceTimeline'
 import { acceptanceApi } from '@/services/acceptanceApi'
 import { useStore } from '@/hooks/useStore'
 
+vi.mock('@/services/engineeringObjectsApi', () => ({
+  listEngineeringObjects: vi.fn(async () => []),
+}))
+
+vi.mock('@/services/materialsApi', () => ({
+  MaterialsApiService: {
+    listParticipantUnits: vi.fn(async () => []),
+  },
+}))
+
 vi.mock('@/services/acceptanceApi', () => ({
   acceptanceApi: {
     getPlans: vi.fn(async () => []),
@@ -16,10 +26,10 @@ vi.mock('@/services/acceptanceApi', () => ({
         {
           id: 'plan-1',
           project_id: 'project-1',
-          milestone_id: 'milestone-1',
+          covered_task_ids: ['task-1'],
           type_id: 'pre_acceptance',
           type_name: 'Pre Acceptance',
-          type_color: 'bg-blue-500',
+          type_color: 'bg-blue-600',
           name: 'Plan A',
           description: 'Acceptance item A',
           planned_date: '2026-04-01',
@@ -95,7 +105,7 @@ vi.mock('@/services/acceptanceApi', () => ({
       linkedWarnings: [
         {
           id: 'warning-1',
-          task_id: 'milestone-1',
+          task_id: 'task-1',
           warning_type: 'condition_due',
           warning_level: 'critical',
           title: 'Warning A',
@@ -145,6 +155,43 @@ vi.mock('@/services/acceptanceApi', () => ({
     createPlanRequirement: vi.fn(async () => undefined),
     createPlanRecord: vi.fn(async () => undefined),
     updateStatus: vi.fn(async () => undefined),
+    previewSystemTemplate: vi.fn(async () => ({
+      templateCode: 'general_delivery_acceptance_v1',
+      templateName: '竣工交付验收事项模板',
+      seedVersion: 'v1.4.22.4',
+      projectId: 'project-1',
+      summary: {
+        itemCreateCount: 1,
+        dependencyCreateCount: 0,
+        requirementCreateCount: 2,
+        skippedExistingCount: 0,
+      },
+      deliveryGoal: { targetName: '综合验收通过', explanation: '按交付目标倒推' },
+      regionProfile: {
+        provinceCode: 'GD',
+        provinceName: '广东省',
+        cityName: '广州市',
+        source: 'project_static_profile',
+        deliveryTargetName: '综合验收通过',
+        updateMode: 'trusted_official_source_auto_publish',
+        policySources: [],
+      },
+      industryProfile: { codes: ['residential'], labels: ['商品住宅'] },
+      items: [],
+      dependencies: [],
+      requirements: [],
+      warnings: [],
+    })),
+    applySystemTemplate: vi.fn(async () => ({
+      templateCode: 'general_delivery_acceptance_v1',
+      seedVersion: 'v1.4.22.4',
+      projectId: 'project-1',
+      createdCatalogIds: [],
+      createdPlanIds: [],
+      createdDependencyIds: [],
+      createdRequirementIds: [],
+      skippedExisting: [],
+    })),
     createCustomType: vi.fn(async (type: Record<string, unknown>) => ({ id: 'type-1', ...type })),
     deleteCustomType: vi.fn(async () => undefined),
     createPlan: vi.fn(async (plan: Record<string, unknown>) => ({ id: 'plan-1', ...plan })),
@@ -253,7 +300,7 @@ describe('AcceptanceTimeline linked data', () => {
         {
           id: 'plan-pass',
           project_id: 'project-1',
-          milestone_id: 'milestone-pass',
+          covered_task_ids: ['task-pass'],
           type_id: 'completion_record',
           type_name: 'Completion Record',
           type_color: 'bg-blue-600',
@@ -275,7 +322,7 @@ describe('AcceptanceTimeline linked data', () => {
         {
           id: 'plan-draft',
           project_id: 'project-1',
-          milestone_id: 'milestone-draft',
+          covered_task_ids: ['task-draft'],
           type_id: 'pre_acceptance',
           type_name: 'Pre Acceptance',
           type_color: 'bg-slate-500',
@@ -335,7 +382,7 @@ describe('AcceptanceTimeline linked data', () => {
         {
           id: 'plan-submit',
           project_id: 'project-1',
-          milestone_id: 'milestone-1',
+          covered_task_ids: ['task-1'],
           type_id: 'completion_record',
           type_name: 'Completion Record',
           type_color: 'bg-blue-600',
@@ -416,10 +463,10 @@ describe('AcceptanceTimeline linked data', () => {
         {
           id: 'plan-compat',
           project_id: 'project-1',
-          milestone_id: 'milestone-1',
+          covered_task_ids: ['task-1'],
           type_id: 'pre_acceptance',
           type_name: 'Compatibility',
-          type_color: 'bg-blue-500',
+          type_color: 'bg-blue-600',
           name: 'Compatibility Plan',
           description: 'status compatibility guard',
           planned_date: '2026-04-01',

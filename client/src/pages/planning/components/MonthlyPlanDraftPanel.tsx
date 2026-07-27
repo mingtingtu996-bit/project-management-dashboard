@@ -31,10 +31,10 @@ export function MonthlyPlanDraftPanel({
       <CardContent padding="md" className="space-y-3 bg-slate-50/80">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="space-y-1">
-            <CardHead eyebrow="MONTHLY DRAFT" title="草稿编辑区" />
+            <CardHead eyebrow="月度计划" title="计划编辑" />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">草稿状态 {draftStatus}</Badge>
+            <Badge variant="outline">{String(draftStatus) === 'draft' ? '待确认' : String(draftStatus) === 'confirmed' ? '已确认' : '编辑中'}</Badge>
             <Badge variant="secondary">已选 {selectedCount} 项</Badge>
           </div>
         </div>

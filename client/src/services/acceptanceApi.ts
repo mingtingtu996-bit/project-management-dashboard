@@ -1,6 +1,7 @@
 import { authFetch } from '../lib/apiClient'
 import { safeJsonParse } from '@/lib/browserStorage'
 import { ACCEPTANCE_TYPE_COLOR_PALETTE } from '@/lib/chartPalette'
+import { daysUntilLocalDate } from '@/lib/dateDistance'
 import type {
   AcceptanceDependencyKind,
   AcceptanceDocument,
@@ -10,6 +11,7 @@ import type {
   AcceptanceOverlayTag,
   AcceptancePlan,
   AcceptanceRequirementStatus,
+  AcceptanceTemplatePreview,
   AcceptancePlanDependencyRecord,
   AcceptancePlanRelationBundle,
   AcceptanceProjectSummary,
@@ -17,6 +19,7 @@ import type {
   AcceptanceRequirementRecord,
   AcceptanceStatus,
   AcceptanceType,
+  ApplyAcceptanceTemplateResult,
 } from '@/types/acceptance'
 import {
   normalizeAcceptanceDependencyKind,
@@ -30,8 +33,7 @@ type UnknownRecord = Record<string, unknown>
 type AcceptancePlanRow = {
   id: string
   project_id: string
-  task_id?: string | null
-  milestone_id?: string | null
+  covered_task_ids?: string[] | string | null
   catalog_id?: string | null
   type_id?: string | null
   type_name?: string | null
@@ -44,6 +46,8 @@ type AcceptancePlanRow = {
   planned_date?: string | null
   actual_date?: string | null
   building_id?: string | null
+  building_object_id?: string | null
+  buildingObjectId?: string | null
   scope_level?: string | null
   participant_unit_id?: string | null
   status?: string | null
@@ -113,8 +117,6 @@ type AcceptanceCatalogRow = {
 
 type AcceptanceRequirementMutation = {
   requirement_type: string
-  source_entity_type: string
-  source_entity_id: string
   drawing_package_id?: string | null
   description?: string | null
   status?: string | null
@@ -128,6 +130,15 @@ type AcceptanceRecordMutation = {
   operator?: string | null
   record_date?: string | null
   attachments?: unknown[] | null
+}
+
+type ApplyAcceptanceTemplatePayload = {
+  templateCode: string
+  seedVersion: string
+  selectedItemCodes: string[]
+  selectedDependencyCodes: string[]
+  selectedRequirementCodes: string[]
+  duplicatePolicy: 'skip_existing'
 }
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -204,12 +215,7 @@ function normalizeOverlayBadges(input: string[]): AcceptanceOverlayTag[] {
 }
 
 function deriveDaysToDue(plannedDate?: string | null) {
-  if (!plannedDate) return null
-  const planned = new Date(`${plannedDate}T00:00:00Z`)
-  if (Number.isNaN(planned.getTime())) return null
-  const today = new Date()
-  const current = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-  return Math.floor((planned.getTime() - current) / (24 * 60 * 60 * 1000))
+  return daysUntilLocalDate(plannedDate)
 }
 
 function buildDerivedOverlayBadges(input: {
@@ -309,7 +315,7 @@ function mapDbToPlan(row: AcceptancePlanRow): AcceptancePlan {
   return {
     id: String(row.id),
     project_id: String(row.project_id),
-    milestone_id: row.task_id ?? row.milestone_id ?? null,
+    covered_task_ids: parseStringArray(row.covered_task_ids),
     catalog_id: row.catalog_id ?? null,
     type_id: typeId,
     type_name: typeName,
@@ -321,6 +327,7 @@ function mapDbToPlan(row: AcceptancePlanRow): AcceptancePlan {
     planned_date: row.planned_date ?? null,
     actual_date: row.actual_date ?? null,
     building_id: row.building_id ?? null,
+    building_object_id: row.building_object_id ?? row.buildingObjectId ?? null,
     scope_level: row.scope_level ?? null,
     participant_unit_id: row.participant_unit_id ?? null,
     status: normalizeAcceptanceStatus(String(row.status ?? 'draft')),
@@ -366,7 +373,6 @@ const FRESH_ACCEPTANCE_READ_OPTIONS = {
 function buildPlanWriteBody(plan: Partial<AcceptancePlan>): Record<string, unknown> {
   return compactObject({
     project_id: plan.project_id,
-    task_id: plan.milestone_id,
     catalog_id: plan.catalog_id,
     type_id: plan.type_id,
     type_name: plan.type_name,
@@ -376,6 +382,7 @@ function buildPlanWriteBody(plan: Partial<AcceptancePlan>): Record<string, unkno
     planned_date: plan.planned_date,
     actual_date: plan.actual_date,
     building_id: plan.building_id,
+    building_object_id: (plan as any).building_object_id ?? (plan as any).buildingObjectId ?? null,
     scope_level: plan.scope_level,
     participant_unit_id: plan.participant_unit_id,
     status: plan.status ? normalizeAcceptanceStatus(plan.status) : undefined,
@@ -384,6 +391,7 @@ function buildPlanWriteBody(plan: Partial<AcceptancePlan>): Record<string, unkno
     sort_order: plan.sort_order,
     parallel_group_id: plan.parallel_group_id,
     documents: plan.documents,
+    covered_task_ids: plan.covered_task_ids,
     created_by: plan.created_by,
   })
 }
@@ -524,6 +532,10 @@ function mapRisk(row: UnknownRecord): AcceptanceLinkedRisk {
 }
 
 export const acceptanceApi = {
+  mapCatalogRowsToTypes(rows: UnknownRecord[] | null | undefined): AcceptanceType[] {
+    return (rows || []).map((row) => mapCatalogToType(row as AcceptanceCatalogRow))
+  },
+
   async getPlans(projectId: string, filters?: AcceptancePlanFilters): Promise<AcceptancePlan[]> {
     const query = buildPlanQuery(projectId, filters)
     const data = await authFetch<AcceptancePlanRow[]>(
@@ -621,6 +633,24 @@ export const acceptanceApi = {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
     })
+  },
+
+  async previewSystemTemplate(projectId: string): Promise<AcceptanceTemplatePreview> {
+    return authFetch<AcceptanceTemplatePreview>(
+      `${API_BASE}/projects/${encodeURIComponent(projectId)}/acceptance-templates/system/preview`,
+      FRESH_ACCEPTANCE_READ_OPTIONS,
+    )
+  },
+
+  async applySystemTemplate(projectId: string, payload: ApplyAcceptanceTemplatePayload): Promise<ApplyAcceptanceTemplateResult> {
+    return authFetch<ApplyAcceptanceTemplateResult>(
+      `${API_BASE}/projects/${encodeURIComponent(projectId)}/acceptance-templates/system/apply`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    )
   },
 
   async getCustomTypes(projectId: string): Promise<AcceptanceType[]> {

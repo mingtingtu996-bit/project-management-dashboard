@@ -10,14 +10,14 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { RefreshCw } from 'lucide-react'
-export type CloseoutConfirmMode = 'batch' | 'single' | 'force'
+export type CloseoutConfirmMode = 'batch' | 'single'
 export type CloseoutConfirmState = 'ready' | 'failed'
 
 export interface CloseoutConfirmSummary {
   rolledInCount: number
   closedCount: number
   manualOverrideCount: number
-  forcedCount: number
+  archiveConfirmationCount: number
   remainingCount?: number
 }
 
@@ -40,8 +40,7 @@ export function CloseoutConfirmDialog({
   onConfirm,
   onRetry,
 }: CloseoutConfirmDialogProps) {
-  const modeLabel =
-    mode === 'force' ? '强制发起关账确认' : mode === 'batch' ? '批量关账确认' : '逐条关账确认'
+  const displayModeLabel = mode === 'batch' ? '批量关账确认' : '逐条关账确认'
   const canConfirm = state !== 'failed'
 
   return (
@@ -49,7 +48,7 @@ export function CloseoutConfirmDialog({
       <DialogContent data-testid="closeout-confirm-dialog" className="max-w-[var(--dialog-lg-width)]">
         <DialogHeader className="text-left">
           <div className="flex flex-wrap items-center gap-2">
-            <DialogTitle>{modeLabel}</DialogTitle>
+            <DialogTitle>{displayModeLabel}</DialogTitle>
             <Badge variant={state === 'failed' ? 'destructive' : 'secondary'}>
               {state === 'failed' ? '生成失败' : '确认待续'}
             </Badge>
@@ -80,8 +79,8 @@ export function CloseoutConfirmDialog({
           </Card>
           <Card className="surface-card">
             <CardContent className="space-y-1 p-5">
-              <div className="text-xs uppercase tracking-wider text-slate-500">强制处理数</div>
-              <div className="text-2xl font-semibold text-slate-900">{summary.forcedCount}</div>
+              <div className="text-xs uppercase tracking-wider text-slate-500">归档确认数</div>
+              <div className="text-2xl font-semibold text-slate-900">{summary.archiveConfirmationCount}</div>
             </CardContent>
           </Card>
         </div>

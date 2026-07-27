@@ -1,206 +1,194 @@
-﻿import { describe, expect, it } from 'vitest'
-import { summarizeCriticalPathSnapshot } from '../criticalPath'
-import { buildCriticalPathSnapshot } from '../criticalPathCompatibility'
-import { calculateCPM, getCriticalPathSummary } from '../cpm'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-describe('criticalPath', () => {
-  it('builds a snapshot with stable auto and manual path fields', () => {
-    const snapshot = buildCriticalPathSnapshot('project-1', [
-      {
-        id: 'task-a',
-        name: 'A',
-        duration: 1,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-01'),
-        dependencies: [],
-      },
-      {
-        id: 'task-b',
-        name: 'B',
-        duration: 6,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-06'),
-        dependencies: [],
-      },
-      {
-        id: 'task-c',
-        name: 'C',
-        duration: 1,
-        startDate: new Date('2026-04-02'),
-        endDate: new Date('2026-04-02'),
-        dependencies: ['task-a'],
-      },
-    ], [
-      {
-        taskId: 'task-c',
-        mode: 'manual_insert',
-        anchorType: 'after',
-        leftTaskId: 'task-a',
-        reason: '插在 A 后面',
-      },
+const mocks = vi.hoisted(() => ({
+  apiGet: vi.fn(),
+  apiPost: vi.fn(),
+}))
+
+vi.mock('@/lib/apiClient', () => ({
+  apiDelete: vi.fn(),
+  apiGet: mocks.apiGet,
+  apiPatch: vi.fn(),
+  apiPost: mocks.apiPost,
+}))
+
+import {
+  buildCriticalPathSummaryModel,
+  fetchCriticalPathSnapshot,
+  normalizeCriticalPathSnapshot,
+  refreshCriticalPathSnapshot,
+  summarizeCriticalPathSnapshot,
+  type CriticalPathSnapshot,
+} from '../criticalPath'
+
+function productionMetric(value: number | null, availability: 'available' | 'unavailable' = 'available') {
+  return {
+    value: availability === 'available' ? value : null,
+    unit: 'construction_production_day' as const,
+    calendarRef: availability === 'available' ? 'work_calendar' : null,
+    calendarVersion: availability === 'available' ? 'calendar-v1' : null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-12',
+    availability,
+    unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
+  }
+}
+
+function makeSnapshot(): CriticalPathSnapshot {
+  return {
+    projectId: 'project-1',
+    autoTaskIds: ['task-a', 'task-b'],
+    manualAttentionTaskIds: ['task-c'],
+    manualInsertedTaskIds: ['task-d'],
+    primaryChain: {
+      id: 'chain-primary',
+      source: 'auto',
+      taskIds: ['task-a', 'task-b'],
+      totalDurationDays: 999,
+      totalDuration: productionMetric(12),
+      displayLabel: '主关键路径',
+    },
+    alternateChains: [{
+      id: 'chain-alt',
+      source: 'manual_insert',
+      taskIds: ['task-b', 'task-d'],
+      totalDurationDays: 998,
+      totalDuration: productionMetric(8),
+      displayLabel: '手动插链',
+    }],
+    displayTaskIds: ['task-a', 'task-b', 'task-c', 'task-d'],
+    edges: [],
+    tasks: [
       {
         taskId: 'task-a',
-        mode: 'manual_attention',
-        reason: '手动关注',
+        title: 'A',
+        floatDays: 999,
+        float: productionMetric(0),
+        durationDays: 999,
+        duration: productionMetric(5),
+        freeFloatDays: 999,
+        freeFloat: productionMetric(1),
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+        chainIndex: 0,
       },
-    ])
+      {
+        taskId: 'task-b',
+        title: 'B',
+        floatDays: 999,
+        float: productionMetric(0),
+        durationDays: 999,
+        duration: productionMetric(7),
+        freeFloatDays: 999,
+        freeFloat: productionMetric(0),
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+        chainIndex: 1,
+      },
+    ],
+    networkSchedule: [{
+      taskId: 'task-a',
+      earliestStartOffsetDays: 0,
+      earliestFinishOffsetDays: 5,
+      latestStartOffsetDays: 0,
+      latestFinishOffsetDays: 5,
+      floatDays: 999,
+      float: productionMetric(0),
+      freeFloatDays: 999,
+      freeFloat: productionMetric(1),
+      durationDays: 999,
+      duration: productionMetric(5),
+      isAutoCritical: true,
+    }],
+    projectDurationDays: 999,
+    projectDuration: productionMetric(12),
+    calculatedAt: '2026-06-12T00:00:00.000Z',
+  }
+}
 
-    expect(snapshot.projectId).toBe('project-1')
-    expect(snapshot.autoTaskIds).toContain('task-b')
-    expect(snapshot.manualAttentionTaskIds).toContain('task-a')
-    expect(snapshot.manualInsertedTaskIds).toContain('task-c')
-    expect(snapshot.primaryChain).not.toBeNull()
-    expect(snapshot.displayTaskIds).toContain('task-a')
-    expect(snapshot.displayTaskIds).toContain('task-c')
-    expect(snapshot.edges.some((edge) => edge.source === 'manual_link')).toBe(true)
-    expect(snapshot.tasks.find((task) => task.taskId === 'task-c')?.isManualInserted).toBe(true)
-    expect(summarizeCriticalPathSnapshot(snapshot)).toContain('关键路径')
-    expect(summarizeCriticalPathSnapshot(snapshot)).toContain('插链')
+describe('criticalPath snapshot display helpers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
-  it('ignores legacy critical flags when building the display snapshot', () => {
-    const snapshot = buildCriticalPathSnapshot('project-1', [
-      {
-        id: 'task-a',
-        name: 'A',
-        duration: 1,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-01'),
-        dependencies: [],
-        isCritical: true,
-      },
-      {
-        id: 'task-b',
-        name: 'B',
-        duration: 6,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-06'),
-        dependencies: [],
-      },
-      {
-        id: 'task-c',
-        name: 'C',
-        duration: 1,
-        startDate: new Date('2026-04-02'),
-        endDate: new Date('2026-04-02'),
-        dependencies: ['task-a'],
-      },
-    ])
+  it('summarizes backend critical path snapshots without running a frontend CPM engine', () => {
+    const summary = summarizeCriticalPathSnapshot(makeSnapshot())
 
-    expect(snapshot.manualAttentionTaskIds).toEqual([])
-    expect(snapshot.displayTaskIds).toEqual(['task-b'])
-    expect(snapshot.tasks.some((task) => task.taskId === 'task-a')).toBe(false)
+    expect(summary).toBe('关键路径 2 项，工期 12 个生产日，备选 1 条，关注 1 项，插链 1 项')
+    expect(summary).not.toContain('999')
   })
 
-  it('keeps the compatibility CPM summary stable', () => {
-    const result = calculateCPM([
-      {
-        id: 'task-a',
-        name: 'A',
-        duration: 3,
-        dependencies: [],
-      },
-      {
-        id: 'task-b',
-        name: 'B',
-        duration: 6,
-        dependencies: [],
-      },
-      {
-        id: 'task-c',
-        name: 'C',
-        duration: 3,
-        dependencies: ['task-a'],
-      },
-    ])
+  it('builds a display model from the backend snapshot', () => {
+    const model = buildCriticalPathSummaryModel(makeSnapshot())
 
-    expect(result.criticalPath).toEqual(['task-a', 'task-b'])
-    expect(getCriticalPathSummary(result)).toBe('2个关键任务，工期 6 天')
+    expect(model?.primaryTaskCount).toBe(2)
+    expect(model?.alternateChainCount).toBe(1)
+    expect(model?.manualAttentionCount).toBe(1)
+    expect(model?.manualInsertedCount).toBe(1)
+    expect(model?.displayTaskCount).toBe(4)
+    expect(model?.projectDuration).toEqual(productionMetric(12))
+    expect(model).not.toHaveProperty('projectDurationDays')
   })
 
-  it('prefers the auto chain with more level-one milestones when durations tie', () => {
-    const snapshot = buildCriticalPathSnapshot('project-1', [
-      {
-        id: 'task-a',
-        name: 'A',
-        duration: 2,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-02'),
-        dependencies: [],
-        isMilestone: true,
-        milestoneLevel: 1,
+  it('fails closed when typed production-day facts are missing or use the wrong unit', () => {
+    const raw = {
+      ...makeSnapshot(),
+      projectDuration: undefined,
+    } as unknown as CriticalPathSnapshot & Record<string, unknown>
+    raw.projectDurationDays = 999
+    raw.primaryChain = {
+      ...raw.primaryChain!,
+      totalDuration: {
+        ...productionMetric(12),
+        unit: 'calendar_day',
       },
-      {
-        id: 'task-c',
-        name: 'C',
-        duration: 5,
-        startDate: new Date('2026-04-03'),
-        endDate: new Date('2026-04-06'),
-        dependencies: ['task-a'],
-      },
-      {
-        id: 'task-b',
-        name: 'B',
-        duration: 6,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-06'),
-        dependencies: [],
-      },
-    ])
+      totalDurationDays: 999,
+    }
 
-    expect(snapshot.primaryChain?.taskIds).toEqual(['task-a', 'task-c'])
-    expect(snapshot.alternateChains[0]?.taskIds).toEqual(['task-b'])
-    expect(snapshot.autoTaskIds).toEqual(['task-a', 'task-c', 'task-b'])
+    const normalized = normalizeCriticalPathSnapshot(raw)
+    const summary = summarizeCriticalPathSnapshot(normalized)
+
+    expect(normalized.projectDuration).toBeNull()
+    expect(normalized.primaryChain?.totalDuration).toBeNull()
+    expect(summary).toContain('生产日口径不可用')
+    expect(summary).not.toContain('999')
   })
 
-  it('includes automatic zero-float parallel chains before manual inserts in alternates', () => {
-    const snapshot = buildCriticalPathSnapshot('project-1', [
-      {
-        id: 'task-a',
-        name: 'A',
-        duration: 2,
-        startDate: new Date('2026-04-01'),
-        endDate: new Date('2026-04-02'),
-        dependencies: [],
-      },
-      {
-        id: 'task-c',
-        name: 'C',
-        duration: 5,
-        startDate: new Date('2026-04-03'),
-        endDate: new Date('2026-04-07'),
-        dependencies: ['task-a'],
-      },
-      {
-        id: 'task-b',
-        name: 'B',
-        duration: 6,
-        startDate: new Date('2026-04-03'),
-        endDate: new Date('2026-04-08'),
-        dependencies: [],
-      },
-      {
-        id: 'task-d',
-        name: 'D',
-        duration: 1,
-        startDate: new Date('2026-04-04'),
-        endDate: new Date('2026-04-04'),
-        dependencies: [],
-      },
-    ], [
-      {
-        taskId: 'task-d',
-        mode: 'manual_insert',
-        anchorType: 'after',
-        leftTaskId: 'task-b',
-        reason: '插在 B 后面',
-      },
-    ])
+  it('normalizes GET and refresh responses without synthesizing typed facts from legacy numbers', async () => {
+    const raw = {
+      ...makeSnapshot(),
+      projectDuration: undefined,
+      projectDurationDays: 999,
+    }
+    mocks.apiGet.mockResolvedValueOnce(raw)
+    mocks.apiPost.mockResolvedValueOnce(raw)
 
-    expect(snapshot.primaryChain?.taskIds).toEqual(['task-b'])
-    expect(snapshot.alternateChains.map((chain) => ({ source: chain.source, taskIds: chain.taskIds }))).toEqual([
-      { source: 'auto', taskIds: ['task-a', 'task-c'] },
-      { source: 'manual_insert', taskIds: ['task-b', 'task-d'] },
-    ])
+    const fetched = await fetchCriticalPathSnapshot('project-1')
+    const refreshed = await refreshCriticalPathSnapshot('project-1')
+
+    expect(fetched.projectDuration).toBeNull()
+    expect(refreshed.projectDuration).toBeNull()
+    expect(summarizeCriticalPathSnapshot(fetched)).not.toContain('999')
+  })
+
+  it('keeps empty and missing snapshots display-safe', () => {
+    const empty = {
+      ...makeSnapshot(),
+      autoTaskIds: [],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: [],
+      tasks: [],
+      projectDurationDays: 0,
+      projectDuration: productionMetric(0),
+    } satisfies CriticalPathSnapshot
+
+    expect(summarizeCriticalPathSnapshot(null)).toBe('')
+    expect(summarizeCriticalPathSnapshot(empty)).toBe('无关键路径')
+    expect(buildCriticalPathSummaryModel(null)).toBeNull()
   })
 })

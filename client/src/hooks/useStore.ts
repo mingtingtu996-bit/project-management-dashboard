@@ -11,22 +11,10 @@ import {
   TaskObstacle,
   TaskDelayHistory,
   AcceptancePlan,
-  DelayRequest,
   ChangeLogRecord,
   TaskProgressSnapshot,
+  EngineeringObject,
 } from '@/lib/supabase'
-
-export type ScopeDimensionKey = 'building' | 'specialty' | 'phase' | 'region'
-
-export interface ScopeDimensionSection {
-  key: ScopeDimensionKey
-  label: string
-  description?: string
-  options: string[]
-  selected: string[]
-}
-
-export type ScopeDraft = Record<ScopeDimensionKey, string[]>
 
 function resolveInitialConnectionMode(): 'websocket' | 'polling' {
   if (
@@ -78,6 +66,16 @@ export interface NotificationRecord {
   createdAt: string
   updatedAt?: string
   status?: string
+  warningLifecycleStatus?: string
+  warningSignature?: string
+  // v1.4.13: notification lifecycle + touchpoint + scope
+  lifecycleStatus?: string
+  touchpointType?: string
+  scopeType?: string
+  dedupeKey?: string
+  targetRoute?: string
+  targetLabel?: string
+  companyId?: string
 }
 
 export interface WarningRecord {
@@ -103,6 +101,8 @@ export interface WarningRecord {
   is_escalated?: boolean
   resolved_at?: string | null
   resolved_source?: string | null
+  warning_lifecycle_status?: string | null
+  source_hash?: string | null
 }
 
 export type RealtimeConnectionState =
@@ -116,6 +116,7 @@ export type RealtimeConnectionState =
 export interface RealtimeEventRecord {
   type: string
   channel?: string | null
+  companyId?: string | null
   projectId?: string | null
   userId?: string | null
   entityType?: string | null
@@ -144,7 +145,6 @@ export interface IssueRecord {
 
 export type ProblemRecord = TaskObstacle
 
-export type DelayRequestRecord = DelayRequest
 export type ChangeLogEntry = ChangeLogRecord
 export type TaskProgressSnapshotRecord = TaskProgressSnapshot
 
@@ -153,7 +153,6 @@ export type SharedSliceKey =
   | 'warnings'
   | 'issueRows'
   | 'problemRows'
-  | 'delayRequests'
   | 'changeLogs'
   | 'taskProgressSnapshots'
 
@@ -172,7 +171,6 @@ function createInitialSharedSliceStatus(): SharedSliceStatusMap {
     warnings: { loading: false, error: null },
     issueRows: { loading: false, error: null },
     problemRows: { loading: false, error: null },
-    delayRequests: { loading: false, error: null },
     changeLogs: { loading: false, error: null },
     taskProgressSnapshots: { loading: false, error: null },
   }
@@ -244,8 +242,6 @@ interface AppState {
   setIssueRows: (issueRows: IssueRecord[]) => void
   problemRows: ProblemRecord[]
   setProblemRows: (problemRows: ProblemRecord[]) => void
-  delayRequests: DelayRequestRecord[]
-  setDelayRequests: (delayRequests: DelayRequestRecord[]) => void
   changeLogs: ChangeLogEntry[]
   setChangeLogs: (changeLogs: ChangeLogEntry[]) => void
   taskProgressSnapshots: TaskProgressSnapshotRecord[]
@@ -254,8 +250,11 @@ interface AppState {
   setSharedSliceStatus: (slice: SharedSliceKey, patch: Partial<SharedSliceStatusState>) => void
   participantUnits: ParticipantUnitRecord[]
   setParticipantUnits: (units: ParticipantUnitRecord[]) => void
-  scopeDimensions: ScopeDimensionSection[]
-  setScopeDimensions: (sections: ScopeDimensionSection[]) => void
+
+  // v1.4 Engineering objects
+  engineeringObjects: EngineeringObject[]
+  setEngineeringObjects: (objects: EngineeringObject[]) => void
+  fetchEngineeringObjects: (projectId: string) => Promise<void>
 
   // 邀请码
   invitations: Invitation[]
@@ -295,12 +294,11 @@ export const useStore = create<AppState>((set) => ({
     warnings: [],
     issueRows: [],
     problemRows: [],
-    delayRequests: [],
     changeLogs: [],
     taskProgressSnapshots: [],
     sharedSliceStatus: createInitialSharedSliceStatus(),
     participantUnits: [],
-    scopeDimensions: [],
+    engineeringObjects: [],
   }),
   setHydratedProjectId: (projectId) => set({ hydratedProjectId: projectId }),
 
@@ -388,8 +386,6 @@ export const useStore = create<AppState>((set) => ({
   setIssueRows: (issueRows) => set({ issueRows }),
   problemRows: [],
   setProblemRows: (problemRows) => set({ problemRows }),
-  delayRequests: [],
-  setDelayRequests: (delayRequests) => set({ delayRequests }),
   changeLogs: [],
   setChangeLogs: (changeLogs) => set({ changeLogs }),
   taskProgressSnapshots: [],
@@ -408,8 +404,13 @@ export const useStore = create<AppState>((set) => ({
   // 邀请码
   participantUnits: [],
   setParticipantUnits: (participantUnits) => set({ participantUnits }),
-  scopeDimensions: [],
-  setScopeDimensions: (scopeDimensions) => set({ scopeDimensions }),
+  engineeringObjects: [],
+  setEngineeringObjects: (engineeringObjects) => set({ engineeringObjects }),
+  fetchEngineeringObjects: async (projectId) => {
+    const { listEngineeringObjects } = await import('@/services/engineeringObjectsApi')
+    const objects = await listEngineeringObjects(projectId)
+    set({ engineeringObjects: objects })
+  },
   invitations: [],
   setInvitations: (invitations) => set({ invitations }),
   addInvitation: (invitation) => set((state) => ({ invitations: [...state.invitations, invitation] })),
@@ -510,8 +511,8 @@ export function selectParticipantUnits(state: AppState): ParticipantUnitRecord[]
   return state.participantUnits
 }
 
-export function selectScopeDimensions(state: AppState): ScopeDimensionSection[] {
-  return state.scopeDimensions
+export function selectEngineeringObjects(state: AppState): EngineeringObject[] {
+  return state.engineeringObjects
 }
 
 export function selectProjectScope(state: AppState, projectId?: string | null): ProjectScopeSnapshot {
@@ -577,12 +578,15 @@ export const useProjectAcceptancePlans = (projectId?: string | null) =>
   useStore((state) => selectProjectAcceptancePlans(state, projectId))
 export const useProjectScope = (projectId?: string | null) => useStore((state) => selectProjectScope(state, projectId))
 export const useParticipantUnits = () => useStore((state) => selectParticipantUnits(state))
-export const useScopeDimensions = () => useStore((state) => selectScopeDimensions(state))
+export const useEngineeringObjects = () => useStore((state) => selectEngineeringObjects(state))
 export const useNotifications = () => useStore((state) => state.notifications)
+export const useNotificationsByTouchpoint = (touchpointType?: string) => useStore((state) => {
+  if (!touchpointType || touchpointType === 'all') return state.notifications
+  return state.notifications.filter((item) => item.touchpointType === touchpointType)
+})
 export const useWarnings = () => useStore((state) => state.warnings)
 export const useIssueRows = () => useStore((state) => state.issueRows)
 export const useProblemRows = () => useStore((state) => state.problemRows)
-export const useDelayRequests = () => useStore((state) => state.delayRequests)
 export const useChangeLogs = () => useStore((state) => state.changeLogs)
 export const useTaskProgressSnapshots = () => useStore((state) => state.taskProgressSnapshots)
 export const useSharedSliceStatus = (slice?: SharedSliceKey) =>
@@ -630,7 +634,6 @@ export const useSetNotifications = () => useStore((state) => state.setNotificati
 export const useSetWarnings = () => useStore((state) => state.setWarnings)
 export const useSetIssueRows = () => useStore((state) => state.setIssueRows)
 export const useSetProblemRows = () => useStore((state) => state.setProblemRows)
-export const useSetDelayRequests = () => useStore((state) => state.setDelayRequests)
 export const useSetChangeLogs = () => useStore((state) => state.setChangeLogs)
 export const useSetTaskProgressSnapshots = () => useStore((state) => state.setTaskProgressSnapshots)
 export const useSetSharedSliceStatus = () => useStore((state) => state.setSharedSliceStatus)

@@ -1,8 +1,10 @@
-import { cp, readFile, rm, writeFile } from 'node:fs/promises'
-import { readdirSync } from 'node:fs'
+﻿import { cp, readFile, rm, writeFile } from 'node:fs/promises'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const latestManifestPath = 'artifacts/figma-design-data/latest-manifest.json'
+const latestManifestPath = process.env.FIGMA_DESIGN_DATA_LATEST_MANIFEST || 'project-ui/artifacts/figma-design-data/latest-manifest.json'
+const legacyFigmaRoot = 'artifacts/figma-design-data'
+const currentFigmaRoot = 'project-ui/artifacts/figma-design-data'
 
 function isIgnorableConsole(routeKey, text) {
   return text.includes('Failed to load resource') && text.includes('400')
@@ -34,9 +36,25 @@ function replaceDir(value, sourceDir, destDir) {
   return typeof value === 'string' ? value.replaceAll(sourceDir, destDir) : value
 }
 
+function resolveMovedPath(value) {
+  if (typeof value !== 'string') return value
+  if (existsSync(value)) return value
+  if (value.startsWith(legacyFigmaRoot)) {
+    const current = value.replace(legacyFigmaRoot, currentFigmaRoot)
+    if (existsSync(current)) return current
+  }
+  return value
+}
+
+function replaceAnyDir(value, sourceDirs, destDir) {
+  if (typeof value !== 'string') return value
+  return sourceDirs.reduce((next, sourceDir) => replaceDir(next, sourceDir, destDir), value)
+}
+
 async function main() {
   const sourceManifest = await readJson(latestManifestPath)
-  const sourceDir = process.env.FIGMA_CLEAN_SOURCE_DIR || sourceManifest.outputDir
+  const sourceDirRaw = process.env.FIGMA_CLEAN_SOURCE_DIR || sourceManifest.outputDir
+  const sourceDir = resolveMovedPath(sourceDirRaw)
   const destDir = process.env.FIGMA_CLEAN_OUTPUT_DIR || `${sourceDir}-cleaned`
   if (sourceDir === destDir) {
     throw new Error(`Refusing to clean in place: ${sourceDir}`)
@@ -63,14 +81,14 @@ async function main() {
   manifest.runId = `${manifest.runId}-cleaned`
   manifest.generatedAt = new Date().toISOString()
   manifest.outputDir = destDir
-  manifest.tokenFile = replaceDir(manifest.tokenFile, sourceDir, destDir)
-  manifest.assetFile = replaceDir(manifest.assetFile, sourceDir, destDir)
+  manifest.tokenFile = replaceAnyDir(manifest.tokenFile, [sourceDirRaw, sourceDir], destDir)
+  manifest.assetFile = replaceAnyDir(manifest.assetFile, [sourceDirRaw, sourceDir], destDir)
   manifest.captures = manifest.captures.map((capture) => {
     const diagnostics = cleanDiagnostics(capture.routeKey, capture.diagnostics)
     return {
       ...capture,
-      pageData: replaceDir(capture.pageData, sourceDir, destDir),
-      screenshot: replaceDir(capture.screenshot, sourceDir, destDir),
+      pageData: replaceAnyDir(capture.pageData, [sourceDirRaw, sourceDir], destDir),
+      screenshot: replaceAnyDir(capture.screenshot, [sourceDirRaw, sourceDir], destDir),
       diagnostics,
     }
   })
@@ -87,12 +105,12 @@ async function main() {
 
   const replayPath = join(destDir, 'figma-replay-spec.json')
   const replay = await readJson(replayPath)
-  replay.source.tokenFile = replaceDir(replay.source.tokenFile, sourceDir, destDir)
-  replay.source.assetFile = replaceDir(replay.source.assetFile, sourceDir, destDir)
+  replay.source.tokenFile = replaceAnyDir(replay.source.tokenFile, [sourceDirRaw, sourceDir], destDir)
+  replay.source.assetFile = replaceAnyDir(replay.source.assetFile, [sourceDirRaw, sourceDir], destDir)
   replay.framePlan = replay.framePlan.map((frame) => ({
     ...frame,
-    dataFile: replaceDir(frame.dataFile, sourceDir, destDir),
-    screenshotReference: replaceDir(frame.screenshotReference, sourceDir, destDir),
+    dataFile: replaceAnyDir(frame.dataFile, [sourceDirRaw, sourceDir], destDir),
+    screenshotReference: replaceAnyDir(frame.screenshotReference, [sourceDirRaw, sourceDir], destDir),
   }))
   await writeFile(replayPath, `${JSON.stringify(replay, null, 2)}\n`, 'utf8')
 

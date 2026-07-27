@@ -1,6 +1,9 @@
 import { logger } from '../middleware/logger.js'
+import { query as rawQuery } from '../database.js'
 import { supabase } from './dbService.js'
 import type { ProjectExecutionSummary } from './projectExecutionSummaryService.js'
+
+const COMPANY_HEALTH_HISTORY_PAGE_SIZE = 1000
 
 export type CompanySummaryHealthHistoryPoint = {
   period: string
@@ -30,6 +33,8 @@ export type CompanySummaryResponse = {
   averageHealth: number
   averageProgress: number
   attentionProjectCount: number
+  totalUnreadWarningCount: number
+  totalDelayedTaskCount: number
   lowHealthProjectCount: number
   overdueMilestoneProjectCount: number
   healthHistory: CompanySummaryHealthHistory
@@ -85,20 +90,21 @@ function normalizeStatus(value: unknown): string {
 
 function average(values: number[]) {
   if (values.length === 0) return null
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length)
 }
 
 function isAttentionRequired(summary: ProjectExecutionSummary) {
   return Boolean(
     summary.attentionRequired ||
-      summary.healthScore < 60 ||
+      Number(summary.businessHealthScore ?? 0) < 60 ||
       (summary.milestoneOverview?.stats?.overdue ?? 0) > 0,
   )
 }
 
 function sortRanking(left: ProjectExecutionSummary, right: ProjectExecutionSummary) {
-  const leftHealth = Number(left.healthScore ?? 0)
-  const rightHealth = Number(right.healthScore ?? 0)
+  const leftHealth = Number(left.businessHealthScore ?? 0)
+  const rightHealth = Number(right.businessHealthScore ?? 0)
   if (leftHealth !== rightHealth) {
     return leftHealth - rightHealth
   }
@@ -164,12 +170,52 @@ function latestMonthlySnapshotRows(rows: ProjectDailySnapshotHealthRow[]) {
   return [...latestRows.values()]
 }
 
-export async function loadCompanyHealthHistoryRows(now = new Date()) {
+function normalizeProjectIds(projectIds?: string[] | null): string[] | null {
+  if (projectIds === undefined || projectIds === null) return null
+  return Array.from(new Set(projectIds.map((id) => String(id ?? '').trim()).filter(Boolean)))
+}
+
+export async function loadCompanyHealthHistoryRows(
+  options: { projectIds: string[]; now?: Date },
+) {
+  const now = options.now ?? new Date()
+  const projectIds = normalizeProjectIds(options.projectIds) ?? []
+  if (projectIds.length === 0) {
+    return [] as HealthHistoryRow[]
+  }
+
   const thisMonth = formatMonthKey(now)
   const lastMonth = getPreviousMonthKey(now)
 
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const params: unknown[] = [monthStart(lastMonth), nextMonthStart(thisMonth)]
+      const projectScope = 'AND project_id = ANY($3::uuid[])'
+      params.push(projectIds)
+      const result = await rawQuery(
+        `SELECT project_id, snapshot_date, health_score
+           FROM project_daily_snapshot
+          WHERE snapshot_date >= $1
+            AND snapshot_date < $2
+            ${projectScope}
+          ORDER BY snapshot_date ASC, project_id ASC`,
+        params,
+      )
+      return latestMonthlySnapshotRows(result.rows as ProjectDailySnapshotHealthRow[])
+        .map((row): HealthHistoryRow => ({
+          project_id: row.project_id,
+          period: snapshotDateToMonthKey(row.snapshot_date),
+          health_score: toFiniteNumber(row.health_score),
+        }))
+    } catch (error) {
+      logger.warn('[companySummaryService] direct health history read failed, falling back to Supabase REST', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('project_daily_snapshot')
       .select('project_id, snapshot_date, health_score')
       .gte('snapshot_date', monthStart(lastMonth))
@@ -177,11 +223,24 @@ export async function loadCompanyHealthHistoryRows(now = new Date()) {
       .order('snapshot_date', { ascending: true })
       .order('project_id', { ascending: true })
 
-    if (error) {
-      throw error
+    query = query.in('project_id', projectIds)
+
+    const rows: ProjectDailySnapshotHealthRow[] = []
+    let offset = 0
+    while (true) {
+      const { data, error } = await query.range(offset, offset + COMPANY_HEALTH_HISTORY_PAGE_SIZE - 1)
+
+      if (error) {
+        throw error
+      }
+
+      const pageRows = (data || []) as ProjectDailySnapshotHealthRow[]
+      rows.push(...pageRows)
+      if (pageRows.length < COMPANY_HEALTH_HISTORY_PAGE_SIZE) break
+      offset += COMPANY_HEALTH_HISTORY_PAGE_SIZE
     }
 
-    return latestMonthlySnapshotRows((data || []) as ProjectDailySnapshotHealthRow[])
+    return latestMonthlySnapshotRows(rows)
       .map((row): HealthHistoryRow => ({
         project_id: row.project_id,
         period: snapshotDateToMonthKey(row.snapshot_date),
@@ -242,14 +301,27 @@ export function buildCompanySummaryResponse(
   })
 
   const averageHealth = projectCount > 0
-    ? Math.round(ranking.reduce((sum, summary) => sum + Number(summary.healthScore ?? 0), 0) / projectCount)
+    // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
+    ? Math.round(ranking.reduce((sum, summary) => sum + Number(summary.businessHealthScore ?? 0), 0) / projectCount)
     : 0
   const averageProgress = projectCount > 0
+    // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
     ? Math.round(ranking.reduce((sum, summary) => sum + Number(summary.overallProgress ?? 0), 0) / projectCount)
     : 0
 
   const attentionProjectCount = ranking.filter(isAttentionRequired).length
-  const lowHealthProjectCount = ranking.filter((summary) => summary.healthScore < 60).length
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
+  const totalUnreadWarningCount = ranking.reduce(
+    (sum, summary) => sum + Number(summary.unreadWarningCount ?? 0),
+    0,
+  )
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
+  const totalDelayedTaskCount = ranking.reduce(
+    (sum, summary) => sum + Number(summary.activeDelayedTasks ?? 0),
+    0,
+  )
+  const lowHealthProjectCount = ranking.filter((summary) => Number(summary.businessHealthScore ?? 0) < 60).length
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
   const overdueMilestoneProjectCount = ranking.filter(
     (summary) => (summary.milestoneOverview?.stats?.overdue ?? 0) > 0,
   ).length
@@ -260,6 +332,8 @@ export function buildCompanySummaryResponse(
     averageHealth,
     averageProgress,
     attentionProjectCount,
+    totalUnreadWarningCount,
+    totalDelayedTaskCount,
     lowHealthProjectCount,
     overdueMilestoneProjectCount,
     healthHistory: buildCompanyHealthHistory(scopedHealthHistoryRows, now),

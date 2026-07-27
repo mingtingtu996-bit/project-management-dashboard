@@ -2,23 +2,15 @@ import { logger } from '../middleware/logger.js'
 import { listActiveProjectIds } from '../services/activeProjectService.js'
 import {
   collectConstructionDependencyReplayCalibrationReport,
+  persistConstructionDependencyReplayCalibrationCandidatesFromReport,
   type ConstructionDependencyReplayCalibrationReport,
 } from '../services/constructionDependencyReplayCalibrationService.js'
 import { persistConstructionDependencyReplayCalibrationReport } from '../services/constructionDependencyReplayCalibrationPersistenceService.js'
 import { runJobWithRetry } from '../services/jobRuntime.js'
-
-const DAY_IN_MS = 24 * 60 * 60 * 1000
+import { PersistentWallClockJobTimer } from '../services/persistentJobScheduleService.js'
 
 function createJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
-}
-
-function nextDailyRunAt(hour: number, minute: number) {
-  const now = new Date()
-  const nextRun = new Date(now)
-  nextRun.setHours(hour, minute, 0, 0)
-  if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1)
-  return nextRun
 }
 
 export type ConstructionDependencyReplayCalibrationJobResult = {
@@ -27,6 +19,9 @@ export type ConstructionDependencyReplayCalibrationJobResult = {
   failedReports: number
   persistedReportCount: number
   reportPersistenceFailedCount: number
+  producerCandidateEventCount: number
+  producerOutcomeCount: number
+  producerFailedCount: number
   inputDependencyCount: number
   matchedDependencyCount: number
   comparableActualDateCount: number
@@ -46,6 +41,9 @@ function emptyResult(): ConstructionDependencyReplayCalibrationJobResult {
     failedReports: 0,
     persistedReportCount: 0,
     reportPersistenceFailedCount: 0,
+    producerCandidateEventCount: 0,
+    producerOutcomeCount: 0,
+    producerFailedCount: 0,
     inputDependencyCount: 0,
     matchedDependencyCount: 0,
     comparableActualDateCount: 0,
@@ -93,13 +91,21 @@ export async function runConstructionDependencyReplayCalibrationSweep(params: {
 
   for (const projectId of projectIds) {
     result.scannedProjects += 1
+    let reportCollected = false
     try {
       const report = await collectConstructionDependencyReplayCalibrationReport({
         projectIds: [projectId],
         maxSamples: params.maxSamples ?? 1000,
         zeroLagReviewThresholdDays: params.zeroLagReviewThresholdDays ?? 2,
       })
+      reportCollected = true
       addReportSummary(result, report)
+      const produced = await persistConstructionDependencyReplayCalibrationCandidatesFromReport({
+        report,
+        projectId,
+      })
+      result.producerCandidateEventCount += produced.persistedEventCount
+      result.producerOutcomeCount += produced.recordedOutcomeCount
       if (params.writeReports !== false) {
         try {
           await persistConstructionDependencyReplayCalibrationReport({
@@ -120,6 +126,7 @@ export async function runConstructionDependencyReplayCalibrationSweep(params: {
       }
     } catch (error) {
       result.failedReports += 1
+      if (reportCollected) result.producerFailedCount += 1
       logger.warn('[constructionDependencyReplayCalibrationJob] project replay calibration failed', {
         projectId,
         error: error instanceof Error ? error.message : String(error),
@@ -127,50 +134,45 @@ export async function runConstructionDependencyReplayCalibrationSweep(params: {
     }
   }
 
+  if (result.failedReports > 0 || result.reportPersistenceFailedCount > 0 || result.producerFailedCount > 0) {
+    throw Object.assign(new Error('construction dependency replay calibration sweep partially failed'), {
+      code: 'CONSTRUCTION_DEPENDENCY_REPLAY_PARTIAL_FAILURE',
+      result,
+    })
+  }
+
   return result
 }
 
 export class ConstructionDependencyReplayCalibrationJob {
-  private timer: NodeJS.Timeout | null = null
-  private startTimer: NodeJS.Timeout | null = null
   private isRunning = false
   private lastRun: Date | null = null
   private nextRun: Date | null = null
+  private wallClockTimer = new PersistentWallClockJobTimer({
+    jobName: 'constructionDependencyReplayCalibrationJob',
+    schedule: { kind: 'daily', hour: 6, minute: 30 },
+    execute: () => this.execute('scheduler'),
+    onScheduled: ({ nextRun, delayMs }) => {
+      this.nextRun = nextRun
+      logger.info('constructionDependencyReplayCalibrationJob scheduled', {
+        nextRun: nextRun.toISOString(),
+        trigger: 'daily_06_30',
+        initialDelay: delayMs,
+      })
+    },
+    onError: (error) => logger.error('constructionDependencyReplayCalibrationJob scheduler failed', {
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
 
   start() {
-    if (this.timer || this.startTimer) {
+    if (!this.wallClockTimer.start()) {
       logger.warn('constructionDependencyReplayCalibrationJob is already running')
-      return
     }
-
-    const nextRun = nextDailyRunAt(6, 30)
-    this.nextRun = nextRun
-    const initialDelay = Math.max(nextRun.getTime() - Date.now(), 0)
-    logger.info('constructionDependencyReplayCalibrationJob scheduled', {
-      nextRun: nextRun.toISOString(),
-      trigger: 'daily_06_30',
-      initialDelay,
-    })
-
-    this.startTimer = setTimeout(() => {
-      this.startTimer = null
-      void this.execute('scheduler')
-      this.timer = setInterval(() => {
-        this.nextRun = new Date(Date.now() + DAY_IN_MS)
-        void this.execute('scheduler')
-      }, DAY_IN_MS)
-    }, initialDelay)
   }
 
   stop() {
-    if (this.startTimer) {
-      clearTimeout(this.startTimer)
-      this.startTimer = null
-    }
-    if (this.timer) {
-      clearInterval(this.timer)
-      this.timer = null
-    }
+    this.wallClockTimer.stop()
     this.nextRun = null
     logger.info('constructionDependencyReplayCalibrationJob stopped')
   }
@@ -178,7 +180,7 @@ export class ConstructionDependencyReplayCalibrationJob {
   getStatus() {
     return {
       isRunning: this.isRunning,
-      isScheduled: this.timer !== null || this.startTimer !== null,
+      isScheduled: this.wallClockTimer.getStatus().isScheduled,
       lastRun: this.lastRun ? this.lastRun.toISOString() : null,
       nextRun: this.nextRun ? this.nextRun.toISOString() : null,
     }
@@ -222,6 +224,7 @@ export class ConstructionDependencyReplayCalibrationJob {
         jobId,
         error: error instanceof Error ? error.message : String(error),
       })
+      if (triggeredBy === 'scheduler') throw error
       return null
     } finally {
       this.isRunning = false

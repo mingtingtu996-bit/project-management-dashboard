@@ -2,8 +2,8 @@
 /**
  * 8.6.2 日常巡检清单生成脚本
  *
- * 生成固定格式的日常巡检命令清单，不接外部系统。
- * 适合每天/每周执行前确认检查范围，或纳入 CI 备忘录。
+ * 生成固定格式的日常巡检命令清单，不直接连接外部系统。
+ * 适合每天/每周执行前确认检查范围，或纳入 CI 备忘记录。
  *
  * 用法：
  *   node scripts/generate-daily-checklist.mjs
@@ -13,15 +13,15 @@
 
 import { writeFileSync } from 'fs'
 
-const apiArg = process.argv.findIndex((a) => a === '--api')
+const apiArg = process.argv.findIndex((arg) => arg === '--api')
 const API_URL = apiArg >= 0 ? process.argv[apiArg + 1] : (process.env.API_URL || 'http://localhost:3001')
 
-const outputArg = process.argv.findIndex((a) => a === '--output')
+const outputArg = process.argv.findIndex((arg) => arg === '--output')
 const OUTPUT_FILE = outputArg >= 0 ? process.argv[outputArg + 1] : null
 
 const today = new Date().toISOString().slice(0, 10)
 
-const CHECKLIST = `# WorkBuddy 日常巡检清单 — ${today}
+const CHECKLIST = `# WorkBuddy 日常巡检清单 - ${today}
 
 > 生成时间：${new Date().toISOString()}
 > 目标 API：${API_URL}
@@ -51,9 +51,9 @@ API_URL=${API_URL} npm run diag:health
 \`\`\`
 
 **检查范围：**
-- [ ] \`/api/health\` — 服务存活
-- [ ] \`/api/dashboard/projects-summary\` — 共享摘要可达
-- [ ] \`/api/notifications\` — 通知路由可达
+- [ ] \`/api/readyz\` 服务与依赖就绪
+- [ ] \`/api/dashboard/projects-summary\` 共享摘要可达
+- [ ] \`/api/notifications\` 通知路由可达
 
 ---
 
@@ -119,11 +119,9 @@ npx tsc -p server/tsconfig.json --noEmit
 _此清单由 \`scripts/generate-daily-checklist.mjs\` 自动生成_
 `
 
-// 输出到控制台
 console.log(CHECKLIST)
 
-// 输出到文件
 if (OUTPUT_FILE) {
   writeFileSync(OUTPUT_FILE, CHECKLIST, 'utf-8')
-  console.error(`\n✅ 已保存到: ${OUTPUT_FILE}`)
+  console.error(`\n已保存到: ${OUTPUT_FILE}`)
 }

@@ -4,12 +4,12 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import { maybeBuildMockAuthResponse, primeBrowserAuth, readFullAppTestManifest } from './browser-auth-fixture.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,17 +18,17 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const TEXT = {
-  taskTitle: '涓讳綋缁撴瀯鏂藉伐',
-  notificationTitle: '浠诲姟寤舵湡鎻愰啋',
+  taskTitle: '主体结构施工',
+  notificationTitle: '任务延期提醒',
 }
 
 const mockProject = {
   id: projectId,
-  name: '鎻愰啋涓績鑱旇皟椤圭洰',
+  name: '提醒中心联调项目',
   description: 'Notifications browser verification fixture project',
   status: 'active',
   created_at: now,
@@ -45,9 +45,9 @@ const mockTask = {
   end_date: '2026-06-30',
   planned_start_date: '2026-03-11',
   planned_end_date: '2026-06-30',
-  assignee_name: '闃胯揪鏄殑',
+  assignee_name: '阿达是的',
   assignee_user_id: 'user-1',
-  responsible_unit: '鎬诲寘鍗曚綅',
+  participant_unit_name: '总包单位',
   created_at: now,
   updated_at: now,
 }
@@ -62,7 +62,7 @@ const mockCriticalPathSnapshot = {
     source: 'auto',
     taskIds: ['task-1'],
     totalDurationDays: 112,
-    displayLabel: '涓诲叧閿矾寰?',
+    displayLabel: '主关键路',
   },
   alternateChains: [],
   displayTaskIds: ['task-1'],
@@ -86,7 +86,7 @@ const mockProjectSummary = {
   id: projectId,
   name: mockProject.name,
   status: 'active',
-  statusLabel: '杩涜涓?',
+  statusLabel: '进行',
   plannedEndDate: '2026-12-31',
   daysUntilPlannedEnd: 257,
   totalTasks: 120,
@@ -120,22 +120,22 @@ const mockProjectSummary = {
   reviewingConstructionDrawingCount: 0,
   attentionRequired: true,
   scheduleVarianceDays: 4,
-  activeDelayRequests: 1,
+  activeDelayedTasks: 1,
   activeObstacles: 2,
-  monthlyCloseStatus: '杩涜涓?',
+  monthlyCloseStatus: '进行',
   closeoutOverdueDays: 0,
   unreadWarningCount: 1,
   highestWarningLevel: 'warning',
-  highestWarningSummary: '寤鸿澶嶆牳涓讳綋鏂藉伐鐨勬暟鎹～鎶?',
+  highestWarningSummary: '建议复核主体施工的数据填',
   shiftedMilestoneCount: 1,
   criticalPathAffectedTasks: 4,
   healthScore: 82,
-  healthStatus: '鍋ュ悍',
+  healthStatus: '健康',
   nextMilestone: {
     id: 'milestone-1',
-    name: '鑺傜偣楠屾敹',
+    name: '节点验收',
     targetDate: '2026-06-20',
-    status: '杩涜涓?',
+    status: '进行',
     daysRemaining: 63,
   },
   milestoneOverview: {
@@ -154,7 +154,7 @@ const mockDataQualitySummary = {
   confidence: {
     score: 84,
     flag: 'medium',
-    note: '鏁版嵁璐ㄩ噺瀛樺湪娉㈠姩锛屽缓璁粨鍚堢幇鍦哄鏍?',
+    note: '数据质量存在波动，建议结合现场复',
     timelinessScore: 83,
     anomalyScore: 80,
     consistencyScore: 86,
@@ -167,7 +167,7 @@ const mockDataQualitySummary = {
   },
   prompt: {
     count: 1,
-    summary: '瀛樺湪 1 鏉￠渶瑕侀噸鐐瑰鏍哥殑鏁版嵁璐ㄩ噺寮傚父',
+    summary: '存在 1 条需要重点复核的数据质量异常',
     items: [
       {
         id: 'finding-1',
@@ -175,8 +175,8 @@ const mockDataQualitySummary = {
         taskTitle: TEXT.taskTitle,
         ruleCode: 'PROGRESS_TIME_MISMATCH',
         severity: 'warning',
-        summary: '杩涘害涓庢椂闂村彂鐢熻交寰敊浣?',
-        recommendation: '澶嶆牳鏈€鏂拌繘搴﹀～鎶ユ椂闂?',
+        summary: '进度与时间发生轻微错',
+        recommendation: '复核最新进度填报时',
       },
     ],
   },
@@ -185,7 +185,7 @@ const mockDataQualitySummary = {
     severity: 'warning',
     scopeLabel: TEXT.taskTitle,
     findingCount: 3,
-    summary: '寤鸿澶嶆牳涓讳綋鏂藉伐鐨勬暟鎹～鎶?',
+    summary: '建议复核主体施工的数据填',
   },
   findings: [],
 }
@@ -232,14 +232,14 @@ const mockTaskSummary = {
 
 const mockTaskSummaryAssignees = [
   {
-    assignee: '闃胯揪鏄殑',
+    assignee: '阿达是的',
     total: 4,
     on_time: 3,
     delayed: 1,
     on_time_rate: 75,
   },
   {
-    assignee: '鏉庡伐',
+    assignee: '李工',
     total: 3,
     on_time: 3,
     delayed: 0,
@@ -259,7 +259,7 @@ const mockDailyProgress = {
       progress_before: 45,
       progress_after: 48,
       progress_delta: 3,
-      assignee: '闃胯揪鏄殑',
+      assignee: '阿达是的',
     },
   ],
 }
@@ -272,12 +272,12 @@ const mockNotifications = [
     notification_type: 'flow-reminder',
     severity: 'warning',
     title: TEXT.notificationTitle,
-    content: '涓讳綋缁撴瀯鏂藉伐瀛樺湪寤舵湡椋庨櫓锛岃灏藉揩澶勭悊銆?',
+    content: '主体结构施工存在延期风险，请尽快处理',
     status: 'pending',
     source_entity_type: 'task',
     source_entity_id: 'task-1',
     task_id: 'task-1',
-    assignee: '闃胯揪鏄殑',
+    assignee: '阿达是的',
     created_at: now,
     updated_at: now,
   },
@@ -287,8 +287,8 @@ const mockNotifications = [
     type: 'warning',
     notification_type: 'business-warning',
     severity: 'critical',
-    title: '鍏抽敭棰勮',
-    content: '褰撳墠椤圭洰瀛樺湪楂樹紭鍏堢骇椋庨櫓锛岃鍚屾鍏虫敞銆?',
+    title: '关键预警',
+    content: '当前项目存在高优先级风险，请同步关注',
     status: 'pending',
     source_entity_type: 'risk',
     source_entity_id: 'risk-1',
@@ -301,10 +301,10 @@ const mockNotifications = [
     type: 'info',
     notification_type: 'system-exception',
     severity: 'info',
-    title: '鍙樻洿璁板綍鍒嗘瀽鎻愰啋',
-    content: '寤鸿杩涘叆鎶ヨ〃鍒嗘瀽鏌ョ湅鏈€鏂板彉鏇磋褰曘€?',
+    title: '进度偏差分析提醒',
+    content: '建议进入报表分析查看最新进度偏差',
     status: 'pending',
-    source_entity_type: 'change_log',
+    source_entity_type: 'progress_deviation',
     source_entity_id: 'log-1',
     created_at: now,
     updated_at: now,
@@ -315,8 +315,8 @@ const mockNotifications = [
     type: 'info',
     notification_type: 'flow-reminder',
     severity: 'info',
-    title: '浠诲姟瀹屾垚鎬荤粨鎻愰啋',
-    content: '褰撳墠椤圭洰宸叉湁鏂扮殑瀹屾垚鎬荤粨锛岃杩涘叆浠诲姟鎬荤粨鏌ョ湅銆?',
+    title: '任务完成总结提醒',
+    content: '当前项目已有新的完成总结，请进入任务总结查看',
     status: 'pending',
     source_entity_type: 'task_summary',
     source_entity_id: 'summary-1',
@@ -328,6 +328,57 @@ const mockNotifications = [
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message)
+  }
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  const manifestProjectId = manifest.projects?.standard?.id ?? manifest.projects?.large?.id ?? manifest.projects?.empty?.id
+  assert(manifestProjectId, 'Full-app manifest does not contain a project id')
+  projectId = manifestProjectId
+  return projectId
+}
+
+async function apiGet(pathname, token) {
+  const response = await fetch(`${apiBaseUrl}${pathname}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+  const text = await response.text()
+  const payload = text ? JSON.parse(text) : null
+  if (!response.ok || payload?.success === false) {
+    throw new Error(payload?.error?.message || payload?.message || text || `GET ${pathname} failed with ${response.status}`)
+  }
+  return payload?.data ?? payload
+}
+
+function isProcessNotification(notification) {
+  const token = `${notification.title ?? ''} ${notification.content ?? ''} ${notification.type ?? ''} ${notification.category ?? ''}`.toLowerCase()
+  return Boolean(
+    notification.target_route
+    || notification.targetRoute
+    || notification.task_id
+    || notification.taskId
+    || notification.source_entity_type === 'task'
+    || notification.sourceEntityType === 'task'
+    || /任务|wbs|延期|critical_path|data_quality_critical_path/.test(token),
+  )
+}
+
+async function buildProxyExpectations(token) {
+  const notifications = await apiGet(`/api/notifications?limit=100&touchpointType=all&projectId=${projectId}`, token)
+  assert(Array.isArray(notifications), 'Proxy notifications endpoint did not return an array')
+  assert(notifications.length > 0, `Proxy project ${projectId} returned no notifications`)
+  const processNotification = notifications.find(isProcessNotification)
+  assert(processNotification, `Proxy project ${projectId} has notifications but no process notification with a target route`)
+  const targetRoute = processNotification.target_route ?? processNotification.targetRoute ?? `/projects/${projectId}/gantt`
+  return {
+    notifications,
+    notificationTitle: processNotification.title,
+    processNotificationId: processNotification.id,
+    targetRoute,
   }
 }
 
@@ -411,6 +462,22 @@ function buildMockResponse(urlString, method) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: [mockTask],
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (pathname === '/api/tasks') {
     return json({ success: true, data: [mockTask] })
   }
@@ -461,7 +528,7 @@ function buildMockResponse(urlString, method) {
           field_name: 'planned_end_date',
           old_value: '2026-04-10',
           new_value: '2026-04-13',
-          change_reason: '椤哄欢鏂藉伐绐楀彛',
+          change_reason: '顺延施工窗口',
           change_source: 'manual_adjusted',
           changed_at: now,
         },
@@ -471,6 +538,34 @@ function buildMockResponse(urlString, method) {
 
   if (pathname === `/api/task-summaries/projects/${projectId}/task-summary`) {
     return json({ success: true, data: mockTaskSummary })
+  }
+
+  if (pathname === `/api/task-summaries/projects/${projectId}/duration-forecasts`) {
+    return json({
+      success: true,
+      data: {
+        projectId,
+        asOfDate: now.slice(0, 10),
+        dimensions: {
+          division: [],
+          subdivision: [],
+          specialty: [],
+          building: [],
+          region: [],
+          phase: [],
+          section: [],
+          floor: [],
+          participant_unit: [],
+          assignee: [],
+        },
+        summary: {
+          groupCount: 0,
+          readyCount: 0,
+          degradedCount: 0,
+          insufficientDataCount: 0,
+        },
+      },
+    })
   }
 
   if (pathname === `/api/task-summaries/projects/${projectId}/task-summary/assignees`) {
@@ -491,7 +586,6 @@ function buildMockResponse(urlString, method) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
     return json({ success: true, data: [] })
@@ -519,6 +613,7 @@ function buildMockResponse(urlString, method) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -539,7 +634,8 @@ async function main() {
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1400 } })
     page.setDefaultTimeout(30000)
-    await primeBrowserAuth(page)
+    const authToken = await primeBrowserAuth(page)
+    const proxyExpectations = shouldUseMockApi ? null : await buildProxyExpectations(authToken)
 
     page.on('console', (message) => {
       if (message.type() === 'error') {
@@ -577,19 +673,79 @@ async function main() {
       }
     })
 
-    await page.goto(`${baseUrl}/#/notifications`, { waitUntil: 'domcontentloaded' })
+    const notificationsUrl = shouldUseMockApi
+      ? `${baseUrl}/#/notifications`
+      : `${baseUrl}/#/notifications?scope=current-project&projectId=${encodeURIComponent(projectId)}`
+    await page.goto(notificationsUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('notifications-page').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('notifications-summary-total').waitFor({ state: 'visible', timeout: 20000 })
 
+    const expectedNotificationTitle = proxyExpectations?.notificationTitle ?? TEXT.notificationTitle
+    await page.waitForFunction(
+      (title) => document.body.innerText.includes(title),
+      expectedNotificationTitle,
+      { timeout: 20000 },
+    )
     const bodyText = await page.locator('body').innerText()
     assert(bodyText.includes('提醒中心'), 'Notifications page title is missing')
-    assert(bodyText.includes(TEXT.notificationTitle), `Missing notification title: ${TEXT.notificationTitle}`)
+    assert(bodyText.includes(expectedNotificationTitle), `Missing notification title: ${expectedNotificationTitle}`)
     await page.screenshot({ path: join(outputDir, 'notifications-page-initial.png'), fullPage: true })
+
+    if (!shouldUseMockApi) {
+      await page.getByTestId(`notification-go-process-${proxyExpectations.processNotificationId}`).click()
+      try {
+        await page.waitForFunction(
+          (targetRoute) => window.location.hash.includes(targetRoute),
+          proxyExpectations.targetRoute,
+          { timeout: 10000 },
+        )
+      } catch (error) {
+        throw new Error(`Notification process link did not navigate to ${proxyExpectations.targetRoute}. Current URL: ${page.url()}`)
+      }
+      const processUrl = page.url()
+      assert(processUrl.includes(proxyExpectations.targetRoute), `Notification process link did not navigate to ${proxyExpectations.targetRoute}: ${processUrl}`)
+      if (proxyExpectations.targetRoute.includes('/dashboard')) {
+        await page.getByTestId('dashboard-page').waitFor({ state: 'visible', timeout: 20000 })
+      } else if (proxyExpectations.targetRoute.includes('/gantt')) {
+        await page.getByTestId('task-workspace-layer-l2').waitFor({ state: 'visible', timeout: 20000 })
+      } else if (proxyExpectations.targetRoute.includes('/planning')) {
+        await page.locator('body').filter({ hasText: /计划编制|计划/ }).waitFor({ state: 'visible', timeout: 20000 })
+      }
+      await page.screenshot({ path: join(outputDir, 'notifications-page-process-link.png'), fullPage: true })
+
+      const result = {
+        mode: 'proxy-api',
+        projectId,
+        notificationsUrl,
+        notificationCount: proxyExpectations.notifications.length,
+        notificationTitle: expectedNotificationTitle,
+        targetRoute: proxyExpectations.targetRoute,
+        processUrl,
+        apiFailures,
+        consoleErrors,
+        pageErrors,
+        screenshots: {
+          initial: join(outputDir, 'notifications-page-initial.png'),
+          processLink: join(outputDir, 'notifications-page-process-link.png'),
+        },
+      }
+
+      assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
+      assert(pageErrors.length === 0, `Browser page errors detected: ${pageErrors.join(' | ')}`)
+      assert(consoleErrors.length === 0, `Browser console errors detected: ${consoleErrors.join(' | ')}`)
+      await writeFile(join(outputDir, 'notifications-browser-check.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
 
     await page.getByTestId('notification-go-process-notif-task-1').click()
     await page.waitForURL((current) => current.hash.includes('/gantt'), { timeout: 10000 })
     await page.getByTestId('task-workspace-layer-l2').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('gantt-task-select-task-1').waitFor({ state: 'visible', timeout: 20000 })
+    await page.waitForFunction(
+      (taskTitle) => document.body.innerText.includes(taskTitle),
+      TEXT.taskTitle,
+      { timeout: 20000 },
+    )
     const ganttUrl = page.url()
     await page.screenshot({ path: join(outputDir, 'notifications-page-process-link.png'), fullPage: true })
 
@@ -605,16 +761,12 @@ async function main() {
     await page.getByTestId('notifications-page').waitFor({ state: 'visible', timeout: 20000 })
     await page.getByTestId('notification-go-process-notif-report-1').click()
     await page.waitForFunction(
-      (expectedProjectId) => window.location.hash.includes(`/projects/${expectedProjectId}/reports?view=change_log`),
+      (expectedProjectId) => window.location.hash.includes(`/projects/${expectedProjectId}/reports?view=progress_deviation`),
       projectId,
       { timeout: 10000 },
     )
-    await page.getByTestId('change-log-view').waitFor({ state: 'visible', timeout: 20000 })
-    await page.waitForFunction(
-      () => document.body.innerText.includes('变更记录分析'),
-      undefined,
-      { timeout: 10000 },
-    )
+    await page.getByTestId('deviation-shell').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('deviation-detail-table').waitFor({ state: 'visible', timeout: 20000 })
     const reportsUrl = page.url()
     await page.screenshot({ path: join(outputDir, 'notifications-page-reports-link.png'), fullPage: true })
 

@@ -1,0 +1,166 @@
+{
+  "schemaVersion": "workbuddy-ui-source-map.v1",
+  "generatedAt": "2026-07-15T00:00:00.000Z",
+  "rule": "This map centralizes UI-related files without breaking existing source, doc, script, or test references.",
+  "retiredSurfaceExclusions": [
+    "PlanningWorkspace",
+    "CompanyProjectTemplateLibrary",
+    "WBSTemplates"
+  ],
+  "sources": [
+    {
+      "path": "AGENTS.md",
+      "type": "project-rule",
+      "uiRelevance": "current global UI/UX and BI guardrails",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "CLAUDE.md",
+      "type": "agent-rule",
+      "uiRelevance": "legacy local agent continuity",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "docs/plans/UI_UX商业级全面优化方案_v1.3.md",
+      "type": "authoritative-plan",
+      "uiRelevance": "long-term commercial UI/UX design rules only; historical page inventories and PlanningWorkspace requirements are retired",
+      "relocation": "index-only"
+    },
+    {
+      "path": "docs/plans/UI_UX需求清单.md",
+      "type": "authoritative-plan",
+      "uiRelevance": "historical UI/UX requirements inventory; retired surface requirements are excluded from current routing and page work",
+      "relocation": "index-only"
+    },
+    {
+      "path": "docs/plans/UI_UX精细化修复方案_v1.3.1.md",
+      "type": "plan",
+      "uiRelevance": "fine repair workstream",
+      "relocation": "index-only"
+    },
+    {
+      "path": "docs/plans/UI_UX优化执行方案.md",
+      "type": "plan",
+      "uiRelevance": "R001-R295 UI/UX execution plan",
+      "relocation": "index-only"
+    },
+    {
+      "path": "docs/plans/v1.4.23.1体系收口台账与验收门禁矩阵.md",
+      "type": "authoritative-capability-fact",
+      "uiRelevance": "v1.4.23.1 capability facts and environment-specific consumption boundaries for current UI behavior",
+      "relocation": "index-only"
+    },
+    {
+      "path": "design-system/workbuddy/MASTER.md",
+      "type": "design-system",
+      "uiRelevance": "design-system reference; may contain older token details",
+      "relocation": "index-only"
+    },
+    {
+      "path": "design-system/workbuddy/pages/risk-management.md",
+      "type": "design-system",
+      "uiRelevance": "page reference",
+      "relocation": "index-only"
+    },
+    {
+      "path": "scripts/verify-uiux-visual.mjs",
+      "type": "script",
+      "uiRelevance": "visual screenshot verification",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/verify-uiux-overlap.mjs",
+      "type": "script",
+      "uiRelevance": "overlap and overflow verification",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/verify-uiux-a11y.mjs",
+      "type": "script",
+      "uiRelevance": "accessibility verification",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/verify-uiux-performance.mjs",
+      "type": "script",
+      "uiRelevance": "browser-side performance verification",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/verify-uiux-release-smoke.mjs",
+      "type": "script",
+      "uiRelevance": "release smoke verification",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/verify-uiux-predeploy-gates.mjs",
+      "type": "script",
+      "uiRelevance": "R295/component/interaction/token/contrast gates",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/extract-figma-design-data.mjs",
+      "type": "script",
+      "uiRelevance": "Figma design data extraction",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/clean-figma-design-data.mjs",
+      "type": "script",
+      "uiRelevance": "Figma design data cleaning",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "scripts/bundle-figma-design-data.mjs",
+      "type": "script",
+      "uiRelevance": "Figma design data bundling",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "docs/reports/uiux-295-release-evidence.md",
+      "type": "historical-evidence",
+      "uiRelevance": "historical UI/UX release proof",
+      "relocation": "index-only"
+    },
+    {
+      "path": "client/src/components/ui",
+      "type": "source",
+      "uiRelevance": "shared UI primitives",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "client/src/mocks",
+      "type": "source",
+      "uiRelevance": "MSW deterministic UI scenario data",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "client/src/pages",
+      "type": "source",
+      "uiRelevance": "page implementations",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "client/pnpm-lock.yaml",
+      "type": "dependency-lock",
+      "uiRelevance": "frozen client dependency truth used by CI and Docker",
+      "relocation": "do-not-move"
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "type": "tool-configuration",
+      "uiRelevance": "root workspace package ownership for client and server",
+      "relocation": "do-not-move"
+    }
+  ],
+  "artifactMigrationPolicy": {
+    "newArtifactsRoot": "project-ui/artifacts",
+    "newReportsRoot": "project-ui/reports",
+    "legacyRootsToConsolidate": [
+      "artifacts/figma-design-data",
+      "artifacts/uiux-*",
+      "client/visual-check"
+    ],
+    "compatibility": "When generated artifacts are moved, record old and new paths in project-ui/index/moved-files.json. Do not move source files without updating references and leaving stubs."
+  }
+}

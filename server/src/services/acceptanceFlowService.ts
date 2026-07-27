@@ -20,18 +20,17 @@ import {
   ACCEPTANCE_RECORD_COLUMNS,
   ACCEPTANCE_REQUIREMENT_COLUMNS,
 } from './sqlColumns.js'
+import { buildAcceptancePlanImpactSignals } from './executionImpactSignals.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
 
 const ACCEPTANCE_CATALOG_SELECT = `SELECT ${ACCEPTANCE_CATALOG_COLUMNS} FROM acceptance_catalog`
 const ACCEPTANCE_PLAN_SELECT = `SELECT ${ACCEPTANCE_PLAN_COLUMNS} FROM acceptance_plans`
 const ACCEPTANCE_DEPENDENCY_SELECT = `SELECT ${ACCEPTANCE_DEPENDENCY_COLUMNS} FROM acceptance_dependencies`
 const ACCEPTANCE_REQUIREMENT_SELECT = `SELECT ${ACCEPTANCE_REQUIREMENT_COLUMNS} FROM acceptance_requirements`
-const ACCEPTANCE_REQUIREMENT_COMPAT_COLUMNS = ACCEPTANCE_REQUIREMENT_COLUMNS
-  .split(',')
-  .map((column) => column.trim())
-  .filter((column) => column !== 'drawing_package_id')
-  .join(', ')
-const ACCEPTANCE_REQUIREMENT_COMPAT_SELECT = `SELECT ${ACCEPTANCE_REQUIREMENT_COMPAT_COLUMNS} FROM acceptance_requirements`
 const ACCEPTANCE_RECORD_SELECT = `SELECT ${ACCEPTANCE_RECORD_COLUMNS} FROM acceptance_records`
+const ACCEPTANCE_FLOW_SNAPSHOT_CACHE_TTL_MS = Number(process.env.ACCEPTANCE_FLOW_SNAPSHOT_CACHE_TTL_MS ?? 300_000)
+const acceptanceFlowSnapshotCache = new Map<string, { expiresAt: number; value: AcceptanceFlowSnapshot }>()
+const acceptanceFlowSnapshotInFlight = new Map<string, Promise<AcceptanceFlowSnapshot>>()
 
 function now() {
   return new Date().toISOString()
@@ -55,90 +54,101 @@ function makeAcceptanceFlowError(code: string, statusCode: number, message: stri
   return error
 }
 
-function extractAcceptanceRequirementMissingColumn(error: unknown) {
-  const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === 'string'
-        ? error
-        : ''
-
-  const patterns = [
-    /Could not find the '([^']+)' column of 'acceptance_requirements'/i,
-    /column "([^"]+)" of relation "acceptance_requirements" does not exist/i,
-    /column "([^"]+)" does not exist/i,
-  ]
-
-  for (const pattern of patterns) {
-    const match = message.match(pattern)
-    if (match?.[1]) return match[1]
-  }
-
-  return null
+async function executeAcceptanceRequirementRows(projectId: string, scopedClause: string, params: unknown[]) {
+  const normalizedProjectId = requireProjectId(projectId)
+  const scopedParams = [normalizedProjectId, ...params]
+  return executeSQL<AcceptanceRequirement>(
+    `${ACCEPTANCE_REQUIREMENT_SELECT} WHERE project_id = ? ${scopedClause}`,
+    scopedParams,
+  )
 }
 
-function isMissingAcceptanceRequirementDrawingPackageId(error: unknown) {
-  return extractAcceptanceRequirementMissingColumn(error) === 'drawing_package_id'
+async function executeAcceptanceRequirementRow(projectId: string, scopedClause: string, params: unknown[]) {
+  const normalizedProjectId = requireProjectId(projectId)
+  const scopedParams = [normalizedProjectId, ...params]
+  return executeSQLOne<AcceptanceRequirement>(
+    `${ACCEPTANCE_REQUIREMENT_SELECT} WHERE project_id = ? ${scopedClause}`,
+    scopedParams,
+  )
 }
 
-async function executeAcceptanceRequirementRows(whereClause: string, params: unknown[]) {
-  try {
-    return await executeSQL<AcceptanceRequirement>(`${ACCEPTANCE_REQUIREMENT_SELECT} ${whereClause}`, params)
-  } catch (error) {
-    if (!isMissingAcceptanceRequirementDrawingPackageId(error)) throw error
-    return executeSQL<AcceptanceRequirement>(`${ACCEPTANCE_REQUIREMENT_COMPAT_SELECT} ${whereClause}`, params)
+async function loadAcceptanceFlowSnapshotFresh(projectId: string): Promise<AcceptanceFlowSnapshot> {
+  const [catalogs, plans, dependencies, requirements, records, taskLinks] = await Promise.all([
+    executeSQL<AcceptanceCatalog>(`${ACCEPTANCE_CATALOG_SELECT} WHERE project_id = ? ORDER BY created_at ASC`, [projectId]),
+    executeSQL<AcceptancePlan>(`${ACCEPTANCE_PLAN_SELECT} WHERE project_id = ? ORDER BY planned_date ASC, created_at ASC`, [projectId]),
+    executeSQL<AcceptanceDependency>(`${ACCEPTANCE_DEPENDENCY_SELECT} WHERE project_id = ? ORDER BY created_at ASC`, [projectId]),
+    executeAcceptanceRequirementRows(projectId, 'ORDER BY created_at ASC', []),
+    executeSQL<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE project_id = ? ORDER BY created_at ASC`, [projectId]),
+    executeSQL<{ source_entity_id?: string | null; target_entity_id?: string | null }>(
+      `SELECT source_entity_id, target_entity_id
+         FROM project_entity_links
+        WHERE project_id = ?
+          AND source_entity_type = 'acceptance_plan'
+          AND target_entity_type = 'task'
+          AND relation_type = 'covers_task'
+          AND status = 'active'
+        ORDER BY created_at ASC, id ASC`,
+      [projectId],
+    ),
+  ])
+
+  const normalizedDependencies = (dependencies || []).map(normalizeAcceptanceDependencyRow)
+  const normalizedRequirements = (requirements || []).map(normalizeAcceptanceRequirementRow)
+  const coveredTaskIdsByPlan = new Map<string, string[]>()
+  for (const link of taskLinks ?? []) {
+    const planId = normalizeText(link.source_entity_id)
+    const taskId = normalizeText(link.target_entity_id)
+    if (!planId || !taskId) continue
+    const taskIds = coveredTaskIdsByPlan.get(planId) ?? []
+    if (!taskIds.includes(taskId)) taskIds.push(taskId)
+    coveredTaskIdsByPlan.set(planId, taskIds)
+  }
+  const plansWithTaskLinks = (plans || []).map((plan) => ({
+    ...plan,
+    covered_task_ids: coveredTaskIdsByPlan.get(normalizeText(plan.id)) ?? [],
+  }))
+  const normalizedPlans = enrichAcceptancePlans(plansWithTaskLinks, normalizedDependencies, normalizedRequirements)
+
+  return {
+    catalogs: catalogs || [],
+    plans: normalizedPlans,
+    dependencies: normalizedDependencies,
+    requirements: normalizedRequirements,
+    records: records || [],
   }
 }
 
-async function executeAcceptanceRequirementRow(whereClause: string, params: unknown[]) {
-  try {
-    return await executeSQLOne<AcceptanceRequirement>(`${ACCEPTANCE_REQUIREMENT_SELECT} ${whereClause}`, params)
-  } catch (error) {
-    if (!isMissingAcceptanceRequirementDrawingPackageId(error)) throw error
-    return executeSQLOne<AcceptanceRequirement>(`${ACCEPTANCE_REQUIREMENT_COMPAT_SELECT} ${whereClause}`, params)
+export function clearAcceptanceFlowSnapshotCache(projectId?: string) {
+  if (projectId) {
+    acceptanceFlowSnapshotCache.delete(projectId)
+    acceptanceFlowSnapshotInFlight.delete(projectId)
+    return
   }
+
+  acceptanceFlowSnapshotCache.clear()
+  acceptanceFlowSnapshotInFlight.clear()
 }
 
-async function insertAcceptanceRequirement(payload: Record<string, unknown>) {
-  const insertRow = { ...payload }
-  for (let attempt = 0; attempt < Object.keys(insertRow).length; attempt += 1) {
-    try {
-      await executeSQL(
-        `INSERT INTO acceptance_requirements (${Object.keys(insertRow).join(', ')}) VALUES (${Object.keys(insertRow).map(() => '?').join(', ')})`,
-        Object.values(insertRow),
-      )
-      return
-    } catch (error) {
-      const missingColumn = extractAcceptanceRequirementMissingColumn(error)
-      if (missingColumn && missingColumn in insertRow) {
-        delete insertRow[missingColumn]
-        continue
-      }
-      throw error
-    }
+async function insertAcceptanceRequirement(projectId: string, payload: Record<string, unknown>) {
+  const normalizedProjectId = requireProjectId(projectId)
+  if (normalizeText(payload.project_id) !== normalizedProjectId) {
+    throw makeAcceptanceFlowError('PROJECT_SCOPE_MISMATCH', 400, 'acceptance requirement project scope mismatch')
   }
+  const insertRow = { ...payload, project_id: normalizedProjectId }
+  await executeSQL(
+    `INSERT INTO acceptance_requirements (${Object.keys(insertRow).join(', ')}) VALUES (${Object.keys(insertRow).map(() => '?').join(', ')})`,
+    Object.values(insertRow),
+  )
 }
 
-async function updateAcceptanceRequirementColumns(id: string, updateMap: Record<string, unknown>) {
-  const pending = { ...updateMap }
-  while (Object.keys(pending).length > 0) {
-    const fields = Object.keys(pending)
-    const values = fields.map((field) => pending[field])
-    try {
-      await executeSQL(
-        `UPDATE acceptance_requirements SET ${fields.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`,
-        [...values, id],
-      )
-      return
-    } catch (error) {
-      const missingColumn = extractAcceptanceRequirementMissingColumn(error)
-      if (missingColumn && missingColumn in pending) {
-        delete pending[missingColumn]
-        continue
-      }
-      throw error
-    }
-  }
+async function updateAcceptanceRequirementColumns(id: string, projectId: string, updateMap: Record<string, unknown>) {
+  const fields = Object.keys(updateMap)
+  if (fields.length === 0) return
+  const values = fields.map((field) => updateMap[field])
+  await executeSQL(
+    `UPDATE acceptance_requirements SET ${fields.map((field) => `${field} = ?`).join(', ')} WHERE id = ? AND project_id = ?`,
+    [...values, id, projectId],
+  )
 }
 
 function requireProjectId(projectId: unknown) {
@@ -199,12 +209,14 @@ function calculateDaysToDue(plannedDate?: string | null) {
   const normalized = normalizeText(plannedDate)
   if (!normalized) return null
 
-  const planned = new Date(`${normalized}T00:00:00Z`)
-  if (Number.isNaN(planned.getTime())) return null
+  return signedDurationDayDelta(toLocalDateKey(new Date()), normalized)
+}
 
-  const today = new Date()
-  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())
-  return Math.floor((planned.getTime() - todayUtc) / (24 * 60 * 60 * 1000))
+function toLocalDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function uniqueStrings(values: Array<string | null | undefined>) {
@@ -364,6 +376,8 @@ function enrichAcceptancePlans(
         isCustom,
       }),
     ])
+    const gateHint = normalizeText((plan as unknown as Record<string, unknown>).gate_type ?? (plan as unknown as Record<string, unknown>).gate_hint)
+      || normalizeText(plan.phase_code ?? plan.phase)
 
     return {
       ...plan,
@@ -389,6 +403,16 @@ function enrichAcceptancePlans(
           ]).join('；') || null
         : null,
       warning_level: isOverdue ? 'critical' : overlayTags.includes('临期') || isBlocked ? 'warning' : 'info',
+      impact_signals: buildAcceptancePlanImpactSignals({
+        planId,
+        status: normalizedStatus,
+        plannedDate: plan.planned_date,
+        upstreamUnfinishedCount,
+        blockedRequirementCount,
+        requirementReadyPercent,
+        isOverdue,
+        gateHint,
+      }),
       is_custom: isCustom,
     }
   })
@@ -417,7 +441,7 @@ export function filterAcceptanceFlowSnapshot(snapshot: AcceptanceFlowSnapshot, f
   const normalizedOverlayTag = normalizeText(filters.overlay_tag)
 
   const visiblePlans = snapshot.plans.filter((plan) => {
-    if (normalizedTaskId && normalizeText(plan.task_id) !== normalizedTaskId) return false
+    if (normalizedTaskId && !(plan.covered_task_ids ?? []).includes(normalizedTaskId)) return false
     if (normalizedBuildingId && normalizeText(plan.building_id) !== normalizedBuildingId) return false
     if (normalizedScopeLevel && normalizeText(plan.scope_level).toLowerCase() !== normalizedScopeLevel) return false
     if (normalizedParticipantUnitId && normalizeText(plan.participant_unit_id) !== normalizedParticipantUnitId) return false
@@ -458,10 +482,11 @@ function isCatalogForeignKeyViolation(error: unknown) {
   )
 }
 
-async function loadAcceptanceDependencyGraph() {
+async function loadAcceptanceDependencyGraph(projectId: string) {
+  const normalizedProjectId = requireProjectId(projectId)
   const dependencies = await executeSQL<Pick<AcceptanceDependency, 'source_plan_id' | 'target_plan_id'>>(
-    'SELECT source_plan_id, target_plan_id FROM acceptance_dependencies',
-    []
+    'SELECT source_plan_id, target_plan_id FROM acceptance_dependencies WHERE project_id = ?',
+    [normalizedProjectId]
   )
 
   const adjacency = new Map<string, Set<string>>()
@@ -482,13 +507,13 @@ async function loadAcceptanceDependencyGraph() {
   return adjacency
 }
 
-async function wouldCreateAcceptanceDependencyCycle(sourcePlanId: string, targetPlanId: string) {
+async function wouldCreateAcceptanceDependencyCycle(projectId: string, sourcePlanId: string, targetPlanId: string) {
   const normalizedSourcePlanId = normalizeText(sourcePlanId)
   const normalizedTargetPlanId = normalizeText(targetPlanId)
   if (!normalizedSourcePlanId || !normalizedTargetPlanId) return false
   if (normalizedSourcePlanId === normalizedTargetPlanId) return true
 
-  const adjacency = await loadAcceptanceDependencyGraph()
+  const adjacency = await loadAcceptanceDependencyGraph(projectId)
   const visited = new Set<string>()
   const stack = [normalizedTargetPlanId]
 
@@ -542,7 +567,7 @@ export function buildAcceptanceProjectSummary(plans: AcceptancePlan[]): Acceptan
   }).length
   const keyMilestoneCount = plans.filter((plan) => {
     const row = plan as unknown as Record<string, unknown>
-    return Boolean(plan.task_id || row.milestone_id || row.is_hard_prerequisite || row.is_system)
+    return Boolean((plan.covered_task_ids?.length ?? 0) > 0 || row.is_hard_prerequisite || row.is_system)
   }).length
 
   return {
@@ -563,25 +588,28 @@ export async function getAcceptanceFlowSnapshot(projectId: string): Promise<Acce
     return { catalogs: [], plans: [], dependencies: [], requirements: [], records: [] }
   }
 
-  const [catalogs, plans, dependencies, requirements, records] = await Promise.all([
-    executeSQL<AcceptanceCatalog>(`${ACCEPTANCE_CATALOG_SELECT} WHERE project_id = ? ORDER BY created_at ASC`, [normalizedProjectId]),
-    executeSQL<AcceptancePlan>(`${ACCEPTANCE_PLAN_SELECT} WHERE project_id = ? ORDER BY planned_date ASC, created_at ASC`, [normalizedProjectId]),
-    executeSQL<AcceptanceDependency>(`${ACCEPTANCE_DEPENDENCY_SELECT} WHERE project_id = ? ORDER BY created_at ASC`, [normalizedProjectId]),
-    executeAcceptanceRequirementRows('WHERE project_id = ? ORDER BY created_at ASC', [normalizedProjectId]),
-    executeSQL<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE project_id = ? ORDER BY created_at ASC`, [normalizedProjectId]),
-  ])
-
-  const normalizedDependencies = (dependencies || []).map(normalizeAcceptanceDependencyRow)
-  const normalizedRequirements = (requirements || []).map(normalizeAcceptanceRequirementRow)
-  const normalizedPlans = enrichAcceptancePlans(plans || [], normalizedDependencies, normalizedRequirements)
-
-  return {
-    catalogs: catalogs || [],
-    plans: normalizedPlans,
-    dependencies: normalizedDependencies,
-    requirements: normalizedRequirements,
-    records: records || [],
+  const cached = acceptanceFlowSnapshotCache.get(normalizedProjectId)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value
   }
+
+  const pending = acceptanceFlowSnapshotInFlight.get(normalizedProjectId)
+  if (pending) return pending
+
+  const promise = loadAcceptanceFlowSnapshotFresh(normalizedProjectId)
+    .then((snapshot) => {
+      acceptanceFlowSnapshotCache.set(normalizedProjectId, {
+        expiresAt: Date.now() + ACCEPTANCE_FLOW_SNAPSHOT_CACHE_TTL_MS,
+        value: snapshot,
+      })
+      return snapshot
+    })
+    .finally(() => {
+      acceptanceFlowSnapshotInFlight.delete(normalizedProjectId)
+    })
+
+  acceptanceFlowSnapshotInFlight.set(normalizedProjectId, promise)
+  return promise
 }
 
 export async function listAcceptanceCatalog(projectId: string) {
@@ -590,9 +618,10 @@ export async function listAcceptanceCatalog(projectId: string) {
 
 export async function createAcceptanceCatalog(input: Partial<AcceptanceCatalog> & { project_id: string }) {
   const id = input.id || uuidv4()
+  const projectId = requireProjectId(input.project_id)
   const payload: Record<string, unknown> = {
     id,
-    project_id: input.project_id,
+    project_id: projectId,
     catalog_code: input.catalog_code || `CAT-${id.slice(0, 8)}`,
     catalog_name: input.catalog_name,
     phase_code: input.phase_code || null,
@@ -608,39 +637,70 @@ export async function createAcceptanceCatalog(input: Partial<AcceptanceCatalog> 
     `INSERT INTO acceptance_catalog (${Object.keys(payload).join(', ')}) VALUES (${Object.keys(payload).map(() => '?').join(', ')})`,
     Object.values(payload)
   )
-  return executeSQLOne<AcceptanceCatalog>(`${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? LIMIT 1`, [id])
+  clearAcceptanceFlowSnapshotCache(projectId)
+  return executeSQLOne<AcceptanceCatalog>(
+    `${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [id, projectId],
+  )
 }
 
-export async function updateAcceptanceCatalog(id: string, updates: Partial<AcceptanceCatalog>) {
-  const fields: string[] = []
-  const values: unknown[] = []
-  const push = (key: keyof AcceptanceCatalog, value: unknown) => {
-    if (value === undefined) return
-    fields.push(`${String(key)} = ?`)
-    values.push(value)
-  }
+export async function updateAcceptanceCatalog(id: string, projectId: string, updates: Partial<AcceptanceCatalog>) {
+  const normalizedProjectId = requireProjectId(projectId)
+  const current = await executeSQLOne<AcceptanceCatalog>(
+    `${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [id, normalizedProjectId],
+  )
+  if (!current) return null
+  const hasChanges = [
+    updates.catalog_code,
+    updates.catalog_name,
+    updates.phase_code,
+    updates.scope_level,
+    updates.planned_finish_date,
+    updates.description,
+    updates.is_system,
+  ].some((value) => value !== undefined)
+  if (!hasChanges) return current
 
-  push('catalog_code', updates.catalog_code)
-  push('catalog_name', updates.catalog_name)
-  push('phase_code', updates.phase_code)
-  push('scope_level', updates.scope_level)
-  push('planned_finish_date', updates.planned_finish_date)
-  push('description', updates.description)
-  push('is_system', updates.is_system)
-  push('updated_at', now())
-
-  if (fields.length === 0) return executeSQLOne<AcceptanceCatalog>(`${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? LIMIT 1`, [id])
-  values.push(id)
-
-  await executeSQL(`UPDATE acceptance_catalog SET ${fields.join(', ')} WHERE id = ?`, values)
-  return executeSQLOne<AcceptanceCatalog>(`${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? LIMIT 1`, [id])
+  await executeSQL(
+    `UPDATE acceptance_catalog
+        SET catalog_code = ?,
+            catalog_name = ?,
+            phase_code = ?,
+            scope_level = ?,
+            planned_finish_date = ?,
+            description = ?,
+            is_system = ?,
+            updated_at = ?
+      WHERE id = ? AND project_id = ?`,
+    [
+      updates.catalog_code === undefined ? current.catalog_code ?? null : updates.catalog_code,
+      updates.catalog_name === undefined ? current.catalog_name : updates.catalog_name,
+      updates.phase_code === undefined ? current.phase_code ?? null : updates.phase_code,
+      updates.scope_level === undefined ? current.scope_level ?? null : updates.scope_level,
+      updates.planned_finish_date === undefined ? current.planned_finish_date ?? null : updates.planned_finish_date,
+      updates.description === undefined ? current.description ?? null : updates.description,
+      updates.is_system === undefined ? current.is_system ?? false : updates.is_system,
+      now(),
+      id,
+      normalizedProjectId,
+    ],
+  )
+  clearAcceptanceFlowSnapshotCache(normalizedProjectId)
+  return executeSQLOne<AcceptanceCatalog>(`${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`, [id, normalizedProjectId])
 }
 
-export async function deleteAcceptanceCatalog(id: string) {
+export async function deleteAcceptanceCatalog(id: string, projectId: string) {
   const normalizedId = normalizeText(id)
+  const normalizedProjectId = requireProjectId(projectId)
+  const existing = await executeSQLOne<AcceptanceCatalog>(
+    `${ACCEPTANCE_CATALOG_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [normalizedId, normalizedProjectId],
+  )
+  if (!existing) return
   const referencedPlan = await executeSQLOne<Pick<AcceptancePlan, 'id'>>(
-    'SELECT id FROM acceptance_plans WHERE catalog_id = ? LIMIT 1',
-    [normalizedId]
+    'SELECT id FROM acceptance_plans WHERE catalog_id = ? AND project_id = ? LIMIT 1',
+    [normalizedId, normalizedProjectId]
   )
 
   if (referencedPlan) {
@@ -652,7 +712,8 @@ export async function deleteAcceptanceCatalog(id: string) {
   }
 
   try {
-    await executeSQL('DELETE FROM acceptance_catalog WHERE id = ?', [normalizedId])
+    await executeSQL('DELETE FROM acceptance_catalog WHERE id = ? AND project_id = ?', [normalizedId, normalizedProjectId])
+    clearAcceptanceFlowSnapshotCache(normalizedProjectId)
   } catch (error) {
     if (isCatalogForeignKeyViolation(error)) {
       throw makeAcceptanceFlowError(
@@ -665,16 +726,17 @@ export async function deleteAcceptanceCatalog(id: string) {
   }
 }
 
-export async function listAcceptanceDependencies(planId: string) {
+export async function listAcceptanceDependencies(projectId: string, planId: string) {
+  const normalizedProjectId = requireProjectId(projectId)
   const normalizedPlanId = normalizeText(planId)
   const [sourceDependencies, targetDependencies] = await Promise.all([
     executeSQL<AcceptanceDependency>(
-      `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE source_plan_id = ? ORDER BY created_at ASC`,
-      [normalizedPlanId],
+      `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE project_id = ? AND source_plan_id = ? ORDER BY created_at ASC`,
+      [normalizedProjectId, normalizedPlanId],
     ),
     executeSQL<AcceptanceDependency>(
-      `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE target_plan_id = ? ORDER BY created_at ASC`,
-      [normalizedPlanId],
+      `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE project_id = ? AND target_plan_id = ? ORDER BY created_at ASC`,
+      [normalizedProjectId, normalizedPlanId],
     ),
   ])
 
@@ -691,15 +753,16 @@ export async function createAcceptanceDependency(input: Partial<AcceptanceDepend
   const targetPlanId = normalizeText(input.target_plan_id)
   const projectId = requireProjectId(input.project_id)
   const existing = await executeSQLOne<AcceptanceDependency>(
-    `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE source_plan_id = ? AND target_plan_id = ? LIMIT 1`,
-    [sourcePlanId, targetPlanId]
+    `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE project_id = ? AND source_plan_id = ? AND target_plan_id = ? LIMIT 1`,
+    [projectId, sourcePlanId, targetPlanId]
   )
 
   if (existing) {
+    clearAcceptanceFlowSnapshotCache(projectId)
     return normalizeAcceptanceDependencyRow(existing)
   }
 
-  if (await wouldCreateAcceptanceDependencyCycle(sourcePlanId, targetPlanId)) {
+  if (await wouldCreateAcceptanceDependencyCycle(projectId, sourcePlanId, targetPlanId)) {
     throw makeAcceptanceFlowError(
       'DEPENDENCY_CYCLE_DETECTED',
       422,
@@ -723,16 +786,27 @@ export async function createAcceptanceDependency(input: Partial<AcceptanceDepend
     `INSERT INTO acceptance_dependencies (${Object.keys(payload).join(', ')}) VALUES (${Object.keys(payload).map(() => '?').join(', ')})`,
     Object.values(payload)
   )
-  const created = await executeSQLOne<AcceptanceDependency>(`${ACCEPTANCE_DEPENDENCY_SELECT} WHERE id = ? LIMIT 1`, [id])
+  clearAcceptanceFlowSnapshotCache(projectId)
+  const created = await executeSQLOne<AcceptanceDependency>(
+    `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [id, projectId],
+  )
   return created ? normalizeAcceptanceDependencyRow(created) : null
 }
 
-export async function deleteAcceptanceDependency(id: string) {
-  await executeSQL('DELETE FROM acceptance_dependencies WHERE id = ?', [id])
+export async function deleteAcceptanceDependency(projectId: string, id: string) {
+  const normalizedProjectId = requireProjectId(projectId)
+  const existing = await executeSQLOne<AcceptanceDependency>(
+    `${ACCEPTANCE_DEPENDENCY_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [id, normalizedProjectId],
+  )
+  if (!existing) return
+  await executeSQL('DELETE FROM acceptance_dependencies WHERE id = ? AND project_id = ?', [id, normalizedProjectId])
+  clearAcceptanceFlowSnapshotCache(normalizedProjectId)
 }
 
-export async function listAcceptanceRequirements(planId: string) {
-  const rows = await executeAcceptanceRequirementRows('WHERE plan_id = ? ORDER BY created_at ASC', [planId])
+export async function listAcceptanceRequirements(projectId: string, planId: string) {
+  const rows = await executeAcceptanceRequirementRows(projectId, 'AND plan_id = ? ORDER BY created_at ASC', [planId])
   return (rows || []).map(normalizeAcceptanceRequirementRow)
 }
 
@@ -756,13 +830,15 @@ export async function createAcceptanceRequirement(input: Partial<AcceptanceRequi
     updated_at: now(),
   }
 
-  await insertAcceptanceRequirement(payload)
-  const created = await executeAcceptanceRequirementRow('WHERE id = ? LIMIT 1', [id])
+  await insertAcceptanceRequirement(projectId, payload)
+  clearAcceptanceFlowSnapshotCache(projectId)
+  const created = await executeAcceptanceRequirementRow(projectId, 'AND id = ? LIMIT 1', [id])
   return created ? normalizeAcceptanceRequirementRow(created) : null
 }
 
-export async function updateAcceptanceRequirement(id: string, updates: Partial<AcceptanceRequirement>) {
-  const current = await executeAcceptanceRequirementRow('WHERE id = ? LIMIT 1', [id])
+export async function updateAcceptanceRequirement(projectId: string, id: string, updates: Partial<AcceptanceRequirement>) {
+  const normalizedProjectId = requireProjectId(projectId)
+  const current = await executeAcceptanceRequirementRow(normalizedProjectId, 'AND id = ? LIMIT 1', [id])
   if (!current) return null
 
   const nextShape = normalizeAcceptanceRequirementShape({
@@ -790,8 +866,9 @@ export async function updateAcceptanceRequirement(id: string, updates: Partial<A
 
   if (Object.keys(updateMap).length === 0) return normalizeAcceptanceRequirementRow(current)
 
-  await updateAcceptanceRequirementColumns(id, updateMap)
-  const updated = await executeAcceptanceRequirementRow('WHERE id = ? LIMIT 1', [id])
+  await updateAcceptanceRequirementColumns(id, normalizedProjectId, updateMap)
+  clearAcceptanceFlowSnapshotCache(normalizedProjectId)
+  const updated = await executeAcceptanceRequirementRow(normalizedProjectId, 'AND id = ? LIMIT 1', [id])
   return updated ? normalizeAcceptanceRequirementRow(updated) : null
 }
 
@@ -809,7 +886,7 @@ export async function syncAcceptanceRequirementsBySource(params: {
     return []
   }
 
-  const requirements = await executeAcceptanceRequirementRows('WHERE project_id = ? ORDER BY created_at ASC', [projectId])
+  const requirements = await executeAcceptanceRequirementRows(projectId, 'ORDER BY created_at ASC', [])
   const matches = (requirements || [])
     .map(normalizeAcceptanceRequirementRow)
     .filter((requirement) =>
@@ -830,7 +907,7 @@ export async function syncAcceptanceRequirementsBySource(params: {
       continue
     }
 
-    const updated = await updateAcceptanceRequirement(requirement.id, {
+    const updated = await updateAcceptanceRequirement(projectId, requirement.id, {
       status: nextStatus,
       is_satisfied: params.isSatisfied,
     })
@@ -840,17 +917,23 @@ export async function syncAcceptanceRequirementsBySource(params: {
   return updatedRows
 }
 
-export async function deleteAcceptanceRequirement(id: string) {
+export async function deleteAcceptanceRequirement(projectId: string, id: string) {
+  const normalizedProjectId = requireProjectId(projectId)
   const normalizedId = normalizeText(id)
-  const existing = await executeAcceptanceRequirementRow('WHERE id = ? LIMIT 1', [normalizedId])
+  const existing = await executeAcceptanceRequirementRow(normalizedProjectId, 'AND id = ? LIMIT 1', [normalizedId])
   if (!existing) return null
 
-  await executeSQL('DELETE FROM acceptance_requirements WHERE id = ?', [normalizedId])
+  await executeSQL('DELETE FROM acceptance_requirements WHERE id = ? AND project_id = ?', [normalizedId, normalizedProjectId])
+  clearAcceptanceFlowSnapshotCache(normalizedProjectId)
   return normalizeAcceptanceRequirementRow(existing)
 }
 
-export async function listAcceptanceRecords(planId: string) {
-  return executeSQL<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE plan_id = ? ORDER BY created_at ASC`, [planId])
+export async function listAcceptanceRecords(projectId: string, planId: string) {
+  const normalizedProjectId = requireProjectId(projectId)
+  return executeSQL<AcceptanceRecord>(
+    `${ACCEPTANCE_RECORD_SELECT} WHERE project_id = ? AND plan_id = ? ORDER BY created_at ASC`,
+    [normalizedProjectId, planId],
+  )
 }
 
 export async function createAcceptanceRecord(input: Partial<AcceptanceRecord> & { plan_id: string; record_type: string; content: string }) {
@@ -873,19 +956,23 @@ export async function createAcceptanceRecord(input: Partial<AcceptanceRecord> & 
     `INSERT INTO acceptance_records (${Object.keys(payload).join(', ')}) VALUES (${Object.keys(payload).map(() => '?').join(', ')})`,
     Object.values(payload)
   )
-  return executeSQLOne<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE id = ? LIMIT 1`, [id])
+  clearAcceptanceFlowSnapshotCache(projectId)
+  return executeSQLOne<AcceptanceRecord>(
+    `${ACCEPTANCE_RECORD_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [id, projectId],
+  )
 }
 
-export async function updateAcceptanceRecord(id: string, updates: Partial<AcceptanceRecord>) {
-  const existing = await executeSQLOne<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE id = ? LIMIT 1`, [normalizeText(id)])
+export async function updateAcceptanceRecord(projectId: string, id: string, updates: Partial<AcceptanceRecord>) {
+  const normalizedProjectId = requireProjectId(projectId)
+  const existing = await executeSQLOne<AcceptanceRecord>(
+    `${ACCEPTANCE_RECORD_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [normalizeText(id), normalizedProjectId],
+  )
   if (!existing) return null
 
-  const fields: string[] = []
-  const values: unknown[] = []
-  const push = (key: keyof AcceptanceRecord, value: unknown) => {
-    if (value === undefined) return
-    fields.push(`${String(key)} = ?`)
-    values.push(value)
+  if (updates.project_id !== undefined && requireProjectId(updates.project_id) !== normalizedProjectId) {
+    throw makeAcceptanceFlowError('PROJECT_ID_IMMUTABLE', 400, 'acceptance record project_id is immutable')
   }
 
   const nextPlanId = updates.plan_id === undefined ? existing.plan_id : normalizeText(updates.plan_id)
@@ -897,30 +984,60 @@ export async function updateAcceptanceRecord(id: string, updates: Partial<Accept
     throw makeAcceptanceFlowError('MISSING_PROJECT_ID', 400, '变更 plan_id 时必须同时提供 project_id')
   }
 
-  push('project_id', nextProjectId)
-  push('plan_id', nextPlanId)
-  push('record_type', updates.record_type)
-  push('content', updates.content)
-  push('operator', updates.operator)
-  push('record_date', updates.record_date)
-  push('attachments', updates.attachments)
-  push('updated_at', now())
+  const hasChanges = [
+    updates.project_id,
+    updates.plan_id,
+    updates.record_type,
+    updates.content,
+    updates.operator,
+    updates.record_date,
+    updates.attachments,
+  ].some((value) => value !== undefined)
+  if (!hasChanges) return existing
 
-  if (fields.length === 0) return existing
-  values.push(normalizeText(id))
+  const existingProjectId = requireProjectId(existing.project_id)
 
-  await executeSQL(`UPDATE acceptance_records SET ${fields.join(', ')} WHERE id = ?`, values)
-  return executeSQLOne<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE id = ? LIMIT 1`, [normalizeText(id)])
+  await executeSQL(
+    `UPDATE acceptance_records
+        SET project_id = ?,
+            plan_id = ?,
+            record_type = ?,
+            content = ?,
+            operator = ?,
+            record_date = ?,
+            attachments = ?,
+            updated_at = ?
+      WHERE id = ? AND project_id = ?`,
+    [
+      nextProjectId,
+      nextPlanId,
+      updates.record_type === undefined ? existing.record_type : updates.record_type,
+      updates.content === undefined ? existing.content : updates.content,
+      updates.operator === undefined ? existing.operator ?? null : updates.operator,
+      updates.record_date === undefined ? existing.record_date ?? null : updates.record_date,
+      updates.attachments === undefined ? existing.attachments ?? null : updates.attachments,
+      now(),
+      normalizeText(id),
+      existingProjectId,
+    ],
+  )
+  clearAcceptanceFlowSnapshotCache(existingProjectId)
+  if (nextProjectId && nextProjectId !== existingProjectId) {
+    clearAcceptanceFlowSnapshotCache(nextProjectId)
+  }
+  return executeSQLOne<AcceptanceRecord>(`${ACCEPTANCE_RECORD_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`, [normalizeText(id), existingProjectId])
 }
 
-export async function deleteAcceptanceRecord(id: string) {
+export async function deleteAcceptanceRecord(projectId: string, id: string) {
+  const normalizedProjectId = requireProjectId(projectId)
   const normalizedId = normalizeText(id)
   const existing = await executeSQLOne<AcceptanceRecord>(
-    `${ACCEPTANCE_RECORD_SELECT} WHERE id = ? LIMIT 1`,
-    [normalizedId],
+    `${ACCEPTANCE_RECORD_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+    [normalizedId, normalizedProjectId],
   )
   if (!existing) return null
 
-  await executeSQL('DELETE FROM acceptance_records WHERE id = ?', [normalizedId])
+  await executeSQL('DELETE FROM acceptance_records WHERE id = ? AND project_id = ?', [normalizedId, normalizedProjectId])
+  clearAcceptanceFlowSnapshotCache(normalizedProjectId)
   return existing
 }

@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+﻿import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Activity, AlertTriangle, ArrowLeft, BarChart3, Bell, ChevronRight, Clock3, Eye, GitBranch, Link2, RefreshCw, Search, ShieldAlert, TriangleAlert, XCircle } from 'lucide-react'
 import { CartesianGrid, Line, LineChart, Tooltip as RechartsTooltip, XAxis, YAxis } from 'recharts'
@@ -12,7 +12,6 @@ import { CollapsibleSection } from '@/components/CollapsibleSection'
 import { ChartAccessibleWrapper } from '@/components/ChartAccessibleWrapper'
 import { PageHeader } from '@/components/PageHeader'
 import { ReadOnlyGuard } from '@/components/ReadOnlyGuard'
-import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import { ChartTooltip, chartTooltipCursor } from '@/components/ui/chart-tooltip'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -21,22 +20,33 @@ import { Card, CardContent } from '@/components/ui/card'
 import { CardHead } from '@/components/ui/card-head'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { MetricCard as SharedMetricCard } from '@/components/ui/metric-card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { Pagination } from '@/components/ui/Pagination'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useStructuredCauseTaxonomy } from '@/hooks/useStructuredCauseTaxonomy'
 import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
+import { elapsedLocalDaysSince } from '@/lib/dateDistance'
 import { formatDate as formatDisplayDate, formatDateTime as formatDisplayDateTime } from '@/lib/formatters'
 import { cn } from '@/lib/utils'
 import { getMuteDurationActionLabel, MUTE_DURATION_OPTIONS, type AllowedMuteHours } from '@/lib/muteDurations'
-import { DataQualityApiService, type DataQualityProjectSummary } from '@/services/dataQualityApi'
-import type { ChangeLogRecord, Issue, Risk, TaskObstacle } from '@/lib/supabase'
+import {
+  buildRetentionDecisionDialogModel,
+  getRetentionApiErrorCode,
+  getRetentionDecisionTokenFromError,
+  isRetentionConfirmationError,
+  parseRetentionApiError,
+  type RetentionParsedError,
+} from '@/lib/retentionError'
+import type { Issue, Risk, TaskObstacle } from '@/lib/supabase'
 
 type WarningItem = {
   id: string
@@ -103,10 +113,22 @@ type IssueRow = {
   sourceEntityId?: string | null
 }
 
+type ClosureResultCode = 'resolved' | 'mitigated' | 'transferred' | 'accepted' | 'duplicate' | 'invalidated'
+type ClosureEffectiveness = 'resolved' | 'partially_resolved' | 'transferred' | 'accepted' | 'undetermined'
+type ClosureResponsibilityClass =
+  | 'none'
+  | 'owner_attributable'
+  | 'contractor_attributable'
+  | 'force_majeure'
+  | 'shared'
+  | 'undetermined'
+
 type DialogState =
   | { type: 'convert-risk'; row: RiskRow }
   | { type: 'create-manual-risk' }
   | { type: 'create-manual-issue' }
+  | { type: 'structured-close'; entityType: 'risk'; row: RiskRow; pendingManualClose: boolean }
+  | { type: 'structured-close'; entityType: 'issue'; row: IssueRow; pendingManualClose: boolean }
   | null
 
 type ProtectionDialogState = {
@@ -124,8 +146,8 @@ type DetailDialogState =
   | null
 
 type DeleteDialogState =
-  | { entityType: 'risk'; row: RiskRow }
-  | { entityType: 'issue'; row: IssueRow }
+  | { entityType: 'risk'; row: RiskRow; isChainLinked: boolean; retentionDecisionToken?: string; retention?: RetentionParsedError | null }
+  | { entityType: 'issue'; row: IssueRow; isChainLinked: boolean; retentionDecisionToken?: string; retention?: RetentionParsedError | null }
   | null
 
 type ChainDialogState = {
@@ -182,6 +204,29 @@ const WARNING_TYPE_LABELS: Record<string, string> = {
 const RISK_STATUS_LABELS: Record<RiskRow['status'], string> = { identified: '已识别', mitigating: '处理中', closed: '已关闭' }
 const ISSUE_STATUS_LABELS: Record<IssueRow['status'], string> = { open: '待处理', investigating: '调查中', resolved: '已解决（待确认）', closed: '已关闭' }
 const SEVERITY_LABELS: Record<RiskRow['severity'], string> = { low: '低', medium: '中', high: '高', critical: '严重' }
+const CLOSURE_RESULT_OPTIONS: Array<{ value: ClosureResultCode; label: string }> = [
+  { value: 'resolved', label: '已解决' },
+  { value: 'mitigated', label: '已缓解' },
+  { value: 'transferred', label: '已转移' },
+  { value: 'accepted', label: '已接受' },
+  { value: 'duplicate', label: '重复记录' },
+  { value: 'invalidated', label: '已失效' },
+]
+const CLOSURE_EFFECTIVENESS_OPTIONS: Array<{ value: ClosureEffectiveness; label: string }> = [
+  { value: 'resolved', label: '完全解决' },
+  { value: 'partially_resolved', label: '部分解决' },
+  { value: 'transferred', label: '已转移' },
+  { value: 'accepted', label: '已接受' },
+  { value: 'undetermined', label: '待观察' },
+]
+const CLOSURE_RESPONSIBILITY_OPTIONS: Array<{ value: ClosureResponsibilityClass; label: string }> = [
+  { value: 'none', label: '暂不判定' },
+  { value: 'owner_attributable', label: '发包人原因' },
+  { value: 'contractor_attributable', label: '承包人原因' },
+  { value: 'force_majeure', label: '不可抗力' },
+  { value: 'shared', label: '共同原因' },
+  { value: 'undetermined', label: '责任待定' },
+]
 const PENDING_MANUAL_CLOSE_LABEL = '待确认关闭'
 const SOURCE_WEIGHT: Record<string, number> = { condition_expired: 4, obstacle_escalated: 3, risk_converted: 2, risk_auto_escalated: 2, manual: 1 }
 const SEVERITY_WEIGHT: Record<RiskRow['severity'], number> = { critical: 4, high: 3, medium: 2, low: 1 }
@@ -204,6 +249,20 @@ function normalizeSeverity(value: unknown): RiskRow['severity'] {
   return 'medium'
 }
 
+function inferClosureCauseCode(row: RiskRow | IssueRow): string {
+  const token = `${row.sourceType} ${row.title} ${row.description ?? ''}`.toLowerCase()
+  if (/(material|supplier|材料|到货|供应商)/.test(token)) return 'material_shortage'
+  if (/(labor|worker|personnel|人员|劳动力|班组)/.test(token)) return 'labor_shortage'
+  if (/(equipment|machine|机械|设备)/.test(token)) return 'equipment_unavailable'
+  if (/(drawing|图纸|出图|审图)/.test(token)) return 'drawing_delay'
+  if (/(design.change|设计变更)/.test(token)) return 'design_change'
+  if (/(quality|rework|质量|返工)/.test(token)) return 'quality_rework'
+  if (/(weather|rain|storm|天气|降雨|高温|低温)/.test(token)) return 'weather_impact'
+  if (/(predecessor|dependency|前置|依赖)/.test(token)) return 'predecessor_delay'
+  if (/(condition|obstacle|warning|条件|阻碍|预警)/.test(token)) return 'external_readiness'
+  return 'other'
+}
+
 function normalizeRiskStatusFilter(value: string | null): 'all' | RiskRow['status'] {
   const raw = String(value ?? '').trim().toLowerCase()
   if (raw === 'identified' || raw === 'mitigating' || raw === 'closed') return raw
@@ -223,12 +282,25 @@ function normalizeRiskSeverityFilter(value: string | null): 'all' | RiskRow['sev
   return 'all'
 }
 
-function getSourceLabel(sourceType: string) {
+const CHAIN_LINKED_RISK_SOURCES = new Set(['warning_converted', 'warning_auto_escalated'])
+const CHAIN_LINKED_ISSUE_SOURCES = new Set(['risk_converted', 'risk_auto_escalated', 'obstacle_escalated', 'condition_expired'])
+
+function isRiskChainLinked(row: { sourceType?: string | null; linkedIssueId?: string | null }) {
+  if (row.linkedIssueId) return true
+  return CHAIN_LINKED_RISK_SOURCES.has(row.sourceType ?? '')
+}
+
+function isIssueChainLinked(row: { sourceType?: string | null }) {
+  return CHAIN_LINKED_ISSUE_SOURCES.has(row.sourceType ?? '')
+}
+
+function getSourceLabel(sourceType: string, sourceEntityType?: string | null) {
   if (sourceType === 'warning_converted') return '预警确认'
   if (sourceType === 'warning_auto_escalated') return '预警自动升级'
   if (sourceType === 'risk_converted') return '风险转问题'
   if (sourceType === 'risk_auto_escalated') return '风险自动升级'
   if (sourceType === 'obstacle_escalated') return '阻碍升级'
+  if (sourceType === 'condition_expired' && sourceEntityType === 'acceptance_plan') return '验收逾期'
   if (sourceType === 'condition_expired') return '条件过期'
   if (sourceType === 'source_deleted') return '来源已删除'
   return '人工录入'
@@ -272,8 +344,7 @@ function calculateIssuePriorityScore(sourceType: string, severity: IssueRow['sev
   }
 
   const base = (SOURCE_WEIGHT[sourceType] ?? 1) * SEVERITY_WEIGHT[severity]
-  const created = createdAt ? new Date(createdAt) : null
-  const unresolvedDays = created && !Number.isNaN(created.getTime()) ? Math.max(0, Math.floor((Date.now() - created.getTime()) / (24 * 60 * 60 * 1000))) : 0
+  const unresolvedDays = elapsedLocalDaysSince(createdAt) ?? 0
   const uplift = 1 + Math.min(5, Math.floor(unresolvedDays / 7)) * 0.1
   return Math.max(1, Math.min(100, Math.round(base * uplift)))
 }
@@ -331,9 +402,8 @@ function getWarningSortRank(item: WarningItem) {
 
 function getAutoEscalationHint(createdAt?: string) {
   if (!createdAt) return null
-  const timestamp = new Date(createdAt).getTime()
-  if (!Number.isFinite(timestamp)) return null
-  const ageDays = Math.max(0, Math.floor((Date.now() - timestamp) / (24 * 60 * 60 * 1000)))
+  const ageDays = elapsedLocalDaysSince(createdAt)
+  if (ageDays === null) return null
   const remainingDays = 7 - ageDays
   if (remainingDays > 0) {
     return `距离自动升级为问题还有 ${remainingDays} 天`
@@ -369,9 +439,7 @@ function mapObstacleSeverityToIssueSeverity(value?: string | null): IssueRow['se
 }
 
 function getObstacleAgeDays(obstacle: TaskObstacle) {
-  const createdAt = new Date(String(obstacle.created_at ?? ''))
-  if (Number.isNaN(createdAt.getTime())) return 0
-  return Math.max(0, Math.floor((Date.now() - createdAt.getTime()) / (24 * 60 * 60 * 1000)))
+  return elapsedLocalDaysSince(obstacle.created_at) ?? 0
 }
 
 function getEscalatedObstacleSeverity(obstacle: TaskObstacle): IssueRow['severity'] {
@@ -410,7 +478,7 @@ function groupWarnings(rows: WarningItem[], mode: ChainViewMode) {
 }
 
 function getSourceTypeTagLabel(sourceType: string) {
-  return getSourceBucket(sourceType) === 'manual' ? '手动链' : '链路来源'
+  return getSourceBucket(sourceType) === 'manual' ? '人工创建' : '关联升级'
 }
 
 function getPendingManualCloseCopy(row: RiskRow | IssueRow, entityType: 'risk' | 'issue') {
@@ -464,7 +532,7 @@ function normalizeRiskRow(item: Risk): RiskRow {
     severity: normalizeSeverity(raw.level ?? raw.severity),
     status: (String(raw.status ?? 'identified').trim().toLowerCase() as RiskRow['status']) || 'identified',
     sourceType: String(raw.source_type ?? 'manual'),
-    sourceLabel: getSourceLabel(String(raw.source_type ?? 'manual')),
+    sourceLabel: getSourceLabel(String(raw.source_type ?? 'manual'), raw.source_entity_type ? String(raw.source_entity_type) : null),
     taskId: raw.task_id ? String(raw.task_id) : undefined,
     chainId: raw.chain_id ? String(raw.chain_id) : null,
     linkedIssueId: raw.linked_issue_id ? String(raw.linked_issue_id) : null,
@@ -479,6 +547,7 @@ function normalizeRiskRow(item: Risk): RiskRow {
 function normalizeIssueRow(item: Issue, manualPriorityLocked = false): IssueRow {
   const raw = item as Record<string, unknown>
   const sourceType = String(raw.source_type ?? raw.sourceType ?? 'manual')
+  const sourceEntityType = raw.source_entity_type ? String(raw.source_entity_type) : raw.sourceEntityType ? String(raw.sourceEntityType) : null
   const severity = normalizeSeverity(raw.severity)
   const createdAt = raw.created_at ? String(raw.created_at) : raw.createdAt ? String(raw.createdAt) : undefined
   const priorityValue =
@@ -494,7 +563,7 @@ function normalizeIssueRow(item: Issue, manualPriorityLocked = false): IssueRow 
     severity,
     status: (String(raw.status ?? 'open').trim().toLowerCase() as IssueRow['status']) || 'open',
     sourceType,
-    sourceLabel: raw.sourceLabel ? String(raw.sourceLabel) : getSourceLabel(sourceType),
+    sourceLabel: raw.sourceLabel ? String(raw.sourceLabel) : getSourceLabel(sourceType, sourceEntityType),
     taskId: raw.task_id ? String(raw.task_id) : raw.taskId ? String(raw.taskId) : undefined,
     chainId: raw.chain_id ? String(raw.chain_id) : raw.chainId ? String(raw.chainId) : null,
     pendingManualClose: Boolean(raw.pending_manual_close ?? raw.pendingManualClose),
@@ -506,7 +575,7 @@ function normalizeIssueRow(item: Issue, manualPriorityLocked = false): IssueRow 
     }),
     priorityValue,
     manualPriorityLocked,
-    sourceEntityType: raw.source_entity_type ? String(raw.source_entity_type) : raw.sourceEntityType ? String(raw.sourceEntityType) : null,
+    sourceEntityType,
     sourceEntityId: raw.source_entity_id ? String(raw.source_entity_id) : raw.sourceEntityId ? String(raw.sourceEntityId) : null,
   }
 }
@@ -546,23 +615,6 @@ function compareCreatedAtDesc(left?: string, right?: string) {
   return rightTime - leftTime
 }
 
-function normalizeChangeLogRecord(row: ChangeLogRecord): ChangeLogRecord {
-  return {
-    ...row,
-    id: row.id ? String(row.id) : '',
-    project_id: row.project_id ? String(row.project_id) : null,
-    entity_type: String(row.entity_type ?? ''),
-    entity_id: String(row.entity_id ?? ''),
-    field_name: String(row.field_name ?? ''),
-    old_value: row.old_value ?? null,
-    new_value: row.new_value ?? null,
-    change_reason: row.change_reason ? String(row.change_reason) : null,
-    changed_by: row.changed_by ? String(row.changed_by) : null,
-    change_source: row.change_source ? String(row.change_source) : null,
-    changed_at: row.changed_at ? String(row.changed_at) : null,
-  }
-}
-
 function normalizeObstacleRecord(row: TaskObstacle): TaskObstacle {
   const raw = row as Record<string, unknown>
   return {
@@ -580,10 +632,8 @@ function normalizeObstacleRecord(row: TaskObstacle): TaskObstacle {
 }
 
 function isWithinRecentDays(value?: string, days = 7) {
-  if (!value) return false
-  const timestamp = new Date(value).getTime()
-  if (Number.isNaN(timestamp)) return false
-  return Date.now() - timestamp <= days * 24 * 60 * 60 * 1000
+  const ageDays = elapsedLocalDaysSince(value)
+  return ageDays !== null && ageDays <= days
 }
 
 function formatShortDate(value?: string | null) {
@@ -694,16 +744,14 @@ export default function RiskManagement() {
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
   const { canEdit } = usePermissions({ projectId: params.id || currentProject?.id })
+  const causeTaxonomy = useStructuredCauseTaxonomy()
   const rawTasks = useStore((state) => state.tasks)
   const rawWarnings = useStore((state) => state.warnings)
   const rawIssueRows = useStore((state) => state.issueRows)
   const rawProblemRows = useStore((state) => state.problemRows)
-  const changeLogs = useStore((state) => state.changeLogs)
-  const delayRequests = useStore((state) => state.delayRequests)
   const setWarnings = useStore((state) => state.setWarnings)
   const setIssueRows = useStore((state) => state.setIssueRows)
   const setProblemRows = useStore((state) => state.setProblemRows)
-  const setChangeLogs = useStore((state) => state.setChangeLogs)
   const setSharedSliceStatus = useStore((state) => state.setSharedSliceStatus)
   const projectId = params.id || currentProject?.id || ''
   const projectName = currentProject?.name || '当前项目'
@@ -743,15 +791,27 @@ export default function RiskManagement() {
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>(null)
   const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [dataQualitySummary, setDataQualitySummary] = useState<DataQualityProjectSummary | null>(null)
   const [manualRiskTitle, setManualRiskTitle] = useState('')
   const [manualRiskDescription, setManualRiskDescription] = useState('')
   const [manualRiskSeverity, setManualRiskSeverity] = useState<RiskRow['severity']>('medium')
   const [manualIssueTitle, setManualIssueTitle] = useState('')
   const [manualIssueDescription, setManualIssueDescription] = useState('')
   const [manualIssueSeverity, setManualIssueSeverity] = useState<IssueRow['severity']>('medium')
+  const [closureResultCode, setClosureResultCode] = useState<ClosureResultCode>('resolved')
+  const [closureEffectiveness, setClosureEffectiveness] = useState<ClosureEffectiveness>('resolved')
+  const [closureCauseCode, setClosureCauseCode] = useState('')
+  const [closureResponsibilityClass, setClosureResponsibilityClass] = useState<ClosureResponsibilityClass>('none')
+  const [closureResultSummary, setClosureResultSummary] = useState('')
+  const [closureResponsibilityBasis, setClosureResponsibilityBasis] = useState('')
+  const [closureError, setClosureError] = useState<string | null>(null)
+  const selectedClosureCause = causeTaxonomy.resolveCode(closureCauseCode)
   const [priorityDrafts, setPriorityDrafts] = useState<Record<string, number>>({})
   const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
+
+  useEffect(() => {
+    if (closureCauseCode && !selectedClosureCause) setClosureCauseCode('')
+  }, [closureCauseCode, selectedClosureCause])
+
   const routeRiskFilters = useMemo(() => {
     const query = new URLSearchParams(location.search)
     return {
@@ -767,15 +827,12 @@ export default function RiskManagement() {
     setSharedSliceStatus('warnings', { loading: true, error: null })
     setSharedSliceStatus('issueRows', { loading: true, error: null })
     setSharedSliceStatus('problemRows', { loading: true, error: null })
-    setSharedSliceStatus('changeLogs', { loading: true, error: null })
     try {
-      const [warningResult, riskResult, issueResult, obstacleResult, changeLogResult, dataQualityResult, riskTrendResult] = await Promise.allSettled([
+      const [warningResult, riskResult, issueResult, obstacleResult, riskTrendResult] = await Promise.allSettled([
         apiGet<WarningItem[]>(`/api/warnings?projectId=${encodeURIComponent(projectId)}&includeResolved=1`, { signal }),
         loadRisks(projectId),
         loadIssues(projectId),
         apiGet<TaskObstacle[]>(`/api/task-obstacles?projectId=${encodeURIComponent(projectId)}`, { signal }),
-        apiGet<ChangeLogRecord[]>(`/api/change-logs?projectId=${encodeURIComponent(projectId)}&limit=150`, { signal }),
-        DataQualityApiService.getProjectSummary(projectId, undefined, { signal }),
         apiGet<RiskTrendResponse>(`/api/risk-statistics/trend?projectId=${encodeURIComponent(projectId)}&days=30`, { signal }),
       ])
 
@@ -821,23 +878,6 @@ export default function RiskManagement() {
         setSharedSliceStatus('problemRows', { loading: false, error: message })
       }
 
-      if (changeLogResult.status === 'fulfilled' && Array.isArray(changeLogResult.value)) {
-        setChangeLogs(changeLogResult.value.map(normalizeChangeLogRecord))
-        setSharedSliceStatus('changeLogs', { loading: false, error: null })
-      } else {
-        const message = changeLogResult.status === 'rejected'
-          ? getErrorMessage(changeLogResult.reason, '变更记录加载失败')
-          : '变更记录格式不正确'
-        errors.push(message)
-        setSharedSliceStatus('changeLogs', { loading: false, error: message })
-      }
-
-      if (dataQualityResult.status === 'fulfilled') {
-        setDataQualitySummary(dataQualityResult.value ?? null)
-      } else {
-        setDataQualitySummary(null)
-      }
-
       if (riskTrendResult.status === 'fulfilled') {
         setRiskTrendData(riskTrendResult.value ?? null)
       } else {
@@ -850,7 +890,7 @@ export default function RiskManagement() {
         setLoading(false)
       }
     }
-  }, [projectId, setChangeLogs, setIssueRows, setProblemRows, setSharedSliceStatus, setWarnings])
+  }, [projectId, setIssueRows, setProblemRows, setSharedSliceStatus, setWarnings])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -858,15 +898,6 @@ export default function RiskManagement() {
     return () => { controller.abort() }
   }, [refresh])
 
-  const priorityLockedIssueIds = useMemo(
-    () =>
-      new Set(
-        changeLogs
-          .filter((record) => record.entity_type === 'issue' && record.field_name === 'priority' && record.entity_id)
-          .map((record) => String(record.entity_id)),
-      ),
-    [changeLogs],
-  )
   const warnings = useMemo(
     () =>
       rawWarnings.map((item) => ({
@@ -876,14 +907,8 @@ export default function RiskManagement() {
     [rawWarnings],
   )
   const issueRows = useMemo(
-    () =>
-      rawIssueRows.map((item) =>
-        normalizeIssueRow(
-          item as unknown as Issue,
-          priorityLockedIssueIds.has(String((item as unknown as Record<string, unknown>).id ?? '')),
-        ),
-      ),
-    [priorityLockedIssueIds, rawIssueRows],
+    () => rawIssueRows.map((item) => normalizeIssueRow(item as unknown as Issue)),
+    [rawIssueRows],
   )
   const problemRows = useMemo(
     () => rawProblemRows.map((row) => normalizeObstacleRecord(row as TaskObstacle)),
@@ -975,15 +1000,15 @@ export default function RiskManagement() {
       activeObstacleRows.filter((row) => {
         const obstacleId = String(row.id ?? '')
         if (!obstacleId || obstacleLinkedIssueIds.has(obstacleId)) return false
-        const createdAt = new Date(String(row.created_at ?? ''))
-        if (Number.isNaN(createdAt.getTime())) return false
-        return Date.now() - createdAt.getTime() >= 7 * 24 * 60 * 60 * 1000
+        const ageDays = elapsedLocalDaysSince(row.created_at)
+        return ageDays !== null && ageDays >= 7
       }),
     [activeObstacleRows, obstacleLinkedIssueIds],
   )
   const activeWarnings = useMemo(() => sortWarnings(warnings.filter((item) => !isWarningResolved(item))), [warnings])
   const activeRisks = useMemo(() => riskRows.filter((row) => row.status !== 'closed'), [riskRows])
   const activeIssues = useMemo(() => issueRows.filter((row) => row.status !== 'closed'), [issueRows])
+  // eslint-disable-next-line -- frontend-bi-aggregation-approved: display-only workbench reminder from loaded risk/issue rows, not a BI SSOT metric.
   const pendingManualCloseCount = useMemo(() => [...riskRows, ...issueRows].filter((row) => row.pendingManualClose).length, [issueRows, riskRows])
   const paginatedWarnings = useMemo(() => paginateRows(filteredWarnings, workspacePage, WORKSPACE_PAGE_SIZE), [filteredWarnings, workspacePage])
   const paginatedRisks = useMemo(() => paginateRows(sortRiskRows(filteredRisks), workspacePage, WORKSPACE_PAGE_SIZE), [filteredRisks, workspacePage])
@@ -1088,11 +1113,6 @@ export default function RiskManagement() {
       onViewAll: () => setActiveStream('issues'),
     },
   ], [activeIssues, activeRisks, activeWarnings, recentIssueCount, recentRiskCount, recentWarningCount])
-  const dataQualityConfidence = dataQualitySummary?.confidence ?? null
-  const showDataQualityBanner = Boolean(
-    dataQualityConfidence && (dataQualityConfidence.flag !== 'high' || dataQualityConfidence.activeFindingCount > 0),
-  )
-
   const resetManualForms = () => {
     setManualRiskTitle('')
     setManualRiskDescription('')
@@ -1129,6 +1149,104 @@ export default function RiskManagement() {
       variant: 'destructive',
     })
   }, [toast])
+
+  const openStructuredCloseDialog = useCallback((
+    row: RiskRow | IssueRow,
+    entityType: 'risk' | 'issue',
+    pendingManualClose = row.pendingManualClose,
+  ) => {
+    setClosureResultCode(entityType === 'risk' ? 'mitigated' : 'resolved')
+    setClosureEffectiveness('resolved')
+    setClosureCauseCode(causeTaxonomy.resolveCode(inferClosureCauseCode(row))?.code ?? '')
+    setClosureResponsibilityClass('none')
+    setClosureResultSummary('')
+    setClosureResponsibilityBasis('')
+    setClosureError(null)
+    if (entityType === 'risk') {
+      setDialogState({ type: 'structured-close', entityType, row: row as RiskRow, pendingManualClose })
+    } else {
+      setDialogState({ type: 'structured-close', entityType, row: row as IssueRow, pendingManualClose })
+    }
+  }, [causeTaxonomy])
+
+  const handleSubmitStructuredClose = useCallback(async () => {
+    if (!projectId || dialogState?.type !== 'structured-close') return
+    const summary = closureResultSummary.trim()
+    if (!summary) {
+      setClosureError('请填写实际处理结果。')
+      return
+    }
+    const confirmedTaxonomyCause = causeTaxonomy.resolveCode(closureCauseCode)
+    if (!confirmedTaxonomyCause) {
+      setClosureError('请从当前原因分类中选择有效项。')
+      return
+    }
+
+    setClosureError(null)
+    setSaving(true)
+    const { entityType, row, pendingManualClose } = dialogState
+    try {
+      const confirmedCause = await apiPost<{ id?: string }>(
+        `/api/cause-attributions/projects/${encodeURIComponent(projectId)}/subjects/${entityType}/${encodeURIComponent(row.id)}/confirm`,
+        {
+          causeCode: confirmedTaxonomyCause.code,
+          causeRole: 'primary',
+          rawText: summary,
+          ...(closureResponsibilityClass === 'none'
+            ? {}
+            : { responsibilityClass: closureResponsibilityClass }),
+          ...(closureResponsibilityClass !== 'none' && closureResponsibilityBasis.trim()
+            ? { responsibilityBasis: closureResponsibilityBasis.trim() }
+            : {}),
+        },
+      )
+      const causeAttributionId = String(confirmedCause?.id ?? '').trim()
+      if (!causeAttributionId) throw new Error('原因归因记录创建失败，请重试。')
+
+      if (pendingManualClose) {
+        await apiPost(`/api/${entityType === 'risk' ? 'risks' : 'issues'}/${row.id}/confirm-close`, {
+          version: row.version,
+          resultCode: closureResultCode,
+          resultSummary: summary,
+          effectiveness: closureEffectiveness,
+          evidenceRefs: [],
+          causeAttributionId,
+        })
+      } else {
+        await apiPut(`/api/${entityType === 'risk' ? 'risks' : 'issues'}/${row.id}`, {
+          status: 'closed',
+          version: row.version,
+          closed_reason: summary,
+          closure_result_code: closureResultCode,
+          closure_result_summary: summary,
+          closure_effectiveness: closureEffectiveness,
+          closure_evidence_refs: [],
+          closure_cause_attribution_id: causeAttributionId,
+        })
+      }
+
+      setDialogState(null)
+      await refresh()
+      toast({ title: entityType === 'risk' ? '风险已关闭' : '问题已关闭', description: row.title })
+    } catch (error) {
+      presentMutationError(error, entityType === 'risk' ? '确认关闭风险' : '确认关闭问题')
+    } finally {
+      setSaving(false)
+    }
+  }, [
+    closureCauseCode,
+    causeTaxonomy,
+    closureEffectiveness,
+    closureResponsibilityBasis,
+    closureResponsibilityClass,
+    closureResultCode,
+    closureResultSummary,
+    dialogState,
+    presentMutationError,
+    projectId,
+    refresh,
+    toast,
+  ])
 
   const handleAcknowledgeWarning = useCallback(async (item: WarningItem) => {
     if (!canEdit) return
@@ -1239,32 +1357,12 @@ export default function RiskManagement() {
     }
   }, [presentMutationError, refresh])
 
-  const handleConfirmCloseRisk = useCallback(async (row: RiskRow) => {
-    try {
-      await apiPost(`/api/risks/${row.id}/confirm-close`, { version: row.version })
-      return true
-    } catch (error) {
-      presentMutationError(error, `确认关闭风险「${row.title}」`)
-      return false
-    }
-  }, [presentMutationError])
-
   const handleKeepProcessingRisk = useCallback(async (row: RiskRow) => {
     try {
       await apiPost(`/api/risks/${row.id}/keep-processing`, { version: row.version })
       return true
     } catch (error) {
       presentMutationError(error, `保持风险处理中「${row.title}」`)
-      return false
-    }
-  }, [presentMutationError])
-
-  const handleConfirmCloseIssue = useCallback(async (row: IssueRow) => {
-    try {
-      await apiPost(`/api/issues/${row.id}/confirm-close`, { version: row.version })
-      return true
-    } catch (error) {
-      presentMutationError(error, `确认关闭问题「${row.title}」`)
       return false
     }
   }, [presentMutationError])
@@ -1280,25 +1378,32 @@ export default function RiskManagement() {
   }, [presentMutationError])
 
   const handlePendingManualCloseDecision = useCallback(async (row: RiskRow | IssueRow, entityType: 'risk' | 'issue', keepProcessing: boolean) => {
+    if (!keepProcessing) {
+      openStructuredCloseDialog(row, entityType, true)
+      return
+    }
     const success = entityType === 'risk'
-      ? keepProcessing
-        ? await handleKeepProcessingRisk(row as RiskRow)
-        : await handleConfirmCloseRisk(row as RiskRow)
-      : keepProcessing
-        ? await handleKeepProcessingIssue(row as IssueRow)
-        : await handleConfirmCloseIssue(row as IssueRow)
+      ? await handleKeepProcessingRisk(row as RiskRow)
+      : await handleKeepProcessingIssue(row as IssueRow)
 
     if (!success) return
     await refresh()
-    toast({ title: keepProcessing ? '已保持处理中' : '已确认关闭', description: row.title })
-  }, [handleConfirmCloseIssue, handleConfirmCloseRisk, handleKeepProcessingIssue, handleKeepProcessingRisk, refresh, toast])
+    toast({ title: '已保持处理中', description: row.title })
+  }, [handleKeepProcessingIssue, handleKeepProcessingRisk, openStructuredCloseDialog, refresh, toast])
 
   const handleDeleteSelectedEntity = useCallback(async () => {
     if (!deleteDialog) return
 
     setDeleteSubmitting(true)
     try {
-      if (deleteDialog.entityType === 'risk') {
+      if (deleteDialog.retentionDecisionToken) {
+        if (!projectId) throw new Error('项目不存在，无法确认保留处置')
+        await apiPost('/api/deletion-retention/confirm', {
+          projectId,
+          decisionToken: deleteDialog.retentionDecisionToken,
+        })
+        toast({ title: '已完成保留处置', description: deleteDialog.row.title })
+      } else if (deleteDialog.entityType === 'risk') {
         await apiDelete(`/api/risks/${deleteDialog.row.id}`)
         toast({ title: '已删除风险', description: deleteDialog.row.title })
       } else {
@@ -1310,11 +1415,37 @@ export default function RiskManagement() {
       setDetailDialog(null)
       await refresh()
     } catch (error) {
+      const decisionToken = getRetentionDecisionTokenFromError(error)
+      const retention = parseRetentionApiError(error)
+      if (
+        hasHttpStatus(error, 409) &&
+        isRetentionConfirmationError(error) &&
+        getRetentionApiErrorCode(error) === 'RETENTION_CONFIRMATION_REQUIRED' &&
+        decisionToken
+      ) {
+        setDeleteDialog({
+          ...deleteDialog,
+          retentionDecisionToken: decisionToken,
+          retention,
+        })
+        return
+      }
       presentMutationError(error, deleteDialog.entityType === 'risk' ? `删除风险「${deleteDialog.row.title}」` : `删除问题「${deleteDialog.row.title}」`)
     } finally {
       setDeleteSubmitting(false)
     }
-  }, [deleteDialog, presentMutationError, refresh, toast])
+  }, [deleteDialog, presentMutationError, projectId, refresh, toast])
+
+  const retentionDialogModel = buildRetentionDecisionDialogModel({
+    title: deleteDialog?.entityType === 'risk' ? '删除风险' : '删除问题',
+    entityName: deleteDialog?.row.title ?? '',
+    fallbackDescription: deleteDialog?.isChainLinked
+      ? '该记录已升级为关闭状态，不能直接删除；关闭记录会继续保留历史链路。'
+      : deleteDialog?.entityType === 'risk'
+        ? `将删除风险「${deleteDialog?.row?.title ?? ''}」，相关联动记录将保留但不再从风险列表展示。`
+        : `将删除问题「${deleteDialog?.row?.title ?? ''}」，相关联动记录将保留但不再从问题列表展示。`,
+    retention: deleteDialog?.retention ?? null,
+  })
 
   const handleCreateManualRisk = useCallback(async () => {
     if (!projectId || !manualRiskTitle.trim()) return
@@ -1433,6 +1564,12 @@ export default function RiskManagement() {
 
     const issueId = query.get('issueId')
     const riskId = query.get('riskId')
+    const taskId = query.get('taskId')?.trim()
+    if (taskId) {
+      setWorkspaceSearch(taskId)
+      setWorkspaceOwnerFilter('task')
+      if (!requestedStream) setActiveStream('risks')
+    }
     if (issueId) {
       setActiveStream('issues')
       openIssueDetailById(issueId)
@@ -1495,23 +1632,13 @@ export default function RiskManagement() {
     const linkedWarnings = warnings.filter((item) => item.chain_id === chainDialog.chainId)
     const linkedRisks = riskRows.filter((row) => row.chainId === chainDialog.chainId)
     const linkedIssues = issueRows.filter((row) => row.chainId === chainDialog.chainId)
-    const entityKeySet = new Set<string>([
-      ...linkedWarnings.map((item) => `warning:${item.id}`),
-      ...linkedRisks.map((row) => `risk:${row.id}`),
-      ...linkedIssues.map((row) => `issue:${row.id}`),
-    ])
-
-    const linkedChangeLogs = changeLogs
-      .filter((record) => entityKeySet.has(`${record.entity_type}:${record.entity_id}`))
-      .sort((left, right) => compareCreatedAtDesc(left.changed_at ?? undefined, right.changed_at ?? undefined))
 
     return {
       linkedWarnings,
       linkedRisks,
       linkedIssues,
-      linkedChangeLogs,
     }
-  }, [chainDialog?.chainId, changeLogs, issueRows, riskRows, warnings])
+  }, [chainDialog?.chainId, issueRows, riskRows, warnings])
 
   function renderPendingManualCloseBanner(row: RiskRow | IssueRow, entityType: 'risk' | 'issue') {
     if (!row.pendingManualClose) return null
@@ -1552,7 +1679,7 @@ export default function RiskManagement() {
               onClick={() => openChainById(item.chain_id)}
               data-testid={`risk-open-chain-warning-${item.id}`}
             >
-              查看全链
+              查看关联
             </Button>
           ) : null}
         </div>
@@ -1573,7 +1700,7 @@ export default function RiskManagement() {
               onClick={() => openChainById(item.chain_id)}
               data-testid={`risk-open-chain-warning-${item.id}`}
             >
-              查看全链
+              查看关联
             </Button>
           ) : null}
         </>
@@ -1620,10 +1747,6 @@ export default function RiskManagement() {
     const sourceType = getWarningSourceType(item)
     const muteMeta = getWarningMuteMeta(item)
     const resolved = isWarningResolved(item)
-    // #15: 检查是否有pending延期申请
-    const hasPendingDelayRequest = item.task_id && delayRequests.some(
-      (req) => req.task_id === item.task_id && req.status === 'pending'
-    )
     return renderEntry({
       badges: <>
         <StatusBadge status={item.warning_level}>{WARNING_LABEL[item.warning_level]}</StatusBadge>
@@ -1634,7 +1757,6 @@ export default function RiskManagement() {
         {muteMeta.label ? <Badge variant="outline">{muteMeta.label}</Badge> : null}
         {item.is_escalated ? <Badge variant="secondary">已升级</Badge> : null}
         {!item.is_acknowledged && item.reactivated_at ? <Badge variant="outline" className="border-orange-300 bg-orange-50 text-orange-700">已重新激活</Badge> : null}
-        {hasPendingDelayRequest ? <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-700">延期审批中</Badge> : null}
         {resolved && item.resolved_source === 'auto' ? <Badge variant="outline" className="border-blue-300 bg-blue-50 text-blue-700">系统联动消除</Badge> : null}
         {resolved && item.resolved_source === 'manual' ? <Badge variant="outline" className="border-red-300 bg-red-50 text-red-700">人工消除</Badge> : null}
       </>,
@@ -1659,7 +1781,7 @@ export default function RiskManagement() {
           {!row.pendingManualClose ? (
             <>
               {row.status === 'identified' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateRisk(row, { status: 'mitigating' })}>开始处理</Button> : null}
-              {row.status === 'mitigating' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateRisk(row, { status: 'closed' })}>关闭风险</Button> : null}
+              {row.status === 'mitigating' ? <Button size="sm" variant="outline" onClick={() => openStructuredCloseDialog(row, 'risk', false)}>关闭风险</Button> : null}
               {row.status === 'closed' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateRisk(row, { status: 'mitigating', linked_issue_id: null, closed_reason: null, closed_at: null })}>恢复处理</Button> : null}
               {row.status !== 'closed' ? <Button size="sm" onClick={() => setDialogState({ type: 'convert-risk', row })}>转为问题</Button> : null}
             </>
@@ -1681,16 +1803,16 @@ export default function RiskManagement() {
               onClick={() => openChainById(row.chainId)}
               data-testid={`risk-open-chain-risk-${row.id}`}
             >
-              查看全链
+              查看关联
             </Button>
           ) : null}
           <Button
             size="sm"
             variant="destructive"
-            onClick={() => setDeleteDialog({ entityType: 'risk', row })}
+            onClick={() => setDeleteDialog({ entityType: 'risk', row, isChainLinked: isRiskChainLinked(row) })}
             data-testid={`risk-delete-risk-${row.id}`}
           >
-            删除
+            {isRiskChainLinked(row) ? '关闭' : '删除'}
           </Button>
         </>
       </ReadOnlyGuard>
@@ -1706,7 +1828,7 @@ export default function RiskManagement() {
               {row.status === 'open' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'investigating' })}>开始调查</Button> : null}
               {row.status === 'investigating' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'open' })}>退回待处理</Button> : null}
               {row.status === 'investigating' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'resolved' })}>标记已解决</Button> : null}
-              {row.status === 'resolved' ? <Button size="sm" variant="outline" onClick={() => void handleUpdateIssue(row, { status: 'closed' })}>确认关闭</Button> : null}
+              {row.status === 'resolved' ? <Button size="sm" variant="outline" onClick={() => openStructuredCloseDialog(row, 'issue', false)}>确认关闭</Button> : null}
             </>
           ) : null}
           {row.sourceEntityType === 'risk' && row.sourceEntityId ? (
@@ -1726,16 +1848,16 @@ export default function RiskManagement() {
               onClick={() => openChainById(row.chainId)}
               data-testid={`risk-open-chain-issue-${row.id}`}
             >
-              查看全链
+              查看关联
             </Button>
           ) : null}
           <Button
             size="sm"
             variant="destructive"
-            onClick={() => setDeleteDialog({ entityType: 'issue', row })}
+            onClick={() => setDeleteDialog({ entityType: 'issue', row, isChainLinked: isIssueChainLinked(row) })}
             data-testid={`risk-delete-issue-${row.id}`}
           >
-            删除
+            {isIssueChainLinked(row) ? '关闭' : '删除'}
           </Button>
         </>
       </ReadOnlyGuard>
@@ -1747,7 +1869,7 @@ export default function RiskManagement() {
     return renderEntry({
       badges: <>
         <StatusBadge status={row.severity}>{SEVERITY_LABELS[row.severity]}</StatusBadge>
-        <StatusBadge status={row.status} fallbackLabel={RISK_STATUS_LABELS[row.status]}>{RISK_STATUS_LABELS[row.status]}</StatusBadge>
+        <StatusBadge status={row.status} fallbackLabel={RISK_STATUS_LABELS[row.status]} statusDomain="risk.lifecycle" statusKey={row.status} visualTone={row.status === 'closed' ? 'green' : row.status === 'mitigating' ? 'blue' : 'amber'}>{RISK_STATUS_LABELS[row.status]}</StatusBadge>
         {row.pendingManualClose ? <StatusBadge status="warning">{PENDING_MANUAL_CLOSE_LABEL}</StatusBadge> : null}
         {row.linkedIssueId ? (
           <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-500">
@@ -1836,7 +1958,7 @@ export default function RiskManagement() {
   if (!projectId) {
     return (
       <div className="page-shell">
-          <Breadcrumb items={[{ label: '公司驾驶舱', href: '/company' }, { label: '风险管理' }]} />
+          <Breadcrumb items={[{ label: '工作台', href: '/workspace' }, { label: '风险管理' }]} />
           <PageHeader eyebrow="风险管控" title="风险管理" />
           <EmptyState icon={AlertTriangle} title="未找到当前项目" action={<Button onClick={goBack}><ArrowLeft className="mr-2 h-4 w-4" />返回</Button>} />
       </div>
@@ -1900,33 +2022,7 @@ export default function RiskManagement() {
           ))}
         </div>
 
-        {dataQualitySummary && dataQualityConfidence ? (
-          <Card data-testid="risk-data-quality-banner" variant="surface">
-            <CardContent className="p-5">
-              <CollapsibleSection title="数据可靠性" defaultOpen={false} count={dataQualityConfidence.activeFindingCount}>
-                <div className="grid gap-5 pt-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(22.5rem,1.15fr)]">
-                  <div className={cn(
-                    'rounded-xl border px-4 py-3',
-                    showDataQualityBanner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-emerald-200 bg-emerald-50 text-emerald-950',
-                  )}>
-                    <div className="text-base font-semibold">
-                      当前数据可靠性 {Math.round(dataQualityConfidence.score)}% · {dataQualityConfidence.flag}
-                    </div>
-                    <div className="mt-2 text-sm leading-6">
-                      {dataQualityConfidence.note} · 活跃异常 {dataQualityConfidence.activeFindingCount} 条
-                    </div>
-                  </div>
-                  <DataConfidenceBreakdown
-                    confidence={dataQualityConfidence}
-                    title="可靠性降分贡献"
-                    compact
-                    testId="risk-data-quality-breakdown"
-                  />
-                </div>
-              </CollapsibleSection>
-            </CardContent>
-          </Card>
-        ) : null}
+        {/* v1.4.16: data reliability removed from RiskManagement; Dashboard is sole entry */}
 
         <RiskMultiLineChart
           data={trendChartData}
@@ -2123,6 +2219,108 @@ export default function RiskManagement() {
         </section>
 
       <Dialog open={dialogState !== null} onOpenChange={(open) => !open && setDialogState(null)}>
+        {dialogState?.type === 'structured-close' ? (
+          <DialogContent className="max-w-[var(--dialog-lg-width)]" data-testid="structured-close-dialog">
+            <DialogHeader>
+              <DialogTitle>{dialogState.entityType === 'risk' ? '关闭风险' : '关闭问题'}</DialogTitle>
+              <DialogDescription className="sr-only">
+                记录关闭结果、原因分类和可选责任判断
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                <p className="text-sm font-medium text-slate-900">{dialogState.row.title}</p>
+                {dialogState.row.description ? (
+                  <p className="mt-1 text-xs leading-5 text-slate-600">{dialogState.row.description}</p>
+                ) : null}
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="closure-result-code">处理结果</Label>
+                  <Select value={closureResultCode} onValueChange={(value) => setClosureResultCode(value as ClosureResultCode)}>
+                    <SelectTrigger id="closure-result-code"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_RESULT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="closure-effectiveness">处置效果</Label>
+                  <Select value={closureEffectiveness} onValueChange={(value) => setClosureEffectiveness(value as ClosureEffectiveness)}>
+                    <SelectTrigger id="closure-effectiveness"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_EFFECTIVENESS_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="closure-cause-code">原因分类</Label>
+                  <Select
+                    value={closureCauseCode || undefined}
+                    onValueChange={setClosureCauseCode}
+                    disabled={causeTaxonomy.status !== 'ready'}
+                  >
+                    <SelectTrigger id="closure-cause-code"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {causeTaxonomy.entries.map((entry) => (
+                        <SelectItem key={entry.code} value={entry.code}>{entry.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="closure-responsibility-class">责任判断</Label>
+                  <Select value={closureResponsibilityClass} onValueChange={(value) => setClosureResponsibilityClass(value as ClosureResponsibilityClass)}>
+                    <SelectTrigger id="closure-responsibility-class"><SelectValue /></SelectTrigger>
+                    <SelectContent align="start">
+                      {CLOSURE_RESPONSIBILITY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="closure-result-summary">实际处理结果</Label>
+                <Textarea
+                  id="closure-result-summary"
+                  data-testid="closure-result-summary"
+                  value={closureResultSummary}
+                  onChange={(event) => setClosureResultSummary(event.target.value)}
+                  maxLength={2000}
+                  aria-invalid={Boolean(closureError)}
+                  className={cn('min-h-24', closureError && 'border-red-500')}
+                />
+              </div>
+              {closureResponsibilityClass !== 'none' ? (
+                <div className="space-y-2">
+                  <Label htmlFor="closure-responsibility-basis">责任判断依据</Label>
+                  <Textarea
+                    id="closure-responsibility-basis"
+                    value={closureResponsibilityBasis}
+                    onChange={(event) => setClosureResponsibilityBasis(event.target.value)}
+                    maxLength={1000}
+                    className="min-h-20"
+                  />
+                </div>
+              ) : null}
+              {closureError ? <p className="text-sm text-red-600" role="alert">{closureError}</p> : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button>
+              <Button
+                data-testid="structured-close-submit"
+                onClick={() => void handleSubmitStructuredClose()}
+                loading={saving}
+                disabled={saving || !closureResultSummary.trim() || !selectedClosureCause}
+              >确认关闭</Button>
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
         {dialogState?.type === 'convert-risk' ? <DialogContent className="max-w-[var(--dialog-md-width)]"><DialogHeader><DialogTitle>转为问题</DialogTitle><DialogDescription className="sr-only">转为问题</DialogDescription></DialogHeader><div className="space-y-3 text-sm text-slate-600"><div><span className="font-medium text-slate-900">标题：</span>{dialogState.row.title}</div>{dialogState.row.description ? <div>{dialogState.row.description}</div> : null}</div><DialogFooter><Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button><Button onClick={() => void handleConvertRiskToIssue()} loading={saving}>确认转入</Button></DialogFooter></DialogContent> : null}
         {dialogState?.type === 'create-manual-risk' ? (
           <DialogContent className="max-w-[var(--dialog-md-width)]">
@@ -2297,7 +2495,7 @@ export default function RiskManagement() {
                     <div className="grid gap-5 sm:grid-cols-2">
                       <DetailField label="任务归属" value={buildTaskBucket(detailDialog.row.taskId)} />
                       <DetailField label="来源口径" value={detailDialog.row.sourceLabel} />
-                      <DetailField label="链路标识" value={detailDialog.row.chainId || '未挂链'} />
+                      <DetailField label="关联记录" value={detailDialog.row.chainId ? '查看关联过程' : '独立记录'} />
                       <DetailField label="创建时间" value={formatDateTime(detailDialog.row.createdAt)} />
                       {detailDialog.row.probability != null && (
                         <DetailField label="可能性评分" value={`${detailDialog.row.probability} / 100`} />
@@ -2336,7 +2534,7 @@ export default function RiskManagement() {
                     <div className="grid gap-5 sm:grid-cols-2">
                       <DetailField label="任务归属" value={buildTaskBucket(detailDialog.row.taskId)} />
                       <DetailField label="来源口径" value={detailDialog.row.sourceLabel} />
-                      <DetailField label="链路标识" value={detailDialog.row.chainId || '未挂链'} />
+                      <DetailField label="关联记录" value={detailDialog.row.chainId ? '查看关联过程' : '独立记录'} />
                       <DetailField label="创建时间" value={formatDateTime(detailDialog.row.createdAt)} />
                     </div>
                     {getIssueDrawingsHref(detailDialog.row) ? (
@@ -2389,7 +2587,7 @@ export default function RiskManagement() {
           <DialogContent className="max-w-[var(--dialog-lg-width)]" data-testid="risk-chain-dialog">
             <DialogHeader>
               <DialogTitle>全链查看</DialogTitle>
-              <DialogDescription>链路标识 {chainDialog.chainId}</DialogDescription>
+              <DialogDescription>关联记录（风险/问题/预警升级链）</DialogDescription>
             </DialogHeader>
             <div className="grid gap-5 lg:grid-cols-2">
               <Card className="border-slate-200 shadow-none">
@@ -2428,28 +2626,6 @@ export default function RiskManagement() {
                   ) : null}
                 </CardContent>
               </Card>
-              <Card className="border-slate-200 shadow-none">
-                <CardContent padding="md" className="space-y-3">
-                  <CardHead eyebrow="CHANGE" title="变更留痕" />
-                  {chainDialogItems.linkedChangeLogs.map((record) => (
-                    <div key={record.id} className="rounded-xl border border-slate-200 px-3 py-3 text-sm">
-                      <div className="font-medium text-slate-900">
-                        {record.entity_type} · {record.field_name}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {String(record.old_value ?? '空')} → {String(record.new_value ?? '空')}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {record.change_reason || '未填写变更原因'} · {formatDateTime(record.changed_at)}
-                      </div>
-                    </div>
-                  ))}
-                  {chainDialogItems.linkedChangeLogs.length === 0 ? (
-                    <div className="rounded-xl empty-state-frame border-slate-200 px-4 py-5 text-sm text-slate-500">
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
             </div>
           </DialogContent>
         ) : null}
@@ -2469,13 +2645,17 @@ export default function RiskManagement() {
       <DeleteProtectionDialog
         open={deleteDialog !== null}
         onOpenChange={(open) => !open && setDeleteDialog(null)}
-        title={deleteDialog?.entityType === 'risk' ? '删除风险' : '删除问题'}
-        description={
-          deleteDialog?.entityType === 'risk'
-            ? `将删除风险「${deleteDialog?.row?.title ?? ''}」，相关联动记录将保留但不再从风险列表展示。`
-            : `将删除问题「${deleteDialog?.row?.title ?? ''}」，相关联动记录将保留但不再从问题列表展示。`
+        title={retentionDialogModel.title}
+        description={retentionDialogModel.description}
+        warning={
+          deleteDialog?.retentionDecisionToken
+            ? '确认后不会清除历史链路，只更新当前风险/问题的处置状态。'
+            : deleteDialog?.isChainLinked
+              ? '该记录已升级为关闭状态，请使用关闭处置链路。'
+              : '该操作无法撤销，请确认该条目确实不需要保留。'
         }
-        warning="该操作无法撤销，请确认该条目确实不需要保留。"
+        confirmLabel={retentionDialogModel.confirmLabel}
+        confirmTone={retentionDialogModel.confirmTone}
         loading={deleteSubmitting}
         onConfirm={() => void handleDeleteSelectedEntity()}
         testId="risk-delete-dialog"

@@ -139,7 +139,15 @@ const state = vi.hoisted(() => {
 })
 
 vi.mock('../middleware/auth.js', () => ({
-  authenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'user-1' }
+    next()
+  }),
+  requireProjectMember: vi.fn(() => (_req: unknown, _res: unknown, next: () => void) => next()),
+}))
+
+vi.mock('../auth/access.js', () => ({
+  getProjectPermissionLevel: vi.fn(async () => 'editor'),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
@@ -225,5 +233,99 @@ describe('ancillary route validation hardening', () => {
 
     expect(response.body.success).toBe(false)
     expect(response.body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('does not allow extra request fields into pre-milestone dependency insert columns', async () => {
+    state.executeSQL.mockResolvedValueOnce([])
+    state.executeSQLOne.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (normalized.includes('from pre_milestones where id = ? limit 1')) {
+        return { project_id: 'project-1' } as Awaited<ReturnType<typeof state.executeSQLOne>>
+      }
+      if (normalized.includes('from pre_milestone_dependencies where id = ? limit 1')) {
+        return {
+          id: String(params[0]),
+          project_id: 'project-1',
+          source_milestone_id: 'pre-1',
+          target_milestone_id: 'pre-2',
+          dependency_kind: 'hard',
+          created_at: '2026-04-10T00:00:00.000Z',
+        }
+      }
+      return null
+    })
+
+    const response = await supertest(buildApp())
+      .post('/api/pre-milestone-dependencies')
+      .send({
+        source_milestone_id: 'pre-1',
+        target_milestone_id: 'pre-2',
+        dependency_kind: 'hard',
+        notes: '先办前置证照',
+        evil_column: 'should-not-be-a-column',
+      })
+      .expect(200)
+
+    expect(response.body.success).toBe(true)
+    const insertCall = state.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).toLowerCase().includes('insert into pre_milestone_dependencies')
+    ))
+    expect(insertCall).toBeTruthy()
+    expect(String(insertCall?.[0])).not.toContain('evil_column')
+    expect(String(insertCall?.[0])).toContain(
+      '(id, project_id, source_milestone_id, target_milestone_id, dependency_kind, notes, created_at)',
+    )
+  })
+
+  it('does not allow extra request fields into pre-milestone condition update columns', async () => {
+    state.executeSQL.mockResolvedValueOnce([])
+    state.executeSQLOne.mockImplementation(async (sql: string) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      if (normalized.includes('from pre_milestone_conditions where id = ? limit 1')) {
+        return {
+          id: 'condition-1',
+          project_id: 'project-1',
+          pre_milestone_id: 'pre-1',
+          condition_type: 'document',
+          condition_name: '营业执照',
+          description: null,
+          status: '待处理',
+          created_at: '2026-04-10T00:00:00.000Z',
+        } as Awaited<ReturnType<typeof state.executeSQLOne>>
+      }
+      if (normalized.includes('from pre_milestone_conditions where id = ? and project_id = ? limit 1')) {
+        return {
+          id: 'condition-1',
+          project_id: 'project-1',
+          pre_milestone_id: 'pre-1',
+          condition_type: 'document',
+          condition_name: '更新后的营业执照',
+          description: null,
+          status: '待处理',
+          created_at: '2026-04-10T00:00:00.000Z',
+        } as Awaited<ReturnType<typeof state.executeSQLOne>>
+      }
+      return null
+    })
+
+    const response = await supertest(buildApp())
+      .put('/api/pre-milestone-conditions/condition-1')
+      .send({
+        condition_name: '更新后的营业执照',
+        target_date: '2026-05-20',
+        evil_column: 'should-not-be-a-column',
+      })
+      .expect(200)
+
+    expect(response.body.success).toBe(true)
+    const updateCall = state.executeSQL.mock.calls.find(([sql]) => (
+      String(sql).replace(/\s+/g, ' ').trim().toLowerCase().includes('update pre_milestone_conditions set')
+    ))
+    expect(updateCall).toBeTruthy()
+    expect(String(updateCall?.[0])).not.toContain('evil_column')
+    expect(String(updateCall?.[0])).not.toContain('target_date')
+    expect(String(updateCall?.[0])).toContain('condition_name = ?')
+    expect(String(updateCall?.[0])).toContain('due_date = ?')
+    expect(String(updateCall?.[0])).toContain('updated_at = ?')
   })
 })

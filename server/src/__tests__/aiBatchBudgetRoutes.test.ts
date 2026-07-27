@@ -3,26 +3,59 @@ import request from 'supertest'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  estimateDuration: vi.fn(async (input: Record<string, unknown>) => ({
-    task_id: input.task_id,
-    estimated_duration: 10,
-  })),
-  predictDuration: vi.fn(async (taskId: string) => ({
-    task_id: taskId,
-    predicted_duration: 9,
-  })),
-  predictBatchDurations: vi.fn(async (taskIds: string[]) => taskIds.map((taskId) => ({
-    task_id: taskId,
-    predicted_duration: 12,
-  }))),
-  analyzeDelayRisk: vi.fn(async (taskId: string) => ({
+  analyzeDelayRisk: vi.fn(async (taskId: string): Promise<Record<string, unknown>> => ({
     task_id: taskId,
     risk_level: 'medium',
   })),
-  getProjectDurationInsight: vi.fn(async (projectId: string) => ({
-    project_id: projectId,
-    overview: 'ok',
+  forecastTaskDuration: vi.fn(async (taskId: string) => ({
+    taskId,
+    recommendedDurationDays: 10,
+    conservativeDurationDays: 14,
+    optimisticRemainingDays: 8,
+    remainingDurationDays: 9,
+    conservativeRemainingDays: 13,
+    durationOutputCode: 'remaining_forecast',
+    durationOutputSemanticFieldName: 'remainingForecastDays',
+    remainingForecastDays: 9,
+    remainingDuration: {
+      value: 9,
+      unit: 'construction_production_day',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-05-19',
+      availability: 'available',
+      unavailableReason: null,
+    },
+    forecastFinishDate: '2026-05-28',
+    forecastDelayDays: 2,
+    delayRiskIndex: 0.42,
+    confidenceLevel: 'medium',
+    confidenceScore: 66,
+    forecastSource: 'remaining_duration_forecast',
+    businessReason: 'Task progress is slower than plan.',
+    dataMaturity: 'L1',
+    topFactors: ['Progress is slower than plan.'],
+    calculationContext: { debug: true },
+    forecastSources: { unstartedOverdueRule: { debug: true } },
   })),
+  forecastBatchTasks: vi.fn(async (taskIds: string[]) => taskIds.map((taskId) => ({
+    taskId,
+    recommendedDurationDays: 10,
+    conservativeDurationDays: 14,
+    remainingDurationDays: 9,
+    durationOutputCode: 'remaining_forecast',
+    durationOutputSemanticFieldName: 'remainingForecastDays',
+    remainingForecastDays: 9,
+    forecastFinishDate: '2026-05-28',
+    forecastDelayDays: 2,
+    confidenceLevel: 'medium',
+    confidenceScore: 66,
+    forecastSource: 'remaining_duration_forecast',
+    businessReason: 'Task progress is slower than plan.',
+    calculationContext: { debug: true },
+    forecastSources: { candidates: [] },
+  }))),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -32,28 +65,57 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../middleware/auth.js', () => ({
-  authenticate: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'user-1', globalRole: 'regular' }
+    next()
+  }),
+  requireProjectMember: vi.fn(() => (req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'user-1', globalRole: 'regular' }
+    next()
+  }),
+  requireProjectEditor: vi.fn(() => (req: any, _res: unknown, next: () => void) => {
+    req.user = { id: 'user-1', globalRole: 'regular' }
+    next()
+  }),
 }))
 
 vi.mock('../middleware/logger.js', () => ({
   logger: mocks.logger,
 }))
 
-vi.mock('../services/aiDurationService.js', () => ({
-  AIDurationService: vi.fn().mockImplementation(() => ({
-    estimateDuration: mocks.estimateDuration,
+vi.mock('../auth/access.js', () => ({
+  getProjectPermissionLevel: vi.fn(async () => 'member'),
+}))
+
+vi.mock('../auth/companyContext.js', () => ({
+  getRequestCompanyId: vi.fn(() => 'company-1'),
+}))
+
+vi.mock('../services/dbService.js', () => ({
+  executeSQLOne: vi.fn(async () => ({ project_id: 'project-1' })),
+  supabase: {
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          order: vi.fn(() => ({
+            limit: vi.fn(async () => ({ data: [], error: null })),
+          })),
+        })),
+      })),
+    })),
+  },
+}))
+
+vi.mock('../services/manualDurationCorrectionService.js', () => ({
+  ManualDurationCorrectionService: vi.fn().mockImplementation(() => ({
     correctDuration: vi.fn(),
-    getConfidence: vi.fn(),
   })),
 }))
 
-vi.mock('../services/schedulePredictor.js', () => ({
-  SchedulePredictor: vi.fn().mockImplementation(() => ({
-    predictDuration: mocks.predictDuration,
-    predictBatchDurations: mocks.predictBatchDurations,
-    analyzeDelayRisk: mocks.analyzeDelayRisk,
-    getProjectDurationInsight: mocks.getProjectDurationInsight,
-  })),
+vi.mock('../services/taskDurationForecastService.js', () => ({
+  forecastTaskDuration: mocks.forecastTaskDuration,
+  forecastBatchTasks: mocks.forecastBatchTasks,
+  analyzeTaskDelayRiskWithDurationForecast: mocks.analyzeDelayRisk,
 }))
 
 function buildApp(path: string, router: express.Router) {
@@ -68,10 +130,10 @@ describe('AI batch route request budgets', () => {
     vi.clearAllMocks()
   })
 
-  it('rejects oversized duration estimate batches before synchronous execution fan-out', async () => {
-    const { default: router } = await import('../routes/ai-duration.js')
-    const response = await request(buildApp('/api/ai', router))
-      .post('/api/ai/estimate-batch')
+  it('rejects oversized duration suggestion batches before synchronous execution fan-out', async () => {
+    const { default: router } = await import('../routes/duration-suggestions.js')
+    const response = await request(buildApp('/api/duration-suggestions', router))
+      .post('/api/duration-suggestions/batch')
       .send({
         project_id: 'project-1',
         task_ids: Array.from({ length: 101 }, (_, index) => `task-${index + 1}`),
@@ -83,14 +145,15 @@ describe('AI batch route request budgets', () => {
       requested_count: 101,
       max_sync_items: 100,
     })
-    expect(mocks.estimateDuration).not.toHaveBeenCalled()
+    expect(mocks.forecastBatchTasks).not.toHaveBeenCalled()
   })
 
-  it('rejects oversized schedule prediction batches before synchronous execution fan-out', async () => {
-    const { default: router } = await import('../routes/aiSchedule.js')
-    const response = await request(buildApp('/api/ai', router))
-      .post('/api/ai/predict-batch-durations')
+  it('keeps canonical duration forecast batches behind the synchronous execution fan-out guard', async () => {
+    const { default: router } = await import('../routes/duration-suggestions.js')
+    const response = await request(buildApp('/api/duration-suggestions', router))
+      .post('/api/duration-suggestions/current-batch')
       .send({
+        project_id: 'project-1',
         task_ids: Array.from({ length: 101 }, (_, index) => `task-${index + 1}`),
       })
 
@@ -100,13 +163,13 @@ describe('AI batch route request budgets', () => {
       requested_count: 101,
       max_sync_items: 100,
     })
-    expect(mocks.predictBatchDurations).not.toHaveBeenCalled()
+    expect(mocks.forecastBatchTasks).not.toHaveBeenCalled()
   })
 
   it('rejects delay risk analysis when task_id is missing', async () => {
-    const { default: router } = await import('../routes/aiSchedule.js')
-    const response = await request(buildApp('/api/ai', router))
-      .post('/api/ai/analyze-delay-risk')
+    const { default: router } = await import('../routes/duration-suggestions.js')
+    const response = await request(buildApp('/api/duration-suggestions', router))
+      .post('/api/duration-suggestions/delay-risk/task')
       .send({})
 
     expect(response.status).toBe(400)
@@ -115,14 +178,94 @@ describe('AI batch route request budgets', () => {
     expect(mocks.analyzeDelayRisk).not.toHaveBeenCalled()
   })
 
-  it('rejects project duration insight requests without project_id', async () => {
-    const { default: router } = await import('../routes/aiSchedule.js')
-    const response = await request(buildApp('/api/ai', router))
-      .get('/api/ai/project-duration-insight')
+  it('returns governed remaining forecast fields from delay-risk nested duration forecast', async () => {
+    mocks.analyzeDelayRisk.mockResolvedValueOnce({
+      task_id: 'task-1',
+      risk_level: 'medium',
+      duration_forecast: {
+        taskId: 'task-1',
+        durationOutputCode: 'remaining_forecast',
+        durationOutputSemanticFieldName: 'remainingForecastDays',
+        remainingForecastDays: 9,
+        remainingDuration: {
+          value: 9,
+          unit: 'construction_production_day',
+          calendarRef: 'cn-work-calendar',
+          calendarVersion: '2026.07',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-05-19',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        remainingDurationDays: 99,
+        optimisticRemainingDays: 88,
+        conservativeRemainingDays: 111,
+        calculationContext: { debug: true },
+        forecastSources: { debug: true },
+      },
+    })
 
-    expect(response.status).toBe(400)
-    expect(response.body.success).toBe(false)
-    expect(response.body.error.code).toBe('VALIDATION_ERROR')
-    expect(mocks.getProjectDurationInsight).not.toHaveBeenCalled()
+    const { default: router } = await import('../routes/duration-suggestions.js')
+    const response = await request(buildApp('/api/duration-suggestions', router))
+      .post('/api/duration-suggestions/delay-risk/task')
+      .send({ task_id: 'task-1' })
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data.duration_forecast).toMatchObject({
+      taskId: 'task-1',
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingForecastDays: 9,
+    })
+    expect(response.body.data.duration_forecast).not.toHaveProperty('remainingDurationDays')
+    expect(response.body.data.duration_forecast).not.toHaveProperty('remaining_duration_days')
+    expect(response.body.data.duration_forecast).not.toHaveProperty('optimisticRemainingDays')
+    expect(response.body.data.duration_forecast).not.toHaveProperty('conservativeRemainingDays')
+    expect(response.body.data.duration_forecast.calculationContext).toBeUndefined()
+    expect(response.body.data.duration_forecast.forecastSources).toBeUndefined()
+  })
+
+  it('returns governed remaining forecast fields from canonical task forecast route', async () => {
+    const { default: router } = await import('../routes/duration-suggestions.js')
+    const response = await request(buildApp('/api/duration-suggestions', router))
+      .get('/api/duration-suggestions/tasks/task-1/duration-forecast')
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data).toMatchObject({
+      taskId: 'task-1',
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingForecastDays: 9,
+    })
+    expect(response.body.data).not.toHaveProperty('duration_output_code')
+    expect(response.body.data).not.toHaveProperty('duration_output_semantic_field_name')
+    expect(response.body.data).not.toHaveProperty('remaining_forecast_days')
+    expect(response.body.data).not.toHaveProperty('recommendedDurationDays')
+    expect(response.body.data).not.toHaveProperty('recommended_duration_days')
+    expect(response.body.data).not.toHaveProperty('remaining_days')
+    expect(response.body.data).not.toHaveProperty('estimated_duration')
+  })
+
+  it('returns duration forecast business DTO without internal debug fields', async () => {
+    const { default: router } = await import('../routes/duration-suggestions.js')
+    const response = await request(buildApp('/api/duration-suggestions', router))
+      .get('/api/duration-suggestions/tasks/task-1/duration-forecast')
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data).toMatchObject({
+      taskId: 'task-1',
+      remainingForecastDays: 9,
+      forecastFinishDate: '2026-05-28',
+      businessReason: 'Task progress is slower than plan.',
+    })
+    expect(response.body.data).not.toHaveProperty('remainingDurationDays')
+    expect(response.body.data).not.toHaveProperty('remaining_duration_days')
+    expect(response.body.data.forecastSources).toBeUndefined()
+    expect(response.body.data.forecast_sources).toBeUndefined()
+    expect(response.body.data.calculationContext).toBeUndefined()
+    expect(response.body.data.calculation_context).toBeUndefined()
   })
 })

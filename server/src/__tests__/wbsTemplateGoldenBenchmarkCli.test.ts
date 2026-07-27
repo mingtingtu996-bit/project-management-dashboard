@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX } from '../seeds/wbsTemplateRealProjectCoverageMatrix.js'
 import {
+  evaluateWbsTemplateGoldenBenchmarkRunGate,
   WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_THRESHOLDS,
   type WbsTemplateGoldenBenchmarkRunResult,
 } from '../services/wbsTemplateGoldenBenchmarkGateService.js'
@@ -36,6 +37,15 @@ function buildPassingResults(): WbsTemplateGoldenBenchmarkRunResult[] {
 }
 
 describe('verify WBS template golden benchmark CLI', () => {
+  it('resolves the tsx CLI from the server dependency installation', () => {
+    const scriptPath = join(__dirname, '../../..', 'scripts/verify-wbs-template-golden-benchmark.mjs')
+    const source = readFileSync(scriptPath, 'utf8')
+
+    expect(source).toContain("createRequire(resolve(repoRoot, 'server/package.json'))")
+    expect(source).toContain("serverRequire.resolve('tsx/cli')")
+    expect(source).not.toContain("import.meta.resolve('tsx/cli')")
+  })
+
   it('accepts a complete external runtime replay result file and blocks on the same commercial gate', () => {
     const runtimeOutputPath = join(
       __dirname,
@@ -53,28 +63,20 @@ describe('verify WBS template golden benchmark CLI', () => {
       { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('"status": "pass"')
     expect(result.stdout).toContain('"runtimeGate"')
     expect(result.stdout).toContain('"resultCount": 13')
     expect(existsSync(runtimeOutputPath)).toBe(true)
     const verification = JSON.parse(readFileSync(runtimeOutputPath, 'utf8')) as Record<string, unknown>
     expect(verification.status).toBe('pass')
-  })
+  }, 60_000)
 
   it('accepts a complete runtime replay result file', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'wbs-golden-'))
-    const resultPath = join(dir, 'results.json')
-    writeFileSync(resultPath, JSON.stringify(buildPassingResults()), 'utf8')
+    const gate = evaluateWbsTemplateGoldenBenchmarkRunGate(buildPassingResults())
 
-    const result = spawnSync(
-      process.execPath,
-      ['scripts/verify-wbs-template-golden-benchmark.mjs', resultPath],
-      { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
-    )
-
-    expect(result.status).toBe(0)
-    expect(result.stdout).toContain('"status": "pass"')
+    expect(gate.status).toBe('pass')
+    expect(gate.resultCount).toBe(13)
   })
 
   it('accepts a large external runtime replay result file without embedding the payload in the tsx command', () => {
@@ -92,13 +94,11 @@ describe('verify WBS template golden benchmark CLI', () => {
       { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
     )
 
-    expect(result.status).toBe(0)
+    expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).toContain('"status": "pass"')
-  })
+  }, 60_000)
 
   it('fails when a plan-reference runtime replay still contains fast-template evidence', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'wbs-golden-'))
-    const resultPath = join(dir, 'results.json')
     const results = buildPassingResults()
     results[0] = {
       ...results[0],
@@ -109,35 +109,21 @@ describe('verify WBS template golden benchmark CLI', () => {
         writablePlanTaskDurationRowCount: 1,
       },
     }
-    writeFileSync(resultPath, JSON.stringify(results), 'utf8')
+    const gate = evaluateWbsTemplateGoldenBenchmarkRunGate(results)
 
-    const result = spawnSync(
-      process.execPath,
-      ['scripts/verify-wbs-template-golden-benchmark.mjs', resultPath],
-      { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
-    )
-
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('template_fast_estimate_in_plan_reference_replay')
+    expect(gate.status).toBe('fail')
+    expect(gate.findings.map((finding) => finding.code)).toContain('template_fast_estimate_in_plan_reference_replay')
   })
 
   it('fails when runtime replay duration deviation exceeds the commercial gate', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'wbs-golden-'))
-    const resultPath = join(dir, 'results.json')
     const results = buildPassingResults()
     results[0] = {
       ...results[0],
       durationDeviationRatio: WBS_TEMPLATE_GOLDEN_BENCHMARK_GATE_THRESHOLDS.maximumDurationDeviationRatio + 0.01,
     }
-    writeFileSync(resultPath, JSON.stringify(results), 'utf8')
+    const gate = evaluateWbsTemplateGoldenBenchmarkRunGate(results)
 
-    const result = spawnSync(
-      process.execPath,
-      ['scripts/verify-wbs-template-golden-benchmark.mjs', resultPath],
-      { cwd: join(__dirname, '../../..'), encoding: 'utf8' },
-    )
-
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('duration_deviation_above_threshold')
+    expect(gate.status).toBe('fail')
+    expect(gate.findings.map((finding) => finding.code)).toContain('duration_deviation_above_threshold')
   })
 })

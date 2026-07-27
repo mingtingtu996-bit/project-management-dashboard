@@ -64,7 +64,6 @@ describe('§7.3 protected business routes require authenticate', () => {
     'routes/tasks.ts',
     'routes/risks.ts',
     'routes/members.ts',
-    'routes/delay-requests.ts',
     'routes/dashboard.ts',
   ]
 
@@ -230,9 +229,9 @@ describe('§7.3 CSRF protection', () => {
     expect(src).toMatch(/helmet\(\)/)
   })
 
-  it('auth module uses HttpOnly cookies for token storage (not script-readable)', () => {
+  it('auth module delegates HttpOnly cookie enforcement to the centralized JWT config', () => {
     const authHttp = readServerSource('auth/http.ts')
-    expect(authHttp).toMatch(/httpOnly:\s*true/)
+    expect(authHttp.match(/httpOnly:\s*JWT_CONFIG\.cookie\.httpOnly/g)).toHaveLength(2)
   })
 
   it('CORS is configured to restrict allowed origins', () => {

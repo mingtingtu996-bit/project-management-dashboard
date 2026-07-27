@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "workbuddy-candidate-asset-contract/v1",
+  "assetFamily": "progress_knowledge",
+  "mutationBoundary": "contract_only_no_db_mutation_no_runtime_write",
+  "defaultStatus": "candidate_review_only",
+  "mayBecomeRuntimeOnlyAfter": [
+    "source_verification",
+    "download_hash_or_source_locator",
+    "extraction_quality_review",
+    "candidate_review",
+    "mapping_owner_review",
+    "conflict_resolution",
+    "shadow_or_replay_evidence",
+    "data_contract_check",
+    "publication_readiness_review",
+    "controlled_writer_authorization",
+    "rollback_plan",
+    "readback_evidence"
+  ],
+  "forbiddenDirectWriteTables": [
+    "tasks",
+    "task_baselines",
+    "monthly_plans",
+    "monthly_plan_items",
+    "task_dependencies",
+    "duration_experience_samples",
+    "actual_duration_outcomes",
+    "critical_path"
+  ]
+}

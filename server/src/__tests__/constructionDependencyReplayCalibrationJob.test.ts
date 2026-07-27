@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  listActiveProjectIds: vi.fn(async (_projectIds?: string[] | null) => ['project-1', 'project-2']),
+  listActiveProjectIds: vi.fn(async (projectIds?: string[] | null) => projectIds ?? ['project-1', 'project-2']),
   collectConstructionDependencyReplayCalibrationReport: vi.fn(async ({ projectIds }: { projectIds?: string[] }) => ({
     reportCode: 'construction_dependency_replay_calibration',
     governancePolicy: {
@@ -33,6 +33,10 @@ const mocks = vi.hoisted(() => ({
     persisted: true,
     reportId: 'report-row-1',
   })),
+  persistConstructionDependencyReplayCalibrationCandidatesFromReport: vi.fn(async () => ({
+    persistedEventCount: 1,
+    recordedOutcomeCount: 1,
+  })),
 }))
 
 vi.mock('../services/activeProjectService.js', () => ({
@@ -48,6 +52,7 @@ vi.mock('../services/jobRuntime.js', () => ({
 
 vi.mock('../services/constructionDependencyReplayCalibrationService.js', () => ({
   collectConstructionDependencyReplayCalibrationReport: mocks.collectConstructionDependencyReplayCalibrationReport,
+  persistConstructionDependencyReplayCalibrationCandidatesFromReport: mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport,
 }))
 
 vi.mock('../services/constructionDependencyReplayCalibrationPersistenceService.js', () => ({
@@ -64,9 +69,14 @@ describe('constructionDependencyReplayCalibrationJob', () => {
     mocks.listActiveProjectIds.mockClear()
     mocks.collectConstructionDependencyReplayCalibrationReport.mockClear()
     mocks.persistConstructionDependencyReplayCalibrationReport.mockClear()
+    mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport.mockReset()
+    mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport.mockResolvedValue({
+      persistedEventCount: 1,
+      recordedOutcomeCount: 1,
+    })
   })
 
-  it('runs and persists report-only L3/L4 replay calibration queues across active projects without writing seeds or task dependencies', async () => {
+  it('persists real dependency candidates and project-scoped network outcomes without writing seeds or task dependencies', async () => {
     const result = await runConstructionDependencyReplayCalibrationSweep({ projectIds: ['project-1', 'project-2'] })
 
     expect(mocks.listActiveProjectIds).toHaveBeenCalledWith(['project-1', 'project-2'])
@@ -77,6 +87,10 @@ describe('constructionDependencyReplayCalibrationJob', () => {
       zeroLagReviewThresholdDays: 2,
     }))
     expect(mocks.persistConstructionDependencyReplayCalibrationReport).toHaveBeenCalledTimes(2)
+    expect(mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport).toHaveBeenCalledTimes(2)
+    expect(mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport).toHaveBeenCalledWith(
+      expect.objectContaining({ report: expect.any(Object), projectId: 'project-1' }),
+    )
     expect(mocks.persistConstructionDependencyReplayCalibrationReport).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'project-1',
       triggeredBy: 'scheduled_or_manual_governance_job',
@@ -94,6 +108,9 @@ describe('constructionDependencyReplayCalibrationJob', () => {
       failedReports: 0,
       persistedReportCount: 2,
       reportPersistenceFailedCount: 0,
+      producerCandidateEventCount: 2,
+      producerOutcomeCount: 2,
+      producerFailedCount: 0,
       inputDependencyCount: 6,
       matchedDependencyCount: 4,
       comparableActualDateCount: 4,
@@ -107,15 +124,35 @@ describe('constructionDependencyReplayCalibrationJob', () => {
     })
   })
 
-  it('can run without persistence for dry-run governance checks', async () => {
+  it('can skip the report snapshot while still producing project-scoped candidates and outcomes', async () => {
     const result = await runConstructionDependencyReplayCalibrationSweep({
       projectIds: ['project-1'],
       writeReports: false,
     })
 
     expect(mocks.persistConstructionDependencyReplayCalibrationReport).not.toHaveBeenCalled()
+    expect(mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport).toHaveBeenCalledOnce()
+    expect(result.completedReports).toBe(1)
+    expect(result.producerCandidateEventCount).toBe(1)
+    expect(result.producerOutcomeCount).toBe(1)
     expect(result.persistedReportCount).toBe(0)
     expect(result.reportPersistenceFailedCount).toBe(0)
+  })
+
+  it('fails the sweep when any project producer cannot persist its outcome so the outer job can retry', async () => {
+    mocks.persistConstructionDependencyReplayCalibrationCandidatesFromReport
+      .mockResolvedValueOnce({ persistedEventCount: 1, recordedOutcomeCount: 1 })
+      .mockRejectedValueOnce(new Error('outcome insert failed'))
+
+    await expect(runConstructionDependencyReplayCalibrationSweep({
+      projectIds: ['project-1', 'project-2'],
+    })).rejects.toMatchObject({
+      code: 'CONSTRUCTION_DEPENDENCY_REPLAY_PARTIAL_FAILURE',
+      result: expect.objectContaining({
+        producerFailedCount: 1,
+        failedReports: 1,
+      }),
+    })
   })
 
   it('is schedulable, manually executable, and exposes last-run status', async () => {
@@ -130,7 +167,7 @@ describe('constructionDependencyReplayCalibrationJob', () => {
 
     const result = await job.executeNow(['project-1'])
 
-    expect(result?.completedReports).toBe(2)
+    expect(result?.completedReports).toBe(1)
     expect(job.getStatus()).toEqual(expect.objectContaining({
       isRunning: false,
       isScheduled: false,

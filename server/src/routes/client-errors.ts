@@ -18,6 +18,7 @@ const clientErrorBodySchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional().nullable(),
 }).passthrough()
 
+// route-auth-public-approved: browser error telemetry accepts anonymous crash evidence.
 router.post('/', validate(clientErrorBodySchema), asyncHandler(async (req, res) => {
   const body = (req.body ?? {}) as Record<string, unknown>
   const source = typeof body.source === 'string' ? body.source : 'unknown'

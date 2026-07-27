@@ -2,6 +2,13 @@ import {
   listDurationLiveLearningManifests,
   type DurationLiveLearningAssetKey,
 } from './durationLiveLearningClosureService.js'
+import {
+  CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+} from './constructionOrganizationRuntimeLineageService.js'
+
+export type DurationRuntimeConsumerObservedAssetKey =
+  | DurationLiveLearningAssetKey
+  | typeof CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY
 
 export type DurationRuntimeConsumerPublicationStatus =
   | 'published'
@@ -9,7 +16,7 @@ export type DurationRuntimeConsumerPublicationStatus =
   | 'runtime_published'
 
 export interface DurationRuntimeConsumerObservationIntegrationContract {
-  assetKey: DurationLiveLearningAssetKey
+  assetKey: DurationRuntimeConsumerObservedAssetKey
   consumerKey: string
   consumerSurface: string
   acceptedPublicationStatuses: DurationRuntimeConsumerPublicationStatus[]
@@ -17,17 +24,17 @@ export interface DurationRuntimeConsumerObservationIntegrationContract {
 
 export interface DurationRuntimeConsumerObservationAdapterRegistration {
   consumerKey: string
-  assetKeys: readonly DurationLiveLearningAssetKey[]
+  assetKeys: readonly DurationRuntimeConsumerObservedAssetKey[]
 }
 
 export interface DurationRuntimeConsumerObservationIntegratedContract {
-  assetKey: DurationLiveLearningAssetKey
+  assetKey: DurationRuntimeConsumerObservedAssetKey
   consumerKey: string
   consumerSurface: string
 }
 
 export interface DurationRuntimeConsumerObservationRejectedRegistration {
-  assetKey: DurationLiveLearningAssetKey
+  assetKey: DurationRuntimeConsumerObservedAssetKey
   consumerKey: string
   reason: 'runtime_consumer_observation_integration_contract_not_declared'
 }
@@ -56,12 +63,29 @@ const CONSUMER_SURFACE_BY_KEY: Record<string, string> = {
   durationSuggestionService: 'duration_suggestion',
   taskDurationForecastService: 'task_duration_forecast',
   projectRemainingDurationForecastService: 'remaining_duration_forecast',
+  projectCriticalPathService: 'critical_path_watch_prior',
+  projectWizard: 'project_wizard_commit',
   wbsTemplateGenerationService: 'wbs_template_generation',
   scheduleAccelerationService: 'schedule_acceleration',
   scheduleAccelerationRuntimeService: 'schedule_acceleration_runtime',
 }
 
-const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationLiveLearningAssetKey, string[]>> = {
+const RUNTIME_ONLY_OBSERVATION_CONTRACTS: DurationRuntimeConsumerObservationIntegrationContract[] = [
+  {
+    assetKey: CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+    consumerKey: 'projectWizard',
+    consumerSurface: 'project_wizard_commit',
+    acceptedPublicationStatuses: [...ACCEPTED_PUBLICATION_STATUSES],
+  },
+  {
+    assetKey: CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+    consumerKey: 'scheduleAccelerationRuntimeService',
+    consumerSurface: 'schedule_acceleration_runtime',
+    acceptedPublicationStatuses: [...ACCEPTED_PUBLICATION_STATUSES],
+  },
+]
+
+const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationRuntimeConsumerObservedAssetKey, string[]>> = {
   base_duration_benchmark: [
     'duration_benchmark_runtime:',
     'duration-benchmark-runtime:',
@@ -69,6 +93,7 @@ const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationLiveLear
     'learnable-parameter-runtime:p50-p75-blend:',
     'learnable-parameter-runtime:event-duration-blend:',
     'learnable-parameter-runtime:event-p50-p75:',
+    'duration_learning_runtime:base_duration_benchmark:',
   ],
   duration_cold_start_baseline: [
     'cold_start_baseline_runtime:',
@@ -87,21 +112,26 @@ const RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET: Partial<Record<DurationLiveLear
   standard_work_duration_seed: [
     'algorithm_seed_versions:',
     'standard_work_duration_seed_runtime:',
+    'duration_learning_runtime:standard_work_duration_seed:',
   ],
   special_work_duration_seed: [
-    'wbs_template_runtime:',
-    'wbs-template-runtime:',
+    'duration_learning_runtime:special_work_duration_seed:',
   ],
   wbs_reference_days: [
-    'wbs_reference_days_runtime:',
+    'duration_learning_runtime:wbs_reference_days:',
   ],
   dependency_rule_candidate: [
-    'dependency_rule_runtime:',
-    'dependency-rule-runtime:',
+    'duration_learning_runtime:dependency_rule_candidate:',
   ],
   critical_path_rule_candidate: [
-    'critical_path_rule_runtime:',
-    'critical-path-rule-runtime:',
+    'duration_learning_runtime:critical_path_rule_candidate:',
+  ],
+  construction_organization_plan_network: [
+    'construction_org_plan_network_runtime:',
+    'construction-organization-plan-network-runtime:',
+    'construction-org-plan-network:',
+    'construction-org-plan-network-release-record:',
+    'construction-organization-plan-network-outcome:',
   ],
 }
 
@@ -129,7 +159,7 @@ function toIntegratedContract(
 
 export function listDurationRuntimeConsumerObservationIntegrationContracts():
   DurationRuntimeConsumerObservationIntegrationContract[] {
-  return listDurationLiveLearningManifests()
+  const liveLearningContracts = listDurationLiveLearningManifests()
     .flatMap((manifest) => manifest.implementationAnchors.runtimeConsumers.map((consumerKey) => {
       const normalizedConsumerKey = normalizeConsumerKey(consumerKey)
       return {
@@ -139,16 +169,23 @@ export function listDurationRuntimeConsumerObservationIntegrationContracts():
         acceptedPublicationStatuses: [...ACCEPTED_PUBLICATION_STATUSES],
       }
     }))
+  return [
+    ...liveLearningContracts,
+    ...RUNTIME_ONLY_OBSERVATION_CONTRACTS.map((contract) => ({
+      ...contract,
+      acceptedPublicationStatuses: [...contract.acceptedPublicationStatuses],
+    })),
+  ]
 }
 
 export function listDurationRuntimeConsumerPublicationKeyPrefixesForAsset(
-  assetKey: DurationLiveLearningAssetKey,
+  assetKey: DurationRuntimeConsumerObservedAssetKey,
 ): string[] {
   return [...(RUNTIME_PUBLICATION_KEY_PREFIXES_BY_ASSET[assetKey] ?? [])]
 }
 
 export function isDurationRuntimeConsumerPublicationKeyAllowedForAsset(
-  assetKey: DurationLiveLearningAssetKey,
+  assetKey: DurationRuntimeConsumerObservedAssetKey,
   publicationKey: unknown,
 ): boolean {
   const normalizedPublicationKey = normalizeText(publicationKey)

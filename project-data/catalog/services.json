@@ -1,0 +1,27 @@
+{
+  "schemaVersion": "workbuddy-data-service-catalog/v1",
+  "mutationBoundary": "catalog_only_no_db_mutation_no_runtime_write",
+  "services": [
+    {
+      "id": "projectExecutionSummaryService",
+      "path": "server/src/services/projectExecutionSummaryService.ts",
+      "role": "project summary source of truth",
+      "dataAuthority": "project-level BI summary and closeout metrics",
+      "writeAuthority": "service-owned summary reads only unless implementation explicitly writes snapshots"
+    },
+    {
+      "id": "projectDailySnapshotService",
+      "path": "server/src/services/projectDailySnapshotService.ts",
+      "role": "daily snapshot source of truth",
+      "dataAuthority": "project_daily_snapshot trends and historical analysis",
+      "writeAuthority": "controlled snapshot service"
+    },
+    {
+      "id": "metricRegistryService",
+      "path": "server/src/services/metricRegistryService.ts",
+      "role": "metric registry source of truth",
+      "dataAuthority": "BI metric registry and metric definitions",
+      "writeAuthority": "code-reviewed registry changes only"
+    }
+  ]
+}

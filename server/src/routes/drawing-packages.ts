@@ -2,8 +2,15 @@
 import { v4 as uuidv4 } from 'uuid'
 
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import {
+  authenticate,
+  getAuthorizedRequestProjectId,
+  requireProjectEditor,
+  requireProjectMember,
+} from '../middleware/auth.js'
+import { withDatabaseTransaction } from '../database.js'
 import { executeSQL, executeSQLOne } from '../services/dbService.js'
+import { recordDrawingVersionCurrentFactChanges } from '../services/drawingVersionExecutionFactService.js'
 import {
   buildDrawingBoardView,
   buildDrawingLedgerRows,
@@ -44,6 +51,13 @@ import {
   DRAWING_TASK_CONDITION_COLUMNS,
   DRAWING_VERSION_COLUMNS,
 } from '../services/sqlColumns.js'
+import { deactivateEntityLinksForEntity } from '../services/projectLinkingService.js'
+import { getProjectCompanyId } from '../auth/access.js'
+import { logger } from '../middleware/logger.js'
+import {
+  buildAndPersistBusinessCompletionSampleHealthReport,
+  buildDrawingVersionCompletionSamples,
+} from '../services/businessCompletionSampleHealthAdapterService.js'
 
 const DRAWING_REVIEW_RULE_SELECT = `SELECT ${DRAWING_REVIEW_RULE_COLUMNS} FROM drawing_review_rules`
 const DRAWING_PACKAGE_SELECT = `SELECT
@@ -76,8 +90,27 @@ const DRAWING_TASK_CONDITION_SELECT = `SELECT ${DRAWING_TASK_CONDITION_COLUMNS} 
 const ACCEPTANCE_PLAN_SELECT = `SELECT ${ACCEPTANCE_PLAN_COLUMNS} FROM acceptance_plans`
 const ACCEPTANCE_REQUIREMENT_SELECT = `SELECT ${ACCEPTANCE_REQUIREMENT_COLUMNS} FROM acceptance_requirements`
 const ACCEPTANCE_RECORD_SELECT = `SELECT ${ACCEPTANCE_RECORD_COLUMNS} FROM acceptance_records`
-const CERTIFICATE_WORK_ITEM_SELECT = `SELECT ${CERTIFICATE_WORK_ITEM_COLUMNS} FROM certificate_work_items`
+const CERTIFICATE_WORK_ITEM_SELECT = `SELECT ${
+  CERTIFICATE_WORK_ITEM_COLUMNS.split(', ').filter((column) => column !== 'certificate_ids').join(', ')
+} FROM certificate_work_items`
 const CERTIFICATE_DEPENDENCY_SELECT = `SELECT ${CERTIFICATE_DEPENDENCY_COLUMNS} FROM certificate_dependencies`
+const DRAWING_BOARD_CACHE_TTL_MS = Number(process.env.DRAWING_BOARD_CACHE_TTL_MS ?? 300_000)
+type DrawingBoardReadModel = ReturnType<typeof buildDrawingBoardView>
+
+const drawingBoardCache = new Map<string, { expiresAt: number; data: DrawingBoardReadModel }>()
+const drawingBoardInFlight = new Map<string, Promise<DrawingBoardReadModel>>()
+
+export function clearDrawingBoardCache(projectId?: string | null) {
+  const normalizedProjectId = normalizeText(projectId)
+  if (!normalizedProjectId) {
+    drawingBoardCache.clear()
+    drawingBoardInFlight.clear()
+    return
+  }
+
+  drawingBoardCache.delete(normalizedProjectId)
+  drawingBoardInFlight.delete(normalizedProjectId)
+}
 
 function normalizeText(value: unknown, fallback: string | null = null): string | null {
   if (typeof value === 'string') {
@@ -92,28 +125,68 @@ function normalizeBoolean(value: unknown): boolean {
   return value === true || value === 1 || value === '1' || value === 'true'
 }
 
+async function recordDrawingVersionSampleHealthEvidence(input: {
+  projectId?: string | null
+  drawingId?: string | null
+  versionId?: string | null
+  drawingCode?: string | null
+  versionNo?: string | null
+  confirmedAt?: string | null
+}) {
+  const projectId = normalizeText(input.projectId)
+  const versionId = normalizeText(input.versionId)
+  if (!projectId || !versionId) return
+
+  try {
+    const companyId = await getProjectCompanyId(projectId)
+    if (!companyId) {
+      logger.warn('[drawingPackages] skip drawing version sample health evidence without company scope', {
+        projectId,
+        versionId,
+      })
+      return
+    }
+
+    await buildAndPersistBusinessCompletionSampleHealthReport({
+      companyId,
+      projectId,
+      queryExec: executeSQL,
+      samples: buildDrawingVersionCompletionSamples([
+        {
+          companyId,
+          projectId,
+          drawingId: normalizeText(input.drawingId),
+          versionId,
+          drawingCode: normalizeText(input.drawingCode),
+          versionNo: normalizeText(input.versionNo),
+          confirmedAt: normalizeText(input.confirmedAt) ?? new Date().toISOString(),
+          metadata: {
+            sourceRoute: 'drawing-packages.set-current-version',
+          },
+        },
+      ]),
+    })
+  } catch (error) {
+    logger.warn('[drawingPackages] failed to record drawing version sample health evidence', {
+      projectId,
+      versionId,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+function isEntityExitStatus(value: unknown): boolean {
+  const status = normalizeText(value)?.toLowerCase()
+  return status === 'archived' || status === 'inactive' || status === 'deleted'
+}
+
 function normalizeNumber(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
-function isMissingTableError(error: unknown, tableName: string): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return (
-    message.includes(tableName) &&
-    (/schema cache/i.test(message) || /does not exist/i.test(message) || /could not find the table/i.test(message))
-  )
-}
-
-async function loadOptionalRows<T>(sql: string, params: unknown[], tableName: string): Promise<T[]> {
-  try {
-    return await executeSQL<T>(sql, params)
-  } catch (error) {
-    if (isMissingTableError(error, tableName)) {
-      return []
-    }
-    throw error
-  }
+async function loadOptionalRows<T>(loader: () => Promise<T[]>, _tableName: string): Promise<T[]> {
+  return loader()
 }
 
 function dedupeRowsById<T extends { id?: unknown }>(rows: T[]) {
@@ -176,21 +249,27 @@ async function loadProjectScopedReviewRules(projectId: string | null | undefined
   const normalizedProjectId = normalizeText(projectId)
   if (!normalizedProjectId) {
     return loadOptionalRows<DrawingReviewRuleSource>(
-      `${DRAWING_REVIEW_RULE_SELECT} ORDER BY project_id DESC, created_at ASC`,
-      [],
+      () => executeSQL<DrawingReviewRuleSource>(
+        `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id IS NULL ORDER BY created_at ASC`,
+        [],
+      ),
       'drawing_review_rules',
     )
   }
 
   const [projectRules, globalRules] = await Promise.all([
     loadOptionalRows<DrawingReviewRuleSource>(
-      `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-      [normalizedProjectId],
+      () => executeSQL<DrawingReviewRuleSource>(
+        `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [normalizedProjectId],
+      ),
       'drawing_review_rules',
     ),
     loadOptionalRows<DrawingReviewRuleSource>(
-      `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id IS NULL ORDER BY created_at ASC`,
-      [],
+      () => executeSQL<DrawingReviewRuleSource>(
+        `${DRAWING_REVIEW_RULE_SELECT} WHERE project_id IS NULL ORDER BY created_at ASC`,
+        [],
+      ),
       'drawing_review_rules',
     ),
   ])
@@ -243,14 +322,14 @@ async function ensureDrawingVersionSnapshot(input: {
   isCurrentVersion?: boolean
 }) {
   const existing = await executeSQLOne<DrawingVersionRecordSource>(
-    `${DRAWING_VERSION_SELECT} WHERE drawing_id = ? AND version_no = ? LIMIT 1`,
-    [input.drawingId, input.versionNo],
+    `${DRAWING_VERSION_SELECT} WHERE drawing_id = ? AND version_no = ? AND project_id = ? LIMIT 1`,
+    [input.drawingId, input.versionNo, input.projectId],
   )
   if (existing) {
     if (input.isCurrentVersion) {
       await executeSQL(
-        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE drawing_id = ? AND package_id = ? AND id <> ?',
-        [0, input.drawingId, input.packageId, existing.id],
+        'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE drawing_id = ? AND package_id = ? AND project_id = ? AND id <> ?',
+        [0, input.drawingId, input.packageId, input.projectId, existing.id],
       )
     }
 
@@ -259,7 +338,7 @@ async function ensureDrawingVersionSnapshot(input: {
       `UPDATE drawing_versions
           SET project_id = ?, package_id = ?, parent_drawing_id = ?, revision_no = ?, issued_for = ?,
               effective_date = ?, change_reason = ?, created_by = ?, is_current_version = ?, superseded_at = ?, updated_at = ?
-        WHERE id = ?`,
+        WHERE id = ? AND project_id = ?`,
       [
         input.projectId,
         input.packageId,
@@ -273,6 +352,7 @@ async function ensureDrawingVersionSnapshot(input: {
         input.isCurrentVersion ? null : normalizeText((existing as unknown as Record<string, unknown>).superseded_at),
         updatedAt,
         existing.id,
+        input.projectId,
       ],
     )
 
@@ -281,14 +361,14 @@ async function ensureDrawingVersionSnapshot(input: {
 
   if (input.isCurrentVersion) {
     await executeSQL(
-      'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE drawing_id = ? AND package_id = ?',
-      [0, input.drawingId, input.packageId],
+      'UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE drawing_id = ? AND package_id = ? AND project_id = ?',
+      [0, input.drawingId, input.packageId, input.projectId],
     )
   }
 
   const previous = await executeSQLOne<DrawingVersionRecordSource>(
-    `${DRAWING_VERSION_SELECT} WHERE drawing_id = ? AND package_id = ? ORDER BY created_at DESC LIMIT 1`,
-    [input.drawingId, input.packageId],
+    `${DRAWING_VERSION_SELECT} WHERE drawing_id = ? AND package_id = ? AND project_id = ? ORDER BY created_at DESC LIMIT 1`,
+    [input.drawingId, input.packageId, input.projectId],
   )
 
   const versionId = uuidv4()
@@ -327,30 +407,39 @@ async function ensureDrawingVersionSnapshot(input: {
 }
 
 async function loadProjectPackages(projectId: string, options?: { includeLinkedContext?: boolean }) {
-  const packages = await loadOptionalRows<DrawingPackageSource>(
-    `${DRAWING_PACKAGE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-    [projectId],
-    'drawing_packages',
-  )
-  const drawings = await loadOptionalRows<DrawingRecordSource>(
-    `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
-    [projectId],
-    'construction_drawings',
-  )
-  const [versionRows, reviewRules] = await Promise.all([
+  const [packages, drawings, versionRows, reviewRules] = await Promise.all([
+    loadOptionalRows<DrawingPackageSource>(
+      () => executeSQL<DrawingPackageSource>(
+        `${DRAWING_PACKAGE_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [projectId],
+      ),
+      'drawing_packages',
+    ),
+    loadOptionalRows<DrawingRecordSource>(
+      () => executeSQL<DrawingRecordSource>(
+        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
+        [projectId],
+      ),
+      'construction_drawings',
+    ),
     loadOptionalRows<DrawingVersionRecordSource>(
-      `${DRAWING_VERSION_SELECT} WHERE project_id = ? ORDER BY created_at DESC`,
-      [projectId],
+      () => executeSQL<DrawingVersionRecordSource>(
+        `${DRAWING_VERSION_SELECT} WHERE project_id = ? ORDER BY created_at DESC`,
+        [projectId],
+      ),
       'drawing_versions',
     ),
     loadProjectScopedReviewRules(projectId),
   ])
+
   const versions = attachDrawingNames(versionRows, drawings)
   const packageIds = uniqueNonEmpty(packages.map((item) => normalizeText(item.id)))
   const items = packageIds.length > 0
     ? await loadOptionalRows<DrawingPackageItemSource>(
-      `${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id IN (${buildSqlPlaceholders(packageIds.length)}) ORDER BY sort_order ASC, created_at ASC`,
-      packageIds,
+      () => executeSQL<DrawingPackageItemSource>(
+        `${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id IN (${buildSqlPlaceholders(packageIds.length)}) ORDER BY sort_order ASC, created_at ASC`,
+        packageIds,
+      ),
       'drawing_package_items',
     )
     : []
@@ -374,53 +463,81 @@ async function loadProjectPackages(projectId: string, options?: { includeLinkedC
     }
   }
 
-  const [certificateWorkItems, certificateDependencies] = await Promise.all([
+  const [
+    certificateWorkItems,
+    certificateDependencies,
+    tasks,
+    taskConditions,
+    acceptancePlans,
+    acceptanceRequirements,
+    acceptanceRecords,
+    issues,
+    risks,
+  ] = await Promise.all([
     loadOptionalRows<CertificateWorkItem>(
-      `${CERTIFICATE_WORK_ITEM_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
-      [projectId],
+      () => executeSQL<CertificateWorkItem>(
+        `${CERTIFICATE_WORK_ITEM_SELECT} WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`,
+        [projectId],
+      ),
       'certificate_work_items',
     ),
     loadOptionalRows<CertificateDependency>(
-      `${CERTIFICATE_DEPENDENCY_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-      [projectId],
+      () => executeSQL<CertificateDependency>(
+        `${CERTIFICATE_DEPENDENCY_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [projectId],
+      ),
       'certificate_dependencies',
     ),
+    loadOptionalRows<DrawingTaskSource>(
+      () => executeSQL<DrawingTaskSource>(
+        `${DRAWING_TASK_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [projectId],
+      ),
+      'tasks',
+    ),
+    loadOptionalRows<DrawingTaskConditionSource>(
+      () => executeSQL<DrawingTaskConditionSource>(
+        `${DRAWING_TASK_CONDITION_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [projectId],
+      ),
+      'task_conditions',
+    ),
+    loadOptionalRows<DrawingAcceptancePlanSource>(
+      () => executeSQL<DrawingAcceptancePlanSource>(
+        `${ACCEPTANCE_PLAN_SELECT} WHERE project_id = ? ORDER BY planned_date ASC, created_at ASC`,
+        [projectId],
+      ),
+      'acceptance_plans',
+    ),
+    loadOptionalRows<DrawingAcceptanceRequirementSource>(
+      () => executeSQL<DrawingAcceptanceRequirementSource>(
+        `${ACCEPTANCE_REQUIREMENT_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [projectId],
+      ),
+      'acceptance_requirements',
+    ),
+    loadOptionalRows<DrawingAcceptanceRecordSource>(
+      () => executeSQL<DrawingAcceptanceRecordSource>(
+        `${ACCEPTANCE_RECORD_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
+        [projectId],
+      ),
+      'acceptance_records',
+    ),
+    loadOptionalRows<DrawingEscalatedIssueSource>(
+      () => executeSQL<DrawingEscalatedIssueSource>(
+        'SELECT id, project_id, title, description, source_id, created_at FROM issues WHERE project_id = ? ORDER BY created_at DESC',
+        [projectId],
+      ),
+      'issues',
+    ),
+    loadOptionalRows<DrawingEscalatedRiskSource>(
+      () => executeSQL<DrawingEscalatedRiskSource>(
+        'SELECT id, project_id, title, description, source_id, created_at FROM risks WHERE project_id = ? ORDER BY created_at DESC',
+        [projectId],
+      ),
+      'risks',
+    ),
   ])
-  const tasks = await loadOptionalRows<DrawingTaskSource>(
-    `${DRAWING_TASK_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-    [projectId],
-    'tasks',
-  )
-  const taskConditions = await loadOptionalRows<DrawingTaskConditionSource>(
-    `${DRAWING_TASK_CONDITION_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-    [projectId],
-    'task_conditions',
-  )
-  const acceptancePlans = await loadOptionalRows<DrawingAcceptancePlanSource>(
-    `${ACCEPTANCE_PLAN_SELECT} WHERE project_id = ? ORDER BY planned_date ASC, created_at ASC`,
-    [projectId],
-    'acceptance_plans',
-  )
-  const acceptanceRequirements = await loadOptionalRows<DrawingAcceptanceRequirementSource>(
-    `${ACCEPTANCE_REQUIREMENT_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-    [projectId],
-    'acceptance_requirements',
-  )
-  const acceptanceRecords = await loadOptionalRows<DrawingAcceptanceRecordSource>(
-    `${ACCEPTANCE_RECORD_SELECT} WHERE project_id = ? ORDER BY created_at ASC`,
-    [projectId],
-    'acceptance_records',
-  )
-  const issues = await loadOptionalRows<DrawingEscalatedIssueSource>(
-    'SELECT id, project_id, title, description, source_id, created_at FROM issues WHERE project_id = ? ORDER BY created_at DESC',
-    [projectId],
-    'issues',
-  )
-  const risks = await loadOptionalRows<DrawingEscalatedRiskSource>(
-    'SELECT id, project_id, title, description, source_id, created_at FROM risks WHERE project_id = ? ORDER BY created_at DESC',
-    [projectId],
-    'risks',
-  )
 
   return {
     packages,
@@ -438,6 +555,57 @@ async function loadProjectPackages(projectId: string, options?: { includeLinkedC
     issues,
     risks,
   }
+}
+
+async function loadDrawingBoard(projectId: string) {
+  const normalizedProjectId = normalizeText(projectId)
+  if (!normalizedProjectId) {
+    throw new Error('MISSING_PROJECT_ID')
+  }
+
+  const now = Date.now()
+  const cached = drawingBoardCache.get(normalizedProjectId)
+  if (cached && cached.expiresAt > now) {
+    return cached.data
+  }
+
+  const pending = drawingBoardInFlight.get(normalizedProjectId)
+  if (pending) return pending
+
+  const promise = (async () => {
+    const data = await loadProjectPackages(normalizedProjectId, { includeLinkedContext: true })
+    const derivedPackages = data.packages.length > 0 ? data.packages : derivePackagesFromLegacyDrawings(data.drawings)
+    return buildDrawingBoardView({
+      packages: derivedPackages,
+      items: data.items,
+      drawings: data.drawings,
+      versions: data.versions,
+      reviewRules: data.reviewRules,
+      certificateWorkItems: data.certificateWorkItems,
+      certificateDependencies: data.certificateDependencies,
+      tasks: data.tasks,
+      taskConditions: data.taskConditions,
+      acceptancePlans: data.acceptancePlans,
+      acceptanceRequirements: data.acceptanceRequirements,
+      acceptanceRecords: data.acceptanceRecords,
+    })
+  })()
+
+  drawingBoardInFlight.set(normalizedProjectId, promise)
+  try {
+    const data = await promise
+    drawingBoardCache.set(normalizedProjectId, {
+      expiresAt: Date.now() + DRAWING_BOARD_CACHE_TTL_MS,
+      data,
+    })
+    return data
+  } finally {
+    drawingBoardInFlight.delete(normalizedProjectId)
+  }
+}
+
+export async function warmDrawingBoardCache(projectId: string) {
+  return loadDrawingBoard(projectId)
 }
 
 function uniqueNonEmpty(values: Array<string | null | undefined>) {
@@ -459,14 +627,18 @@ async function loadDrawingPackageLinkedContext(input: {
   const requirementPackageIds = uniqueNonEmpty([input.packageId])
   const [packageScopedDrawingsById, packageScopedDrawingsByCode] = await Promise.all([
     loadOptionalRows<DrawingRecordSource>(
-      `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY created_at ASC`,
-      [input.projectId, input.packageId],
+      () => executeSQL<DrawingRecordSource>(
+        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY created_at ASC`,
+        [input.projectId, input.packageId],
+      ),
       'construction_drawings',
     ),
     input.packageCode
       ? loadOptionalRows<DrawingRecordSource>(
-        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_code = ? ORDER BY created_at ASC`,
-        [input.projectId, input.packageCode],
+        () => executeSQL<DrawingRecordSource>(
+          `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_code = ? ORDER BY created_at ASC`,
+          [input.projectId, input.packageCode],
+        ),
         'construction_drawings',
       )
       : Promise.resolve([] as DrawingRecordSource[]),
@@ -483,19 +655,23 @@ async function loadDrawingPackageLinkedContext(input: {
       ? Promise.all([
         taskPackageIds.length > 0
           ? loadOptionalRows<DrawingTaskConditionSource>(
-            `${DRAWING_TASK_CONDITION_SELECT}
-              WHERE project_id = ? AND drawing_package_id IN (${buildSqlPlaceholders(taskPackageIds.length)})
-              ORDER BY created_at ASC`,
-            [input.projectId, ...taskPackageIds],
+            () => executeSQL<DrawingTaskConditionSource>(
+              `${DRAWING_TASK_CONDITION_SELECT}
+                WHERE project_id = ? AND drawing_package_id IN (${buildSqlPlaceholders(taskPackageIds.length)})
+                ORDER BY created_at ASC`,
+              [input.projectId, ...taskPackageIds],
+            ),
             'task_conditions',
           )
           : Promise.resolve([] as DrawingTaskConditionSource[]),
         taskPackageCodes.length > 0
           ? loadOptionalRows<DrawingTaskConditionSource>(
-            `${DRAWING_TASK_CONDITION_SELECT}
-              WHERE project_id = ? AND drawing_package_code IN (${buildSqlPlaceholders(taskPackageCodes.length)})
-              ORDER BY created_at ASC`,
-            [input.projectId, ...taskPackageCodes],
+            () => executeSQL<DrawingTaskConditionSource>(
+              `${DRAWING_TASK_CONDITION_SELECT}
+                WHERE project_id = ? AND drawing_package_code IN (${buildSqlPlaceholders(taskPackageCodes.length)})
+                ORDER BY created_at ASC`,
+              [input.projectId, ...taskPackageCodes],
+            ),
             'task_conditions',
           )
           : Promise.resolve([] as DrawingTaskConditionSource[]),
@@ -505,19 +681,23 @@ async function loadDrawingPackageLinkedContext(input: {
       ? Promise.all([
         requirementPackageIds.length > 0
           ? loadOptionalRows<DrawingAcceptanceRequirementSource>(
-            `${ACCEPTANCE_REQUIREMENT_SELECT}
-              WHERE project_id = ? AND drawing_package_id IN (${buildSqlPlaceholders(requirementPackageIds.length)})
-              ORDER BY created_at ASC`,
-            [input.projectId, ...requirementPackageIds],
+            () => executeSQL<DrawingAcceptanceRequirementSource>(
+              `${ACCEPTANCE_REQUIREMENT_SELECT}
+                WHERE project_id = ? AND drawing_package_id IN (${buildSqlPlaceholders(requirementPackageIds.length)})
+                ORDER BY created_at ASC`,
+              [input.projectId, ...requirementPackageIds],
+            ),
             'acceptance_requirements',
           )
           : Promise.resolve([] as DrawingAcceptanceRequirementSource[]),
         requirementSourceEntityIds.length > 0
           ? loadOptionalRows<DrawingAcceptanceRequirementSource>(
-            `${ACCEPTANCE_REQUIREMENT_SELECT}
-              WHERE project_id = ? AND source_entity_id IN (${buildSqlPlaceholders(requirementSourceEntityIds.length)})
-              ORDER BY created_at ASC`,
-            [input.projectId, ...requirementSourceEntityIds],
+            () => executeSQL<DrawingAcceptanceRequirementSource>(
+              `${ACCEPTANCE_REQUIREMENT_SELECT}
+                WHERE project_id = ? AND source_entity_id IN (${buildSqlPlaceholders(requirementSourceEntityIds.length)})
+                ORDER BY created_at ASC`,
+              [input.projectId, ...requirementSourceEntityIds],
+            ),
             'acceptance_requirements',
           )
           : Promise.resolve([] as DrawingAcceptanceRequirementSource[]),
@@ -525,37 +705,45 @@ async function loadDrawingPackageLinkedContext(input: {
       : Promise.resolve([] as DrawingAcceptanceRequirementSource[]),
     Promise.all([
       loadOptionalRows<DrawingEscalatedIssueSource>(
-        `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
-           FROM issues
-          WHERE project_id = ? AND source_id = ?
-          ORDER BY created_at DESC`,
-        [input.projectId, input.packageId],
+        () => executeSQL<DrawingEscalatedIssueSource>(
+          `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
+             FROM issues
+            WHERE project_id = ? AND source_id = ?
+            ORDER BY created_at DESC`,
+          [input.projectId, input.packageId],
+        ),
         'issues',
       ),
       loadOptionalRows<DrawingEscalatedIssueSource>(
-        `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
-           FROM issues
-          WHERE project_id = ? AND source_entity_type = ? AND source_entity_id = ?
-          ORDER BY created_at DESC`,
-        [input.projectId, 'drawing_package', input.packageId],
+        () => executeSQL<DrawingEscalatedIssueSource>(
+          `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
+             FROM issues
+            WHERE project_id = ? AND source_entity_type = ? AND source_entity_id = ?
+            ORDER BY created_at DESC`,
+          [input.projectId, 'drawing_package', input.packageId],
+        ),
         'issues',
       ),
     ]).then((groups) => dedupeRowsById(groups.flat())),
     Promise.all([
       loadOptionalRows<DrawingEscalatedRiskSource>(
-        `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
-           FROM risks
-          WHERE project_id = ? AND source_id = ?
-          ORDER BY created_at DESC`,
-        [input.projectId, input.packageId],
+        () => executeSQL<DrawingEscalatedRiskSource>(
+          `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
+             FROM risks
+            WHERE project_id = ? AND source_id = ?
+            ORDER BY created_at DESC`,
+          [input.projectId, input.packageId],
+        ),
         'risks',
       ),
       loadOptionalRows<DrawingEscalatedRiskSource>(
-        `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
-           FROM risks
-          WHERE project_id = ? AND source_entity_type = ? AND source_entity_id = ?
-          ORDER BY created_at DESC`,
-        [input.projectId, 'drawing_package', input.packageId],
+        () => executeSQL<DrawingEscalatedRiskSource>(
+          `SELECT id, project_id, title, description, source_id, source_entity_type, source_entity_id, created_at
+             FROM risks
+            WHERE project_id = ? AND source_entity_type = ? AND source_entity_id = ?
+            ORDER BY created_at DESC`,
+          [input.projectId, 'drawing_package', input.packageId],
+        ),
         'risks',
       ),
     ]).then((groups) => dedupeRowsById(groups.flat())),
@@ -566,26 +754,32 @@ async function loadDrawingPackageLinkedContext(input: {
   const [tasks, acceptancePlans, acceptanceRecords] = await Promise.all([
     taskIds.length > 0
       ? loadOptionalRows<DrawingTaskSource>(
-        `${DRAWING_TASK_SELECT} WHERE project_id = ? AND id IN (${buildSqlPlaceholders(taskIds.length)}) ORDER BY created_at ASC`,
-        [input.projectId, ...taskIds],
+        () => executeSQL<DrawingTaskSource>(
+          `${DRAWING_TASK_SELECT} WHERE project_id = ? AND id IN (${buildSqlPlaceholders(taskIds.length)}) ORDER BY created_at ASC`,
+          [input.projectId, ...taskIds],
+        ),
         'tasks',
       )
       : Promise.resolve([] as DrawingTaskSource[]),
     planIds.length > 0
       ? loadOptionalRows<DrawingAcceptancePlanSource>(
-        `${ACCEPTANCE_PLAN_SELECT}
-          WHERE project_id = ? AND id IN (${buildSqlPlaceholders(planIds.length)})
-          ORDER BY planned_date ASC, created_at ASC`,
-        [input.projectId, ...planIds],
+        () => executeSQL<DrawingAcceptancePlanSource>(
+          `${ACCEPTANCE_PLAN_SELECT}
+            WHERE project_id = ? AND id IN (${buildSqlPlaceholders(planIds.length)})
+            ORDER BY planned_date ASC, created_at ASC`,
+          [input.projectId, ...planIds],
+        ),
         'acceptance_plans',
       )
       : Promise.resolve([] as DrawingAcceptancePlanSource[]),
     planIds.length > 0
       ? loadOptionalRows<DrawingAcceptanceRecordSource>(
-        `${ACCEPTANCE_RECORD_SELECT}
-          WHERE project_id = ? AND plan_id IN (${buildSqlPlaceholders(planIds.length)})
-          ORDER BY created_at ASC`,
-        [input.projectId, ...planIds],
+        () => executeSQL<DrawingAcceptanceRecordSource>(
+          `${ACCEPTANCE_RECORD_SELECT}
+            WHERE project_id = ? AND plan_id IN (${buildSqlPlaceholders(planIds.length)})
+            ORDER BY created_at ASC`,
+          [input.projectId, ...planIds],
+        ),
         'acceptance_records',
       )
       : Promise.resolve([] as DrawingAcceptanceRecordSource[]),
@@ -606,33 +800,25 @@ function resolveLegacyPackageId(packageRow: DrawingPackageSource | null | undefi
   return packageRow?.id || packageRow?.package_code || packageId
 }
 
+async function resolveDrawingPackageProjectId(packageId: string, fallbackProjectId?: unknown) {
+  const packageRow = await findDrawingPackageByIdentifier(packageId)
+  return normalizeText(packageRow?.project_id) || normalizeText(fallbackProjectId) || undefined
+}
+
 export function registerDrawingPackageRoutes(router: Router) {
-  router.get('/board', asyncHandler(async (req, res) => {
+  router.get('/board',
+    requireProjectMember((req) => normalizeText(req.query.projectId) || undefined),
+    asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.query.projectId)
     if (!projectId) {
       return res.status(400).json({
         success: false,
-        error: { code: 'MISSING_PROJECT_ID', message: '椤圭洰ID涓嶈兘涓虹┖' },
+        error: { code: 'MISSING_PROJECT_ID', message: '项目ID不能为空' },
         timestamp: new Date().toISOString(),
       })
     }
 
-    const data = await loadProjectPackages(projectId, { includeLinkedContext: true })
-    const derivedPackages = data.packages.length > 0 ? data.packages : derivePackagesFromLegacyDrawings(data.drawings)
-    const board = buildDrawingBoardView({
-      packages: derivedPackages,
-      items: data.items,
-      drawings: data.drawings,
-      versions: data.versions,
-      reviewRules: data.reviewRules,
-      certificateWorkItems: data.certificateWorkItems,
-      certificateDependencies: data.certificateDependencies,
-      tasks: data.tasks,
-      taskConditions: data.taskConditions,
-      acceptancePlans: data.acceptancePlans,
-      acceptanceRequirements: data.acceptanceRequirements,
-      acceptanceRecords: data.acceptanceRecords,
-    })
+    const board = await loadDrawingBoard(projectId)
 
     res.json({
       success: true,
@@ -641,12 +827,14 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.get('/ledger', asyncHandler(async (req, res) => {
+  router.get('/ledger',
+    requireProjectMember((req) => normalizeText(req.query.projectId) || undefined),
+    asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.query.projectId)
     if (!projectId) {
       return res.status(400).json({
         success: false,
-        error: { code: 'MISSING_PROJECT_ID', message: '椤圭洰ID涓嶈兘涓虹┖' },
+        error: { code: 'MISSING_PROJECT_ID', message: '项目ID不能为空' },
         timestamp: new Date().toISOString(),
       })
     }
@@ -663,7 +851,9 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.get('/packages/:packageId/detail', asyncHandler(async (req, res) => {
+  router.get('/packages/:packageId/detail',
+    requireProjectMember((req) => resolveDrawingPackageProjectId(req.params.packageId, req.query.projectId)),
+    asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.query.projectId)
     const { packageId } = req.params
 
@@ -764,7 +954,7 @@ export function registerDrawingPackageRoutes(router: Router) {
     if (!resolvedPackage) {
       return res.status(404).json({
         success: false,
-        error: { code: 'PACKAGE_NOT_FOUND', message: '鍥剧焊鍖呬笉瀛樺湪' },
+        error: { code: 'PACKAGE_NOT_FOUND', message: '图纸包不存在' },
         timestamp: new Date().toISOString(),
       })
     }
@@ -804,7 +994,9 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.get('/packages/:packageId/versions', asyncHandler(async (req, res) => {
+  router.get('/packages/:packageId/versions',
+    requireProjectMember((req) => resolveDrawingPackageProjectId(req.params.packageId, req.query.projectId)),
+    asyncHandler(async (req, res) => {
     const { packageId } = req.params
 
     const packageRow = await findDrawingPackageByIdentifier(packageId)
@@ -884,7 +1076,9 @@ export function registerDrawingPackageRoutes(router: Router) {
     })
   }))
 
-  router.get('/packages', asyncHandler(async (req, res) => {
+  router.get('/packages',
+    requireProjectMember((req) => normalizeText(req.query.projectId) || undefined),
+    asyncHandler(async (req, res) => {
     const projectId = normalizeText(req.query.projectId)
     if (!projectId) {
       return res.status(400).json({
@@ -955,8 +1149,9 @@ export function registerDrawingPackageRoutes(router: Router) {
     const packageId = uuidv4()
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
 
-    await executeSQL(
-      `INSERT INTO drawing_packages
+    const { createdPackage, createdItems } = await withDatabaseTransaction(async () => {
+      await executeSQL(
+        `INSERT INTO drawing_packages
          (id, project_id, package_code, package_name, discipline_type, document_purpose,
           status, requires_review, review_mode, review_basis, completeness_ratio,
           missing_required_count, current_version_drawing_id, has_change, schedule_impact_flag,
@@ -982,8 +1177,8 @@ export function registerDrawingPackageRoutes(router: Router) {
         0,
         now,
         now,
-      ],
-    )
+        ],
+      )
 
     const items = requestedItems.length > 0
       ? requestedItems.map((item: Record<string, unknown>, index: number) => ({
@@ -995,9 +1190,9 @@ export function registerDrawingPackageRoutes(router: Router) {
       }))
       : buildDrawingPackageTemplateItems(template)
 
-    for (const item of items) {
-      await executeSQL(
-        `INSERT INTO drawing_package_items
+      for (const item of items) {
+        await executeSQL(
+          `INSERT INTO drawing_package_items
            (id, package_id, item_code, item_name, discipline_type, is_required, current_drawing_id,
             current_version, status, notes, sort_order, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1015,12 +1210,15 @@ export function registerDrawingPackageRoutes(router: Router) {
           item.sortOrder,
           now,
           now,
-        ],
-      )
-    }
+          ],
+        )
+      }
 
-    const createdPackage = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
-    const createdItems = await executeSQL<DrawingPackageItemSource>(`${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? ORDER BY sort_order ASC`, [packageId])
+      const createdPackage = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
+      const createdItems = await executeSQL<DrawingPackageItemSource>(`${DRAWING_PACKAGE_ITEM_SELECT} WHERE package_id = ? ORDER BY sort_order ASC`, [packageId])
+      return { createdPackage, createdItems }
+    })
+    clearDrawingBoardCache(projectId)
 
     res.status(201).json({
       success: true,
@@ -1043,9 +1241,31 @@ export function registerDrawingPackageRoutes(router: Router) {
     if (!current) {
       return res.status(404).json({
         success: false,
-        error: { code: 'PACKAGE_NOT_FOUND', message: '鍥剧焊鍖呬笉瀛樺湪' },
+        error: { code: 'PACKAGE_NOT_FOUND', message: '图纸包不存在' },
         timestamp: new Date().toISOString(),
       })
+    }
+
+    const requestedCurrentDrawingId = normalizeText(req.body.currentVersionDrawingId ?? req.body.current_version_drawing_id)
+    if (requestedCurrentDrawingId) {
+      const currentDrawing = await executeSQLOne<DrawingRecordSource>(
+        `${CONSTRUCTION_DRAWING_SELECT} WHERE id = ? LIMIT 1`,
+        [requestedCurrentDrawingId],
+      )
+      if (
+        !currentDrawing
+        || normalizeText(currentDrawing.project_id) !== normalizeText(current.project_id)
+        || (
+          normalizeText(currentDrawing.package_id) !== normalizeText(current.id)
+          && normalizeText(currentDrawing.package_code) !== normalizeText(current.package_code)
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'DRAWING_PACKAGE_PROJECT_MISMATCH', message: '当前版本图纸不属于当前图纸包或项目' },
+          timestamp: new Date().toISOString(),
+        })
+      }
     }
 
     const incomingReviewMode = req.body.reviewMode ?? req.body.review_mode
@@ -1085,10 +1305,21 @@ export function registerDrawingPackageRoutes(router: Router) {
 
     if (updates.length > 0) {
       params.push(packageId)
-      await executeSQL(`UPDATE drawing_packages SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, params)
+      params.push(normalizeText(current.project_id))
+      await executeSQL(`UPDATE drawing_packages SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?`, params)
     }
 
-    const updated = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
+    if (isEntityExitStatus(fields.status) && current.project_id) {
+      await deactivateEntityLinksForEntity({
+        projectId: String(current.project_id),
+        entityType: 'drawing_package',
+        entityId: packageId,
+        roles: ['source'],
+      })
+    }
+
+    const updated = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`, [packageId, normalizeText(current.project_id)])
+    clearDrawingBoardCache(current.project_id)
     res.json({
       success: true,
       data: updated,
@@ -1106,110 +1337,185 @@ export function registerDrawingPackageRoutes(router: Router) {
     const drawingId = normalizeText(req.body.drawingId ?? req.body.drawing_id)
     const versionId = normalizeText(req.body.versionId ?? req.body.version_id)
 
-    const packageRow = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageId])
-    if (!packageRow) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'PACKAGE_NOT_FOUND', message: '图纸包不存在' },
-        timestamp: new Date().toISOString(),
-      })
-    }
-
-    const [drawingsByPackageId, drawingsByPackageCode, versions] = await Promise.all([
-      executeSQL<DrawingRecordSource>(
-        `${CONSTRUCTION_DRAWING_SELECT} WHERE package_id = ? ORDER BY created_at ASC`,
-        [packageRow.id || packageId],
-      ),
-      normalizeText(packageRow.package_code)
-        ? executeSQL<DrawingRecordSource>(
-          `${CONSTRUCTION_DRAWING_SELECT} WHERE package_code = ? ORDER BY created_at ASC`,
-          [normalizeText(packageRow.package_code)],
-        )
-        : Promise.resolve([] as DrawingRecordSource[]),
-      executeSQL<DrawingVersionRecordSource>(
-        `${DRAWING_VERSION_SELECT} WHERE package_id = ? ORDER BY is_current_version DESC, created_at DESC`,
-        [packageRow.id || packageId],
-      ),
-    ])
-    const drawings = dedupeRowsById([...drawingsByPackageId, ...drawingsByPackageCode])
-
-    let target = resolveDrawingPackageCurrentVersionTarget({
-      packageId: packageRow.id || packageId,
-      versionId,
-      drawingId,
-      versions,
-      drawings,
-    })
-
-    if (target.error?.code === 'DRAWING_NOT_IN_PACKAGE' && drawingId) {
-      const directDrawing = drawings.find((drawing) => normalizeText(drawing.id) === drawingId)
-      if (directDrawing) {
-        const directVersion = sortVersionsDesc(
-          versions.filter((version) => normalizeText(version.drawing_id) === drawingId),
-        )[0] ?? null
-        target = {
-          targetVersion: directVersion,
-          targetDrawingId: normalizeText(directDrawing.id),
-          targetDrawing: directDrawing,
-          needsSnapshot: !directVersion,
-          error: null,
+    const mutation = await withDatabaseTransaction(async () => {
+      const packageRow = await executeSQLOne<DrawingPackageSource>(
+        `${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1 FOR UPDATE`,
+        [packageId],
+      )
+      const projectId = normalizeText(packageRow?.project_id)
+      if (!packageRow || !projectId || !getAuthorizedRequestProjectId(req, projectId)) {
+        return {
+          ok: false as const,
+          status: 404,
+          code: 'PACKAGE_NOT_FOUND',
+          message: '图纸包不存在',
         }
       }
-    }
 
-    if (target.error) {
-      return res.status(target.error.status).json({
-        success: false,
-        error: { code: target.error.code, message: target.error.message },
-        timestamp: new Date().toISOString(),
+      const lockedPackageId = normalizeText(packageRow.id) || packageId
+      const packageCode = normalizeText(packageRow.package_code)
+      const drawingsByPackageId = await executeSQL<DrawingRecordSource>(
+        `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY created_at ASC FOR UPDATE`,
+        [projectId, lockedPackageId],
+      )
+      const drawingsByPackageCode = packageCode
+        ? await executeSQL<DrawingRecordSource>(
+          `${CONSTRUCTION_DRAWING_SELECT} WHERE project_id = ? AND package_code = ? ORDER BY created_at ASC FOR UPDATE`,
+          [projectId, packageCode],
+        )
+        : []
+      const versions = await executeSQL<DrawingVersionRecordSource>(
+        `${DRAWING_VERSION_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY is_current_version DESC, created_at DESC FOR UPDATE`,
+        [projectId, lockedPackageId],
+      )
+      const versionFactsBefore = versions.map((version) => ({ ...version }))
+      const drawings = dedupeRowsById([...drawingsByPackageId, ...drawingsByPackageCode])
+
+      let target = resolveDrawingPackageCurrentVersionTarget({
+        packageId: lockedPackageId,
+        versionId,
+        drawingId,
+        versions,
+        drawings,
       })
-    }
 
-    let targetVersion = target.targetVersion
-    let targetDrawingId = target.targetDrawingId
+      if (target.error?.code === 'DRAWING_NOT_IN_PACKAGE' && drawingId) {
+        const directDrawing = drawings.find((drawing) => normalizeText(drawing.id) === drawingId)
+        if (directDrawing) {
+          const directVersion = sortVersionsDesc(
+            versions.filter((version) => normalizeText(version.drawing_id) === drawingId),
+          )[0] ?? null
+          target = {
+            targetVersion: directVersion,
+            targetDrawingId: normalizeText(directDrawing.id),
+            targetDrawing: directDrawing,
+            needsSnapshot: !directVersion,
+            error: null,
+          }
+        }
+      }
 
-    if (!targetVersion && target.needsSnapshot && target.targetDrawing && targetDrawingId) {
-      targetVersion = await ensureDrawingVersionSnapshot({
-        projectId: normalizeText(packageRow.project_id) || normalizeText(target.targetDrawing.project_id) || '',
-        packageId: packageRow.id || packageId,
+      if (target.error) {
+        return {
+          ok: false as const,
+          status: target.error.status,
+          code: target.error.code,
+          message: target.error.message,
+        }
+      }
+
+      if (
+        !target.targetDrawingId
+        || (!target.targetVersion && !(target.needsSnapshot && target.targetDrawing))
+      ) {
+        return {
+          ok: false as const,
+          status: 400,
+          code: 'MISSING_TARGET_DRAWING',
+          message: '当前有效版不能为空',
+        }
+      }
+
+      let targetVersion = target.targetVersion
+      const targetDrawingId = target.targetDrawingId as string
+      if (!targetVersion && target.needsSnapshot && target.targetDrawing) {
+        targetVersion = await ensureDrawingVersionSnapshot({
+          projectId,
+          packageId: lockedPackageId,
+          drawingId: targetDrawingId,
+          versionNo: normalizeText(target.targetDrawing.version_no ?? target.targetDrawing.version, '1.0'),
+          parentDrawingId: normalizeText(target.targetDrawing.parent_drawing_id),
+          revisionNo: normalizeText(target.targetDrawing.revision_no ?? target.targetDrawing.version_no ?? target.targetDrawing.version),
+          issuedFor: normalizeText(target.targetDrawing.issued_for ?? target.targetDrawing.document_purpose),
+          effectiveDate: normalizeText(target.targetDrawing.effective_date ?? target.targetDrawing.actual_pass_date ?? ((target.targetDrawing as DrawingRecordSource & { drawing_date?: string | null }).drawing_date)),
+          changeReason: normalizeText(target.targetDrawing.change_reason),
+          createdBy: null,
+          isCurrentVersion: true,
+        })
+      }
+      if (!targetVersion) throw new Error('Drawing version snapshot was not persisted')
+
+      await executeSQL(
+        `UPDATE construction_drawings
+            SET is_current_version = CASE WHEN id = ? THEN ? ELSE ? END
+          WHERE project_id = ? AND package_id = ?`,
+        [targetDrawingId, true, false, projectId, lockedPackageId],
+      )
+      if (packageCode) {
+        await executeSQL(
+          `UPDATE construction_drawings
+              SET is_current_version = CASE WHEN id = ? THEN ? ELSE ? END
+            WHERE project_id = ? AND package_code = ? AND package_id IS DISTINCT FROM ?`,
+          [targetDrawingId, true, false, projectId, packageCode, lockedPackageId],
+        )
+      }
+      await executeSQL(
+        `UPDATE drawing_versions
+            SET is_current_version = CASE WHEN id = ? THEN ? ELSE ? END,
+                superseded_at = CASE WHEN id = ? THEN ? ELSE CURRENT_TIMESTAMP END
+          WHERE package_id = ? AND project_id = ?`,
+        [targetVersion.id, true, false, targetVersion.id, null, lockedPackageId, projectId],
+      )
+      await executeSQL(
+        'UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND project_id = ?',
+        [targetDrawingId, lockedPackageId, projectId],
+      )
+      await syncPackageItemCurrentDrawing({
+        packageId: lockedPackageId,
         drawingId: targetDrawingId,
-        versionNo: normalizeText(target.targetDrawing.version_no ?? target.targetDrawing.version, '1.0'),
-        parentDrawingId: normalizeText(target.targetDrawing.parent_drawing_id),
-        revisionNo: normalizeText(target.targetDrawing.revision_no ?? target.targetDrawing.version_no ?? target.targetDrawing.version),
-        issuedFor: normalizeText(target.targetDrawing.issued_for ?? target.targetDrawing.document_purpose),
-        effectiveDate: normalizeText(target.targetDrawing.effective_date ?? target.targetDrawing.actual_pass_date ?? ((target.targetDrawing as DrawingRecordSource & { drawing_date?: string | null }).drawing_date)),
-        changeReason: normalizeText(target.targetDrawing.change_reason),
-        createdBy: null,
-        isCurrentVersion: true,
+        drawingCode: normalizeText(target.targetDrawing?.drawing_code),
+        versionNo: normalizeText(targetVersion.version_no),
       })
-    }
+      const versionFactsAfter = await executeSQL<DrawingVersionRecordSource>(
+        `${DRAWING_VERSION_SELECT} WHERE project_id = ? AND package_id = ? ORDER BY is_current_version DESC, created_at DESC FOR UPDATE`,
+        [projectId, lockedPackageId],
+      )
+      await recordDrawingVersionCurrentFactChanges({
+        projectId,
+        sourceModule: 'drawing-packages',
+        sourceMutationId: `drawing-package:${lockedPackageId}:set-current:${normalizeText(targetVersion.id)}:${Date.now()}`,
+        observedAt: new Date().toISOString(),
+        actorUserId: req.user?.id ?? null,
+        before: versionFactsBefore,
+        after: versionFactsAfter,
+      })
+      await syncPackageCurrentDrawingCertificateLink(
+        projectId,
+        lockedPackageId,
+      )
+      return {
+        ok: true as const,
+        packageRow,
+        projectId,
+        packageId: lockedPackageId,
+        targetDrawing: target.targetDrawing,
+        targetDrawingId,
+        targetVersion,
+      }
+    })
 
-    if (!targetVersion || !targetDrawingId) {
-      return res.status(400).json({
+    if (!mutation.ok) {
+      return res.status(mutation.status).json({
         success: false,
-        error: { code: 'MISSING_TARGET_DRAWING', message: '当前有效版不能为空' },
+        error: { code: mutation.code, message: mutation.message },
         timestamp: new Date().toISOString(),
       })
     }
 
-    for (const drawing of drawings) {
-      await executeSQL('UPDATE construction_drawings SET is_current_version = ? WHERE id = ?', [drawing.id === targetDrawingId ? 1 : 0, drawing.id])
-    }
-    await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = CURRENT_TIMESTAMP WHERE package_id = ?', [0, packageRow.id || packageId])
-    await executeSQL('UPDATE drawing_versions SET is_current_version = ?, superseded_at = ? WHERE id = ?', [1, null, targetVersion.id])
-    await executeSQL('UPDATE drawing_packages SET current_version_drawing_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [targetDrawingId, packageRow.id || packageId])
-    await syncPackageItemCurrentDrawing({
-      packageId: packageRow.id || packageId,
-      drawingId: targetDrawingId,
-      drawingCode: normalizeText(target.targetDrawing?.drawing_code),
-      versionNo: normalizeText(targetVersion.version_no),
+    await recordDrawingVersionSampleHealthEvidence({
+      projectId: mutation.projectId,
+      drawingId: mutation.targetDrawingId,
+      versionId: normalizeText(mutation.targetVersion.id),
+      drawingCode: normalizeText(mutation.targetDrawing?.drawing_code),
+      versionNo: normalizeText(mutation.targetVersion.version_no),
+      confirmedAt: normalizeText(mutation.targetVersion.updated_at ?? mutation.targetVersion.created_at),
     })
-    await syncPackageCurrentDrawingCertificateLink(
-      normalizeText(packageRow.project_id),
-      normalizeText(packageRow.id || packageId),
-    )
 
-    const updatedPackage = await executeSQLOne<DrawingPackageSource>(`${DRAWING_PACKAGE_SELECT} WHERE id = ? LIMIT 1`, [packageRow.id || packageId])
+    const updatedPackage = await executeSQLOne<DrawingPackageSource>(
+      `${DRAWING_PACKAGE_SELECT} WHERE id = ? AND project_id = ? LIMIT 1`,
+      [mutation.packageId, mutation.projectId],
+    )
+    clearDrawingBoardCache(mutation.projectId)
     res.json({
       success: true,
       data: updatedPackage,

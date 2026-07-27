@@ -1,9 +1,12 @@
 import { v4 as uuidv4 } from 'uuid'
 
+import { query as rawQuery } from '../database.js'
+import { loadCoveredTaskIdsByAcceptancePlanIds } from './acceptancePlanTaskLinkService.js'
 import { logger } from '../middleware/logger.js'
 import type { Issue, Notification, Risk, Warning } from '../types/db.js'
 import {
   createIssue as dbCreateIssue,
+  createRisk as dbCreateRisk,
   getIssue as dbGetIssue,
   getRisk as dbGetRisk,
   getMembers,
@@ -11,6 +14,7 @@ import {
   updateIssue as dbUpdateIssue,
   updateRisk as dbUpdateRisk,
 } from './dbService.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 import {
   buildIssuePendingManualClosePatch,
   buildRiskPendingManualClosePatch,
@@ -24,6 +28,11 @@ import {
   ACTIVE_ACCEPTANCE_STATUSES,
   normalizeAcceptanceStatus,
 } from '../utils/acceptanceStatus.js'
+import { getRiskIssueWarningLifecycleThresholdMs } from './riskIssueWarningRuleRegistry.js'
+import {
+  resolveProjectBusinessDateBuckets,
+  type ProjectBusinessDateBucket,
+} from './projectBusinessDateService.js'
 
 const WARNING_SOURCE_ENTITY_TYPE = 'warning'
 const ACTIVE_WARNING_STATUSES = new Set(['active', 'acknowledged', 'muted', 'unread'])
@@ -40,6 +49,7 @@ type WarningNotificationRecord = Notification & {
   is_escalated?: boolean | null
   resolved_at?: string | null
   resolved_source?: string | null
+  warning_lifecycle_status?: string | null
 }
 
 interface WarningAcknowledgmentRow {
@@ -58,9 +68,21 @@ function nowIso() {
   return new Date().toISOString()
 }
 
+export type ExpiredIssueSyncOptions = {
+  now?: Date
+}
+
+function scopeQueryToProjectIds(query: any, field: string, projectIds: string[]) {
+  if (projectIds.length === 0) return query
+  if (projectIds.length === 1) return query.eq(field, projectIds[0])
+  return query.in(field, projectIds)
+}
+
 function uniqueRecipients(values: Array<string | null | undefined>) {
   return Array.from(new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean)))
 }
+
+import { buildWarningNaturalKey, buildWarningSignature } from '../utils/warningSignature.js'
 
 function warningDay(value?: string | null) {
   const normalized = String(value ?? '').trim()
@@ -83,15 +105,36 @@ function normalizeStatus(value?: string | null) {
   return String(value ?? '').trim().toLowerCase()
 }
 
-async function isTaskCompleted(taskId?: string | null) {
+function readRecord(value: unknown): Record<string, any> {
+  if (!value) return {}
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, any> : {}
+    } catch {
+      return {}
+    }
+  }
+  return {}
+}
+
+function warningRoutingMetadata(warning: Warning) {
+  return readRecord(readRecord((warning as any).metadata).routing)
+}
+
+async function isTaskCompleted(taskId?: string | null, projectId?: string | null) {
   const normalizedTaskId = String(taskId ?? '').trim()
   if (!normalizedTaskId) return false
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('tasks')
     .select('status, progress')
     .eq('id', normalizedTaskId)
-    .limit(1)
+  if (projectId) {
+    query = query.eq('project_id', projectId)
+  }
+  const { data, error } = await query.limit(1)
 
   if (error) throw new Error(error.message)
   const row = ((data ?? [])[0] ?? null) as { status?: string | null; progress?: number | null } | null
@@ -102,7 +145,7 @@ async function isTaskCompleted(taskId?: string | null) {
 }
 
 async function inferResolvedSource(notification: WarningNotificationRecord): Promise<string> {
-  if (await isTaskCompleted(notification.task_id ?? null)) {
+  if (await isTaskCompleted(notification.task_id ?? null, notification.project_id ?? null)) {
     return 'task_completed'
   }
 
@@ -177,11 +220,42 @@ function warningIdentityFromNotification(notification: Partial<WarningNotificati
 }
 
 function warningNaturalKeyFromNotification(notification: Partial<WarningNotificationRecord>) {
+  const originalSource = warningOriginalSourceIdentityFromNotification(notification)
   return buildWarningNaturalKey({
     project_id: notification.project_id ?? '',
     task_id: notification.task_id ?? undefined,
     warning_type: notification.category ?? notification.type ?? '',
+    source_entity_type: originalSource?.sourceEntityType,
+    source_entity_id: originalSource?.sourceEntityId,
   })
+}
+
+function parseSourceIdentityFromSourceKey(sourceKey?: string | null) {
+  const normalized = String(sourceKey ?? '').trim()
+  const separatorIndex = normalized.indexOf(':')
+  if (separatorIndex <= 0 || separatorIndex >= normalized.length - 1) return null
+  return {
+    sourceEntityType: normalized.slice(0, separatorIndex),
+    sourceEntityId: normalized.slice(separatorIndex + 1),
+  }
+}
+
+function warningOriginalSourceIdentityFromNotification(notification: Partial<WarningNotificationRecord>) {
+  const category = warningCategory(notification)
+  const sourceHash = String((notification as any).source_hash ?? '').trim()
+  if (category && sourceHash.startsWith(`${category}:`)) {
+    const parsed = parseSourceIdentityFromSourceKey(sourceHash.slice(category.length + 1))
+    if (parsed) return parsed
+  }
+
+  const signature = String(notification.warning_signature ?? notification.source_entity_id ?? '').trim()
+  const signatureParts = signature.split('|')
+  if (signatureParts.length >= 3 && (!category || signatureParts[0] === category)) {
+    const parsed = parseSourceIdentityFromSourceKey(signatureParts.slice(1, -1).join('|'))
+    if (parsed) return parsed
+  }
+
+  return null
 }
 
 function isPersistedWarningRow(notification: Partial<WarningNotificationRecord>) {
@@ -191,6 +265,27 @@ function isPersistedWarningRow(notification: Partial<WarningNotificationRecord>)
 }
 
 async function listWarningAcknowledgments(userId: string, projectId?: string) {
+  if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
+    try {
+      const params: unknown[] = [userId]
+      const projectFilter = projectId ? ' AND project_id = $2' : ''
+      if (projectId) params.push(projectId)
+      const result = await rawQuery(
+        `SELECT *
+           FROM public.warning_acknowledgments
+          WHERE user_id = $1${projectFilter}`,
+        params,
+      )
+      return (result.rows ?? []) as WarningAcknowledgmentRow[]
+    } catch (error) {
+      logger.warn('[upgradeChainService] direct warning acknowledgment read failed; falling back to Supabase REST', {
+        userId,
+        projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   let query = supabase
     .from('warning_acknowledgments')
     .select('*')
@@ -264,17 +359,18 @@ function getRiskProbabilityImpact(level: Risk['level']) {
 }
 
 function shouldResetWarningWindow(existing: Partial<WarningNotificationRecord>, warning: Warning) {
-  const severityWorsened = severityRank(warning.warning_level) > severityRank(existing.severity)
-  const titleChanged = String(existing.title ?? '').trim() !== String(warning.title ?? '').trim()
-  const contentChanged = String(existing.content ?? '').trim() !== String(warning.description ?? '').trim()
-  return severityWorsened || titleChanged || contentChanged
+  const existingNaturalKey = warningNaturalKeyFromNotification(existing)
+  const incomingNaturalKey = buildWarningNaturalKey(warning)
+  if (existingNaturalKey === incomingNaturalKey) return false
+  return severityRank(warning.warning_level) > severityRank(existing.severity)
 }
 
-async function fetchWarningNotificationById(id: string) {
+async function fetchWarningNotificationById(projectId: string, id: string) {
   const { data, error } = await supabase
     .from('notifications')
     .select('*')
     .eq('id', id)
+    .eq('project_id', projectId)
     .eq('source_entity_type', WARNING_SOURCE_ENTITY_TYPE)
     .single()
 
@@ -286,11 +382,12 @@ async function fetchWarningNotificationById(id: string) {
   return data as WarningNotificationRecord
 }
 
-async function fetchRiskById(id: string) {
+async function fetchRiskById(projectId: string, id: string) {
   const { data, error } = await supabase
     .from('risks')
     .select('*')
     .eq('id', id)
+    .eq('project_id', projectId)
     .single()
 
   if (error) {
@@ -355,13 +452,16 @@ async function markRiskPendingManualCloseForResolvedWarning(notification: Warnin
   await dbUpdateRisk(risk.id, buildRiskPendingManualClosePatch(), risk.version, 'system_auto')
 }
 
-export async function closeDelaySourceRisksForCompletedTask(taskId: string) {
+export async function closeDelaySourceRisksForCompletedTask(taskId: string, projectId: string) {
   const normalizedTaskId = String(taskId ?? '').trim()
   if (!normalizedTaskId) return []
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) throw new Error('delay source risk close requires projectId')
 
   const { data: warningRows, error: warningError } = await supabase
     .from('notifications')
     .select('id, type, category')
+    .eq('project_id', normalizedProjectId)
     .eq('source_entity_type', WARNING_SOURCE_ENTITY_TYPE)
     .eq('task_id', normalizedTaskId)
 
@@ -379,6 +479,7 @@ export async function closeDelaySourceRisksForCompletedTask(taskId: string) {
   const { data: riskRows, error: riskError } = await supabase
     .from('risks')
     .select('*')
+    .eq('project_id', normalizedProjectId)
     .eq('task_id', normalizedTaskId)
     .eq('source_entity_type', WARNING_SOURCE_ENTITY_TYPE)
     .in('status', ['identified', 'mitigating'])
@@ -437,20 +538,18 @@ async function getOwnerRecipients(projectId?: string | null) {
   const members = await getMembers(projectId)
   return uniqueRecipients(
     members
-      .filter((member) => {
-        const level = String(member.permission_level ?? member.role ?? '').trim().toLowerCase()
-        return level === 'owner'
-      })
+      .filter((member) => member.permission_level === 'owner')
       .map((member) => member.user_id),
   )
 }
 
-async function getDirectTaskRecipient(taskId?: string | null) {
-  if (!taskId) return null
+async function getDirectTaskRecipient(projectId: string, taskId?: string | null) {
+  if (!projectId || !taskId) return null
   const { data, error } = await supabase
     .from('tasks')
     .select('assignee_user_id, assignee_id')
     .eq('id', taskId)
+    .eq('project_id', projectId)
     .single()
 
   if (error) {
@@ -462,9 +561,157 @@ async function getDirectTaskRecipient(taskId?: string | null) {
   return value || null
 }
 
-async function resolveWarningRecipients(warning: Warning) {
-  const ownerRecipients = await getOwnerRecipients(warning.project_id)
-  const directTaskRecipient = await getDirectTaskRecipient(warning.task_id ?? null)
+async function getParticipantUnitRecipients(ownerUnitId?: string | null) {
+  const normalizedUnitId = String(ownerUnitId ?? '').trim()
+  if (!normalizedUnitId) return []
+
+  const { data, error } = await supabase
+    .from('participant_unit_members')
+    .select('user_id')
+    .eq('participant_unit_id', normalizedUnitId)
+
+  if (error) {
+    logger.warn('[upgradeChain] participant unit recipient lookup failed', {
+      ownerUnitId: normalizedUnitId,
+      error: error.message,
+    })
+    return []
+  }
+
+  return uniqueRecipients(
+    ((data ?? []) as Array<Record<string, unknown>>)
+      .map((row) => String(row.user_id ?? '').trim()),
+  )
+}
+
+type WarningRecipientResolver = {
+  getOwnerRecipients: typeof getOwnerRecipients
+  getDirectTaskRecipient: typeof getDirectTaskRecipient
+  getParticipantUnitRecipients: typeof getParticipantUnitRecipients
+}
+
+export type WarningRecipientLookupKind = 'owner_project' | 'direct_task' | 'participant_unit'
+
+export type WarningRecipientLookupTelemetryEvent = {
+  lookupKind: WarningRecipientLookupKind
+  cacheKey: string
+  cacheHit: boolean
+}
+
+export type WarningNotificationSyncOptions = {
+  onRecipientLookup?: (event: WarningRecipientLookupTelemetryEvent) => void
+  writeConcurrency?: number
+}
+
+const DEFAULT_WARNING_NOTIFICATION_WRITE_CONCURRENCY = 8
+
+function normalizeWarningNotificationWriteConcurrency(value: unknown) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return DEFAULT_WARNING_NOTIFICATION_WRITE_CONCURRENCY
+  return Math.max(1, Math.min(32, Math.trunc(parsed)))
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+) {
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const workerCount = Math.min(items.length, normalizeWarningNotificationWriteConcurrency(concurrency))
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex)
+    }
+  }))
+
+  return results
+}
+
+const defaultWarningRecipientResolver: WarningRecipientResolver = {
+  getOwnerRecipients,
+  getDirectTaskRecipient,
+  getParticipantUnitRecipients,
+}
+
+function createWarningRecipientResolverCache(options: WarningNotificationSyncOptions = {}): WarningRecipientResolver {
+  const ownerRecipientsByProjectId = new Map<string, Promise<string[]>>()
+  const directTaskRecipientByProjectAndTask = new Map<string, Promise<string | null>>()
+  const unitRecipientsByUnitId = new Map<string, Promise<string[]>>()
+
+  const emitLookup = (event: WarningRecipientLookupTelemetryEvent) => {
+    options.onRecipientLookup?.(event)
+  }
+
+  return {
+    getOwnerRecipients(projectId?: string | null) {
+      const normalizedProjectId = String(projectId ?? '').trim()
+      if (!normalizedProjectId) return Promise.resolve([])
+
+      let cached = ownerRecipientsByProjectId.get(normalizedProjectId)
+      emitLookup({
+        lookupKind: 'owner_project',
+        cacheKey: normalizedProjectId,
+        cacheHit: Boolean(cached),
+      })
+      if (!cached) {
+        cached = getOwnerRecipients(normalizedProjectId)
+        ownerRecipientsByProjectId.set(normalizedProjectId, cached)
+      }
+      return cached
+    },
+    getDirectTaskRecipient(projectId: string, taskId?: string | null) {
+      const normalizedProjectId = String(projectId ?? '').trim()
+      const normalizedTaskId = String(taskId ?? '').trim()
+      if (!normalizedProjectId || !normalizedTaskId) return Promise.resolve(null)
+      const scopedCacheKey = `${normalizedProjectId}:${normalizedTaskId}`
+
+      let cached = directTaskRecipientByProjectAndTask.get(scopedCacheKey)
+      emitLookup({
+        lookupKind: 'direct_task',
+        cacheKey: normalizedTaskId,
+        cacheHit: Boolean(cached),
+      })
+      if (!cached) {
+        cached = getDirectTaskRecipient(normalizedProjectId, normalizedTaskId)
+        directTaskRecipientByProjectAndTask.set(scopedCacheKey, cached)
+      }
+      return cached
+    },
+    getParticipantUnitRecipients(ownerUnitId?: string | null) {
+      const normalizedUnitId = String(ownerUnitId ?? '').trim()
+      if (!normalizedUnitId) return Promise.resolve([])
+
+      let cached = unitRecipientsByUnitId.get(normalizedUnitId)
+      emitLookup({
+        lookupKind: 'participant_unit',
+        cacheKey: normalizedUnitId,
+        cacheHit: Boolean(cached),
+      })
+      if (!cached) {
+        cached = getParticipantUnitRecipients(normalizedUnitId)
+        unitRecipientsByUnitId.set(normalizedUnitId, cached)
+      }
+      return cached
+    },
+  }
+}
+
+async function resolveWarningRecipients(
+  warning: Warning,
+  recipientResolver: WarningRecipientResolver = defaultWarningRecipientResolver,
+) {
+  const routing = warningRoutingMetadata(warning)
+  if (routing.strategy === 'responsibility_owner' && routing.ownerUnitId) {
+    const unitRecipients = await recipientResolver.getParticipantUnitRecipients(String(routing.ownerUnitId))
+    if (unitRecipients.length > 0) return unitRecipients
+  }
+
+  const ownerRecipients = await recipientResolver.getOwnerRecipients(warning.project_id)
+  const directTaskRecipient = await recipientResolver.getDirectTaskRecipient(warning.project_id, warning.task_id ?? null)
 
   if (warning.warning_type === 'critical_path_delay') {
     if (warning.warning_level === 'info') {
@@ -477,7 +724,11 @@ async function resolveWarningRecipients(warning: Warning) {
   return ownerRecipients
 }
 
-async function upsertWarningNotification(warning: Warning, existing?: WarningNotificationRecord | null) {
+async function upsertWarningNotification(
+  warning: Warning,
+  existing?: WarningNotificationRecord | null,
+  recipientResolver: WarningRecipientResolver = defaultWarningRecipientResolver,
+) {
   const timestamp = nowIso()
   const warningSignature = buildWarningSignature(warning)
   const nextChainId = existing?.chain_id || uuidv4()
@@ -485,7 +736,17 @@ async function upsertWarningNotification(warning: Warning, existing?: WarningNot
   const nextFirstSeenAt = resetWindow ? timestamp : existing?.first_seen_at || warning.created_at || timestamp
   const nextAcknowledgedAt = resetWindow ? null : existing?.acknowledged_at ?? null
   const nextMutedUntil = resetWindow ? null : existing?.muted_until ?? null
-  const recipients = await resolveWarningRecipients(warning)
+  const recipients = await resolveWarningRecipients(warning, recipientResolver)
+  // v1.4.12: lifecycle status driven by governance, not personal ack
+  const lifecycleStatus = existing?.is_escalated
+    ? 'escalated'
+    : existing?.warning_lifecycle_status === 'acknowledged'
+      ? 'acknowledged'
+      : nextMutedUntil && isFuture(nextMutedUntil)
+        ? 'muted'
+        : 'active'
+
+  // Legacy status for notification reading state (kept for backward compat)
   const nextStatus = existing?.is_escalated
     ? 'escalated'
     : nextMutedUntil && isFuture(nextMutedUntil)
@@ -506,9 +767,13 @@ async function upsertWarningNotification(warning: Warning, existing?: WarningNot
     is_broadcast: warning.warning_level === 'critical',
     source_entity_type: WARNING_SOURCE_ENTITY_TYPE,
     source_entity_id: warningSignature,
+    source_hash: `${warning.warning_type}:${warning.source_entity_type && warning.source_entity_id ? `${warning.source_entity_type}:${warning.source_entity_id}` : warning.task_id ?? warning.project_id ?? ''}`,
+    warning_signature: warningSignature,
+    warning_lifecycle_status: lifecycleStatus,
     category: warning.warning_type,
     task_id: warning.task_id ?? null,
     recipients,
+    metadata: (warning as any).metadata ?? null,
     status: nextStatus,
     chain_id: nextChainId,
     first_seen_at: nextFirstSeenAt,
@@ -523,24 +788,29 @@ async function upsertWarningNotification(warning: Warning, existing?: WarningNot
     updated_at: timestamp,
   }
 
-  const { error } = existing
-    ? await supabase.from('notifications').update(row).eq('id', existing.id)
-    : await supabase.from('notifications').insert(row)
+  if (existing) {
+    const { error } = await supabase
+      .from('notifications')
+      .update(row)
+      .eq('id', existing.id)
+      .eq('project_id', warning.project_id)
+    if (error) throw new Error(error.message)
+    return (await fetchWarningNotificationById(warning.project_id, row.id)) as WarningNotificationRecord
+  }
 
-  if (error) throw new Error(error.message)
-
-  return (await fetchWarningNotificationById(row.id)) as WarningNotificationRecord
+  return await notificationTouchpointService.emit({
+      ...row,
+      is_read: Boolean(row.is_read),
+      touchpoint_type: 'dashboard_todo',
+      scope_type: 'project',
+      dedupe_key: warningSignature,
+      target_route: `/projects/${warning.project_id}/risks`,
+      target_label: '查看风险预警',
+    }) as WarningNotificationRecord
 }
 
-export function buildWarningNaturalKey(warning: Pick<Warning, 'project_id' | 'task_id' | 'warning_type'>) {
-  return [warning.project_id || '', warning.task_id || '', warning.warning_type || ''].join('|')
-}
-
-export function buildWarningSignature(
-  warning: Pick<Warning, 'project_id' | 'task_id' | 'warning_type'> & { created_at?: string | null },
-) {
-  return [warning.warning_type || '', warning.task_id || warning.project_id || '', warningDay(warning.created_at)].join('|')
-}
+// buildWarningNaturalKey and buildWarningSignature re-exported from shared util
+export { buildWarningNaturalKey, buildWarningSignature } from '../utils/warningSignature.js'
 
 export function notificationToWarning(notification: WarningNotificationRecord): Warning {
   return {
@@ -611,29 +881,45 @@ export function isProtectedIssue(issue: Partial<Issue>) {
   return isProtectedIssueRecord(issue)
 }
 
-export async function syncWarningNotifications(warnings: Warning[], projectId?: string) {
+export async function syncWarningNotifications(
+  warnings: Warning[],
+  projectId?: string,
+  options: WarningNotificationSyncOptions = {},
+) {
   const existing = await listWarningNotifications(projectId)
   const existingBySignature = new Map(existing.map((item) => [warningIdentityFromNotification(item), item]))
   const existingByNaturalKey = new Map(existing.map((item) => [warningNaturalKeyFromNotification(item), item]))
+  const recipientResolver = createWarningRecipientResolverCache(options)
   const activeSignatures = new Set<string>()
-  const synced: Warning[] = []
-
-  for (const warning of warnings) {
+  const activeNaturalKeys = new Set<string>()
+  const writeItems = warnings.map((warning) => {
     const signature = buildWarningSignature(warning)
     const naturalKey = buildWarningNaturalKey(warning)
     activeSignatures.add(signature)
-    const row = await upsertWarningNotification(
-      { ...warning, warning_signature: signature },
-      existingBySignature.get(signature) ?? existingByNaturalKey.get(naturalKey) ?? null,
-    )
-    synced.push(notificationToWarning(row))
-  }
+    activeNaturalKeys.add(naturalKey)
+    return { warning, signature, naturalKey }
+  })
+
+  const synced = await mapWithConcurrency(
+    writeItems,
+    normalizeWarningNotificationWriteConcurrency(options.writeConcurrency),
+    async ({ warning, signature, naturalKey }) => {
+      const row = await upsertWarningNotification(
+        { ...warning, warning_signature: signature },
+        existingBySignature.get(signature) ?? existingByNaturalKey.get(naturalKey) ?? null,
+        recipientResolver,
+      )
+      return notificationToWarning(row)
+    },
+  )
 
   const timestamp = nowIso()
   for (const item of existing) {
     const signature = warningIdentityFromNotification(item)
+    const naturalKey = warningNaturalKeyFromNotification(item)
     const status = normalizeStatus(item.status)
     if (activeSignatures.has(signature)) continue
+    if (activeNaturalKeys.has(naturalKey)) continue
     if (CLOSED_WARNING_STATUSES.has(status) || ESCALATED_WARNING_STATUSES.has(status)) continue
 
     const resolvedSource = await inferResolvedSource(item)
@@ -641,11 +927,13 @@ export async function syncWarningNotifications(warnings: Warning[], projectId?: 
       .from('notifications')
       .update({
         status: 'resolved',
+        warning_lifecycle_status: 'resolved',
         resolved_at: timestamp,
         resolved_source: resolvedSource,
         updated_at: timestamp,
       })
       .eq('id', item.id)
+      .eq('project_id', item.project_id)
 
     if (error) throw new Error(error.message)
     await markRiskPendingManualCloseForResolvedWarning(item)
@@ -658,8 +946,8 @@ export async function syncWarningNotifications(warnings: Warning[], projectId?: 
   })
 }
 
-export async function acknowledgeWarningNotification(id: string, userId?: string | null) {
-  const warning = await fetchWarningNotificationById(id)
+export async function acknowledgeWarningNotification(projectId: string, id: string, userId?: string | null) {
+  const warning = await fetchWarningNotificationById(projectId, id)
   if (!warning || !isPersistedWarningRow(warning)) return null
 
   const timestamp = nowIso()
@@ -673,14 +961,15 @@ export async function acknowledgeWarningNotification(id: string, userId?: string
       updated_at: timestamp,
     })
     .eq('id', id)
+    .eq('project_id', warning.project_id)
 
   if (error) throw new Error(error.message)
   await upsertWarningAcknowledgment(warning, userId, timestamp)
-  return await fetchWarningNotificationById(id)
+  return await fetchWarningNotificationById(projectId, id)
 }
 
-export async function muteWarningNotification(id: string, hours = 24, userId?: string | null) {
-  const warning = await fetchWarningNotificationById(id)
+export async function muteWarningNotification(projectId: string, id: string, hours = 24, userId?: string | null) {
+  const warning = await fetchWarningNotificationById(projectId, id)
   if (!warning || !isPersistedWarningRow(warning)) return null
 
   const timestamp = nowIso()
@@ -694,31 +983,49 @@ export async function muteWarningNotification(id: string, hours = 24, userId?: s
       updated_at: timestamp,
     })
     .eq('id', id)
+    .eq('project_id', warning.project_id)
 
   if (error) throw new Error(error.message)
   await upsertWarningAcknowledgment(warning, userId, timestamp)
-  return await fetchWarningNotificationById(id)
+  return await fetchWarningNotificationById(projectId, id)
 }
 
-async function createRiskFromWarningAtomic(notificationId: string, sourceType: Risk['source_type']) {
-  const riskId = await invokeRpc<string | null>('confirm_warning_as_risk_atomic', {
-    p_warning_id: notificationId,
-    p_source_type: sourceType,
+async function createRiskFromWarningAtomic(
+  notification: WarningNotificationRecord,
+  sourceType: Risk['source_type'],
+  actorId?: string | null,
+) {
+  const severity = normalizeWarningLevel(notification.severity)
+  const level = severity === 'critical' ? 'critical' : severity === 'warning' ? 'high' : 'medium'
+  const probability = severity === 'critical' ? 90 : severity === 'warning' ? 75 : 60
+  const impact = severity === 'critical' ? 90 : severity === 'warning' ? 75 : 50
+  return await dbCreateRisk({
+    project_id: notification.project_id,
+    task_id: notification.task_id ?? null,
+    title: notification.title,
+    description: notification.content,
+    level,
+    probability,
+    impact,
+    status: 'identified',
+    source_type: sourceType,
+    source_id: notification.id,
+    source_entity_type: 'warning',
+    source_entity_id: notification.id,
+    chain_id: notification.chain_id ?? null,
+    created_by: actorId ?? null,
   })
-
-  if (!riskId) return null
-  return await fetchRiskById(riskId)
 }
 
-export async function confirmWarningAsRisk(id: string, _actorId?: string) {
-  const notification = await fetchWarningNotificationById(id)
+export async function confirmWarningAsRisk(projectId: string, id: string, _actorId?: string) {
+  const notification = await fetchWarningNotificationById(projectId, id)
   if (!notification || !isPersistedWarningRow(notification)) return null
 
   if (notification.escalated_to_risk_id) {
-    return await fetchRiskById(notification.escalated_to_risk_id)
+    return await fetchRiskById(projectId, notification.escalated_to_risk_id)
   }
 
-  const risk = await createRiskFromWarningAtomic(notification.id, 'warning_converted')
+  const risk = await createRiskFromWarningAtomic(notification, 'warning_converted', _actorId ?? null)
   if (!risk) return null
   await upsertWarningAcknowledgment(notification, _actorId ?? null)
   logger.info('[upgradeChain] warning escalated to risk', {
@@ -736,15 +1043,18 @@ export async function autoEscalateWarnings(projectId?: string) {
 
   for (const warning of warnings) {
     if (warning.escalated_to_risk_id || warning.is_escalated) continue
-    if (!ACTIVE_WARNING_STATUSES.has(normalizeStatus(warning.status) || 'active')) continue
-    if (warning.acknowledged_at) continue
-    if (isFuture(warning.muted_until)) continue
+    // v1.4.12: use warning_lifecycle_status for governance; personal ack does NOT pause escalation
+    const lifecycle = (warning as any).warning_lifecycle_status ?? warning.status
+    if (!ACTIVE_WARNING_STATUSES.has(normalizeStatus(lifecycle) || 'active')) continue
+    if ((warning as any).warning_lifecycle_status === 'acknowledged') continue
+    if ((warning as any).warning_lifecycle_status === 'muted') continue
 
     const firstSeenAt = new Date(warning.first_seen_at || warning.created_at).getTime()
     if (!Number.isFinite(firstSeenAt)) continue
-    if (timestamp - firstSeenAt < 3 * 24 * 60 * 60 * 1000) continue
+    const thresholdMs = getRiskIssueWarningLifecycleThresholdMs('warning_to_risk')
+    if (timestamp - firstSeenAt < thresholdMs) continue
 
-    const risk = await createRiskFromWarningAtomic(warning.id, 'warning_auto_escalated')
+    const risk = await createRiskFromWarningAtomic(warning, 'warning_auto_escalated')
     if (!risk) continue
     createdRisks.push(risk)
   }
@@ -784,20 +1094,23 @@ async function listAcceptanceExpiredIssues(projectId?: string) {
   return (data ?? []) as Issue[]
 }
 
-export async function syncConditionExpiredIssues(projectId?: string) {
-  const timestamp = nowIso()
-  let query = supabase
-    .from('task_conditions')
-    .select('id, task_id, name, target_date, tasks!inner(project_id, title)')
-    .eq('is_satisfied', false)
-    .lt('target_date', timestamp)
+export async function syncConditionExpiredIssues(projectId?: string, options: ExpiredIssueSyncOptions = {}) {
+  const now = options.now ?? new Date()
+  const timestamp = now.toISOString()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
+  const data: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = supabase
+      .from('task_conditions')
+      .select('id, task_id, name, target_date, tasks!inner(project_id, title)')
+      .eq('is_satisfied', false)
+      .lt('target_date', bucket.businessDate)
+    query = scopeQueryToProjectIds(query, 'tasks.project_id', bucket.projectIds)
 
-  if (projectId) {
-    query = query.eq('tasks.project_id', projectId)
+    const { data: rows, error } = await query
+    if (error) throw new Error(error.message)
+    data.push(...((rows ?? []) as Record<string, unknown>[]))
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
 
   const existingIssues = await listConditionExpiredIssues(projectId)
   const existingByConditionId = new Map(
@@ -841,20 +1154,27 @@ export async function syncConditionExpiredIssues(projectId?: string) {
   return created
 }
 
-export async function syncAcceptanceExpiredIssues(projectId?: string) {
-  const timestamp = nowIso()
-  let query = supabase
-    .from('acceptance_plans')
-    .select('id, project_id, task_id, acceptance_name, acceptance_type, type_name, planned_date, status')
-    .in('status', [...ACTIVE_ACCEPTANCE_STATUSES])
-    .lt('planned_date', timestamp)
+export async function syncAcceptanceExpiredIssues(projectId?: string, options: ExpiredIssueSyncOptions = {}) {
+  const now = options.now ?? new Date()
+  const timestamp = now.toISOString()
+  const dateBuckets = await resolveProjectBusinessDateBuckets(supabase as any, projectId, now)
+  const data: Record<string, unknown>[] = []
+  for (const bucket of dateBuckets) {
+    let query = supabase
+      .from('acceptance_plans')
+      .select('id, project_id, acceptance_name, acceptance_type, type_name, planned_date, status')
+      .in('status', [...ACTIVE_ACCEPTANCE_STATUSES])
+      .lt('planned_date', bucket.businessDate)
+    query = scopeQueryToProjectIds(query, 'project_id', bucket.projectIds)
 
-  if (projectId) {
-    query = query.eq('project_id', projectId)
+    const { data: rows, error } = await query
+    if (error) throw new Error(error.message)
+    data.push(...((rows ?? []) as Record<string, unknown>[]))
   }
-
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
+  const coveredTaskIdsByPlanId = await loadCoveredTaskIdsByAcceptancePlanIds(
+    (data ?? []).map((row: any) => String(row.id ?? '')),
+    projectId,
+  )
 
   const existingIssues = await listAcceptanceExpiredIssues(projectId)
   const existingByPlanId = new Map(
@@ -872,10 +1192,11 @@ export async function syncAcceptanceExpiredIssues(projectId?: string) {
     const typeName = getAcceptanceTypeLabel(row as any)
     const plannedDate = String((row as any).planned_date ?? '').trim()
     const statusLabel = acceptanceStatusLabel((row as any).status)
+    const linkedTaskId = coveredTaskIdsByPlanId.get(planId)?.[0] ?? null
 
     const issue = await dbCreateIssue({
       project_id: String((row as any).project_id ?? ''),
-      task_id: (row as any).task_id ? String((row as any).task_id) : null,
+      task_id: linkedTaskId,
       title: `验收已逾期：${planName}`,
       description: `${typeName}“${planName}”计划于${plannedDate || '未设置日期'}完成，当前状态为${statusLabel}，已自动升级到问题主链。`,
       source_type: 'condition_expired',
@@ -926,6 +1247,7 @@ export async function ensureObstacleEscalatedIssue(obstacle: {
   const { data, error } = await supabase
     .from('issues')
     .select('*')
+    .eq('project_id', projectId)
     .eq('source_type', 'obstacle_escalated')
     .or(`source_id.eq.${obstacleId},source_entity_id.eq.${obstacleId}`)
     .order('created_at', { ascending: false })
@@ -974,15 +1296,20 @@ export async function ensureObstacleEscalatedIssue(obstacle: {
   })
 }
 
-export async function markObstacleEscalatedIssuePendingManualClose(obstacleId: string) {
+export async function markObstacleEscalatedIssuePendingManualClose(obstacleId: string, projectId?: string | null) {
   if (!obstacleId) return []
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('issues')
     .select('*')
     .eq('source_type', 'obstacle_escalated')
     .or(`source_id.eq.${obstacleId},source_entity_id.eq.${obstacleId}`)
     .in('status', ['open', 'investigating'])
+  if (projectId) {
+    query = query.eq('project_id', projectId)
+  }
+
+  const { data, error } = await query
 
   if (error) throw new Error(error.message)
 
@@ -1015,17 +1342,25 @@ export async function convertRiskToIssueAtomic(
     status: 'open',
     priority: getIssueBasePriority(sourceType, effectiveSeverity),
   })
-  const issueId = await invokeRpc<string | null>('create_issue_from_risk_atomic', {
-    p_risk_id: riskId,
-    p_issue_source_type: sourceType,
-    p_title: overrides?.title ?? null,
-    p_description: overrides?.description ?? null,
-    p_severity: effectiveSeverity,
-    p_priority: effectivePriority,
+  if (!risk) return null
+  return await dbCreateIssue({
+    project_id: risk.project_id,
+    task_id: risk.task_id ?? null,
+    title: overrides?.title ?? risk.title,
+    description: overrides?.description ?? risk.description ?? null,
+    source_type: sourceType,
+    source_id: riskId,
+    source_entity_type: 'risk',
+    source_entity_id: riskId,
+    chain_id: risk.chain_id ?? null,
+    severity: effectiveSeverity,
+    priority: effectivePriority,
+    pending_manual_close: false,
+    status: 'open',
+    closed_reason: null,
+    closed_at: null,
+    version: 1,
   })
-
-  if (!issueId) return null
-  return await fetchIssueById(issueId)
 }
 
 export async function autoEscalateRisksToIssues(projectId?: string) {
@@ -1043,7 +1378,7 @@ export async function autoEscalateRisksToIssues(projectId?: string) {
   const { data, error } = await query
   if (error) throw new Error(error.message)
 
-  const threshold = Date.now() - 7 * 24 * 60 * 60 * 1000
+  const threshold = Date.now() - getRiskIssueWarningLifecycleThresholdMs('risk_to_issue')
   const createdIssues: Issue[] = []
 
   for (const risk of (data ?? []) as Risk[]) {
@@ -1058,8 +1393,8 @@ export async function autoEscalateRisksToIssues(projectId?: string) {
   return createdIssues
 }
 
-export async function closeWarningNotification(id: string) {
-  const warning = await fetchWarningNotificationById(id)
+export async function closeWarningNotification(projectId: string, id: string) {
+  const warning = await fetchWarningNotificationById(projectId, id)
   if (!warning || !isPersistedWarningRow(warning)) return null
   if (isProtectedWarning(warning)) return warning
 
@@ -1068,14 +1403,16 @@ export async function closeWarningNotification(id: string) {
     .from('notifications')
     .update({
       status: 'closed',
+      warning_lifecycle_status: 'resolved',
       resolved_at: timestamp,
       resolved_source: 'manual_closed',
       updated_at: timestamp,
     })
     .eq('id', id)
+    .eq('project_id', warning.project_id)
 
   if (error) throw new Error(error.message)
-  return await fetchWarningNotificationById(id)
+  return await fetchWarningNotificationById(projectId, id)
 }
 
 export async function markSourceDeletedOnDownstream(sourceEntityType: string, sourceEntityId: string) {

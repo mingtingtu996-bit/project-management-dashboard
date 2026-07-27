@@ -6,7 +6,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 
-import { authenticate as requireAuth, optionalAuthenticate } from '../middleware/auth.js'
+import { authenticate as requireAuth, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate } from '../middleware/validation.js'
 import { riskStatisticsService } from '../services/riskStatisticsService.js'
@@ -43,7 +43,9 @@ function buildError(message: string) {
   }
 }
 
-router.get('/trend', optionalAuthenticate, validate(trendQuerySchema, 'query'), asyncHandler(async (req, res) => {
+router.get('/trend', requireAuth, validate(trendQuerySchema, 'query'), requireProjectMember((req) => (
+  typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+)), asyncHandler(async (req, res) => {
   const projectId = String(req.query.projectId)
   const days = Number(req.query.days ?? 30)
   const trendData = await riskStatisticsService.getRiskTrend(projectId, days)
@@ -54,7 +56,9 @@ router.get('/trend', optionalAuthenticate, validate(trendQuerySchema, 'query'), 
   })
 }))
 
-router.get('/latest', requireAuth, validate(latestQuerySchema, 'query'), asyncHandler(async (req, res) => {
+router.get('/latest', requireAuth, validate(latestQuerySchema, 'query'), requireProjectMember((req) => (
+  typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+)), asyncHandler(async (req, res) => {
   const projectId = String(req.query.projectId)
   const snapshot = await riskStatisticsService.getLatestSnapshot(projectId)
 
@@ -64,7 +68,9 @@ router.get('/latest', requireAuth, validate(latestQuerySchema, 'query'), asyncHa
   })
 }))
 
-router.post('/generate', requireAuth, validate(generateBodySchema), asyncHandler(async (req, res) => {
+router.post('/generate', requireAuth, validate(generateBodySchema), requireProjectEditor((req) => (
+  typeof req.body?.projectId === 'string' ? req.body.projectId : undefined
+)), asyncHandler(async (req, res) => {
   const { projectId, date } = req.body
   const statDate = date || new Date().toISOString().split('T')[0]
   const snapshot = await riskStatisticsService.generateDailySnapshot(projectId, statDate)
@@ -80,7 +86,9 @@ router.post('/generate', requireAuth, validate(generateBodySchema), asyncHandler
   })
 }))
 
-router.post('/generate-historical', requireAuth, validate(generateHistoricalBodySchema), asyncHandler(async (req, res) => {
+router.post('/generate-historical', requireAuth, validate(generateHistoricalBodySchema), requireProjectEditor((req) => (
+  typeof req.body?.projectId === 'string' ? req.body.projectId : undefined
+)), asyncHandler(async (req, res) => {
   const projectId = String(req.body.projectId)
   const days = Number(req.body.days ?? 30)
   const generated = await riskStatisticsService.generateHistoricalSnapshots(projectId, days)
@@ -92,7 +100,9 @@ router.post('/generate-historical', requireAuth, validate(generateHistoricalBody
   })
 }))
 
-router.get('/summary', requireAuth, validate(latestQuerySchema, 'query'), asyncHandler(async (req, res) => {
+router.get('/summary', requireAuth, validate(latestQuerySchema, 'query'), requireProjectMember((req) => (
+  typeof req.query.projectId === 'string' ? req.query.projectId : undefined
+)), asyncHandler(async (req, res) => {
   const projectId = String(req.query.projectId)
 
   const [weekTrend, monthTrend] = await Promise.all([

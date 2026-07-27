@@ -7,6 +7,9 @@ import { afterEach, vi } from 'vitest'
 const require = createRequire(import.meta.url)
 const React = require('react') as typeof ReactTypes
 
+vi.stubEnv('VITE_SUPABASE_URL', 'http://127.0.0.1:54321')
+vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'workbuddy-test-anon-key')
+
 vi.mock('react', () => ({
   ...React,
   default: React,

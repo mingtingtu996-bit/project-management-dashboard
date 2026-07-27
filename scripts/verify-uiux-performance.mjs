@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto'
+﻿import { randomUUID } from 'node:crypto'
 import { constants, existsSync, readFileSync } from 'node:fs'
 import { access, mkdir, rm, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { chromium } from 'playwright'
@@ -13,7 +13,7 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputDir = join(repoRoot, 'artifacts', 'uiux-performance')
+const outputDir = join(repoRoot, process.env.UIUX_PERFORMANCE_OUTPUT_DIR || 'project-ui/artifacts/uiux-performance')
 const summaryPath = join(outputDir, 'performance-summary.json')
 
 function loadEnv(filePath) {
@@ -30,12 +30,17 @@ function loadEnv(filePath) {
   }
 }
 
+const explicitEnvFile = process.env.UIUX_PERFORMANCE_ENV_FILE || process.env.UIUX_ENV_FILE
+if (explicitEnvFile) {
+  loadEnv(resolve(repoRoot, explicitEnvFile))
+}
 loadEnv(join(repoRoot, 'server', '.env'))
 
-const port = Number(process.env.PORT || 4174)
-const baseUrl = process.env.BASE_URL || `http://127.0.0.1:${port}`
+const port = Number(process.env.UIUX_PERFORMANCE_PORT || 4174)
+const baseUrl = process.env.UIUX_PERFORMANCE_BASE_URL || process.env.WEB_BASE_URL || process.env.CLIENT_BASE_URL || `http://127.0.0.1:${port}`
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldStartPreview = process.env.PERFORMANCE_START_PREVIEW !== 'false'
+const shouldRewriteApiOrigin = process.env.UIUX_PERFORMANCE_DIRECT_API_ORIGIN === 'true'
 const perfProjectName = process.env.UIUX_PERFORMANCE_PROJECT_NAME || 'UIUX-PERF-TIMELINE-120-20260429'
 const perfTaskTarget = Number(process.env.UIUX_PERFORMANCE_TASK_COUNT || 120)
 
@@ -214,12 +219,74 @@ async function newContext(browser, token) {
     colorScheme: 'light',
     locale: 'zh-CN',
   })
-  await context.addInitScript((authToken) => {
+  await context.addInitScript(({ authToken, apiOrigin, rewriteApiOrigin }) => {
+    const isPerformanceReportUrl = (value) => {
+      try {
+        const requestUrl = new URL(String(value), window.location.origin)
+        return requestUrl.pathname === '/api/performance-reports'
+      } catch {
+        return false
+      }
+    }
+
+    if (rewriteApiOrigin) {
+      const nativeFetch = window.fetch.bind(window)
+      window.fetch = (input, init) => {
+        if (
+          isPerformanceReportUrl(typeof input === 'string' ? input : input instanceof Request ? input.url : '')
+        ) {
+          return Promise.resolve(new Response(JSON.stringify({ success: true, data: { accepted: true, intercepted: true } }), {
+            status: 202,
+            headers: { 'Content-Type': 'application/json' },
+          }))
+        }
+
+        if (typeof input === 'string' && input.startsWith('/api/')) {
+          return nativeFetch(`${apiOrigin}${input}`, init)
+        }
+
+        if (input instanceof Request) {
+          const requestUrl = new URL(input.url)
+          if (requestUrl.origin === window.location.origin && requestUrl.pathname.startsWith('/api/')) {
+            return nativeFetch(new Request(`${apiOrigin}${requestUrl.pathname}${requestUrl.search}`, input), init)
+          }
+        }
+
+        return nativeFetch(input, init)
+      }
+    } else {
+      const nativeFetch = window.fetch.bind(window)
+      window.fetch = (input, init) => {
+        if (
+          isPerformanceReportUrl(typeof input === 'string' ? input : input instanceof Request ? input.url : '')
+        ) {
+          return Promise.resolve(new Response(JSON.stringify({ success: true, data: { accepted: true, intercepted: true } }), {
+            status: 202,
+            headers: { 'Content-Type': 'application/json' },
+          }))
+        }
+
+        return nativeFetch(input, init)
+      }
+    }
+
+    if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+      const nativeSendBeacon = navigator.sendBeacon.bind(navigator)
+      Object.defineProperty(navigator, 'sendBeacon', {
+        configurable: true,
+        value: (url, data) => {
+          if (isPerformanceReportUrl(url)) return true
+          return nativeSendBeacon(url, data)
+        },
+      })
+    }
+
     window.localStorage.setItem('auth_token', authToken)
     window.localStorage.setItem('access_token', authToken)
-    window.localStorage.setItem('onboarding_completed', 'true')
+    window.localStorage.setItem('onboarding_workspace_completed', 'true')
+    window.localStorage.setItem('onboarding_project_completed', 'true')
     window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
-  }, token)
+  }, { authToken: token, apiOrigin: apiBaseUrl, rewriteApiOrigin: shouldRewriteApiOrigin })
   return context
 }
 
@@ -328,7 +395,30 @@ async function visibleLoaderCount(page) {
 async function verifyHeavyPage(page, state) {
   const startedAt = Date.now()
   await page.goto(route(state.path), { waitUntil: 'domcontentloaded', timeout: 30000 })
-  const matchedSelector = await waitForAny(page, state.any, 10000)
+  let matchedSelector = null
+  try {
+    matchedSelector = await waitForAny(page, state.any, 10000)
+  } catch (error) {
+    const snapshot = await page.evaluate((selectors) => ({
+      href: window.location.href,
+      title: document.title,
+      readyState: document.readyState,
+      text: document.body.innerText.trim().slice(0, 800),
+      selectors: selectors.map((selector) => {
+        const element = document.querySelector(selector)
+        if (!(element instanceof HTMLElement)) return { selector, present: false, visible: false }
+        const rect = element.getBoundingClientRect()
+        const style = window.getComputedStyle(element)
+        return {
+          selector,
+          present: true,
+          visible: rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden',
+        }
+      }),
+    }), state.any)
+    const message = error instanceof Error ? error.message : String(error)
+    throw new Error(`${state.key} did not render ready selector: ${message}; snapshot=${JSON.stringify(snapshot)}`)
+  }
   const firstVisibleMs = Date.now() - startedAt
   await page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {})
   await page.waitForTimeout(250)
@@ -412,7 +502,7 @@ async function main() {
   await mkdir(outputDir, { recursive: true })
 
   const manifest = await readJson(manifestPath)
-  assert(await isHttpReady(`${apiBaseUrl}/api/health`), `API is not reachable at ${apiBaseUrl}/api/health`)
+  assert(await isHttpReady(`${apiBaseUrl}/api/readyz`), `API is not ready at ${apiBaseUrl}/api/readyz`)
 
   const ownerSession = await login(manifest.accounts.owner)
   const adminSession = await login(manifest.accounts.companyAdmin)

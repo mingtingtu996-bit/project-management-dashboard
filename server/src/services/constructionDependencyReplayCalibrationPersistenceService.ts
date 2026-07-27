@@ -229,13 +229,6 @@ const REVIEW_PACKAGE_GOVERNANCE_BOUNDARY: ConstructionDependencySeedPromotionRev
   allowedUse: 'manual_seed_promotion_review',
 }
 
-function buildDefaultQueryExec(): QueryExec {
-  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
-  }
-}
-
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
@@ -455,39 +448,10 @@ function buildSeedPromotionReviewPackage(
   }
 }
 
-async function ensureConstructionDependencyReplayCalibrationReportsTable(queryExec: QueryExec) {
-  await queryExec(`
-    CREATE TABLE IF NOT EXISTS public.construction_dependency_replay_calibration_reports (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      project_id UUID NULL REFERENCES public.projects(id) ON DELETE CASCADE,
-      run_id TEXT NOT NULL,
-      triggered_by TEXT NOT NULL,
-      report_code TEXT NOT NULL,
-      report_generated_at TIMESTAMPTZ NOT NULL,
-      governance_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
-      summary JSONB NOT NULL DEFAULT '{}'::jsonb,
-      calibration_queues JSONB NOT NULL DEFAULT '{}'::jsonb,
-      report_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-      runtime_mutation_policy TEXT NOT NULL DEFAULT 'none_report_only',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    )
-  `)
-  await queryExec(`
-    CREATE INDEX IF NOT EXISTS idx_construction_dependency_replay_reports_project
-      ON public.construction_dependency_replay_calibration_reports(project_id, report_generated_at DESC)
-  `)
-  await queryExec(`
-    CREATE INDEX IF NOT EXISTS idx_construction_dependency_replay_reports_run
-      ON public.construction_dependency_replay_calibration_reports(run_id, report_generated_at DESC)
-  `)
-}
-
-export async function persistConstructionDependencyReplayCalibrationReport(
+async function insertConstructionDependencyReplayCalibrationReportDirect(
   params: PersistConstructionDependencyReplayCalibrationReportParams,
-): Promise<PersistConstructionDependencyReplayCalibrationReportResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
-  await ensureConstructionDependencyReplayCalibrationReportsTable(queryExec)
-  const rows = await queryExec<{ id?: string }>(`
+) {
+  const result = await rawQuery(`
     INSERT INTO public.construction_dependency_replay_calibration_reports (
       project_id,
       run_id,
@@ -522,23 +486,15 @@ export async function persistConstructionDependencyReplayCalibrationReport(
     params.report.summary,
     params.report.calibrationQueues,
     params.report,
-  ])
-
-  return {
-    persisted: true,
-    reportId: rows[0]?.id ?? null,
-  }
+  ] as any[])
+  return result.rows as Array<{ id?: string }>
 }
 
-export async function listConstructionDependencyReplayCalibrationHistoryReport(
-  options: ListConstructionDependencyReplayCalibrationHistoryOptions = {},
-): Promise<ConstructionDependencyReplayCalibrationHistoryReport> {
-  const queryExec = options.queryExec ?? buildDefaultQueryExec()
-  const projectId = normalizeText(options.projectId) || null
-  const matchedSeedCodeFilter = normalizeText(options.matchedSeedCode)
-  const limit = normalizePositiveLimit(options.limit)
-
-  const rows = sortRowsByLatest(await queryExec<ConstructionDependencyReplayCalibrationReportRow>(`
+async function listConstructionDependencyReplayCalibrationRowsDirect(
+  projectId: string | null,
+  limit: number,
+) {
+  const result = await rawQuery(`
     SELECT
       id,
       project_id,
@@ -553,7 +509,85 @@ export async function listConstructionDependencyReplayCalibrationHistoryReport(
     WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
     ORDER BY report_generated_at DESC, created_at DESC
     LIMIT $2
-  `, [projectId, limit]))
+  `, [projectId, limit] as any[])
+  return result.rows as ConstructionDependencyReplayCalibrationReportRow[]
+}
+
+export async function persistConstructionDependencyReplayCalibrationReport(
+  params: PersistConstructionDependencyReplayCalibrationReportParams,
+): Promise<PersistConstructionDependencyReplayCalibrationReportResult> {
+  const rows = params.queryExec
+    ? await (async () => {
+      return params.queryExec!<{ id?: string }>(`
+        INSERT INTO public.construction_dependency_replay_calibration_reports (
+          project_id,
+          run_id,
+          triggered_by,
+          report_code,
+          report_generated_at,
+          governance_policy,
+          summary,
+          calibration_queues,
+          report_payload,
+          runtime_mutation_policy
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6::jsonb,
+          $7::jsonb,
+          $8::jsonb,
+          $9::jsonb,
+          'none_report_only'
+        )
+        RETURNING id
+      `, [
+        params.projectId,
+        params.runId,
+        params.triggeredBy,
+        params.report.reportCode,
+        params.report.generatedAt,
+        params.report.governancePolicy,
+        params.report.summary,
+        params.report.calibrationQueues,
+        params.report,
+      ])
+    })()
+    : await insertConstructionDependencyReplayCalibrationReportDirect(params)
+
+  return {
+    persisted: true,
+    reportId: rows[0]?.id ?? null,
+  }
+}
+
+export async function listConstructionDependencyReplayCalibrationHistoryReport(
+  options: ListConstructionDependencyReplayCalibrationHistoryOptions = {},
+): Promise<ConstructionDependencyReplayCalibrationHistoryReport> {
+  const projectId = normalizeText(options.projectId) || null
+  const matchedSeedCodeFilter = normalizeText(options.matchedSeedCode)
+  const limit = normalizePositiveLimit(options.limit)
+
+  const rows = sortRowsByLatest(options.queryExec
+    ? await options.queryExec<ConstructionDependencyReplayCalibrationReportRow>(`
+      SELECT
+        id,
+        project_id,
+        run_id,
+        report_generated_at,
+        created_at,
+        governance_policy,
+        summary,
+        calibration_queues,
+        report_payload
+      FROM public.construction_dependency_replay_calibration_reports
+      WHERE ($1::uuid IS NULL OR project_id = $1::uuid)
+      ORDER BY report_generated_at DESC, created_at DESC
+      LIMIT $2
+    `, [projectId, limit])
+    : await listConstructionDependencyReplayCalibrationRowsDirect(projectId, limit))
 
   type GroupState = Omit<ConstructionDependencyReplayCalibrationHistoryItem, 'promotionReadiness'> & {
     reportKeys: Set<string>

@@ -1,13 +1,18 @@
 # Dependencies
 node_modules/
+.pnpm-store/
 .pnp/
 .pnp.js
+project-data/plugins/python-tools/.venv/
 
 # Build outputs
 dist/
 build/
 .next/
 out/
+output/
+storybook-static/
+client/storybook-static/
 
 # Environment files
 .env
@@ -16,6 +21,7 @@ out/
 .env.test.local
 .env.production.local
 deploy/env/server.production.env
+deploy/env/staging.env
 
 # IDE
 .idea/
@@ -41,6 +47,7 @@ coverage/
 *.tmp
 .tmp/
 .temp/
+tmp/
 tmp-browser-checks/
 check-*.png
 tmp-*.png
@@ -50,6 +57,16 @@ tmp-*.pdf
 
 # Generated artifacts
 artifacts/
+project-testing/reports/
+
+# Keep testing-center roots reproducible in clean checkouts while ignoring outputs.
+!project-testing/artifacts/
+project-testing/artifacts/**
+!project-testing/artifacts/**/
+!project-testing/artifacts/**/README.md
+!project-testing/reports/
+project-testing/reports/*
+!project-testing/reports/README.md
 
 # Project specific
 .project-snapshots/

@@ -1,11 +1,12 @@
 export type GlobalRole = 'company_admin' | 'regular'
-export type ProjectPermissionLevel = 'owner' | 'editor' | 'viewer'
+export type ProjectPermissionLevel = 'owner' | 'editor'
+export type ProjectAccessLevel = ProjectPermissionLevel | 'none'
 
 export function normalizeGlobalRole(value?: string | null): GlobalRole {
   return value === 'company_admin' ? 'company_admin' : 'regular'
 }
 
-export function normalizeProjectPermissionLevel(value?: string | null): ProjectPermissionLevel {
+export function normalizeProjectPermissionLevel(value?: string | null): ProjectPermissionLevel | null {
   switch (String(value ?? '').trim()) {
     case 'owner':
     case 'admin':
@@ -13,8 +14,12 @@ export function normalizeProjectPermissionLevel(value?: string | null): ProjectP
     case 'editor':
       return 'editor'
     default:
-      return 'viewer'
+      return null
   }
+}
+
+export function normalizeProjectAccessLevel(value?: string | null): ProjectAccessLevel {
+  return normalizeProjectPermissionLevel(value) ?? 'none'
 }
 
 export function getGlobalRoleLabel(role?: string | null): string {
@@ -22,18 +27,18 @@ export function getGlobalRoleLabel(role?: string | null): string {
 }
 
 export function getProjectRoleLabel(role?: string | null): string {
-  switch (normalizeProjectPermissionLevel(role)) {
+  switch (normalizeProjectAccessLevel(role)) {
     case 'owner':
       return '项目负责人'
     case 'editor':
       return '编辑成员'
     default:
-      return '只读成员'
+      return '无项目权限'
   }
 }
 
 export function getRoleBadgeTone(role?: string | null): string {
-  switch (normalizeProjectPermissionLevel(role)) {
+  switch (normalizeProjectAccessLevel(role)) {
     case 'owner':
       return 'bg-slate-900 text-white'
     case 'editor':

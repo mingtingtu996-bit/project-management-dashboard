@@ -1,0 +1,4 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "ignoreCommand": "node -e \"console.log('Vercel deployment retired: use the self-hosted release workflow'); process.exit(0)\""
+}

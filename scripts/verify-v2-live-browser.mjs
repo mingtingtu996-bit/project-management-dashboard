@@ -87,10 +87,10 @@ async function apiRequest(pathname, { method = 'GET', token, body, allowFailure 
 async function ensureHealth() {
   const [{ response: webResponse }, { response: apiResponse }] = await Promise.all([
     fetchJson(WEB_BASE),
-    fetchJson(`${API_BASE}/api/health`),
+    fetchJson(`${API_BASE}/api/readyz`),
   ])
   assert(webResponse.ok, `前端服务不可达：${WEB_BASE}`)
-  assert(apiResponse.ok, `后端服务不可达：${API_BASE}/api/health`)
+  assert(apiResponse.ok, `后端服务未就绪：${API_BASE}/api/readyz`)
 }
 
 function plusDays(dateText, days) {
@@ -171,11 +171,8 @@ async function createTask(token, projectId, input) {
       planned_start_date: input.startDate,
       planned_end_date: input.endDate,
       participant_unit_id: input.participantUnitId ?? null,
-      responsible_unit: input.responsibleUnit ?? input.assigneeUnit ?? null,
       assignee_name: input.assigneeName ?? null,
-      assignee_unit: input.assigneeUnit ?? null,
       specialty_type: input.specialtyType ?? null,
-      phase_id: input.phaseId ?? projectId,
       is_milestone: input.isMilestone ?? false,
       milestone_level: input.milestoneLevel ?? null,
     },
@@ -320,7 +317,7 @@ async function createAcceptancePlan(token, projectId, taskId, suffix) {
   return json.data
 }
 
-async function createInvitation(token, projectId, permissionLevel = 'viewer') {
+async function createInvitation(token, projectId, permissionLevel = 'editor') {
   const { json } = await apiRequest('/api/invitations', {
     method: 'POST',
     token,
@@ -576,7 +573,7 @@ async function main() {
   })
   await deleteParticipantUnit(owner.token, retiredUnit.id)
 
-  const invitation = await createInvitation(owner.token, project.id, 'viewer')
+  const invitation = await createInvitation(owner.token, project.id, 'editor')
   const shouldRunMaterialReminderJob = shouldRunCheck('materials-reminder-job') || shouldRunCheck('notifications')
   const materialReminderRun = shouldRunMaterialReminderJob
     ? await executeJob(owner.token, 'materialArrivalReminderJob')

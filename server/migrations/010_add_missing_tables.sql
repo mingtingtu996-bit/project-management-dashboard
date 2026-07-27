@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     priority VARCHAR(20) DEFAULT 'normal',
     channel VARCHAR(50) DEFAULT 'in_app',
     is_read BOOLEAN DEFAULT FALSE,
+    is_system BOOLEAN NOT NULL DEFAULT FALSE,
     read_at TIMESTAMP WITH TIME ZONE,
     sent_at TIMESTAMP WITH TIME ZONE,
     metadata JSONB,

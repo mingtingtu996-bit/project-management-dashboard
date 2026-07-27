@@ -9,6 +9,7 @@ import { isActiveIssue } from '../utils/issueStatus.js'
 import { isActiveObstacle } from '../utils/obstacleStatus.js'
 import { isActiveRisk } from '../utils/riskStatus.js'
 import {
+  COMPLETED_TASK_STATUS_SQL_LIST,
   isCompletedMilestone,
   isCompletedTask,
   isInProgressTask,
@@ -69,21 +70,46 @@ describe('BI status utilities', () => {
       { id: 'child-b', parent_id: 'parent', progress: 80, planned_start_date: '2026-04-01', planned_end_date: '2026-04-11' },
     ]
 
-    expect(calculateWeightedProgress(tasks)).toBe(70)
-    expect(calculateOverallProgress(tasks)).toBe(70)
+    expect(calculateWeightedProgress(tasks)).toBe(67)
+    expect(calculateOverallProgress(tasks)).toBe(67)
   })
 
   it('keeps completion checks delegated to the shared taskStatus utility', () => {
     const dbServiceSource = readFileSync(sourcePath('services/dbService.ts'), 'utf8')
     const taskSummarySource = readFileSync(sourcePath('routes/task-summaries.ts'), 'utf8')
+    const taskSummaryServiceSource = readFileSync(sourcePath('services/taskSummaryService.ts'), 'utf8')
+    const taskSummaryCompareSource = readFileSync(sourcePath('services/taskSummaryCompareService.ts'), 'utf8')
+    const taskAttributionSummarySource = readFileSync(sourcePath('services/taskAttributionSummaryService.ts'), 'utf8')
+    const projectExecutionSummarySource = readFileSync(sourcePath('services/projectExecutionSummaryService.ts'), 'utf8')
 
     expect(dbServiceSource).toContain("from '../utils/taskStatus.js'")
     expect(dbServiceSource).not.toContain('function isCompletedTaskLike')
     expect(dbServiceSource).not.toContain('function isCompletedState')
 
-    expect(taskSummarySource).toContain("from '../utils/taskStatus.js'")
-    expect(taskSummarySource).not.toContain("status === '已完成' ||")
-    expect(taskSummarySource).not.toContain("status === 'completed' ||")
+    const completionSources = [
+      taskSummaryServiceSource,
+      taskSummaryCompareSource,
+      taskAttributionSummarySource,
+      projectExecutionSummarySource,
+    ]
+    completionSources.forEach((source) => {
+      expect(source).toContain("from '../utils/taskStatus.js'")
+    })
+    const guardedCompletionSources = [taskSummarySource, ...completionSources]
+    guardedCompletionSources.forEach((source) => {
+      expect(source).not.toContain("String(task.status ?? '').toLowerCase() === 'completed'")
+      expect(source).not.toContain("['completed', 'done', 'finished', 'on_time', 'delayed'].includes(status)")
+      expect(source).not.toContain("status === '已完成' ||")
+      expect(source).not.toContain("status === 'completed' ||")
+    })
+    expect(COMPLETED_TASK_STATUS_SQL_LIST).toContain("'已完成'")
+    expect(taskSummarySource).not.toContain("IN ('completed', 'done')")
+    expect(taskSummarySource).not.toContain('COMPLETED_TASK_STATUS_SQL_LIST')
+    expect(completionSources.reduce(
+      (count, source) => count + (source.match(/\bisCompletedTask\(/g) ?? []).length,
+      0,
+    )).toBeGreaterThanOrEqual(8)
+    expect((taskSummaryServiceSource.match(/\bisCompletedMilestone\(/g) ?? []).length).toBeGreaterThanOrEqual(1)
     expect(taskSummarySource).not.toContain(".in('status', ['已完成', 'completed'])")
   })
 })

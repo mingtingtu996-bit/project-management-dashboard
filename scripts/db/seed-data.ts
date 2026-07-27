@@ -77,7 +77,7 @@ async function insertSeedData() {
     const { error } = await supabase.from('project_members').insert({
       project_id: projectId,
       user_id: userId,
-      permission_level: 'admin',
+      permission_level: 'owner',
       joined_at: new Date().toISOString(),
       is_active: true,
     })
@@ -119,28 +119,28 @@ async function insertSeedData() {
   const tasks = [
     { title: '施工图设计', status: 'done', progress: 100, priority: 'high',
       planned_start: '2026-03-01', planned_end: '2026-03-20', actual_start: '2026-03-01', actual_end: '2026-03-18',
-      assignee_name: '张工', assignee_type: 'person', specialty: '设计', ref_duration: 20 },
+      assignee_name: '张工', assignee_type: 'person', specialty: '设计' },
     { title: '基坑开挖', status: 'in_progress', progress: 65, priority: 'high',
       planned_start: '2026-03-15', planned_end: '2026-04-30', actual_start: '2026-03-16', actual_end: null,
-      assignee_name: '李工', assignee_type: 'person', specialty: '土建', ref_duration: 45 },
+      assignee_name: '李工', assignee_type: 'person', specialty: '土建' },
     { title: '桩基施工', status: 'in_progress', progress: 30, priority: 'high',
       planned_start: '2026-03-20', planned_end: '2026-05-10', actual_start: '2026-03-22', actual_end: null,
-      assignee_name: '王施工队', assignee_type: 'unit', specialty: '基础', ref_duration: 50 },
+      assignee_name: '王施工队', assignee_type: 'unit', specialty: '基础' },
     { title: '钢筋采购', status: 'todo', progress: 0, priority: 'medium',
       planned_start: '2026-04-01', planned_end: '2026-04-15', actual_start: null, actual_end: null,
-      assignee_name: '采购部', assignee_type: 'unit', specialty: '材料', ref_duration: 15 },
+      assignee_name: '采购部', assignee_type: 'unit', specialty: '材料' },
     { title: '主体结构施工', status: 'todo', progress: 0, priority: 'high',
       planned_start: '2026-05-01', planned_end: '2026-08-30', actual_start: null, actual_end: null,
-      assignee_name: '赵工', assignee_type: 'person', specialty: '土建', ref_duration: 120 },
+      assignee_name: '赵工', assignee_type: 'person', specialty: '土建' },
     { title: '机电安装预埋', status: 'todo', progress: 0, priority: 'medium',
       planned_start: '2026-05-15', planned_end: '2026-07-15', actual_start: null, actual_end: null,
-      assignee_name: '机电班组', assignee_type: 'unit', specialty: '机电', ref_duration: 60 },
+      assignee_name: '机电班组', assignee_type: 'unit', specialty: '机电' },
     { title: '外墙施工', status: 'todo', progress: 0, priority: 'low',
       planned_start: '2026-07-01', planned_end: '2026-09-30', actual_start: null, actual_end: null,
-      assignee_name: '外墙班组', assignee_type: 'unit', specialty: '装饰', ref_duration: 90 },
+      assignee_name: '外墙班组', assignee_type: 'unit', specialty: '装饰' },
     { title: '园林绿化', status: 'todo', progress: 0, priority: 'low',
       planned_start: '2026-09-01', planned_end: '2026-11-30', actual_start: null, actual_end: null,
-      assignee_name: '园林公司', assignee_type: 'unit', specialty: '园林', ref_duration: 90 },
+      assignee_name: '园林公司', assignee_type: 'unit', specialty: '园林' },
   ]
 
   const taskIds: string[] = []
@@ -156,9 +156,6 @@ async function insertSeedData() {
       planned_end_date: t.planned_end,
       actual_start_date: t.actual_start,
       actual_end_date: t.actual_end,
-      planned_duration: t.ref_duration,
-      standard_duration: t.ref_duration,
-      reference_duration: t.ref_duration,
       assignee_name: t.assignee_name,
       assignee_type: t.assignee_type,
       specialty_type: t.specialty,
@@ -282,7 +279,6 @@ async function cleanSeedData() {
     { table: 'task_conditions',   field: 'description',  value: '种子数据' },
     { table: 'risks',             field: 'description',  value: '种子数据' },
     { table: 'tasks',             field: 'description',  value: '种子数据' },
-    { table: 'milestones',        field: 'description',  value: '种子数据' },
   ]
 
   for (const op of cleanOps) {

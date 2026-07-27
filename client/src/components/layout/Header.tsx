@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Bell, Check, Command, Copy, KeyRound, LogIn, LogOut, Search, Settings, User, Wifi, WifiOff } from 'lucide-react'
+import { Bell, Check, ChevronDown, Command, Copy, CreditCard, KeyRound, LogIn, LogOut, Search, Settings, User, Wifi, WifiOff } from 'lucide-react'
 
 import { EditProfileDialog } from '@/components/EditProfileDialog'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
@@ -9,13 +9,19 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
-import { useAuth } from '@/hooks/useAuth'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { useAuth } from '@/context/AuthContext'
 import { useAuthDialog } from '@/hooks/useAuthDialog'
 import { usePermissions } from '@/hooks/usePermissions'
-import { useNotifications, useRealtimeConnectionState, useStore } from '@/hooks/useStore'
+import { useCurrentCompanyRole } from '@/hooks/useCurrentCompanyRole'
+import { useNotificationsByTouchpoint, useRealtimeConnectionState, useStore } from '@/hooks/useStore'
+import { useAttentionSummary } from '@/hooks/useAttentionSummary'
 import { toast } from '@/hooks/use-toast'
 import { getShellNavigationMeta } from '@/config/navigation'
 import { buildProjectAttentionSnapshot } from '@/lib/projectAttention'
+import { getProjectDisplayName } from '@/lib/projectDisplay'
+import { isProjectRoutePath } from '@/lib/projectRouteGuards'
 import { getGlobalRoleLabel, getProjectRoleLabel } from '@/lib/roleLabels'
 
 interface HeaderProps {
@@ -29,28 +35,38 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
   const realtimeConnectionState = useRealtimeConnectionState()
   const { isAuthenticated, logout, user } = useAuth()
   const { openLoginDialog } = useAuthDialog()
-  const { permissionLevel, globalRole, canManageTeam } = usePermissions()
+  const { permissionLevel, canManageTeam } = usePermissions()
+  const currentCompanyRole = useCurrentCompanyRole()
   const [copied, setCopied] = useState(false)
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [profileDialogOpen, setProfileDialogOpen] = useState(false)
   const [changePasswordOpen, setChangePasswordOpen] = useState(false)
   const [teamDrawerOpen, setTeamDrawerOpen] = useState(false)
 
+  // v1.4.13: unified attention-summary available for Header consumption
+  const { summary: attentionSummary, loaded: attentionSummaryLoaded } = useAttentionSummary(currentProject?.id)
   const attentionSnapshot = useMemo(
     () => buildProjectAttentionSnapshot(currentProject?.id, tasks, risks, conditions, obstacles, acceptancePlans),
     [acceptancePlans, conditions, currentProject?.id, obstacles, risks, tasks],
   )
 
-  const storeNotifications = useNotifications()
+  const storeNotifications = useNotificationsByTouchpoint('persistent')
   const notificationUnreadCount = useMemo(() => {
     if (!storeNotifications || storeNotifications.length === 0) return 0
     return storeNotifications.filter((n) => !n.isRead && !n.isMuted).length
   }, [storeNotifications])
 
-  const bellBadgeCount = attentionSnapshot.totalAttentionCount + notificationUnreadCount
+  // v1.4.13: use unified attention-summary as primary; fallback to local snapshot
+  const bellBadgeCount = attentionSummaryLoaded
+    ? attentionSummary.totalAttentionCount
+    : attentionSnapshot.totalAttentionCount + notificationUnreadCount
 
   const { title, contextLabel } = getShellNavigationMeta(location.pathname)
-  const isProjectPage = location.pathname.startsWith('/projects/')
+  const isProjectPage = isProjectRoutePath(location.pathname)
+  const showShellTabs = !isProjectPage && ['/workspace', '/company', '/notifications', '/demo'].some((path) => location.pathname === path || location.pathname.startsWith(`${path}/`))
+  const isCurrentCompanyAdmin = currentCompanyRole === 'company_admin'
+  const canSeeCompanyCockpit = isCurrentCompanyAdmin
+  const shellTabValue = location.pathname === '/company' ? 'company' : 'workspace'
   const userName = user?.display_name || currentUser?.display_name || '未命名用户'
   const isMacPlatform = useMemo(
     () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/i.test(navigator.platform),
@@ -58,7 +74,7 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
   )
   const shellIdentity = useMemo(() => {
     if (currentProject && isProjectPage) {
-      const projectName = currentProject.name?.trim() || '当前项目'
+      const projectName = getProjectDisplayName(currentProject.name)
       const parts = projectName.split('-').filter(Boolean)
       const primary = parts.length >= 3 && /^[A-Z0-9]+$/i.test(parts[0]) ? parts.slice(0, 2).join('-') : projectName
       const secondary = primary === projectName ? contextLabel || '项目工作台' : parts.slice(2).join('-') || contextLabel || '项目工作台'
@@ -84,22 +100,23 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
     return { primary: title, secondary: contextLabel, initials: initials || 'W' }
   }, [contextLabel, currentProject, isProjectPage, title])
   const avatarClassName = useMemo(() => {
-    const palette = ['bg-blue-600', 'bg-emerald-600', 'bg-sky-600', 'bg-slate-700', 'bg-rose-600', 'bg-amber-600']
+    const palette = ['bg-blue-700', 'bg-emerald-700', 'bg-sky-700', 'bg-slate-700', 'bg-rose-700', 'bg-amber-700']
     const seed = userName.charCodeAt(0) || 0
     return palette[seed % palette.length]
   }, [userName])
+  const accountDisplayLabel = getGlobalRoleLabel(currentCompanyRole)
 
   useEffect(() => {
     const titleParts = [title]
-    if (isProjectPage && currentProject?.name) {
-      titleParts.unshift(currentProject.name)
+    if (isProjectPage && currentProject?.id) {
+      titleParts.unshift(getProjectDisplayName(currentProject.name))
     }
     if (contextLabel) {
       titleParts.push(contextLabel)
     }
     titleParts.push('仪表盘')
     document.title = titleParts.join(' · ')
-  }, [contextLabel, currentProject?.name, isProjectPage, title])
+  }, [contextLabel, currentProject?.id, currentProject?.name, isProjectPage, title])
 
   const copyInvitationCode = async () => {
     if (!currentProject?.primary_invitation_code) return
@@ -115,12 +132,12 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
 
   const syncIndicator =
     connectionMode === 'polling'
-      ? { icon: WifiOff, iconClassName: 'text-yellow-500', label: '轮询模式' }
+      ? { icon: WifiOff, iconClassName: 'text-amber-500', label: '轮询', tooltip: '当前为轮询同步模式' }
       : realtimeConnectionState === 'connected'
-        ? { icon: Wifi, iconClassName: 'text-emerald-500', label: '实时同步' }
+        ? { icon: Wifi, iconClassName: 'text-emerald-500', label: '已同步', tooltip: '实时同步已连接' }
         : realtimeConnectionState === 'connecting' || realtimeConnectionState === 'reconnecting'
-          ? { icon: Wifi, iconClassName: 'text-amber-500', label: '实时重连中' }
-          : { icon: WifiOff, iconClassName: 'text-rose-500', label: '实时已断开' }
+          ? { icon: Wifi, iconClassName: 'text-amber-500', label: '重连中', tooltip: '实时同步正在重连' }
+          : { icon: WifiOff, iconClassName: 'text-rose-500', label: '已断开', tooltip: '实时同步已断开' }
 
   const SyncIcon = syncIndicator.icon
 
@@ -139,7 +156,7 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
 
     setAccountMenuOpen(false)
     await logout()
-    navigate(`/company?login=1&redirect=${encodeURIComponent(redirectTarget)}`, { replace: true })
+    navigate(`/workspace?login=1&redirect=${encodeURIComponent(redirectTarget)}`, { replace: true })
   }
 
   return (
@@ -154,86 +171,137 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
         </div>
       </div>
 
-      <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2">
-        <div className="relative hidden lg:block">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" strokeWidth={1.5} />
+      {showShellTabs ? (
+        <SegmentedControl
+          value={shellTabValue}
+          onChange={(value) => navigate(value === 'company' ? '/company' : '/workspace')}
+          className="hidden shrink-0 sm:inline-flex"
+          options={[
+            { value: 'workspace', label: '工作台' },
+            ...(canSeeCompanyCockpit ? [{ value: 'company', label: '公司驾驶舱' }] : []),
+          ]}
+        />
+      ) : null}
+
+      <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-4 lg:pr-[clamp(72px,7vw,144px)]">
+        <div
+          className="hidden h-10 w-[300px] items-center gap-2 rounded-xl border border-slate-200/70 bg-slate-50/80 px-3 text-slate-600 transition-colors hover:border-slate-300/80 hover:bg-white xl:flex xl:w-[360px] 2xl:w-[400px]"
+          onClick={onOpenCommandPalette}
+        >
+          <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" strokeWidth={1.5} />
           <Input
             aria-label="打开命令面板"
-            placeholder="搜索项目、任务或提醒..."
+            placeholder="搜索项目、任务..."
             readOnly
             onClick={onOpenCommandPalette}
             onFocus={onOpenCommandPalette}
-            className="command-input-text h-9 w-72 rounded-lg border-transparent bg-slate-50 pl-9 pr-20 text-slate-600 shadow-none placeholder:text-slate-400 transition-colors hover:border-slate-200 hover:bg-white focus-visible:border-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500/20 xl:w-80"
+            className="command-input-text h-full min-w-0 flex-1 border-0 bg-transparent px-0 text-slate-600 shadow-none placeholder:font-normal placeholder:text-slate-400 focus-visible:ring-0"
           />
-          <span className="pointer-events-none absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5 text-slate-400">
+          <span className="pointer-events-none flex shrink-0 items-center gap-0.5 text-slate-400">
             {isMacPlatform ? (
-              <kbd className="kbd-hint num-mono flex h-5 min-w-5 items-center justify-center rounded border border-slate-200 bg-white px-1">
+              <kbd className="kbd-hint num-mono flex h-5 min-w-5 items-center justify-center rounded-md border border-slate-200 bg-white px-1">
                 <Command className="h-2.5 w-2.5" strokeWidth={1.75} />
               </kbd>
             ) : (
-              <kbd className="kbd-hint num-mono flex h-5 min-w-8 items-center justify-center rounded border border-slate-200 bg-white px-1">
+              <kbd className="kbd-hint num-mono flex h-5 min-w-8 items-center justify-center rounded-md border border-slate-200 bg-white px-1">
                 Ctrl
               </kbd>
             )}
-            <kbd className="kbd-hint num-mono flex h-5 min-w-5 items-center justify-center rounded border border-slate-200 bg-white px-1">
+            <kbd className="kbd-hint num-mono flex h-5 min-w-5 items-center justify-center rounded-md border border-slate-200 bg-white px-1">
               K
             </kbd>
           </span>
         </div>
 
-        <div className="topbar-control-text flex h-9 items-center gap-2 rounded-lg bg-slate-50 px-3 text-slate-600 ring-1 ring-inset ring-slate-200/60">
-          <SyncIcon className={`h-3.5 w-3.5 ${syncIndicator.iconClassName}`} strokeWidth={1.5} />
-          <span className="hidden sm:inline">{syncIndicator.label}</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="打开命令面板"
+          onClick={onOpenCommandPalette}
+          className="h-10 w-10 rounded-xl border border-slate-200/70 bg-white text-slate-500 shadow-none hover:bg-slate-50 hover:text-slate-900 lg:hidden"
+        >
+          <Search className="h-4 w-4" strokeWidth={1.5} />
+        </Button>
+
+        <div className="hidden h-6 w-px shrink-0 bg-slate-200/80 md:block" />
+
+        <div className="flex shrink-0 items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                aria-label={syncIndicator.tooltip}
+                role="status"
+                className="topbar-control-text flex h-10 items-center gap-2 rounded-xl px-2.5 text-slate-600 transition-colors hover:bg-slate-50 sm:px-3"
+              >
+                <SyncIcon className={`h-3.5 w-3.5 ${syncIndicator.iconClassName}`} strokeWidth={1.5} />
+                <span className="hidden font-medium xl:inline">{syncIndicator.label}</span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>{syncIndicator.tooltip}</TooltipContent>
+          </Tooltip>
+
+          {currentProject && isProjectPage && currentProject.primary_invitation_code ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={copyInvitationCode}
+              className="topbar-control-text hidden h-10 rounded-xl border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 2xl:inline-flex"
+            >
+              {copied ? (
+                <>
+                  <Check className="mr-1 h-3.5 w-3.5 text-emerald-500" strokeWidth={1.5} />
+                  <span className="text-emerald-600">已复制</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
+                  复制邀请
+                </>
+              )}
+            </Button>
+          ) : null}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button asChild variant="ghost" size="icon" className="relative hidden h-10 w-10 rounded-xl border border-transparent text-slate-500 hover:border-slate-200/70 hover:bg-slate-50 hover:text-slate-900 sm:flex">
+                <Link to="/notifications" aria-label="打开提醒中心">
+                  <Bell className="h-4 w-4" strokeWidth={1.5} />
+                  {bellBadgeCount > 0 ? (
+                    bellBadgeCount <= 3 ? (
+                      <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-rose-500 ring-2 ring-white" />
+                    ) : (
+                      <span className="badge-micro num-mono absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 font-semibold text-white ring-2 ring-white">
+                        {bellBadgeCount > 99 ? '99+' : bellBadgeCount}
+                      </span>
+                    )
+                  ) : null}
+                </Link>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>提醒中心</TooltipContent>
+          </Tooltip>
         </div>
 
-        {currentProject && isProjectPage && currentProject.primary_invitation_code ? (
-          <Button variant="outline" size="sm" onClick={copyInvitationCode} className="topbar-control-text hidden h-9 rounded-lg border-slate-200 bg-white px-3 text-slate-600 shadow-none hover:bg-slate-50 xl:inline-flex">
-            {copied ? (
-              <>
-                <Check className="mr-1 h-3.5 w-3.5 text-emerald-500" strokeWidth={1.5} />
-                <span className="text-emerald-600">已复制</span>
-              </>
-            ) : (
-              <>
-                <Copy className="mr-1 h-3.5 w-3.5" strokeWidth={1.5} />
-                复制邀请
-              </>
-            )}
-          </Button>
-        ) : null}
-
-        <Button asChild variant="ghost" size="icon" className="relative hidden h-9 w-9 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900 sm:flex">
-          <Link to="/notifications" aria-label="打开提醒中心">
-            <Bell className="h-4 w-4" strokeWidth={1.5} />
-            {bellBadgeCount > 0 ? (
-              bellBadgeCount <= 3 ? (
-                <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-rose-500 ring-2 ring-white" />
-              ) : (
-                <span className="absolute -top-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-xs font-bold text-white">
-                  {bellBadgeCount > 99 ? '99+' : bellBadgeCount}
-                </span>
-              )
-            ) : null}
-          </Link>
-        </Button>
+        <div className="h-6 w-px shrink-0 bg-slate-200/80" />
 
         <DropdownMenu open={accountMenuOpen} onOpenChange={setAccountMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" aria-label="打开用户菜单" className="topbar-control-text h-9 rounded-lg px-1.5 text-slate-700 hover:bg-slate-100 lg:px-2">
+            <Button variant="ghost" aria-label={`打开用户菜单，当前用户 ${userName}`} className="topbar-control-text h-10 rounded-xl border border-transparent px-1.5 text-slate-700 hover:border-slate-200/70 hover:bg-slate-50 lg:px-2">
               <Avatar className="h-8 w-8 ring-1 ring-white">
                 <AvatarFallback className={`${avatarClassName} meta-text font-medium text-white`}>
                   {userName.slice(0, 2)}
                 </AvatarFallback>
               </Avatar>
-              <span className="hidden max-w-32 truncate sm:inline">{userName}</span>
+              <span className="hidden max-w-24 truncate text-slate-700 xl:inline">{accountDisplayLabel}</span>
+              <ChevronDown className="hidden h-3.5 w-3.5 text-slate-400 sm:block" strokeWidth={1.5} />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-64">
+          <DropdownMenuContent align="end" className="w-72 rounded-xl border-slate-200/80 shadow-[var(--el-2)]">
             {isAuthenticated ? (
               <>
                 <DropdownMenuLabel className="space-y-1">
-                  <div>我的账户</div>
-                  <div className="text-xs font-normal text-slate-500">{getGlobalRoleLabel(user?.globalRole || globalRole)}</div>
+                  <div className="truncate text-sm font-semibold text-slate-900">{userName}</div>
+                  <div className="text-xs font-normal text-slate-500">{accountDisplayLabel}</div>
                   {currentProject && isProjectPage ? (
                     <div className="text-xs font-normal text-slate-500">{getProjectRoleLabel(permissionLevel)}</div>
                   ) : null}
@@ -246,6 +314,10 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
                 <DropdownMenuItem onSelect={() => scheduleMenuAction(() => setChangePasswordOpen(true))}>
                   <KeyRound className="mr-2 h-4 w-4" />
                   修改密码
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => scheduleMenuAction(() => navigate('/settings/billing'))}>
+                  <CreditCard className="mr-2 h-4 w-4" />
+                  套餐与权益
                 </DropdownMenuItem>
                 {currentProject && isProjectPage && canManageTeam ? (
                   <DropdownMenuItem onSelect={() => scheduleMenuAction(() => setTeamDrawerOpen(true))}>
@@ -273,9 +345,13 @@ export default function Header({ onOpenCommandPalette }: HeaderProps) {
         </DropdownMenu>
 
         <EditProfileDialog isOpen={profileDialogOpen} onClose={() => setProfileDialogOpen(false)} />
-        <ChangePasswordDialog isOpen={changePasswordOpen} onClose={() => setChangePasswordOpen(false)} />
+        <ChangePasswordDialog
+          isOpen={changePasswordOpen || Boolean(user?.passwordResetRequired)}
+          required={Boolean(user?.passwordResetRequired)}
+          onClose={() => setChangePasswordOpen(false)}
+        />
         {currentProject?.id ? (
-          <ProjectTeamManagementDrawer open={teamDrawerOpen} onOpenChange={setTeamDrawerOpen} projectId={currentProject.id} projectName={currentProject.name} />
+          <ProjectTeamManagementDrawer open={teamDrawerOpen} onOpenChange={setTeamDrawerOpen} projectId={currentProject.id} projectName={getProjectDisplayName(currentProject.name)} />
         ) : null}
       </div>
     </header>

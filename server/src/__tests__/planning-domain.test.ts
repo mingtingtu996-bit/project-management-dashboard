@@ -3,7 +3,6 @@ import { resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   buildDraftLockNotificationRecipients,
-  canForceUnlockDraftLock,
   classifyDraftLockConflict,
   isDraftLockExpired,
   PLANNING_DRAFT_LOCK_REMINDER_MINUTES,
@@ -57,7 +56,14 @@ describe('planning domain contract', () => {
     expect(planningContracts.endpoints).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ method: 'GET', path: '/api/task-baselines' }),
+        expect.objectContaining({ method: 'GET', path: '/api/task-baselines/:id' }),
+        expect.objectContaining({ method: 'GET', path: '/api/task-baselines/:id/diff' }),
+        expect.objectContaining({ method: 'GET', path: '/api/task-baselines/:id/generation-candidate' }),
+        expect.objectContaining({ method: 'POST', path: '/api/task-baselines/generate' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines' }),
+        expect.objectContaining({ method: 'PUT', path: '/api/task-baselines/:id' }),
+        expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/commit' }),
+        expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/publish' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/confirm' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/queue-realignment' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/resolve-realignment' }),
@@ -65,23 +71,38 @@ describe('planning domain contract', () => {
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/revision-pool' }),
         expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/revisions' }),
         expect.objectContaining({ method: 'GET', path: '/api/task-baselines/:id/lock' }),
-        expect.objectContaining({ method: 'POST', path: '/api/task-baselines/:id/force-unlock' }),
         expect.objectContaining({ method: 'GET', path: '/api/monthly-plans' }),
+        expect.objectContaining({ method: 'GET', path: '/api/monthly-plans/:id' }),
+        expect.objectContaining({ method: 'GET', path: '/api/monthly-plans/:id/change-summary' }),
+        expect.objectContaining({ method: 'GET', path: '/api/monthly-plans/:id/closeout-summary' }),
+        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/generate' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans' }),
+        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/commit' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/confirm' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/revoke' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/void' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/queue-realignment' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/resolve-realignment' }),
         expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/close' }),
-        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/force-close' }),
-        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/items/batch-scope' }),
-        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/items/batch-shift-dates' }),
-        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/items/batch-target-progress' }),
         expect.objectContaining({ method: 'GET', path: '/api/monthly-plans/:id/lock' }),
-        expect.objectContaining({ method: 'POST', path: '/api/monthly-plans/:id/force-unlock' }),
+        expect.objectContaining({ method: 'GET', path: '/api/tasks' }),
+        expect.objectContaining({ method: 'GET', path: '/api/tasks/progress-snapshots' }),
+        expect.objectContaining({ method: 'GET', path: '/api/tasks/:id' }),
+        expect.objectContaining({ method: 'POST', path: '/api/tasks/commit' }),
+        expect.objectContaining({ method: 'POST', path: '/api/tasks/:id/close' }),
+        expect.objectContaining({ method: 'POST', path: '/api/tasks/:id/reopen' }),
         expect.objectContaining({ method: 'POST', path: '/api/planning-governance/:projectId/start-reorder' }),
         expect.objectContaining({ method: 'POST', path: '/api/planning-governance/:projectId/end-reorder' }),
+      ])
+    )
+    expect(planningContracts.endpoints).toEqual(
+      expect.not.arrayContaining([
+        expect.objectContaining({ path: '/api/task-baselines/:id/force-unlock' }),
+        expect.objectContaining({ path: '/api/monthly-plans/:id/force-close' }),
+        expect.objectContaining({ path: '/api/monthly-plans/:id/force-unlock' }),
+        expect.objectContaining({ path: '/api/monthly-plans/:id/items/batch-scope' }),
+        expect.objectContaining({ path: '/api/monthly-plans/:id/items/batch-shift-dates' }),
+        expect.objectContaining({ path: '/api/monthly-plans/:id/items/batch-target-progress' }),
       ])
     )
   })
@@ -92,6 +113,8 @@ describe('planning domain contract', () => {
     const baselineRouteSource = readServerFile('src', 'routes', 'task-baselines.ts')
     const monthlyRouteSource = readServerFile('src', 'routes', 'monthly-plans.ts')
     const lockServiceSource = readServerFile('src', 'services', 'planningDraftLockService.ts')
+    const fieldRegistryServiceSource = readServerFile('src', 'services', 'planningFieldRegistryService.ts')
+    const commitServiceSource = readServerFile('src', 'services', 'planningTableCommitService.ts')
 
     expect(indexSource).toContain("import taskBaselinesRouter from './routes/task-baselines.js'")
     expect(indexSource).toContain("import monthlyPlansRouter from './routes/monthly-plans.js'")
@@ -103,26 +126,37 @@ describe('planning domain contract', () => {
     expect(schedulerSource).toContain('planningDraftLockTimeoutJob.stop()')
     expect(baselineRouteSource).toContain('planningStateMachine.transition')
     expect(monthlyRouteSource).toContain('planningStateMachine.transition')
+    expect(baselineRouteSource).toContain("'/:id/commit'")
+    expect(monthlyRouteSource).toContain("'/:id/commit'")
+    expect(fieldRegistryServiceSource).toContain('PLANNING_FIELD_REGISTRY_VERSION')
+    expect(commitServiceSource).toContain('PlanningTableCommitRequest')
+    expect(commitServiceSource).toContain('FIELD_REGISTRY_STALE')
+    expect(baselineRouteSource).toContain('buildFieldRegistryStaleResponse')
+    expect(baselineRouteSource).toContain("'/:id/diff'")
+    expect(baselineRouteSource).toContain("'/:id/generation-candidate'")
+    expect(monthlyRouteSource).toContain('buildFieldRegistryStaleResponse')
     expect(baselineRouteSource).toContain('cleanupBaselineDraft')
     expect(baselineRouteSource).toContain("'/:id/revision-pool'")
     expect(baselineRouteSource).toContain("'/:id/revisions'")
     expect(baselineRouteSource).toContain("'/:id/queue-realignment'")
     expect(baselineRouteSource).toContain("'/:id/resolve-realignment'")
     expect(monthlyRouteSource).toContain('cleanupMonthlyPlanDraft')
-    expect(monthlyRouteSource).toContain("'/:id/force-close'")
     expect(monthlyRouteSource).toContain("'/:id/revoke'")
     expect(monthlyRouteSource).toContain("'/:id/void'")
     expect(monthlyRouteSource).toContain("'/:id/queue-realignment'")
     expect(monthlyRouteSource).toContain("'/:id/resolve-realignment'")
-    expect(monthlyRouteSource).toContain("'/:id/items/batch-scope'")
-    expect(monthlyRouteSource).toContain("'/:id/items/batch-shift-dates'")
-    expect(monthlyRouteSource).toContain("'/:id/items/batch-target-progress'")
+    expect(baselineRouteSource).not.toContain("'/:id/force-unlock'")
+    expect(monthlyRouteSource).not.toContain("'/:id/force-close'")
+    expect(monthlyRouteSource).not.toContain("'/:id/force-unlock'")
+    expect(monthlyRouteSource).not.toContain("'/:id/items/batch-scope'")
+    expect(monthlyRouteSource).not.toContain("'/:id/items/batch-shift-dates'")
+    expect(monthlyRouteSource).not.toContain("'/:id/items/batch-target-progress'")
     expect(indexSource).toContain("app.use('/api/planning-governance', planningGovernanceRouter)")
     expect(lockServiceSource).toContain('recipients:')
     expect(lockServiceSource).toContain('releasedBy')
   })
 
-  it('classifies planning draft locks with timeout, reminder and force-unlock rules', () => {
+  it('classifies planning draft locks with timeout and reminder rules', () => {
     expect(PLANNING_DRAFT_LOCK_TIMEOUT_MINUTES).toBe(30)
     expect(PLANNING_DRAFT_LOCK_REMINDER_MINUTES).toBe(5)
 
@@ -177,10 +211,6 @@ describe('planning domain contract', () => {
       )
     ).toBe(false)
 
-    expect(canForceUnlockDraftLock('owner')).toBe(true)
-    expect(canForceUnlockDraftLock('admin')).toBe(true)
-    expect(canForceUnlockDraftLock('editor')).toBe(false)
-    expect(canForceUnlockDraftLock(undefined)).toBe(false)
   })
 
   it('keeps lock notifications addressable and timeout releases unauthenticated', () => {
@@ -199,7 +229,6 @@ describe('planning domain contract', () => {
     ).toEqual(['editor-1', 'owner-1'])
 
     expect(resolveDraftLockReleasedBy('timeout', 'editor-1')).toBeNull()
-    expect(resolveDraftLockReleasedBy('force_unlock', 'owner-1')).toBe('owner-1')
     expect(resolveDraftLockReleasedBy('manual_release', null)).toBeNull()
   })
 

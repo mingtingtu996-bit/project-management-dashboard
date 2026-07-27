@@ -1,29 +1,24 @@
 import { Router } from 'express'
-import { authenticate } from '../middleware/auth.js'
+import { authenticate, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validateIdParam } from '../middleware/validation.js'
-import { supabase } from '../services/dbService.js'
+import {
+  getLatestWeeklyDigestReadModel,
+  warmLatestWeeklyDigestReadModel,
+} from '../services/weeklyDigestReadModelService.js'
 
 const router = Router()
-
 router.use(authenticate)
 
+export async function warmWeeklyDigestCache(projectId: string) {
+  return warmLatestWeeklyDigestReadModel(projectId)
+}
+
 // GET /api/projects/:id/weekly-digest/latest
-router.get('/:id/weekly-digest/latest', validateIdParam, asyncHandler(async (req, res) => {
+router.get('/:id/weekly-digest/latest', validateIdParam, requireProjectMember((req) => req.params.id), asyncHandler(async (req, res) => {
   const { id: projectId } = req.params
-  const { data, error } = await supabase
-    .from('weekly_digests')
-    .select('*')
-    .eq('project_id', projectId)
-    .order('week_start', { ascending: false })
-    .limit(1)
-    .single()
-
-  if (error && error.code !== 'PGRST116') {
-    throw new Error(error.message)
-  }
-
-  res.json({ success: true, data: data ?? null })
+  const data = await getLatestWeeklyDigestReadModel(projectId)
+  res.json({ success: true, data })
 }))
 
 export default router

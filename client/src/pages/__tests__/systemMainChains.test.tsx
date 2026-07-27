@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   selectParticipantUnits,
+  selectEngineeringObjects,
   selectProjectScope,
-  selectScopeDimensions,
   useStore,
 } from '@/hooks/useStore'
 import { buildProjectTaskProgressSnapshot } from '@/lib/taskBusinessStatus'
@@ -22,7 +22,7 @@ describe('system main chains', () => {
       conditions: [] as never,
       obstacles: [] as never,
       participantUnits: [] as never,
-      scopeDimensions: [] as never,
+      engineeringObjects: [] as never,
     })
   })
 
@@ -70,26 +70,19 @@ describe('system main chains', () => {
       participantUnits: [
         { id: 'unit-1', unit_name: '总包单位', unit_type: 'general', version: 1 },
       ] as never,
-      scopeDimensions: [
-        { key: 'building', label: '建筑维度', options: ['A'], selected: ['A'] },
-        { key: 'specialty', label: '专业维度', options: ['B'], selected: ['B'] },
-        { key: 'phase', label: '阶段维度', options: ['C'], selected: ['C'] },
-        { key: 'region', label: '区域维度', options: ['D'], selected: ['D'] },
+      engineeringObjects: [
+        { id: 'object-1', projectId, objectType: 'building', objectName: 'A栋' },
+        { id: 'object-2', projectId, objectType: 'specialty', objectName: '机电' },
       ] as never,
     })
 
     expect(selectParticipantUnits(useStore.getState()).map((unit) => unit.unit_name)).toEqual(['总包单位'])
-    expect(selectScopeDimensions(useStore.getState()).map((section) => section.key)).toEqual([
-      'building',
-      'specialty',
-      'phase',
-      'region',
-    ])
+    expect(selectEngineeringObjects(useStore.getState()).map((object) => object.objectName)).toEqual(['A栋', '机电'])
 
     useStore.getState().setCurrentProject(null)
 
     expect(selectParticipantUnits(useStore.getState())).toEqual([])
-    expect(selectScopeDimensions(useStore.getState())).toEqual([])
+    expect(selectEngineeringObjects(useStore.getState())).toEqual([])
   })
 
   it('keeps task timeline facts and summary on one shared event source', () => {

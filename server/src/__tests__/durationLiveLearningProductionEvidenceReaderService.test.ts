@@ -1,3 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -70,10 +74,18 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
 ]
 
 const parameterPublicationAssetKeys: DurationLiveLearningAssetKey[] = [
-  'base_duration_benchmark',
   'duration_cold_start_baseline',
   'forecast_residual_overlay',
   'forecast_confidence_weight',
+]
+
+const unifiedDurationLearningAssetKeys: DurationLiveLearningAssetKey[] = [
+  'base_duration_benchmark',
+  'standard_work_duration_seed',
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
 ]
 
 const planNetworkAssetKeys: DurationLiveLearningAssetKey[] = [
@@ -87,18 +99,17 @@ const durationOutcomeAssetKeys = learnableAssetKeys.filter((assetKey) =>
   !planNetworkAssetKeys.includes(assetKey))
 
 function publicationKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
-  if (assetKey === 'base_duration_benchmark') return 'duration_benchmark_runtime:base-v2'
+  if (unifiedDurationLearningAssetKeys.includes(assetKey)) {
+    return `duration_learning_runtime:${assetKey}:asset-v2`
+  }
   if (assetKey === 'duration_cold_start_baseline') return 'cold_start_baseline_runtime:segment-v2'
   if (assetKey === 'forecast_residual_overlay') return 'forecast_residual_overlay_runtime:overlay-v2'
   if (assetKey === 'forecast_confidence_weight') return 'forecast_confidence_weight_runtime:weight-v2'
-  if (assetKey === 'standard_work_duration_seed') {
-    return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
-  }
-  if (assetKey === 'special_work_duration_seed') return 'wbs_template_runtime:special-work-seed-v2'
-  if (assetKey === 'wbs_reference_days') return 'wbs_reference_days_runtime:wbs-reference-days-v2'
-  if (assetKey === 'dependency_rule_candidate') return 'dependency_rule_runtime:dependency-rule-v2'
-  if (assetKey === 'critical_path_rule_candidate') return 'critical_path_rule_runtime:critical-path-rule-v2'
   return `publication-${assetKey}`
+}
+
+function artifactKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
+  return `${assetKey}:artifact-v2`
 }
 
 const expectedRuntimeConsumerObservations = [
@@ -114,6 +125,7 @@ const expectedRuntimeConsumerObservations = [
   { assetKey: 'wbs_reference_days' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'wbsTemplateGenerationService' },
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectCriticalPathService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
 ]
@@ -130,6 +142,10 @@ const runtimeCallEvidence = [
   {
     consumerKey: 'projectRemainingDurationForecastService',
     runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+  },
+  {
+    consumerKey: 'projectCriticalPathService',
+    runtimeEntryRef: 'projectCriticalPathService:resolveCriticalPathLearningPublications',
   },
   {
     consumerKey: 'wbsTemplateGenerationService',
@@ -266,14 +282,38 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       target_runtime_table: 'algorithm_learnable_parameter_runtime_publications',
     }))
   }
-  if (normalized.includes('from public.algorithm_seed_versions')) {
+  if (normalized.includes('from public.duration_learning_runtime_publications')) {
+    return unifiedDurationLearningAssetKeys.map((assetKey) => ({
+      publication_key: publicationKeyForAsset(assetKey),
+      asset_key: assetKey,
+      artifact_key: artifactKeyForAsset(assetKey),
+      scope_level: 'project',
+      publication_stage: 'stable',
+      source_candidate_refs: [`candidate:${assetKey}:v2`],
+      source_evidence_refs: [`evidence:${assetKey}:v2`],
+      automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+      monitoring_status: 'passed',
+      impact_metrics: { observedCount: 5 },
+      rollback_execution: { status: 'rollback_verified', rolledBackAt: '2026-06-15T00:00:00.000Z' },
+    }))
+  }
+  if (normalized.includes('from public.duration_learning_runtime_consumptions')) {
+    const assetKey: DurationLiveLearningAssetKey = 'wbs_reference_days'
+    const publicationKey = publicationKeyForAsset(assetKey)
     return [{
-      id: 'seed-version-standard-work-duration-v2',
-      seed_type: 'standard_work_duration',
-      seed_version: 'v2',
-      status: 'active',
-      is_current: true,
-      published_at: '2026-06-14T00:00:00.000Z',
+      id: 'trusted-consumption-wbs-reference-days',
+      consumption_key: 'trusted-consumption:wbs-reference-days:task-1',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      publication_key: publicationKey,
+      asset_key: assetKey,
+      artifact_key: artifactKeyForAsset(assetKey),
+      consumer_key: 'wbsTemplateGenerationService',
+      consumer_surface: 'wbs_template_generation',
+      task_id: 'task-1',
+      duration_day_basis: 'construction_production_day',
+      source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+      consumption_context: { generationBatchId: 'batch-1' },
     }]
   }
   if (normalized.includes('from public.duration_algorithm_accuracy_events')) {
@@ -291,7 +331,15 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       publication_key: publicationKeyForAsset(assetKey),
       consumer_key: consumerKey,
       observation_status: 'observed',
-      source_evidence_refs: [runtimeConsumerSourceEvidenceRef(consumerKey)],
+      source_evidence_refs: [
+        runtimeConsumerSourceEvidenceRef(consumerKey),
+        ...(unifiedDurationLearningAssetKeys.includes(assetKey)
+          ? [`duration_learning_runtime_publications:${publicationKeyForAsset(assetKey)}`]
+          : []),
+      ],
+      observation_context: unifiedDurationLearningAssetKeys.includes(assetKey)
+        ? { artifactKey: artifactKeyForAsset(assetKey) }
+        : {},
       writes_runtime_directly: false,
       writes_fact_directly: false,
     }))
@@ -307,63 +355,8 @@ function rowsForSql(sql: string, options: { includePlanNetworkOutcomes?: boolean
       writes_fact_directly: false,
     }))
   }
-  if (normalized.includes('from public.wbs_template_runtime_publications')) {
-    return [
-      {
-        publication_key: publicationKeyForAsset('special_work_duration_seed'),
-        asset_kind: 'special_work_duration_seed',
-        asset_version_id: 'special_work_duration_seed-version-v2',
-        runtime_publication_status: 'runtime_published',
-        impact_monitoring: { status: 'monitoring_armed' },
-        rollback_execution: { status: 'rollback_verified' },
-      },
-      {
-        publication_key: publicationKeyForAsset('wbs_reference_days'),
-        asset_kind: 'wbs_reference_days',
-        asset_version_id: 'wbs_reference_days-version-v2',
-        runtime_publication_status: 'runtime_published',
-        impact_monitoring: { status: 'monitoring_armed' },
-        rollback_execution: { status: 'rollback_verified' },
-      },
-    ]
-  }
-  if (normalized.includes('from public.wbs_template_runtime_events')) return []
-  if (normalized.includes('from public.construction_dependency_rule_runtime_publications')) {
-    return [
-      {
-        publication_key: publicationKeyForAsset('dependency_rule_candidate'),
-        dependency_rule_version_id: 'dependency_rule_candidate-version-v2',
-        runtime_publication_status: 'runtime_published',
-        dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
-        impact_monitoring: { status: 'monitoring_armed' },
-        rollback_execution: { status: 'rollback_verified' },
-      },
-      {
-        publication_key: publicationKeyForAsset('critical_path_rule_candidate'),
-        dependency_rule_version_id: 'critical_path_rule_candidate-version-v2',
-        runtime_publication_status: 'runtime_published',
-        dependency_rule_lineage: { assetType: 'critical_path_rule_candidate' },
-        impact_monitoring: { status: 'monitoring_armed' },
-        rollback_execution: { status: 'rollback_verified' },
-      },
-    ]
-  }
-  if (normalized.includes('from public.construction_dependency_rule_runtime_events')) return []
   if (normalized.includes('from public.algorithm_learnable_parameter_release_events')) {
-    return [
-      {
-        event_type: 'impact_monitoring',
-        event_status: 'monitoring_passed',
-        source_publication_key: publicationKeyForAsset('standard_work_duration_seed'),
-        event_payload: { assetKey: 'standard_work_duration_seed' },
-      },
-      {
-        event_type: 'rollback_execution',
-        event_status: 'rollback_executed',
-        source_publication_key: publicationKeyForAsset('standard_work_duration_seed'),
-        event_payload: { assetKey: 'standard_work_duration_seed' },
-      },
-    ]
+    return []
   }
   throw new Error(`unexpected query: ${sql}`)
 }
@@ -528,7 +521,7 @@ function buildReadyBusinessPathSourceFiles() {
       `,
     },
     {
-      sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+      sourcePath: 'server/src/services/wbsTemplateGenerationOrchestrator.ts',
       sourceText: `
         import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
         export async function generateWbsTemplateRows() {
@@ -616,33 +609,31 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
       'duration_algorithm_accuracy_events',
       'runtime_consumer_observations',
       'runtime_consumer_runtime_calls',
+      'duration_learning_runtime_publications',
+      'duration_learning_runtime_consumptions',
       'algorithm_learnable_parameter_runtime_publications',
       'algorithm_learnable_parameter_release_events',
-      'algorithm_seed_versions',
       'duration_plan_network_outcomes',
-      'wbs_template_runtime_publications',
-      'wbs_template_runtime_events',
-      'construction_dependency_rule_runtime_publications',
-      'construction_dependency_rule_runtime_events',
     ])
     expect(audit.evidenceRowCollection.rejectedRows).toEqual([])
     expect(audit.evidenceCollection.rejectedRecords).toEqual([])
 
     const joinedSql = databaseMock.calls.map((call) => call.sql.toLowerCase()).join('\n')
     expect(joinedSql).toContain('from public.duration_experience_samples')
+    expect(joinedSql).toContain('from public.duration_learning_runtime_publications')
+    expect(joinedSql).toContain('from public.duration_learning_runtime_consumptions')
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_runtime_publications')
-    expect(joinedSql).toContain('from public.algorithm_seed_versions')
-    expect(joinedSql).toContain("seed_type = 'standard_work_duration'")
     expect(joinedSql).toContain('from public.algorithm_learnable_parameter_release_events')
     expect(joinedSql).toContain('from public.duration_plan_network_outcomes')
-    expect(joinedSql).toContain('from public.wbs_template_runtime_publications')
-    expect(joinedSql).toContain('from public.wbs_template_runtime_events')
-    expect(joinedSql).toContain('from public.construction_dependency_rule_runtime_publications')
-    expect(joinedSql).toContain('from public.construction_dependency_rule_runtime_events')
     expect(joinedSql).toContain('from public.duration_algorithm_accuracy_events')
     expect(joinedSql).toContain('from public.runtime_consumer_observations')
     expect(joinedSql).toContain('from public.runtime_consumer_runtime_calls')
     expect(joinedSql).not.toMatch(/\binsert\b|\bupdate\b|\bdelete\b/)
+    expect(joinedSql).not.toContain('from public.algorithm_seed_versions')
+    expect(joinedSql).not.toContain('from public.wbs_template_runtime_publications')
+    expect(joinedSql).not.toContain('from public.wbs_template_runtime_events')
+    expect(joinedSql).not.toContain('from public.construction_dependency_rule_runtime_publications')
+    expect(joinedSql).not.toContain('from public.construction_dependency_rule_runtime_events')
     expect(joinedSql).not.toContain('task_baseline_items')
     expect(joinedSql).not.toContain('monthly_plan_items')
   })
@@ -979,5 +970,21 @@ describe('durationLiveLearningProductionEvidenceReaderService', () => {
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.status)
       .toBe('runtime_consumer_business_path_integration_ready')
     expect(audit.runtimeConsumerBusinessPathIntegrationCoverage.missingIntegrations).toEqual([])
+  })
+
+  it('keeps the canonical DB reader on fixed rawQuery branches instead of a generated SQL executor', () => {
+    const sourcePath = resolve(
+      fileURLToPath(new URL('..', import.meta.url)),
+      'services',
+      'durationLiveLearningProductionEvidenceReaderService.ts',
+    )
+    const source = readFileSync(sourcePath, 'utf8')
+
+    expect(source).not.toContain('async function defaultQueryExec')
+    expect(source).not.toContain('rawQuery(sql')
+    expect(source).not.toContain('queryExec ?? defaultQueryExec')
+    expect(source).toContain('async function queryCanonicalSourceTableRows')
+    expect(source).toContain('from public.duration_experience_samples')
+    expect(source).toContain('from public.runtime_consumer_runtime_calls')
   })
 })

@@ -1,6 +1,7 @@
 ﻿import { v4 as uuidv4 } from 'uuid'
 import { isCriticalPathTask, getCriticalPathTaskIds } from './criticalPathHelpers.js'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
+import { buildProjectQualitySummary } from './dataQualityGovernanceService.js'
 import type {
   DataConfidenceSnapshot,
   DataQualityFinding,
@@ -13,18 +14,81 @@ import type {
 import { logger } from '../middleware/logger.js'
 import { listActiveProjectIds } from './activeProjectService.js'
 import { executeSQL, listTaskProgressSnapshotsByTaskIds, supabase } from './dbService.js'
+import { query as rawQuery, withDatabaseTransaction } from '../database.js'
+import { detectProgressQualitySignals, type ProgressQualityCode } from './progressAnomalyService.js'
+import { normalizeStatus } from './statusDictionaryService.js'
 import {
-  insertNotification,
+  getDataQualityRecommendation,
+  getDataQualityRuleDimension,
+  isDataQualityOwnerDigestEligible,
+  listDataQualityRuleCodes,
+} from './dataQualityRuleRegistry.js'
+import {
   listNotifications,
   updateNotificationById,
 } from './notificationStore.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 import { isCompletedTask, isInProgressTask } from '../utils/taskStatus.js'
+import { hasStableResponsibleUnit } from '../utils/responsibilitySubject.js'
+import { signedDurationDayDelta } from '../utils/durationDays.js'
+import { ScopedBatchOperationError } from './scopedBatchRunner.js'
 
-const DAY_MS = 24 * 60 * 60 * 1000
 const DATA_CONFIDENCE_LOW_THRESHOLD = 70
 const DATA_CONFIDENCE_MEDIUM_THRESHOLD = 85
 
 const DATA_QUALITY_WEIGHT_KEYS = ['timeliness', 'anomaly', 'consistency', 'jumpiness', 'coverage'] as const
+const DATA_QUALITY_SETTINGS_CACHE_TTL_MS = 30_000
+const dataQualitySettingsCache = new Map<string, { expiresAt: number; summary: DataQualityProjectSettingsSummary }>()
+
+const DATA_QUALITY_TASK_FIELDS = [
+  'id',
+  'project_id',
+  'title',
+  'status',
+  'start_date',
+  'end_date',
+  'planned_start_date',
+  'planned_end_date',
+  'actual_start_date',
+  'actual_end_date',
+  'progress',
+  'assignee',
+  'assignee_name',
+  'parent_id',
+  'is_milestone',
+  'is_wbs_summary',
+  'is_executable',
+  'is_leaf',
+  'wbs_code',
+  'wbs_level',
+  'wbs_node_type',
+  'engineering_object_id',
+  'phase_object_id',
+  'section_object_id',
+  'building_object_id',
+  'basement_object_id',
+  'floor_object_id',
+  'physical_zone_object_id',
+  'functional_area_object_id',
+  'participant_unit_id',
+  'engineering_category_id',
+  'baseline_item_id',
+  'monthly_plan_item_id',
+  'template_id',
+  'template_node_id',
+  'first_progress_at',
+  'created_at',
+  'updated_at',
+] as const
+
+const DATA_QUALITY_TASK_SELECT = [
+  ...DATA_QUALITY_TASK_FIELDS.map((field) => `task.${field}`),
+  'participant_unit.unit_name AS participant_unit_name',
+].join(', ')
+
+const DATA_QUALITY_TASK_FALLBACK_SELECT = DATA_QUALITY_TASK_FIELDS
+  .map((field) => `task.${field}`)
+  .join(', ')
 
 export type DataQualityWeightKey = (typeof DATA_QUALITY_WEIGHT_KEYS)[number]
 
@@ -47,13 +111,76 @@ const DATA_QUALITY_DIMENSION_LABELS: Record<DataQualityWeightKey, string> = {
 }
 
 type FindingSeverity = 'info' | 'warning' | 'critical'
-type FindingRuleType = 'trend' | 'anomaly' | 'cross_check'
+type TaskDependencySignal = {
+  dependencyTaskId: string
+  sourceType: string | null
+}
+const STRONG_DEPENDENCY_SOURCES = new Set(['manual', 'current_task_fact', 'explicit', 'user', 'user_manual'])
+
+function normalizeDependencySourceType(value: unknown) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function isStrongDependencySource(sourceType: unknown) {
+  return STRONG_DEPENDENCY_SOURCES.has(normalizeDependencySourceType(sourceType))
+}
+
+export async function loadTaskDependencySignals(projectId: string, tasks: Task[]): Promise<Map<string, TaskDependencySignal[]>> {
+  const dependencySignalsByTaskId = new Map<string, TaskDependencySignal[]>()
+  const allIds = tasks.map((task) => task.id).filter(Boolean)
+  if (allIds.length === 0) return dependencySignalsByTaskId
+
+  try {
+    const result = await rawQuery(
+      `SELECT task_id, dependency_task_id, source_type, required_for_start, status
+         FROM public.task_dependencies
+        WHERE project_id = $1
+          AND task_id = ANY($2::uuid[])
+          AND status = 'active'`,
+      [projectId, allIds],
+    )
+
+    for (const dependency of result.rows as Array<Record<string, unknown>>) {
+      const taskId = String(dependency.task_id ?? '').trim()
+      const dependencyTaskId = String(dependency.dependency_task_id ?? '').trim()
+      if (!taskId || !dependencyTaskId || dependency.required_for_start === false) continue
+      const arr = dependencySignalsByTaskId.get(taskId) ?? []
+      arr.push({
+        dependencyTaskId,
+        sourceType: String(dependency.source_type ?? '').trim() || null,
+      })
+      dependencySignalsByTaskId.set(taskId, arr)
+    }
+  } catch (error) {
+    logger.warn('[dataQualityService] failed to load task dependency signals', { projectId, error })
+  }
+
+  return dependencySignalsByTaskId
+}
+
+type FindingRuleType =
+  | 'trend'
+  | 'anomaly'
+  | 'cross_check'
+  | 'completeness'
+  | 'wbs_classification'
+  | 'status_normalization'
+  | 'lineage'
+  | 'cross_consistency'
+  | 'staleness'
+  | 'retention'
+  | 'metric_caliber'
 type ConfidenceFlag = 'high' | 'medium' | 'low'
 
 type FindingRuleCode =
   | 'TREND_DELAY'
   | 'SNAPSHOT_GAP'
   | 'PROGRESS_JUMP'
+  | 'PROGRESS_MONTH_END_BURST'
+  | 'PROGRESS_STUCK_FINISHING'
+  | 'PROGRESS_SOURCE_LOW_CONFIDENCE'
+  | 'PROGRESS_ROLLBACK'
+  | 'PROGRESS_DUPLICATE_FILL'
   | 'PROGRESS_TIME_MISMATCH'
   | 'BATCH_SAME_VALUE'
   | 'PARENT_CHILD_INCONSISTENT'
@@ -61,15 +188,43 @@ type FindingRuleCode =
   | 'MILESTONE_PREDECESSOR_INCONSISTENT'
   | 'CONDITION_UNSATISFIED_STARTED'
   | 'ASSIGNEE_WORKLOAD_ABNORMAL'
+  | 'ENGINEERING_OBJECT_MISSING'
+  | 'PARTICIPANT_UNIT_MISSING'
+  | 'WBS_TYPE_UNCALIBRATED'
+  | 'STATUS_NORMALIZATION_NEEDED'
+  | 'LINEAGE_INCOMPLETE'
+  | 'ACCEPTANCE_LINK_ORPHAN'
+  | 'RETENTION_DECISION_EXPIRED'
+  | 'RETENTION_CONFIRMATION_FAILED'
+  | 'RETENTION_CONFIRMING_STALE'
+  | 'METRIC_CALIBER_MISSING'
+  | 'METRIC_VALUE_UNAVAILABLE'
+  | 'MATERIAL_SPECIALTY_MISSING'
+  | 'MATERIAL_UNIT_MISSING'
+  | 'MATERIAL_ARRIVAL_OVERDUE'
+  | 'MATERIAL_SAMPLE_PENDING'
 
-type DataQualityFindingDraft = Omit<DataQualityFinding, 'id' | 'detected_at' | 'resolved_at' | 'status'> & {
+type DataQualitySourceKey =
+  | 'tasks'
+  | 'conditions'
+  | 'snapshots'
+  | 'lineageLinks'
+  | 'acceptancePlans'
+  | 'materials'
+  | 'retentionEvents'
+  | 'metricSnapshots'
+
+type DataQualitySourceReadStatus = Record<DataQualitySourceKey, 'ok' | 'failed'>
+
+type DataQualityQuerySourceKey = Exclude<DataQualitySourceKey, 'snapshots'>
+
+export type DataQualityFindingDraft = Omit<DataQualityFinding, 'id' | 'detected_at' | 'resolved_at' | 'status'> & {
   details_json: Record<string, unknown>
 }
 
 type ProjectMemberRow = {
   project_id: string
   user_id: string
-  role?: string | null
   permission_level?: string | null
 }
 
@@ -81,6 +236,255 @@ type ProjectOwnerRow = {
 type ProgressWindow = {
   startAt: number
   endAt: number
+}
+
+type DataQualityTaskQueryRow = Record<string, unknown> & {
+  participant_unit_id?: string | null
+  participant_unit_name?: string | null
+}
+
+type ParticipantUnitNameRow = {
+  id?: string | null
+  unit_name?: string | null
+}
+
+type AcceptancePlanFallbackRow = AcceptancePlanQualityRow & {
+  linked_task_id?: string | null
+}
+
+type AcceptancePlanTaskLinkRow = {
+  source_entity_id?: string | null
+  target_entity_id?: string | null
+}
+
+async function readFallbackTaskRows<T>(projectId: string): Promise<T[]> {
+  const rows = await executeSQL<DataQualityTaskQueryRow>(
+    `SELECT ${DATA_QUALITY_TASK_FALLBACK_SELECT}
+       FROM tasks task
+      WHERE task.project_id = ?`,
+    [projectId],
+  )
+  const needsParticipantUnitNames = rows.some((row) => (
+    Boolean(row.participant_unit_id) && !row.participant_unit_name
+  ))
+  if (!needsParticipantUnitNames) return rows as T[]
+
+  const units = await executeSQL<ParticipantUnitNameRow>(
+    'SELECT id, unit_name FROM participant_units WHERE project_id = ?',
+    [projectId],
+  )
+  const unitNameById = new Map(
+    units
+      .filter((row): row is ParticipantUnitNameRow & { id: string } => Boolean(row.id))
+      .map((row) => [String(row.id), row.unit_name ?? null]),
+  )
+
+  return rows.map((row) => ({
+    ...row,
+    participant_unit_name: row.participant_unit_name
+      ?? unitNameById.get(String(row.participant_unit_id ?? ''))
+      ?? null,
+  })) as T[]
+}
+
+async function readFallbackAcceptancePlanRows<T>(projectId: string): Promise<T[]> {
+  const plans = await executeSQL<AcceptancePlanFallbackRow>(
+    'SELECT id, project_id, plan_name, acceptance_name, status FROM acceptance_plans WHERE project_id = ?',
+    [projectId],
+  )
+  if (plans.length === 0 || plans.every((plan) => Object.prototype.hasOwnProperty.call(plan, 'linked_task_id'))) {
+    return plans as T[]
+  }
+
+  const links = await executeSQL<AcceptancePlanTaskLinkRow>(
+    "SELECT source_entity_id, target_entity_id FROM project_entity_links WHERE project_id = ? AND source_entity_type = 'acceptance_plan' AND target_entity_type = 'task' AND relation_type = 'covers_task' AND status = 'active'",
+    [projectId],
+  )
+  const taskIdsByPlanId = new Map<string, string[]>()
+  for (const link of links) {
+    const planId = String(link.source_entity_id ?? '').trim()
+    const taskId = String(link.target_entity_id ?? '').trim()
+    if (!planId || !taskId) continue
+    taskIdsByPlanId.set(planId, [...(taskIdsByPlanId.get(planId) ?? []), taskId])
+  }
+
+  return plans.flatMap((plan) => {
+    const taskIds = taskIdsByPlanId.get(String(plan.id)) ?? []
+    if (taskIds.length === 0) return [{ ...plan, linked_task_id: null }]
+    return taskIds.map((taskId) => ({ ...plan, linked_task_id: taskId }))
+  }) as T[]
+}
+
+async function readDataQualityRows<T>(sourceKey: DataQualityQuerySourceKey, projectId: string): Promise<T[]> {
+  if (process.env.NODE_ENV === 'test') {
+    switch (sourceKey) {
+      case 'tasks':
+        return readFallbackTaskRows<T>(projectId)
+      case 'conditions':
+        return executeSQL<T>('SELECT * FROM task_conditions WHERE project_id = ?', [projectId])
+      case 'lineageLinks':
+        return executeSQL<T>(
+          "SELECT source_entity_type, source_entity_id, relation_type, target_entity_type, target_entity_id, mapping_status FROM data_lineage_links WHERE project_id = ? AND target_entity_type = 'task'",
+          [projectId],
+        )
+      case 'acceptancePlans':
+        return readFallbackAcceptancePlanRows<T>(projectId)
+      case 'materials':
+        return executeSQL<T>(
+          'SELECT id, project_id, material_name, participant_unit_id, requires_sample_confirmation, sample_confirmed, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status, specialty_type FROM project_materials WHERE project_id = ?',
+          [projectId],
+        )
+      case 'retentionEvents':
+        return executeSQL<T>(
+          'SELECT id, project_id, entity_type, entity_id, entity_name_snapshot, requested_action, resolved_action, execution_status, requires_user_confirmation, decision_token_hash, expires_at, confirmed_at, confirmation_metadata FROM deletion_retention_events WHERE project_id = ?',
+          [projectId],
+        )
+      case 'metricSnapshots':
+        return executeSQL<T>(
+          'SELECT id, project_id, snapshot_date, metric_availability, metric_registry_version, metric_snapshot_version FROM project_daily_snapshot WHERE project_id = ? ORDER BY snapshot_date DESC LIMIT 1',
+          [projectId],
+        )
+    }
+  }
+
+  let result: Awaited<ReturnType<typeof rawQuery>>
+  switch (sourceKey) {
+    case 'tasks':
+      result = await rawQuery(
+        `SELECT ${DATA_QUALITY_TASK_SELECT}
+           FROM public.tasks task
+           LEFT JOIN public.participant_units participant_unit ON participant_unit.id = task.participant_unit_id
+          WHERE task.project_id = $1`,
+        [projectId],
+      )
+      break
+    case 'conditions':
+      result = await rawQuery('SELECT * FROM public.task_conditions WHERE project_id = $1', [projectId])
+      break
+    case 'lineageLinks':
+      result = await rawQuery(
+        "SELECT source_entity_type, source_entity_id, relation_type, target_entity_type, target_entity_id, mapping_status FROM public.data_lineage_links WHERE project_id = $1 AND target_entity_type = 'task'",
+        [projectId],
+      )
+      break
+    case 'acceptancePlans':
+      result = await rawQuery(
+        `SELECT ap.id, ap.project_id, ap.plan_name, ap.acceptance_name, ap.status,
+                pel.target_entity_id AS linked_task_id
+           FROM public.acceptance_plans ap
+           LEFT JOIN public.project_entity_links pel
+             ON pel.project_id = ap.project_id
+            AND pel.source_entity_type = 'acceptance_plan'
+            AND pel.source_entity_id = ap.id::text
+            AND pel.target_entity_type = 'task'
+            AND pel.relation_type = 'covers_task'
+            AND pel.status = 'active'
+          WHERE ap.project_id = $1`,
+        [projectId],
+      )
+      break
+    case 'materials':
+      result = await rawQuery(
+        'SELECT id, project_id, material_name, participant_unit_id, requires_sample_confirmation, sample_confirmed, expected_arrival_date, actual_arrival_date, record_status, lifecycle_status, specialty_type FROM public.project_materials WHERE project_id = $1',
+        [projectId],
+      )
+      break
+    case 'retentionEvents':
+      result = await rawQuery(
+        'SELECT id, project_id, entity_type, entity_id, entity_name_snapshot, requested_action, resolved_action, execution_status, requires_user_confirmation, decision_token_hash, expires_at, confirmed_at, confirmation_metadata FROM public.deletion_retention_events WHERE project_id = $1',
+        [projectId],
+      )
+      break
+    case 'metricSnapshots':
+      result = await rawQuery(
+        'SELECT id, project_id, snapshot_date, metric_availability, metric_registry_version, metric_snapshot_version FROM public.project_daily_snapshot WHERE project_id = $1 ORDER BY snapshot_date DESC LIMIT 1',
+        [projectId],
+      )
+      break
+  }
+
+  return result.rows as T[]
+}
+
+async function listDataQualitySnapshots(taskIds: string[]) {
+  const normalizedTaskIds = [...new Set(
+    taskIds.map((taskId) => String(taskId ?? '').trim()).filter(Boolean),
+  )]
+  if (normalizedTaskIds.length === 0) return []
+  if (process.env.NODE_ENV === 'test') {
+    return listTaskProgressSnapshotsByTaskIds(normalizedTaskIds)
+  }
+
+  try {
+    const result = await rawQuery(
+      'SELECT * FROM public.task_progress_snapshots WHERE task_id = ANY($1::uuid[])',
+      [normalizedTaskIds],
+    )
+    return result.rows as TaskProgressSnapshot[]
+  } catch (error) {
+    logger.warn('[dataQualityService] direct snapshot read failed, falling back to dbService', {
+      taskCount: normalizedTaskIds.length,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return listTaskProgressSnapshotsByTaskIds(normalizedTaskIds)
+  }
+}
+
+type DataLineageLinkRow = {
+  source_entity_type?: string | null
+  source_entity_id?: string | null
+  relation_type?: string | null
+  target_entity_type?: string | null
+  target_entity_id?: string | null
+  mapping_status?: string | null
+}
+
+type AcceptancePlanQualityRow = {
+  id: string
+  project_id: string
+  linked_task_id?: string | null
+  plan_name?: string | null
+  acceptance_name?: string | null
+  status?: string | null
+}
+
+type ProjectMaterialQualityRow = {
+  id: string
+  project_id: string
+  material_name?: string | null
+  participant_unit_id?: string | null
+  requires_sample_confirmation?: boolean | null
+  sample_confirmed?: boolean | null
+  expected_arrival_date?: string | null
+  actual_arrival_date?: string | null
+  record_status?: string | null
+  lifecycle_status?: string | null
+  specialty_type?: string | null
+}
+
+type RetentionDecisionQualityRow = {
+  id: string
+  project_id?: string | null
+  entity_type?: string | null
+  entity_id?: string | null
+  entity_name_snapshot?: string | null
+  requested_action?: string | null
+  resolved_action?: string | null
+  execution_status?: string | null
+  requires_user_confirmation?: boolean | null
+  decision_token_hash?: string | null
+  expires_at?: string | null
+  confirmed_at?: string | null
+  confirmation_metadata?: Record<string, unknown> | string | null
+}
+
+type ProjectDailySnapshotQualityRow = {
+  id?: string | null
+  project_id: string
+  snapshot_date?: string | null
+  metric_availability?: Record<string, unknown> | null
+  metric_registry_version?: string | null
+  metric_snapshot_version?: number | string | null
 }
 
 type DataQualityConfidence = {
@@ -101,7 +505,7 @@ type DataQualityConfidence = {
 }
 
 export interface DataQualityConfidenceDimension {
-  key: DataQualityWeightKey
+  key: string
   label: string
   score: number
   weight: number
@@ -148,6 +552,10 @@ export interface DataQualityProjectSummary {
   }
   ownerDigest: DataQualityOwnerDigest
   findings: DataQualityFinding[]
+  // v1.4.16: extended dimensions
+  extendedDimensions?: Array<{ dimension: string; score: number; findingCount: number; activeCount: number }>
+  extendedConfidenceScore?: number
+  extendedRules?: string[]
 }
 
 export interface DataQualityLiveCheckSummary {
@@ -158,6 +566,138 @@ export interface DataQualityLiveCheckSummary {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+type DataQualityQueryExec = typeof rawQuery
+type DataQualityTransactionRunner = <T>(work: () => Promise<T>) => Promise<T>
+
+export async function persistDataQualityFindingsDirect(options: {
+  projectId: string
+  nextFindings: DataQualityFindingDraft[]
+  unresolvedRuleCodes?: Set<FindingRuleCode>
+  queryExec?: DataQualityQueryExec
+  transactionRunner?: DataQualityTransactionRunner
+}) {
+  const queryExec = options.queryExec ?? rawQuery
+  const transactionRunner = options.transactionRunner ?? withDatabaseTransaction
+
+  return transactionRunner(async () => {
+    const existingResult = await queryExec(
+      'SELECT * FROM public.data_quality_findings WHERE project_id = $1',
+      [options.projectId],
+    )
+    const existing = existingResult.rows as DataQualityFinding[]
+    const existingByKey = new Map(existing.map((finding) => [finding.finding_key, finding]))
+    const detectedAt = nowIso()
+    const activeKeys = new Set(options.nextFindings.map((finding) => finding.finding_key))
+    const upsertPayload = options.nextFindings.map((finding) => {
+      const current = existingByKey.get(finding.finding_key)
+      return {
+        id: current?.id ?? uuidv4(),
+        finding_key: finding.finding_key,
+        project_id: finding.project_id,
+        task_id: finding.task_id ?? null,
+        rule_code: finding.rule_code,
+        rule_type: finding.rule_type,
+        severity: finding.severity,
+        dimension_key: finding.dimension_key ?? null,
+        summary: finding.summary,
+        details_json: finding.details_json,
+        detected_at: current?.detected_at ?? detectedAt,
+        entity_type: finding.entity_type ?? 'task',
+        entity_id: finding.entity_id ?? (finding.task_id ?? null),
+        quality_dimension: finding.quality_dimension ?? getDataQualityRuleDimension(finding.rule_code),
+        source_type: finding.source_type ?? null,
+      }
+    })
+
+    if (upsertPayload.length > 0) {
+      await queryExec(
+        `INSERT INTO public.data_quality_findings (
+           id, finding_key, project_id, task_id, rule_code, rule_type, severity,
+           dimension_key, summary, details_json, detected_at, resolved_at, status,
+           entity_type, entity_id, quality_dimension, source_type, resolved_type
+         )
+         SELECT payload.id::uuid,
+                payload.finding_key,
+                payload.project_id::uuid,
+                NULLIF(payload.task_id, '')::uuid,
+                payload.rule_code,
+                payload.rule_type,
+                payload.severity,
+                payload.dimension_key,
+                payload.summary,
+                payload.details_json,
+                payload.detected_at::timestamptz,
+                NULL,
+                'active',
+                payload.entity_type,
+                payload.entity_id,
+                payload.quality_dimension,
+                payload.source_type,
+                NULL
+           FROM jsonb_to_recordset($1::jsonb) AS payload(
+             id text,
+             finding_key text,
+             project_id text,
+             task_id text,
+             rule_code text,
+             rule_type text,
+             severity text,
+             dimension_key text,
+             summary text,
+             details_json jsonb,
+             detected_at text,
+             entity_type text,
+             entity_id text,
+             quality_dimension text,
+             source_type text
+           )
+         ON CONFLICT (finding_key) DO UPDATE
+           SET project_id = EXCLUDED.project_id,
+               task_id = EXCLUDED.task_id,
+               rule_code = EXCLUDED.rule_code,
+               rule_type = EXCLUDED.rule_type,
+               severity = EXCLUDED.severity,
+               dimension_key = EXCLUDED.dimension_key,
+               summary = EXCLUDED.summary,
+               details_json = EXCLUDED.details_json,
+               resolved_at = NULL,
+               status = 'active',
+               entity_type = EXCLUDED.entity_type,
+               entity_id = EXCLUDED.entity_id,
+               quality_dimension = EXCLUDED.quality_dimension,
+               source_type = EXCLUDED.source_type,
+               resolved_type = NULL`,
+        [JSON.stringify(upsertPayload)],
+      )
+    }
+
+    const staleIds = existing
+      .filter((finding) => finding.status === 'active' && !activeKeys.has(finding.finding_key))
+      .filter((finding) => !options.unresolvedRuleCodes?.has(finding.rule_code as FindingRuleCode))
+      .map((finding) => finding.id)
+
+    if (staleIds.length > 0) {
+      await queryExec(
+        `UPDATE public.data_quality_findings
+            SET status = 'resolved',
+                resolved_at = $3::timestamptz
+          WHERE project_id = $1
+            AND id = ANY($2::uuid[])`,
+        [options.projectId, staleIds, detectedAt],
+      )
+    }
+
+    const persistedResult = await queryExec(
+      `SELECT *
+         FROM public.data_quality_findings
+        WHERE project_id = $1
+        ORDER BY detected_at DESC`,
+      [options.projectId],
+    )
+    return persistedResult.rows as DataQualityFinding[]
+  })
 }
 
 function roundScore(value: number) {
@@ -235,8 +775,35 @@ function toTimestamp(value?: string | null) {
   return new Date(value).getTime()
 }
 
+function normalizeTextValue(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+function normalizeLowerValue(value: unknown) {
+  return normalizeTextValue(value).toLowerCase()
+}
+
+function toRecord(value: unknown): Record<string, unknown> {
+  if (!value) return {}
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+    } catch {
+      return {}
+    }
+  }
+  return typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function isPastDate(value?: string | null, referenceAt = Date.now()) {
+  const timestamp = toTimestamp(value)
+  return Number.isFinite(timestamp) && timestamp < referenceAt
+}
+
 function diffDays(startAt: number, endAt: number) {
-  return Math.max(0, Math.ceil((endAt - startAt) / DAY_MS))
+  if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) return 0
+  return Math.max(0, signedDurationDayDelta(new Date(startAt), new Date(endAt)) ?? 0)
 }
 
 function isStartedTask(task: Partial<Task>) {
@@ -284,7 +851,7 @@ function getConfidenceNote(score: number) {
     return '数据置信度低，仅供参考'
   }
   if (score < DATA_CONFIDENCE_MEDIUM_THRESHOLD) {
-    return '数据质量存在波动，建议结合现场复核'
+    return 'ڲֳ'
   }
   return '当前数据质量稳定，可作为分析依据'
 }
@@ -330,6 +897,7 @@ function getOverlapCount(target: ProgressWindow, windows: ProgressWindow[]) {
 }
 
 function toFindingRow(finding: DataQualityFindingDraft, detectedAt: string, status: DataQualityFinding['status'] = 'active'): DataQualityFinding {
+  const ruleCode = String(finding.rule_code ?? '')
   return {
     id: '',
     finding_key: finding.finding_key,
@@ -344,34 +912,17 @@ function toFindingRow(finding: DataQualityFindingDraft, detectedAt: string, stat
     detected_at: detectedAt,
     resolved_at: null,
     status,
+    entity_type: finding.entity_type ?? 'task',
+    entity_id: finding.entity_id ?? (finding.task_id ?? null),
+    quality_dimension: finding.quality_dimension ?? getDataQualityRuleDimension(ruleCode),
+    confidence_impact: finding.confidence_impact ?? null,
+    source_type: finding.source_type ?? null,
+    resolved_type: finding.resolved_type ?? null,
   }
 }
 
 function buildRecommendation(ruleCode: FindingRuleCode) {
-  switch (ruleCode) {
-    case 'TREND_DELAY':
-      return '优先核对计划工期、现场完成量和剩余工期，必要时提前调整资源。'
-    case 'SNAPSHOT_GAP':
-      return '请尽快补录最近一次进度，避免后续分析失真。'
-    case 'PROGRESS_JUMP':
-      return '请核对最近两次进度填报依据，确认是否存在突击补填。'
-    case 'PROGRESS_TIME_MISMATCH':
-      return '请复核计划工期与当前进度是否匹配，避免整体判断失真。'
-    case 'BATCH_SAME_VALUE':
-      return '请核对同批任务是否被粗填为相同进度，必要时逐条修正。'
-    case 'PARENT_CHILD_INCONSISTENT':
-      return '请先补齐子项状态，再同步父级完成情况。'
-    case 'DEPENDENCY_INCONSISTENT':
-      return '请核对前置任务完成情况和当前任务开工时间。'
-    case 'MILESTONE_PREDECESSOR_INCONSISTENT':
-      return '请确认关键节点是否已满足前置任务条件，再决定是否保留完成状态。'
-    case 'CONDITION_UNSATISFIED_STARTED':
-      return '请先确认开工条件，再继续更新任务进度。'
-    case 'ASSIGNEE_WORKLOAD_ABNORMAL':
-      return '请核查责任人同时承担的在途任务量，必要时调整责任分配。'
-    default:
-      return '请核对当前数据并根据现场情况修正。'
-  }
+  return getDataQualityRecommendation(ruleCode)
 }
 
 function buildPrompt(findings: DataQualityFinding[], taskTitleById: Map<string, string>): DataQualityProjectSummary['prompt'] {
@@ -426,6 +977,7 @@ function buildTrendWarningsFromFindings(findings: DataQualityFinding[]): Notific
 function buildOwnerDigest(findings: DataQualityFinding[]): DataQualityOwnerDigest {
   const activeFindings = findings.filter((finding) => {
     if (finding.status !== 'active') return false
+    if (!isDataQualityOwnerDigestEligible(finding.rule_code)) return false
     if (finding.rule_type !== 'trend') return true
     return !Boolean(finding.details_json?.is_critical_task)
   })
@@ -480,7 +1032,7 @@ function buildOwnerDigest(findings: DataQualityFinding[]): DataQualityOwnerDiges
       severity: 'info',
       scopeLabel: null,
       findingCount: activeFindings.length,
-      summary: `当前共有 ${activeFindings.length} 条${summaryLabel}，但尚未达到聚合推送阈值。`,
+      summary: `当前 ${activeFindings.length} 项${summaryLabel}需要到业务页面核对。`,
     }
   }
 
@@ -489,7 +1041,7 @@ function buildOwnerDigest(findings: DataQualityFinding[]): DataQualityOwnerDiges
     severity: topCluster.severity,
     scopeLabel: topCluster.label,
     findingCount: topCluster.count,
-    summary: `当前“${topCluster.label}”相关任务出现 ${topCluster.count} 条${summaryLabel}，建议优先安排现场核验。`,
+    summary: `当前${topCluster.label}中有 ${topCluster.count} 项${summaryLabel}，请优先核对该范围。`,
   }
 }
 
@@ -553,17 +1105,8 @@ function buildTaskPreview(
     actual_end_date: draft?.actual_end_date ?? baseTask?.actual_end_date,
     progress: nextProgress,
     assignee: typeof draft?.assignee === 'string' ? draft.assignee : baseTask?.assignee,
-    assignee_unit: typeof draft?.assignee_unit === 'string'
-      ? draft.assignee_unit
-      : typeof draft?.responsible_unit === 'string'
-        ? draft.responsible_unit
-        : baseTask?.assignee_unit,
     parent_task_id: draft?.parent_task_id ?? baseTask?.parent_task_id,
-    dependencies: Array.isArray(draft?.dependencies)
-      ? draft.dependencies.map((item) => String(item))
-      : Array.isArray(baseTask?.dependencies)
-        ? baseTask.dependencies
-        : [],
+    dependencies: [],
     milestone_id: draft?.milestone_id ?? baseTask?.milestone_id,
     wbs_level: draft?.wbs_level ?? baseTask?.wbs_level,
     wbs_code: draft?.wbs_code ?? baseTask?.wbs_code,
@@ -572,13 +1115,18 @@ function buildTaskPreview(
     milestone_level: draft?.milestone_level ?? baseTask?.milestone_level,
     milestone_order: draft?.milestone_order ?? baseTask?.milestone_order,
     task_type: draft?.task_type ?? baseTask?.task_type,
-    phase_id: draft?.phase_id ?? baseTask?.phase_id,
     task_source: draft?.task_source ?? baseTask?.task_source,
-    is_critical: typeof draft?.is_critical === 'boolean' ? draft.is_critical : baseTask?.is_critical,
+    is_critical: false,
     parent_id: draft?.parent_id ?? draft?.parent_task_id ?? baseTask?.parent_id ?? baseTask?.parent_task_id ?? null,
     specialty_type: draft?.specialty_type ?? baseTask?.specialty_type,
-    reference_duration: draft?.reference_duration ?? baseTask?.reference_duration,
-    ai_duration: draft?.ai_duration ?? baseTask?.ai_duration,
+    engineering_object_id: draft?.engineering_object_id ?? baseTask?.engineering_object_id ?? null,
+    phase_object_id: draft?.phase_object_id ?? baseTask?.phase_object_id ?? null,
+    section_object_id: draft?.section_object_id ?? baseTask?.section_object_id ?? null,
+    building_object_id: draft?.building_object_id ?? baseTask?.building_object_id ?? null,
+    floor_object_id: draft?.floor_object_id ?? baseTask?.floor_object_id ?? null,
+    basement_object_id: draft?.basement_object_id ?? baseTask?.basement_object_id ?? null,
+    physical_zone_object_id: draft?.physical_zone_object_id ?? baseTask?.physical_zone_object_id ?? null,
+    functional_area_object_id: draft?.functional_area_object_id ?? baseTask?.functional_area_object_id ?? null,
     first_progress_at: draft?.first_progress_at ?? baseTask?.first_progress_at,
     delay_reason: draft?.delay_reason ?? baseTask?.delay_reason,
     assignee_user_id: draft?.assignee_user_id ?? baseTask?.assignee_user_id ?? null,
@@ -587,19 +1135,12 @@ function buildTaskPreview(
       : typeof draft?.assignee === 'string'
         ? draft.assignee
         : baseTask?.assignee_name ?? baseTask?.assignee,
-    responsible_unit: typeof draft?.responsible_unit === 'string'
-      ? draft.responsible_unit
-      : typeof draft?.assignee_unit === 'string'
-        ? draft.assignee_unit
-        : baseTask?.responsible_unit ?? baseTask?.assignee_unit,
     baseline_item_id: draft?.baseline_item_id ?? baseTask?.baseline_item_id,
     monthly_plan_item_id: draft?.monthly_plan_item_id ?? baseTask?.monthly_plan_item_id,
     participant_unit_id: draft?.participant_unit_id ?? baseTask?.participant_unit_id,
     participant_unit_name: typeof draft?.participant_unit_name === 'string'
       ? draft.participant_unit_name
-      : typeof draft?.responsible_unit === 'string'
-        ? draft.responsible_unit
-        : baseTask?.participant_unit_name,
+      : baseTask?.participant_unit_name,
     created_at: baseTask?.created_at ?? nowIso(),
     updated_at: nowIso(),
     updated_by: baseTask?.updated_by,
@@ -656,16 +1197,203 @@ function buildProgressWindows(tasks: Task[]) {
   return windows
 }
 
+const INACTIVE_TASK_STATUSES = new Set([
+  'completed',
+  'cancelled',
+  'closed',
+  'archived',
+  'voided',
+  'deleted',
+  '已完成',
+  '已取消',
+  '已关闭',
+  '已归档',
+  '已作废',
+  '已删除',
+])
+
+const INACTIVE_MATERIAL_STATUSES = new Set([
+  'inactive',
+  'archived',
+  'voided',
+  'deleted',
+  'cancelled',
+  'closed',
+  '已停用',
+  '已归档',
+  '已作废',
+  '已删除',
+  '已取消',
+  '已关闭',
+])
+
+const UNAVAILABLE_METRIC_STATUSES = new Set([
+  'insufficient_data',
+  'data_pending',
+  'source_unavailable',
+  'low_confidence',
+])
+
+function isQualityActiveTask(task: Task) {
+  const status = String(task.status ?? '').trim().toLowerCase()
+  return !INACTIVE_TASK_STATUSES.has(status)
+}
+
+function isQualityExecutableTask(task: Task) {
+  return isQualityActiveTask(task) && task.is_wbs_summary !== true && task.is_executable !== false
+}
+
+function hasAnyEngineeringObjectReference(task: Task) {
+  return Boolean(
+    task.engineering_object_id ||
+    task.phase_object_id ||
+    task.section_object_id ||
+    task.building_object_id ||
+    task.basement_object_id ||
+    task.floor_object_id ||
+    task.physical_zone_object_id ||
+    task.functional_area_object_id,
+  )
+}
+
+function hasParticipantUnitReference(task: Task) {
+  return hasStableResponsibleUnit(task)
+}
+
+function shouldHaveExplicitWbsType(task: Task) {
+  return Boolean(
+    task.wbs_code ||
+    task.wbs_level != null ||
+    task.parent_id ||
+    task.parent_task_id ||
+    task.is_wbs_summary ||
+    task.is_executable != null,
+  )
+}
+
+function isGeneratedTaskNeedingLineage(task: Task) {
+  const source = String(task.task_source ?? '').trim().toLowerCase()
+  if (task.baseline_item_id || task.monthly_plan_item_id || task.template_id || task.template_node_id) return true
+  return ['baseline', 'monthly_plan', 'template', 'wbs_template', 'imported', 'generated'].includes(source)
+}
+
+function isQualityActiveMaterial(material: ProjectMaterialQualityRow) {
+  const recordStatus = normalizeLowerValue(material.record_status || 'active')
+  const lifecycleStatus = normalizeLowerValue(material.lifecycle_status || 'active')
+  return !INACTIVE_MATERIAL_STATUSES.has(recordStatus) && !INACTIVE_MATERIAL_STATUSES.has(lifecycleStatus)
+}
+
+function defaultSourceReadStatus(): DataQualitySourceReadStatus {
+  return {
+    tasks: 'ok',
+    conditions: 'ok',
+    snapshots: 'ok',
+    lineageLinks: 'ok',
+    acceptancePlans: 'ok',
+    materials: 'ok',
+    retentionEvents: 'ok',
+    metricSnapshots: 'ok',
+  }
+}
+
+async function readOptionalQualityRows<T>(
+  projectId: string,
+  sourceKey: DataQualitySourceKey,
+  status: DataQualitySourceReadStatus,
+  loader: () => Promise<T[]>,
+): Promise<T[]> {
+  try {
+    return await loader()
+  } catch (error) {
+    status[sourceKey] = 'failed'
+    logger.warn('[dataQualityService] optional source read failed', {
+      projectId,
+      sourceKey,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+}
+
+const SOURCE_RULE_CODES: Record<DataQualitySourceKey, FindingRuleCode[]> = {
+  tasks: [
+    'TREND_DELAY',
+    'SNAPSHOT_GAP',
+    'PROGRESS_TIME_MISMATCH',
+    'BATCH_SAME_VALUE',
+    'PARENT_CHILD_INCONSISTENT',
+    'DEPENDENCY_INCONSISTENT',
+    'MILESTONE_PREDECESSOR_INCONSISTENT',
+    'CONDITION_UNSATISFIED_STARTED',
+    'ASSIGNEE_WORKLOAD_ABNORMAL',
+    'ENGINEERING_OBJECT_MISSING',
+    'PARTICIPANT_UNIT_MISSING',
+    'WBS_TYPE_UNCALIBRATED',
+    'STATUS_NORMALIZATION_NEEDED',
+    'LINEAGE_INCOMPLETE',
+  ],
+  conditions: [
+    'CONDITION_UNSATISFIED_STARTED',
+  ],
+  snapshots: [
+    'SNAPSHOT_GAP',
+    'PROGRESS_JUMP',
+    'PROGRESS_MONTH_END_BURST',
+    'PROGRESS_STUCK_FINISHING',
+    'PROGRESS_SOURCE_LOW_CONFIDENCE',
+    'PROGRESS_ROLLBACK',
+    'PROGRESS_DUPLICATE_FILL',
+  ],
+  lineageLinks: [
+    'LINEAGE_INCOMPLETE',
+  ],
+  acceptancePlans: [
+    'ACCEPTANCE_LINK_ORPHAN',
+  ],
+  materials: [
+    'MATERIAL_SPECIALTY_MISSING',
+    'MATERIAL_UNIT_MISSING',
+    'MATERIAL_ARRIVAL_OVERDUE',
+    'MATERIAL_SAMPLE_PENDING',
+  ],
+  retentionEvents: [
+    'RETENTION_DECISION_EXPIRED',
+    'RETENTION_CONFIRMATION_FAILED',
+    'RETENTION_CONFIRMING_STALE',
+  ],
+  metricSnapshots: [
+    'METRIC_CALIBER_MISSING',
+    'METRIC_VALUE_UNAVAILABLE',
+  ],
+}
+
+function collectUnresolvedRuleCodesForFailedSources(status: DataQualitySourceReadStatus) {
+  const codes = new Set<FindingRuleCode>()
+  for (const [sourceKey, readStatus] of Object.entries(status) as Array<[DataQualitySourceKey, 'ok' | 'failed']>) {
+    if (readStatus !== 'failed') continue
+    for (const ruleCode of SOURCE_RULE_CODES[sourceKey] ?? []) {
+      codes.add(ruleCode)
+    }
+  }
+  return codes
+}
+
 export class DataQualityService {
   private async loadProjectData(projectId: string) {
-    const tasks = await executeSQL<Task>('SELECT * FROM tasks WHERE project_id = ?', [projectId])
+    const sourceReadStatus = defaultSourceReadStatus()
+    const tasks = await readDataQualityRows<Task>('tasks', projectId)
     const taskIds = tasks.map((task) => task.id)
-    const [conditions, snapshots] = await Promise.all([
-      executeSQL<TaskCondition>('SELECT * FROM task_conditions WHERE project_id = ?', [projectId]),
-      listTaskProgressSnapshotsByTaskIds(taskIds),
+    const [conditions, snapshots, lineageLinks, acceptancePlans, materials, retentionEvents, metricSnapshots] = await Promise.all([
+      readDataQualityRows<TaskCondition>('conditions', projectId),
+      listDataQualitySnapshots(taskIds),
+      readOptionalQualityRows(projectId, 'lineageLinks', sourceReadStatus, () => readDataQualityRows<DataLineageLinkRow>('lineageLinks', projectId)),
+      readOptionalQualityRows(projectId, 'acceptancePlans', sourceReadStatus, () => readDataQualityRows<AcceptancePlanQualityRow>('acceptancePlans', projectId)),
+      readOptionalQualityRows(projectId, 'materials', sourceReadStatus, () => readDataQualityRows<ProjectMaterialQualityRow>('materials', projectId)),
+      readOptionalQualityRows(projectId, 'retentionEvents', sourceReadStatus, () => readDataQualityRows<RetentionDecisionQualityRow>('retentionEvents', projectId)),
+      readOptionalQualityRows(projectId, 'metricSnapshots', sourceReadStatus, () => readDataQualityRows<ProjectDailySnapshotQualityRow>('metricSnapshots', projectId)),
     ])
 
-    return { tasks, conditions, snapshots }
+    return { tasks, conditions, snapshots, lineageLinks, acceptancePlans, materials, retentionEvents, metricSnapshots, sourceReadStatus }
   }
 
   private async detectTrendFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
@@ -712,17 +1440,17 @@ export class DataQualityService {
         rule_type: 'trend',
         severity,
         dimension_key: `task:${task.id}`,
-        summary: `任务“${task.title}”当前进度 ${Number(task.progress ?? 0)}%，时间已消耗 ${Math.round(timeConsumedRate * 100)}%，存在明显滞后趋势。`,
+        summary: `任务「${task.title}」当前进度 ${Number(task.progress ?? 0)}%，时间消耗约 ${Math.round(timeConsumedRate * 100)}%，存在进度滞后趋势。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           deviation_ratio: roundScore(deviationRatio),
           progress_rate: roundScore(progressRate),
           time_consumed_rate: roundScore(timeConsumedRate),
-          remaining_days: remainingDays,
+          plannedRemainingDays: remainingDays,
           is_critical_task: isCritical,
           assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
         },
       })
     }
@@ -761,14 +1489,14 @@ export class DataQualityService {
         rule_type: 'anomaly',
         severity,
         dimension_key: `task:${task.id}`,
-        summary: `任务”${task.title}”最近 ${gapDays} 天没有新的进度快照，请尽快补录。`,
+        summary: `任务「${task.title}」已有 ${gapDays} 天未更新进度，请复核现场最新进展。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           gap_days: gapDays,
           latest_snapshot_date: latestSnapshot?.snapshot_date ?? latestSnapshot?.created_at ?? null,
           assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
           is_critical_task: isCritical,
         },
       })
@@ -780,44 +1508,55 @@ export class DataQualityService {
   private async detectProgressJumpFindings(projectId: string, tasks: Task[], snapshotsByTask: Map<string, TaskProgressSnapshot[]>): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const criticalTaskIds = await getCriticalPathTaskIds(projectId)
+    const ruleByCode: Record<ProgressQualityCode, FindingRuleCode> = {
+      progress_jump: 'PROGRESS_JUMP',
+      month_end_burst: 'PROGRESS_MONTH_END_BURST',
+      stuck_finishing: 'PROGRESS_STUCK_FINISHING',
+      source_low_confidence: 'PROGRESS_SOURCE_LOW_CONFIDENCE',
+      progress_rollback: 'PROGRESS_ROLLBACK',
+      duplicate_progress_fill: 'PROGRESS_DUPLICATE_FILL',
+    }
+    const labelByCode: Record<ProgressQualityCode, string> = {
+      progress_jump: '进度跳变填报',
+      month_end_burst: '月末集中填报',
+      stuck_finishing: '进度卡停未闭合',
+      source_low_confidence: '进度来源可信度偏低',
+      progress_rollback: '进度回退修正',
+      duplicate_progress_fill: '重复进度填报',
+    }
 
     for (const task of tasks) {
       const snapshots = snapshotsByTask.get(task.id) ?? []
-      if (snapshots.length < 2) continue
+      const signals = detectProgressQualitySignals(snapshots)
+      if (signals.length === 0) continue
 
-      const latest = snapshots[0]
-      const previous = snapshots[1]
-      const latestAt = toTimestamp(latest.snapshot_date ?? latest.created_at)
-      const previousAt = toTimestamp(previous.snapshot_date ?? previous.created_at)
-      if (!Number.isFinite(latestAt) || !Number.isFinite(previousAt) || latestAt <= previousAt) continue
-
-      const progressDelta = Number(latest.progress ?? 0) - Number(previous.progress ?? 0)
-      const daysBetween = Math.max(1, diffDays(previousAt, latestAt))
-      if (progressDelta < 40) continue
-
-      const severity: FindingSeverity = progressDelta >= 60 || daysBetween <= 1 ? 'critical' : 'warning'
       const isCritical = criticalTaskIds.has(task.id)
-      findings.push({
-        finding_key: buildFindingKey('PROGRESS_JUMP', task.id),
-        project_id: projectId,
-        task_id: task.id,
-        rule_code: 'PROGRESS_JUMP',
-        rule_type: 'anomaly',
-        severity,
-        dimension_key: `task:${task.id}`,
-        summary: `任务”${task.title}”在 ${daysBetween} 天内进度跳变 ${progressDelta}%，请核对填报依据。`,
-        details_json: {
+      for (const signal of signals) {
+        const ruleCode = ruleByCode[signal.code]
+        findings.push({
+          finding_key: buildFindingKey(ruleCode, task.id, signal.code),
+          project_id: projectId,
           task_id: task.id,
-          task_title: task.title,
-          progress_delta: progressDelta,
-          days_between: daysBetween,
-          latest_progress: latest.progress,
-          previous_progress: previous.progress,
-          assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
-          is_critical_task: isCritical,
-        },
-      })
+          rule_code: ruleCode,
+          rule_type: 'anomaly',
+          severity: signal.acknowledged ? 'info' : signal.severity,
+          dimension_key: `task:${task.id}`,
+          summary: `任务「${task.title}」命中${labelByCode[signal.code]}，该样本仅用于数据质量提示，并会按规则影响速度学习样本。`,
+          details_json: {
+            task_id: task.id,
+            task_title: task.title,
+            anomaly_code: signal.code,
+            confidence_action: signal.confidenceAction,
+            excluded_from_velocity_learning: signal.excludedFromVelocityLearning,
+            acknowledged: signal.acknowledged,
+            source_confidence_related: ['source_low_confidence', 'duplicate_progress_fill'].includes(signal.code),
+            assignee_name: task.assignee_name ?? task.assignee ?? null,
+            participant_unit_name: task.participant_unit_name ?? null,
+            is_critical_task: isCritical,
+            ...signal.metadata,
+          },
+        })
+      }
     }
 
     return findings
@@ -858,14 +1597,14 @@ export class DataQualityService {
         rule_type: 'anomaly',
         severity,
         dimension_key: `task:${task.id}`,
-        summary: `任务”${task.title}”的工期消耗与当前进度明显不匹配，请复核填报真实性。`,
+        summary: `任务「${task.title}」计划时间消耗与当前进度不匹配，请复核计划或填报。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           elapsed_rate: roundScore(elapsedRate),
           progress_rate: roundScore(progressRate),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
           is_critical_task: isCritical,
         },
       })
@@ -900,13 +1639,13 @@ export class DataQualityService {
         rule_type: 'anomaly',
         severity: groupedTasks.length >= 5 ? 'critical' : 'warning',
         dimension_key: `assignee:${assigneeName}`,
-        summary: `责任人“${assigneeName}”在同一天将 ${groupedTasks.length} 条任务更新为相同进度，存在批量粗填风险。`,
+        summary: `责任人「${assigneeName}」当前有 ${groupedTasks.length} 条任务填报为相同进度，请核对是否批量粗填。`,
         details_json: {
           assignee_name: assigneeName,
           task_ids: taskIds,
           task_titles: groupedTasks.map((task) => task.title),
           progress_value: Number(groupedTasks[0]?.progress ?? 0),
-          participant_unit_name: groupedTasks[0]?.participant_unit_name ?? groupedTasks[0]?.assignee_unit ?? null,
+          participant_unit_name: groupedTasks[0]?.participant_unit_name ?? null,
         },
       })
     }
@@ -941,14 +1680,14 @@ export class DataQualityService {
           rule_type: 'cross_check',
           severity: 'critical',
           dimension_key: `task:${task.id}`,
-          summary: `任务”${task.title}”已标记完成，但仍有 ${unfinishedChildren.length} 个子项未完成。`,
+          summary: `任务「${task.title}」已完成，但仍有 ${unfinishedChildren.length} 个子任务未完成。`,
           details_json: {
             task_id: task.id,
             task_title: task.title,
             child_task_ids: unfinishedChildren.map((child) => child.id),
             child_task_titles: unfinishedChildren.map((child) => child.title),
             assignee_name: task.assignee_name ?? task.assignee ?? null,
-            participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+            participant_unit_name: task.participant_unit_name ?? null,
             is_critical_task: isCritical,
           },
         })
@@ -960,36 +1699,44 @@ export class DataQualityService {
 
   private async detectDependencyFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
+    const dependencySignalsByTaskId = await loadTaskDependencySignals(projectId, tasks)
+
     const taskMap = new Map(tasks.map((task) => [task.id, task]))
     const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
-      const dependencyIds = Array.isArray(task.dependencies) ? task.dependencies : []
-      if (dependencyIds.length === 0 || !isStartedTask(task)) continue
+      const dependencySignals = [...(dependencySignalsByTaskId.get(task.id) ?? [])]
+      if (dependencySignals.length === 0 || !isStartedTask(task)) continue
 
-      const blockedBy = dependencyIds
-        .map((dependencyId) => taskMap.get(dependencyId))
-        .filter((dependency): dependency is Task => Boolean(dependency) && !isCompletedTask(dependency))
+      const blockedBy = dependencySignals
+        .map((signal) => ({ signal, dependency: taskMap.get(signal.dependencyTaskId) }))
+        .filter((item): item is { signal: TaskDependencySignal; dependency: Task } => Boolean(item.dependency) && !isCompletedTask(item.dependency))
 
       if (blockedBy.length === 0) continue
 
       const isCritical = criticalTaskIds.has(task.id)
+      const hasStrongDependency = blockedBy.some((item) => isStrongDependencySource(item.signal.sourceType))
+      const dependencyPolicy = hasStrongDependency ? 'manual_strong_dependency' : 'site_overlap_light_signal'
       findings.push({
         finding_key: buildFindingKey('DEPENDENCY_INCONSISTENT', task.id),
         project_id: projectId,
         task_id: task.id,
         rule_code: 'DEPENDENCY_INCONSISTENT',
         rule_type: 'cross_check',
-        severity: isCritical ? 'critical' : 'warning',
+        severity: hasStrongDependency ? (isCritical ? 'critical' : 'warning') : 'info',
         dimension_key: `task:${task.id}`,
-        summary: `任务”${task.title}”已开始，但前置任务仍有 ${blockedBy.length} 项未完成。`,
+        summary: hasStrongDependency
+          ? `任务「${task.title}」已开工，但仍有 ${blockedBy.length} 个手动强前置任务未完成。`
+          : `任务「${task.title}」已按现场事实先行推进，仍有 ${blockedBy.length} 个计划前置未完成，按穿插施工轻提示处理。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
-          dependency_task_ids: blockedBy.map((dependency) => dependency.id),
-          dependency_task_titles: blockedBy.map((dependency) => dependency.title),
+          dependency_task_ids: blockedBy.map((item) => item.dependency.id),
+          dependency_task_titles: blockedBy.map((item) => item.dependency.title),
+          dependency_source_types: blockedBy.map((item) => item.signal.sourceType ?? 'unknown'),
+          dependency_policy: dependencyPolicy,
           assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
           is_critical_task: isCritical,
         },
       })
@@ -1001,11 +1748,12 @@ export class DataQualityService {
   private async detectMilestonePredecessorFindings(projectId: string, tasks: Task[]): Promise<DataQualityFindingDraft[]> {
     const findings: DataQualityFindingDraft[] = []
     const taskMap = new Map(tasks.map((task) => [task.id, task]))
+    const dependencySignalsByTaskId = await loadTaskDependencySignals(projectId, tasks)
     const criticalTaskIds = await getCriticalPathTaskIds(projectId)
 
     for (const task of tasks) {
       if (!task.is_milestone || !isCompletedTask(task)) continue
-      const dependencyIds = Array.isArray(task.dependencies) ? task.dependencies : []
+      const dependencyIds = (dependencySignalsByTaskId.get(task.id) ?? []).map((signal) => signal.dependencyTaskId)
       if (dependencyIds.length === 0) continue
 
       const unfinished = dependencyIds
@@ -1023,14 +1771,14 @@ export class DataQualityService {
         rule_type: 'cross_check',
         severity: 'critical',
         dimension_key: `task:${task.id}`,
-        summary: `关键节点”${task.title}”已标记完成，但前置任务尚未全部完成。`,
+        summary: `关键节点「${task.title}」已完成，但仍有关联前置任务未完成。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           dependency_task_ids: unfinished.map((dependency) => dependency.id),
           dependency_task_titles: unfinished.map((dependency) => dependency.title),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
           is_critical_task: isCritical,
         },
       })
@@ -1067,14 +1815,14 @@ export class DataQualityService {
         rule_type: 'cross_check',
         severity: isCritical ? 'critical' : 'warning',
         dimension_key: `task:${task.id}`,
-        summary: `任务”${task.title}”已进入执行，但仍有 ${pendingConditions.length} 项开工条件未满足。`,
+        summary: `任务「${task.title}」已开工，但仍有 ${pendingConditions.length} 个开工条件未满足。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           condition_ids: pendingConditions.map((condition) => condition.id),
           condition_names: pendingConditions.map((condition) => condition.condition_name),
           assignee_name: task.assignee_name ?? task.assignee ?? null,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
           is_critical_task: isCritical,
         },
       })
@@ -1109,15 +1857,457 @@ export class DataQualityService {
         rule_type: 'cross_check',
         severity,
         dimension_key: `assignee:${assigneeName}`,
-        summary: `责任人”${assigneeName}”当前有 ${overlapCount} 项同时段在途任务，工作量异常。`,
+        summary: `责任人「${assigneeName}」当前有 ${overlapCount} 条在途任务时间重叠，可能存在责任分配异常。`,
         details_json: {
           task_id: task.id,
           task_title: task.title,
           assignee_name: assigneeName,
           overlap_count: overlapCount,
-          participant_unit_name: task.participant_unit_name ?? task.assignee_unit ?? null,
+          participant_unit_name: task.participant_unit_name ?? null,
           is_critical_task: isCritical,
         },
+      })
+    }
+
+    return findings
+  }
+
+  private async detectGovernanceFindings(
+    projectId: string,
+    tasks: Task[],
+    lineageLinks: DataLineageLinkRow[],
+    acceptancePlans: AcceptancePlanQualityRow[],
+  ): Promise<DataQualityFindingDraft[]> {
+    const findings: DataQualityFindingDraft[] = []
+    const taskById = new Map(tasks.map((task) => [task.id, task]))
+    const lineageTargetIds = new Set(
+      lineageLinks
+        .filter((link) => String(link.target_entity_type ?? '').trim() === 'task')
+        .map((link) => String(link.target_entity_id ?? '').trim())
+        .filter(Boolean),
+    )
+
+    for (const task of tasks) {
+      if (!isQualityExecutableTask(task)) continue
+
+      const taskTitle = task.title || '未命名任务'
+      if (!hasAnyEngineeringObjectReference(task)) {
+        findings.push({
+          finding_key: buildFindingKey('ENGINEERING_OBJECT_MISSING', task.id),
+          project_id: projectId,
+          task_id: task.id,
+          rule_code: 'ENGINEERING_OBJECT_MISSING',
+          rule_type: 'completeness',
+          severity: 'warning',
+          dimension_key: `task:${task.id}`,
+          summary: `任务「${taskTitle}」缺少工程对象或施工范围，后续范围统计和偏差归因可能失真。`,
+          details_json: {
+            task_id: task.id,
+            task_title: taskTitle,
+            wbs_code: task.wbs_code ?? null,
+          },
+          entity_type: 'task',
+          entity_id: task.id,
+          quality_dimension: 'completeness',
+          source_type: 'task',
+        })
+      }
+
+      if (!hasParticipantUnitReference(task)) {
+        findings.push({
+          finding_key: buildFindingKey('PARTICIPANT_UNIT_MISSING', task.id),
+          project_id: projectId,
+          task_id: task.id,
+          rule_code: 'PARTICIPANT_UNIT_MISSING',
+          rule_type: 'completeness',
+          severity: 'warning',
+          dimension_key: `task:${task.id}`,
+          summary: `任务「${taskTitle}」缺少责任单位，责任汇总、通知触达和履约分析可能失真。`,
+          details_json: {
+            task_id: task.id,
+            task_title: taskTitle,
+            assignee_name: task.assignee_name ?? task.assignee ?? null,
+          },
+          entity_type: 'task',
+          entity_id: task.id,
+          quality_dimension: 'completeness',
+          source_type: 'task',
+        })
+      }
+
+      if (shouldHaveExplicitWbsType(task) && !task.wbs_node_type && !task.engineering_category_id) {
+        findings.push({
+          finding_key: buildFindingKey('WBS_TYPE_UNCALIBRATED', task.id),
+          project_id: projectId,
+          task_id: task.id,
+          rule_code: 'WBS_TYPE_UNCALIBRATED',
+          rule_type: 'wbs_classification',
+          severity: 'info',
+          dimension_key: `task:${task.id}`,
+          summary: `任务「${taskTitle}」缺少 WBS 语义类型或工程分类，需要校准。`,
+          details_json: {
+            task_id: task.id,
+            task_title: taskTitle,
+            wbs_code: task.wbs_code ?? null,
+            wbs_level: task.wbs_level ?? null,
+          },
+          entity_type: 'task',
+          entity_id: task.id,
+          quality_dimension: 'accuracy',
+          source_type: 'wbs',
+        })
+      }
+
+      const rawStatus = String(task.status ?? '').trim()
+      const normalizedStatus = await normalizeStatus('task.lifecycle', rawStatus)
+      if (rawStatus && normalizedStatus !== rawStatus) {
+        findings.push({
+          finding_key: buildFindingKey('STATUS_NORMALIZATION_NEEDED', task.id),
+          project_id: projectId,
+          task_id: task.id,
+          rule_code: 'STATUS_NORMALIZATION_NEEDED',
+          rule_type: 'status_normalization',
+          severity: 'warning',
+          dimension_key: `task:${task.id}`,
+          summary: `${taskTitle} 状态 ${rawStatus} 未使用标准状态值，请统一为 ${normalizedStatus}`,
+          details_json: {
+            task_id: task.id,
+            task_title: taskTitle,
+            raw_status: rawStatus,
+            normalized_status: normalizedStatus,
+          },
+          entity_type: 'task',
+          entity_id: task.id,
+          quality_dimension: 'governance',
+          source_type: 'status_dictionary',
+        })
+      }
+
+      if (isGeneratedTaskNeedingLineage(task) && !lineageTargetIds.has(task.id)) {
+        findings.push({
+          finding_key: buildFindingKey('LINEAGE_INCOMPLETE', task.id),
+          project_id: projectId,
+          task_id: task.id,
+          rule_code: 'LINEAGE_INCOMPLETE',
+          rule_type: 'lineage',
+          severity: 'info',
+          dimension_key: `task:${task.id}`,
+          summary: `任务「${taskTitle}」缺少来源映射，模板、基线或月度计划生成链路不可追溯。`,
+          details_json: {
+            task_id: task.id,
+            task_title: taskTitle,
+            task_source: task.task_source ?? null,
+            baseline_item_id: task.baseline_item_id ?? null,
+            monthly_plan_item_id: task.monthly_plan_item_id ?? null,
+            template_id: task.template_id ?? null,
+          },
+          entity_type: 'task',
+          entity_id: task.id,
+          quality_dimension: 'lineage',
+          source_type: 'data_lineage',
+        })
+      }
+    }
+
+    for (const plan of acceptancePlans) {
+      const taskId = String(plan.linked_task_id ?? '').trim()
+      if (!taskId) continue
+
+      const linkedTask = taskById.get(taskId)
+      if (linkedTask && isQualityActiveTask(linkedTask)) continue
+
+      const planName = plan.plan_name || plan.acceptance_name || '未命名验收项'
+      findings.push({
+        finding_key: buildFindingKey('ACCEPTANCE_LINK_ORPHAN', taskId, plan.id),
+        project_id: projectId,
+        task_id: linkedTask?.id ?? null,
+        rule_code: 'ACCEPTANCE_LINK_ORPHAN',
+        rule_type: 'cross_consistency',
+        severity: 'warning',
+        dimension_key: `acceptance:${plan.id}`,
+        summary: `验收项「${planName}」关联的任务已不存在或已关闭，请修正验收联动关系。`,
+        details_json: {
+          acceptance_plan_id: plan.id,
+          acceptance_plan_name: planName,
+          linked_task_id: taskId,
+          linked_task_status: linkedTask?.status ?? null,
+        },
+        entity_type: 'acceptance_plan',
+        entity_id: plan.id,
+        quality_dimension: 'consistency',
+        source_type: 'acceptance',
+      })
+    }
+
+    return findings
+  }
+
+  private detectMaterialFindings(
+    projectId: string,
+    materials: ProjectMaterialQualityRow[],
+  ): DataQualityFindingDraft[] {
+    const findings: DataQualityFindingDraft[] = []
+    const nowAt = Date.now()
+
+    for (const material of materials) {
+      if (!material.id || !isQualityActiveMaterial(material)) continue
+
+      const materialName = material.material_name || '未命名材料'
+      const baseDetails = {
+        material_id: material.id,
+        material_name: materialName,
+        specialty_type: material.specialty_type ?? null,
+        expected_arrival_date: material.expected_arrival_date ?? null,
+        actual_arrival_date: material.actual_arrival_date ?? null,
+      }
+
+      if (!normalizeTextValue(material.specialty_type)) {
+        findings.push({
+          finding_key: buildFindingKey('MATERIAL_SPECIALTY_MISSING', null, material.id),
+          project_id: projectId,
+          task_id: null,
+          rule_code: 'MATERIAL_SPECIALTY_MISSING',
+          rule_type: 'completeness',
+          severity: 'warning',
+          dimension_key: `material:${material.id}`,
+          summary: `材料「${materialName}」缺少材料专业分类，材料到场与任务联动可能失真。`,
+          details_json: baseDetails,
+          entity_type: 'project_material',
+          entity_id: material.id,
+          quality_dimension: 'completeness',
+          source_type: 'project_materials',
+        })
+      }
+
+      if (!normalizeTextValue(material.participant_unit_id)) {
+        findings.push({
+          finding_key: buildFindingKey('MATERIAL_UNIT_MISSING', null, material.id),
+          project_id: projectId,
+          task_id: null,
+          rule_code: 'MATERIAL_UNIT_MISSING',
+          rule_type: 'completeness',
+          severity: 'warning',
+          dimension_key: `material:${material.id}`,
+          summary: `材料「${materialName}」缺少责任单位，材料到场、验收和催办链路不可追踪。`,
+          details_json: baseDetails,
+          entity_type: 'project_material',
+          entity_id: material.id,
+          quality_dimension: 'completeness',
+          source_type: 'project_materials',
+        })
+      }
+
+      if (!material.actual_arrival_date && isPastDate(material.expected_arrival_date, nowAt)) {
+        findings.push({
+          finding_key: buildFindingKey('MATERIAL_ARRIVAL_OVERDUE', null, material.id),
+          project_id: projectId,
+          task_id: null,
+          rule_code: 'MATERIAL_ARRIVAL_OVERDUE',
+          rule_type: 'staleness',
+          severity: 'warning',
+          dimension_key: `material:${material.id}`,
+          summary: `材料「${materialName}」预计到场日期已过但未记录实际到场，请核对到场状态。`,
+          details_json: {
+            ...baseDetails,
+            overdue_days: diffDays(toTimestamp(material.expected_arrival_date), nowAt),
+          },
+          entity_type: 'project_material',
+          entity_id: material.id,
+          quality_dimension: 'timeliness',
+          source_type: 'project_materials',
+        })
+      }
+
+      if (
+        material.requires_sample_confirmation === true
+        && material.sample_confirmed !== true
+        && isPastDate(material.expected_arrival_date, nowAt)
+      ) {
+        findings.push({
+          finding_key: buildFindingKey('MATERIAL_SAMPLE_PENDING', null, material.id),
+          project_id: projectId,
+          task_id: null,
+          rule_code: 'MATERIAL_SAMPLE_PENDING',
+          rule_type: 'staleness',
+          severity: 'info',
+          dimension_key: `material:${material.id}`,
+          summary: `材料「${materialName}」需要样品确认，但预计到场日期后仍未确认样品状态。`,
+          details_json: {
+            ...baseDetails,
+            requires_sample_confirmation: material.requires_sample_confirmation,
+            sample_confirmed: material.sample_confirmed ?? false,
+          },
+          entity_type: 'project_material',
+          entity_id: material.id,
+          quality_dimension: 'timeliness',
+          source_type: 'project_materials',
+        })
+      }
+    }
+
+    return findings
+  }
+
+  private detectRetentionFindings(
+    projectId: string,
+    retentionEvents: RetentionDecisionQualityRow[],
+  ): DataQualityFindingDraft[] {
+    const nowAt = Date.now()
+    const findings: DataQualityFindingDraft[] = []
+
+    for (const event of retentionEvents) {
+      if (!event.id) continue
+      const executionStatus = normalizeLowerValue(event.execution_status)
+      const requiresConfirmation = event.requires_user_confirmation === true
+      const confirmed = Boolean(event.confirmed_at)
+      const entityType = normalizeTextValue(event.entity_type) || 'unknown'
+      const entityId = normalizeTextValue(event.entity_id) || event.id
+      const entityName = event.entity_name_snapshot || entityId
+      const metadata = toRecord(event.confirmation_metadata)
+      const baseDetails = {
+        event_id: event.id,
+        entity_type: entityType,
+        entity_id: entityId,
+        requested_action: event.requested_action ?? null,
+        resolved_action: event.resolved_action ?? null,
+        execution_status: event.execution_status ?? null,
+        expires_at: event.expires_at ?? null,
+        decision_token_hash_present: Boolean(event.decision_token_hash),
+      }
+
+      const pushRetentionFinding = (
+        ruleCode: Extract<FindingRuleCode, 'RETENTION_DECISION_EXPIRED' | 'RETENTION_CONFIRMATION_FAILED' | 'RETENTION_CONFIRMING_STALE'>,
+        severity: DataQualityFindingDraft['severity'],
+        summary: string,
+        details: Record<string, unknown> = {},
+      ) => {
+        findings.push({
+          finding_key: buildFindingKey(ruleCode, null, event.id),
+          project_id: projectId,
+          task_id: null,
+          rule_code: ruleCode,
+          rule_type: 'retention',
+          severity,
+          dimension_key: `retention:${event.id}`,
+          summary,
+          details_json: {
+            ...baseDetails,
+            ...details,
+          },
+          entity_type: 'deletion_retention_event',
+          entity_id: event.id,
+          quality_dimension: 'retention',
+          source_type: 'deletion_retention_events',
+        })
+      }
+
+      if (
+        requiresConfirmation &&
+        !confirmed &&
+        ['pending_confirmation', 'expired'].includes(executionStatus) &&
+        (executionStatus === 'expired' || isPastDate(event.expires_at, nowAt))
+      ) {
+        pushRetentionFinding(
+          'RETENTION_DECISION_EXPIRED',
+          'warning',
+          `保留/删除决策「${entityName}」确认令牌已过期，需要重新发起治理决策。`,
+        )
+      }
+
+      if (requiresConfirmation && !confirmed && executionStatus === 'failed') {
+        pushRetentionFinding(
+          'RETENTION_CONFIRMATION_FAILED',
+          'warning',
+          `保留/删除决策「${entityName}」确认执行失败，需要人工处理。`,
+          {
+            last_error_code: normalizeTextValue(metadata.last_error_code) || null,
+            last_error_message: normalizeTextValue(metadata.last_error_message) || null,
+            recovery_attempts: Number(metadata.recovery_attempts ?? 0) || 0,
+          },
+        )
+      }
+
+      if (requiresConfirmation && !confirmed && executionStatus === 'confirming') {
+        const reservedAt = normalizeTextValue(metadata.reserved_at)
+        const reservedAtMs = reservedAt ? new Date(reservedAt).getTime() : NaN
+        const stale = Number.isFinite(reservedAtMs) && nowAt - reservedAtMs >= 10 * 60 * 1000
+        if (!stale) continue
+        pushRetentionFinding(
+          'RETENTION_CONFIRMING_STALE',
+          'warning',
+          `保留/删除决策「${entityName}」确认长时间停留在执行中，需要恢复或人工处理。`,
+          {
+            reserved_at: reservedAt || null,
+            recovery_attempts: Number(metadata.recovery_attempts ?? 0) || 0,
+          },
+        )
+      }
+    }
+
+    return findings
+  }
+
+  private detectMetricCaliberFindings(
+    projectId: string,
+    metricSnapshots: ProjectDailySnapshotQualityRow[],
+  ): DataQualityFindingDraft[] {
+    const latest = metricSnapshots[0]
+    if (!latest) return []
+
+    const findings: DataQualityFindingDraft[] = []
+    const snapshotKey = latest.id || latest.snapshot_date || projectId
+    const registryVersion = normalizeTextValue(latest.metric_registry_version)
+    const snapshotVersion = Number(latest.metric_snapshot_version)
+
+    if (!registryVersion || !Number.isFinite(snapshotVersion) || snapshotVersion <= 0) {
+      findings.push({
+        finding_key: buildFindingKey('METRIC_CALIBER_MISSING', null, String(snapshotKey)),
+        project_id: projectId,
+        task_id: null,
+        rule_code: 'METRIC_CALIBER_MISSING',
+        rule_type: 'metric_caliber',
+        severity: 'warning',
+        dimension_key: `metric_snapshot:${snapshotKey}`,
+        summary: `项目最新日报快照缺少指标口径版本或快照结构版本，报表口径需要补齐。`,
+        details_json: {
+          snapshot_id: latest.id ?? null,
+          snapshot_date: latest.snapshot_date ?? null,
+          metric_registry_version: latest.metric_registry_version ?? null,
+          metric_snapshot_version: latest.metric_snapshot_version ?? null,
+        },
+        entity_type: 'project_daily_snapshot',
+        entity_id: String(snapshotKey),
+        quality_dimension: 'metric_caliber',
+        source_type: 'project_daily_snapshot',
+      })
+    }
+
+    const availability = toRecord(latest.metric_availability)
+    const unavailableMetrics = Object.entries(availability)
+      .filter(([, status]) => UNAVAILABLE_METRIC_STATUSES.has(normalizeLowerValue(status)))
+      .map(([metricKey]) => metricKey)
+      .sort()
+
+    if (unavailableMetrics.length > 0) {
+      findings.push({
+        finding_key: buildFindingKey('METRIC_VALUE_UNAVAILABLE', null, `${snapshotKey}:${unavailableMetrics.join(',')}`),
+        project_id: projectId,
+        task_id: null,
+        rule_code: 'METRIC_VALUE_UNAVAILABLE',
+        rule_type: 'metric_caliber',
+        severity: 'info',
+        dimension_key: `metric_snapshot:${snapshotKey}`,
+        summary: `项目最新日报快照有 ${unavailableMetrics.length} 个指标当前不可用，请核对摘要服务或快照生成链路。`,
+        details_json: {
+          snapshot_id: latest.id ?? null,
+          snapshot_date: latest.snapshot_date ?? null,
+          unavailable_metrics: unavailableMetrics,
+          metric_availability: availability,
+        },
+        entity_type: 'project_daily_snapshot',
+        entity_id: String(snapshotKey),
+        quality_dimension: 'metric_caliber',
+        source_type: 'project_daily_snapshot',
       })
     }
 
@@ -1158,6 +2348,32 @@ export class DataQualityService {
     const monthRange = monthBounds(month)
     const latestSnapshots = getLatestSnapshotMap(snapshots)
 
+    if (taskIds.length === 0) {
+      const emptyScores = {
+        timeliness: 0,
+        anomaly: 0,
+        consistency: 0,
+        coverage: 0,
+        jumpiness: 0,
+      }
+      return {
+        score: 0,
+        flag: 'low',
+        note: '缺少可评估任务数据，仅供参考',
+        timelinessScore: 0,
+        anomalyScore: 0,
+        consistencyScore: 0,
+        coverageScore: 0,
+        jumpinessScore: 0,
+        activeFindingCount: findings.filter((finding) => finding.status === 'active').length,
+        trendWarningCount: findings.filter((finding) => finding.status === 'active' && finding.rule_type === 'trend').length,
+        anomalyFindingCount: findings.filter((finding) => finding.status === 'active' && finding.rule_type === 'anomaly').length,
+        crossCheckFindingCount: findings.filter((finding) => finding.status === 'active' && finding.rule_type === 'cross_check').length,
+        weights,
+        dimensions: buildConfidenceDimensions(emptyScores, weights),
+      }
+    }
+
     const staleTaskCount = relevantTasks.filter((task) => {
       const snapshot = latestSnapshots.get(task.id)
       const referenceAt = toTimestamp(snapshot?.snapshot_date ?? snapshot?.created_at ?? task.updated_at ?? task.created_at)
@@ -1186,7 +2402,14 @@ export class DataQualityService {
     )
     const jumpTaskIds = new Set(
       findings
-        .filter((finding) => finding.status === 'active' && finding.rule_code === 'PROGRESS_JUMP' && finding.task_id)
+        .filter((finding) => finding.status === 'active' && [
+          'PROGRESS_JUMP',
+          'PROGRESS_MONTH_END_BURST',
+          'PROGRESS_STUCK_FINISHING',
+          'PROGRESS_SOURCE_LOW_CONFIDENCE',
+          'PROGRESS_ROLLBACK',
+          'PROGRESS_DUPLICATE_FILL',
+        ].includes(finding.rule_code) && finding.task_id)
         .map((finding) => String(finding.task_id)),
     )
 
@@ -1234,6 +2457,31 @@ export class DataQualityService {
   }
 
   async getProjectSettings(projectId: string): Promise<DataQualityProjectSettingsSummary> {
+    const cached = dataQualitySettingsCache.get(projectId)
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.summary
+    }
+
+    if (process.env.NODE_ENV !== 'test') {
+      try {
+        const result = await rawQuery(
+          'SELECT project_id, weights_json, updated_at, updated_by FROM public.project_data_quality_settings WHERE project_id = $1 LIMIT 1',
+          [projectId],
+        )
+        const summary = toProjectSettingsSummary(projectId, (result.rows[0] as ProjectDataQualitySettings | undefined) ?? null)
+        dataQualitySettingsCache.set(projectId, {
+          expiresAt: Date.now() + DATA_QUALITY_SETTINGS_CACHE_TTL_MS,
+          summary,
+        })
+        return summary
+      } catch (error) {
+        logger.warn('[dataQualityService] direct settings read failed, falling back to Supabase REST', {
+          projectId,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
+    }
+
     const { data, error } = await supabase
       .from('project_data_quality_settings')
       .select('project_id, weights_json, updated_at, updated_by')
@@ -1243,7 +2491,12 @@ export class DataQualityService {
     if (error) throw new Error(error.message)
 
     const row = ((data ?? [])[0] ?? null) as ProjectDataQualitySettings | null
-    return toProjectSettingsSummary(projectId, row)
+    const summary = toProjectSettingsSummary(projectId, row)
+    dataQualitySettingsCache.set(projectId, {
+      expiresAt: Date.now() + DATA_QUALITY_SETTINGS_CACHE_TTL_MS,
+      summary,
+    })
+    return summary
   }
 
   async updateProjectSettings(
@@ -1267,19 +2520,24 @@ export class DataQualityService {
 
     if (error) throw new Error(error.message)
 
-    return toProjectSettingsSummary(projectId, data as ProjectDataQualitySettings)
+    const summary = toProjectSettingsSummary(projectId, data as ProjectDataQualitySettings)
+    dataQualitySettingsCache.set(projectId, {
+      expiresAt: Date.now() + DATA_QUALITY_SETTINGS_CACHE_TTL_MS,
+      summary,
+    })
+    return summary
   }
 
   private async getOwnerRecipients(projectId: string) {
     const [project, members] = await Promise.all([
       executeSQL<ProjectOwnerRow>('SELECT id, owner_id FROM projects WHERE id = ? LIMIT 1', [projectId]),
-      executeSQL<ProjectMemberRow>('SELECT project_id, user_id, role, permission_level FROM project_members WHERE project_id = ?', [projectId]),
+      executeSQL<ProjectMemberRow>('SELECT project_id, user_id, permission_level FROM project_members WHERE project_id = ?', [projectId]),
     ])
 
     return uniqueStrings([
       project[0]?.owner_id ?? null,
       ...(members ?? [])
-        .filter((member) => normalizeProjectPermissionLevel(member.permission_level ?? member.role) === 'owner')
+        .filter((member) => normalizeProjectPermissionLevel(member.permission_level) === 'owner')
         .map((member) => member.user_id),
     ])
   }
@@ -1294,7 +2552,7 @@ export class DataQualityService {
         activeExisting.map((notification) => updateNotificationById(notification.id, {
           status: 'resolved',
           resolved_at: nowIso(),
-        })),
+        }, notification)),
       )
       return null
     }
@@ -1333,9 +2591,17 @@ export class DataQualityService {
         metadata: payload.metadata,
         recipients: payload.recipients,
         status: payload.status,
-      })
+      }, current)
     } else {
-      await insertNotification(payload)
+      await notificationTouchpointService.emit({
+        ...payload,
+        notification_type: 'system-exception',
+        touchpoint_type: 'system_record',
+        scope_type: 'project',
+        dedupe_key: String(payload.source_entity_id ?? ''),
+        target_route: `/projects/${projectId}/dashboard`,
+        target_label: '查看数据质量',
+      })
     }
 
     await Promise.all(
@@ -1344,7 +2610,7 @@ export class DataQualityService {
         .map((notification) => updateNotificationById(notification.id, {
           status: 'resolved',
           resolved_at: nowIso(),
-        })),
+        }, notification)),
     )
 
     return payload
@@ -1396,9 +2662,17 @@ export class DataQualityService {
           task_id: payload.task_id,
           recipients: payload.recipients,
           status: payload.status,
-        })
+        }, current)
       } else if (recipients.length > 0) {
-        await insertNotification(payload)
+        await notificationTouchpointService.emit({
+          ...payload,
+          notification_type: 'system-exception',
+          touchpoint_type: 'system_record',
+          scope_type: 'project',
+          dedupe_key: String(payload.source_entity_id ?? ''),
+          target_route: `/projects/${projectId}/dashboard`,
+          target_label: '查看数据质量',
+        })
       }
     }
 
@@ -1408,11 +2682,23 @@ export class DataQualityService {
         .map((notification) => updateNotificationById(notification.id, {
           status: 'resolved',
           resolved_at: nowIso(),
-        })),
+        }, notification)),
     )
   }
 
-  private async persistFindings(projectId: string, nextFindings: DataQualityFindingDraft[]) {
+  private async persistFindings(
+    projectId: string,
+    nextFindings: DataQualityFindingDraft[],
+    options?: { unresolvedRuleCodes?: Set<FindingRuleCode> },
+  ) {
+    if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
+      return persistDataQualityFindingsDirect({
+        projectId,
+        nextFindings,
+        unresolvedRuleCodes: options?.unresolvedRuleCodes,
+      })
+    }
+
     const { data, error } = await supabase
       .from('data_quality_findings')
       .select('*')
@@ -1441,6 +2727,12 @@ export class DataQualityService {
         detected_at: current?.detected_at ?? detectedAt,
         resolved_at: null,
         status: 'active',
+        // v1.4.16: new fields
+        entity_type: finding.entity_type ?? 'task',
+        entity_id: finding.entity_id ?? (finding.task_id ?? null),
+        quality_dimension: finding.quality_dimension ?? getDataQualityRuleDimension(finding.rule_code),
+        source_type: finding.source_type ?? null,
+        resolved_type: null,
       }
     })
 
@@ -1454,6 +2746,7 @@ export class DataQualityService {
 
     const staleIds = existing
       .filter((finding) => finding.status === 'active' && !activeKeys.has(finding.finding_key))
+      .filter((finding) => !options?.unresolvedRuleCodes?.has(finding.rule_code as FindingRuleCode))
       .map((finding) => finding.id)
 
     if (staleIds.length > 0) {
@@ -1463,6 +2756,7 @@ export class DataQualityService {
           status: 'resolved',
           resolved_at: detectedAt,
         })
+        .eq('project_id', projectId)
         .in('id', staleIds)
 
       if (resolveError) throw new Error(resolveError.message)
@@ -1501,6 +2795,43 @@ export class DataQualityService {
       computed_at: nowIso(),
     }
 
+    if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
+      const result = await rawQuery(
+        `INSERT INTO public.data_confidence_snapshots (
+           project_id, period_month, confidence_score, timeliness_score,
+           anomaly_score, consistency_score, coverage_score, jumpiness_score,
+           weights_json, details_json, computed_at
+         ) VALUES (
+           $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::timestamptz
+         )
+         ON CONFLICT (project_id, period_month) DO UPDATE
+           SET confidence_score = EXCLUDED.confidence_score,
+               timeliness_score = EXCLUDED.timeliness_score,
+               anomaly_score = EXCLUDED.anomaly_score,
+               consistency_score = EXCLUDED.consistency_score,
+               coverage_score = EXCLUDED.coverage_score,
+               jumpiness_score = EXCLUDED.jumpiness_score,
+               weights_json = EXCLUDED.weights_json,
+               details_json = EXCLUDED.details_json,
+               computed_at = EXCLUDED.computed_at
+         RETURNING *`,
+        [
+          payload.project_id,
+          payload.period_month,
+          payload.confidence_score,
+          payload.timeliness_score,
+          payload.anomaly_score,
+          payload.consistency_score,
+          payload.coverage_score,
+          payload.jumpiness_score,
+          JSON.stringify(payload.weights_json),
+          JSON.stringify(payload.details_json),
+          payload.computed_at,
+        ],
+      )
+      return result.rows[0] as DataConfidenceSnapshot
+    }
+
     const { data, error } = await supabase
       .from('data_confidence_snapshots')
       .upsert(payload, { onConflict: 'project_id,period_month' })
@@ -1512,7 +2843,17 @@ export class DataQualityService {
   }
 
   private async scanProject(projectId: string, month = normalizeMonth()) {
-    const { tasks, conditions, snapshots } = await this.loadProjectData(projectId)
+    const {
+      tasks,
+      conditions,
+      snapshots,
+      lineageLinks,
+      acceptancePlans,
+      materials,
+      retentionEvents,
+      metricSnapshots,
+      sourceReadStatus,
+    } = await this.loadProjectData(projectId)
     const latestSnapshots = getLatestSnapshotMap(snapshots)
     const snapshotsByTask = getSnapshotsByTask(snapshots)
 
@@ -1523,6 +2864,10 @@ export class DataQualityService {
       progressTimeMismatchFindings,
       batchSameValueFindings,
       crossCheckFindings,
+      governanceFindings,
+      materialFindings,
+      retentionFindings,
+      metricCaliberFindings,
     ] = await Promise.all([
       this.detectTrendFindings(projectId, tasks),
       this.detectSnapshotGapFindings(projectId, tasks, latestSnapshots),
@@ -1530,6 +2875,10 @@ export class DataQualityService {
       this.detectProgressTimeMismatchFindings(projectId, tasks),
       Promise.resolve(this.detectBatchSameValueFindings(projectId, tasks, latestSnapshots)),
       this.detectCrossCheckFindings(projectId, tasks, conditions),
+      this.detectGovernanceFindings(projectId, tasks, lineageLinks, acceptancePlans),
+      Promise.resolve(this.detectMaterialFindings(projectId, materials)),
+      Promise.resolve(this.detectRetentionFindings(projectId, retentionEvents)),
+      Promise.resolve(this.detectMetricCaliberFindings(projectId, metricSnapshots)),
     ])
 
     const drafts = this.dedupeFindings([
@@ -1539,10 +2888,14 @@ export class DataQualityService {
       ...progressTimeMismatchFindings,
       ...batchSameValueFindings,
       ...crossCheckFindings,
+      ...governanceFindings,
+      ...materialFindings,
+      ...retentionFindings,
+      ...metricCaliberFindings,
     ])
 
     const taskTitleById = new Map(tasks.map((task) => [task.id, task.title]))
-    return { tasks, snapshots, taskTitleById, findings: drafts, month }
+    return { tasks, snapshots, taskTitleById, findings: drafts, month, sourceReadStatus }
   }
 
   async scanTrendWarnings(projectId?: string) {
@@ -1615,10 +2968,15 @@ export class DataQualityService {
     ])
     const findings = result.findings.map((finding) => toFindingRow(finding, nowIso()))
     const confidence = this.computeConfidence(result.month, result.tasks, result.snapshots, findings, settings.weights)
+    // v1.4.16: enrich with extended quality dimensions from governance service
+    const extendedSummary = await buildProjectQualitySummary(projectId).catch(() => null)
     return {
       projectId,
       month: result.month,
       confidence,
+      extendedDimensions: extendedSummary?.dimensions ?? [],
+      extendedConfidenceScore: extendedSummary?.confidenceScore,
+      extendedRules: listDataQualityRuleCodes(),
       prompt: buildPrompt(findings, result.taskTitleById),
       ownerDigest: buildOwnerDigest(findings),
       findings,
@@ -1630,35 +2988,51 @@ export class DataQualityService {
       this.scanProject(projectId, month),
       this.getProjectSettings(projectId),
     ])
-    const persistedFindings = await this.persistFindings(projectId, result.findings)
+    const persistedFindings = await this.persistFindings(projectId, result.findings, {
+      unresolvedRuleCodes: collectUnresolvedRuleCodesForFailedSources(result.sourceReadStatus),
+    })
     const confidence = this.computeConfidence(result.month, result.tasks, result.snapshots, persistedFindings, settings.weights)
     await this.persistConfidence(projectId, result.month, confidence)
     const ownerDigest = buildOwnerDigest(persistedFindings)
     await this.syncOwnerDigestNotification(projectId, ownerDigest)
     await this.syncCriticalPathFindingNotifications(projectId, persistedFindings)
+    const extendedSummary = await buildProjectQualitySummary(projectId).catch(() => null)
 
     return {
       projectId,
       month: result.month,
       confidence,
+      extendedDimensions: extendedSummary?.dimensions ?? [],
+      extendedConfidenceScore: extendedSummary?.confidenceScore,
+      extendedRules: listDataQualityRuleCodes(),
       prompt: buildPrompt(persistedFindings, result.taskTitleById),
       ownerDigest,
       findings: persistedFindings,
     }
   }
 
-  async syncAllProjectsDataQuality(month = normalizeMonth()) {
-    const projectIds = await listActiveProjectIds()
+  async syncAllProjectsDataQuality(month = normalizeMonth(), projectIds?: string[] | null) {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
     const reports: DataQualityProjectSummary[] = []
-    for (const projectId of projectIds) {
+    const failures: Array<{ scopeId: string; attempts: number; errorMessage: string }> = []
+    for (const projectId of activeProjectIds) {
       try {
         reports.push(await this.syncProjectDataQuality(projectId, month))
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        failures.push({ scopeId: projectId, attempts: 1, errorMessage })
         logger.warn('[dataQualityService] failed to sync project data quality', {
           projectId,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage,
         })
       }
+    }
+    if (failures.length > 0) {
+      throw new ScopedBatchOperationError(
+        'data quality project sync',
+        failures,
+        reports.map((report) => report.projectId),
+      )
     }
     return reports
   }

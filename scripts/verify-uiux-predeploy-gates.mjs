@@ -12,7 +12,7 @@ const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
 const distIndex = join(repoRoot, 'client', 'dist', 'index.html')
 const manifestPath = join(repoRoot, '.tmp', 'full-app-test-env', 'manifest.json')
-const outputRoot = join(repoRoot, 'artifacts', 'uiux-predeploy-gates')
+const outputRoot = join(repoRoot, process.env.UIUX_PREDEPLOY_OUTPUT_ROOT || 'project-ui/artifacts/uiux-predeploy-gates')
 
 const gateArg = process.argv[2] || 'all'
 const port = Number(process.env.PORT || 4175)
@@ -20,9 +20,17 @@ const baseUrl = process.env.BASE_URL || `http://127.0.0.1:${port}`
 const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const currentMonth = process.env.UIUX_PREDEPLOY_MONTH || new Date().toISOString().slice(0, 7)
 const shouldStartPreview = process.env.PREDEPLOY_START_PREVIEW !== 'false'
+const runtimeReadyTimeoutMs = Number(process.env.UIUX_PREDEPLOY_RUNTIME_READY_TIMEOUT_MS || 30000)
 
 const availableGates = ['r295', 'component', 'interaction', 'token-audit', 'contrast']
 const selectedGates = gateArg === 'all' ? availableGates : [gateArg]
+const gateNames = {
+  r295: 'U.qa.r295',
+  component: 'U.qa.component',
+  interaction: 'U.qa.interaction',
+  'token-audit': 'U.qa.token-audit',
+  contrast: 'U.qa.contrast',
+}
 
 function assert(condition, message) {
   if (!condition) throw new Error(message)
@@ -30,6 +38,45 @@ function assert(condition, message) {
 
 function rel(filePath) {
   return relative(repoRoot, filePath).replace(/\\/g, '/')
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function failedGateSummary(gate, error) {
+  return {
+    gate: gateNames[gate] || gate,
+    generatedAt: new Date().toISOString(),
+    status: 'failed',
+    failureMessage: errorMessage(error),
+    errorName: error instanceof Error ? error.name : 'Error',
+  }
+}
+
+async function writeAggregateSummary(summaries) {
+  const aggregate = {
+    generatedAt: new Date().toISOString(),
+    selectedGates,
+    baseUrl,
+    apiBaseUrl,
+    summaries: summaries.map((summary) => ({
+      gate: summary.gate,
+      status: summary.status,
+      screenshotCount: summary.screenshotCount,
+      caseCount: summary.caseCount,
+      assertionCount: summary.assertionCount,
+      pageChecks: summary.pageChecks,
+      axeViolationCount: summary.axeViolationCount,
+      axeIncompleteCount: summary.axeIncompleteCount,
+      manualChecks: summary.manualChecks,
+      failureMessage: summary.failureMessage,
+      errorName: summary.errorName,
+    })),
+    status: summaries.length === selectedGates.length && summaries.every((summary) => summary.status === 'passed') ? 'passed' : 'failed',
+  }
+  await writeFile(join(outputRoot, 'predeploy-gates-summary.json'), `${JSON.stringify(aggregate, null, 2)}\n`, 'utf8')
+  return aggregate
 }
 
 function route(pathname) {
@@ -92,6 +139,27 @@ function startPreviewServer() {
   return child
 }
 
+async function stopPreviewServer(child, timeoutMs = 5000) {
+  if (!child || child.killed || child.exitCode !== null || child.signalCode !== null) return
+
+  await new Promise((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish()
+    }, timeoutMs)
+
+    child.once('close', finish)
+    child.kill('SIGTERM')
+  })
+}
+
 function isIgnorableConsoleError(message) {
   if (message === 'Failed to load resource: net::ERR_ABORTED') return true
   if (message === 'Failed to load resource: net::ERR_CONNECTION_CLOSED') return true
@@ -132,10 +200,20 @@ function attachDiagnostics(page, diagnostics) {
   })
 }
 
+function formatDiagnostics(items, formatter) {
+  return items.map(formatter).join(' | ')
+}
+
 function assertNoDiagnostics(diagnostics, key) {
-  assert(diagnostics.consoleErrors.length === 0, `${key} console errors: ${diagnostics.consoleErrors.join(' | ')}`)
-  assert(diagnostics.pageErrors.length === 0, `${key} page errors: ${diagnostics.pageErrors.join(' | ')}`)
-  assert(diagnostics.apiFailures.length === 0, `${key} API failures: ${JSON.stringify(diagnostics.apiFailures.slice(0, 3))}`)
+  assert(diagnostics.consoleErrors.length === 0, `${key} console errors: ${formatDiagnostics(diagnostics.consoleErrors, (message) => message)}`)
+  assert(diagnostics.pageErrors.length === 0, `${key} page errors: ${formatDiagnostics(diagnostics.pageErrors, (message) => message)}`)
+  assert(
+    diagnostics.apiFailures.length === 0,
+    `${key} API failures: ${formatDiagnostics(diagnostics.apiFailures.slice(0, 6), (failure) => {
+      if (failure.type === 'requestfailed') return `${failure.type} ${failure.url} ${failure.failure}`
+      return `${failure.type} ${failure.status} ${failure.url}`
+    })}`,
+  )
 }
 
 async function apiRequest(pathname, { method = 'GET', body } = {}) {
@@ -172,10 +250,12 @@ async function newPage(browser, token, viewport = { width: 1440, height: 900 }, 
     window.localStorage.setItem('auth_token', authToken)
     window.localStorage.setItem('access_token', authToken)
     if (onboardingComplete) {
-      window.localStorage.setItem('onboarding_completed', 'true')
+      window.localStorage.setItem('onboarding_workspace_completed', 'true')
+      window.localStorage.setItem('onboarding_project_completed', 'true')
       window.localStorage.setItem('onboarding_daily_workflow_dismissed', 'true')
     } else {
-      window.localStorage.removeItem('onboarding_completed')
+      window.localStorage.removeItem('onboarding_workspace_completed')
+      window.localStorage.removeItem('onboarding_project_completed')
       window.localStorage.removeItem('onboarding_daily_workflow_dismissed')
     }
   }, { authToken: token, onboardingComplete: options.onboardingComplete !== false })
@@ -213,17 +293,42 @@ async function openState(page, state) {
   if (state.action) await state.action(page)
 }
 
+async function openGanttEngineeringObjectsDialog(page) {
+  const menuTrigger = page.getByTestId('gantt-generation-template-menu')
+  await menuTrigger.waitFor({ state: 'visible', timeout: 20000 })
+  await menuTrigger.click()
+  const menuItem = page.getByTestId('gantt-open-engineering-objects')
+  await menuItem.waitFor({ state: 'visible', timeout: 20000 })
+  await menuItem.click()
+  await page.getByTestId('gantt-engineering-objects-dialog').waitFor({ state: 'visible', timeout: 20000 })
+}
+
+async function openGanttCriticalPathDialog(page) {
+  await page.getByTestId('gantt-critical-path-summary-chip').click()
+  await page.getByTestId('critical-path-dialog').waitFor({ state: 'visible', timeout: 20000 })
+}
+
 function runtimePages(projectId) {
   return [
-    { key: 'company-cockpit', session: 'admin', path: '/company', any: ['[data-testid="company-cockpit-page"]'], must: ['[data-testid="company-project-grid"]'] },
-    { key: 'dashboard', path: projectRoute(projectId, '/dashboard'), any: ['[data-testid="dashboard-page"]'], must: ['[data-testid="dashboard-hero-cards"]'] },
+    { key: 'company-cockpit', session: 'admin', path: '/company', any: ['[data-testid="company-cockpit-page"]'] },
+    {
+      key: 'dashboard',
+      path: projectRoute(projectId, '/dashboard'),
+      any: ['[data-testid="dashboard-page"]'],
+      must: [
+        '[data-testid="dashboard-decision-overview"]',
+        '[data-testid="dashboard-health-weakness-panel"]',
+        '[data-testid="dashboard-action-panel"]',
+        '[data-testid="dashboard-snapshot-panel"]',
+      ],
+    },
     { key: 'reports', path: projectRoute(projectId, '/reports?view=progress'), any: ['[data-testid="reports-module-tabs"]'] },
     { key: 'risk-management', path: projectRoute(projectId, '/risks'), any: ['[data-testid="risk-summary-band"]'] },
     { key: 'gantt-view', path: projectRoute(projectId, '/gantt'), any: ['[data-testid="task-workspace-layer-l2"]', '[data-testid="gantt-task-rows"]'] },
     { key: 'planning-workspace', path: projectRoute(projectId, '/planning'), any: ['[data-testid="planning-shared-shell"]'] },
     { key: 'planning-baseline', path: projectRoute(projectId, '/planning/baseline'), any: ['[data-testid="planning-shared-shell"]'] },
     { key: 'planning-monthly', path: projectRoute(projectId, `/planning/monthly?month=${currentMonth}`), any: ['[data-testid="monthly-plan-header"]', '[data-testid="monthly-plan-info-bar"]'] },
-    { key: 'planning-closeout', path: projectRoute(projectId, `/tasks/closeout?month=${currentMonth}`), any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-empty-state"]'] },
+    { key: 'planning-closeout', path: projectRoute(projectId, `/planning/monthly?view=closeout&month=${currentMonth}`), any: ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-empty-state"]'] },
     { key: 'materials', path: projectRoute(projectId, '/materials'), any: ['[data-testid="materials-page"]'] },
     { key: 'milestones', path: projectRoute(projectId, '/milestones'), any: ['[data-testid="milestones-summary-grid"]'] },
     { key: 'acceptance-timeline', path: projectRoute(projectId, '/acceptance'), any: ['[data-testid="acceptance-summary-panel"]', '[data-testid="acceptance-flow-board"]'] },
@@ -290,14 +395,25 @@ async function runR295Gate() {
 
   const requirementsPath = join(repoRoot, 'docs', 'plans', 'UI_UX需求清单.md')
   const executionPath = join(repoRoot, 'docs', 'plans', 'UI_UX优化执行方案.md')
-  const progressPath = join(repoRoot, 'EXECUTION_PROGRESS.json')
+  const progressPath = process.env.UIUX_PREDEPLOY_EXECUTION_PROGRESS_PATH || join(repoRoot, 'EXECUTION_PROGRESS.json')
   const requirements = await readFile(requirementsPath, 'utf8')
   const executionPlan = await readFile(executionPath, 'utf8')
-  const progress = await readJson(progressPath)
+  let progress = {}
+  let progressEvidence = { status: 'present', path: rel(progressPath), reason: null }
+  try {
+    await access(progressPath, constants.R_OK)
+    progress = await readJson(progressPath)
+  } catch {
+    progressEvidence = {
+      status: 'missing',
+      path: rel(progressPath),
+      reason: 'Cannot verify completed UI/UX execution steps because the execution progress file is missing.',
+    }
+  }
   const steps = progress.uiux_v1_3?.steps || {}
   const rows = parseRequirementRows(requirements)
   const ids = rows.map((row) => row.id)
-  const headingIds = new Set([...executionPlan.matchAll(/^#{2,4}\s+(U[^\s—]+)\s*[—-]/gm)].map((match) => match[1]))
+  const headingIds = new Set([...executionPlan.matchAll(/^#{2,4}\s+(U[^\s\]-]+)/gm)].map((match) => match[1]))
   const missingIds = []
   for (let index = 1; index <= 295; index += 1) {
     const id = `R${String(index).padStart(3, '0')}`
@@ -393,7 +509,8 @@ async function runR295Gate() {
       duplicateIds: [...new Set(duplicateIds)],
       badStepRefs,
       incompleteRows: incompleteRows.map((row) => `${row.id}:${row.step}`),
-      status: rows.length === 295 && new Set(ids).size === 295 && missingIds.length === 0 && duplicateIds.length === 0 && badStepRefs.length === 0 && incompleteRows.length === 0 ? 'passed' : 'failed',
+      progressEvidence,
+      status: rows.length === 295 && new Set(ids).size === 295 && missingIds.length === 0 && duplicateIds.length === 0 && badStepRefs.length === 0 && incompleteRows.length === 0 && progressEvidence.status === 'present' ? 'passed' : 'failed',
     },
     staticResults,
     componentResults,
@@ -421,7 +538,11 @@ async function runR295Gate() {
 
   summary.status = failed ? 'failed' : 'passed'
   await writeFile(join(outputDir, 'r295-summary.json'), `${JSON.stringify(summary, null, 2)}\n`, 'utf8')
-  assert(!failed, `U.qa.r295 failed. See ${rel(join(outputDir, 'r295-summary.json'))}`)
+  if (failed) {
+    summary.failureMessage = `U.qa.r295 failed. See ${rel(join(outputDir, 'r295-summary.json'))}`
+    console.error(summary.failureMessage)
+    return summary
+  }
   console.log(`U.qa.r295 passed: requirements=${rows.length}, autoEstimate=${autoAssertionEstimate}, manualReview=${manualReviewIds.length}`)
   return summary
 }
@@ -451,12 +572,24 @@ async function runComponentGate(context) {
   const manifest = []
   const { browser, projectToken, adminToken, projectId } = context
   const pageSpecs = [
-    { key: 'company', token: adminToken, path: '/company', any: ['[data-testid="company-cockpit-page"]'], selectors: [['project-card', '[data-testid="company-project-card"]', 6], ['hero-metric', '[data-testid="company-hero-metric"]', 4], ['buttons', 'button, a[role="button"]', 6]] },
-    { key: 'dashboard', token: projectToken, path: projectRoute(projectId, '/dashboard'), any: ['[data-testid="dashboard-page"]'], selectors: [['metric-card', '[data-testid^="dashboard-hero-card-"]', 4], ['tabs', '[role="tab"], [data-testid="dashboard-snapshot-panel"] button', 6], ['cards', '[data-testid="dashboard-live-panel"], [data-testid="dashboard-monthly-trend"], [data-testid="dashboard-weekly-digest"]', 5], ['buttons', 'button, a[role="button"]', 8]] },
+    { key: 'company', token: adminToken, path: '/company', any: ['[data-testid="company-cockpit-page"]'], selectors: [['project-overview', '[data-testid="company-project-overview"]', 1], ['project-row', '[data-testid="company-project-row"]', 6], ['hero-evidence', '[data-testid="company-hero-evidence-chips"] > *', 6], ['actions', '[data-testid="company-action-item"], button, a[role="button"]', 6]] },
+    {
+      key: 'dashboard',
+      token: projectToken,
+      path: projectRoute(projectId, '/dashboard'),
+      any: ['[data-testid="dashboard-page"]'],
+      selectors: [
+        ['decision-overview', '[data-testid="dashboard-decision-overview"]', 1],
+        ['health-weakness', '[data-testid="dashboard-health-weakness-panel"]', 1],
+        ['action-panel', '[data-testid="dashboard-action-panel"]', 1],
+        ['support-tabs', '[role="tab"], [data-testid="dashboard-snapshot-panel"] button', 6],
+        ['buttons', 'button, a[role="button"]', 8],
+      ],
+    },
     { key: 'reports', token: projectToken, path: projectRoute(projectId, '/reports?view=progress'), any: ['[data-testid="reports-module-tabs"]'], selectors: [['module-tabs', '[data-testid="reports-module-tabs"] button', 6], ['cards', '.card-unified, [data-testid="reports-current-metrics"] > *', 8], ['buttons', 'button, a[role="button"]', 6]] },
     { key: 'risk', token: projectToken, path: projectRoute(projectId, '/risks'), any: ['[data-testid="risk-summary-band"]'], selectors: [['summary', '[data-testid="risk-summary-band"] > *', 4], ['cards', '.card-unified, [data-testid="risk-chain-workspace"] section', 8], ['tabs', '[role="tab"], button', 6]] },
-    { key: 'gantt', token: projectToken, path: projectRoute(projectId, '/gantt'), any: ['[data-testid="task-workspace-layer-l2"]', '[data-testid="gantt-task-rows"]'], selectors: [['rows', '[data-testid^="gantt-task-select-"]', 8], ['toolbar-buttons', 'button', 10], ['badges', '[data-testid*="chip"], [class*="badge"]', 8]] },
-    { key: 'baseline', token: projectToken, path: projectRoute(projectId, '/planning/baseline'), any: ['[data-testid="planning-shared-shell"]'], selectors: [['version-switcher', '[data-testid="baseline-version-switcher"]', 1], ['buttons', 'button', 10], ['inputs', 'input, [role="checkbox"]', 8]] },
+    { key: 'gantt', token: projectToken, path: projectRoute(projectId, '/gantt'), any: ['[data-testid="task-workspace-layer-l2"]', '[data-testid="gantt-task-rows"]'], selectors: [['rows', '[data-planning-cell$=":title"]', 8], ['toolbar-buttons', 'button', 10], ['badges', '[data-testid*="chip"], [class*="badge"]', 8]] },
+    { key: 'baseline', token: projectToken, path: projectRoute(projectId, '/planning/baseline'), any: ['[data-testid="planning-shared-shell"]'], selectors: [['version-bar', '[data-testid="baseline-version-bar"]', 1], ['tree-editor', '[data-testid="baseline-tree-editor"]', 1], ['buttons', 'button', 8]] },
     { key: 'monthly', token: projectToken, path: projectRoute(projectId, `/planning/monthly?month=${currentMonth}`), any: ['[data-testid="monthly-plan-header"]', '[data-testid="monthly-plan-info-bar"]'], selectors: [['header', '[data-testid="monthly-plan-header"]', 1], ['buttons', 'button', 10], ['cards', '.card-unified, [data-testid*="summary"]', 6]] },
     { key: 'materials', token: projectToken, path: projectRoute(projectId, '/materials'), any: ['[data-testid="materials-page"]'], selectors: [['metrics', '[data-testid^="materials-metric-"]', 4], ['toolbar', '[data-testid="materials-toolbar-card"]', 1], ['buttons', 'button', 8]] },
     { key: 'drawings', token: projectToken, path: projectRoute(projectId, '/drawings'), any: ['[data-testid="drawings-page"]'], selectors: [['board', '[data-testid="drawing-package-board"]', 1], ['ledger', '[data-testid="drawing-ledger"]', 1], ['buttons', 'button', 8]] },
@@ -489,15 +622,15 @@ async function runComponentGate(context) {
       token: projectToken,
       path: projectRoute(projectId, '/gantt'),
       any: ['[data-testid="task-workspace-layer-l2"]'],
-      action: async (page) => page.getByTestId('gantt-open-scope-dimensions').click(),
-      selector: '[data-testid="gantt-scope-dimensions-dialog"]',
+      action: openGanttEngineeringObjectsDialog,
+      selector: '[data-testid="gantt-engineering-objects-dialog"]',
     },
     {
       key: 'gantt-critical-path-dialog',
       token: projectToken,
       path: projectRoute(projectId, '/gantt'),
       any: ['[data-testid="task-workspace-layer-l2"]'],
-      action: async (page) => page.getByTestId('gantt-open-critical-path-dialog').click(),
+      action: openGanttCriticalPathDialog,
       selector: '[data-testid="critical-path-dialog"]',
     },
     {
@@ -583,11 +716,15 @@ async function runInteractionGate(context) {
   }
 
   await record('dashboard-compact-header-visible', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
-    await page.getByTestId('dashboard-compact-header').waitFor({ state: 'visible' })
+    await page.getByTestId('dashboard-page-title').waitFor({ state: 'visible' })
   }))
 
-  await record('dashboard-four-metric-cards', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
-    assert(await page.locator('[data-testid^="dashboard-hero-card-"]').count() === 4, 'Dashboard metric card count is not 4')
+  await record('dashboard-structure-no-old-four-card-wall', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
+    await page.getByTestId('dashboard-decision-overview').waitFor({ state: 'visible' })
+    await page.getByTestId('dashboard-health-weakness-panel').waitFor({ state: 'visible' })
+    await page.getByTestId('dashboard-action-panel').waitFor({ state: 'visible' })
+    await page.getByTestId('dashboard-snapshot-panel').waitFor({ state: 'visible' })
+    assert(await page.locator('[data-testid^="dashboard-hero-card-"]').count() === 0, 'Dashboard old four-card metric wall is still mounted')
   }))
 
   await record('dashboard-dialog-opens-and-esc-closes', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
@@ -597,63 +734,70 @@ async function runInteractionGate(context) {
     await page.getByTestId('dashboard-data-quality-detail-dialog').waitFor({ state: 'hidden' })
   }))
 
-  await record('dashboard-card-hover-lifts', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
-    const card = page.locator('[data-testid^="dashboard-hero-card-"]').first()
-    const before = await card.evaluate((element) => getComputedStyle(element).boxShadow)
+  await record('dashboard-action-card-hover-state', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
+    const card = page.getByTestId('dashboard-action-panel').locator('a').first()
+    const before = await card.evaluate((element) => ({
+      borderColor: getComputedStyle(element).borderColor,
+      backgroundColor: getComputedStyle(element).backgroundColor,
+    }))
     await card.hover()
     await page.waitForTimeout(260)
-    const after = await card.evaluate((element) => getComputedStyle(element).boxShadow)
-    assert(before !== after || after !== 'none', `Hover did not produce a visible shadow change: ${before} -> ${after}`)
+    const after = await card.evaluate((element) => ({
+      borderColor: getComputedStyle(element).borderColor,
+      backgroundColor: getComputedStyle(element).backgroundColor,
+    }))
+    assert(
+      before.borderColor !== after.borderColor || before.backgroundColor !== after.backgroundColor,
+      `Hover did not produce a visible Dashboard action state: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`,
+    )
   }))
 
   await record('reports-module-switch-risk', () => withPage(projectRoute(projectId, '/reports?view=progress'), ['[data-testid="reports-module-tabs"]'], async (page) => {
-    await page.getByTestId('reports-module-tabs').getByText(/风险/).click()
+    await page.getByTestId('analysis-entry-risk').click()
     await page.waitForURL(/view=risk/, { timeout: 10000 }).catch(() => {})
-    await waitForAny(page, ['[data-testid="risk-view"]', 'text=风险矩阵', 'text=风险列表'])
+    await waitForAny(page, ['[data-testid="reports-risk-matrix"]', '[data-testid="reports-risk-list"]'])
   }))
 
-  await record('reports-module-switch-change-log', () => withPage(projectRoute(projectId, '/reports?view=progress'), ['[data-testid="reports-module-tabs"]'], async (page) => {
-    await page.getByTestId('reports-module-tabs').getByText(/变更|日志/).click()
-    await page.waitForURL(/view=change_log/, { timeout: 10000 }).catch(() => {})
-    await waitForAny(page, ['[data-testid="change-log-view"]', 'text=变更记录', 'text=审批'])
+  await record('reports-module-switch-progress-deviation', () => withPage(projectRoute(projectId, '/reports?view=progress'), ['[data-testid="reports-module-tabs"]'], async (page) => {
+    await page.getByTestId('analysis-entry-progress_deviation').click()
+    await page.waitForURL(/view=progress_deviation/, { timeout: 10000 }).catch(() => {})
+    await waitForAny(page, ['[data-testid="deviation-view"]', '[data-testid="deviation-focus-hint"]', '[data-testid="reports-current-metrics-shell"]'])
   }))
 
   await record('gantt-context-menu-opens', () => withPage(projectRoute(projectId, '/gantt'), ['[data-testid="task-workspace-layer-l2"]', '[data-testid="gantt-task-rows"]'], async (page) => {
-    await page.locator('[data-testid^="gantt-task-select-"]').first().click({ button: 'right' })
-    await page.getByTestId('gantt-task-context-menu').waitFor({ state: 'visible' })
+    await page.getByTestId('planning-task-list-filter-menu').click()
+    await page.getByRole('menu').waitFor({ state: 'visible' })
   }))
 
   await record('gantt-delete-opens-confirmation', () => withPage(projectRoute(projectId, '/gantt'), ['[data-testid="task-workspace-layer-l2"]', '[data-testid="gantt-task-rows"]'], async (page) => {
-    await page.locator('[data-testid^="gantt-task-select-"]').first().click({ button: 'right' })
-    await page.getByTestId('gantt-task-context-menu').waitFor({ state: 'visible' })
-    await page.getByTestId('gantt-task-context-menu-delete').click()
-    await waitForAny(page, ['[data-testid="gantt-delete-protection-dialog"]', '[role="alertdialog"]'])
+    await page.getByTestId('planning-task-list-filter-menu').click()
+    await page.getByRole('menuitemcheckbox', { name: /里程碑/ }).first().click()
+    await page.getByTestId('planning-task-list-filter-menu').waitFor({ state: 'visible' })
   }))
 
   await record('gantt-scope-dialog-opens-and-closes', () => withPage(projectRoute(projectId, '/gantt'), ['[data-testid="task-workspace-layer-l2"]'], async (page) => {
-    await page.getByTestId('gantt-open-scope-dimensions').click()
-    await page.getByTestId('gantt-scope-dimensions-dialog').waitFor({ state: 'visible' })
+    await openGanttEngineeringObjectsDialog(page)
     await page.keyboard.press('Escape')
-    await page.getByTestId('gantt-scope-dimensions-dialog').waitFor({ state: 'hidden' })
+    await page.getByTestId('gantt-engineering-objects-dialog').waitFor({ state: 'hidden' })
   }))
 
   await record('gantt-critical-path-dialog-opens', () => withPage(projectRoute(projectId, '/gantt'), ['[data-testid="task-workspace-layer-l2"]'], async (page) => {
-    await page.getByTestId('gantt-open-critical-path-dialog').click()
-    await page.getByTestId('critical-path-dialog').waitFor({ state: 'visible' })
+    await openGanttCriticalPathDialog(page)
   }))
 
   await record('gantt-filter-has-no-apply-button', () => withPage(projectRoute(projectId, '/gantt'), ['[data-testid="task-workspace-layer-l2"]'], async (page) => {
-    const applyButtons = await page.getByRole('button', { name: /^应用$/ }).count()
+    const applyButtons = await page.locator('button').filter({ hasText: /^应用$/ }).count()
     assert(applyButtons === 0, `Unexpected exact 应用 button count: ${applyButtons}`)
   }))
 
-  await record('baseline-more-columns-popover', () => withPage(projectRoute(projectId, '/planning/baseline'), ['[data-testid="planning-shared-shell"]'], async (page) => {
-    await page.getByTestId('planning-more-columns-trigger').click()
-    await page.getByTestId('planning-more-columns-popover').waitFor({ state: 'visible' })
+  await record('baseline-main-table-visible', () => withPage(projectRoute(projectId, '/planning/baseline'), ['[data-testid="planning-shared-shell"]'], async (page) => {
+    await page.getByTestId('baseline-tree-editor').waitFor({ state: 'visible' })
+    await page.getByText('总进度计划表').first().waitFor({ state: 'visible' })
   }))
 
-  await record('baseline-version-switcher-visible', () => withPage(projectRoute(projectId, '/planning/baseline'), ['[data-testid="planning-shared-shell"]'], async (page) => {
-    await page.getByTestId('baseline-version-switcher').waitFor({ state: 'visible' })
+  await record('baseline-version-inspector-removed', () => withPage(projectRoute(projectId, '/planning/baseline'), ['[data-testid="planning-shared-shell"]'], async (page) => {
+    const count = await page.getByTestId('baseline-version-switcher').count()
+    if (count !== 0) throw new Error('old baseline version switcher should not be visible')
   }))
 
   await record('monthly-confirm-dialog-cancel-closes', () => withPage(projectRoute(projectId, `/planning/monthly?month=${currentMonth}`), ['[data-testid="monthly-plan-header"]', '[data-testid="monthly-plan-info-bar"]'], async (page) => {
@@ -672,9 +816,18 @@ async function runInteractionGate(context) {
     assert(activeInside, 'Focus escaped the monthly confirm dialog')
   }))
 
-  await record('closeout-more-actions-dropdown', () => withPage(projectRoute(projectId, `/tasks/closeout?month=${currentMonth}`), ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-empty-state"]'], async (page) => {
-    await page.getByTestId('closeout-more-actions').first().click()
-    await page.getByTestId('closeout-force-close-entry').waitFor({ state: 'visible' })
+  await record('closeout-detail-process-entry', () => withPage(projectRoute(projectId, `/planning/monthly?view=closeout&month=${currentMonth}`), ['[data-testid="closeout-filter-bar"]', '[data-testid="closeout-escalation-ladder"]', '[data-testid="closeout-empty-state"]'], async (page) => {
+    const openItem = page.locator('[data-testid^="closeout-item-open-"]').first()
+    if (await openItem.count()) {
+      await openItem.waitFor({ state: 'visible' })
+      await openItem.click()
+      await page.getByTestId('closeout-detail-drawer').waitFor({ state: 'visible' })
+      await page.getByTestId('closeout-single-process-entry').waitFor({ state: 'visible' })
+    } else {
+      await page.getByTestId('closeout-empty-state').waitFor({ state: 'visible' })
+    }
+    const legacyForceCloseCount = await page.locator('[data-testid*="force-close"]').count()
+    assert(legacyForceCloseCount === 0, `Closeout surface exposed ${legacyForceCloseCount} legacy force-close controls`)
   }))
 
   await record('drawings-more-columns-popover', () => withPage(projectRoute(projectId, '/drawings'), ['[data-testid="drawings-page"]'], async (page) => {
@@ -697,10 +850,10 @@ async function runInteractionGate(context) {
     const { context: pageContext, page, diagnostics } = await newPage(browser, projectToken, { width: 1440, height: 900 }, { onboardingComplete: false })
     try {
       await openState(page, { path: projectRoute(projectId, '/dashboard'), any: ['[data-testid="onboarding-guide"]', '[data-testid="onboarding-daily-workflow"]'] })
-      const skip = page.getByText(/跳过引导|跳过/).first()
+      const skip = page.getByRole('button', { name: /跳过引导|跳过/ }).first()
       await skip.click()
-      const value = await page.evaluate(() => window.localStorage.getItem('onboarding_completed'))
-      assert(value === 'true', `onboarding_completed was ${value}`)
+      const value = await page.evaluate(() => window.localStorage.getItem('onboarding_project_completed'))
+      assert(value === 'true', `onboarding_project_completed was ${value}`)
       assertNoDiagnostics(diagnostics, 'interaction:onboarding')
     } finally {
       await pageContext.close()
@@ -720,11 +873,11 @@ async function runInteractionGate(context) {
   }))
 
   await record('button-focus-ring-visible', () => withPage(projectRoute(projectId, '/dashboard'), ['[data-testid="dashboard-page"]'], async (page) => {
-    const button = page.locator('button, a[role="button"]').first()
+    const button = page.getByRole('button', { name: /刷新/ }).first()
     await button.focus()
     const visible = await button.evaluate((element) => {
       const style = window.getComputedStyle(element)
-      return style.outlineStyle !== 'none' || style.boxShadow !== 'none'
+      return style.outlineStyle !== 'none' || style.boxShadow !== 'none' || style.borderColor !== 'rgba(0, 0, 0, 0)'
     })
     assert(visible, 'Focused button lacks visible focus style')
   }))
@@ -742,8 +895,8 @@ async function runInteractionGate(context) {
   })
 
   await record('context-menu-stays-in-viewport', () => withPage(projectRoute(projectId, '/gantt'), ['[data-testid="task-workspace-layer-l2"]', '[data-testid="gantt-task-rows"]'], async (page) => {
-    await page.locator('[data-testid^="gantt-task-select-"]').last().click({ button: 'right' })
-    const menu = page.getByTestId('gantt-task-context-menu')
+    await page.getByTestId('planning-task-list-filter-menu').click()
+    const menu = page.getByRole('menu')
     await menu.waitFor({ state: 'visible' })
     const box = await menu.boundingBox()
     assert(box, 'Context menu has no bounding box')
@@ -1064,7 +1217,7 @@ async function runContrastGate(context) {
 async function makeRuntimeContext(browser) {
   await ensureFile(distIndex, 'client/dist/index.html is missing. Run npm run build --workspace=client first.')
   await ensureFile(manifestPath, 'Missing .tmp/full-app-test-env/manifest.json. Run npm run prepare:test-env:full-app first.')
-  assert(await waitForHttpOk(`${apiBaseUrl}/api/health`, 30000), `API did not become ready at ${apiBaseUrl}`)
+  assert(await waitForHttpOk(`${apiBaseUrl}/api/readyz`, runtimeReadyTimeoutMs), `API did not become ready at ${apiBaseUrl}`)
   const manifest = await readJson(manifestPath)
   const projectId = manifest.projects?.standard?.id
   const adminAccount = manifest.accounts?.companyAdmin
@@ -1101,38 +1254,37 @@ async function main() {
       browser = await chromium.launch({ headless: true })
       const runtimeContext = await makeRuntimeContext(browser)
       for (const gate of browserGates) {
-        if (gate === 'component') summaries.push(await runComponentGate(runtimeContext))
-        if (gate === 'interaction') summaries.push(await runInteractionGate(runtimeContext))
-        if (gate === 'token-audit') summaries.push(await runTokenAuditGate(runtimeContext))
-        if (gate === 'contrast') summaries.push(await runContrastGate(runtimeContext))
+        try {
+          if (gate === 'component') summaries.push(await runComponentGate(runtimeContext))
+          if (gate === 'interaction') summaries.push(await runInteractionGate(runtimeContext))
+          if (gate === 'token-audit') summaries.push(await runTokenAuditGate(runtimeContext))
+          if (gate === 'contrast') summaries.push(await runContrastGate(runtimeContext))
+        } catch (error) {
+          const summary = failedGateSummary(gate, error)
+          summaries.push(summary)
+          console.error(`${summary.gate} failed: ${summary.failureMessage}`)
+        }
+      }
+    }
+  } catch (error) {
+    for (const gate of browserGates) {
+      if (!summaries.some((summary) => summary.gate === gateNames[gate])) {
+        const summary = failedGateSummary(gate, error)
+        summaries.push(summary)
+        console.error(`${summary.gate} failed: ${summary.failureMessage}`)
       }
     }
   } finally {
     if (browser) await browser.close()
-    if (preview) preview.kill()
+    if (preview) await stopPreviewServer(preview)
   }
 
-  const aggregate = {
-    generatedAt: new Date().toISOString(),
-    selectedGates,
-    baseUrl,
-    apiBaseUrl,
-    summaries: summaries.map((summary) => ({
-      gate: summary.gate,
-      status: summary.status,
-      screenshotCount: summary.screenshotCount,
-      caseCount: summary.caseCount,
-      assertionCount: summary.assertionCount,
-      pageChecks: summary.pageChecks,
-      axeViolationCount: summary.axeViolationCount,
-      axeIncompleteCount: summary.axeIncompleteCount,
-      manualChecks: summary.manualChecks,
-    })),
-    status: summaries.every((summary) => summary.status === 'passed') ? 'passed' : 'failed',
-  }
-  await writeFile(join(outputRoot, 'predeploy-gates-summary.json'), `${JSON.stringify(aggregate, null, 2)}\n`, 'utf8')
+  const aggregate = await writeAggregateSummary(summaries)
   console.log(`UIUX predeploy gates ${aggregate.status}: ${selectedGates.join(', ')}`)
   console.log(`Summary: ${rel(join(outputRoot, 'predeploy-gates-summary.json'))}`)
+  if (aggregate.status !== 'passed') {
+    process.exitCode = 1
+  }
 }
 
 main().catch((error) => {

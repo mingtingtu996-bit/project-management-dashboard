@@ -14,36 +14,260 @@ import type {
   Invitation,
   TaskProgressSnapshot,
 } from '../types/db.js'
-import { query as rawQuery } from '../database.js'
+import {
+  isDatabaseTransactionActive,
+  query as rawQuery,
+  registerDatabasePostCommitEffect,
+  withDatabaseTransaction,
+} from '../database.js'
 import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
 import { isCompletedTask, isCompletedTaskStatus } from '../utils/taskStatus.js'
-import type { WriteLifecycleLogParams, WriteLogParams } from './changeLogs.js'
+import type { WriteLifecycleLogParams, WriteLogParams } from '../types/changeLogs.js'
+import {
+  ExecutionFactIntent,
+  applyExecutionFactGovernance,
+} from './planningScheduleGovernanceService.js'
 import {
   PROTECTED_ISSUE_SOURCE_TYPES,
   PROTECTED_RISK_SOURCE_TYPES,
   buildIssueConfirmClosePatch,
   buildIssueKeepProcessingPatch,
+  buildIssueRetentionClosePatch,
   buildRiskConfirmClosePatch,
   buildRiskKeepProcessingPatch,
+  buildRiskRetentionClosePatch,
   computeDynamicIssuePriority,
   getIssueBasePriority,
   isProtectedIssueRecord,
-} from './workflowDomainPolicy.js'
+  type RetentionClosureContext,
+  type RiskIssueClosureOutcomeInput,
+} from '../domain/riskIssueWorkflowPolicy.js'
+import { classifyProgressSnapshotSource, normalizeProgressSnapshotSource } from '../utils/progressSnapshotSource.js'
+import { shouldRecordTaskProgressSnapshot } from '../utils/taskProgressSnapshotPolicy.js'
+import { resolveSupabaseRuntimeKey } from './runtimeCredentialBoundary.js'
+import { createJobLeaseFencedFetch } from './jobLeaseFenceContext.js'
+import {
+  recordChangedExecutionFacts,
+  type ExecutionFactProjectionChange,
+} from './executionFactGovernanceService.js'
+
+export interface DbServiceBusinessSideEffectAdapters {
+  writeLog?: (params: WriteLogParams) => Promise<unknown> | unknown
+  writeLifecycleLog?: (params: WriteLifecycleLogParams) => Promise<unknown> | unknown
+  enqueueProjectHealthUpdate?: (projectId: string, trigger: string) => Promise<unknown> | unknown
+  syncProjectDataQuality?: (projectId: string) => Promise<unknown> | unknown
+  evaluateTaskConstraint?: (taskId: string, options: { projectId: string; sourceEventType: string }) => Promise<unknown> | unknown
+  finalizeTaskWrite?: (task: Task, previousTask?: Task | null, actorId?: string | null) => Promise<unknown> | unknown
+}
+
+let businessSideEffectAdapters: DbServiceBusinessSideEffectAdapters = {}
+
+export function registerDbServiceBusinessSideEffectAdapters(adapters: DbServiceBusinessSideEffectAdapters) {
+  businessSideEffectAdapters = { ...businessSideEffectAdapters, ...adapters }
+}
+
+export function assertDbServiceBusinessSideEffectAdaptersRegistered() {
+  const requiredAdapters: Array<keyof DbServiceBusinessSideEffectAdapters> = [
+    'writeLog',
+    'writeLifecycleLog',
+    'enqueueProjectHealthUpdate',
+    'syncProjectDataQuality',
+    'evaluateTaskConstraint',
+    'finalizeTaskWrite',
+  ]
+  const missingAdapters = requiredAdapters.filter((name) => !businessSideEffectAdapters[name])
+  if (missingAdapters.length > 0) {
+    throw new Error(`[dbService] missing business side-effect adapters: ${missingAdapters.join(', ')}`)
+  }
+}
+
+function runBusinessSideEffect(
+  name: keyof DbServiceBusinessSideEffectAdapters,
+  task: (() => Promise<unknown> | unknown) | undefined,
+  context: Record<string, unknown>,
+) {
+  if (!task) {
+    logger.warn('[dbService] business side-effect adapter is not registered', { name, ...context })
+    return
+  }
+  try {
+    void Promise.resolve(task()).catch((error) => {
+      logger.warn('[dbService] business side-effect failed', {
+        name,
+        ...context,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  } catch (error) {
+    logger.warn('[dbService] business side-effect failed synchronously', {
+      name,
+      ...context,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
 
 // ─── Supabase 初始化 ──────────────────────────────────────────────────────────
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
-const supabaseKey =
-  process.env.SUPABASE_SERVICE_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY ||
-  ''
+const supabaseKey = resolveSupabaseRuntimeKey()
 
 if (!supabaseUrl || !supabaseKey) {
   console.warn('[dbService] WARNING: SUPABASE_URL or SUPABASE_KEY not set')
 }
 
-const supabase = createClient(supabaseUrl, supabaseKey)
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  global: {
+    fetch: createJobLeaseFencedFetch(),
+  },
+})
+
+function readPositiveIntEnv(name: string, fallback: number) {
+  const parsed = Number(process.env[name])
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+const SUPABASE_REST_QUERY_TIMEOUT_MS = readPositiveIntEnv('SUPABASE_REST_QUERY_TIMEOUT_MS', 4000)
+const DB_DIRECT_QUERY_TIMEOUT_MS = readPositiveIntEnv('DB_DIRECT_QUERY_TIMEOUT_MS', 4000)
+const SUPABASE_REST_CIRCUIT_BREAKER_MS = readPositiveIntEnv('SUPABASE_REST_CIRCUIT_BREAKER_MS', 15000)
+const DB_DIRECT_QUERY_CIRCUIT_BREAKER_MS = readPositiveIntEnv('DB_DIRECT_QUERY_CIRCUIT_BREAKER_MS', 10000)
+const TASK_READ_CACHE_TTL_MS = readPositiveIntEnv('TASK_READ_CACHE_TTL_MS', 3000)
+const TASK_READ_STALE_TTL_MS = readPositiveIntEnv('TASK_READ_STALE_TTL_MS', 60000)
+const TASK_READ_REST_FIRST = process.env.TASK_READ_DIRECT_FIRST !== 'true'
+
+function shouldUseDirectSqlPath() {
+  const configuredMode = String(process.env.DB_SQL_EXECUTION_MODE ?? '').trim().toLowerCase()
+  if (configuredMode === 'direct') return true
+  if (configuredMode === 'rest') return false
+
+  return Boolean(process.env.DB_CONNECTION_STRING?.trim())
+    && !process.env.SUPABASE_RUNTIME_KEY?.trim()
+}
+
+export function usesDirectSqlRuntimePath() {
+  return isDatabaseTransactionActive() || shouldUseDirectSqlPath()
+}
+
+function asProjectRows(data: unknown): Project[] {
+  return Array.isArray(data) ? (data as Project[]) : []
+}
+
+type AbortablePromiseLike<T> = PromiseLike<T> & {
+  abortSignal?: (signal: AbortSignal) => PromiseLike<T>
+}
+
+let supabaseRestCircuitOpenUntil = 0
+let dbDirectQueryCircuitOpenUntil = 0
+
+type TaskReadCacheEntry = {
+  projectId: string | null
+  rows: Task[]
+  expiresAt: number
+  staleUntil: number
+}
+
+const taskReadCache = new Map<string, TaskReadCacheEntry>()
+const taskReadInFlight = new Map<string, Promise<Task[]>>()
+const taskReadInvalidationVersion = new Map<string, number>()
+
+function remainingCircuitMs(openUntil: number) {
+  return Math.max(0, openUntil - Date.now())
+}
+
+function isCircuitOpen(openUntil: number) {
+  return remainingCircuitMs(openUntil) > 0
+}
+
+function markSupabaseRestCircuitOpen() {
+  supabaseRestCircuitOpenUntil = Date.now() + SUPABASE_REST_CIRCUIT_BREAKER_MS
+}
+
+function markDbDirectQueryCircuitOpen() {
+  dbDirectQueryCircuitOpenUntil = Date.now() + DB_DIRECT_QUERY_CIRCUIT_BREAKER_MS
+}
+
+function observeTimedQuery<T>(
+  promise: PromiseLike<T>,
+  label: string,
+  isTimedOut: () => boolean,
+): Promise<T> {
+  return Promise.resolve(promise).then(
+    (value) => {
+      if (!isTimedOut()) {
+        return value
+      }
+
+      logger.warn('dbService late database resolution after timeout', { label })
+      return new Promise<T>(() => {})
+    },
+    (error) => {
+      if (!isTimedOut()) {
+        throw error
+      }
+
+      logger.warn('dbService late database rejection after timeout', {
+        label,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return new Promise<T>(() => {})
+    },
+  )
+}
+
+async function withSupabaseRestTimeout<T>(query: AbortablePromiseLike<T>, label: string): Promise<T> {
+  if (isCircuitOpen(supabaseRestCircuitOpenUntil)) {
+    throw new Error(`${label} skipped because Supabase REST circuit is open for ${remainingCircuitMs(supabaseRestCircuitOpenUntil)}ms`)
+  }
+
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let timedOut = false
+  const request = typeof query.abortSignal === 'function'
+    ? query.abortSignal(controller.signal)
+    : query
+  const observedRequest = observeTimedQuery(request, label, () => timedOut)
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+      reject(new Error(`${label} timed out after ${SUPABASE_REST_QUERY_TIMEOUT_MS}ms`))
+    }, SUPABASE_REST_QUERY_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([observedRequest, timeout])
+  } catch (error) {
+    if (timedOut) {
+      markSupabaseRestCircuitOpen()
+    }
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+async function withDirectQueryTimeout<T>(query: PromiseLike<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let timedOut = false
+  const observedQuery = observeTimedQuery(query, label, () => timedOut)
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      reject(new Error(`${label} timed out after ${DB_DIRECT_QUERY_TIMEOUT_MS}ms`))
+    }, DB_DIRECT_QUERY_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([observedQuery, timeout])
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('timed out after')) {
+      markDbDirectQueryCircuitOpen()
+    }
+    throw error
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
 
 // ─── SQL 执行辅助（纯 Supabase SDK，无需 RPC）────────────────────────────────
 // 解析标准 CRUD SQL 并转换为 Supabase JS SDK 调用。
@@ -53,9 +277,14 @@ const supabase = createClient(supabaseUrl, supabaseKey)
 type SqlFilter =
   | { col: string; kind: 'eq'; value: any }
   | { col: string; kind: 'neq'; value: any }
+  | { col: string; kind: 'gt'; value: any }
+  | { col: string; kind: 'gte'; value: any }
+  | { col: string; kind: 'lt'; value: any }
+  | { col: string; kind: 'lte'; value: any }
   | { col: string; kind: 'in'; values: any[] }
   | { col: string; kind: 'is_null' }
   | { col: string; kind: 'is_not_null' }
+  | { kind: 'always_false' }
 
 type QueryErrorLike = {
   message?: string | null
@@ -64,9 +293,11 @@ type QueryErrorLike = {
 type SelectQueryResult = {
   data: unknown[] | null
   error: QueryErrorLike | null
+  count?: number | null
 }
 
 type MutationQueryResult = {
+  data?: unknown[] | null
   error: QueryErrorLike | null
 }
 
@@ -75,16 +306,25 @@ interface SqlSelectQuery extends PromiseLike<SelectQueryResult> {
   not(column: string, operator: string, value: unknown): SqlSelectQuery
   in(column: string, values: unknown[]): SqlSelectQuery
   eq(column: string, value: unknown): SqlSelectQuery
+  gt(column: string, value: unknown): SqlSelectQuery
+  gte(column: string, value: unknown): SqlSelectQuery
+  lt(column: string, value: unknown): SqlSelectQuery
+  lte(column: string, value: unknown): SqlSelectQuery
   order(column: string, options?: { ascending?: boolean }): SqlSelectQuery
   range(from: number, to: number): SqlSelectQuery
   limit(count: number): SqlSelectQuery
 }
 
 interface SqlMutationQuery extends PromiseLike<MutationQueryResult> {
+  select(columns?: string): SqlMutationQuery
   is(column: string, value: null): SqlMutationQuery
   not(column: string, operator: string, value: unknown): SqlMutationQuery
   in(column: string, values: unknown[]): SqlMutationQuery
   eq(column: string, value: unknown): SqlMutationQuery
+  gt(column: string, value: unknown): SqlMutationQuery
+  gte(column: string, value: unknown): SqlMutationQuery
+  lt(column: string, value: unknown): SqlMutationQuery
+  lte(column: string, value: unknown): SqlMutationQuery
 }
 
 interface SnapshotTableLike {
@@ -95,7 +335,70 @@ interface SnapshotTableLike {
   insert: (row: Record<string, unknown>) => Promise<MutationQueryResult>
 }
 
+type ParsedSelectProjection =
+  | { kind: 'count'; alias: string }
+  | { kind: 'columns'; postgrestProjection: string }
+
+function parseSimpleSelectProjection(sql: string): ParsedSelectProjection | null {
+  const selectMatch = sql.match(/^SELECT\s+([\s\S]+?)\s+FROM\s/i)
+  if (!selectMatch) return null
+  const rawProjection = selectMatch[1].trim()
+  const countMatch = rawProjection.match(/^COUNT\s*\(\s*\*\s*\)\s+AS\s+(\w+)$/i)
+  if (countMatch) return { kind: 'count', alias: countMatch[1] }
+  if (rawProjection === '*') return { kind: 'columns', postgrestProjection: '*' }
+
+  const projectedColumns: string[] = []
+  for (const rawColumn of splitSqlTopLevel(rawProjection, ',')) {
+    const columnMatch = rawColumn.trim().match(/^(?:(\w+)\.)?(\w+)(?:\s+AS\s+(\w+))?$/i)
+    if (!columnMatch) return null
+    const column = columnMatch[2]
+    const alias = columnMatch[3]
+    projectedColumns.push(alias ? `${alias}:${column}` : column)
+  }
+  return projectedColumns.length > 0
+    ? { kind: 'columns', postgrestProjection: projectedColumns.join(',') }
+    : null
+}
+
 const TASK_PROGRESS_SNAPSHOT_BATCH_SIZE = 200
+const PROJECT_LIST_COLUMNS = [
+  'id',
+  'name',
+  'description',
+  'primary_invitation_code',
+  'status',
+  'project_type',
+  'building_type',
+  'structure_type',
+  'building_count',
+  'above_ground_floors',
+  'underground_floors',
+  'support_method',
+  'total_area',
+  'planned_start_date',
+  'planned_end_date',
+  'actual_start_date',
+  'actual_end_date',
+  'start_date',
+  'end_date',
+  'total_investment',
+  'budget',
+  'location',
+  'health_score',
+  'health_status',
+  'current_phase',
+  'construction_unlock_date',
+  'construction_unlock_by',
+  'default_wbs_generated',
+  'created_at',
+  'updated_at',
+  'version',
+  'owner_id',
+  'project_code',
+  'project_code_generated_at',
+  'company_id',
+  'project_visibility',
+].join(', ')
 
 type ProjectCleanupStep = {
   table: string
@@ -105,18 +408,21 @@ type ProjectCleanupStep = {
 const PROJECT_DELETE_CLEANUP_STEPS: ProjectCleanupStep[] = [
   { table: 'task_conditions' },
   { table: 'task_obstacles' },
+  { table: 'task_timeline_events' },
+  { table: 'notifications' },
   // risks.task_id historically does not cascade, so tasks must be deleted after risks.
   { table: 'risks' },
   { table: 'issues' },
   { table: 'tasks' },
-  // condition/obstacle delete triggers may emit timeline rows while the project still exists.
-  { table: 'task_timeline_events' },
 ]
 
 type ProjectCreateInput = Omit<Project, 'id' | 'created_at' | 'updated_at'> & {
   id?: string
   owner_id?: string | null
   created_by?: string | null
+  companyId?: string | null
+  company_id?: string | null
+  project_visibility?: 'private' | 'company_visible' | 'invite_only' | null
   created_at?: string | null
   updated_at?: string | null
   project_type?: string | null
@@ -136,9 +442,6 @@ type TaskWriteInput = Omit<Task, 'id' | 'created_at' | 'updated_at' | 'version'>
   assignee_type?: string | null
   estimated_hours?: number | null
   actual_hours?: number | null
-  planned_duration?: number | null
-  standard_duration?: number | null
-  ai_adjusted_duration?: number | null
   wbs_order?: number | null
 }
 
@@ -146,6 +449,9 @@ type TaskUpdateInput = Partial<TaskWriteInput> & {
   id?: string
   created_at?: string
   updated_at?: string
+  first_progress_at?: string | null
+  actual_start_date?: string | null
+  actual_end_date?: string | null
 }
 
 type RiskRow = Risk & {
@@ -194,7 +500,6 @@ type IssueUpdateInput = Partial<IssueWriteInput> & {
 }
 
 type MemberRow = ProjectMember & {
-  permission_level?: ProjectMember['permission_level']
   is_active?: boolean | null
   last_activity?: string | null
   created_at?: string | null
@@ -211,24 +516,7 @@ type MemberUpdateInput = Partial<MemberWriteInput> & {
   joined_at?: string
 }
 
-type InvitationRow = Invitation & {
-  invitation_code?: string | null
-  invited_by?: string | null
-  accepted_by?: string | null
-  accepted_at?: string | null
-}
-
-type InvitationWriteInput = Omit<Invitation, 'created_at'> & {
-  invitation_code?: string | null
-  invited_by?: string | null
-  accepted_by?: string | null
-  accepted_at?: string | null
-}
-
-type InvitationUpdateInput = Partial<InvitationWriteInput> & {
-  id?: string
-  created_at?: string
-}
+type InvitationRow = Invitation & { permission_level?: string | null }
 
 function isSqlIdentifierChar(char: string | undefined) {
   return !!char && /[a-z0-9_]/i.test(char)
@@ -359,7 +647,8 @@ function parseSqlWhere(whereClause: string, params: any[], startIdx: number): { 
       if (tautologyMatch[1] === tautologyMatch[2]) {
         continue
       }
-      throw new Error(`[executeSQL WHERE] Unsupported numeric comparison: ${condition}`)
+      filters.push({ kind: 'always_false' })
+      continue
     }
 
     const isNullMatch = condition.match(/^(\w+)\s+IS\s+NULL$/i)
@@ -390,16 +679,23 @@ function parseSqlWhere(whereClause: string, params: any[], startIdx: number): { 
       continue
     }
 
-    const compareMatch = condition.match(/^(\w+)\s*(=|!=|<>)\s*(.+)$/i)
+    const compareMatch = condition.match(/^(\w+)\s*(<=|>=|=|!=|<>|<|>)\s*(.+)$/i)
     if (compareMatch) {
       const resolved = resolveSqlLiteralToken(compareMatch[3], params, idx)
       if (!resolved) {
         throw new Error(`[executeSQL WHERE] Unsupported comparison token: ${condition}`)
       }
       idx += resolved.consumed
+      const operator = compareMatch[2]
       filters.push({
         col: compareMatch[1],
-        kind: compareMatch[2] === '=' ? 'eq' : 'neq',
+        kind:
+          operator === '=' ? 'eq'
+            : operator === '!=' || operator === '<>' ? 'neq'
+              : operator === '>' ? 'gt'
+                : operator === '>=' ? 'gte'
+                  : operator === '<' ? 'lt'
+                    : 'lte',
         value: resolved.value,
       })
       continue
@@ -425,6 +721,75 @@ function resolveSqlNumericToken(token: string | undefined, params: any[], index:
   return { value, consumed: 0 }
 }
 
+function convertQuestionPlaceholdersToPg(sql: string) {
+  let index = 0
+  let quote: "'" | '"' | null = null
+  let converted = ''
+
+  for (let cursor = 0; cursor < sql.length; cursor += 1) {
+    const char = sql[cursor]
+    const next = sql[cursor + 1]
+
+    if (quote) {
+      converted += char
+      if (char === quote) {
+        if (quote === "'" && next === "'") {
+          converted += next
+          cursor += 1
+        } else {
+          quote = null
+        }
+      }
+      continue
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char
+      converted += char
+      continue
+    }
+
+    if (char === '?') {
+      index += 1
+      converted += `$${index}`
+      continue
+    }
+
+    converted += char
+  }
+
+  return converted
+}
+
+async function runDirectExecuteSqlFallback<T = any>(
+  sql: string,
+  params: any[],
+  label: string,
+): Promise<T[]> {
+  const pgSql = convertQuestionPlaceholdersToPg(sql)
+  const result = await withDirectQueryTimeout(rawQuery(pgSql, params), label)
+  return result.rows as T[]
+}
+
+function createMutationOutcomeUnknownError(
+  operation: 'INSERT' | 'UPDATE' | 'DELETE',
+  table: string,
+  cause: unknown,
+) {
+  const causeMessage = cause instanceof Error ? cause.message : String(cause)
+  return Object.assign(
+    new Error(
+      `[executeSQL ${operation}] mutation outcome is unknown for ${table}; automatic replay is disabled: ${causeMessage}`,
+    ),
+    {
+      code: 'MUTATION_OUTCOME_UNKNOWN',
+      statusCode: 503,
+      operation,
+      table,
+    },
+  )
+}
+
 function isMissingSupabaseResourceError(error: QueryErrorLike | null | undefined) {
   const code = String((error as { code?: string } | null | undefined)?.code ?? '').trim()
   const message = String(error?.message ?? '')
@@ -438,25 +803,6 @@ function isMissingSupabaseResourceError(error: QueryErrorLike | null | undefined
     || /Could not find the table/i.test(message)
     || /Could not find the .*column/i.test(message)
   )
-}
-
-async function deleteProjectScopedRows(projectId: string, step: ProjectCleanupStep): Promise<void> {
-  const column = step.column ?? 'project_id'
-  const query = supabase.from(step.table).delete() as unknown as SqlMutationQuery
-  const { error } = await query.eq(column, projectId)
-  if (!error) return
-
-  if (isMissingSupabaseResourceError(error)) {
-    logger.warn('Skipping project cleanup step because current schema is missing the target resource', {
-      projectId,
-      table: step.table,
-      column,
-      error: error.message ?? null,
-    })
-    return
-  }
-
-  throw new Error(`[deleteProject cleanup ${step.table}] ${error.message ?? 'unknown error'}`)
 }
 
 // ─── 数据访问规范（2026-04-06 制定）─────────────────────────────────────────
@@ -473,6 +819,14 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
   const s = sql.trim()
   const upper = s.toUpperCase()
 
+  if (isDatabaseTransactionActive()) {
+    return runDirectExecuteSqlFallback<T>(s, params, 'dbService.executeSQL active transaction')
+  }
+
+  if (shouldUseDirectSqlPath()) {
+    return runDirectExecuteSqlFallback<T>(s, params, 'dbService.executeSQL direct runtime SQL')
+  }
+
   // ── SELECT ──────────────────────────────────────────────────────────────────
   if (upper.startsWith('SELECT')) {
     if (/\bJOIN\b/i.test(s)) {
@@ -480,35 +834,58 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
     }
 
     // 提取表名
-    const fromMatch = s.match(/FROM\s+(\w+)/i)
+    const fromMatch = s.match(/FROM\s+(?:(\w+)\.)?(\w+)/i)
     if (!fromMatch) throw new Error(`[executeSQL] Cannot parse table from: ${s}`)
-    const table = fromMatch[1]
+    const table = fromMatch[2]
 
-    // 判断是 COUNT(*) 查询
-    const isCount = /SELECT\s+COUNT\s*\(\s*\*\s*\)\s+AS\s+(\w+)/i.test(s)
-
-    let query = supabase.from(table).select('*') as unknown as SqlSelectQuery
+    const projection = parseSimpleSelectProjection(s)
+    if (!projection || /\b(?:GROUP\s+BY|HAVING|UNION|DISTINCT)\b|->>?/i.test(s)) {
+      return runDirectExecuteSqlFallback<T>(s, params, `dbService.executeSQL SELECT ${table} complex projection`)
+    }
+    const isCount = projection.kind === 'count'
 
     // 解析 WHERE 子句
     const whereMatch = s.match(/WHERE\s+(.+?)(?:\s+ORDER\s+|\s+LIMIT\s+|\s+GROUP\s+|$)/i)
     let paramIdx = 0
+    let filters: SqlFilter[] = []
 
     if (whereMatch) {
       const whereStr = whereMatch[1]
-      const { filters, consumed } = parseSqlWhere(whereStr, params, paramIdx)
+      const parsedWhere = parseSqlWhere(whereStr, params, paramIdx)
+      filters = parsedWhere.filters
+      const { consumed } = parsedWhere
       paramIdx += consumed
-      for (const filter of filters) {
-        if (filter.kind === 'is_null') {
-          query = query.is(filter.col, null)
-        } else if (filter.kind === 'is_not_null') {
-          query = query.not(filter.col, 'is', null)
-        } else if (filter.kind === 'in') {
-          query = query.in(filter.col, filter.values)
-        } else if (filter.kind === 'neq') {
-          query = query.not(filter.col, 'eq', filter.value)
-        } else {
-          query = query.eq(filter.col, filter.value)
+      if (filters.some((filter) => filter.kind === 'always_false')) {
+        if (isCount) {
+          return [{ [projection.alias]: 0 } as T]
         }
+        return []
+      }
+    }
+
+    const queryBuilder = supabase.from(table)
+    let query = (isCount
+      ? queryBuilder.select('id', { count: 'exact', head: true })
+      : queryBuilder.select(projection.postgrestProjection)) as unknown as SqlSelectQuery
+    for (const filter of filters) {
+      if (filter.kind === 'is_null') {
+        query = query.is(filter.col, null)
+      } else if (filter.kind === 'is_not_null') {
+        query = query.not(filter.col, 'is', null)
+      } else if (filter.kind === 'in') {
+        query = query.in(filter.col, filter.values)
+      } else if (filter.kind === 'neq') {
+        query = query.not(filter.col, 'eq', filter.value)
+      } else if (filter.kind === 'gt') {
+        query = query.gt(filter.col, filter.value)
+      } else if (filter.kind === 'gte') {
+        query = query.gte(filter.col, filter.value)
+      } else if (filter.kind === 'lt') {
+        query = query.lt(filter.col, filter.value)
+      } else if (filter.kind === 'lte') {
+        query = query.lte(filter.col, filter.value)
+      } else if (filter.kind === 'eq') {
+        query = query.eq(filter.col, filter.value)
       }
     }
 
@@ -535,15 +912,49 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
       }
     }
 
-    const { data, error } = await query
-    if (error) throw new Error(`[executeSQL SELECT] ${error.message} | SQL: ${s}`)
+    let data: unknown[] | null = null
+    let error: QueryErrorLike | null = null
+    let exactCount: number | null = null
+
+    try {
+      const result = await withSupabaseRestTimeout(query, `dbService.executeSQL SELECT ${table}`)
+      data = result.data
+      error = result.error
+      exactCount = result.count ?? null
+    } catch (restError) {
+      if (isCircuitOpen(dbDirectQueryCircuitOpenUntil)) {
+        logger.warn('dbService.executeSQL SELECT skipped direct query because direct DB circuit is open', {
+          table,
+          remainingMs: remainingCircuitMs(dbDirectQueryCircuitOpenUntil),
+          error: restError instanceof Error ? restError.message : String(restError),
+        })
+        throw restError
+      }
+
+      logger.warn('dbService.executeSQL SELECT REST read failed, falling back to direct query', {
+        table,
+        error: restError instanceof Error ? restError.message : String(restError),
+      })
+      return runDirectExecuteSqlFallback<T>(s, params, `dbService.executeSQL SELECT ${table} direct query`)
+    }
+
+    if (error) {
+      if (isCircuitOpen(dbDirectQueryCircuitOpenUntil)) {
+        throw new Error(`[executeSQL SELECT] ${error.message} | SQL: ${s}`)
+      }
+
+      logger.warn('dbService.executeSQL SELECT REST returned an error, falling back to direct query', {
+        table,
+        error: error.message ?? null,
+      })
+      return runDirectExecuteSqlFallback<T>(s, params, `dbService.executeSQL SELECT ${table} direct query`)
+    }
 
     if (isCount) {
-      // 把 SELECT COUNT(*) AS cnt 的结果包装成 [{cnt: N}]
-      const aliasMatch = s.match(/COUNT\s*\(\s*\*\s*\)\s+AS\s+(\w+)/i)
-      const alias = aliasMatch ? aliasMatch[1] : 'count'
-      const count = Array.isArray(data) ? data.length : 0
-      return [{ [alias]: count } as T]
+      if (!Number.isFinite(exactCount)) {
+        throw new Error(`[executeSQL SELECT] exact count was not returned for ${table}`)
+      }
+      return [{ [projection.alias]: Number(exactCount) } as T]
     }
 
     return (data ?? []) as T[]
@@ -551,20 +962,44 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
 
   // ── INSERT ──────────────────────────────────────────────────────────────────
   if (upper.startsWith('INSERT')) {
-    const tableMatch = s.match(/INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i)
+    const tableMatch = s.match(/INTO\s+(?:(\w+)\.)?(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i)
     if (!tableMatch) throw new Error(`[executeSQL] Cannot parse INSERT: ${s}`)
-    const table = tableMatch[1]
-    const cols = tableMatch[2].split(',').map(c => c.trim())
+    const table = tableMatch[2]
+    const cols = tableMatch[3].split(',').map(c => c.trim())
     const record: Record<string, any> = {}
     cols.forEach((col, i) => { record[col] = params[i] ?? null })
-    const { error } = await supabase.from(table).insert(record)
-    if (error) throw new Error(`[executeSQL INSERT] ${error.message} | SQL: ${s}`)
-    return []
+    const returningMatch = s.match(/RETURNING\s+(.+?)\s*$/i)
+    const returningColumns = returningMatch ? returningMatch[1].trim() : null
+    const insertQuery = returningColumns
+      ? (supabase.from(table).insert(record).select(returningColumns) as unknown as AbortablePromiseLike<MutationQueryResult>)
+      : (supabase.from(table).insert(record) as unknown as AbortablePromiseLike<MutationQueryResult>)
+    let data: unknown[] | null = null
+    let error: QueryErrorLike | null = null
+
+    try {
+      const result = await withSupabaseRestTimeout(insertQuery, `dbService.executeSQL INSERT ${table}`)
+      data = result.data ?? null
+      error = result.error
+    } catch (restError) {
+      logger.error('dbService.executeSQL INSERT REST write outcome is unknown; direct replay disabled', {
+        table,
+        error: restError instanceof Error ? restError.message : String(restError),
+      })
+      throw createMutationOutcomeUnknownError('INSERT', table, restError)
+    }
+
+    if (error) {
+      throw new Error(`[executeSQL INSERT] ${error.message} | SQL: ${s}`)
+    }
+    return (data ?? []) as T[]
   }
 
   // ── UPDATE ──────────────────────────────────────────────────────────────────
   if (upper.startsWith('UPDATE')) {
-    const tableMatch = s.match(/UPDATE\s+(\w+)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+?)(?:\s*$)/i)
+    const returningMatch = s.match(/\s+RETURNING\s+(.+?)\s*$/i)
+    const returningColumns = returningMatch ? returningMatch[1].trim() : '*'
+    const updateStatement = returningMatch ? s.slice(0, returningMatch.index).trim() : s
+    const tableMatch = updateStatement.match(/UPDATE\s+(\w+)\s+SET\s+([\s\S]+?)\s+WHERE\s+([\s\S]+?)(?:\s*$)/i)
     if (!tableMatch) throw new Error(`[executeSQL] Cannot parse UPDATE: ${s}`)
     const table = tableMatch[1]
     const setStr = tableMatch[2]
@@ -590,18 +1025,37 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
 
     // 解析 WHERE 条件
     const { filters } = parseSqlWhere(whereStr, params, paramIdx)
+    if (filters.some((filter) => filter.kind === 'always_false')) return []
     let query = supabase.from(table).update(updates) as unknown as SqlMutationQuery
     for (const filter of filters) {
       if (filter.kind === 'is_null') query = query.is(filter.col, null)
       else if (filter.kind === 'is_not_null') query = query.not(filter.col, 'is', null)
       else if (filter.kind === 'in') query = query.in(filter.col, filter.values)
       else if (filter.kind === 'neq') query = query.not(filter.col, 'eq', filter.value)
-      else query = query.eq(filter.col, filter.value)
+      else if (filter.kind === 'gt') query = query.gt(filter.col, filter.value)
+      else if (filter.kind === 'gte') query = query.gte(filter.col, filter.value)
+      else if (filter.kind === 'lt') query = query.lt(filter.col, filter.value)
+      else if (filter.kind === 'lte') query = query.lte(filter.col, filter.value)
+      else if (filter.kind === 'eq') query = query.eq(filter.col, filter.value)
     }
 
-    const { error } = await query
-    if (error) throw new Error(`[executeSQL UPDATE] ${error.message} | SQL: ${s}`)
-    return []
+    let data: unknown[] | null = null
+    let error: QueryErrorLike | null = null
+    try {
+      const result = await withSupabaseRestTimeout(query.select(returningColumns), `dbService.executeSQL UPDATE ${table}`)
+      data = result.data ?? null
+      error = result.error
+    } catch (restError) {
+      logger.error('dbService.executeSQL UPDATE REST write outcome is unknown; direct replay disabled', {
+        table,
+        error: restError instanceof Error ? restError.message : String(restError),
+      })
+      throw createMutationOutcomeUnknownError('UPDATE', table, restError)
+    }
+    if (error) {
+      throw new Error(`[executeSQL UPDATE] ${error.message} | SQL: ${s}`)
+    }
+    return (data ?? []) as T[]
   }
 
   // ── DELETE ──────────────────────────────────────────────────────────────────
@@ -614,17 +1068,34 @@ async function executeSQL<T = any>(sql: string, params: any[] = []): Promise<T[]
     let query = supabase.from(table).delete() as unknown as SqlMutationQuery
     if (whereStr) {
       const { filters } = parseSqlWhere(whereStr, params, 0)
+      if (filters.some((filter) => filter.kind === 'always_false')) return []
       for (const filter of filters) {
         if (filter.kind === 'is_null') query = query.is(filter.col, null)
         else if (filter.kind === 'is_not_null') query = query.not(filter.col, 'is', null)
         else if (filter.kind === 'in') query = query.in(filter.col, filter.values)
         else if (filter.kind === 'neq') query = query.not(filter.col, 'eq', filter.value)
-        else query = query.eq(filter.col, filter.value)
+        else if (filter.kind === 'gt') query = query.gt(filter.col, filter.value)
+        else if (filter.kind === 'gte') query = query.gte(filter.col, filter.value)
+        else if (filter.kind === 'lt') query = query.lt(filter.col, filter.value)
+        else if (filter.kind === 'lte') query = query.lte(filter.col, filter.value)
+        else if (filter.kind === 'eq') query = query.eq(filter.col, filter.value)
       }
     }
 
-    const { error } = await query
-    if (error) throw new Error(`[executeSQL DELETE] ${error.message} | SQL: ${s}`)
+    let error: QueryErrorLike | null = null
+    try {
+      const result = await withSupabaseRestTimeout(query, `dbService.executeSQL DELETE ${table}`)
+      error = result.error
+    } catch (restError) {
+      logger.error('dbService.executeSQL DELETE REST write outcome is unknown; direct replay disabled', {
+        table,
+        error: restError instanceof Error ? restError.message : String(restError),
+      })
+      throw createMutationOutcomeUnknownError('DELETE', table, restError)
+    }
+    if (error) {
+      throw new Error(`[executeSQL DELETE] ${error.message} | SQL: ${s}`)
+    }
     return []
   }
 
@@ -641,11 +1112,44 @@ function now(): string {
   return new Date().toISOString()
 }
 
+function enqueueProjectHealthRefresh(projectId: unknown, trigger: string) {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) return
+
+  runBusinessSideEffect(
+    'enqueueProjectHealthUpdate',
+    businessSideEffectAdapters.enqueueProjectHealthUpdate
+      ? () => businessSideEffectAdapters.enqueueProjectHealthUpdate!(normalizedProjectId, trigger)
+      : undefined,
+    { projectId: normalizedProjectId, trigger },
+  )
+}
+
+export async function finalizeTaskWriteWithRegisteredAdapter(
+  task: Task,
+  previousTask?: Task | null,
+  actorId?: string | null,
+) {
+  const finalize = businessSideEffectAdapters.finalizeTaskWrite
+  if (!finalize) throw new Error('[dbService] task write finalizer is not registered')
+  await finalize(task, previousTask, actorId)
+}
+
+async function enqueueProjectHealthRefreshAfterCommit(projectId: unknown, trigger: string) {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) return
+  await registerDatabasePostCommitEffect(
+    `dbService.projectHealth:${trigger}:${normalizedProjectId}`,
+    async () => enqueueProjectHealthRefresh(normalizedProjectId, trigger),
+  )
+}
+
 type ChangeSource =
   | 'system_auto'
   | 'manual_adjusted'
   | 'manual_close_confirmation'
   | 'manual_keep_processing'
+  | 'retention_close'
   | 'admin_force'
   | 'approval'
   | 'monthly_plan_correction'
@@ -665,32 +1169,77 @@ function createBusinessError(code: string, message: string, statusCode = 422): B
   return error
 }
 
+function assertStructuredClosureOutcome(
+  currentStatus: string | null | undefined,
+  nextStatus: string,
+  fields: Partial<Risk> | Partial<Issue>,
+) {
+  if (currentStatus === 'closed' || nextStatus !== 'closed') return
+
+  const hasRequiredOutcome = Boolean(
+    fields.closure_result_code
+    && String(fields.closure_result_summary ?? '').trim()
+    && fields.closure_effectiveness
+    && fields.closure_recorded_at,
+  )
+  if (!hasRequiredOutcome) {
+    throw createBusinessError(
+      'CLOSURE_OUTCOME_REQUIRED',
+      '风险或问题关闭时必须记录受控结果、结果说明、有效性和记录时间',
+    )
+  }
+}
+
+function clearStructuredClosureOutcome(fields: Partial<Risk> | Partial<Issue>) {
+  Object.assign(fields, {
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
+  })
+}
+
 function normalizeDbChangeLogSource(source?: ChangeSource): DbChangeLogSource {
   if (source === 'manual_close_confirmation' || source === 'manual_keep_processing') {
     return 'manual_adjusted'
   }
+  if (source === 'retention_close') return 'system_auto'
   return source
 }
 
-async function runRpc<T = unknown>(fn: string, params: Record<string, unknown>) {
+export async function executeDatabaseRpc<T = unknown>(fn: string, params: Record<string, unknown>) {
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    const identifierPattern = /^[a-z_][a-z0-9_]*$/i
+    if (!identifierPattern.test(fn)) {
+      throw new Error(`Invalid database RPC function name: ${fn}`)
+    }
+
+    const entries = Object.entries(params)
+    for (const [name] of entries) {
+      if (!identifierPattern.test(name)) {
+        throw new Error(`Invalid database RPC parameter name: ${name}`)
+      }
+    }
+
+    const args = entries
+      .map(([name], index) => `"${name}" => $${index + 1}`)
+      .join(', ')
+    const result = await withDirectQueryTimeout(
+      rawQuery(`SELECT public."${fn}"(${args}) AS result`, entries.map(([, value]) => value)),
+      `dbService.runRpc ${fn}`,
+    )
+    return (result.rows[0]?.result ?? null) as T
+  }
+
   const { data, error } = await supabase.rpc(fn, params)
   if (error) throw new Error(error.message)
   return data as T
 }
 
-function isMissingRelationError(error: unknown, relation: string) {
-  const message = String((error as Error | undefined)?.message || '')
-  const lowerMessage = message.toLowerCase()
-  const lowerRelation = relation.toLowerCase()
-
-  return lowerMessage.includes(lowerRelation) && (
-    lowerMessage.includes('does not exist') ||
-    lowerMessage.includes('不存在') ||
-    lowerMessage.includes('schema cache') ||
-    lowerMessage.includes('could not find the table') ||
-    lowerMessage.includes('could not find the column')
-  )
-}
+const runRpc = executeDatabaseRpc
 
 function buildIndependentChainId(sourceType?: string | null, chainId?: string | null) {
   if (chainId) return chainId
@@ -708,6 +1257,73 @@ function normalizeIssueStatus(value?: string | null): Issue['status'] {
   return 'open'
 }
 
+function buildRiskIssueClosureFact(row: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries({
+    status: row.status,
+    resultCode: row.closure_result_code,
+    resultSummary: row.closure_result_summary,
+    effectiveness: row.closure_effectiveness,
+    evidenceRefs: row.closure_evidence_refs,
+    causeAttributionId: row.closure_cause_attribution_id,
+    closedBy: row.closed_by,
+    recordedAt: row.closure_recorded_at,
+  }).filter(([, value]) => value !== undefined && value !== null))
+}
+
+async function recordRiskIssueExecutionFacts(input: {
+  entityType: 'risk' | 'issue'
+  entityId: string
+  projectId: string
+  previous: Record<string, unknown> | null
+  next: Record<string, unknown>
+  sourceMutationId: string
+  observedAt: string
+  actorUserId?: string | null
+  forceInitialStatus?: boolean
+}) {
+  const statusFactType = `${input.entityType}.status` as 'risk.status' | 'issue.status'
+  const closureFactType = `${input.entityType}.closure` as 'risk.closure' | 'issue.closure'
+  const changes: ExecutionFactProjectionChange[] = [{
+    factType: statusFactType,
+    previousValue: input.previous?.status ?? null,
+    nextValue: input.next.status,
+    force: input.forceInitialStatus === true,
+    effectiveAt: input.observedAt,
+  }]
+  if (input.next.status === 'closed') {
+    changes.push({
+      factType: closureFactType,
+      previousValue: input.previous?.status === 'closed'
+        ? buildRiskIssueClosureFact(input.previous)
+        : null,
+      nextValue: buildRiskIssueClosureFact(input.next),
+      effectiveAt: String(
+        input.next.closure_recorded_at
+        ?? input.next.closed_at
+        ?? input.next.resolved_at
+        ?? input.observedAt,
+      ),
+    })
+  }
+
+  const changed = changes.filter((change) => (
+    change.force === true
+    || JSON.stringify(change.previousValue) !== JSON.stringify(change.nextValue)
+  ))
+  if (changed.length === 0) return
+
+  await recordChangedExecutionFacts({
+    projectId: input.projectId,
+    entityType: input.entityType,
+    entityId: input.entityId,
+    sourceModule: 'dbService',
+    sourceMutationId: input.sourceMutationId,
+    actorUserId: input.actorUserId ?? null,
+    observedAt: input.observedAt,
+    changes: changed,
+  })
+}
+
 function validateRiskStatusTransition(
   currentStatus: Risk['status'] | null,
   nextStatus: Risk['status'],
@@ -715,7 +1331,7 @@ function validateRiskStatusTransition(
 ) {
   if (!currentStatus || currentStatus === nextStatus) return
 
-  if (changeSource === 'system_auto') {
+  if (changeSource === 'system_auto' || changeSource === 'retention_close') {
     const allowedSystemTransitions: Record<Risk['status'], Risk['status'][]> = {
       identified: ['mitigating', 'closed'],
       mitigating: ['closed'],
@@ -756,6 +1372,8 @@ function validateIssueStatusTransition(
     if (allowedSystemTransitions[currentStatus]?.includes(nextStatus)) return
   }
 
+  if (changeSource === 'retention_close' && nextStatus === 'closed') return
+
   if (currentStatus === 'open' && nextStatus === 'investigating') return
   if (currentStatus === 'investigating' && nextStatus === 'open') return
   if (currentStatus === 'investigating' && nextStatus === 'resolved') return
@@ -777,11 +1395,21 @@ function validateIssueStatusTransition(
 }
 
 function isIssuePendingManualCloseAction(changeSource: ChangeSource) {
-  return changeSource === 'manual_close_confirmation' || changeSource === 'manual_keep_processing'
+  return changeSource === 'manual_close_confirmation'
+    || changeSource === 'manual_keep_processing'
+    || changeSource === 'retention_close'
 }
 
 async function listPriorityLockedIssueIds(issueIds: string[]) {
   if (!issueIds.length) return new Set<string>()
+
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    const rows = await executeSQL<{ entity_id?: string | null }>(
+      `SELECT entity_id FROM change_logs WHERE entity_type = ? AND field_name = ? AND entity_id IN (${issueIds.map(() => '?').join(', ')})`,
+      ['issue', 'priority', ...issueIds],
+    )
+    return new Set(rows.map((row) => String(row.entity_id ?? '')).filter(Boolean))
+  }
 
   const { data, error } = await supabase
     .from('change_logs')
@@ -815,7 +1443,7 @@ function normalizeMilestoneTaskStatus(value?: string | null): Task['status'] {
 function buildTaskInputFromMilestone(milestone: Omit<Milestone, 'id' | 'created_at' | 'updated_at'>): TaskWriteInput {
   return {
     project_id: milestone.project_id,
-    title: milestone.title ?? milestone.name,
+    title: milestone.title,
     description: milestone.description ?? null,
     status: normalizeMilestoneTaskStatus(milestone.status),
     priority: 'medium',
@@ -830,8 +1458,8 @@ function buildTaskInputFromMilestone(milestone: Omit<Milestone, 'id' | 'created_
 
 function buildTaskUpdateFromMilestone(updates: Partial<Milestone>): TaskUpdateInput {
   const taskUpdates: TaskUpdateInput = {}
-  if (updates.name !== undefined || updates.title !== undefined) {
-    taskUpdates.title = updates.title ?? updates.name ?? ''
+  if (updates.title !== undefined) {
+    taskUpdates.title = updates.title
   }
   if (updates.description !== undefined) {
     taskUpdates.description = updates.description
@@ -877,33 +1505,43 @@ async function listUnmetTaskConditionIds(taskId: string) {
   return rows.map((row) => String(row.id ?? '')).filter(Boolean)
 }
 
-function extractMissingColumnName(message: string | undefined, table: string): string | null {
-  if (!message) return null
+function createProjectMutationError(
+  code: 'PROJECT_SCHEMA_INCOMPATIBLE' | 'PROJECT_OWNERSHIP_REQUIRED',
+  message: string,
+  statusCode: 400 | 503,
+) {
+  return Object.assign(new Error(message), { code, statusCode })
+}
 
-  const patterns = [
-    new RegExp(`Could not find the '([^']+)' column of '${table}'`, 'i'),
-    new RegExp(`column "([^"]+)" of relation "${table}" does not exist`, 'i'),
-    /column "([^"]+)" does not exist/i,
-  ]
+function createProjectSchemaIncompatibleError(error: QueryErrorLike | null | undefined) {
+  return createProjectMutationError(
+    'PROJECT_SCHEMA_INCOMPATIBLE',
+    `项目数据库结构与当前服务版本不兼容，请先完成数据库迁移：${error?.message ?? 'unknown schema error'}`,
+    503,
+  )
+}
 
-  for (const pattern of patterns) {
-    const match = message.match(pattern)
-    if (match?.[1]) return match[1]
+function toDateOnly(value?: unknown): string {
+  if (value instanceof Date) {
+    const time = value.getTime()
+    return Number.isNaN(time) ? now().slice(0, 10) : value.toISOString().slice(0, 10)
   }
 
-  return null
-}
+  if (typeof value === 'number') {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? now().slice(0, 10) : date.toISOString().slice(0, 10)
+  }
 
-function toDateOnly(value?: string | null): string {
-  return (value ?? now()).slice(0, 10)
-}
+  const text = String(value ?? now()).trim()
+  const isoDate = text.match(/^(\d{4}-\d{2}-\d{2})/)
+  if (isoDate) return isoDate[1]
 
-function isStartState(status?: string | null): boolean {
-  return ['todo', 'pending', '未开始'].includes(String(status ?? '').trim())
-}
+  const parsed = new Date(text)
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toISOString().slice(0, 10)
+  }
 
-function isInProgressState(status?: string | null): boolean {
-  return ['in_progress', '进行中'].includes(String(status ?? '').trim())
+  return now().slice(0, 10)
 }
 
 function normalizeTaskProgressValue(value: unknown): number {
@@ -916,7 +1554,7 @@ function normalizeTaskProgressValue(value: unknown): number {
 
 async function writeChangeLog(params: {
   project_id?: string | null
-  entity_type: 'task' | 'risk' | 'issue' | 'delay_request'
+  entity_type: 'task' | 'risk' | 'issue'
   entity_id: string
   field_name: string
   old_value?: string | number | boolean | null
@@ -924,29 +1562,41 @@ async function writeChangeLog(params: {
   changed_by?: string | null
   change_source?: ChangeSource
 }) {
-  const { writeLog } = await import('./changeLogs.js')
   const normalizedParams: WriteLogParams = {
     ...params,
     change_source: normalizeDbChangeLogSource(params.change_source),
   }
-  await writeLog(normalizedParams)
+  if (!businessSideEffectAdapters.writeLog) {
+    logger.warn('[dbService] writeLog adapter is not registered', {
+      entityType: params.entity_type,
+      entityId: params.entity_id,
+    })
+    return
+  }
+  await businessSideEffectAdapters.writeLog(normalizedParams)
 }
 
 async function writeLifecycleChangeLog(params: {
   project_id?: string | null
-  entity_type: 'task' | 'risk' | 'issue' | 'delay_request'
+  entity_type: 'task' | 'risk' | 'issue'
   entity_id: string
   action: string
   changed_by?: string | null
   change_reason?: string | null
   change_source?: ChangeSource
 }) {
-  const { writeLifecycleLog } = await import('./changeLogs.js')
   const normalizedParams: WriteLifecycleLogParams = {
     ...params,
     change_source: normalizeDbChangeLogSource(params.change_source),
   }
-  await writeLifecycleLog(normalizedParams)
+  if (!businessSideEffectAdapters.writeLifecycleLog) {
+    logger.warn('[dbService] writeLifecycleLog adapter is not registered', {
+      entityType: params.entity_type,
+      entityId: params.entity_id,
+    })
+    return
+  }
+  await businessSideEffectAdapters.writeLifecycleLog(normalizedParams)
 }
 
 export interface TaskSnapshotWriteOptions {
@@ -954,11 +1604,17 @@ export interface TaskSnapshotWriteOptions {
   eventType?: string
   eventSource?: string
   notes?: string | null
+  confirmationStatus?: 'unconfirmed' | 'confirmed' | 'acknowledged' | 'verified' | null
+  confirmedAt?: string | null
+  confirmedBy?: string | null
 }
 
 interface TaskUpdateOptions {
   allowReopen?: boolean
   skipSnapshotWrite?: boolean
+  executionFactIntent?: ExecutionFactIntent
+  executionFactEventDate?: string | null
+  allowManualActualDates?: boolean
 }
 
 function resolveTaskSnapshotEventType(task: any, previousTask?: any | null) {
@@ -986,13 +1642,20 @@ function toMonthKey(value?: string | null) {
 
 export async function recordTaskProgressSnapshot(task: any, options: TaskSnapshotWriteOptions = {}, previousTask?: any | null) {
   const eventType = options.eventType ?? resolveTaskSnapshotEventType(task, previousTask)
-  const eventSource = options.eventSource ?? (options.recordedBy ? 'user_action' : 'system_auto')
+  const eventSource = normalizeProgressSnapshotSource(options.eventSource ?? (options.recordedBy ? 'user_action' : 'system_auto'))
+  const sourceConfidence = classifyProgressSnapshotSource({ event_source: eventSource })
+  const confirmationStatus = options.confirmationStatus
+    ?? (options.confirmedAt || options.confirmedBy ? 'confirmed' : 'unconfirmed')
   const snapshot = {
     task_id: task.id,
     progress: Number(task.progress ?? 0),
     snapshot_date: toDateOnly(task.updated_at),
     event_type: eventType,
     event_source: eventSource,
+    source_confidence: sourceConfidence,
+    confirmation_status: confirmationStatus,
+    confirmed_at: options.confirmedAt ?? null,
+    confirmed_by: options.confirmedBy ?? null,
     notes: options.notes ?? `进度更新: ${Number(task.progress ?? 0)}%`,
     status: task.status ?? null,
     conditions_met_count: Number(task.conditions_met_count ?? 0),
@@ -1047,6 +1710,10 @@ export async function recordTaskProgressSnapshot(task: any, options: TaskSnapsho
           .update({
             progress: snapshot.progress,
             notes: snapshot.notes,
+            source_confidence: snapshot.source_confidence,
+            confirmation_status: snapshot.confirmation_status,
+            confirmed_at: snapshot.confirmed_at,
+            confirmed_by: snapshot.confirmed_by,
             status: snapshot.status,
             conditions_met_count: snapshot.conditions_met_count,
             conditions_total_count: snapshot.conditions_total_count,
@@ -1078,32 +1745,28 @@ export async function recordTaskProgressSnapshot(task: any, options: TaskSnapsho
 
   const projectId = String(task?.project_id ?? '').trim()
   if (projectId) {
-    void import('./projectHealthService.js')
-      .then(({ enqueueProjectHealthUpdate }) => enqueueProjectHealthUpdate(projectId, eventType))
-      .catch((error) => {
-        logger.warn('[dbService] failed to enqueue project health refresh after snapshot write', {
-          projectId,
-          eventType,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
-
-    void import('./dataQualityService.js')
-      .then(({ dataQualityService }) => dataQualityService.syncProjectDataQuality(projectId))
-      .catch((error) => {
-        logger.warn('[dbService] failed to enqueue data quality refresh after snapshot write', {
-          projectId,
-          eventType,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
+    runBusinessSideEffect(
+      'enqueueProjectHealthUpdate',
+      businessSideEffectAdapters.enqueueProjectHealthUpdate
+        ? () => businessSideEffectAdapters.enqueueProjectHealthUpdate!(projectId, eventType)
+        : undefined,
+      { projectId, eventType },
+    )
+    runBusinessSideEffect(
+      'syncProjectDataQuality',
+      businessSideEffectAdapters.syncProjectDataQuality
+        ? () => businessSideEffectAdapters.syncProjectDataQuality!(projectId)
+        : undefined,
+      { projectId, eventType },
+    )
   }
 }
 
 // ─── Projects ─────────────────────────────────────────────────────────────────
 export async function getProjects(): Promise<Project[]> {
   try {
-    const result = await rawQuery('SELECT * FROM public.projects ORDER BY created_at DESC')
+    // v1.4.22.1: exclude wizard_drafting projects from main list
+    const result = await rawQuery(`SELECT ${PROJECT_LIST_COLUMNS} FROM public.projects WHERE (status IS NULL OR status != 'wizard_drafting') ORDER BY created_at DESC`)
     return result.rows as Project[]
   } catch (error) {
     logger.warn('dbService.getProjects fallback to Supabase REST', {
@@ -1113,10 +1776,10 @@ export async function getProjects(): Promise<Project[]> {
 
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select(PROJECT_LIST_COLUMNS)
     .order('created_at', { ascending: false })
   if (error) throw new Error(error.message)
-  return (data ?? []) as Project[]
+  return asProjectRows(data)
 }
 
 export async function getProject(id: string): Promise<Project | null> {
@@ -1144,6 +1807,8 @@ export async function getProject(id: string): Promise<Project | null> {
 
 function normalizeProjectStatus(status?: string | null): Project['status'] {
   switch (String(status || '').trim()) {
+    case 'wizard_drafting':
+      return 'wizard_drafting'
     case '已完成':
     case 'completed':
     case 'done':
@@ -1168,15 +1833,27 @@ function normalizeProjectStatus(status?: string | null): Project['status'] {
 export async function createProject(
   project: ProjectCreateInput
 ): Promise<Project> {
+  const companyId = String(project.company_id ?? project.companyId ?? '').trim()
+  const ownerId = String(project.owner_id ?? '').trim()
+  if (!companyId || !ownerId) {
+    throw createProjectMutationError(
+      'PROJECT_OWNERSHIP_REQUIRED',
+      '创建项目必须提供有效的 company_id 和 owner_id',
+      400,
+    )
+  }
+
   const id = project.id || uuidv4()
   const ts = now()
   const row = {
     id,
     name: project.name,
     description: project.description ?? null,
+    company_id: companyId,
+    project_visibility: project.project_visibility ?? 'private',
     status: normalizeProjectStatus(project.status),
-    owner_id: project.owner_id ?? null,
-    created_by: project.created_by ?? project.owner_id ?? null,
+    owner_id: ownerId,
+    created_by: project.created_by ?? ownerId,
     project_type: project.project_type ?? null,
     building_type: project.building_type ?? null,
     structure_type: project.structure_type ?? null,
@@ -1196,82 +1873,63 @@ export async function createProject(
     created_at: ts,
     updated_at: ts,
   }
-  // TODO(待替换点 6.2)：以下是列剥离重试补丁，用于兼容 projects 表列与代码字段不匹配的情形。
-  // 当 Supabase 返回 42703（列不存在）时，自动删除该列并重试，直到插入成功或所有字段耗尽。
-  // 问题：行为不透明、每次部署存在隐性依赖、无法区分"真实业务字段缺失"与"迁移滞后"。
-  // 替换方向：迁移完整对齐后，改为显式 allowedColumns 白名单，直接过滤 row 字段，去掉重试循环。
-  // 替换前提：需确认所有生产环境已跑完 001→054 标准迁移链（见步骤 6.1）。
-  const insertRow: Record<string, unknown> = { ...row }
-
-  for (let attempt = 0; attempt < Object.keys(row).length; attempt += 1) {
-    const { error } = await supabase.from('projects').insert(insertRow)
-
-    if (!error) {
-      if (row.owner_id) {
-        try {
-          const { data: existingMember, error: existingMemberError } = await supabase
-            .from('project_members')
-            .select('id, joined_at')
-            .eq('project_id', id)
-            .eq('user_id', row.owner_id)
-            .maybeSingle()
-
-          if (existingMemberError) {
-            throw new Error(existingMemberError.message)
-          }
-
-          if (existingMember?.id) {
-            const { error: updateMemberError } = await supabase
-              .from('project_members')
-              .update({
-                permission_level: 'owner',
-                is_active: true,
-                joined_at: existingMember.joined_at ?? ts,
-                last_activity: ts,
-              })
-              .eq('id', existingMember.id)
-
-            if (updateMemberError) {
-              throw new Error(updateMemberError.message)
-            }
-          } else {
-            const { error: insertMemberError } = await supabase
-              .from('project_members')
-              .insert({
-                id: uuidv4(),
-                project_id: id,
-                user_id: row.owner_id,
-                permission_level: 'owner',
-                joined_at: ts,
-                is_active: true,
-                last_activity: ts,
-              })
-
-            if (insertMemberError) {
-              throw new Error(insertMemberError.message)
-            }
-          }
-        } catch (membershipError) {
-          await supabase.from('projects').delete().eq('id', id)
-          throw membershipError
-        }
-      }
-      return (await getProject(id))!
+  const { error } = await supabase.from('projects').insert(row)
+  if (error) {
+    if (isMissingSupabaseResourceError(error)) {
+      throw createProjectSchemaIncompatibleError(error)
     }
-
-    const missingColumn =
-      extractMissingColumnName(error.message, 'projects') ??
-      extractMissingColumnName(String(error.details || ''), 'projects')
-
-    if ((error.code === '42703' || missingColumn) && missingColumn && missingColumn in insertRow) {
-      delete insertRow[missingColumn]
-      continue
-    }
-
     throw new Error(error.message)
   }
 
-  throw new Error('项目创建失败：projects 表结构与当前接口不兼容')
+  try {
+    const { data: existingMember, error: existingMemberError } = await supabase
+      .from('project_members')
+      .select('id, joined_at')
+      .eq('project_id', id)
+      .eq('user_id', row.owner_id)
+      .maybeSingle()
+
+    if (existingMemberError) {
+      throw new Error(existingMemberError.message)
+    }
+
+    if (existingMember?.id) {
+      const { error: updateMemberError } = await supabase
+        .from('project_members')
+        .update({
+          permission_level: 'owner',
+          is_active: true,
+          joined_at: existingMember.joined_at ?? ts,
+          last_activity: ts,
+        })
+        .eq('id', existingMember.id)
+
+      if (updateMemberError) {
+        throw new Error(updateMemberError.message)
+      }
+    } else {
+      const { error: insertMemberError } = await supabase
+        .from('project_members')
+        .insert({
+          id: uuidv4(),
+          project_id: id,
+          user_id: row.owner_id,
+          permission_level: 'owner',
+          joined_at: ts,
+          is_active: true,
+          last_activity: ts,
+        })
+
+      if (insertMemberError) {
+        throw new Error(insertMemberError.message)
+      }
+    }
+  } catch (membershipError) {
+    await supabase.from('projects').delete().eq('id', id)
+    throw membershipError
+  }
+
+  return (await getProject(id))!
 }
 
 export async function updateProject(
@@ -1301,16 +1959,10 @@ export async function updateProject(
       .maybeSingle()
     
     if (error) {
-      // 42703: column does not exist —— version 列尚未迁移，降级重试
-      if (error.code === '42703' || error.message?.includes('"version"') || error.message?.includes("version")) {
-        const { error: retryError } = await supabase
-          .from('projects')
-          .update({ ...normalizedFields, updated_at: now() })
-          .eq('id', id)
-        if (retryError) throw new Error(retryError.message)
-      } else {
-        throw new Error(error.message)
+      if (isMissingSupabaseResourceError(error)) {
+        throw createProjectSchemaIncompatibleError(error)
       }
+      throw new Error(error.message)
     }
     
     // Supabase update 未命中时 data 可能为 null，而不是稳定返回 count=0。
@@ -1331,45 +1983,354 @@ export async function updateProject(
   return getProject(id)
 }
 
-export async function deleteProject(id: string): Promise<void> {
+export type ProjectDeleteAuditContext = {
+  actorUserId: string
+  actorUsername?: string | null
+  companyId?: string | null
+  confirmation: {
+    action: 'delete-project'
+    resourceId: string
+    source: 'explicit_request_header'
+  }
+  requestPath: string
+}
+
+export async function deleteProject(id: string, audit: ProjectDeleteAuditContext): Promise<void> {
   const projectId = String(id ?? '').trim()
   if (!projectId) return
-
-  for (const step of PROJECT_DELETE_CLEANUP_STEPS) {
-    await deleteProjectScopedRows(projectId, step)
+  const actorUserId = String(audit?.actorUserId ?? '').trim()
+  if (
+    !actorUserId
+    || audit?.confirmation?.action !== 'delete-project'
+    || String(audit.confirmation.resourceId ?? '').trim() !== projectId
+    || audit.confirmation.source !== 'explicit_request_header'
+  ) {
+    throw new Error('Project deletion requires a resource-bound confirmation audit context')
   }
 
-  const query = supabase.from('projects').delete() as unknown as SqlMutationQuery
-  const { error } = await query.eq('id', projectId)
-  if (error) throw new Error(error.message)
+  const { getClient } = await import('../database.js')
+  const client = await getClient()
+  let transactionStarted = false
+
+  try {
+    await client.query('BEGIN')
+    transactionStarted = true
+
+    for (const step of PROJECT_DELETE_CLEANUP_STEPS) {
+      const column = step.column ?? 'project_id'
+      await client.query(
+        `DELETE FROM public.${step.table} WHERE ${column} = $1`,
+        [projectId],
+      )
+    }
+
+    await client.query('DELETE FROM public.projects WHERE id = $1', [projectId])
+    await client.query(
+      `INSERT INTO public.operation_logs
+        (user_id, username, project_id, action, resource_type, resource_id,
+         method, path, status_code, detail, created_at)
+       VALUES ($1, $2, $3, 'project:delete_confirmed', 'project', $3,
+               'DELETE', $4, 200, $5::jsonb, NOW())`,
+      [
+        actorUserId,
+        audit.actorUsername ?? null,
+        projectId,
+        audit.requestPath,
+        JSON.stringify({
+          companyId: audit.companyId ?? null,
+          confirmation: audit.confirmation,
+          auditPolicy: 'same_transaction_as_project_delete',
+        }),
+      ],
+    )
+    await client.query('COMMIT')
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await client.query('ROLLBACK')
+      } catch (rollbackError) {
+        logger.error('Project deletion rollback failed', {
+          projectId,
+          error: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+        })
+      }
+    }
+    throw error
+  } finally {
+    client.release()
+  }
 }
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
-export async function getTasks(projectId?: string): Promise<Task[]> {
-  const sql = projectId
-    ? 'SELECT * FROM public.tasks WHERE project_id = $1 ORDER BY created_at DESC'
-    : 'SELECT * FROM public.tasks ORDER BY created_at DESC'
+async function attachEngineeringCategoryInfo(tasks: Task[]): Promise<Task[]> {
+  const categoryIds = Array.from(new Set(
+    tasks
+      .map((task) => task.engineering_category_id)
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
+  ))
+  if (categoryIds.length === 0) return tasks
 
   try {
-    const result = projectId
-      ? await rawQuery(sql, [projectId])
-      : await rawQuery(sql)
-    return result.rows as Task[]
-  } catch (error) {
-    logger.warn('dbService.getTasks fallback to Supabase REST', {
-      projectId: projectId ?? null,
-      error: error instanceof Error ? error.message : String(error),
+    const { data, error } = await withSupabaseRestTimeout(supabase
+      .from('engineering_categories')
+      .select('id, category_type, category_name')
+      .in('id', categoryIds), 'dbService.attachEngineeringCategoryInfo')
+    if (error) throw new Error(error.message)
+
+    const categoriesById = new Map((data ?? []).map((category) => [
+      String(category.id),
+      {
+        engineering_category_type: category.category_type as string | null,
+        engineering_category_name: category.category_name as string | null,
+      },
+    ]))
+
+    return tasks.map((task) => {
+      const category = task.engineering_category_id ? categoriesById.get(task.engineering_category_id) : null
+      if (!category) return task
+      return {
+        ...task,
+        engineering_category_type: task.engineering_category_type ?? category.engineering_category_type,
+        engineering_category_name: task.engineering_category_name ?? category.engineering_category_name,
+      }
+    })
+  } catch (directError) {
+    logger.warn('dbService.attachEngineeringCategoryInfo REST read failed, falling back to direct query', {
+      error: directError instanceof Error ? directError.message : String(directError),
     })
   }
 
-  let query = supabase.from('tasks').select('*').order('created_at', { ascending: false })
-  if (projectId) query = query.eq('project_id', projectId)
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
-  return (data ?? []) as Task[]
+  if (isCircuitOpen(dbDirectQueryCircuitOpenUntil)) {
+    logger.warn('dbService.attachEngineeringCategoryInfo skipped direct query because direct DB circuit is open', {
+      remainingMs: remainingCircuitMs(dbDirectQueryCircuitOpenUntil),
+    })
+    return tasks
+  }
+
+  try {
+    const placeholders = categoryIds.map((_, index) => `$${index + 1}`).join(', ')
+    const result = await withDirectQueryTimeout(
+      rawQuery(
+        `SELECT id, category_type, category_name
+           FROM public.engineering_categories
+          WHERE id IN (${placeholders})`,
+        categoryIds,
+      ),
+      'dbService.attachEngineeringCategoryInfo direct query',
+    )
+
+    const categoriesById = new Map<string, {
+      engineering_category_type: string | null
+      engineering_category_name: string | null
+    }>((result.rows ?? []).map((category: any) => [
+      String(category.id),
+      {
+        engineering_category_type: category.category_type as string | null,
+        engineering_category_name: category.category_name as string | null,
+      },
+    ] as const))
+
+    return tasks.map((task) => {
+      const category = task.engineering_category_id ? categoriesById.get(task.engineering_category_id) : null
+      if (!category) return task
+      return {
+        ...task,
+        engineering_category_type: task.engineering_category_type ?? category.engineering_category_type,
+        engineering_category_name: task.engineering_category_name ?? category.engineering_category_name,
+      }
+    })
+  } catch (error) {
+    logger.warn('dbService.attachEngineeringCategoryInfo skipped', {
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return tasks
+  }
+}
+
+export type GetTasksOptions = {
+  columns?: readonly string[]
+}
+
+function buildTaskSelectClause(columns?: readonly string[]) {
+  if (!columns || columns.length === 0) return '*'
+  return Array.from(new Set(columns))
+    .map((column) => String(column).trim())
+    .filter((column) => /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(column))
+    .join(', ') || '*'
+}
+
+function buildTaskReadCacheKey(projectId: string | undefined, selectClause: string) {
+  return `${String(projectId ?? '').trim() || '*'}::${selectClause}`
+}
+
+function buildTaskReadProjectKey(projectId?: string | null) {
+  return String(projectId ?? '').trim() || '*'
+}
+
+function getTaskReadInvalidationVersion(projectKey: string) {
+  return taskReadInvalidationVersion.get(projectKey) ?? 0
+}
+
+function cloneTasksForReadCache(tasks: Task[]) {
+  return tasks.map((task) => ({ ...task }))
+}
+
+export function invalidateTaskReadCache(projectId?: string | null) {
+  const normalizedProjectId = String(projectId ?? '').trim()
+  if (!normalizedProjectId) {
+    taskReadCache.clear()
+    taskReadInFlight.clear()
+    taskReadInvalidationVersion.set('*', getTaskReadInvalidationVersion('*') + 1)
+    return
+  }
+
+  taskReadInvalidationVersion.set(
+    normalizedProjectId,
+    getTaskReadInvalidationVersion(normalizedProjectId) + 1,
+  )
+  taskReadInvalidationVersion.set('*', getTaskReadInvalidationVersion('*') + 1)
+
+  for (const [key, entry] of taskReadCache.entries()) {
+    if (entry.projectId === normalizedProjectId || entry.projectId === null) {
+      taskReadCache.delete(key)
+    }
+  }
+  for (const key of taskReadInFlight.keys()) {
+    if (key.startsWith(`${normalizedProjectId}::`) || key.startsWith('*::')) {
+      taskReadInFlight.delete(key)
+    }
+  }
+}
+
+async function loadTasksFromSupabaseRest(projectId: string | undefined, selectClause: string): Promise<Task[]> {
+  const pageSize = 1000
+  const rows: Task[] = []
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase
+      .from('tasks')
+      .select(selectClause)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + pageSize - 1)
+    if (projectId) query = query.eq('project_id', projectId)
+    const { data, error } = await withSupabaseRestTimeout(query, `dbService.getTasks REST page ${Math.floor(offset / pageSize) + 1}`)
+    if (error) throw new Error(error.message)
+    const page = (data ?? []) as unknown as Task[]
+    rows.push(...page)
+    if (page.length < pageSize) break
+  }
+  return attachEngineeringCategoryInfo(rows)
+}
+
+async function loadTasksFromDirectDatabase(projectId: string | undefined, selectClause: string): Promise<Task[]> {
+  const sql = projectId
+    ? `SELECT ${selectClause} FROM public.tasks WHERE project_id = $1 ORDER BY created_at DESC`
+    : `SELECT ${selectClause} FROM public.tasks ORDER BY created_at DESC`
+
+  const result = projectId
+    ? await withDirectQueryTimeout(rawQuery(sql, [projectId]), 'dbService.getTasks direct query')
+    : await withDirectQueryTimeout(rawQuery(sql), 'dbService.getTasks direct query')
+  return attachEngineeringCategoryInfo(result.rows as Task[])
+}
+
+async function loadTasksFromDatabase(projectId: string | undefined, selectClause: string): Promise<Task[]> {
+  let restError: unknown = null
+  let directError: unknown = null
+  const readFromRestFirst = TASK_READ_REST_FIRST
+    && !shouldUseDirectSqlPath()
+    && !isDatabaseTransactionActive()
+
+  if (readFromRestFirst) {
+    try {
+      return await loadTasksFromSupabaseRest(projectId, selectClause)
+    } catch (error) {
+      restError = error
+      logger.warn('dbService.getTasks REST read failed, falling back to direct query', {
+        projectId: projectId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  if (!isCircuitOpen(dbDirectQueryCircuitOpenUntil)) {
+    try {
+      return await loadTasksFromDirectDatabase(projectId, selectClause)
+    } catch (error) {
+      directError = error
+      logger.warn('dbService.getTasks fallback to Supabase REST', {
+        projectId: projectId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  } else {
+    logger.warn('dbService.getTasks skipped direct query because direct DB circuit is open', {
+      projectId: projectId ?? null,
+      remainingMs: remainingCircuitMs(dbDirectQueryCircuitOpenUntil),
+    })
+  }
+
+  if (!readFromRestFirst) {
+    return await loadTasksFromSupabaseRest(projectId, selectClause)
+  }
+
+  if (directError instanceof Error) throw directError
+  throw restError instanceof Error ? restError : new Error(String(restError ?? 'Task REST read failed'))
+}
+
+export async function getTasks(projectId?: string, options: GetTasksOptions = {}): Promise<Task[]> {
+  const selectClause = buildTaskSelectClause(options.columns)
+  const cacheKey = buildTaskReadCacheKey(projectId, selectClause)
+  const projectKey = buildTaskReadProjectKey(projectId)
+  const nowMs = Date.now()
+  const cached = taskReadCache.get(cacheKey)
+
+  if (cached && nowMs < cached.expiresAt) {
+    return cloneTasksForReadCache(cached.rows)
+  }
+
+  const inFlight = taskReadInFlight.get(cacheKey)
+  if (inFlight) {
+    return cloneTasksForReadCache(await inFlight)
+  }
+
+  const requestVersion = getTaskReadInvalidationVersion(projectKey)
+  const request = loadTasksFromDatabase(projectId, selectClause)
+    .then((rows) => {
+      if (getTaskReadInvalidationVersion(projectKey) === requestVersion) {
+        taskReadCache.set(cacheKey, {
+          projectId: projectId ? String(projectId) : null,
+          rows,
+          expiresAt: Date.now() + TASK_READ_CACHE_TTL_MS,
+          staleUntil: Date.now() + TASK_READ_STALE_TTL_MS,
+        })
+      }
+      return rows
+    })
+
+  taskReadInFlight.set(cacheKey, request)
+
+  try {
+    return cloneTasksForReadCache(await request)
+  } catch (error) {
+    if (cached && nowMs < cached.staleUntil) {
+      logger.warn('dbService.getTasks served stale cache after read failure', {
+        projectId: projectId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return cloneTasksForReadCache(cached.rows)
+    }
+    throw error
+  } finally {
+    if (taskReadInFlight.get(cacheKey) === request) {
+      taskReadInFlight.delete(cacheKey)
+    }
+  }
 }
 
 export async function getTask(id: string): Promise<Task | null> {
+  if (isDatabaseTransactionActive() || shouldUseDirectSqlPath()) {
+    const result = await rawQuery('SELECT * FROM tasks WHERE id = $1 LIMIT 1', [id])
+    return (result.rows[0] as Task | undefined) ?? null
+  }
   const { data, error } = await supabase.from('tasks').select('*').eq('id', id).single()
   if (error) {
     if (error.code === 'PGRST116') return null
@@ -1382,13 +2343,12 @@ export async function createTask(
   task: TaskWriteInput,
   options: Pick<TaskUpdateOptions, 'skipSnapshotWrite'> = {},
 ): Promise<Task> {
-  const id = uuidv4()
+  const id = (task as any).id || uuidv4()
   const ts = now()
   const normalizedProgress = normalizeTaskProgressValue(task.progress ?? 0)
   const row = {
     id,
     project_id: task.project_id,
-    phase_id: task.phase_id ?? null,
     parent_id: task.parent_id ?? null,
     title: task.title,
     description: task.description ?? null,
@@ -1403,27 +2363,54 @@ export async function createTask(
     milestone_level: task.milestone_level ?? null,
     milestone_order: task.milestone_order ?? null,
     milestone_id: task.milestone_id ?? null,
-    is_critical: task.is_critical ?? false,
     specialty_type: task.specialty_type ?? null,
-    reference_duration: task.reference_duration ?? null,
-    ai_duration: task.ai_duration ?? null,
+    duration_calibration_source: (task as any).duration_calibration_source ?? null,
+    duration_provenance: (task as any).duration_provenance ?? null,
     first_progress_at: task.first_progress_at ?? null,
     delay_reason: task.delay_reason ?? null,
     planned_start_date: task.planned_start_date ?? task.start_date ?? null,
     planned_end_date: task.planned_end_date ?? task.end_date ?? null,
-    actual_start_date: task.actual_start_date ?? null,
-    actual_end_date: task.actual_end_date ?? null,
-    planned_duration: task.planned_duration ?? null,
-    standard_duration: task.standard_duration ?? null,
-    ai_adjusted_duration: task.ai_adjusted_duration ?? null,
+    actual_start_date: null,
+    actual_end_date: null,
     assignee_id: task.assignee_id ?? task.assignee_user_id ?? null,
     assignee_user_id: task.assignee_user_id ?? task.assignee_id ?? null,
     assignee_name: task.assignee_name ?? task.assignee ?? null,
-    assignee_unit: task.assignee_unit ?? task.responsible_unit ?? null,
     participant_unit_id: task.participant_unit_id ?? null,
+    // v1.4 range-tree engineering object references
+    engineering_object_id: (task as any).engineering_object_id ?? (task as any).engineeringObjectId ?? null,
+    phase_object_id: (task as any).phase_object_id ?? (task as any).phaseObjectId ?? null,
+    section_object_id: (task as any).section_object_id ?? (task as any).sectionObjectId ?? null,
+    building_object_id: (task as any).building_object_id ?? (task as any).buildingObjectId ?? null,
+    basement_object_id: (task as any).basement_object_id ?? (task as any).basementObjectId ?? null,
+    floor_object_id: (task as any).floor_object_id ?? (task as any).floorObjectId ?? null,
+    physical_zone_object_id: (task as any).physical_zone_object_id ?? (task as any).physicalZoneObjectId ?? null,
+    functional_area_object_id: (task as any).functional_area_object_id ?? (task as any).functionalAreaObjectId ?? null,
     assignee_type: task.assignee_type ?? 'person',
     estimated_hours: task.estimated_hours ?? null,
     actual_hours: task.actual_hours ?? null,
+    // v1.4.2 WBS semantic fields
+    engineering_category_id: (task as any).engineering_category_id ?? null,
+    wbs_node_type: (task as any).wbs_node_type ?? null,
+    wbs_path: (task as any).wbs_path ?? null,
+    is_leaf: (task as any).is_leaf ?? null,
+    is_wbs_summary: (task as any).is_wbs_summary ?? null,
+    is_executable: (task as any).is_executable ?? null,
+    standard_work_code: (task as any).standard_work_code ?? null,
+    standard_work_name: (task as any).standard_work_name ?? null,
+    // v1.4.3 task standard fields
+    task_code: (task as any).task_code ?? null,
+    task_code_version: (task as any).task_code_version ?? null,
+    progress_method: (task as any).progress_method ?? 'percent',
+    planned_quantity: (task as any).planned_quantity ?? null,
+    completed_quantity: (task as any).completed_quantity ?? null,
+    quantity_unit: (task as any).quantity_unit ?? null,
+    progress_weight: (task as any).progress_weight ?? 1,
+    completion_rule: (task as any).completion_rule ?? 'progress_100',
+    drawing_required: (task as any).drawing_required ?? false,
+    material_required: (task as any).material_required ?? false,
+    acceptance_required: (task as any).acceptance_required ?? false,
+    quality_required: (task as any).quality_required ?? false,
+    standard_task_metadata: (task as any).standard_task_metadata ?? {},
     // 恢复：添加 version 字段（乐观锁支持）
     version: task.version ?? 1,
     // 修复：只在 created_by 为有效 UUID 时才添加到 row
@@ -1435,6 +2422,7 @@ export async function createTask(
   if (error) {
     throw new Error(error.message)
   }
+  invalidateTaskReadCache(task.project_id)
   const createdTask = await getTask(id)
   if (createdTask && !options.skipSnapshotWrite) {
     await recordTaskProgressSnapshot(createdTask, {
@@ -1460,14 +2448,49 @@ export async function updateTask(
     id: _id,
     created_at: _ca,
     version: _v,
-    first_progress_at: _manualFirstProgressAt,
-    ...fields
+    dependencies: _legacyDependencies,
+    first_progress_at: manualFirstProgressAt,
+    actual_start_date: manualActualStartDate,
+    actual_end_date: manualActualEndDate,
+    ...rawFields
   } = updates
+  let fields = rawFields
+  if (options.allowManualActualDates) {
+    const managedFields = fields as Record<string, unknown>
+    if (manualFirstProgressAt !== undefined) managedFields.first_progress_at = manualFirstProgressAt
+    if (manualActualStartDate !== undefined) managedFields.actual_start_date = manualActualStartDate
+    if (manualActualEndDate !== undefined) managedFields.actual_end_date = manualActualEndDate
+  }
   if ('assignee_user_id' in fields && !('assignee_id' in fields)) {
     fields.assignee_id = fields.assignee_user_id ?? null
   }
   if ('assignee_id' in fields && !('assignee_user_id' in fields)) {
     fields.assignee_user_id = fields.assignee_id ?? null
+  }
+  // v1.4.1 Normalize camelCase engineering object IDs to snake_case DB columns
+  if ('engineeringObjectId' in fields && !('engineering_object_id' in fields)) {
+    fields.engineering_object_id = (fields as any).engineeringObjectId ?? null
+  }
+  if ('phaseObjectId' in fields && !('phase_object_id' in fields)) {
+    fields.phase_object_id = (fields as any).phaseObjectId ?? null
+  }
+  if ('sectionObjectId' in fields && !('section_object_id' in fields)) {
+    fields.section_object_id = (fields as any).sectionObjectId ?? null
+  }
+  if ('buildingObjectId' in fields && !('building_object_id' in fields)) {
+    fields.building_object_id = (fields as any).buildingObjectId ?? null
+  }
+  if ('basementObjectId' in fields && !('basement_object_id' in fields)) {
+    fields.basement_object_id = (fields as any).basementObjectId ?? null
+  }
+  if ('floorObjectId' in fields && !('floor_object_id' in fields)) {
+    fields.floor_object_id = (fields as any).floorObjectId ?? null
+  }
+  if ('physicalZoneObjectId' in fields && !('physical_zone_object_id' in fields)) {
+    fields.physical_zone_object_id = (fields as any).physicalZoneObjectId ?? null
+  }
+  if ('functionalAreaObjectId' in fields && !('functional_area_object_id' in fields)) {
+    fields.functional_area_object_id = (fields as any).functionalAreaObjectId ?? null
   }
   if (!options.allowReopen && fields.status !== undefined && isCompletedTaskStatus(fields.status)) {
     fields.progress = 100
@@ -1515,31 +2538,33 @@ export async function updateTask(
   const isProgressAdvance = fields.progress !== undefined && nextProgress > previousProgress
 
   if (isProgressAdvance && !isFirstProgressAdvance) {
-    // 统一口径：仅首次 0 -> >0 进度填报可以豁免条件拦截，
-    // 后续推进仍需先解除未满足条件；主写链也不会隐式替当前任务 auto-satisfy 条件。
+    // v1.4.8: unmet start conditions are execution quality signals, not a hard write block.
     const unmetConditionIds = await listUnmetTaskConditionIds(id)
     if (unmetConditionIds.length > 0) {
-      throw createBusinessError(
-        'TASK_CONDITIONS_UNMET',
-        '该任务存在未满足的开工条件，请先处理阻塞项后再录入进度',
-      )
+      logger.info('[dbService] task progressed with unmet start conditions', {
+        taskId: id,
+        unmetConditionCount: unmetConditionIds.length,
+      })
     }
   }
 
-  const autoActualStart = !oldTask.actual_start_date && (
-    (isStartState(oldTask.status) && isInProgressState(nextStatus)) ||
-    nextProgress > 0
-  )
-  const autoActualEnd = !oldTask.actual_end_date && (
-    isCompletedTask({ status: nextStatus, progress: nextProgress })
-  )
-  const autoFirstProgress = !oldTask.first_progress_at && nextProgress > 0
+  const governedExecutionFacts = applyExecutionFactGovernance({
+    intent: options.allowReopen
+      ? ExecutionFactIntent.TaskReopen
+      : options.executionFactIntent ?? ExecutionFactIntent.TaskApiUpdate,
+    previousTask: oldTask,
+    patch: fields,
+    now: nowTs,
+    eventDate: options.executionFactEventDate ?? null,
+    allowManualActualDates: options.allowManualActualDates === true,
+  })
+  fields = governedExecutionFacts.patch as typeof fields
+  const autoActualStart = governedExecutionFacts.generatedFields.includes('actual_start_date')
+  const autoActualEnd = governedExecutionFacts.generatedFields.includes('actual_end_date')
+  const autoFirstProgress = governedExecutionFacts.generatedFields.includes('first_progress_at')
   const updatePayload = {
     ...fields,
     ...(options.allowReopen ? { actual_end_date: null } : {}),
-    ...(autoActualStart ? { actual_start_date: toDateOnly(nowTs) } : {}),
-    ...(autoActualEnd ? { actual_end_date: toDateOnly(nowTs) } : {}),
-    ...(autoFirstProgress ? { first_progress_at: nowTs } : {}),
     updated_at: nowTs,
     ...(expectedVersion !== undefined ? { version: expectedVersion + 1 } : {}),
   }
@@ -1572,6 +2597,7 @@ export async function updateTask(
   }
 
   if (!updatedTask) return null
+  invalidateTaskReadCache(oldTask.project_id ?? updatedTask.project_id ?? null)
 
   const changedBy = (fields.updated_by ?? fields.created_by ?? null) as string | null
   const isCrossMonthReopen =
@@ -1670,21 +2696,28 @@ export async function updateTask(
     })
   }
 
-  // 10.2d 规定：end_date 变更必须通过延期审批流（POST /api/delay-requests）提交，
-  // 不再在 updateTask 内自动创建 approved 的 delay_request。
+  // end_date 变更直接作为当前排期调整，后续由月度计划、月末关账和项目基线重编算法自动消化。
   // 仅通过 change_logs 留痕（已在上方 changedFieldPairs 中覆盖 end_date / planned_end_date）。
 
-  const needsSnapshot =
-    fields.progress !== undefined ||
-    fields.status !== undefined ||
-    autoActualStart ||
-    autoActualEnd ||
-    autoFirstProgress
+  const needsSnapshot = shouldRecordTaskProgressSnapshot(oldTask, updatedTask)
 
   if (needsSnapshot && !options.skipSnapshotWrite) {
     await recordTaskProgressSnapshot(updatedTask, {
       recordedBy: changedBy,
     }, oldTask)
+  }
+
+  if (fields.progress !== undefined || fields.status !== undefined) {
+    runBusinessSideEffect(
+      'evaluateTaskConstraint',
+      businessSideEffectAdapters.evaluateTaskConstraint
+        ? () => businessSideEffectAdapters.evaluateTaskConstraint!(id, {
+          projectId: String(oldTask.project_id ?? ''),
+          sourceEventType: 'task_progress_or_status_updated',
+        })
+        : undefined,
+      { taskId: id },
+    )
   }
 
   return updatedTask
@@ -1709,30 +2742,34 @@ export async function reopenTask(
 }
 
 export async function deleteTask(id: string): Promise<void> {
-  try {
-    await runRpc<boolean>('delete_task_with_source_backfill_atomic', {
-      p_task_id: id,
+  const existingTask = await getTask(id).catch((error) => {
+    logger.warn('Failed to read task before delete cache invalidation', {
+      taskId: id,
+      error: error instanceof Error ? error.message : String(error),
     })
-  } catch (error) {
-    if (!isMissingRelationError(error, 'task_preceding_relations')) {
-      throw error
-    }
-
-    logger.warn('Falling back to direct task delete because task_preceding_relations is missing inside delete RPC', { id })
-
-    const { error: deleteError } = await supabase
-      .from('tasks')
-      .delete()
-      .eq('id', id)
-
-    if (deleteError) {
-      throw new Error(deleteError.message)
-    }
+    return null
+  })
+  if (isDatabaseTransactionActive()) {
+    await rawQuery('SELECT public.delete_task_with_source_backfill_atomic($1)', [id])
+    invalidateTaskReadCache(existingTask?.project_id ?? null)
+    return
   }
+
+  await runRpc<boolean>('delete_task_with_source_backfill_atomic', {
+    p_task_id: id,
+  })
+  invalidateTaskReadCache(existingTask?.project_id ?? null)
 }
 
 // ─── Risks ────────────────────────────────────────────────────────────────────
 export async function getRisks(projectId?: string): Promise<Risk[]> {
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    const rows = projectId
+      ? await executeSQL<RiskRow>('SELECT * FROM risks WHERE project_id = ? ORDER BY created_at DESC', [projectId])
+      : await executeSQL<RiskRow>('SELECT * FROM risks ORDER BY created_at DESC')
+    return rows.map((risk) => ({ ...risk, risk_category: risk.risk_category ?? risk.category })) as Risk[]
+  }
+
   let query = supabase.from('risks').select('*').order('created_at', { ascending: false })
   if (projectId) query = query.eq('project_id', projectId)
   const { data, error } = await query
@@ -1771,16 +2808,17 @@ export async function listTaskProgressSnapshotsByTaskIds(
 }
 
 export async function getRisk(id: string): Promise<Risk | null> {
-  const { data, error } = await supabase.from('risks').select('*').eq('id', id).single()
-  if (error) {
-    if (error.code === 'PGRST116') return null
-    throw new Error(error.message)
-  }
-  return data as Risk
+  return executeSQLOne<Risk>('SELECT * FROM risks WHERE id = ? LIMIT 1', [id])
 }
 
 export async function createRisk(
   risk: RiskWriteInput
+): Promise<Risk> {
+  return withDatabaseTransaction(() => createRiskInTransaction(risk))
+}
+
+async function createRiskInTransaction(
+  risk: RiskWriteInput,
 ): Promise<Risk> {
   const id = uuidv4()
   const ts = now()
@@ -1790,6 +2828,41 @@ export async function createRisk(
 
   if (requestedStatus === 'closed') {
     throw createBusinessError('INVALID_RISK_STATUS_TRANSITION', '风险创建时不能直接进入 closed 状态')
+  }
+
+  if (sourceType === 'warning_converted' || sourceType === 'warning_auto_escalated') {
+    const sourceWarningId = String(
+      risk.source_entity_type === 'warning'
+        ? risk.source_entity_id ?? risk.source_id ?? ''
+        : risk.source_id ?? '',
+    ).trim()
+    if (!sourceWarningId) {
+      throw createBusinessError('RISK_WARNING_SOURCE_REQUIRED', '预警升级风险必须绑定来源预警')
+    }
+    const riskId = await runRpc<string | null>('confirm_warning_as_risk_atomic', {
+      p_warning_id: sourceWarningId,
+      p_source_type: sourceType,
+    })
+    if (!riskId) {
+      throw new Error('confirm_warning_as_risk_atomic returned empty risk id')
+    }
+    const created = await getRisk(riskId)
+    if (!created || created.project_id !== risk.project_id) {
+      throw createBusinessError('PROJECT_SCOPE_MISMATCH', '预警升级风险不属于请求项目', 403)
+    }
+    await recordRiskIssueExecutionFacts({
+      entityType: 'risk',
+      entityId: riskId,
+      projectId: created.project_id,
+      previous: null,
+      next: created as unknown as Record<string, unknown>,
+      sourceMutationId: `risk:${riskId}:warning:${sourceWarningId}`,
+      observedAt: String(created.updated_at ?? created.created_at ?? ts),
+      actorUserId: risk.created_by ?? null,
+      forceInitialStatus: true,
+    })
+    await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'risk_created')
+    return created
   }
 
   const row = {
@@ -1820,13 +2893,79 @@ export async function createRisk(
     linked_issue_id: risk.linked_issue_id ?? null,
     closed_reason: risk.closed_reason ?? null,
     closed_at: status === 'closed' ? (risk.closed_at ?? ts) : null,
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
     version: risk.version ?? 1,
     created_at: ts,
     updated_at: ts,
   }
-  const { error } = await supabase.from('risks').insert(row)
-  if (error) throw new Error(error.message)
-  return (await getRisk(id))!
+  await executeSQL(
+    `INSERT INTO risks (
+       id, project_id, task_id, title, description, level, status,
+       risk_category, risk_type, impact_description, owner_id, owner_name,
+       due_date, resolved_at, created_by, source_type, source_id,
+       source_entity_type, source_entity_id, chain_id, pending_manual_close,
+       linked_issue_id, closed_reason, closed_at,
+       closure_result_code, closure_result_summary, closure_effectiveness,
+       closure_evidence_refs, closure_cause_attribution_id, closed_by,
+       closure_recorded_at, version, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.id,
+      row.project_id,
+      row.task_id,
+      row.title,
+      row.description,
+      row.level,
+      row.status,
+      row.risk_category,
+      row.risk_type,
+      row.impact_description,
+      row.owner_id,
+      row.owner_name,
+      row.due_date,
+      row.resolved_at,
+      row.created_by,
+      row.source_type,
+      row.source_id,
+      row.source_entity_type,
+      row.source_entity_id,
+      row.chain_id,
+      row.pending_manual_close,
+      row.linked_issue_id,
+      row.closed_reason,
+      row.closed_at,
+      row.closure_result_code,
+      row.closure_result_summary,
+      row.closure_effectiveness,
+      row.closure_evidence_refs,
+      row.closure_cause_attribution_id,
+      row.closed_by,
+      row.closure_recorded_at,
+      row.version,
+      row.created_at,
+      row.updated_at,
+    ],
+  )
+  const created = (await getRisk(id))!
+  await recordRiskIssueExecutionFacts({
+    entityType: 'risk',
+    entityId: id,
+    projectId: created.project_id,
+    previous: null,
+    next: created as unknown as Record<string, unknown>,
+    sourceMutationId: `risk:${id}:version:${Number(created.version ?? 1)}`,
+    observedAt: ts,
+    actorUserId: risk.created_by ?? null,
+    forceInitialStatus: true,
+  })
+  await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'risk_created')
+  return created
 }
 
 export async function updateRisk(
@@ -1835,7 +2974,16 @@ export async function updateRisk(
   expectedVersion?: number,
   changeSource: ChangeSource = 'manual_adjusted',
 ): Promise<Risk | null> {
-  const oldRisk = await getRisk(id)
+  return withDatabaseTransaction(() => updateRiskInTransaction(id, updates, expectedVersion, changeSource))
+}
+
+async function updateRiskInTransaction(
+  id: string,
+  updates: RiskUpdateInput,
+  expectedVersion?: number,
+  changeSource: ChangeSource = 'manual_adjusted',
+): Promise<Risk | null> {
+  const oldRisk = await executeSQLOne<Risk>('SELECT * FROM risks WHERE id = ? FOR UPDATE', [id])
   if (!oldRisk) return null
   const { version: _v, id: _id, created_at: _ca, updated_at: _ua, risk_category, ...restFields } = updates
   const fields: Omit<RiskUpdateInput, 'id' | 'created_at' | 'updated_at' | 'version'> = {
@@ -1848,6 +2996,7 @@ export async function updateRisk(
     oldRisk.pending_manual_close
     && changeSource !== 'manual_close_confirmation'
     && changeSource !== 'manual_keep_processing'
+    && changeSource !== 'retention_close'
   ) {
     const pendingFlagChanged = fields.pending_manual_close !== undefined && Boolean(fields.pending_manual_close) !== Boolean(oldRisk.pending_manual_close)
     const statusChanged = fields.status !== undefined && nextStatus !== oldRisk.status
@@ -1860,6 +3009,7 @@ export async function updateRisk(
   }
 
   validateRiskStatusTransition(oldRisk.status, nextStatus, changeSource)
+  assertStructuredClosureOutcome(oldRisk.status, nextStatus, fields)
   
   if (fields.status !== undefined) {
     fields.status = nextStatus
@@ -1869,57 +3019,44 @@ export async function updateRisk(
     if (nextStatus !== 'closed') {
       if (fields.closed_at === undefined) fields.closed_at = null
       if (fields.closed_reason === undefined) fields.closed_reason = null
+      clearStructuredClosureOutcome(fields)
     }
   }
   
-  // 乐观锁：原子性更新
+  const updatePayload = {
+    ...fields,
+    updated_at: now(),
+    version: expectedVersion !== undefined ? expectedVersion + 1 : Number(oldRisk.version ?? 1) + 1,
+  }
+  const mutableColumns = new Set([
+    'task_id', 'title', 'description', 'level', 'status', 'risk_category',
+    'risk_type', 'impact_description', 'owner_id', 'owner_name', 'due_date',
+    'resolved_at', 'source_type', 'source_id', 'source_entity_type',
+    'source_entity_id', 'chain_id', 'pending_manual_close', 'linked_issue_id',
+    'closed_reason', 'closed_at', 'closure_result_code', 'closure_result_summary',
+    'closure_effectiveness', 'closure_evidence_refs', 'closure_cause_attribution_id',
+    'closed_by', 'closure_recorded_at', 'updated_at', 'version',
+  ])
+  const entries = Object.entries(updatePayload).filter(([column, value]) => (
+    value !== undefined && mutableColumns.has(column)
+  ))
+  const where = ['id = ?', 'project_id = ?']
+  const values = entries.map(([, value]) => value)
+  values.push(id, oldRisk.project_id)
   if (expectedVersion !== undefined) {
-    const { data, error } = await supabase
-      .from('risks')
-      .update({ ...fields, version: expectedVersion + 1, updated_at: now() })
-      .eq('id', id)
-      .eq('version', expectedVersion)
-      .select('id')
-    
-    if (error) throw new Error(error.message)
-    
-    if (!data || data.length === 0) {
+    where.push('version = ?')
+    values.push(expectedVersion)
+  }
+  const rows = await executeSQL<{ id: string }>(
+    `UPDATE risks SET ${entries.map(([column]) => `${column} = ?`).join(', ')} WHERE ${where.join(' AND ')} RETURNING id`,
+    values,
+  )
+  if (rows.length === 0) {
+    if (expectedVersion !== undefined) {
       throw createBusinessError('VERSION_MISMATCH', '该风险已被他人修改，请刷新后重试', 409)
     }
-    const updated = await getRisk(id)
-    if (updated) {
-      if (oldRisk.status !== updated.status) {
-        await writeChangeLog({
-          project_id: oldRisk.project_id ?? null,
-          entity_type: 'risk',
-          entity_id: id,
-          field_name: 'status',
-          old_value: oldRisk.status ?? null,
-          new_value: updated.status ?? null,
-          change_source: changeSource,
-        })
-      }
-      if (Boolean(oldRisk.pending_manual_close) !== Boolean(updated.pending_manual_close)) {
-        await writeChangeLog({
-          project_id: oldRisk.project_id ?? null,
-          entity_type: 'risk',
-          entity_id: id,
-          field_name: 'pending_manual_close',
-          old_value: Boolean(oldRisk.pending_manual_close),
-          new_value: Boolean(updated.pending_manual_close),
-          change_source: changeSource,
-        })
-      }
-    }
-    return updated
+    throw createBusinessError('RISK_UPDATE_FAILED', '风险更新未写入任何记录', 500)
   }
-
-  // 无乐观锁：普通更新
-  const { error } = await supabase
-    .from('risks')
-    .update({ ...fields, updated_at: now() })
-    .eq('id', id)
-  if (error) throw new Error(error.message)
   const updated = await getRisk(id)
   if (updated) {
     if (oldRisk.status !== updated.status) {
@@ -1945,6 +3082,19 @@ export async function updateRisk(
       })
     }
   }
+  if (updated) {
+    await recordRiskIssueExecutionFacts({
+      entityType: 'risk',
+      entityId: id,
+      projectId: updated.project_id,
+      previous: oldRisk as unknown as Record<string, unknown>,
+      next: updated as unknown as Record<string, unknown>,
+      sourceMutationId: `risk:${id}:version:${Number(updated.version ?? updatePayload.version)}`,
+      observedAt: String(updated.updated_at ?? updatePayload.updated_at),
+      actorUserId: String(updated.closed_by ?? '').trim() || null,
+    })
+  }
+  await enqueueProjectHealthRefreshAfterCommit(updated?.project_id ?? oldRisk.project_id, 'risk_updated')
   return updated
 }
 
@@ -1956,18 +3106,48 @@ export async function deleteRisk(id: string): Promise<void> {
     throw createBusinessError('UPGRADE_CHAIN_PROTECTED', '该风险已关联升级链，请改为关闭操作')
   }
 
-  await runRpc<boolean>('delete_risk_with_source_backfill_atomic', {
-    p_risk_id: id,
-  })
+  if (shouldUseDirectSqlPath()) {
+    await rawQuery('SELECT public.delete_risk_with_source_backfill_atomic($1) AS deleted', [id])
+  } else {
+    await runRpc<boolean>('delete_risk_with_source_backfill_atomic', {
+      p_risk_id: id,
+    })
+  }
+  enqueueProjectHealthRefresh(existing.project_id, 'risk_deleted')
 }
 
-export async function confirmRiskPendingManualClose(id: string, expectedVersion?: number): Promise<Risk | null> {
+export async function confirmRiskPendingManualClose(
+  id: string,
+  outcome: RiskIssueClosureOutcomeInput,
+  actorId: string,
+  expectedVersion?: number,
+): Promise<Risk | null> {
   const risk = await getRisk(id)
   if (!risk) return null
   if (!risk.pending_manual_close) {
     throw createBusinessError('RISK_PENDING_MANUAL_CLOSE_REQUIRED', '当前风险不处于待确认关闭状态')
   }
-  return await updateRisk(id, buildRiskConfirmClosePatch(), expectedVersion, 'manual_close_confirmation')
+  return await updateRisk(id, buildRiskConfirmClosePatch(outcome, actorId), expectedVersion, 'manual_close_confirmation')
+}
+
+export async function closeRiskByRetention(
+  id: string,
+  projectId: string,
+  context: RetentionClosureContext = {},
+  expectedVersion?: number,
+): Promise<Risk | null> {
+  const risk = await getRisk(id)
+  if (!risk) return null
+  if (risk.project_id !== projectId) {
+    throw createBusinessError('PROJECT_SCOPE_MISMATCH', '风险不属于当前留存治理项目', 403)
+  }
+  if (risk.status === 'closed') return risk
+  return await updateRisk(
+    id,
+    buildRiskRetentionClosePatch(context),
+    expectedVersion,
+    'retention_close',
+  )
 }
 
 export async function keepRiskProcessing(id: string, expectedVersion?: number): Promise<Risk | null> {
@@ -2033,11 +3213,12 @@ export async function getMembers(projectId?: string): Promise<ProjectMember[]> {
   const { data, error } = await query
   if (error) throw new Error(error.message)
   const rows = (data ?? []) as MemberRow[]
-  return rows.map((record) => {
-    const normalizedRole = normalizeProjectPermissionLevel(record.permission_level ?? record.role)
+  return rows.flatMap((record) => {
+    if (record.is_active === false) return []
+    const normalizedRole = normalizeProjectPermissionLevel(record.permission_level)
+    if (!normalizedRole) return []
     return {
       ...record,
-      role: normalizedRole,
       permission_level: normalizedRole,
     } as ProjectMember
   })
@@ -2048,12 +3229,12 @@ export async function createMember(
 ): Promise<ProjectMember> {
   const id = uuidv4()
   const ts = now()
-  const normalizedRole = normalizeProjectPermissionLevel(member.permission_level ?? member.role ?? 'viewer')
+  const normalizedRole = normalizeProjectPermissionLevel(member.permission_level)
+  if (!normalizedRole) throw new Error('Invalid project member role')
   const row = {
     id,
     project_id: member.project_id,
     user_id: member.user_id,
-    role: normalizedRole,
     permission_level: normalizedRole,
     joined_at: ts,
     created_at: ts,
@@ -2070,15 +3251,27 @@ export async function updateMember(
   id: string,
   updates: MemberUpdateInput
 ): Promise<ProjectMember | null> {
+  const { data: existing } = await supabase.from('project_members').select('project_id').eq('id', id).single()
+  const projectId = (existing as { project_id?: string | null } | null)?.project_id
+  if (!projectId) return null
   const { id: _id, joined_at: _ja, created_at: _ca, ...fields } = updates
-  const { error } = await supabase.from('project_members').update(fields).eq('id', id)
+  const nextRole = fields.permission_level
+  if (nextRole !== undefined) {
+    const normalizedRole = normalizeProjectPermissionLevel(nextRole)
+    if (!normalizedRole) throw new Error('Invalid project member role')
+    fields.permission_level = normalizedRole
+  }
+  const { error } = await supabase.from('project_members').update(fields).eq('id', id).eq('project_id', projectId)
   if (error) throw new Error(error.message)
-  const { data } = await supabase.from('project_members').select('*').eq('id', id).single()
+  const { data } = await supabase.from('project_members').select('*').eq('id', id).eq('project_id', projectId).single()
   return (data ?? null) as ProjectMember | null
 }
 
 export async function deleteMember(id: string): Promise<void> {
-  const { error } = await supabase.from('project_members').delete().eq('id', id)
+  const { data: existing } = await supabase.from('project_members').select('project_id').eq('id', id).single()
+  const projectId = (existing as { project_id?: string | null } | null)?.project_id
+  if (!projectId) return
+  const { error } = await supabase.from('project_members').delete().eq('id', id).eq('project_id', projectId)
   if (error) throw new Error(error.message)
 }
 
@@ -2088,62 +3281,10 @@ export async function getInvitations(projectId?: string): Promise<Invitation[]> 
   if (projectId) query = query.eq('project_id', projectId)
   const { data, error } = await query
   if (error) throw new Error(error.message)
-  return (data ?? []) as Invitation[]
-}
-
-export async function createInvitation(
-  invitation: InvitationWriteInput
-): Promise<Invitation> {
-  const ts = now()
-  const row = {
-    id: invitation.id ?? uuidv4(),
-    project_id: invitation.project_id,
-    invited_by: invitation.invited_by ?? invitation.created_by,
-    invitation_code: invitation.invitation_code ?? invitation.code,
-    role: invitation.role ?? 'viewer',
-    status: invitation.status ?? 'active',
-    expires_at: invitation.expires_at ?? null,
-    accepted_by: invitation.accepted_by ?? null,
-    accepted_at: invitation.accepted_at ?? null,
-    created_at: ts,
-  }
-  const { error } = await supabase.from('project_invitations').insert(row)
-  if (error) throw new Error(error.message)
-  const { data } = await supabase
-    .from('project_invitations')
-    .select('*')
-    .eq('invitation_code', invitation.invitation_code ?? invitation.code)
-    .single()
-  return data as Invitation
-}
-
-export async function updateInvitation(
-  id: string,
-  updates: InvitationUpdateInput
-): Promise<Invitation | null> {
-  const { id: _id, created_at: _ca, ...fields } = updates
-  const { error } = await supabase.from('project_invitations').update(fields).eq('id', id)
-  if (error) throw new Error(error.message)
-  const { data } = await supabase.from('project_invitations').select('*').eq('id', id).single()
-  return (data ?? null) as Invitation | null
-}
-
-export async function deleteInvitation(id: string): Promise<void> {
-  const { error } = await supabase.from('project_invitations').delete().eq('id', id)
-  if (error) throw new Error(error.message)
-}
-
-export async function validateInvitation(code: string): Promise<Invitation | null> {
-  const { data } = await supabase
-    .from('project_invitations')
-    .select('*')
-    .eq('invitation_code', code)
-    .eq('status', 'pending')
-    .single()
-  if (!data) return null
-  const invitation = data as InvitationRow
-  if (invitation.expires_at && new Date(invitation.expires_at) < new Date()) return null
-  return data as Invitation
+  return ((data ?? []) as InvitationRow[]).flatMap((row) => {
+    if (normalizeProjectPermissionLevel(row.permission_level) !== 'editor') return []
+    return [{ ...row, permission_level: 'editor' as const }]
+  }) as Invitation[]
 }
 
 // ─── 通用 SQL 执行（供其他路由使用）────────────────────────────────────────────
@@ -2158,9 +3299,9 @@ export class SupabaseService {
   async getProject(id: string) { return getProject(id) }
   async createProject(p: any) { return createProject(p) }
   async updateProject(id: string, u: any, v: number) { return updateProject(id, u, v) }
-  async deleteProject(id: string) { return deleteProject(id) }
+  async deleteProject(id: string, audit: ProjectDeleteAuditContext) { return deleteProject(id, audit) }
 
-  async getTasks(projectId?: string) { return getTasks(projectId) }
+  async getTasks(projectId?: string, options?: GetTasksOptions) { return getTasks(projectId, options) }
   async getTask(id: string) { return getTask(id) }
   async createTask(t: any) { return createTask(t) }
   async updateTask(id: string, u: any, v: number) { return updateTask(id, u, v) }
@@ -2185,10 +3326,6 @@ export class SupabaseService {
   async deleteMember(id: string) { return deleteMember(id) }
 
   async getInvitations(projectId?: string) { return getInvitations(projectId) }
-  async createInvitation(inv: any) { return createInvitation(inv) }
-  async updateInvitation(id: string, u: any) { return updateInvitation(id, u) }
-  async deleteInvitation(id: string) { return deleteInvitation(id) }
-  async validateInvitation(code: string) { return validateInvitation(code) }
 
   // ─── 通用 CRUD 方法（crudRouterFactory 使用）────────────────────────
   // 6.3 修复：将反引号（MySQL 方言）SQL 改为 Supabase JS SDK 直接调用，消除 PostgreSQL 语法错误风险。
@@ -2210,15 +3347,27 @@ export class SupabaseService {
   }
 
   async update<T = any>(table: string, id: string, data: Record<string, unknown>, _version?: number): Promise<T> {
+    const current = await this.query<Record<string, unknown>>(table, { id })
+    const projectId = current[0]?.project_id
     const { id: _id, created_at: _ca, ...fields } = data
-    const { error } = await supabase.from(table).update(fields).eq('id', id)
+    let updateQuery = supabase.from(table).update(fields).eq('id', id)
+    if (projectId) {
+      updateQuery = updateQuery.eq('project_id', projectId)
+    }
+    const { error } = await updateQuery
     if (error) throw new Error(`[SupabaseService.update] ${error.message}`)
-    const updated = await this.query<T>(table, { id })
+    const updated = await this.query<T>(table, projectId ? { id, project_id: projectId } : { id })
     return updated[0]
   }
 
   async delete(table: string, id: string): Promise<void> {
-    const { error } = await supabase.from(table).delete().eq('id', id)
+    const current = await this.query<Record<string, unknown>>(table, { id })
+    const projectId = current[0]?.project_id
+    let deleteQuery = supabase.from(table).delete().eq('id', id)
+    if (projectId) {
+      deleteQuery = deleteQuery.eq('project_id', projectId)
+    }
+    const { error } = await deleteQuery
     if (error) throw new Error(`[SupabaseService.delete] ${error.message}`)
   }
 }
@@ -2226,28 +3375,47 @@ export class SupabaseService {
 // ─── Issues CRUD ──────────────────────────────────────────────────────────────
 
 export async function getIssues(projectId?: string): Promise<Issue[]> {
-  let query = supabase.from('issues').select('*').order('created_at', { ascending: false })
-  if (projectId) query = query.eq('project_id', projectId)
-  const { data, error } = await query
-  if (error) throw new Error(error.message)
-  const issues = (data ?? []) as Issue[]
+  let issues: Issue[]
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    issues = projectId
+      ? await executeSQL<Issue>('SELECT * FROM issues WHERE project_id = ? ORDER BY created_at DESC', [projectId])
+      : await executeSQL<Issue>('SELECT * FROM issues ORDER BY created_at DESC')
+  } else {
+    let query = supabase.from('issues').select('*').order('created_at', { ascending: false })
+    if (projectId) query = query.eq('project_id', projectId)
+    const { data, error } = await query
+    if (error) throw new Error(error.message)
+    issues = (data ?? []) as Issue[]
+  }
   const lockedIds = await listPriorityLockedIssueIds(issues.map((issue) => issue.id))
   return issues.map((issue) => applyDynamicPriority(issue, lockedIds.has(issue.id)))
 }
 
 export async function getIssue(id: string): Promise<Issue | null> {
-  const { data, error } = await supabase.from('issues').select('*').eq('id', id).single()
-  if (error) {
-    if (error.code === 'PGRST116') return null
-    throw new Error(error.message)
+  let issue: Issue | null
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    issue = await executeSQLOne<Issue>('SELECT * FROM issues WHERE id = ? LIMIT 1', [id])
+  } else {
+    const { data, error } = await supabase.from('issues').select('*').eq('id', id).single()
+    if (error) {
+      if (error.code === 'PGRST116') return null
+      throw new Error(error.message)
+    }
+    issue = data as Issue
   }
-  const issue = data as Issue
+  if (!issue) return null
   const lockedIds = await listPriorityLockedIssueIds([issue.id])
   return applyDynamicPriority(issue, lockedIds.has(issue.id))
 }
 
 export async function createIssue(
   issue: IssueWriteInput
+): Promise<Issue> {
+  return withDatabaseTransaction(() => createIssueInTransaction(issue))
+}
+
+async function createIssueInTransaction(
+  issue: IssueWriteInput,
 ): Promise<Issue> {
   const id = uuidv4()
   const ts = now()
@@ -2268,6 +3436,21 @@ export async function createIssue(
     && typeof sourceRiskId === 'string'
     && sourceRiskId
   ) {
+    const previousRisk = await executeSQLOne<Risk>(
+      'SELECT * FROM risks WHERE id = ? FOR UPDATE',
+      [sourceRiskId],
+    )
+    const previousIssue = previousRisk?.linked_issue_id
+      ? await executeSQLOne<Issue>('SELECT * FROM issues WHERE id = ? FOR UPDATE', [previousRisk.linked_issue_id])
+      : await executeSQLOne<Issue>(
+        `SELECT * FROM issues
+          WHERE source_entity_type = 'risk'
+            AND (source_id = ? OR source_entity_id = ?)
+          ORDER BY created_at DESC
+          LIMIT 1
+          FOR UPDATE`,
+        [sourceRiskId, sourceRiskId],
+      )
     const issueId = await runRpc<string | null>('create_issue_from_risk_atomic', {
       p_risk_id: sourceRiskId,
       p_issue_source_type: sourceType,
@@ -2279,7 +3462,31 @@ export async function createIssue(
     if (!issueId) {
       throw new Error('create_issue_from_risk_atomic returned empty issue id')
     }
-    return (await getIssue(issueId))!
+    const created = (await getIssue(issueId))!
+    const updatedRisk = previousRisk ? await getRisk(previousRisk.id) : null
+    await recordRiskIssueExecutionFacts({
+      entityType: 'issue',
+      entityId: issueId,
+      projectId: created.project_id,
+      previous: previousIssue as unknown as Record<string, unknown> | null,
+      next: created as unknown as Record<string, unknown>,
+      sourceMutationId: `issue:${issueId}:version:${Number(created.version ?? 1)}`,
+      observedAt: String(created.updated_at ?? created.created_at ?? ts),
+      forceInitialStatus: !previousIssue,
+    })
+    if (previousRisk && updatedRisk) {
+      await recordRiskIssueExecutionFacts({
+        entityType: 'risk',
+        entityId: previousRisk.id,
+        projectId: updatedRisk.project_id,
+        previous: previousRisk as unknown as Record<string, unknown>,
+        next: updatedRisk as unknown as Record<string, unknown>,
+        sourceMutationId: `risk:${previousRisk.id}:conversion:${issueId}`,
+        observedAt: String(updatedRisk.updated_at ?? ts),
+      })
+    }
+    await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'issue_created')
+    return created
   }
 
   const basePriority = computeDynamicIssuePriority({
@@ -2312,12 +3519,35 @@ export async function createIssue(
     status,
     closed_reason: issue.closed_reason ?? null,
     closed_at: status === 'closed' ? (issue.closed_at ?? ts) : null,
+    closure_result_code: null,
+    closure_result_summary: null,
+    closure_effectiveness: null,
+    closure_evidence_refs: [],
+    closure_cause_attribution_id: null,
+    closed_by: null,
+    closure_recorded_at: null,
     version: issue.version ?? 1,
     created_at: ts,
     updated_at: ts,
   }
-  const { error } = await supabase.from('issues').insert(row)
-  if (error) throw new Error(error.message)
+  await executeSQL(
+    `INSERT INTO issues (
+       id, project_id, task_id, title, description, source_type, source_id,
+       source_entity_type, source_entity_id, chain_id, severity, priority,
+       pending_manual_close, status, closed_reason, closed_at,
+       closure_result_code, closure_result_summary, closure_effectiveness,
+       closure_evidence_refs, closure_cause_attribution_id, closed_by,
+       closure_recorded_at, version, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.id, row.project_id, row.task_id, row.title, row.description,
+      row.source_type, row.source_id, row.source_entity_type, row.source_entity_id,
+      row.chain_id, row.severity, row.priority, row.pending_manual_close, row.status,
+      row.closed_reason, row.closed_at, row.closure_result_code, row.closure_result_summary,
+      row.closure_effectiveness, row.closure_evidence_refs, row.closure_cause_attribution_id,
+      row.closed_by, row.closure_recorded_at, row.version, row.created_at, row.updated_at,
+    ],
+  )
   if (requestedPriority !== undefined && requestedPriority !== basePriority) {
     await writeChangeLog({
       project_id: row.project_id,
@@ -2329,7 +3559,20 @@ export async function createIssue(
       change_source: 'manual_adjusted',
     })
   }
-  return (await getIssue(id))!
+  const created = (await getIssue(id))!
+  await recordRiskIssueExecutionFacts({
+    entityType: 'issue',
+    entityId: id,
+    projectId: created.project_id,
+    previous: null,
+    next: created as unknown as Record<string, unknown>,
+    sourceMutationId: `issue:${id}:version:${Number(created.version ?? 1)}`,
+    observedAt: ts,
+    actorUserId: String((issue as Record<string, unknown>).created_by ?? '').trim() || null,
+    forceInitialStatus: true,
+  })
+  await enqueueProjectHealthRefreshAfterCommit(created.project_id, 'issue_created')
+  return created
 }
 
 export async function updateIssue(
@@ -2338,7 +3581,16 @@ export async function updateIssue(
   expectedVersion?: number,
   changeSource: ChangeSource = 'manual_adjusted',
 ): Promise<Issue | null> {
-  const oldIssue = await getIssue(id)
+  return withDatabaseTransaction(() => updateIssueInTransaction(id, updates, expectedVersion, changeSource))
+}
+
+async function updateIssueInTransaction(
+  id: string,
+  updates: IssueUpdateInput,
+  expectedVersion?: number,
+  changeSource: ChangeSource = 'manual_adjusted',
+): Promise<Issue | null> {
+  const oldIssue = await executeSQLOne<Issue>('SELECT * FROM issues WHERE id = ? FOR UPDATE', [id])
   if (!oldIssue) return null
   const { id: _id, created_at: _ca, ...fields } = updates
   const nextStatus = fields.status !== undefined ? normalizeIssueStatus(fields.status) : oldIssue.status
@@ -2355,6 +3607,7 @@ export async function updateIssue(
   }
 
   validateIssueStatusTransition(oldIssue.status, nextStatus, changeSource, updates)
+  assertStructuredClosureOutcome(oldIssue.status, nextStatus, fields)
 
   if (fields.status !== undefined) {
     fields.status = nextStatus
@@ -2364,6 +3617,7 @@ export async function updateIssue(
     if (nextStatus !== 'closed') {
       if (fields.closed_at === undefined) fields.closed_at = null
       if (fields.closed_reason === undefined) fields.closed_reason = null
+      clearStructuredClosureOutcome(fields)
     }
   }
 
@@ -2373,11 +3627,38 @@ export async function updateIssue(
     version: expectedVersion !== undefined ? expectedVersion + 1 : oldIssue.version + 1,
   }
 
-  if (expectedVersion !== undefined) {
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    const mutableColumns = new Set([
+      'task_id', 'title', 'description', 'source_type', 'source_id',
+      'source_entity_type', 'source_entity_id', 'chain_id', 'severity',
+      'priority', 'pending_manual_close', 'status', 'closed_reason',
+      'closed_at', 'closure_result_code', 'closure_result_summary', 'closure_effectiveness',
+      'closure_evidence_refs', 'closure_cause_attribution_id', 'closed_by',
+      'closure_recorded_at', 'updated_at', 'version',
+    ])
+    const entries = Object.entries(updatePayload).filter(([column, value]) => (
+      value !== undefined && mutableColumns.has(column)
+    ))
+    const where = ['id = ?', 'project_id = ?']
+    const values = entries.map(([, value]) => value)
+    values.push(id, oldIssue.project_id)
+    if (expectedVersion !== undefined) {
+      where.push('version = ?')
+      values.push(expectedVersion)
+    }
+    const rows = await executeSQL<{ id: string }>(
+      `UPDATE issues SET ${entries.map(([column]) => `${column} = ?`).join(', ')} WHERE ${where.join(' AND ')} RETURNING id`,
+      values,
+    )
+    if (expectedVersion !== undefined && rows.length === 0) {
+      throw createBusinessError('VERSION_MISMATCH', '该问题已被他人修改，请刷新后重试', 409)
+    }
+  } else if (expectedVersion !== undefined) {
     const { data, error } = await supabase
       .from('issues')
       .update(updatePayload)
       .eq('id', id)
+      .eq('project_id', oldIssue.project_id)
       .eq('version', expectedVersion)
       .select('id')
 
@@ -2390,6 +3671,7 @@ export async function updateIssue(
       .from('issues')
       .update(updatePayload)
       .eq('id', id)
+      .eq('project_id', oldIssue.project_id)
 
     if (error) throw new Error(error.message)
   }
@@ -2428,7 +3710,18 @@ export async function updateIssue(
         change_source: changeSource,
       })
     }
+    await recordRiskIssueExecutionFacts({
+      entityType: 'issue',
+      entityId: id,
+      projectId: updated.project_id,
+      previous: oldIssue as unknown as Record<string, unknown>,
+      next: updated as unknown as Record<string, unknown>,
+      sourceMutationId: `issue:${id}:version:${Number(updated.version ?? updatePayload.version)}`,
+      observedAt: String(updated.updated_at ?? updatePayload.updated_at),
+      actorUserId: String(updated.closed_by ?? '').trim() || null,
+    })
   }
+  await enqueueProjectHealthRefreshAfterCommit(updated?.project_id ?? oldIssue.project_id, 'issue_updated')
   return updated
 }
 
@@ -2439,17 +3732,51 @@ export async function deleteIssue(id: string): Promise<void> {
     throw createBusinessError('UPGRADE_CHAIN_PROTECTED', '该问题已关联升级链，请改为关闭操作')
   }
 
-  const { error } = await supabase.from('issues').delete().eq('id', id)
-  if (error) throw new Error(error.message)
+  if (shouldUseDirectSqlPath() || isDatabaseTransactionActive()) {
+    await executeSQL('DELETE FROM issues WHERE id = ? AND project_id = ?', [id, existing.project_id])
+  } else {
+    const { error } = await supabase
+      .from('issues')
+      .delete()
+      .eq('id', id)
+      .eq('project_id', existing.project_id)
+    if (error) throw new Error(error.message)
+  }
+  enqueueProjectHealthRefresh(existing.project_id, 'issue_deleted')
 }
 
-export async function confirmIssuePendingManualClose(id: string, expectedVersion?: number): Promise<Issue | null> {
+export async function confirmIssuePendingManualClose(
+  id: string,
+  outcome: RiskIssueClosureOutcomeInput,
+  actorId: string,
+  expectedVersion?: number,
+): Promise<Issue | null> {
   const issue = await getIssue(id)
   if (!issue) return null
   if (!issue.pending_manual_close) {
     throw createBusinessError('ISSUE_PENDING_MANUAL_CLOSE_REQUIRED', '当前问题不处于待确认关闭状态')
   }
-  return await updateIssue(id, buildIssueConfirmClosePatch(), expectedVersion, 'manual_close_confirmation')
+  return await updateIssue(id, buildIssueConfirmClosePatch(outcome, actorId), expectedVersion, 'manual_close_confirmation')
+}
+
+export async function closeIssueByRetention(
+  id: string,
+  projectId: string,
+  context: RetentionClosureContext = {},
+  expectedVersion?: number,
+): Promise<Issue | null> {
+  const issue = await getIssue(id)
+  if (!issue) return null
+  if (issue.project_id !== projectId) {
+    throw createBusinessError('PROJECT_SCOPE_MISMATCH', '问题不属于当前留存治理项目', 403)
+  }
+  if (issue.status === 'closed') return issue
+  return await updateIssue(
+    id,
+    buildIssueRetentionClosePatch(context),
+    expectedVersion,
+    'retention_close',
+  )
 }
 
 export async function keepIssueProcessing(id: string, expectedVersion?: number): Promise<Issue | null> {

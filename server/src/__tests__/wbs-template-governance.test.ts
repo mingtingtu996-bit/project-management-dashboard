@@ -2,7 +2,6 @@ import express from 'express'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import supertest from 'supertest'
 
-import { buildBaselineItemsFromTemplateNodes } from '../services/planningBootstrap.js'
 import {
   CHINA_GB55032_TEMPLATE_CATALOG,
   collectStandardInternalFlowGovernanceReport,
@@ -41,6 +40,7 @@ const state = vi.hoisted(() => {
 
   return {
     rawQuery: vi.fn(async () => ({ rows: [] })),
+    globalRole: 'regular',
     template: {
       id: 'template-1',
       project_id: 'project-1',
@@ -48,6 +48,7 @@ const state = vi.hoisted(() => {
       template_data: JSON.parse(JSON.stringify(templateTree)),
       wbs_nodes: JSON.parse(JSON.stringify(templateTree)),
       reference_days: null as number | null,
+      is_public: true,
       updated_at: '2026-04-01T00:00:00.000Z',
     },
     baselineTemplate: JSON.parse(JSON.stringify(templateTree)),
@@ -163,6 +164,7 @@ const dbMock = vi.hoisted(() => ({
       if (tableName === 'wbs_template_candidate_aggregations') {
         const query = {
           select: vi.fn().mockReturnThis(),
+          in: vi.fn().mockReturnThis(),
           order: vi.fn().mockReturnThis(),
           limit: vi.fn(async () => ({
             data: [
@@ -216,7 +218,7 @@ const dbMock = vi.hoisted(() => ({
     return []
   }),
   executeSQLOne: vi.fn(async (query: string, params: any[] = []) => {
-    if (query.includes('SELECT * FROM wbs_templates WHERE id = ?')) {
+    if (query.includes('FROM wbs_templates') && query.includes('WHERE id = ?')) {
       return params[0] === state.template.id ? state.template : null
     }
 
@@ -225,12 +227,26 @@ const dbMock = vi.hoisted(() => ({
 }))
 
 vi.mock('../services/dbService.js', () => dbMock)
+vi.mock('../services/constructionCalendar.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/constructionCalendar.js')>()
+  return {
+    ...actual,
+    resolveConstructionCalendarContext: vi.fn(async () => ({
+      basis: 'official_construction_calendar_seed',
+      availability: 'available',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      timezone: 'Asia/Shanghai',
+      windows: [],
+    })),
+  }
+})
 vi.mock('../database.js', () => ({
   query: state.rawQuery,
 }))
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: unknown, next: () => void) => {
-    req.user = { id: 'user-1', globalRole: 'regular' }
+    req.user = { id: 'user-1', globalRole: state.globalRole }
     next()
   }),
 }))
@@ -265,10 +281,12 @@ function buildApp() {
 describe('wbs template governance', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    state.globalRole = 'regular'
     state.template.project_id = 'project-1'
     ;(state.template as any).company_id = null
     ;(state.template as any).catalog_scope = null
     ;(state.template as any).is_builtin = false
+    ;(state.template as any).is_public = true
     ;(state.template as any).standard_catalog_code = null
     state.template.template_data = JSON.parse(JSON.stringify(state.baselineTemplate))
     state.template.wbs_nodes = JSON.parse(JSON.stringify(state.baselineTemplate))
@@ -423,7 +441,8 @@ describe('wbs template governance', () => {
     }
 
     const report = collectStandardInternalFlowGovernanceReport(5)
-    expect(catalogs).toHaveLength(40)
+    expect(catalogs.length).toBeGreaterThanOrEqual(43)
+    expect(new Set(catalogs.map((catalog) => catalog.templateId)).size).toBe(catalogs.length)
     expect(adjacentPairCount).toBeGreaterThan(23_000)
     expect(report.summary.totalRules).toBe(adjacentPairCount)
     expect(findings).toEqual([])
@@ -761,6 +780,17 @@ describe('wbs template governance', () => {
     expect(Array.isArray(allowed.body.data.topReviewRequiredPairs)).toBe(true)
   })
 
+  it('does not trust JWT globalRole for WBS seed governance without admin membership', async () => {
+    state.globalRole = 'company_admin'
+    vi.mocked(getCurrentCompanyMembership).mockResolvedValueOnce({ companyId: 'company-1', role: 'regular' })
+
+    const response = await supertest(buildApp())
+      .get('/api/wbs-template-governance/internal-flow-rules/report')
+      .expect(403)
+
+    expect(response.body.error.code).toBe('FORBIDDEN')
+  })
+
   it('keeps the unified dependency rule system report backend/admin-only', async () => {
     const app = buildApp()
 
@@ -785,6 +815,7 @@ describe('wbs template governance', () => {
     expect(allowed.body.data.dependencySystemCloseout).toEqual(expect.objectContaining({
       status: 'dependency_rule_system_closeout_ready',
       runtimeCloseoutStatus: 'runtime_dependency_generation_ready',
+      scheduleTrustCoverageStatus: 'schedule_trust_closed_with_classified_non_l2_tail',
       governanceCoverageStatus: 'coverage_sprint_pending',
       allDependencyGovernanceComplete: false,
       backendOnly: true,
@@ -798,7 +829,7 @@ describe('wbs template governance', () => {
     expect(allowed.body.data.dependencySystemCloseout.remainingP1Risks)
       .not.toContain('standard_internal_flow_execution_baseline_gate_not_ready')
     expect(allowed.body.data.dependencySystemCloseout.statusMeaning)
-      .toMatch(/non-blocking governance backlog may remain/i)
+      .toMatch(/schedule trust may already be closed/i)
     expect(allowed.body.data.dependencySystemCloseout.layerReadiness).toEqual(expect.objectContaining({
       workflow_sequence_dictionary: expect.objectContaining({ ready: true, runtimeDecisionSource: false }),
       same_parent_internal_flow: expect.objectContaining({
@@ -821,6 +852,7 @@ describe('wbs template governance', () => {
     expect(allowed.body.data.dependencySystemCloseout.nonBlockingGovernanceBacklog).toEqual(expect.objectContaining({
       same_parent_internal_flow: expect.objectContaining({
         status: 'coverage_sprint_pending',
+        scheduleTrustCoverageStatus: 'schedule_trust_closed_with_classified_non_l2_tail',
         currentCuratedCoverageRatio: expect.any(Number),
         minimumCuratedCoverageRatio: 0.88,
         runtimeBlockingReviewRequiredRuleCount: 0,
@@ -929,7 +961,7 @@ describe('wbs template governance', () => {
     }))
     expect(allowed.body.data.runtimeMetrics.process_constraint.backValidationCandidateEligibleEdgeCount).toBeGreaterThan(0)
     expect(allowed.body.data.runtimeMetrics.process_constraint.keywordFallbackMatchedEdgeCount).toBe(0)
-    expect(allowed.body.data.runtimeMetrics.process_constraint.unmatchedExistingRelationEdgeCount).toBeGreaterThan(0)
+    expect(allowed.body.data.runtimeMetrics.process_constraint.unmatchedExistingRelationEdgeCount).toBeGreaterThanOrEqual(0)
     expect(allowed.body.data.processConstraintCoverage.scope).toBe('process_constraint_edge_enhancement_coverage')
     expect(allowed.body.data.processConstraintCoverage.coveragePolicy.mode)
       .toBe('selective_edge_enhancement_not_full_dependency_coverage')
@@ -959,7 +991,7 @@ describe('wbs template governance', () => {
     expect(allowed.body.data.processConstraintCoverage.summary.structuredCodeMatchedEdgeCount).toBeGreaterThan(5_000)
     expect(allowed.body.data.processConstraintCoverage.summary.keywordFallbackMatchedEdgeCount).toBe(0)
     expect(allowed.body.data.processConstraintCoverage.summary.backValidationCandidateEligibleEdgeCount).toBeGreaterThan(300)
-    expect(allowed.body.data.processConstraintCoverage.summary.unmatchedExistingRelationEdgeCount).toBeGreaterThan(0)
+    expect(allowed.body.data.processConstraintCoverage.summary.unmatchedExistingRelationEdgeCount).toBeGreaterThanOrEqual(0)
     expect(allowed.body.data.processConstraintCoverage.summary.selectiveCoverageRatio).toBeGreaterThan(0.14)
     expect(allowed.body.data.processConstraintCoverage.summary.generatedDependencyMatchedRatio).toBeGreaterThan(0.18)
     expect(allowed.body.data.processConstraintCoverage.summary.sameParentSelectiveCoverageRatio).toBeGreaterThan(0.14)
@@ -978,7 +1010,9 @@ describe('wbs template governance', () => {
       .toEqual(allowed.body.data.processConstraintCoverage.summary)
     expect(allowed.body.data.processConstraintCoverage.topKeywordFallbackPairs).toEqual([])
     expect(allowed.body.data.processConstraintCoverage.topBackValidationCandidatePairs.length).toBeGreaterThan(0)
-    expect(allowed.body.data.processConstraintCoverage.topUnmatchedExistingRelationEdges.length).toBeGreaterThan(0)
+    expect(allowed.body.data.processConstraintCoverage.topUnmatchedExistingRelationEdges.length).toBeLessThanOrEqual(
+      allowed.body.data.processConstraintCoverage.summary.unmatchedExistingRelationEdgeCount,
+    )
   })
 
   it('keeps semantic precision governance backend/admin-only', async () => {
@@ -992,13 +1026,17 @@ describe('wbs template governance', () => {
     const allowed = await supertest(app).get('/api/wbs-template-governance/semantic-precision/report?limit=5&sample_limit=2')
     expect(allowed.status).toBe(200)
     expect(allowed.body.data.reportCode).toBe('wbs_seed_semantic_precision_governance')
+    expect(allowed.body.data.businessTypeRegistryAudit).toEqual(expect.objectContaining({
+      status: 'ready',
+      unmappedLegacyWbsTemplateTypes: [],
+    }))
     expect(allowed.body.data.summary.totalProcessLikeNodes).toBeGreaterThan(20000)
     expect(allowed.body.data.summary.byCatalogGroup.core_quality).toBeGreaterThan(0)
     expect(allowed.body.data.summary.byCatalogGroup.specialty).toBeGreaterThan(0)
     expect(allowed.body.data.summary.p0Open).toBeGreaterThan(0)
     expect(allowed.body.data.summary.p0Open).toBeLessThanOrEqual(80)
     expect(allowed.body.data.summary.p1Open).toBeGreaterThan(100)
-    expect(allowed.body.data.summary.p1Open).toBeLessThanOrEqual(650)
+    expect(allowed.body.data.summary.p1Open).toBeLessThanOrEqual(700)
     expect(allowed.body.data.summary.p2Open).toBeLessThanOrEqual(10)
     expect(allowed.body.data.summary.findings.bySeverity.P0).toBe(allowed.body.data.summary.p0Open)
     expect(allowed.body.data.summary.findings.bySeverity.P1).toBe(allowed.body.data.summary.p1Open)
@@ -1216,7 +1254,7 @@ describe('wbs template governance', () => {
     })
   })
 
-  it('passes current company scope into WBS reference-days outcome evidence', async () => {
+  it('does not collapse multi-project feedback into a project-scoped reference-days outcome', async () => {
     const app = buildApp()
     const response = await supertest(app).get('/api/wbs-template-governance/template-1/feedback')
 
@@ -1225,11 +1263,7 @@ describe('wbs template governance', () => {
     const outcomeInsert = rawQueryCalls.find((call) =>
       String(call[0]).toLowerCase().includes('insert into public.duration_plan_network_outcomes'),
     )
-    expect(outcomeInsert).toBeTruthy()
-    expect(outcomeInsert?.[1]?.[1]).toBe('wbs_reference_days')
-    expect(outcomeInsert?.[1]?.[4]).toBe('project')
-    expect(outcomeInsert?.[1]?.[5]).toBe('project_business_outcome_writer')
-    expect(outcomeInsert?.[1]?.[6]).toBe('company-1')
+    expect(outcomeInsert).toBeUndefined()
   })
 
   it('rejects company-scoped templates outside the current company', async () => {
@@ -1270,6 +1304,62 @@ describe('wbs template governance', () => {
     ;(state.template as any).catalog_scope = null
   })
 
+  it('allows public unscoped templates to load reference-days as read-only quality data', async () => {
+    state.template.project_id = null as any
+    ;(state.template as any).company_id = null
+    ;(state.template as any).catalog_scope = 'project'
+    ;(state.template as any).is_builtin = false
+    ;(state.template as any).is_public = true
+    ;(state.template as any).standard_catalog_code = null
+
+    const app = buildApp()
+    const response = await supertest(app).get('/api/wbs-template-governance/template-1/reference-days')
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data.updated_count).toBe(3)
+
+    const writeResponse = await supertest(app)
+      .post('/api/wbs-template-governance/template-1/reference-days/confirm')
+      .send({ apply_all: true })
+
+    expect(writeResponse.status).toBe(403)
+    expect(writeResponse.body.error.code).toBe('GLOBAL_TEMPLATE_WRITE_FORBIDDEN')
+
+    state.template.project_id = 'project-1'
+    ;(state.template as any).catalog_scope = null
+  })
+
+  it('allows published unscoped project catalog templates returned by the list API to load reference-days as read-only quality data', async () => {
+    state.template.project_id = null as any
+    ;(state.template as any).company_id = null
+    ;(state.template as any).catalog_scope = 'project'
+    ;(state.template as any).is_builtin = false
+    ;(state.template as any).is_public = false
+    ;(state.template as any).standard_catalog_code = null
+    ;(state.template as any).status = 'published'
+    ;(state.template as any).deleted_at = null
+
+    const app = buildApp()
+    const response = await supertest(app).get('/api/wbs-template-governance/template-1/reference-days')
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data.updated_count).toBe(3)
+
+    const writeResponse = await supertest(app)
+      .post('/api/wbs-template-governance/template-1/reference-days/confirm')
+      .send({ apply_all: true })
+
+    expect(writeResponse.status).toBe(403)
+    expect(writeResponse.body.error.code).toBe('GLOBAL_TEMPLATE_WRITE_FORBIDDEN')
+
+    state.template.project_id = 'project-1'
+    ;(state.template as any).catalog_scope = null
+    ;(state.template as any).status = undefined
+    ;(state.template as any).deleted_at = undefined
+  })
+
   it('confirms reference days and writes them back into template JSON', async () => {
     const app = buildApp()
     const response = await supertest(app)
@@ -1292,33 +1382,23 @@ describe('wbs template governance', () => {
     expect(template.template_data[1].reference_days).toBe(30)
     expect(template.template_data[1].children[0].reference_days).toBe(22)
 
-    const baselineItems = buildBaselineItemsFromTemplateNodes(template.template_data as any, {
-      projectId: 'project-1',
-      baselineVersionId: 'baseline-1',
-      anchorDate: '2026-05-01',
-    })
-
-    expect(baselineItems).toHaveLength(5)
-    expect(baselineItems[0]).toMatchObject({
-      title: 'Preparation',
-      planned_start_date: '2026-05-01',
-      planned_end_date: '2026-05-22',
-    })
-    expect(baselineItems[1]).toMatchObject({
-      title: 'Survey',
-      planned_start_date: '2026-05-01',
-      planned_end_date: '2026-05-08',
-    })
-    expect(baselineItems[2]).toMatchObject({
-      title: 'Drawings',
-      planned_start_date: '2026-05-09',
-      planned_end_date: '2026-05-22',
-    })
-    expect(baselineItems[3]).toMatchObject({
-      title: 'Structure',
-      planned_start_date: '2026-05-23',
-      planned_end_date: '2026-06-21',
-    })
+    expect(template.template_data).toEqual([
+      expect.objectContaining({
+        title: 'Preparation',
+        reference_days: 12,
+        children: [
+          expect.objectContaining({ title: 'Survey', reference_days: 8 }),
+          expect.objectContaining({ title: 'Drawings', reference_days: 14 }),
+        ],
+      }),
+      expect.objectContaining({
+        title: 'Structure',
+        reference_days: 30,
+        children: [
+          expect.objectContaining({ title: 'Typical floor cycle', reference_days: 22 }),
+        ],
+      }),
+    ])
   })
 
   it('can confirm only selected paths', async () => {

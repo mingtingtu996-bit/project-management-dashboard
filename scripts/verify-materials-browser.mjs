@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +8,7 @@ import { chromium } from 'playwright'
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -145,7 +145,7 @@ const mockProjectSummary = {
   reviewingConstructionDrawingCount: 0,
   attentionRequired: false,
   scheduleVarianceDays: 3,
-  activeDelayRequests: 0,
+  activeDelayedTasks: 0,
   activeObstacles: 1,
   monthlyCloseStatus: '\u8fdb\u884c\u4e2d',
   closeoutOverdueDays: 0,
@@ -458,7 +458,6 @@ async function main() {
         || pathname === '/api/task-obstacles'
         || pathname === '/api/warnings'
         || pathname === '/api/issues'
-        || pathname === '/api/delay-requests'
         || pathname === '/api/tasks/progress-snapshots'
       ) {
         await route.fulfill(json({ success: true, data: [] }))

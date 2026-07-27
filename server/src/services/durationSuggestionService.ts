@@ -1,8 +1,7 @@
 ﻿// v1.4.18 + v1.4.7.4: unified duration suggestion service.
-// New duration decisions must enter through this service; legacy AI fields are compatibility fallback only.
+// New duration decisions must enter through this service; retired legacy duration fields are not runtime fallbacks.
 
 import { getProjectCompanyId } from '../auth/access.js'
-import { query as rawQuery } from '../database.js'
 import { logger } from '../middleware/logger.js'
 import {
   applyDurationContextToDays,
@@ -12,35 +11,36 @@ import {
   type DurationContextFactorKey,
   type DurationContextSummary,
 } from './durationContextService.js'
-import { supabase } from './dbService.js'
+import { getTask, supabase } from './dbService.js'
 import {
   expandTitleWeakStandardWorkSearchTextFromResolver,
+  describeDurationContributionModeFromResolver,
+  inferTitleWeakScaleSignalFromResolver,
   inferTitleWeakStandardWorkCodesFromResolver,
+  isDurationBearingContributionModeFromResolver,
+  resolveDurationContributionModeFromResolver,
   resolveStandardWorkDurationSeed,
 } from './algorithmSeedResolver.js'
-import { buildProjectProgressVelocityLearning } from './progressVelocityLearningService.js'
+import { loadPublishedProgressVelocityRuntime } from './progressVelocityRuntimePublicationService.js'
 import { buildProjectHealthDeviationSummary } from './projectHealthDeviationSummaryService.js'
-import {
-  expandTitleWeakStandardWorkSearchText,
-  inferTitleWeakScaleSignal,
-} from '../seeds/v1472TitleWeakRecognitionSeed.js'
-import {
-  describeDurationContributionMode,
-  isDurationBearingContributionMode,
-  normalizeDurationContributionMode,
-} from '../seeds/durationContributionMode.js'
 import {
   buildProjectGenerationFactsSnapshot,
   readProjectGenerationFactsSnapshot,
   type ProjectGenerationFactsSnapshot,
 } from './projectGenerationFactsSnapshotService.js'
 import {
+  readLiveProjectGenerationContext,
+} from './projectGenerationFactsStoreService.js'
+import {
   buildAlgorithmFactContext,
   summarizeAlgorithmFactContext,
   type AlgorithmFactContextPhase,
 } from './algorithmFactContextService.js'
 import { resolvePackageChildRhythmWindow } from './packageChildRhythmWindowService.js'
-import { hydrateDurationAlgorithmInput } from './durationAlgorithmInputHydrationService.js'
+import {
+  assembleDurationInput,
+  type DurationInputAssemblerResult,
+} from './durationInputAssemblerService.js'
 import {
   getDurationOutputContract,
   type DurationOutputCode,
@@ -48,6 +48,7 @@ import {
 import { resolveProjectFactDurationScaling } from './durationProjectFactScaleService.js'
 import {
   addConstructionProductionDays,
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -62,31 +63,81 @@ import {
 import {
   loadAlgorithmAssetLearnableParameterRuntimeValue,
 } from './algorithmAssetLearnableParameterRuntimeConsumptionService.js'
+import { getAlgorithmAssetLearnableParameter } from './algorithmAssetLearnableParameterRegistryService.js'
+import { resolveDurationContextPolicyRuntimeSelection } from './durationContextPolicySelectorService.js'
 import {
   recordDurationSuggestionConsumedArtifacts,
   type DurationRuntimeConsumerFacadeArtifactsResult,
 } from './durationRuntimeConsumerObservationAdapterService.js'
+import {
+  readPlanningReplayCalibrationReadback,
+  type PlanningReplayCalibrationReadback,
+} from './planningReplayCalibrationService.js'
+import {
+  evaluateDurationPlausibility,
+  type DurationPlausibilityWarning,
+} from './durationEngineeringPlausibilityGuardrailService.js'
+import {
+  durationLearningBenchmarkRuntimeVersionReasons,
+  executeDurationLearningRuntimePublicationQuery,
+  resolveDurationLearningRuntimePublication,
+  type DurationLearningRuntimePublicationQueryExec,
+  type DurationLearningRuntimeScope,
+} from './durationLearningRuntimePublicationService.js'
 import type {
   DurationRuntimeConsumerObservationQueryExec,
   DurationRuntimeConsumerObservedArtifact,
 } from './durationRuntimeConsumerObservationService.js'
+import {
+  createDurationRuntimeConsumerObservationQueryExec,
+} from './durationRuntimeConsumerObservationService.js'
+import type { T2RhythmScheduleCandidatePackage } from './t2DivisionRhythmTemplateRegistryService.js'
+import type { T2RhythmScheduleCandidateNetworkPhase1Evaluation } from './t2RhythmScheduleCandidateNetworkEvaluationService.js'
+import type { T2RhythmSchedulePhase1Selection } from './t2RhythmSchedulePhase1SelectionService.js'
+import type { ConstructionOrganizationScenarioSelection } from './constructionOrganizationScenarioSelector.js'
+import {
+  loadCurrentCauseSegment,
+  type DurationBenchmarkCauseSegment,
+  type DurationBenchmarkCauseSegmentQueryExec,
+} from './durationBenchmarkCauseSegmentService.js'
+import {
+  mergeConstructionOrganizationLineageIntoContext,
+  readConstructionOrganizationPlanNetworkRuntimeLineage,
+  type ConstructionOrganizationPlanNetworkRuntimeLineage,
+} from './constructionOrganizationRuntimeLineageService.js'
+import { resolveDurationDayBasis } from '../utils/durationDayBasis.js'
+import {
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  type StructuredCauseCode,
+} from '../domain/structuredCauseTaxonomy.js'
+import type { TaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
+import {
+  buildConstructionProductionDayRiskDistribution,
+  DEFAULT_DURATION_TIMEZONE,
+  type DurationRiskDistributionDto,
+} from './durationMetricService.js'
 
 export type DurationCalibrationSource =
   | 'enterprise_override'
   | 'project_history_sample'
   | 'company_history_sample'
+  | 'industry_history_sample'
+  | 'global_history_sample'
   | 'system_history_sample'
   | 'standard_work_duration_seed'
   | 'standard_work_duration_seed+company_history_sample'
+  | 'standard_work_duration_seed+industry_history_sample'
+  | 'standard_work_duration_seed+global_history_sample'
   | 'standard_work_duration_seed+system_history_sample'
   | 'standard_work_duration_seed+project_history_sample'
   | 'standard_work_duration_seed+mixed_history_sample'
+  | 'runtime_learning_publication'
   | 'cold_start_baseline'
   | 'unavailable'
 
 export type DurationDataMaturityLevel = 'L0' | 'L1' | 'L2'
 export type DurationSuggestionPurpose = 'new_task_reference' | 'execution_reference' | 'monthly_commitment_window'
-type DurationMaturityEvidenceScope = 'project' | 'company' | 'system' | 'legacy' | 'unknown'
+type DurationMaturityEvidenceScope = 'project' | 'company' | 'system' | 'unknown'
 export type DurationQuantitySource =
   | 'explicit_task_quantity'
   | 'task_saved_quantity'
@@ -96,6 +147,45 @@ export type DurationQuantitySource =
   | 'none'
 export type DurationQuantityConfidence = 'high' | 'medium' | 'low' | 'unavailable'
 export type DurationBoundaryRole = 'standalone_duration' | 'aggregate_parent_duration' | 'package_child_window'
+
+export type BenchmarkProvenanceReasonCode =
+  | 'benchmark_provenance_missing'
+  | 'benchmark_version_missing'
+  | 'benchmark_generated_at_missing'
+  | 'benchmark_source_as_of_missing'
+  | 'benchmark_source_window_start_missing'
+  | 'benchmark_sample_count_invalid'
+  | 'benchmark_day_basis_unavailable'
+  | 'benchmark_scope_unavailable'
+  | 'benchmark_calendar_identity_missing'
+  | 'benchmark_runtime_publication_key_missing'
+  | 'benchmark_cause_identity_missing'
+  | 'benchmark_blend_weight_invalid'
+
+export interface BenchmarkProvenanceEntry {
+  source: 'persisted_benchmark' | 'runtime_publication' | 'cause_segment'
+  benchmarkId: string | null
+  publicationKey: string | null
+  benchmarkVersion: string | null
+  scope: 'project' | 'company' | 'industry' | 'global' | null
+  generatedAt: string | null
+  sourceAsOf: string | null
+  sourceWindowStart: string | null
+  sampleCount: number | null
+  dayBasis: 'construction_production_day' | null
+  calendarRef: string | null
+  calendarVersion: string | null
+  aggregateCalendarIdentities: Array<{ calendarRef: string; calendarVersion: string }>
+  causeSegment: null | { causeCode: StructuredCauseCode; taxonomyVersion: string }
+  blendWeight: number | null
+  availability: 'available' | 'unavailable'
+  reasonCodes: BenchmarkProvenanceReasonCode[]
+}
+
+export interface BenchmarkProvenanceSet {
+  mode: 'single' | 'blended'
+  entries: BenchmarkProvenanceEntry[]
+}
 export type ParentDurationBoundaryPolicy =
   | 'aggregate_package_window'
   | 'rhythm_package_window'
@@ -119,6 +209,7 @@ export type DurationBusinessReasonCode =
   | 'MONTHLY_COMMITMENT_WINDOW'
   | 'NON_DURATION_BEARING_STANDARD_WORK'
   | 'PACKAGE_CHILD_DURATION_WINDOW'
+  | 'PLANNING_REPLAY_CALIBRATION'
   | 'SERVICE_UNAVAILABLE'
 
 export interface DurationSuggestion {
@@ -136,7 +227,7 @@ export interface DurationSuggestion {
   confidenceScore: number
   forecastSource: string
   durationCalibrationSource: DurationCalibrationSource
-  durationProvenance: 'manual_override' | 'historical_benchmark' | 'standard_work_duration_seed' | 'unavailable'
+  durationProvenance: 'manual_override' | 'historical_benchmark' | 'standard_work_duration_seed' | 'runtime_learning_publication' | 'unavailable'
   businessReason: string | null
   businessReasonCode?: DurationBusinessReasonCode | null
   businessReasonCodes?: DurationBusinessReasonCode[]
@@ -165,6 +256,32 @@ export interface DurationSuggestion {
   packageChildRhythmWindowStartDay?: number | null
   packageChildRhythmWindowEndDay?: number | null
   packageChildRhythmWindowRole?: string | null
+  benchmarkCauseSegment?: {
+    causeCode: StructuredCauseCode
+    taxonomyVersion: string
+    generatedAt: string
+    sourceAsOf: string
+    sampleCount: number
+  } | null
+  benchmarkCauseSelection?:
+    | 'exact_cause'
+    | 'all_cause_fallback'
+    | 'no_confirmed_cause'
+    | 'cause_segment_read_failed'
+    | 'cause_authority_review_required'
+    | 'cause_authority_unavailable'
+  benchmarkGeneratedAt?: string | null
+  benchmarkAsOf?: string | null
+  benchmarkWindowStart?: string | null
+  benchmarkVersion?: string | null
+  benchmarkSampleCount?: number | null
+  benchmarkDayBasis?: 'construction_production_day' | null
+  benchmarkScope?: 'project' | 'company' | 'industry' | 'global' | 'mixed' | null
+  benchmarkProvenance?: BenchmarkProvenanceSet | null
+  benchmarkProvenanceAvailability?: 'available' | 'partial' | 'unavailable' | null
+  benchmarkProvenanceReasonCodes?: BenchmarkProvenanceReasonCode[]
+  benchmarkProvenanceUnavailableReason?: BenchmarkProvenanceReasonCode | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
 }
 
 export interface DurationSuggestionInput {
@@ -219,9 +336,17 @@ export interface DurationSuggestionInput {
   acceptanceRequired?: boolean | null
   materialRequired?: boolean | null
   projectGenerationFacts?: Record<string, unknown> | null
+  constructionOrganizationScenario?: ConstructionOrganizationScenarioSelection | null
+  t2RhythmScheduleCandidatePackage?: T2RhythmScheduleCandidatePackage | null
+  t2RhythmScheduleCandidateNetworkEvaluation?: T2RhythmScheduleCandidateNetworkPhase1Evaluation | null
+  t2RhythmSchedulePhase1Selection?: T2RhythmSchedulePhase1Selection | null
+  durationInputAssembly?: DurationInputAssemblerResult<DurationSuggestionInput> | null
   runtimeExecutionFacts?: Record<string, unknown> | null
   workCalendar?: ConstructionCalendarContext | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  runtimeEvidenceMode?: 'record' | 'no_write'
+  confirmedCauseCode?: StructuredCauseCode | null
+  structuredCauseAuthority?: TaskStructuredCauseAuthority | null
 }
 
 export interface DurationSuggestionRuntimeArtifactPublication {
@@ -230,6 +355,10 @@ export interface DurationSuggestionRuntimeArtifactPublication {
   publicationStatus?: string | null
   sourceEvidenceRefs?: string[] | null
   observationContext?: Record<string, unknown> | null
+}
+
+function shouldRecordDurationRuntimeConsumerEvidence(input: DurationSuggestionInput) {
+  return input.runtimeEvidenceMode === 'record'
 }
 
 export interface RecordDurationSuggestionRuntimeConsumptionInput {
@@ -241,6 +370,35 @@ export interface RecordDurationSuggestionRuntimeConsumptionInput {
   observedAt?: string
 }
 
+export interface CommittedDurationSuggestionPredictionEvidence {
+  companyId: string
+  projectId: string
+  taskId: string
+  generationBatchId?: string | null
+  standardWorkCode?: string | null
+  plannedStartDate?: string | null
+  plannedEndDate?: string | null
+  recommendedDurationDays: number
+  forecastSource?: string | null
+  confidenceLevel?: string | null
+  confidenceScore?: number | null
+  runtimeApplications: ReadonlyArray<{
+    assetKey: string
+    publicationKey: string
+    artifactKey: string
+    scopeLevel: DurationLearningRuntimeScope['level']
+    industryKey?: string | null
+    inputTaskIds: readonly string[]
+  }>
+}
+
+const DURATION_LEARNING_RUNTIME_SCOPE_LEVELS = new Set<DurationLearningRuntimeScope['level']>([
+  'project',
+  'company',
+  'industry',
+  'global',
+])
+
 const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
   'base_duration_benchmark',
   'duration_cold_start_baseline',
@@ -248,7 +406,9 @@ const DURATION_SUGGESTION_CONSUMER_ASSET_KEYS = new Set([
   'special_work_duration_seed',
 ])
 
-type DurationBenchmarkRow = {
+export type DurationBenchmarkRow = {
+  id?: string | null
+  benchmark_version?: string | null
   p50_days?: number | null
   p75_days?: number | null
   p80_days?: number | null
@@ -258,11 +418,26 @@ type DurationBenchmarkRow = {
   confidence_score?: number | null
   company_id?: string | null
   project_id?: string | null
+  generated_at?: string | null
+  source_window_start?: string | null
+  source_as_of?: string | null
   metadata?: Record<string, unknown> | null
   variance?: number | null
   cv?: number | null
   coefficient_of_variation?: number | null
   coefficientOfVariation?: number | null
+  duration_day_basis?: 'calendar_day' | 'construction_production_day' | null
+  __durationLearningPublicationKey?: string | null
+  __durationLearningPublicationStage?: string | null
+  __durationLearningSelectionBasis?: string | null
+  __durationLearningScope?: 'project' | 'company' | 'industry' | 'global' | null
+  __durationLearningAggregateCalendarIdentities?: Array<{ calendarRef: string; calendarVersion: string }>
+  __durationLearningCauseSegment?: null | {
+    causeCode: StructuredCauseCode
+    taxonomyVersion: string
+    calendarRef: string | null
+    calendarVersion: string | null
+  }
 }
 
 type DurationOverrideRow = {
@@ -271,14 +446,9 @@ type DurationOverrideRow = {
   reason?: string | null
 }
 
-type BenchmarkLookupResult = {
-  benchmark: DurationBenchmarkRow | null
-  missingCompanyColumn: boolean
-}
+type BenchmarkScope = DurationLearningRuntimeScope['level']
 
-type BenchmarkScope = 'project' | 'company' | 'system' | 'legacy'
-
-type DurationBenchmarkCandidate = {
+export type DurationBenchmarkCandidate = {
   benchmark: DurationBenchmarkRow
   scope: BenchmarkScope
   benchKey: string
@@ -390,13 +560,6 @@ function normalizeId(value: unknown) {
   return String(value ?? '').trim()
 }
 
-function buildDurationRuntimeConsumerObservationQueryExec(): DurationRuntimeConsumerObservationQueryExec {
-  return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
-  }
-}
-
 export function buildDurationSuggestionConsumedArtifacts(input: {
   runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[]
   projectId?: string | null
@@ -427,7 +590,7 @@ export function buildDurationSuggestionConsumedArtifacts(input: {
 export function recordDurationSuggestionRuntimeConsumption(
   input: RecordDurationSuggestionRuntimeConsumptionInput,
 ): Promise<DurationRuntimeConsumerFacadeArtifactsResult> {
-  const queryExec = input.queryExec ?? buildDurationRuntimeConsumerObservationQueryExec()
+  const queryExec = createDurationRuntimeConsumerObservationQueryExec(input.queryExec)
   const projectId = normalizeId(input.projectId)
   const taskId = normalizeId(input.taskId)
   const standardWorkCode = normalizeId(input.standardWorkCode)
@@ -461,6 +624,21 @@ function buildStandardSeedRuntimePublication(
   standardSeed: Record<string, unknown> | null | undefined,
 ): DurationSuggestionRuntimeArtifactPublication | null {
   if (!standardSeed) return null
+  const learnedPublicationKey = normalizeId(standardSeed.__durationLearningPublicationKey)
+  if (learnedPublicationKey) {
+    const stage = normalizeId(standardSeed.__durationLearningPublicationStage)
+    return {
+      assetKey: 'standard_work_duration_seed',
+      publicationKey: learnedPublicationKey,
+      publicationStatus: stage === 'canary' ? 'canary' : 'published',
+      sourceEvidenceRefs: [`duration_learning_runtime_publications:${learnedPublicationKey}`],
+      observationContext: {
+        seedSource: normalizeId(standardSeed.__resolverSource),
+        seedStableCode: normalizeId(standardSeed.__stableCode ?? standardSeed.stableCode ?? standardSeed.stable_code),
+        selectionBasis: normalizeId(standardSeed.__durationLearningSelectionBasis),
+      },
+    }
+  }
   const seedSource = normalizeId(standardSeed.__resolverSource)
   if (seedSource !== 'active_seed') return null
   const seedVersion = normalizeId(
@@ -484,8 +662,72 @@ function buildStandardSeedRuntimePublication(
   }
 }
 
+function buildLearnedBenchmarkRuntimePublication(
+  benchmark: DurationBenchmarkRow | null | undefined,
+): DurationSuggestionRuntimeArtifactPublication | null {
+  const publicationKey = normalizeId(benchmark?.__durationLearningPublicationKey)
+  if (!publicationKey) return null
+  const stage = normalizeId(benchmark?.__durationLearningPublicationStage)
+  return {
+    assetKey: 'base_duration_benchmark',
+    publicationKey,
+    publicationStatus: stage === 'canary' ? 'canary' : 'published',
+    sourceEvidenceRefs: [`duration_learning_runtime_publications:${publicationKey}`],
+    observationContext: {
+      selectionBasis: normalizeId(benchmark?.__durationLearningSelectionBasis),
+      durationDayBasis: benchmark?.duration_day_basis ?? null,
+    },
+  }
+}
+
+function createDurationLearningRuntimeQueryExec(
+  input: DurationSuggestionInput,
+): DurationLearningRuntimePublicationQueryExec | null {
+  if (input.runtimeConsumerObservationQueryExec) return input.runtimeConsumerObservationQueryExec
+  if (process.env.NODE_ENV === 'test') return null
+  return executeDurationLearningRuntimePublicationQuery
+}
+
+async function applyLearnedStandardDurationPublication(input: {
+  suggestionInput: DurationSuggestionInput
+  companyId: string | null
+  seed: Record<string, unknown> | null
+}) {
+  const stableCode = normalizeId(
+    input.seed?.__stableCode
+      ?? input.seed?.stableCode
+      ?? input.seed?.stable_code
+      ?? input.suggestionInput.standardWorkCode
+      ?? input.suggestionInput.templateStableCode,
+  )
+  const queryExec = createDurationLearningRuntimeQueryExec(input.suggestionInput)
+  if (!stableCode || !queryExec) return input.seed
+  const resolution = await resolveDurationLearningRuntimePublication({
+    queryExec,
+    assetKey: 'standard_work_duration_seed',
+    artifactKey: stableCode,
+    companyId: input.companyId,
+    projectId: input.suggestionInput.projectId,
+    industryKey: input.suggestionInput.projectTypeCode,
+  })
+  if (!resolution.runtimeConsumable || !resolution.publication) return input.seed
+  return {
+    ...(input.seed ?? {}),
+    ...resolution.publication.runtimePayload,
+    stableCode,
+    __stableCode: stableCode,
+    __resolverSource: `duration_learning_${resolution.selectionBasis}`,
+    __seedVersion: resolution.publicationKey,
+    __resolverVersionId: resolution.publicationKey,
+    __durationLearningPublicationKey: resolution.publicationKey,
+    __durationLearningPublicationStage: resolution.publication.publicationStage,
+    __durationLearningSelectionBasis: resolution.selectionBasis,
+  }
+}
+
 function buildDurationSuggestionRuntimeArtifactPublications(input: {
   benchmarkBlendRuntimeParameter?: BenchmarkBlendRuntimeParameter | null
+  benchmark?: DurationBenchmarkRow | null
   coldStartDecision?: AlgorithmAssetColdStartRuntimeDecision | null
   coldStartBaselines?: AlgorithmAssetColdStartBaseline[]
   standardSeed?: Record<string, unknown> | null
@@ -516,6 +758,8 @@ function buildDurationSuggestionRuntimeArtifactPublications(input: {
       },
     })
   }
+
+  push(buildLearnedBenchmarkRuntimePublication(input.benchmark))
 
   if (input.benchmarkBlendRuntimeParameter?.p50P75BlendRatioPublicationKey) {
     push({
@@ -815,7 +1059,7 @@ function buildRuntimeGuardSuggestion(
 }
 
 function readSeedDurationContributionMode(seed: Record<string, unknown>) {
-  return normalizeDurationContributionMode(seed.durationContributionMode ?? seed.duration_contribution_mode)
+  return resolveDurationContributionModeFromResolver(seed.durationContributionMode ?? seed.duration_contribution_mode)
 }
 
 function buildDisplaySummary(suggestion: DurationSuggestion) {
@@ -987,26 +1231,7 @@ function buildBaselineMatchText(input: DurationSuggestionInput) {
     ...trustedMethodVariantCodes(input),
     ...trustedElementVariantCodes(input),
   ].map(normalizeId).filter(Boolean).join(' ').toLowerCase()
-  return expandTitleWeakStandardWorkSearchText(raw).toLowerCase()
-}
-
-function isMissingColumnError(error: unknown, columnName: string) {
-  const code = String((error as { code?: unknown } | null)?.code ?? '')
-  const message = String((error as Error | null | undefined)?.message ?? '').toLowerCase()
-  const column = columnName.toLowerCase()
-  return code === '42703' && (
-    message.includes(column)
-    || message.includes(`column "${column}"`)
-    || message.includes(`column ${column}`)
-  )
-}
-
-function isMissingCompanyColumnError(error: unknown) {
-  return isMissingColumnError(error, 'company_id')
-}
-
-function isMissingProjectColumnError(error: unknown) {
-  return isMissingColumnError(error, 'project_id')
+  return raw
 }
 
 async function resolveCompanyId(input: DurationSuggestionInput) {
@@ -1157,21 +1382,36 @@ function enrichDurationInputFromProjectGenerationFacts(input: DurationSuggestion
   }
 }
 
-async function loadSuggestionTaskContext(taskId: string | null): Promise<SuggestionTaskContextRow | null> {
-  if (!taskId) return null
+async function loadSuggestionTaskContext(
+  taskId: string | null,
+  projectId: string | null,
+): Promise<SuggestionTaskContextRow | null> {
+  if (!taskId || !projectId) return null
 
   const { data, error } = await (supabase as any)
     .from('tasks')
     .select('id, project_id, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, progress, template_node_id, engineering_category_id, wbs_node_type, standard_work_code, standard_work_name, engineering_object_id, building_object_id, basement_object_id, floor_object_id, physical_zone_object_id, functional_area_object_id, participant_unit_id, acceptance_required, material_required, planned_quantity, quantity_unit, standard_task_metadata, parent_id')
     .eq('id', taskId)
+    .eq('project_id', projectId)
     .maybeSingle()
 
   if (error) {
     logger.warn('[durationSuggestionService] failed to load task suggestion context', { taskId, error })
-    return null
+  } else if (data) {
+    return data as SuggestionTaskContextRow
   }
 
-  return (data ?? null) as SuggestionTaskContextRow | null
+  try {
+    const task = await getTask(taskId)
+    if (!task || normalizeId(task.project_id) !== projectId) return null
+    return task as SuggestionTaskContextRow
+  } catch (fallbackError) {
+    logger.warn('[durationSuggestionService] failed to load task suggestion context through task reader', {
+      taskId,
+      error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+    })
+    return null
+  }
 }
 
 function normalizeParentDurationBoundaryPolicy(value: unknown): ParentDurationBoundaryPolicy | null {
@@ -1341,8 +1581,11 @@ function resolvePackageChildRhythmWindowInputFromMetadata(metadata: Record<strin
   }
 }
 
-async function loadParentDurationBoundaryContext(parentTaskId: string | null): Promise<ParentDurationBoundaryContext | null> {
-  const parent = await loadSuggestionTaskContext(parentTaskId)
+async function loadParentDurationBoundaryContext(
+  parentTaskId: string | null,
+  projectId: string | null,
+): Promise<ParentDurationBoundaryContext | null> {
+  const parent = await loadSuggestionTaskContext(parentTaskId, projectId)
   return resolveParentDurationBoundaryFromRow(parent)
 }
 
@@ -1383,15 +1626,20 @@ async function loadEngineeringObjectFeatureProfile(
   }))
 }
 
-async function countChildTasks(taskId: string | null, explicitChildTaskCount?: number | null) {
+async function countChildTasks(
+  taskId: string | null,
+  projectId: string | null,
+  explicitChildTaskCount?: number | null,
+) {
   const explicit = Number(explicitChildTaskCount ?? 0)
   if (Number.isFinite(explicit) && explicit > 0) return Math.ceil(explicit)
-  if (!taskId) return null
+  if (!taskId || !projectId) return null
 
   const { data, error } = await (supabase as any)
     .from('tasks')
     .select('id')
     .eq('parent_id', taskId)
+    .eq('project_id', projectId)
     .not('status', 'in', '(deleted,cancelled,closed)')
 
   if (error || !Array.isArray(data)) return null
@@ -1400,7 +1648,8 @@ async function countChildTasks(taskId: string | null, explicitChildTaskCount?: n
 
 async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promise<DurationSuggestionInput> {
   const taskId = normalizeId(input.taskId)
-  const task = await loadSuggestionTaskContext(taskId)
+  const requestedProjectId = normalizeId(input.projectId)
+  const task = await loadSuggestionTaskContext(taskId, requestedProjectId)
   if (!task) return input
 
   const metadata = readMetadataObject(task.standard_task_metadata)
@@ -1409,7 +1658,7 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
     readNestedMetadata(metadata, 'featureProfile'),
     projectGenerationFactsToDurationFeatureProfile(taskProjectGenerationFacts),
   )
-  const projectId = normalizeId(input.projectId) || normalizeId(task.project_id)
+  const projectId = requestedProjectId || normalizeId(task.project_id)
   const objectFeatureProfile = await loadEngineeringObjectFeatureProfile(projectId, [
     input.engineeringObjectId ?? task.engineering_object_id,
     input.buildingObjectId ?? task.building_object_id,
@@ -1429,12 +1678,12 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
     : savedQuantity
       ? 'task_saved_quantity'
       : input.taskQuantitySource ?? null
-  const childTaskCount = await countChildTasks(taskId, input.childTaskCount)
+  const childTaskCount = await countChildTasks(taskId, projectId, input.childTaskCount)
   const savedParentBoundary = resolveChildDurationBoundaryFromMetadata(metadata)
   const savedPackageChildWindow = resolvePackageChildRhythmWindowInputFromMetadata(metadata)
   const parentBoundary = normalizeParentDurationBoundaryPolicy(input.parentDurationBoundaryPolicy)
     ? null
-    : savedParentBoundary ?? await loadParentDurationBoundaryContext(normalizeId(task.parent_id) || null)
+    : savedParentBoundary ?? await loadParentDurationBoundaryContext(normalizeId(task.parent_id) || null, projectId)
   const coveredBuildingIds = normalizeCodeArray(input.coveredBuildingIds).length > 0
     ? normalizeCodeArray(input.coveredBuildingIds)
     : readMetadataArray(metadata, 'coveredBuildingIds', 'covered_building_ids')
@@ -1495,53 +1744,52 @@ async function mergeSuggestionTaskContext(input: DurationSuggestionInput): Promi
   }
 }
 
-async function findBenchmark(benchKey: string, companyId: string | null): Promise<BenchmarkLookupResult> {
+async function findBenchmark(benchKey: string, companyId: string | null): Promise<DurationBenchmarkRow | null> {
   let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
+    .select('id, benchmark_version, p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, project_id, duration_day_basis, generated_at, source_window_start, source_as_of, metadata')
     .eq('benchmark_key', benchKey)
     .eq('is_current', true)
     .eq('is_active', true)
+    .is('project_id', null)
 
   query = companyId ? query.eq('company_id', companyId) : query.is('company_id', null)
 
   const { data, error } = await query.maybeSingle()
-  if (error) {
-    if (isMissingCompanyColumnError(error)) {
-      return { benchmark: null, missingCompanyColumn: true }
-    }
-    logger.warn('[durationSuggestionService] failed to query scoped benchmark', { error })
-    return { benchmark: null, missingCompanyColumn: false }
-  }
+  if (error) throw error
 
-  return { benchmark: (data ?? null) as DurationBenchmarkRow | null, missingCompanyColumn: false }
+  return (data ?? null) as DurationBenchmarkRow | null
 }
 
-async function findProjectBenchmark(benchKey: string, projectId: string | null): Promise<BenchmarkLookupResult> {
+async function findProjectBenchmark(
+  benchKey: string,
+  companyId: string | null,
+  projectId: string | null,
+): Promise<DurationBenchmarkRow | null> {
   const normalizedProjectId = normalizeId(projectId)
-  if (!normalizedProjectId) return { benchmark: null, missingCompanyColumn: false }
+  if (!normalizedProjectId) return null
 
-  const { data, error } = await (supabase as any)
+  let query = (supabase as any)
     .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
+    .select('id, benchmark_version, p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, project_id, duration_day_basis, generated_at, source_window_start, source_as_of, metadata')
     .eq('benchmark_key', benchKey)
     .eq('project_id', normalizedProjectId)
     .eq('is_current', true)
     .eq('is_active', true)
-    .maybeSingle()
 
-  if (error) {
-    if (isMissingProjectColumnError(error)) {
-      return { benchmark: null, missingCompanyColumn: false }
-    }
-    logger.warn('[durationSuggestionService] failed to query project benchmark', { error })
-    return { benchmark: null, missingCompanyColumn: false }
-  }
+  const normalizedCompanyId = normalizeId(companyId)
+  query = normalizedCompanyId ? query.eq('company_id', normalizedCompanyId) : query.is('company_id', null)
+  const { data, error } = await query.maybeSingle()
 
-  return {
-    benchmark: data ? { ...(data as DurationBenchmarkRow), project_id: normalizedProjectId } : null,
-    missingCompanyColumn: false,
-  }
+  if (error) throw error
+
+  return data
+    ? {
+        ...(data as DurationBenchmarkRow),
+        company_id: normalizedCompanyId || null,
+        project_id: normalizedProjectId,
+      }
+    : null
 }
 
 function isTemplateUsableForContext(
@@ -1559,23 +1807,6 @@ function isTemplateUsableForContext(
   return true
 }
 
-async function findLegacyBenchmark(benchKey: string) {
-  const { data, error } = await (supabase as any)
-    .from('duration_benchmarks')
-    .select('p50_days, p75_days, p80_days, mean_days, sample_count, variance, coefficient_of_variation, confidence_level, confidence_score, company_id, metadata')
-    .eq('benchmark_key', benchKey)
-    .eq('is_current', true)
-    .eq('is_active', true)
-    .maybeSingle()
-
-  if (error) {
-    logger.warn('[durationSuggestionService] failed to query legacy benchmark', { error })
-    return null
-  }
-
-  return (data ?? null) as DurationBenchmarkRow | null
-}
-
 function isBenchmarkCandidateScopeConsistent(
   benchmark: DurationBenchmarkRow,
   scope: BenchmarkScope,
@@ -1587,15 +1818,187 @@ function isBenchmarkCandidateScopeConsistent(
   const inputProjectId = normalizeId(input.projectId)
 
   if (scope === 'project') {
-    return Boolean(inputProjectId) && rowProjectId === inputProjectId
+    return Boolean(inputProjectId)
+      && rowProjectId === inputProjectId
+      && Boolean(companyId)
+      && rowCompanyId === companyId
   }
   if (scope === 'company') {
     return Boolean(companyId) && rowCompanyId === companyId && !rowProjectId
   }
-  if (scope === 'system') {
-    return !rowCompanyId && !rowProjectId
+  if (scope === 'industry') {
+    return !rowCompanyId
+      && !rowProjectId
+      && normalizeId((benchmark as any).__durationLearningScope) === 'industry'
+  }
+  if (scope === 'global') {
+    const runtimeScope = normalizeId((benchmark as any).__durationLearningScope)
+    return !rowCompanyId && !rowProjectId && (!runtimeScope || runtimeScope === 'global')
   }
   return isTemplateUsableForContext(benchmark, input, companyId)
+}
+
+const STRICT_RFC3339_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/
+
+function readRuntimeTimestamp(value: unknown) {
+  if (typeof value !== 'string') return null
+  const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(value)
+  if (!match) return null
+
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fractionText = '', timezoneText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const millisecond = Number(`${fractionText}000`.slice(0, 3))
+  if (month < 1 || month > 12) return null
+  if (day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return null
+  if (timezoneText.startsWith('+14:') || timezoneText.startsWith('-14:')) {
+    if (!timezoneText.endsWith(':00')) return null
+  }
+
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.getTime())) return null
+  const localShape = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond))
+  if (
+    localShape.getUTCFullYear() !== year
+    || localShape.getUTCMonth() !== month - 1
+    || localShape.getUTCDate() !== day
+    || localShape.getUTCHours() !== hour
+    || localShape.getUTCMinutes() !== minute
+    || localShape.getUTCSeconds() !== second
+  ) return null
+
+  return parsed.toISOString()
+}
+
+function readRuntimeList(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : []
+}
+
+export function buildDurationBenchmarkRowFromRuntimePublication(input: {
+  publicationKey: string
+  selectionBasis: string
+  publication: {
+    runtimePayload: Record<string, unknown>
+    companyId: string | null
+    projectId: string | null
+    industryKey?: string | null
+    publicationStage: string
+    scopeLevel?: string
+  }
+}): DurationBenchmarkRow | null {
+  const payload = input.publication.runtimePayload
+  const benchmarkKind = normalizeId(payload.benchmarkKind ?? payload.benchmark_kind)
+  const causeApplicability = normalizeId(payload.causeApplicability ?? payload.cause_applicability)
+  const scopeLevel = normalizeId(input.publication.scopeLevel)
+  const aggregateProvenance = readMetadataObject(payload.aggregateProvenance ?? payload.aggregate_provenance)
+  const isAggregate = benchmarkKind === 'aggregate_all_cause'
+    && causeApplicability === 'all_cause'
+    && scopeLevel !== 'project'
+  const benchmarkId = normalizeId(payload.benchmarkId ?? payload.benchmark_id)
+  const benchmarkVersion = normalizeId(payload.benchmarkVersion ?? payload.benchmark_version)
+  const p50Days = readPositiveRawNumber(payload.p50Days ?? payload.p50_days)
+  const p75Days = readPositiveRawNumber(payload.p75Days ?? payload.p75_days)
+  const p80Days = readPositiveRawNumber(payload.p80Days ?? payload.p80_days)
+  const meanDays = readPositiveRawNumber(payload.meanDays ?? payload.mean_days)
+  const sampleCount = readPositiveNumber(payload.sampleCount ?? payload.sample_count)
+  const variance = readOptionalNonNegativeNumber(payload.variance)
+  const coefficientOfVariation = readOptionalNonNegativeNumber(
+    payload.coefficientOfVariation ?? payload.coefficient_of_variation,
+  )
+  const confidenceLevel = normalizeId(payload.confidenceLevel ?? payload.confidence_level)
+  const confidenceScore = readOptionalNonNegativeNumber(payload.confidenceScore ?? payload.confidence_score)
+  const durationDayBasis = normalizeId(payload.durationDayBasis ?? payload.duration_day_basis)
+  const calendarRef = normalizeId(payload.calendarRef ?? payload.calendar_ref)
+  const calendarVersion = normalizeId(payload.calendarVersion ?? payload.calendar_version)
+  const generatedAt = readRuntimeTimestamp(payload.generatedAt ?? payload.generated_at)
+  const sourceWindowStart = readRuntimeTimestamp(payload.sourceWindowStart ?? payload.source_window_start)
+  const sourceAsOf = readRuntimeTimestamp(payload.sourceAsOf ?? payload.source_as_of)
+  const aggregateCalendarIdentities = readRuntimeList(
+    aggregateProvenance.calendarIdentities ?? aggregateProvenance.calendar_identities,
+  ).map(readMetadataObject)
+  const companyId = normalizeId(input.publication.companyId)
+  const projectId = normalizeId(input.publication.projectId)
+  const industryKey = normalizeId(input.publication.industryKey)
+  const runtimeScope: DurationLearningRuntimeScope | null = scopeLevel === 'project'
+    ? companyId && projectId && !industryKey
+      ? { level: 'project', companyId, projectId }
+      : null
+    : scopeLevel === 'company'
+      ? companyId && !projectId && !industryKey
+        ? { level: 'company', companyId }
+        : null
+      : scopeLevel === 'industry'
+        ? industryKey && !companyId && !projectId
+          ? { level: 'industry', industryKey }
+          : null
+        : scopeLevel === 'global' && !companyId && !projectId && !industryKey
+          ? { level: 'global' }
+          : null
+  const aggregateContractValid = isAggregate
+    && DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(scopeLevel as DurationLearningRuntimeScope['level'])
+    && normalizeId(aggregateProvenance.schemaVersion ?? aggregateProvenance.schema_version) === 'duration-benchmark-aggregate/v1'
+    && normalizeId(aggregateProvenance.scopeLevel ?? aggregateProvenance.scope_level) === scopeLevel
+    && readRuntimeList(aggregateProvenance.sourceBenchmarkIds ?? aggregateProvenance.source_benchmark_ids).length > 0
+    && readRuntimeList(aggregateProvenance.sourceBenchmarkVersions ?? aggregateProvenance.source_benchmark_versions).length > 0
+    && readRuntimeList(aggregateProvenance.sourceProjectIds ?? aggregateProvenance.source_project_ids).length > 0
+    && aggregateCalendarIdentities.length > 0
+    && aggregateCalendarIdentities.every((identity) => (
+      Boolean(normalizeId(identity.calendarRef ?? identity.calendar_ref))
+      && Boolean(normalizeId(identity.calendarVersion ?? identity.calendar_version))
+    ))
+  if (
+    !runtimeScope
+    || durationLearningBenchmarkRuntimeVersionReasons(payload, runtimeScope).length > 0
+    || !benchmarkVersion
+    || (!benchmarkId && !aggregateContractValid) || !p50Days || !p75Days || !p80Days || !meanDays || !sampleCount
+    || variance === null || coefficientOfVariation === null
+    || !confidenceLevel || confidenceScore === null
+    || durationDayBasis !== 'construction_production_day'
+    || (!aggregateContractValid && (!calendarRef || !calendarVersion))
+    || !generatedAt || !sourceWindowStart || !sourceAsOf
+    || (aggregateContractValid && Boolean(benchmarkId))
+  ) return null
+  return {
+    id: aggregateContractValid ? null : benchmarkId,
+    benchmark_version: benchmarkVersion,
+    p50_days: p50Days,
+    p75_days: p75Days,
+    p80_days: p80Days,
+    mean_days: meanDays,
+    sample_count: sampleCount,
+    variance,
+    coefficient_of_variation: coefficientOfVariation,
+    confidence_level: confidenceLevel as DurationBenchmarkRow['confidence_level'],
+    confidence_score: confidenceScore,
+    company_id: companyId || null,
+    project_id: projectId || null,
+    generated_at: generatedAt,
+    source_window_start: sourceWindowStart,
+    source_as_of: sourceAsOf,
+    duration_day_basis: 'construction_production_day',
+    metadata: {
+      source: 'duration_learning_runtime_publication',
+      publication_key: input.publicationKey,
+      benchmark_provenance: aggregateContractValid ? 'aggregate_all_cause' : 'exact_project_candidate',
+      ...(aggregateContractValid
+        ? { aggregate_provenance: aggregateProvenance }
+        : { calendar_ref: calendarRef, calendar_version: calendarVersion }),
+    },
+    __durationLearningPublicationKey: input.publicationKey,
+    __durationLearningPublicationStage: input.publication.publicationStage,
+    __durationLearningSelectionBasis: input.selectionBasis,
+    __durationLearningScope: scopeLevel as DurationLearningRuntimeScope['level'],
+    __durationLearningAggregateCalendarIdentities: aggregateCalendarIdentities
+      .map((identity) => ({
+        calendarRef: normalizeId(identity.calendarRef ?? identity.calendar_ref),
+        calendarVersion: normalizeId(identity.calendarVersion ?? identity.calendar_version),
+      }))
+      .filter((identity) => identity.calendarRef && identity.calendarVersion),
+  }
 }
 
 async function collectBenchmarkCandidates(params: {
@@ -1604,13 +2007,16 @@ async function collectBenchmarkCandidates(params: {
   input: DurationSuggestionInput
   companyId: string | null
 }): Promise<DurationBenchmarkCandidate[]> {
+  const candidates: DurationBenchmarkCandidate[] = []
+  const occupiedScopes = new Set<BenchmarkScope>()
   for (const contextKey of buildBenchmarkContextKeys(params.input)) {
     const benchKey = [params.benchmarkIdentity, params.wbsNodeType, contextKey].join(':')
     const specificity = benchmarkContextSpecificity(contextKey)
-    const candidates: DurationBenchmarkCandidate[] = []
 
     const addCandidate = (benchmark: DurationBenchmarkRow | null, scope: BenchmarkScope) => {
+      if (occupiedScopes.has(scope)) return
       if (!benchmark || !isBenchmarkCandidateScopeConsistent(benchmark, scope, params.input, params.companyId)) return
+      if (resolveDurationDayBasis(benchmark as Record<string, unknown>) !== 'construction_production_day') return
       const sampleSize = Number(benchmark.sample_count ?? 0)
       if (!isBenchmarkCandidateUsable(scope, sampleSize, specificity)) return
       candidates.push({
@@ -1621,30 +2027,183 @@ async function collectBenchmarkCandidates(params: {
         sampleSize,
         specificity,
       })
+      occupiedScopes.add(scope)
     }
 
-    const projectBenchmark = await findProjectBenchmark(benchKey, params.input.projectId ?? null)
-    addCandidate(projectBenchmark.benchmark, 'project')
-
-    if (params.companyId) {
-      const companyBenchmark = await findBenchmark(benchKey, params.companyId)
-      if (companyBenchmark.missingCompanyColumn) {
-        addCandidate(await findLegacyBenchmark(benchKey), 'legacy')
-      } else {
-        addCandidate(companyBenchmark.benchmark, 'company')
+    const queryExec = createDurationLearningRuntimeQueryExec(params.input)
+    if (queryExec) {
+      const resolution = await resolveDurationLearningRuntimePublication({
+        queryExec,
+        assetKey: 'base_duration_benchmark',
+        artifactKey: benchKey,
+        companyId: params.companyId,
+        projectId: params.input.projectId,
+        industryKey: params.input.projectTypeCode,
+      })
+      if (resolution.runtimeConsumable && resolution.publication) {
+        const scope = resolution.publication.scopeLevel
+        if (DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(scope as DurationLearningRuntimeScope['level'])) {
+          addCandidate(buildDurationBenchmarkRowFromRuntimePublication({
+            publicationKey: resolution.publicationKey,
+            selectionBasis: resolution.selectionBasis,
+            publication: resolution.publication,
+          }), scope as DurationLearningRuntimeScope['level'])
+        }
       }
     }
 
-    const systemBenchmark = await findBenchmark(benchKey, null)
-    if (systemBenchmark.missingCompanyColumn) {
-      addCandidate(await findLegacyBenchmark(benchKey), 'legacy')
-    } else {
-      addCandidate(systemBenchmark.benchmark, 'system')
+    if (!occupiedScopes.has('project')) {
+      addCandidate(await findProjectBenchmark(benchKey, params.companyId, params.input.projectId ?? null), 'project')
     }
 
-    if (candidates.length > 0) return candidates
+    if (params.companyId && !occupiedScopes.has('company')) {
+      addCandidate(await findBenchmark(benchKey, params.companyId), 'company')
+    }
+
+    if (!occupiedScopes.has('global')) {
+      addCandidate(await findBenchmark(benchKey, null), 'global')
+    }
+
   }
-  return []
+  return candidates.sort((left, right) => (
+    BENCHMARK_SCOPE_PRIORITY[left.scope] - BENCHMARK_SCOPE_PRIORITY[right.scope]
+    || left.contextKey.localeCompare(right.contextKey)
+    || left.benchKey.localeCompare(right.benchKey)
+  ))
+}
+
+function benchmarkRowFromCauseSegment(
+  benchmark: DurationBenchmarkRow,
+  segment: DurationBenchmarkCauseSegment,
+): DurationBenchmarkRow {
+  const coefficientOfVariation = segment.variance !== null
+    && Number.isFinite(segment.variance)
+    && segment.variance >= 0
+    && segment.meanDays !== null
+    && Number.isFinite(segment.meanDays)
+    && segment.meanDays > 0
+    ? Math.sqrt(segment.variance) / segment.meanDays
+    : null
+  return {
+    ...benchmark,
+    p50_days: segment.p50Days,
+    p75_days: segment.p75Days,
+    p80_days: segment.p80Days,
+    mean_days: segment.meanDays,
+    sample_count: segment.sampleCount,
+    variance: segment.variance,
+    coefficient_of_variation: coefficientOfVariation,
+    company_id: segment.companyId,
+    project_id: segment.projectId,
+    duration_day_basis: segment.durationDayBasis,
+    generated_at: segment.generatedAt,
+    source_window_start: segment.sourceWindowStart,
+    source_as_of: segment.sourceAsOf,
+    metadata: {
+      ...readMetadataObject(benchmark.metadata),
+      calendar_ref: segment.calendarRef,
+      calendar_version: segment.calendarVersion,
+    },
+    __durationLearningCauseSegment: {
+      causeCode: segment.causeCode,
+      taxonomyVersion: segment.taxonomyVersion,
+      calendarRef: segment.calendarRef,
+      calendarVersion: segment.calendarVersion,
+    },
+  }
+}
+
+export async function selectCauseAwareBenchmarkCandidates(
+  candidates: DurationBenchmarkCandidate[],
+  authorityInput: TaskStructuredCauseAuthority | StructuredCauseCode | null | undefined,
+  queryExec: DurationBenchmarkCauseSegmentQueryExec = executeDurationLearningRuntimePublicationQuery,
+) {
+  const authorityState: TaskStructuredCauseAuthority = typeof authorityInput === 'string'
+    ? {
+          state: 'confirmed',
+          causeCode: authorityInput,
+          taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+          reasonCodes: [],
+        }
+    : authorityInput ?? {
+          state: 'no_cause',
+          causeCode: null,
+          taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+          reasonCodes: [],
+        }
+  if (authorityState.state === 'review_required' || authorityState.state === 'unavailable') {
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null as DurationBenchmarkCauseSegment | null,
+      fallback: null as 'all_cause' | null,
+      selection: authorityState.state === 'review_required'
+        ? 'cause_authority_review_required' as const
+        : 'cause_authority_unavailable' as const,
+    }
+  }
+  const confirmedCauseCode = authorityState.state === 'confirmed' ? authorityState.causeCode : null
+  const primary = candidates[0] ?? null
+  if (!confirmedCauseCode || !primary) {
+    return {
+      candidates,
+      segment: null as DurationBenchmarkCauseSegment | null,
+      fallback: null as 'all_cause' | null,
+      selection: confirmedCauseCode ? 'all_cause_fallback' as const : 'no_confirmed_cause' as const,
+    }
+  }
+
+  const benchmarkId = normalizeId(primary.benchmark.id)
+  const benchmarkMetadata = readMetadataObject(primary.benchmark.metadata)
+  if (normalizeId(benchmarkMetadata.benchmark_provenance) === 'aggregate_all_cause') {
+    return {
+      candidates,
+      segment: null,
+      fallback: 'all_cause' as const,
+      selection: 'all_cause_fallback' as const,
+    }
+  }
+  if (!benchmarkId) {
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null,
+      fallback: null,
+      selection: 'cause_segment_read_failed' as const,
+    }
+  }
+
+  try {
+    const segment = await loadCurrentCauseSegment({
+      benchmarkId,
+      causeCode: confirmedCauseCode,
+      companyId: normalizeId(primary.benchmark.company_id) || null,
+      projectId: normalizeId(primary.benchmark.project_id) || null,
+    }, queryExec)
+    if (
+      !segment
+      || !readPositiveNumber(segment.p50Days)
+      || !isBenchmarkCandidateUsable(primary.scope, segment.sampleCount, primary.specificity)
+    ) {
+      return { candidates, segment: null, fallback: 'all_cause' as const, selection: 'all_cause_fallback' as const }
+    }
+    const exactCandidate: DurationBenchmarkCandidate = {
+      ...primary,
+      benchmark: benchmarkRowFromCauseSegment(primary.benchmark, segment),
+      sampleSize: segment.sampleCount,
+    }
+    return { candidates: [exactCandidate], segment, fallback: null, selection: 'exact_cause' as const }
+  } catch (error) {
+    logger.warn('[durationSuggestionService] failed to load exact benchmark cause segment', {
+      benchmarkId,
+      confirmedCauseCode,
+      error,
+    })
+    return {
+      candidates: [] as DurationBenchmarkCandidate[],
+      segment: null,
+      fallback: null,
+      selection: 'cause_segment_read_failed' as const,
+    }
+  }
 }
 
 async function findDurationOverride(input: {
@@ -1664,7 +2223,7 @@ async function findDurationOverride(input: {
       .maybeSingle()
 
     if (error) {
-      logger.warn('[durationSuggestionService] failed to query project duration override', { error })
+      throw error
     } else if (data) {
       return data as DurationOverrideRow
     }
@@ -1681,9 +2240,7 @@ async function findDurationOverride(input: {
       .maybeSingle()
 
     if (error) {
-      if (!isMissingCompanyColumnError(error)) {
-        logger.warn('[durationSuggestionService] failed to query company duration override', { error })
-      }
+      throw error
     } else if (data) {
       return data as DurationOverrideRow
     }
@@ -1699,19 +2256,7 @@ async function findDurationOverride(input: {
     .maybeSingle()
 
   if (error) {
-    if (isMissingCompanyColumnError(error)) {
-      const fallback = await (supabase as any)
-        .from('duration_suggestion_overrides')
-        .select(overrideColumns)
-        .eq('template_node_id', input.templateNodeId)
-        .eq('override_status', 'active')
-        .is('project_id', null)
-        .maybeSingle()
-      return (fallback.data ?? null) as DurationOverrideRow | null
-    }
-
-    logger.warn('[durationSuggestionService] failed to query global duration override', { error })
-    return null
+    throw error
   }
 
   return (data ?? null) as DurationOverrideRow | null
@@ -2109,12 +2654,12 @@ function appendScaleConfidenceSignals(
   ]
 }
 
-function resolveScaleAdjustment(
+async function resolveScaleAdjustment(
   input: DurationSuggestionInput,
   baseDays: number | null,
   seedPayload?: Record<string, any> | null,
   factorSummary?: DurationContextSummary | null,
-): DurationScaleAdjustment {
+): Promise<DurationScaleAdjustment> {
   const days = readPositiveNumber(baseDays)
   const fixedDays = resolveScaleFixedDays(days, seedPayload)
   const variableDays = Math.max(0, Number(seedPayload?.variableDays ?? seedPayload?.variable_days ?? (days ? Math.max(0, days - fixedDays) : 0)))
@@ -2206,7 +2751,16 @@ function resolveScaleAdjustment(
 
   const coverage = coverageScaleFactor(input, seedPayload, factorSummary)
   const child = childTaskScaleFactor(input.childTaskCount)
-  const title = inferTitleWeakScaleSignal(buildBaselineMatchText(input))
+  const title = await inferTitleWeakScaleSignalFromResolver(buildBaselineMatchText(input), {
+    projectId: input.projectId,
+    companyId: input.companyId,
+    standardWorkCode: input.standardWorkCode,
+    templateNodeId: input.templateNodeId,
+    projectTypeCode: input.projectTypeCode,
+    structureTypeCode: input.structureTypeCode,
+    methodVariantCodes: trustedMethodVariantCodes(input),
+    elementVariantCodes: trustedElementVariantCodes(input),
+  })
   const combinedScope = combineScopeScaleSignals(coverage, child)
   const candidates = [
     combinedScope,
@@ -2366,7 +2920,7 @@ function resolveDataMaturity(
     && Boolean(input.taskId && Number(input.progress ?? 0) > 0)
   const factorAvailability: Record<string, boolean> = {
     standard_classification: hasCoreClassification(input),
-    project_benchmark: evidenceScope === 'project' || evidenceScope === 'legacy'
+    project_benchmark: evidenceScope === 'project'
       ? sampleSize >= 5
       : evidenceScope === 'unknown' && sampleSize >= 5,
     company_benchmark: evidenceScope === 'company' ? sampleSize >= 15 : sampleSize >= 50,
@@ -2449,7 +3003,7 @@ function isBenchmarkCandidateUsable(
   sampleSize: number,
   specificity: 'all' | 'specific',
 ) {
-  if (scope === 'project' || scope === 'company' || scope === 'legacy') return sampleSize >= 5
+  if (scope === 'project' || scope === 'company') return sampleSize >= 5
   return specificity === 'all' ? sampleSize >= 100 : sampleSize >= 50
 }
 
@@ -2517,7 +3071,7 @@ function benchmarkReferenceFromP50P75(
 function readBenchmarkMetadataNumber(benchmark: DurationBenchmarkRow | null | undefined, ...keys: string[]) {
   const metadata = readMetadataObject(benchmark?.metadata)
   for (const key of keys) {
-    const value = readPositiveRawNumber((benchmark as any)?.[key] ?? metadata[key])
+    const value = readOptionalNonNegativeNumber((benchmark as any)?.[key] ?? metadata[key])
     if (value !== null) return value
   }
   return null
@@ -2700,38 +3254,309 @@ function blendBenchmarkCandidates(
   }
 }
 
+const BENCHMARK_SCOPE_PRIORITY: Record<BenchmarkScope, number> = {
+  project: 0,
+  company: 1,
+  industry: 2,
+  global: 3,
+}
+
+function normalizeAggregateCalendarIdentities(value: unknown) {
+  const identities = Array.isArray(value) ? value : []
+  return [...new Map(identities.map((value) => {
+    const identity = readMetadataObject(value)
+    const calendarRef = normalizeId(identity.calendarRef ?? identity.calendar_ref)
+    const calendarVersion = normalizeId(identity.calendarVersion ?? identity.calendar_version)
+    return [`${calendarRef}\u0000${calendarVersion}`, { calendarRef, calendarVersion }] as const
+  }).filter(([, identity]) => Boolean(identity.calendarRef && identity.calendarVersion))).values()]
+    .sort((left, right) => (
+      left.calendarRef.localeCompare(right.calendarRef)
+      || left.calendarVersion.localeCompare(right.calendarVersion)
+    ))
+}
+
+function buildBenchmarkProvenanceEntry(
+  candidate: DurationBenchmarkCandidate,
+  blendWeight: number | null,
+  blendWeightRequired = false,
+): BenchmarkProvenanceEntry {
+  const benchmark = candidate.benchmark
+  const metadata = readMetadataObject(benchmark.metadata)
+  const causeSegment = benchmark.__durationLearningCauseSegment ?? null
+  const source: BenchmarkProvenanceEntry['source'] = causeSegment
+    ? 'cause_segment'
+    : normalizeId(benchmark.__durationLearningPublicationKey)
+      ? 'runtime_publication'
+      : 'persisted_benchmark'
+  const benchmarkId = normalizeId(benchmark.id) || null
+  const publicationKey = normalizeId(benchmark.__durationLearningPublicationKey) || null
+  const benchmarkVersion = normalizeId(benchmark.benchmark_version) || null
+  const scope = DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(candidate.scope)
+    ? candidate.scope
+    : null
+  const generatedAt = readRuntimeTimestamp(benchmark.generated_at)
+  const sourceAsOf = readRuntimeTimestamp(benchmark.source_as_of)
+  const sourceWindowStart = readRuntimeTimestamp(benchmark.source_window_start)
+  const sampleCount = readPositiveNumber(benchmark.sample_count)
+  const dayBasis = benchmark.duration_day_basis === 'construction_production_day'
+    ? 'construction_production_day'
+    : null
+  const calendarRef = normalizeId(
+    causeSegment?.calendarRef
+    ?? metadata.calendar_ref
+    ?? metadata.calendarRef
+    ?? metadata.construction_calendar_ref
+    ?? metadata.constructionCalendarRef,
+  ) || null
+  const calendarVersion = normalizeId(
+    causeSegment?.calendarVersion
+    ?? metadata.calendar_version
+    ?? metadata.calendarVersion
+    ?? metadata.construction_calendar_version
+    ?? metadata.constructionCalendarVersion,
+  ) || null
+  const aggregateCalendarIdentities = normalizeAggregateCalendarIdentities(
+    benchmark.__durationLearningAggregateCalendarIdentities
+    ?? readMetadataObject(metadata.aggregate_provenance ?? metadata.aggregateProvenance).calendarIdentities
+    ?? readMetadataObject(metadata.aggregate_provenance ?? metadata.aggregateProvenance).calendar_identities,
+  )
+  const normalizedCauseCode = normalizeId(causeSegment?.causeCode)
+  const normalizedTaxonomyVersion = normalizeId(causeSegment?.taxonomyVersion)
+  const entryCauseSegment = normalizedCauseCode && normalizedTaxonomyVersion
+    ? {
+        causeCode: normalizedCauseCode as StructuredCauseCode,
+        taxonomyVersion: normalizedTaxonomyVersion,
+      }
+    : null
+  const sourceIdentityAvailable = source === 'runtime_publication'
+    ? Boolean(publicationKey)
+    : Boolean(benchmarkId)
+  const reasonCodes = [
+    ...(sourceIdentityAvailable ? [] : ['benchmark_provenance_missing']),
+    ...(benchmarkVersion ? [] : ['benchmark_version_missing']),
+    ...(generatedAt ? [] : ['benchmark_generated_at_missing']),
+    ...(sourceAsOf ? [] : ['benchmark_source_as_of_missing']),
+    ...(sourceWindowStart ? [] : ['benchmark_source_window_start_missing']),
+    ...(sampleCount ? [] : ['benchmark_sample_count_invalid']),
+    ...(dayBasis ? [] : ['benchmark_day_basis_unavailable']),
+    ...(scope ? [] : ['benchmark_scope_unavailable']),
+    ...(calendarRef && calendarVersion || aggregateCalendarIdentities.length > 0
+      ? []
+      : ['benchmark_calendar_identity_missing']),
+    ...(source !== 'runtime_publication' || publicationKey
+      ? []
+      : ['benchmark_runtime_publication_key_missing']),
+    ...(source !== 'cause_segment' || entryCauseSegment
+      ? []
+      : ['benchmark_cause_identity_missing']),
+    ...(!blendWeightRequired && blendWeight === null
+      || Number.isFinite(blendWeight) && blendWeight > 0 && blendWeight <= 1
+      ? []
+      : ['benchmark_blend_weight_invalid']),
+  ] as BenchmarkProvenanceReasonCode[]
+  const uniqueReasonCodes = [...new Set(reasonCodes)].sort() as BenchmarkProvenanceReasonCode[]
+  return {
+    source,
+    benchmarkId,
+    publicationKey,
+    benchmarkVersion,
+    scope,
+    generatedAt,
+    sourceAsOf,
+    sourceWindowStart,
+    sampleCount,
+    dayBasis,
+    calendarRef,
+    calendarVersion,
+    aggregateCalendarIdentities,
+    causeSegment: entryCauseSegment,
+    blendWeight,
+    availability: uniqueReasonCodes.length === 0 ? 'available' : 'unavailable',
+    reasonCodes: uniqueReasonCodes,
+  }
+}
+
+function partitionBenchmarkCandidatesByProvenance(candidates: DurationBenchmarkCandidate[]) {
+  const admissible: DurationBenchmarkCandidate[] = []
+  const rejected: DurationBenchmarkCandidate[] = []
+  for (const candidate of candidates) {
+    const provenance = buildBenchmarkProvenanceEntry(candidate, null, false)
+    if (provenance.availability === 'available') admissible.push(candidate)
+    else rejected.push(candidate)
+  }
+  return { admissible, rejected }
+}
+
+function buildBenchmarkProvenance(
+  candidates: readonly (DurationBenchmarkCandidate & { weight?: number })[],
+) {
+  const isBlended = candidates.length > 1
+  const rawWeightSum = isBlended
+    ? candidates.reduce((sum, candidate) => sum + Math.max(0, Number(candidate.weight ?? 0)), 0)
+    : 0
+  const entries = candidates
+    .map((candidate) => buildBenchmarkProvenanceEntry(
+      candidate,
+      isBlended && rawWeightSum > 0 ? Math.max(0, Number(candidate.weight ?? 0)) / rawWeightSum : null,
+      isBlended,
+    ))
+    .sort((left, right) => (
+      (right.blendWeight ?? 0) - (left.blendWeight ?? 0)
+      || BENCHMARK_SCOPE_PRIORITY[left.scope ?? 'global'] - BENCHMARK_SCOPE_PRIORITY[right.scope ?? 'global']
+      || `${left.benchmarkId ?? ''}:${left.publicationKey ?? ''}`.localeCompare(
+        `${right.benchmarkId ?? ''}:${right.publicationKey ?? ''}`,
+      )
+    ))
+  const reasonCodes: BenchmarkProvenanceReasonCode[] = entries.length === 0
+    ? (['benchmark_provenance_missing'] as BenchmarkProvenanceReasonCode[])
+    : ([...new Set(entries.flatMap((entry) => entry.reasonCodes))].sort() as BenchmarkProvenanceReasonCode[])
+  const availableCount = entries.filter((entry) => entry.availability === 'available').length
+  const availability: 'available' | 'partial' | 'unavailable' = entries.length === 0 || availableCount === 0
+    ? 'unavailable'
+    : availableCount === entries.length
+      ? 'available'
+      : 'partial'
+  const available = availability === 'available'
+  const timestamps = (key: 'generatedAt' | 'sourceAsOf' | 'sourceWindowStart') => entries
+    .map((entry) => entry[key])
+    .filter((value): value is string => Boolean(value))
+    .sort()
+  const scopes = [...new Set(entries.map((entry) => entry.scope).filter((scope): scope is BenchmarkScope => Boolean(scope)))]
+  return {
+    benchmarkProvenance: {
+      mode: isBlended ? 'blended' : 'single',
+      entries,
+    } satisfies BenchmarkProvenanceSet,
+    benchmarkProvenanceAvailability: availability,
+    benchmarkProvenanceReasonCodes: reasonCodes,
+    benchmarkProvenanceUnavailableReason: reasonCodes[0] ?? null,
+    benchmarkGeneratedAt: available ? timestamps('generatedAt').at(-1) ?? null : null,
+    benchmarkAsOf: available ? timestamps('sourceAsOf')[0] ?? null : null,
+    benchmarkWindowStart: available ? timestamps('sourceWindowStart')[0] ?? null : null,
+    benchmarkVersion: available && !isBlended ? entries[0]?.benchmarkVersion ?? null : null,
+    benchmarkSampleCount: available
+      ? entries.reduce((sum, entry) => sum + Number(entry.sampleCount ?? 0), 0)
+      : null,
+    benchmarkDayBasis: available ? 'construction_production_day' as const : null,
+    benchmarkScope: available
+      ? scopes.length === 1 ? scopes[0] ?? null : 'mixed' as const
+      : null,
+  }
+}
+
+function resolveBenchmarkRiskCalendar(
+  provenance: BenchmarkProvenanceSet,
+  workCalendar: ConstructionCalendarContext | null | undefined,
+): ConstructionCalendarContext {
+  const identities = provenance.entries.flatMap((entry) => (
+    entry.calendarRef && entry.calendarVersion
+      ? [{ calendarRef: entry.calendarRef, calendarVersion: entry.calendarVersion }]
+      : entry.aggregateCalendarIdentities
+  ))
+  const uniqueIdentities = [...new Map(identities.map((identity) => [
+    `${identity.calendarRef}\u0000${identity.calendarVersion}`,
+    identity,
+  ])).values()]
+  if (uniqueIdentities.length !== 1) {
+    return {
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: workCalendar?.timezone ?? DEFAULT_DURATION_TIMEZONE,
+      availability: 'unavailable',
+      unavailableReason: uniqueIdentities.length > 1
+        ? 'benchmark_calendar_identity_ambiguous'
+        : 'benchmark_calendar_identity_missing',
+    }
+  }
+  return {
+    basis: 'official_construction_calendar_seed',
+    windows: [],
+    calendarRef: uniqueIdentities[0].calendarRef,
+    calendarVersion: uniqueIdentities[0].calendarVersion,
+    timezone: workCalendar?.timezone ?? DEFAULT_DURATION_TIMEZONE,
+    availability: 'available',
+    unavailableReason: null,
+  }
+}
+
 async function loadBenchmarkBlendRuntimeParameter(
   companyId: string | null | undefined,
   projectId: string | null | undefined,
+  trafficSubjectKey?: string | null,
 ): Promise<BenchmarkBlendRuntimeParameter | null> {
   if (!companyId) return null
   let benchmarkWeight: BenchmarkBlendRuntimeParameter | null = null
+  const registered = getAlgorithmAssetLearnableParameter('duration.benchmark_blend_weight')
+  const deterministicValue = typeof registered?.currentValue === 'number' ? registered.currentValue : 0.55
   try {
-    const result = await loadAlgorithmAssetLearnableParameterRuntimeValue({
+    const canary = await resolveDurationContextPolicyRuntimeSelection({
       parameterKey: 'duration.benchmark_blend_weight',
+      deterministicValue,
       companyId,
       projectId: projectId ?? null,
+      consumptionMode: 'canary',
+      canaryRuntimeBoundary: {
+        consumerKey: 'durationSuggestionService.company_benchmark_blend',
+        scopeBoundary: projectId ? 'project' : 'company',
+        stopConditionKeys: [
+          'duration_benchmark_blend_overcompensation_rate',
+          'duration_benchmark_blend_mae_regression',
+          'duration_benchmark_blend_scope_drift',
+        ],
+        monitoringWindowHours: 72,
+        trafficSubjectKey: normalizeId(trafficSubjectKey) || normalizeId(projectId),
+      },
     })
     if (
-      result.runtimeConsumable
-      && typeof result.runtimeValue === 'number'
-      && Number.isFinite(result.runtimeValue)
-      && result.runtimeValue >= 0
-      && result.runtimeValue <= 1
+      canary.runtimeApplied
+      && Number.isFinite(canary.selectedValue)
+      && canary.selectedValue >= 0
+      && canary.selectedValue <= 1
     ) {
       benchmarkWeight = {
-        weight: result.runtimeValue,
-        publicationKey: result.publicationKey,
-        publicationStatus: result.publicationStatus,
-        scopeLevel: result.scopeLevel,
+        weight: canary.selectedValue,
+        publicationKey: canary.publicationKey,
+        publicationStatus: canary.publicationStatus,
+        scopeLevel: canary.scopeLevel,
       }
     }
   } catch (error) {
-    logger.warn('[durationSuggestionService] failed to load learnable benchmark blend parameter', {
+    logger.warn('[durationSuggestionService] failed to load canary benchmark blend parameter', {
       companyId,
       projectId,
       error,
     })
+  }
+  if (!benchmarkWeight) {
+    try {
+      const stable = await resolveDurationContextPolicyRuntimeSelection({
+        parameterKey: 'duration.benchmark_blend_weight',
+        deterministicValue,
+        companyId,
+        projectId: projectId ?? null,
+      })
+      if (
+        stable.runtimeApplied
+        && Number.isFinite(stable.selectedValue)
+        && stable.selectedValue >= 0
+        && stable.selectedValue <= 1
+      ) {
+        benchmarkWeight = {
+          weight: stable.selectedValue,
+          publicationKey: stable.publicationKey,
+          publicationStatus: stable.publicationStatus,
+          scopeLevel: stable.scopeLevel,
+        }
+      }
+    } catch (error) {
+      logger.warn('[durationSuggestionService] failed to load stable benchmark blend parameter', {
+        companyId,
+        projectId,
+        error,
+      })
+    }
   }
   if (!benchmarkWeight) return null
 
@@ -3230,12 +4055,13 @@ function withEstimatedPlannedEndDate(input: DurationSuggestionInput, baseDays: n
 }
 
 function calendarContextSummary(calendar?: ConstructionCalendarContext | null) {
-  const hasOfficialCalendar = calendar?.basis === 'official_construction_calendar_seed'
+  const hasOfficialCalendar = isAuthoritativeConstructionCalendar(calendar)
+  const windows = hasOfficialCalendar ? calendar.windows : []
   return {
     basis: hasOfficialCalendar ? 'official_construction_calendar_seed' : 'calendar_day_no_shutdown_context',
     rawBasis: calendar?.basis ?? 'calendar_day',
-    windowCount: calendar?.windows.length ?? 0,
-    shutdownWindowCount: calendar?.windows.filter((window) => {
+    windowCount: windows.length,
+    shutdownWindowCount: windows.filter((window) => {
       const flag = String(
         (window as Record<string, unknown>).countsAsConstructionShutdown
           ?? (window as Record<string, unknown>).counts_as_construction_shutdown
@@ -3279,6 +4105,400 @@ function withDurationCalendarContext(suggestion: DurationSuggestion, input: Dura
   }
 }
 
+function readT2RhythmScheduleCandidateContext(input: DurationSuggestionInput) {
+  const candidatePackage = input.t2RhythmScheduleCandidatePackage
+  if (candidatePackage?.source !== 't2_division_rhythm_schedule_candidate_package') return null
+  const compatibility = candidatePackage.compatibility
+  const priorityAdjudication = compatibility.priorityAdjudication
+  return {
+    source: candidatePackage.source,
+    tier: candidatePackage.tier,
+    status: candidatePackage.status,
+    selectedTemplateIds: candidatePackage.selectedTemplateIds,
+    templateCount: candidatePackage.templateCount,
+    durationBearingWindowCount: candidatePackage.durationBearingWindowCount,
+    durationContextCandidateCount: candidatePackage.durationContextCandidates.length,
+    dependencyCandidateCount: candidatePackage.dependencyCandidates.length,
+    candidateDependencyEdgeCount: candidatePackage.candidateDependencyEdgeCount,
+    hardGateCount: candidatePackage.hardGateCount,
+    compatibility: {
+      status: compatibility.status,
+      compatible: compatibility.compatible,
+      conflictCount: compatibility.conflicts.length,
+      conflictCodes: compatibility.conflicts.map((conflict) => conflict.conflictCode),
+      priorityOverrideBlocked: priorityAdjudication?.priorityOverrideBlocked ?? false,
+      assemblyFeasibilityRequired: priorityAdjudication?.assemblyFeasibilityRequired ?? true,
+      selectedTemplateId: priorityAdjudication?.selectedTemplateId ?? null,
+      selectedBy: priorityAdjudication?.selectedBy ?? null,
+    },
+    scheduleTrustPolicy: candidatePackage.scheduleTrustPolicy,
+    scheduleTrustSummaries: (candidatePackage.scheduleTrustSummaries ?? []).slice(0, 8).map((summary) => ({
+      sourceTemplateId: summary.sourceTemplateId,
+      criticalPathRoles: summary.criticalPathRoles.slice(0, 6),
+      durationDrivers: summary.durationDrivers.slice(0, 8),
+      workfaceReadinessSignals: summary.workfaceReadinessSignals.slice(0, 8),
+      assemblyRiskTags: summary.assemblyRiskTags.slice(0, 8),
+      replayAdmission: summary.replayAdmission,
+    })),
+    durationContextCandidates: candidatePackage.durationContextCandidates.slice(0, 8).map((candidate) => ({
+      sourceTemplateId: candidate.sourceTemplateId,
+      windowCode: candidate.windowCode,
+      recommendedDurationDays: candidate.recommendedDurationDays,
+      planReferenceDays: candidate.planReferenceDays,
+      planDurationTruthSource: candidate.planDurationTruthSource,
+      governanceStatus: candidate.governanceStatus,
+      sourceType: candidate.sourceType,
+      autoApply: candidate.autoApply,
+    })),
+  }
+}
+
+function withT2RhythmScheduleCandidateContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const t2Context = readT2RhythmScheduleCandidateContext(input)
+  if (!t2Context) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    t2RhythmScheduleCandidatePackage: t2Context,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    t2_rhythm_schedule_candidate_package: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        t2_rhythm_schedule_candidate_package: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        t2RhythmScheduleCandidatePackage: t2Context,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      t2RhythmScheduleCandidatePackageStatus: t2Context.status,
+      t2RhythmScheduleCandidateAutoApply: t2Context.scheduleTrustPolicy.autoApply,
+      t2RhythmScheduleCandidateWritesTaskDependencies: t2Context.scheduleTrustPolicy.writesTaskDependencies,
+      t2RhythmScheduleCandidateWritesPlanDates: t2Context.scheduleTrustPolicy.writesPlanDates,
+      t2RhythmScheduleCandidateSelectedTemplateIds: t2Context.selectedTemplateIds,
+    },
+  }
+}
+
+function readT2RhythmScheduleCandidateNetworkEvaluationContext(input: DurationSuggestionInput) {
+  const evaluation = input.t2RhythmScheduleCandidateNetworkEvaluation
+  if (evaluation?.source !== 't2_rhythm_schedule_candidate_network_phase1_evaluation') return null
+  const selectionReceipts = Array.isArray(evaluation.selectionReceipts) ? evaluation.selectionReceipts : []
+  const selectionReceiptCount = typeof evaluation.scheduleTrustEvidence.selectionReceiptCount === 'number'
+    ? evaluation.scheduleTrustEvidence.selectionReceiptCount
+    : selectionReceipts.length
+  const selectorReceiptAuditStatus = evaluation.scheduleTrustEvidence.selectorReceiptAuditStatus
+    ?? (selectionReceiptCount > 0 ? 'ready' : 'missing')
+  const standardLibraryReadiness = evaluation.standardLibraryReadiness ?? {
+    status: evaluation.scheduleTrustEvidence.standardLibraryReadinessStatus ?? 'unknown_legacy_evaluation_without_standard_library_readiness',
+    precisionStatus: evaluation.scheduleTrustEvidence.standardLibraryPrecisionStatus ?? 'unknown',
+    breadthStatus: evaluation.scheduleTrustEvidence.standardLibraryBreadthStatus ?? 'unknown',
+    depthStatus: evaluation.scheduleTrustEvidence.standardLibraryDepthStatus ?? 'unknown',
+    canEnterC1913Phase1Selection: evaluation.canEnterC1913Phase1Selection,
+    canAutoMaterializeTaskDependencies: false,
+    canAutoPublishRuntimeExperience: false,
+    liveReplayTrustGate: null,
+    releaseBlockers: evaluation.scheduleTrustEvidence.releaseBlockers ?? [
+      'standard_library_readiness_missing_from_legacy_evaluation',
+    ],
+  }
+  const phase1PublicationGate = evaluation.phase1PublicationGate ?? {
+    status: 'blocked_pending_release_evidence',
+    canPublishRuntimeExperience: false,
+    canMaterializeTaskDependencies: false,
+    releaseBlockers: standardLibraryReadiness.releaseBlockers,
+  }
+  const scheduleTrustEvidence = evaluation.scheduleTrustEvidence
+  const liveReplayTrustGate = standardLibraryReadiness.liveReplayTrustGate ?? null
+  const standardLibraryTrustGateStatus = liveReplayTrustGate?.status
+    ?? scheduleTrustEvidence.standardLibraryTrustGateStatus
+    ?? 'missing'
+  const standardLibraryTrustBoundary = liveReplayTrustGate?.trustBoundary
+    ?? scheduleTrustEvidence.standardLibraryTrustBoundary
+    ?? null
+  const canTrustForRealScheduleCalibration = liveReplayTrustGate?.canTrustForRealScheduleCalibration
+    ?? scheduleTrustEvidence.canTrustForRealScheduleCalibration
+    ?? false
+  const standardLibraryTrustGateReleaseBlockers = liveReplayTrustGate?.releaseBlockers
+    ?? scheduleTrustEvidence.standardLibraryTrustGateReleaseBlockers
+    ?? []
+  return {
+    source: evaluation.source,
+    tier: evaluation.tier,
+    candidateId: evaluation.candidateId,
+    status: evaluation.status,
+    canEnterC1913Phase1Selection: evaluation.canEnterC1913Phase1Selection,
+    networkSpanDays: evaluation.networkSpanDays,
+    topologicalOrder: evaluation.topologicalOrder.slice(0, 16),
+    criticalNodeIds: evaluation.criticalNodeIds.slice(0, 16),
+    criticalWindowCodes: evaluation.criticalWindowCodes.slice(0, 16),
+    criticalNodeCount: evaluation.criticalNodeIds.length,
+    nodeEvaluationCount: evaluation.nodeEvaluations.length,
+    nodeEvaluations: evaluation.nodeEvaluations.slice(0, 8).map((node) => ({
+      nodeId: node.nodeId,
+      windowCode: node.windowCode,
+      role: node.role,
+      earliestStartDay: node.earliestStartDay,
+      earliestFinishDay: node.earliestFinishDay,
+      latestStartDay: node.latestStartDay,
+      latestFinishDay: node.latestFinishDay,
+      totalFloatDays: node.totalFloatDays,
+      isCritical: node.isCritical,
+    })),
+    conflictSummary: evaluation.conflictSummary,
+    scheduleTrustEvidence: {
+      selectedTemplateIds: scheduleTrustEvidence.selectedTemplateIds,
+      durationBearingNodeCount: scheduleTrustEvidence.durationBearingNodeCount,
+      dependencyEdgeCount: scheduleTrustEvidence.dependencyEdgeCount,
+      hardGateCount: scheduleTrustEvidence.hardGateCount,
+      compatibilityStatus: scheduleTrustEvidence.compatibilityStatus,
+      replayRequiredBeforePublish: scheduleTrustEvidence.replayRequiredBeforePublish,
+      standardLibraryReadinessStatus: standardLibraryReadiness.status,
+      standardLibraryPrecisionStatus: standardLibraryReadiness.precisionStatus,
+      standardLibraryBreadthStatus: standardLibraryReadiness.breadthStatus,
+      standardLibraryDepthStatus: standardLibraryReadiness.depthStatus,
+      standardLibraryTrustGateStatus,
+      standardLibraryTrustBoundary,
+      canTrustForRealScheduleCalibration,
+      standardLibraryTrustGateReleaseBlockers,
+      selectionReceiptCount,
+      selectorReceiptAuditStatus,
+      releaseBlockers: standardLibraryReadiness.releaseBlockers,
+      topologyEvaluated: scheduleTrustEvidence.topologyEvaluated,
+      floatCalculated: scheduleTrustEvidence.floatCalculated,
+      writesTaskDependencies: scheduleTrustEvidence.writesTaskDependencies,
+      writesPlanDates: scheduleTrustEvidence.writesPlanDates,
+    },
+    selectionReceipts: selectionReceipts.slice(0, 8).map((receipt) => ({
+      templateId: receipt.templateId,
+      selectionStatus: receipt.selectionStatus,
+      rank: receipt.rank,
+      selectorScore: receipt.selectorScore,
+      selectionBasis: receipt.selectionBasis,
+      unmatchedExplicitDimensions: receipt.unmatchedExplicitDimensions,
+      selectorPurity: receipt.selectorPurity,
+      mutationBoundary: receipt.mutationBoundary,
+    })),
+    standardLibraryReadiness,
+    phase1PublicationGate,
+    mutationBoundary: evaluation.mutationBoundary,
+  }
+}
+
+function withT2RhythmScheduleCandidateNetworkEvaluationContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const evaluationContext = readT2RhythmScheduleCandidateNetworkEvaluationContext(input)
+  if (!evaluationContext) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    t2RhythmScheduleCandidateNetworkEvaluation: evaluationContext,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    t2_rhythm_schedule_candidate_network_phase1_evaluation: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        t2_rhythm_schedule_candidate_network_phase1_evaluation: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        t2RhythmScheduleCandidateNetworkEvaluation: evaluationContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      t2RhythmScheduleCandidateNetworkEvaluationStatus: evaluationContext.status,
+      t2RhythmScheduleCandidateNetworkCanEnterC1913Phase1Selection: evaluationContext.canEnterC1913Phase1Selection,
+      t2RhythmScheduleCandidateNetworkSpanDays: evaluationContext.networkSpanDays,
+      t2RhythmScheduleCandidateNetworkCriticalWindowCodes: evaluationContext.criticalWindowCodes,
+      t2RhythmScheduleCandidateNetworkWritesTaskDependencies: evaluationContext.mutationBoundary.writesTaskDependencies,
+      t2RhythmScheduleCandidateNetworkWritesPlanDates: evaluationContext.mutationBoundary.writesPlanDates,
+      t2RhythmScheduleCandidateNetworkWritesCriticalPathFacts: evaluationContext.mutationBoundary.writesCriticalPathFacts,
+      t2RhythmScheduleCandidateNetworkSelectionReceiptCount: evaluationContext.scheduleTrustEvidence.selectionReceiptCount,
+      t2RhythmScheduleCandidateNetworkSelectorReceiptAuditStatus: evaluationContext.scheduleTrustEvidence.selectorReceiptAuditStatus,
+      t2RhythmScheduleCandidateNetworkStandardLibraryReadinessStatus: evaluationContext.standardLibraryReadiness.status,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustGateStatus: evaluationContext.scheduleTrustEvidence.standardLibraryTrustGateStatus,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustBoundary: evaluationContext.scheduleTrustEvidence.standardLibraryTrustBoundary,
+      t2RhythmScheduleCandidateNetworkCanTrustForRealScheduleCalibration: evaluationContext.scheduleTrustEvidence.canTrustForRealScheduleCalibration,
+      t2RhythmScheduleCandidateNetworkStandardLibraryTrustGateReleaseBlockers: evaluationContext.scheduleTrustEvidence.standardLibraryTrustGateReleaseBlockers,
+      t2RhythmScheduleCandidateNetworkPhase1PublicationGateStatus: evaluationContext.phase1PublicationGate.status,
+      t2RhythmScheduleCandidateNetworkCanPublishRuntimeExperience: evaluationContext.phase1PublicationGate.canPublishRuntimeExperience,
+      t2RhythmScheduleCandidateNetworkCanMaterializeTaskDependencies: evaluationContext.phase1PublicationGate.canMaterializeTaskDependencies,
+      t2RhythmScheduleCandidateNetworkReleaseBlockers: evaluationContext.phase1PublicationGate.releaseBlockers,
+    },
+  }
+}
+
+function readT2RhythmSchedulePhase1SelectionContext(input: DurationSuggestionInput) {
+  const selection = input.t2RhythmSchedulePhase1Selection
+  if (selection?.source !== 't2_rhythm_schedule_phase1_selection') return null
+  return {
+    source: selection.source,
+    selectionId: selection.selectionId,
+    status: selection.status,
+    selectedCandidateId: selection.selectedCandidateId,
+    eligibleCandidateIds: selection.eligibleCandidateIds.slice(0, 12),
+    rejectedCandidateCount: selection.rejectedCandidates.length,
+    rejectedCandidates: selection.rejectedCandidates.slice(0, 8).map((candidate) => ({
+      candidateId: candidate.candidateId,
+      status: candidate.status,
+      reasonCodes: candidate.reasonCodes,
+      conflictCodes: candidate.conflictCodes,
+      priorityOverrideBlocked: candidate.priorityOverrideBlocked,
+    })),
+    combinationConsistencyGate: selection.combinationConsistencyGate,
+    selectionBasis: selection.selectionBasis,
+    mutationBoundary: selection.mutationBoundary,
+  }
+}
+
+function withT2RhythmSchedulePhase1SelectionContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const selectionContext = readT2RhythmSchedulePhase1SelectionContext(input)
+  if (!selectionContext) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    t2RhythmSchedulePhase1Selection: selectionContext,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    t2_rhythm_schedule_phase1_selection: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        t2_rhythm_schedule_phase1_selection: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        t2RhythmSchedulePhase1Selection: selectionContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      t2RhythmSchedulePhase1SelectionStatus: selectionContext.status,
+      t2RhythmSchedulePhase1SelectedCandidateId: selectionContext.selectedCandidateId,
+      t2RhythmSchedulePhase1RejectedCandidateCount: selectionContext.rejectedCandidateCount,
+      t2RhythmSchedulePhase1WritesTaskDependencies: selectionContext.mutationBoundary.writesTaskDependencies,
+      t2RhythmSchedulePhase1WritesPlanDates: selectionContext.mutationBoundary.writesPlanDates,
+      t2RhythmSchedulePhase1LinearPriorityCanOverrideAssemblyConflict:
+        selectionContext.selectionBasis.linearPriorityCanOverrideAssemblyConflict,
+    },
+  }
+}
+
+function readDurationInputAssemblyContext(input: DurationSuggestionInput) {
+  const assembly = input.durationInputAssembly
+  if (!assembly) return null
+  return {
+    source: 'DurationInputAssembler',
+    inputChannels: assembly.inputChannels,
+    sourceLineage: assembly.sourceLineage.map((lineage) => ({
+      channel: lineage.channel,
+      source: lineage.source,
+      status: lineage.status,
+      tier: lineage.tier ?? null,
+      candidateId: lineage.candidateId ?? null,
+      selectedTemplateIds: lineage.selectedTemplateIds ?? [],
+      assetSource: lineage.assetSource ?? null,
+    })),
+    assemblyGate: assembly.assemblyGate,
+    mutationBoundary: assembly.mutationBoundary,
+  }
+}
+
+function withDurationInputAssemblyContext(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const assemblyContext = readDurationInputAssemblyContext(input)
+  if (!assemblyContext) return suggestion
+  const calculationContext = {
+    ...(suggestion.factorSummary?.calculationContext ?? {}),
+    ...(suggestion.calculationContext ?? {}),
+    durationInputAssembly: assemblyContext,
+  } as DurationSuggestion['calculationContext']
+  const factorAvailability = {
+    ...(suggestion.factorAvailability ?? {}),
+    duration_input_assembler: true,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        duration_input_assembler: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        durationInputAssembly: assemblyContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+
+  return {
+    ...suggestion,
+    factorAvailability,
+    factorSummary,
+    calculationContext,
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      durationInputAssemblyGateStatus: assemblyContext.assemblyGate.status,
+      durationInputAssemblyCanEnterC1913Phase1Selection: assemblyContext.assemblyGate.canEnterC1913Phase1Selection,
+      durationInputAssemblyRequiresManualReview: assemblyContext.assemblyGate.requiresManualReview,
+      durationInputAssemblyPriorityOverrideBlocked: assemblyContext.assemblyGate.priorityOverrideBlocked,
+      durationInputAssemblyConflictCodes: assemblyContext.assemblyGate.conflictCodes,
+      durationInputAssemblyWritesTaskDependencies: assemblyContext.mutationBoundary.writesTaskDependencies,
+      durationInputAssemblyWritesPlanDates: assemblyContext.mutationBoundary.writesPlanDates,
+      durationInputAssemblyWritesCriticalPathFacts: assemblyContext.mutationBoundary.writesCriticalPathFacts,
+    },
+  }
+}
+
 async function rebuildNewTaskReferenceContext(
   input: DurationSuggestionInput,
   baseDays: number | null,
@@ -3312,6 +4532,116 @@ function appendBusinessReasonCode(
 
 function appendForecastSourceSuffix(source: string, suffix: string) {
   return source.includes(suffix) ? source : `${source}+${suffix}`
+}
+
+function readSuggestionPlanningReplayAdjustmentDays(readback: PlanningReplayCalibrationReadback | null | undefined) {
+  if (!readback || readback.status !== 'ready') return null
+  if (readback.writePolicy !== 'candidate_overlay_only_no_fact_mutation') return null
+  const parsed = Number(readback.e1DurationAdjustmentDays)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.min(7, Math.ceil(parsed))
+}
+
+async function loadPlanningReplayCalibrationReadbackForSuggestion(input: DurationSuggestionInput) {
+  const projectId = normalizeId(input.projectId)
+  if (!projectId) return null
+  if (
+    !normalizeId(input.standardWorkCode)
+    && !normalizeId(input.standardWorkName)
+    && !normalizeId(input.engineeringCategoryId)
+  ) return null
+  try {
+    return await readPlanningReplayCalibrationReadback({
+      projectId,
+      standardWorkCode: input.standardWorkCode,
+      standardWorkName: input.standardWorkName ?? input.taskTitle,
+      engineeringCategoryId: input.engineeringCategoryId,
+    })
+  } catch (error) {
+    logger.warn('[durationSuggestionService] planning replay calibration readback unavailable', {
+      projectId,
+      taskId: input.taskId,
+      standardWorkCode: input.standardWorkCode,
+      error,
+    })
+    return null
+  }
+}
+
+async function applyPlanningReplayCalibrationReadbackToSuggestion(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+  purpose: DurationSuggestionPurpose,
+): Promise<DurationSuggestion> {
+  if (purpose !== 'new_task_reference' && purpose !== 'execution_reference') return suggestion
+  if (suggestion.durationProvenance === 'manual_override') return suggestion
+  const recommended = readPositiveNumber(suggestion.recommendedDurationDays)
+  if (!recommended) return suggestion
+
+  const readback = await loadPlanningReplayCalibrationReadbackForSuggestion(input)
+  const adjustmentDays = readSuggestionPlanningReplayAdjustmentDays(readback)
+  if (!readback || adjustmentDays == null) return suggestion
+
+  const conservativeBase = readPositiveNumber(suggestion.conservativeDurationDays ?? suggestion.recommendedDurationDays)
+  const readbackContext = {
+    applied: true,
+    source: 'planningReplayCalibrationService',
+    writePolicy: readback.writePolicy,
+    coarseProcessKey: readback.coarseProcessKey,
+    acceptedSampleCount: readback.acceptedSampleCount,
+    originalMae: readback.originalMae,
+    replayMae: readback.replayMae,
+    maeImprovement: readback.maeImprovement,
+    overcompensationRate: readback.overcompensationRate,
+    e1DurationAdjustmentDays: adjustmentDays,
+    evidenceRefs: readback.evidenceRefs,
+  }
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      factorAvailability: {
+        ...(suggestion.factorSummary.factorAvailability ?? {}),
+        planning_replay_calibration_readback: true,
+      },
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        planning_replay_calibration_readback: readbackContext,
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+  const calculationContext = {
+    ...(suggestion.calculationContext ?? {}),
+    planning_replay_calibration_readback: readbackContext,
+  } as DurationSuggestion['calculationContext']
+
+  return {
+    ...suggestion,
+    recommendedDurationDays: recommended + adjustmentDays,
+    conservativeDurationDays: conservativeBase ? conservativeBase + adjustmentDays : recommended + adjustmentDays,
+    forecastSource: appendForecastSourceSuffix(suggestion.forecastSource, 'planning_replay_calibration'),
+    businessReason: appendReason(
+      suggestion.businessReason,
+      `回放校准显示该粗工序历史误差可补 ${adjustmentDays} 天，已按候选 overlay 方式修正参考工期`,
+    ),
+    ...appendBusinessReasonCode(suggestion, 'PLANNING_REPLAY_CALIBRATION', {
+      planningReplayCalibrationAdjustmentDays: adjustmentDays,
+      planningReplayCalibrationWritePolicy: readback.writePolicy,
+      planningReplayCalibrationEvidenceRefs: readback.evidenceRefs,
+      planningReplayCalibrationAcceptedSampleCount: readback.acceptedSampleCount,
+      planningReplayCalibrationCoarseProcessKey: readback.coarseProcessKey,
+      planningReplayCalibrationOriginalMae: readback.originalMae,
+      planningReplayCalibrationReplayMae: readback.replayMae,
+      planningReplayCalibrationMaeImprovement: readback.maeImprovement,
+      planningReplayCalibrationOvercompensationRate: readback.overcompensationRate,
+    }),
+    displaySummary: null,
+    factorAvailability: {
+      ...(suggestion.factorAvailability ?? {}),
+      planning_replay_calibration_readback: true,
+    },
+    factorSummary,
+    calculationContext,
+  }
 }
 
 function normalizeDurationBoundaryInput(input: DurationSuggestionInput): ParentDurationBoundaryContext | null {
@@ -3526,8 +4856,68 @@ function buildSuggestionSeedLineage(input: DurationSuggestionInput, suggestion: 
   }
 }
 
-function buildSuggestionNetworkLineage(input: DurationSuggestionInput) {
+type SuggestionConstructionOrganizationEvidenceLineage = ConstructionOrganizationPlanNetworkRuntimeLineage & {
+  businessType: string
+}
+
+function readSuggestionBusinessType(value: unknown) {
+  const metadata = readMetadataObject(value)
+  return normalizeId(
+    metadata.businessType
+      ?? metadata.business_type
+      ?? metadata.businessTypeCode
+      ?? metadata.business_type_code
+      ?? metadata.projectTypeCode
+      ?? metadata.project_type_code,
+  ) || null
+}
+
+async function resolveSuggestionConstructionOrganizationEvidenceLineage(
+  input: DurationSuggestionInput,
+): Promise<SuggestionConstructionOrganizationEvidenceLineage | null> {
+  let lineage =
+    readConstructionOrganizationPlanNetworkRuntimeLineage(
+      input.projectGenerationFacts,
+      'durationSuggestionService.projectGenerationFacts',
+    )
+    ?? readConstructionOrganizationPlanNetworkRuntimeLineage(
+      input.constructionOrganizationScenario,
+      'durationSuggestionService.constructionOrganizationScenario',
+    )
+  let businessType =
+    readSuggestionBusinessType(input.projectGenerationFacts)
+    || normalizeId(input.projectTypeCode)
+    || null
+
+  const projectId = normalizeId(input.projectId)
+  if ((!lineage || !businessType) && projectId) {
+    const context = await readLiveProjectGenerationContext(projectId)
+    lineage = lineage
+      ?? readConstructionOrganizationPlanNetworkRuntimeLineage(
+        context.constructionOrganizationScenario,
+        'durationSuggestionService.projectMetadata.constructionOrganizationScenario',
+      )
+      ?? readConstructionOrganizationPlanNetworkRuntimeLineage(
+        context.projectGenerationFacts,
+        'durationSuggestionService.projectMetadata.projectGenerationFacts',
+      )
+    businessType =
+      businessType
+      || readSuggestionBusinessType(context.projectGenerationFacts)
+  }
+
+  if (!lineage || !businessType) return null
   return {
+    ...lineage,
+    businessType,
+  }
+}
+
+function buildSuggestionNetworkLineage(
+  input: DurationSuggestionInput,
+  constructionOrganizationLineage?: SuggestionConstructionOrganizationEvidenceLineage | null,
+) {
+  const baseLineage = {
     wbsTemplateVersion: normalizeId(input.templateNodeId)
       ? `template-node:${normalizeId(input.templateNodeId)}`
       : normalizeId(input.templateStableCode)
@@ -3538,6 +4928,12 @@ function buildSuggestionNetworkLineage(input: DurationSuggestionInput) {
     wbsNodeType: normalizeId(input.wbsNodeType) ?? null,
     engineeringCategoryId: normalizeId(input.engineeringCategoryId) ?? null,
   }
+  const merged = mergeConstructionOrganizationLineageIntoContext(baseLineage, constructionOrganizationLineage)
+  if (!constructionOrganizationLineage) return merged
+  return {
+    ...merged,
+    businessType: constructionOrganizationLineage.businessType,
+  }
 }
 
 async function recordDurationSuggestionPredictionEvent(
@@ -3547,6 +4943,19 @@ async function recordDurationSuggestionPredictionEvent(
 ) {
   if (!suggestion.recommendedDurationDays) return
   try {
+    const constructionOrganizationLineage = await resolveSuggestionConstructionOrganizationEvidenceLineage(input)
+    const predictionContext = mergeConstructionOrganizationLineageIntoContext({
+      sourceService: 'durationSuggestionService',
+      suggestionPurpose: purpose,
+      forecastSource: suggestion.forecastSource,
+      confidenceLevel: suggestion.confidenceLevel,
+      confidenceScore: suggestion.confidenceScore,
+      conservativeDurationDays: suggestion.conservativeDurationDays,
+      benchmarkKey: suggestion.benchmarkKey,
+      businessReasonCode: suggestion.businessReasonCode ?? null,
+      durationOutputCode: suggestion.durationOutputCode ?? null,
+      calculationContext: suggestion.calculationContext ?? {},
+    }, constructionOrganizationLineage)
     await recordDurationAccuracyPrediction({
       engineCode: 'standard_duration_reference',
       outputKind: suggestionOutputKind(purpose),
@@ -3561,19 +4970,13 @@ async function recordDurationSuggestionPredictionEvent(
       predictedDurationDays: suggestion.recommendedDurationDays,
       runtimeConsumptionState: runtimeConsumptionStateForSuggestion(suggestion),
       seedLineage: buildSuggestionSeedLineage(input, suggestion),
-      networkLineage: buildSuggestionNetworkLineage(input),
-      predictionContext: {
-        sourceService: 'durationSuggestionService',
-        suggestionPurpose: purpose,
-        forecastSource: suggestion.forecastSource,
-        confidenceLevel: suggestion.confidenceLevel,
-        confidenceScore: suggestion.confidenceScore,
-        conservativeDurationDays: suggestion.conservativeDurationDays,
-        benchmarkKey: suggestion.benchmarkKey,
-        businessReasonCode: suggestion.businessReasonCode ?? null,
-        durationOutputCode: suggestion.durationOutputCode ?? null,
-        calculationContext: suggestion.calculationContext ?? {},
-      },
+      networkLineage: buildSuggestionNetworkLineage(input, constructionOrganizationLineage),
+      predictionContext: constructionOrganizationLineage
+        ? {
+          ...predictionContext,
+          businessType: constructionOrganizationLineage.businessType,
+        }
+        : predictionContext,
     })
   } catch (error) {
     logger.warn('[durationSuggestionService] failed to record duration prediction event', {
@@ -3585,89 +4988,87 @@ async function recordDurationSuggestionPredictionEvent(
   }
 }
 
-/*
-async function applyProjectExecutionContext(
-  base: DurationSuggestion,
-  input: DurationSuggestionInput,
-  purpose: DurationSuggestionPurpose,
-): Promise<DurationSuggestion> {
-  if (purpose !== 'new_task_reference') return base
-  if (base.durationProvenance === 'manual_override') return base
-  const recommended = readPositiveNumber(base.recommendedDurationDays)
-  if (!recommended || !normalizeId(input.projectId) || !hasCoreClassification(input)) return base
-
-  try {
-    const learning = await buildProjectProgressVelocityLearning({
-      projectId: input.projectId,
-      companyId: input.companyId,
-      taskId: input.taskId,
-      templateNodeId: input.templateNodeId,
-      templateStableCode: input.templateStableCode,
-      standardWorkCode: input.standardWorkCode,
-      engineeringCategoryId: input.engineeringCategoryId,
-      responsibleUnitId: input.responsibleUnitId,
-      structureTypeCode: input.structureTypeCode,
-      baseDurationDays: recommended,
-    })
-    if (!learning || learning.sampleCount < 2) return base
-
-    const multiplier = clamp(Number(learning.multiplier ?? 1), 0.75, 1.35)
-    const reason = `项目内同类已完成任务显示当前生产节奏约 ${Number(multiplier.toFixed(2))} 倍，已作为 L1 项目级沉淀上下文`
-    `
-    const canApplyRecommended = learning.confidenceLevel === 'high' && learning.actionPolicy === 'auto_apply'
-    const canAdjustConservative = canApplyRecommended || learning.confidenceLevel === 'medium' || learning.actionPolicy === 'candidate_only'
-    const conservativeBase = readPositiveNumber(base.conservativeDurationDays ?? base.recommendedDurationDays)
-    const adjustedRecommended = canApplyRecommended
-      ? Math.max(1, Math.ceil(recommended * multiplier))
-      : recommended
-    const adjustedConservative = conservativeBase && canAdjustConservative
-      ? Math.max(conservativeBase, Math.ceil(conservativeBase * Math.max(1, multiplier)), Math.ceil(adjustedRecommended * Math.max(1.15, multiplier)))
-      : conservativeBase
-    const scoreDelta = canApplyRecommended ? 4 : learning.confidenceLevel === 'medium' ? 0 : -5
-    const confidenceScore = clamp(Number(base.confidenceScore ?? 50) + scoreDelta, 10, 95)
-
-    return {
-      ...base,
-      recommendedDurationDays: adjustedRecommended,
-      conservativeDurationDays: adjustedConservative,
-      confidenceScore,
-      confidenceLevel: scoreToDurationConfidenceLevel(confidenceScore),
-      forecastSource: `${base.forecastSource}+project_execution_context`,
-      businessReason: appendReason(base.businessReason, reason),
-      displaySummary: null,
-      dataMaturity: base.dataMaturity === 'L2' ? 'L2' : 'L1',
-      dataMaturityReasons: Array.from(new Set([...(base.dataMaturityReasons ?? []), 'project-level completed-task rhythm is available'])),
-      factorAvailability: {
-        ...(base.factorAvailability ?? {}),
-        project_execution_context: true,
-      },
-      factorSummary: base.factorSummary
-        ? {
-          ...base.factorSummary,
-          dataMaturity: base.dataMaturity === 'L2' ? 'L2' : 'L1',
-          factorAvailability: {
-            ...(base.factorSummary.factorAvailability ?? {}),
-            project_execution_context: true,
-          },
-          projectExecutionContext: {
-            source: 'progressVelocityLearningService',
-            confidenceLevel: learning.confidenceLevel,
-            confidenceScore: learning.confidenceScore,
-            actionPolicy: learning.actionPolicy,
-            sampleCount: learning.sampleCount,
-            multiplier,
-            groupKey: learning.groupKey,
-          },
-        } as DurationContextSummary
-        : base.factorSummary,
-    }
-  } catch (error) {
-    logger.warn('[durationSuggestionService] project execution context unavailable', { error })
-    return base
+export async function recordCommittedDurationSuggestionPredictionEvidence(
+  input: CommittedDurationSuggestionPredictionEvidence,
+) {
+  const companyId = normalizeId(input.companyId)
+  const projectId = normalizeId(input.projectId)
+  const taskId = normalizeId(input.taskId)
+  const recommendedDurationDays = readPositiveNumber(input.recommendedDurationDays)
+  const normalizedRuntimeApplications = input.runtimeApplications
+    .map((application) => ({
+      assetKey: normalizeId(application.assetKey),
+      publicationKey: normalizeId(application.publicationKey),
+      artifactKey: normalizeId(application.artifactKey),
+      scopeLevel: normalizeId(application.scopeLevel),
+      industryKey: normalizeId(application.industryKey) || null,
+      inputTaskIds: Array.from(new Set(application.inputTaskIds.map(normalizeId).filter(Boolean))).sort(),
+    }))
+  const runtimeApplications = normalizedRuntimeApplications.filter((application) => (
+      application.assetKey
+      && application.publicationKey
+      && application.artifactKey
+      && DURATION_LEARNING_RUNTIME_SCOPE_LEVELS.has(
+        application.scopeLevel as DurationLearningRuntimeScope['level'],
+      )
+      && (application.scopeLevel !== 'industry' || Boolean(application.industryKey))
+      && application.inputTaskIds.includes(taskId)
+    ))
+  if (
+    !companyId
+    || !projectId
+    || !taskId
+    || !recommendedDurationDays
+    || runtimeApplications.length === 0
+    || runtimeApplications.length !== normalizedRuntimeApplications.length
+  ) {
+    throw new Error('committed_duration_prediction_lineage_invalid')
   }
+  const runtimePublicationKeys = Array.from(new Set(
+    runtimeApplications.map((application) => application.publicationKey),
+  )).sort()
+  const generationBatchId = normalizeId(input.generationBatchId) || null
+  const forecastSource = normalizeId(input.forecastSource) || 'duration_learning_runtime_publication'
+  const result = await recordDurationAccuracyPrediction({
+    engineCode: 'standard_duration_reference',
+    outputKind: 'new_task_reference_duration',
+    projectId,
+    taskId,
+    dedupeKey: [
+      projectId,
+      taskId,
+      generationBatchId ?? 'no_batch',
+      ...runtimePublicationKeys,
+    ].join(':'),
+    predictionBasis: forecastSource,
+    predictionSource: 'durationSuggestionService.committed_materialization',
+    modelVersion: 'durationSuggestionService.v1.4.22.4',
+    predictedStartDate: input.plannedStartDate,
+    predictedFinishDate: input.plannedEndDate,
+    predictedDurationDays: recommendedDurationDays,
+    runtimeConsumptionState: 'duration_learning_runtime_publication',
+    predictionContext: {
+      sourceService: 'durationSuggestionService',
+      sourceWriter: 'committed_materialization_durable_evidence',
+      companyId,
+      projectId,
+      taskId,
+      generationBatchId,
+      standardWorkCode: normalizeId(input.standardWorkCode) || null,
+      confidenceLevel: normalizeId(input.confidenceLevel) || null,
+      confidenceScore: Number.isFinite(Number(input.confidenceScore)) ? Number(input.confidenceScore) : null,
+      runtimePublicationKeys,
+      runtimeApplications,
+    },
+    seedLineage: {
+      standardWorkCode: normalizeId(input.standardWorkCode) || null,
+      runtimeApplications,
+    },
+  })
+  if (!result) throw new Error('duration_accuracy_prediction_not_persisted')
+  return result
 }
 
-*/
 async function applyProjectExecutionEnvironment(
   base: DurationSuggestion,
   input: DurationSuggestionInput,
@@ -3685,19 +5086,16 @@ async function applyProjectExecutionEnvironment(
   let changed = false
 
   try {
-    const learning = await buildProjectProgressVelocityLearning({
-      projectId: input.projectId,
-      taskId: input.taskId,
-      templateNodeId: input.templateNodeId,
-      templateStableCode: input.templateStableCode,
-      standardWorkCode: input.standardWorkCode,
-      engineeringCategoryId: input.engineeringCategoryId,
-      responsibleUnitId: input.responsibleUnitId,
-      structureTypeCode: input.structureTypeCode,
-    })
+    const learning = hasProjectBaselineCalibrationContext(next.factorSummary)
+      ? null
+      : await loadPublishedProgressVelocityRuntime({
+        projectId: input.projectId,
+        companyId: input.companyId,
+        consumerKey: 'durationSuggestionService.similar_task_rhythm',
+      })
     if (learning && learning.sampleCount >= 1) {
       const multiplier = clamp(Number(learning.multiplier ?? 1), 0.75, 1.35)
-      const reason = `本项目同类已完成任务显示当前生产节奏约 ${Number(multiplier.toFixed(2))} 倍，已作为 L1 同类任务节奏`
+      const reason = `本项目已发布的同类任务节奏参数约为 ${Number(multiplier.toFixed(2))} 倍，已作为受控 L1 运行参数`
       const canApplyRecommended = learning.confidenceLevel === 'high' && learning.actionPolicy === 'auto_apply'
       const canPartialApplyRecommended = !canApplyRecommended
         && learning.confidenceLevel === 'medium'
@@ -3743,7 +5141,7 @@ async function applyProjectExecutionEnvironment(
       contextAvailability.similar_task_rhythm = true
       maturityReasons.push('project-level similar-task rhythm is available')
       contextDetails.similarTaskRhythm = {
-        source: 'progressVelocityLearningService',
+        source: 'progressVelocityRuntimePublicationService',
         confidenceLevel: learning.confidenceLevel,
         confidenceScore: learning.confidenceScore,
         actionPolicy: learning.actionPolicy,
@@ -3886,15 +5284,23 @@ async function finalizeSuggestion(
 ) {
   const contextualSuggestion = await applyProjectExecutionEnvironment(suggestion, input, purpose)
   const boundedSuggestion = withParentDurationBoundaryContext(contextualSuggestion, input)
+  const replayCalibratedSuggestion = await applyPlanningReplayCalibrationReadbackToSuggestion(boundedSuggestion, input, purpose)
+  const plausibleSuggestion = withEngineeringPlausibilityGuardrails(replayCalibratedSuggestion, input)
   const finalSuggestion = withDisplaySummary(
     purpose === 'monthly_commitment_window'
-      ? buildMonthlyCommitmentWindowSuggestion(boundedSuggestion, input)
-      : boundedSuggestion,
+      ? buildMonthlyCommitmentWindowSuggestion(plausibleSuggestion, input)
+      : plausibleSuggestion,
   )
-  const calendarAwareSuggestion = withDurationCalendarContext(finalSuggestion, input)
+  const t2ContextualSuggestion = withT2RhythmScheduleCandidateContext(finalSuggestion, input)
+  const t2NetworkEvaluationSuggestion = withT2RhythmScheduleCandidateNetworkEvaluationContext(t2ContextualSuggestion, input)
+  const t2Phase1SelectionSuggestion = withT2RhythmSchedulePhase1SelectionContext(t2NetworkEvaluationSuggestion, input)
+  const assembledInputSuggestion = withDurationInputAssemblyContext(t2Phase1SelectionSuggestion, input)
+  const calendarAwareSuggestion = withDurationCalendarContext(assembledInputSuggestion, input)
   const governedSuggestion = withDurationOutputContract(calendarAwareSuggestion)
   logDurationSuggestionRun(input, purpose, governedSuggestion)
-  await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
+  if (input.runtimeEvidenceMode === 'record') {
+    await recordDurationSuggestionPredictionEvent(input, purpose, governedSuggestion)
+  }
   return governedSuggestion
 }
 
@@ -3935,9 +5341,77 @@ function withDurationOutputContract(suggestion: DurationSuggestion): DurationSug
   }
 }
 
+function withEngineeringPlausibilityGuardrails(
+  suggestion: DurationSuggestion,
+  input: DurationSuggestionInput,
+): DurationSuggestion {
+  const recommended = readPositiveNumber(suggestion.recommendedDurationDays)
+  if (!recommended) return suggestion
+  const conservative = readPositiveNumber(suggestion.conservativeDurationDays ?? suggestion.recommendedDurationDays)
+  const recommendedGuard = evaluateDurationPlausibility({
+    engineCode: 'duration_suggestion',
+    durationDays: recommended,
+    title: input.taskTitle ?? input.standardWorkName,
+    standardWorkCode: input.standardWorkCode ?? input.templateStableCode,
+    standardWorkName: input.standardWorkName,
+    taskId: input.taskId,
+    clamp: true,
+  })
+  const conservativeGuard = conservative
+    ? evaluateDurationPlausibility({
+      engineCode: 'duration_suggestion',
+      durationDays: conservative,
+      title: input.taskTitle ?? input.standardWorkName,
+      standardWorkCode: input.standardWorkCode ?? input.templateStableCode,
+      standardWorkName: input.standardWorkName,
+      taskId: input.taskId,
+      clamp: true,
+    })
+    : { durationDays: null, warnings: [] as DurationPlausibilityWarning[] }
+  const warnings = [...recommendedGuard.warnings, ...conservativeGuard.warnings]
+  if (warnings.length === 0) return suggestion
+  const nextRecommended = recommendedGuard.durationDays ?? recommended
+  const nextConservative = Math.max(
+    nextRecommended,
+    conservativeGuard.durationDays ?? conservative ?? nextRecommended,
+  )
+  const calculationContext = {
+    ...(suggestion.calculationContext ?? {}),
+    durationPlausibilityWarnings: [
+      ...(((suggestion.calculationContext as any)?.durationPlausibilityWarnings ?? []) as DurationPlausibilityWarning[]),
+      ...warnings,
+    ],
+  } as DurationSuggestion['calculationContext']
+  const factorSummary = suggestion.factorSummary
+    ? {
+      ...suggestion.factorSummary,
+      calculationContext: {
+        ...suggestion.factorSummary.calculationContext,
+        durationPlausibilityWarnings: [
+          ...(((suggestion.factorSummary.calculationContext as any)?.durationPlausibilityWarnings ?? []) as DurationPlausibilityWarning[]),
+          ...warnings,
+        ],
+      },
+    } as DurationContextSummary
+    : suggestion.factorSummary
+  return {
+    ...suggestion,
+    recommendedDurationDays: nextRecommended,
+    conservativeDurationDays: nextConservative,
+    calculationContext,
+    factorSummary,
+    businessReason: appendReason(suggestion.businessReason, '已通过工程合理性护栏校验参考工期'),
+    businessReasonParams: {
+      ...(suggestion.businessReasonParams ?? {}),
+      durationPlausibilityWarnings: warnings,
+    },
+    displaySummary: null,
+  }
+}
+
 export async function getTaskDurationSuggestion(input: DurationSuggestionInput): Promise<DurationSuggestion> {
   let normalizedInput: DurationSuggestionInput = input
-  const hydratedInput = await hydrateDurationAlgorithmInput(input, {
+  const assembledInput = await assembleDurationInput(input, {
     purpose: input.suggestionPurpose === 'execution_reference'
       ? 'execution_reference'
       : input.suggestionPurpose === 'monthly_commitment_window'
@@ -3945,6 +5419,10 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         : 'new_task_reference',
     allowLiveProjectReread: input.suggestionPurpose === 'execution_reference',
   })
+  const hydratedInput = {
+    ...assembledInput,
+    durationInputAssembly: assembledInput as DurationInputAssemblerResult<DurationSuggestionInput>,
+  }
   const taskMergedInput = await mergeSuggestionTaskContext(enrichDurationInputFromProjectGenerationFacts(hydratedInput))
   const wbsNodeType = taskMergedInput.wbsNodeType ?? 'process'
   const projectId = normalizeId(taskMergedInput.projectId) || null
@@ -3980,24 +5458,28 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       runtimeArtifactPublications: readonly DurationSuggestionRuntimeArtifactPublication[],
     ) => {
       const governedSuggestion = await finalizeSuggestion(suggestion, normalizedInput, suggestionPurpose)
+      if (!shouldRecordDurationRuntimeConsumerEvidence(normalizedInput)) return governedSuggestion
       const artifacts = buildDurationSuggestionConsumedArtifacts({
         runtimeArtifactPublications,
         projectId: normalizedInput.projectId,
         taskId: normalizedInput.taskId,
         standardWorkCode: normalizedInput.standardWorkCode,
       })
-      if (artifacts.length === 0) return governedSuggestion
       try {
         const projectIdForEvidence = normalizeId(normalizedInput.projectId)
         const taskIdForEvidence = normalizeId(normalizedInput.taskId)
         const standardWorkCodeForEvidence = normalizeId(normalizedInput.standardWorkCode)
         await recordDurationSuggestionConsumedArtifacts({
-          queryExec: normalizedInput.runtimeConsumerObservationQueryExec ?? buildDurationRuntimeConsumerObservationQueryExec(),
+          queryExec: createDurationRuntimeConsumerObservationQueryExec(
+            normalizedInput.runtimeConsumerObservationQueryExec,
+          ),
           callContext: {
             projectId: projectIdForEvidence || null,
             taskId: taskIdForEvidence || null,
             standardWorkCode: standardWorkCodeForEvidence || null,
             runtimeConsumer: 'durationSuggestionService',
+            runtimeAssetMode: artifacts.length > 0 ? 'published_artifact' : 'no_published_artifact',
+            runtimeArtifactCount: artifacts.length,
           },
           sourceEvidenceRefs: [
             [
@@ -4098,29 +5580,41 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       ?? normalizedInput.standardWorkCode
       ?? normalizedInput.engineeringCategoryId
       ?? 'all'
-    const benchmarkCandidates = await collectBenchmarkCandidates({
+    const allCauseBenchmarkCandidates = await collectBenchmarkCandidates({
       benchmarkIdentity,
       wbsNodeType,
       input: normalizedInput,
       companyId,
     })
+    const causeAwareBenchmarkSelection = await selectCauseAwareBenchmarkCandidates(
+      allCauseBenchmarkCandidates,
+      normalizedInput.structuredCauseAuthority ?? normalizedInput.confirmedCauseCode,
+    )
+    const selectedBenchmarkCandidates = causeAwareBenchmarkSelection.candidates
+    const benchmarkCandidateAdmission = partitionBenchmarkCandidatesByProvenance(selectedBenchmarkCandidates)
+    const benchmarkCandidates = benchmarkCandidateAdmission.admissible
+    const rejectedBenchmarkCandidates = benchmarkCandidateAdmission.rejected
+    const benchmarkCauseSegment = benchmarkCandidates.some((candidate) => Boolean(candidate.benchmark.__durationLearningCauseSegment))
+      ? causeAwareBenchmarkSelection.segment
+      : null
+    const benchmarkCauseFallback = causeAwareBenchmarkSelection.fallback
+    const benchmarkCauseSelection = causeAwareBenchmarkSelection.selection
     const primaryBenchmarkCandidate = benchmarkCandidates[0] ?? null
     const companyBenchmarkCandidate = benchmarkCandidates.find((candidate) => candidate.scope === 'company') ?? null
     const benchmark = primaryBenchmarkCandidate?.benchmark ?? null
     const matchedBenchKey = primaryBenchmarkCandidate?.benchKey ?? [benchmarkIdentity, wbsNodeType, 'all'].join(':')
-    const benchmarkScope: BenchmarkScope = primaryBenchmarkCandidate?.scope ?? 'system'
+    const benchmarkScope = primaryBenchmarkCandidate?.scope ?? null
     const matchedBenchmarkContextKey = primaryBenchmarkCandidate?.contextKey ?? 'all'
     const benchmarkSampleSize = primaryBenchmarkCandidate?.sampleSize ?? 0
     const benchmarkSpecificity = primaryBenchmarkCandidate?.specificity ?? benchmarkContextSpecificity(matchedBenchmarkContextKey)
-    const benchmarkUsable = benchmarkCandidates.length > 0
-    const broadSystemBenchmark = benchmarkCandidates.length === 0
-      ? (await findBenchmark([benchmarkIdentity, wbsNodeType, 'all'].join(':'), null)).benchmark
+    const broadGlobalBenchmark = benchmarkCandidates.length === 0
+      ? await findBenchmark([benchmarkIdentity, wbsNodeType, 'all'].join(':'), null)
       : null
     const benchmarkGeneralizationSkipped = Boolean(
-      broadSystemBenchmark
-      && Number(broadSystemBenchmark.sample_count ?? 0) > 0
-      && Number(broadSystemBenchmark.sample_count ?? 0) < 100
-      && isTemplateUsableForContext(broadSystemBenchmark, normalizedInput, companyId),
+      broadGlobalBenchmark
+      && Number(broadGlobalBenchmark.sample_count ?? 0) > 0
+      && Number(broadGlobalBenchmark.sample_count ?? 0) < 100
+      && isTemplateUsableForContext(broadGlobalBenchmark, normalizedInput, companyId),
     )
 
     const baselineMatchText = buildBaselineMatchText(normalizedInput)
@@ -4147,7 +5641,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       trustedMethodCodes.length > 0 ? { methodVariantCodes: trustedMethodCodes } : null,
       trustedElementCodes.length > 0 ? { elementVariantCodes: trustedElementCodes } : null,
     )
-    const standardSeed = await resolveStandardWorkDurationSeed(resolvedBaselineMatchText || baselineMatchText, {
+    const resolvedStandardSeed = await resolveStandardWorkDurationSeed(resolvedBaselineMatchText || baselineMatchText, {
       projectId,
       companyId,
       standardWorkCode: normalizedInput.standardWorkCode,
@@ -4164,6 +5658,11 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       applicableGranularity: normalizedInput.wbsNodeType === 'summary' ? 'summary' : 'task',
       featureProfile: seedFeatureProfile,
     })
+    const standardSeed = await applyLearnedStandardDurationPublication({
+      suggestionInput: normalizedInput,
+      companyId,
+      seed: resolvedStandardSeed as Record<string, unknown> | null,
+    })
     if (standardSeed) {
       const standardWorkConflictGuard = getStandardWorkConflictGuard(normalizedInput, standardSeed as Record<string, unknown>)
       if (standardWorkConflictGuard) {
@@ -4174,7 +5673,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         )
       }
       const durationContributionMode = readSeedDurationContributionMode(standardSeed as Record<string, unknown>)
-      if (durationContributionMode && !isDurationBearingContributionMode(durationContributionMode)) {
+      if (durationContributionMode && !isDurationBearingContributionModeFromResolver(durationContributionMode)) {
         const seedEvidenceScope = resolveSeedEvidenceScope(standardSeed as any)
         const seedSampleSize = readSeedGovernanceSampleSize(standardSeed as any, seedEvidenceScope)
         const maturity = resolveDataMaturity(normalizedInput, seedSampleSize, suggestionPurpose, seedEvidenceScope)
@@ -4186,13 +5685,13 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           forecastSource: 'standard_work_duration_seed:non_duration_bearing',
           durationCalibrationSource: 'standard_work_duration_seed',
           durationProvenance: 'unavailable',
-          businessReason: `该标准工序为${describeDurationContributionMode(durationContributionMode)}，不生成独立参考工期`,
+          businessReason: `该标准工序为${describeDurationContributionModeFromResolver(durationContributionMode)}，不生成独立参考工期`,
           businessReasonCode: 'NON_DURATION_BEARING_STANDARD_WORK',
           businessReasonCodes: ['NON_DURATION_BEARING_STANDARD_WORK'],
           businessReasonParams: {
             seedSource: (standardSeed as any).__resolverSource ?? 'standard_work_duration_seed',
             durationContributionMode,
-            durationContributionModeLabel: describeDurationContributionMode(durationContributionMode),
+            durationContributionModeLabel: describeDurationContributionModeFromResolver(durationContributionMode),
           },
           benchmarkKey: `standard_work_duration:${(standardSeed as any).__stableCode ?? (standardSeed as any).stableCode}`,
           sampleSize: 0,
@@ -4241,33 +5740,45 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const coldStartP80 = coldStartBaselineApplied && coldStartBaseDays && baseDays
         ? coldStartConservativeDays(baseDays, p80, coldStartBaseDays)
         : p80
-      const canBlendBenchmark = benchmarkCandidates.length > 0
-        && benchmarkUsable
-        && (suggestionPurpose === 'new_task_reference' || suggestionPurpose === 'execution_reference')
+      const benchmarkPurposeAllowsBlend = suggestionPurpose === 'new_task_reference'
+        || suggestionPurpose === 'execution_reference'
+      const canBlendBenchmark = benchmarkCandidates.length > 0 && benchmarkPurposeAllowsBlend
       const benchmarkBlendRuntimeParameter = companyBenchmarkCandidate
         && canBlendBenchmark
-        ? await loadBenchmarkBlendRuntimeParameter(companyId, normalizedInput.projectId ?? null)
+        ? await loadBenchmarkBlendRuntimeParameter(
+            companyId,
+            normalizedInput.projectId ?? null,
+            normalizeId(normalizedInput.taskId) || normalizeId(normalizedInput.standardWorkCode),
+          )
         : null
       const benchmarkBlend = canBlendBenchmark
         ? blendBenchmarkCandidates(coldStartBaseDays, coldStartP80, benchmarkCandidates, benchmarkBlendRuntimeParameter)
         : null
+      const benchmarkProvenance = buildBenchmarkProvenance(
+        benchmarkBlend?.candidates
+        ?? (benchmarkCandidates.length === 0 && benchmarkPurposeAllowsBlend ? rejectedBenchmarkCandidates : []),
+      )
       const benchmarkBlendScopeLabel = benchmarkBlend?.scopes.length
         ? benchmarkBlend.scopes.map((scope) => (
-          scope === 'company' ? '公司' : scope === 'system' ? '系统' : '项目'
+          scope === 'project' ? '项目' : scope === 'company' ? '公司' : scope === 'industry' ? '行业' : '全局'
         )).join(' / ')
         : benchmarkScope === 'company'
           ? '公司'
-          : benchmarkScope === 'system'
-            ? '系统'
-            : '项目'
+          : benchmarkScope === 'industry'
+            ? '行业'
+            : benchmarkScope === 'global'
+              ? '全局'
+              : '项目'
       const benchmarkBlendCalibrationSource: DurationCalibrationSource = benchmarkBlend
         ? benchmarkBlend.scopes.length > 1
           ? 'standard_work_duration_seed+mixed_history_sample'
           : benchmarkBlend.scopes[0] === 'company'
             ? 'standard_work_duration_seed+company_history_sample'
-            : benchmarkBlend.scopes[0] === 'system'
-              ? 'standard_work_duration_seed+system_history_sample'
-              : 'standard_work_duration_seed+project_history_sample'
+            : benchmarkBlend.scopes[0] === 'industry'
+              ? 'standard_work_duration_seed+industry_history_sample'
+              : benchmarkBlend.scopes[0] === 'global'
+                ? 'standard_work_duration_seed+global_history_sample'
+                : 'standard_work_duration_seed+project_history_sample'
         : coldStartBaselineApplied ? 'cold_start_baseline' : 'standard_work_duration_seed'
       const effectiveBaseDays = benchmarkBlend?.days ?? coldStartBaseDays
       const sanitizedP80 = sanitizeSeedP80(
@@ -4278,7 +5789,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const seedEvidenceScope = resolveSeedEvidenceScope(standardSeed as any)
       const seedSampleSize = readSeedGovernanceSampleSize(standardSeed as any, seedEvidenceScope)
       const maturity = resolveDataMaturity(normalizedInput, seedSampleSize, suggestionPurpose, seedEvidenceScope)
-      const scale = resolveScaleAdjustment(normalizedInput, effectiveBaseDays, standardSeed as any, factorSummary)
+      const scale = await resolveScaleAdjustment(normalizedInput, effectiveBaseDays, standardSeed as any, factorSummary)
       const scaledRecommended = applyScaleToDays(effectiveBaseDays, scale)
       const scaledConservative = applyScaleToDays(sanitizedP80.conservativeDays, scale)
       const baseConfidenceScore = (standardSeed as any).confidence === 'high' ? 74 : (standardSeed as any).confidence === 'low' ? 42 : 60
@@ -4318,11 +5829,35 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           p80: benchmarkDistributionCandidate.p80,
           mean: readPositiveNumber(benchmarkDistributionCandidate.benchmark.mean_days) ?? benchmarkDistributionCandidate.p50,
           variance: benchmarkDistributionCandidate.variance,
+          coefficientOfVariation: readBenchmarkMetadataNumber(
+            benchmarkDistributionCandidate.benchmark,
+            'cv',
+            'coefficient_of_variation',
+            'coefficientOfVariation',
+          ),
+          dayBasis: 'construction_production_day',
           source: 'duration_benchmarks',
           scope: benchmarkDistributionCandidate.scope,
           sampleCount: benchmarkDistributionCandidate.sampleSize,
         }
         : null
+      const benchmarkRiskCalendar = resolveBenchmarkRiskCalendar(
+        benchmarkProvenance.benchmarkProvenance,
+        normalizedInput.workCalendar,
+      )
+      const durationRiskDistribution = buildConstructionProductionDayRiskDistribution({
+        p50: benchmarkDistributionCandidate?.p50 ?? null,
+        p80: benchmarkDistributionCandidate?.p80 ?? null,
+        source: benchmarkDistributionCandidate ? 'duration_benchmarks' : null,
+        scope: benchmarkProvenance.benchmarkScope,
+        sampleCount: benchmarkProvenance.benchmarkSampleCount,
+        generatedAt: benchmarkProvenance.benchmarkGeneratedAt,
+        sourceAsOf: benchmarkProvenance.benchmarkAsOf,
+        calendar: benchmarkRiskCalendar,
+        provenanceAvailability: benchmarkProvenance.benchmarkProvenanceAvailability,
+        unavailableReason: benchmarkProvenance.benchmarkProvenanceUnavailableReason
+          ?? benchmarkRiskCalendar.unavailableReason,
+      })
       const effectiveFactorSummaryWithBenchmarkDistribution = benchmarkDurationDistribution
         ? {
           ...effectiveFactorSummary,
@@ -4338,6 +5873,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       const standardForecastSource = scale.factor === 1 ? baseForecastSource : appendForecastSourceSuffix(baseForecastSource, 'scale_proxy')
       const runtimeArtifactPublications = buildDurationSuggestionRuntimeArtifactPublications({
         benchmarkBlendRuntimeParameter,
+        benchmark: benchmarkDistributionCandidate?.benchmark ?? null,
         coldStartDecision,
         coldStartBaselines,
         standardSeed: standardSeed as Record<string, unknown>,
@@ -4350,6 +5886,8 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         forecastSource: standardForecastSource,
         durationCalibrationSource: benchmarkBlendCalibrationSource,
         durationProvenance: coldStartBaselineApplied ? 'historical_benchmark' : 'standard_work_duration_seed',
+        ...benchmarkProvenance,
+        durationRiskDistribution,
         businessReason: seedBusinessReason,
         businessReasonCode: variantFallback.hasFallback ? 'STANDARD_SEED_VARIANT_FALLBACK' : scale.factor === 1 ? 'STANDARD_SEED_REFERENCE' : 'BASED_ON_SEED_AND_COVERAGE',
         businessReasonCodes: [variantFallback.hasFallback ? 'STANDARD_SEED_VARIANT_FALLBACK' : scale.factor === 1 ? 'STANDARD_SEED_REFERENCE' : 'BASED_ON_SEED_AND_COVERAGE'],
@@ -4406,12 +5944,25 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           benchmarkP80: benchmarkDistributionCandidate?.p80,
           benchmarkP80Source: benchmarkDistributionCandidate?.p80Source,
           benchmarkVariance: benchmarkDistributionCandidate?.variance,
+          benchmarkDurationDayBasis: benchmarkDistributionCandidate ? 'construction_production_day' : null,
           benchmarkReferenceDays: benchmarkDistributionCandidate?.referenceDays,
           benchmarkReferenceSource: benchmarkDistributionCandidate?.referenceSource,
           benchmarkSampleCount: benchmarkBlend?.sampleCount,
           benchmarkBlendWeightSource: benchmarkMetadataCandidate?.weightSource,
           benchmarkGeneralizationSkipped,
+          benchmarkCauseFallback,
+          benchmarkCauseSelection,
         },
+        benchmarkCauseSelection,
+        benchmarkCauseSegment: benchmarkCauseSegment
+          ? {
+              causeCode: benchmarkCauseSegment.causeCode,
+              taxonomyVersion: benchmarkCauseSegment.taxonomyVersion,
+              generatedAt: benchmarkCauseSegment.generatedAt,
+              sourceAsOf: benchmarkCauseSegment.sourceAsOf,
+              sampleCount: benchmarkCauseSegment.sampleCount,
+            }
+          : null,
         benchmarkKey: standardBenchmarkKey,
         sampleSize: 0,
         dataMaturity: maturity.level,
@@ -4437,7 +5988,21 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
       businessReason: noSeedReason.message,
       businessReasonCode: noSeedReason.code,
       businessReasonCodes: [noSeedReason.code],
-      businessReasonParams: noSeedReason.params,
+      businessReasonParams: {
+        ...noSeedReason.params,
+        benchmarkCauseFallback,
+        benchmarkCauseSelection,
+      },
+      benchmarkCauseSelection,
+      benchmarkCauseSegment: benchmarkCauseSegment
+        ? {
+            causeCode: benchmarkCauseSegment.causeCode,
+            taxonomyVersion: benchmarkCauseSegment.taxonomyVersion,
+            generatedAt: benchmarkCauseSegment.generatedAt,
+            sourceAsOf: benchmarkCauseSegment.sourceAsOf,
+            sampleCount: benchmarkCauseSegment.sampleCount,
+          }
+        : null,
       dataMaturity: unavailableMaturity.level,
       dataMaturityReasons: unavailableMaturity.reasons,
       dataUpgradePath: unavailableMaturity.upgradePath,

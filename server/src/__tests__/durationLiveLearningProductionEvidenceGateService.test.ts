@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import {
   buildDurationLiveLearningCompletionAudit,
@@ -46,9 +46,8 @@ const learnableAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
-const serviceSourcePath = resolve(
-  process.cwd(),
-  'server/src/services/durationLiveLearningProductionEvidenceGateService.ts',
+const serviceSourcePath = fileURLToPath(
+  new URL('../services/durationLiveLearningProductionEvidenceGateService.ts', import.meta.url),
 )
 
 const durationOutcomeProductionSourceTables = [
@@ -72,10 +71,18 @@ const planNetworkAssetKeys: DurationLiveLearningAssetKey[] = [
   'critical_path_rule_candidate',
 ]
 
+const unifiedDurationLearningAssetKeys = new Set<DurationLiveLearningAssetKey>([
+  'base_duration_benchmark',
+  'standard_work_duration_seed',
+  'special_work_duration_seed',
+  'wbs_reference_days',
+  'dependency_rule_candidate',
+  'critical_path_rule_candidate',
+])
+
 function expectedSourceTablesForAssetKey(assetKey: DurationLiveLearningAssetKey) {
   if (
-    assetKey === 'base_duration_benchmark'
-    || assetKey === 'duration_cold_start_baseline'
+    assetKey === 'duration_cold_start_baseline'
     || assetKey === 'forecast_residual_overlay'
     || assetKey === 'forecast_confidence_weight'
   ) {
@@ -85,25 +92,16 @@ function expectedSourceTablesForAssetKey(assetKey: DurationLiveLearningAssetKey)
       'algorithm_learnable_parameter_release_events',
     ]
   }
-  if (assetKey === 'standard_work_duration_seed') {
+  if (unifiedDurationLearningAssetKeys.has(assetKey)) {
     return [
-      ...durationOutcomeProductionSourceTables,
-      'algorithm_seed_versions',
-      'algorithm_learnable_parameter_release_events',
+      ...(planNetworkAssetKeys.includes(assetKey)
+        ? networkOutcomeProductionSourceTables
+        : durationOutcomeProductionSourceTables),
+      'duration_learning_runtime_publications',
+      'duration_learning_runtime_consumptions',
     ]
   }
-  if (assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days') {
-    return [
-      ...networkOutcomeProductionSourceTables,
-      'wbs_template_runtime_publications',
-      'wbs_template_runtime_events',
-    ]
-  }
-  return [
-    ...networkOutcomeProductionSourceTables,
-    'construction_dependency_rule_runtime_publications',
-    'construction_dependency_rule_runtime_events',
-  ]
+  return [...durationOutcomeProductionSourceTables]
 }
 
 const expectedRuntimeConsumerObservations = [
@@ -119,6 +117,7 @@ const expectedRuntimeConsumerObservations = [
   { assetKey: 'wbs_reference_days' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'wbsTemplateGenerationService' },
   { assetKey: 'dependency_rule_candidate' as const, consumerKey: 'scheduleAccelerationService' },
+  { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectCriticalPathService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'projectRemainingDurationForecastService' },
   { assetKey: 'critical_path_rule_candidate' as const, consumerKey: 'scheduleAccelerationRuntimeService' },
 ]
@@ -135,6 +134,10 @@ const runtimeCallEvidence: DurationRuntimeConsumerObservationRuntimeCallEvidence
   {
     consumerKey: 'projectRemainingDurationForecastService',
     runtimeEntryRef: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+  },
+  {
+    consumerKey: 'projectCriticalPathService',
+    runtimeEntryRef: 'projectCriticalPathService:resolveCriticalPathLearningPublications',
   },
   {
     consumerKey: 'wbsTemplateGenerationService',
@@ -175,8 +178,8 @@ function buildReadyCompletionAudit() {
 }
 
 function publicationEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) {
-  if (assetKey === 'base_duration_benchmark') {
-    return 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2'
+  if (unifiedDurationLearningAssetKeys.has(assetKey)) {
+    return `duration_learning_runtime_publications:${publicationKeyForAsset(assetKey)}`
   }
   if (assetKey === 'duration_cold_start_baseline') {
     return 'algorithm_learnable_parameter_runtime_publications:cold_start_baseline_runtime:segment-v2'
@@ -187,13 +190,7 @@ function publicationEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) 
   if (assetKey === 'forecast_confidence_weight') {
     return 'algorithm_learnable_parameter_runtime_publications:forecast_confidence_weight_runtime:weight-v2'
   }
-  if (assetKey === 'standard_work_duration_seed') {
-    return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
-  }
-  if (assetKey === 'special_work_duration_seed') return 'wbs_template_runtime:special-work-seed-v2'
-  if (assetKey === 'wbs_reference_days') return 'wbs_reference_days_runtime:wbs-reference-days-v2'
-  if (assetKey === 'dependency_rule_candidate') return 'dependency_rule_runtime:dependency-rule-v2'
-  return 'critical_path_rule_runtime:critical-path-rule-v2'
+  return ''
 }
 
 function productionSampleEvidenceRefForAsset(assetKey: DurationLiveLearningAssetKey) {
@@ -256,25 +253,23 @@ function buildAllProductionEvidenceRecords() {
 }
 
 function publicationKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
-  if (assetKey === 'base_duration_benchmark') return 'duration_benchmark_runtime:base-v2'
+  if (unifiedDurationLearningAssetKeys.has(assetKey)) {
+    return `duration_learning_runtime:${assetKey}:asset-v2`
+  }
   if (assetKey === 'duration_cold_start_baseline') return 'cold_start_baseline_runtime:segment-v2'
   if (assetKey === 'forecast_residual_overlay') return 'forecast_residual_overlay_runtime:overlay-v2'
   if (assetKey === 'forecast_confidence_weight') return 'forecast_confidence_weight_runtime:weight-v2'
-  if (assetKey === 'standard_work_duration_seed') {
-    return 'algorithm_seed_versions:seed-version-standard-work-duration-v2'
-  }
-  if (assetKey === 'special_work_duration_seed') return 'wbs_template_runtime:special-work-seed-v2'
-  if (assetKey === 'wbs_reference_days') return 'wbs_reference_days_runtime:wbs-reference-days-v2'
-  if (assetKey === 'dependency_rule_candidate') return 'dependency_rule_runtime:dependency-rule-v2'
-  if (assetKey === 'critical_path_rule_candidate') return 'critical_path_rule_runtime:critical-path-rule-v2'
   return `publication-${assetKey}`
+}
+
+function artifactKeyForAsset(assetKey: DurationLiveLearningAssetKey) {
+  return `${assetKey}:artifact-v2`
 }
 
 function publicationSourceRowsForAsset(assetKey: DurationLiveLearningAssetKey) {
   const publicationKey = publicationKeyForAsset(assetKey)
   if (
-    assetKey === 'base_duration_benchmark'
-    || assetKey === 'duration_cold_start_baseline'
+    assetKey === 'duration_cold_start_baseline'
     || assetKey === 'forecast_residual_overlay'
     || assetKey === 'forecast_confidence_weight'
   ) {
@@ -291,63 +286,28 @@ function publicationSourceRowsForAsset(assetKey: DurationLiveLearningAssetKey) {
       },
     }]
   }
-  if (assetKey === 'standard_work_duration_seed') {
-    return [
-      {
-        sourceTable: 'algorithm_seed_versions' as const,
-        row: {
-          id: 'seed-version-standard-work-duration-v2',
-          seed_type: 'standard_work_duration',
-          seed_version: 'v2',
-          status: 'active',
-          is_current: true,
-          published_at: '2026-06-14T00:00:00.000Z',
-        },
-      },
-      {
-        sourceTable: 'algorithm_learnable_parameter_release_events' as const,
-        row: {
-          event_type: 'impact_monitoring',
-          event_status: 'monitoring_passed',
-          source_publication_key: publicationKey,
-          event_payload: { assetKey },
-        },
-      },
-      {
-        sourceTable: 'algorithm_learnable_parameter_release_events' as const,
-        row: {
-          event_type: 'rollback_execution',
-          event_status: 'rollback_executed',
-          source_publication_key: publicationKey,
-          event_payload: { assetKey },
-        },
-      },
-    ]
-  }
-  if (assetKey === 'special_work_duration_seed' || assetKey === 'wbs_reference_days') {
+  if (unifiedDurationLearningAssetKeys.has(assetKey)) {
     return [{
-      sourceTable: 'wbs_template_runtime_publications' as const,
+      sourceTable: 'duration_learning_runtime_publications' as const,
       row: {
         publication_key: publicationKey,
-        asset_kind: assetKey,
-        asset_version_id: `${assetKey}-version-v2`,
-        runtime_publication_status: 'runtime_published',
-        impact_monitoring: { status: 'monitoring_armed' },
-        rollback_execution: { status: 'rollback_verified' },
+        asset_key: assetKey,
+        artifact_key: artifactKeyForAsset(assetKey),
+        scope_level: 'project',
+        publication_stage: 'stable',
+        source_candidate_refs: [`candidate:${assetKey}:v2`],
+        source_evidence_refs: [`evidence:${assetKey}:v2`],
+        automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+        monitoring_status: 'passed',
+        impact_metrics: { observedCount: 1 },
+        rollback_execution: {
+          status: 'rollback_verified',
+          rolledBackAt: '2026-06-15T00:00:00.000Z',
+        },
       },
     }]
   }
-  return [{
-    sourceTable: 'construction_dependency_rule_runtime_publications' as const,
-    row: {
-      publication_key: publicationKey,
-      dependency_rule_version_id: `${assetKey}-version-v2`,
-      runtime_publication_status: 'runtime_published',
-      dependency_rule_lineage: { assetType: assetKey },
-      impact_monitoring: { status: 'monitoring_armed' },
-      rollback_execution: { status: 'rollback_verified' },
-    },
-  }]
+  return []
 }
 
 function buildAllProductionSourceRows() {
@@ -399,7 +359,15 @@ function buildAllProductionSourceRows() {
         publication_key: publicationKeyForAsset(assetKey),
         consumer_key: consumerKey,
         observation_status: 'observed',
-        source_evidence_refs: [runtimeConsumerSourceEvidenceRef(consumerKey)],
+        source_evidence_refs: [
+          runtimeConsumerSourceEvidenceRef(consumerKey),
+          ...(unifiedDurationLearningAssetKeys.has(assetKey)
+            ? [`duration_learning_runtime_publications:${publicationKeyForAsset(assetKey)}`]
+            : []),
+        ],
+        observation_context: unifiedDurationLearningAssetKeys.has(assetKey)
+          ? { artifactKey: artifactKeyForAsset(assetKey) }
+          : {},
         writes_runtime_directly: false,
         writes_fact_directly: false,
       },
@@ -467,7 +435,19 @@ function buildReadyBusinessPathSourceFiles() {
       `,
     },
     {
-      sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+      sourcePath: 'server/src/services/projectCriticalPathService.ts',
+      sourceText: `
+        import { recordProjectCriticalPathConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        const PROJECT_CRITICAL_PATH_CONSUMER_ASSET_KEYS = new Set([
+          'critical_path_rule_candidate',
+        ])
+        async function resolveCriticalPathLearningPublications() {
+          await recordProjectCriticalPathConsumedArtifacts({ queryExec, artifacts: [] })
+        }
+      `,
+    },
+    {
+      sourcePath: 'server/src/services/wbsTemplateGenerationOrchestrator.ts',
       sourceText: `
         import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
         const WBS_TEMPLATE_GENERATION_CONSUMER_ASSET_KEYS = new Set([
@@ -496,8 +476,10 @@ function buildReadyBusinessPathSourceFiles() {
       sourcePath: 'server/src/services/scheduleAccelerationRuntimeService.ts',
       sourceText: `
         import { recordScheduleAccelerationRuntimeConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
+        import { CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY } from './constructionOrganizationRuntimeLineageService.js'
         const SCHEDULE_ACCELERATION_RUNTIME_CONSUMER_ASSET_KEYS = new Set([
           'critical_path_rule_candidate',
+          CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
         ])
         export async function evaluateRuntimeScheduleAcceleration() {
           await recordScheduleAccelerationRuntimeConsumedArtifacts({ queryExec, artifacts: [] })
@@ -565,21 +547,24 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'event_status',
         'event_payload.assetKey',
       ]))
-      expect(entry.requiredFieldsBySourceTable.wbs_template_runtime_publications).toEqual(expect.arrayContaining([
+      expect(entry.requiredFieldsBySourceTable.duration_learning_runtime_publications).toEqual(expect.arrayContaining([
         'publication_key',
-        'asset_kind',
-        'asset_version_id',
-        'runtime_publication_status',
-        'impact_monitoring.status',
-        'rollback_execution.status',
+        'asset_key',
+        'artifact_key',
+        'scope_level',
+        'publication_stage',
+        'monitoring_status',
+        'rollback_execution.rolledBackAt',
       ]))
-      expect(entry.requiredFieldsBySourceTable.construction_dependency_rule_runtime_publications).toEqual(expect.arrayContaining([
+      expect(entry.requiredFieldsBySourceTable.duration_learning_runtime_consumptions).toEqual(expect.arrayContaining([
+        'consumption_key',
         'publication_key',
-        'dependency_rule_version_id',
-        'runtime_publication_status',
-        'dependency_rule_lineage.assetType',
-        'impact_monitoring.status',
-        'rollback_execution.status',
+        'asset_key',
+        'artifact_key',
+        'consumer_key',
+        'project_id',
+        'duration_day_basis',
+        'source_evidence_refs',
       ]))
       expect(entry.requiredFieldsBySourceTable.duration_algorithm_accuracy_events).toEqual(expect.arrayContaining([
         'id',
@@ -597,6 +582,15 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         'writes_runtime_directly',
         'writes_fact_directly',
       ]))
+      if (unifiedDurationLearningAssetKeys.has(entry.assetKey)) {
+        expect(entry.sourceTables).not.toEqual(expect.arrayContaining([
+          'algorithm_seed_versions',
+          'wbs_template_runtime_publications',
+          'wbs_template_runtime_events',
+          'construction_dependency_rule_runtime_publications',
+          'construction_dependency_rule_runtime_events',
+        ]))
+      }
       expect(entry.requiredFieldsBySourceTable.runtime_consumer_runtime_calls).toEqual(expect.arrayContaining([
         'id',
         'consumer_key',
@@ -730,35 +724,35 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'publication_execution',
-          evidenceRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
+          evidenceRef: 'duration_learning_runtime_publications:duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'published',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'runtime_consumer_observation',
           evidenceRef: 'runtime_consumer:base:observed',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'observed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'impact_monitoring',
           evidenceRef: 'impact_monitoring:base:armed',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'monitoring_armed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'rollback_drill',
           evidenceRef: 'rollback:base:verified',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'rollback_verified',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'accuracy',
           evidenceRef: 'accuracy:base:mae-bias-ok',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'accuracy_passed',
         },
         {
@@ -779,15 +773,15 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(collected.productionEvidence).toEqual([{
       assetKey: 'base_duration_benchmark',
       productionSampleEvidenceRef: 'duration_samples:base:accepted',
-      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
+      publicationExecutionRef: 'duration_learning_runtime_publications:duration_learning_runtime:base_duration_benchmark:asset-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:base:observed',
-      runtimeConsumerPublicationKey: 'duration_benchmark_runtime:base-v2',
+      runtimeConsumerPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
       impactMonitoringEvidenceRef: 'impact_monitoring:base:armed',
-      impactMonitoringPublicationKey: 'duration_benchmark_runtime:base-v2',
+      impactMonitoringPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
       rollbackDrillEvidenceRef: 'rollback:base:verified',
-      rollbackDrillPublicationKey: 'duration_benchmark_runtime:base-v2',
+      rollbackDrillPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
       accuracyEvidenceRef: 'accuracy:base:mae-bias-ok',
-      accuracyPublicationKey: 'duration_benchmark_runtime:base-v2',
+      accuracyPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
     }])
     expect(collected.rejectedRecords).toEqual([
       {
@@ -863,62 +857,62 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'runtime_consumer_observation',
           evidenceRef: 'runtime_consumer:base:old-observation',
-          publicationKey: 'duration_benchmark_runtime:base-v1',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v1',
           evidenceStatus: 'observed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'impact_monitoring',
           evidenceRef: 'impact_monitoring:duration_benchmark_runtime:base-v1:monitoring_armed',
-          publicationKey: 'duration_benchmark_runtime:base-v1',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v1',
           evidenceStatus: 'monitoring_armed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'rollback_drill',
           evidenceRef: 'rollback:duration_benchmark_runtime:base-v1:rollback_verified',
-          publicationKey: 'duration_benchmark_runtime:base-v1',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v1',
           evidenceStatus: 'rollback_verified',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'accuracy',
           evidenceRef: 'duration_algorithm_accuracy_events:base-v1',
-          publicationKey: 'duration_benchmark_runtime:base-v1',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v1',
           evidenceStatus: 'accuracy_passed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'runtime_consumer_observation',
           evidenceRef: 'runtime_consumer:base:current-observation',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'observed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'impact_monitoring',
           evidenceRef: 'impact_monitoring:duration_benchmark_runtime:base-v2:monitoring_armed',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'monitoring_armed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'rollback_drill',
           evidenceRef: 'rollback:duration_benchmark_runtime:base-v2:rollback_verified',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'rollback_verified',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'accuracy',
           evidenceRef: 'duration_algorithm_accuracy_events:base-v2',
-          publicationKey: 'duration_benchmark_runtime:base-v2',
+          publicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'accuracy_passed',
         },
         {
           assetKey: 'base_duration_benchmark',
           evidenceKind: 'publication_execution',
-          evidenceRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
+          evidenceRef: 'duration_learning_runtime_publications:duration_learning_runtime:base_duration_benchmark:asset-v2',
           evidenceStatus: 'published',
         },
       ],
@@ -927,15 +921,15 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     expect(collected.productionEvidence).toEqual([{
       assetKey: 'base_duration_benchmark',
       productionSampleEvidenceRef: 'duration_samples:base:accepted',
-      publicationExecutionRef: 'algorithm_learnable_parameter_runtime_publications:duration_benchmark_runtime:base-v2',
+      publicationExecutionRef: 'duration_learning_runtime_publications:duration_learning_runtime:base_duration_benchmark:asset-v2',
       runtimeConsumerObservationRef: 'runtime_consumer:base:current-observation',
-      runtimeConsumerPublicationKey: 'duration_benchmark_runtime:base-v2',
+      runtimeConsumerPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
       impactMonitoringEvidenceRef: 'impact_monitoring:duration_benchmark_runtime:base-v2:monitoring_armed',
-      impactMonitoringPublicationKey: 'duration_benchmark_runtime:base-v2',
+      impactMonitoringPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
       rollbackDrillEvidenceRef: 'rollback:duration_benchmark_runtime:base-v2:rollback_verified',
-      rollbackDrillPublicationKey: 'duration_benchmark_runtime:base-v2',
+      rollbackDrillPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
       accuracyEvidenceRef: 'duration_algorithm_accuracy_events:base-v2',
-      accuracyPublicationKey: 'duration_benchmark_runtime:base-v2',
+      accuracyPublicationKey: 'duration_learning_runtime:base_duration_benchmark:asset-v2',
     }])
     expect(collected.rejectedRecords).toEqual([])
   })
@@ -1200,14 +1194,21 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
           },
         },
         {
-          sourceTable: 'algorithm_seed_versions',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            id: 'seed-version-standard-work-duration-v2',
-            seed_type: 'standard_work_duration',
-            seed_version: 'v2',
-            status: 'active',
-            is_current: true,
-            published_at: '2026-06-14T00:00:00.000Z',
+            publication_key: 'duration_learning_runtime:standard_work_duration_seed:asset-v2',
+            asset_key: 'standard_work_duration_seed',
+            artifact_key: 'standard_work_duration_seed:artifact-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['evidence:standard-work-duration:v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 3 },
+            rollback_execution: {
+              status: 'rollback_verified',
+              rolledBackAt: '2026-06-15T00:00:00.000Z',
+            },
           },
         },
         {
@@ -1280,8 +1281,23 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       {
         assetKey: 'standard_work_duration_seed',
         evidenceKind: 'publication_execution',
-        evidenceRef: 'algorithm_seed_versions:seed-version-standard-work-duration-v2',
+        evidenceRef: 'duration_learning_runtime_publications:duration_learning_runtime:standard_work_duration_seed:asset-v2',
         evidenceStatus: 'published',
+        publicationKey: 'duration_learning_runtime:standard_work_duration_seed:asset-v2',
+      },
+      {
+        assetKey: 'standard_work_duration_seed',
+        evidenceKind: 'impact_monitoring',
+        evidenceRef: 'impact_monitoring:duration_learning_runtime:standard_work_duration_seed:asset-v2:monitoring_passed',
+        evidenceStatus: 'monitoring_passed',
+        publicationKey: 'duration_learning_runtime:standard_work_duration_seed:asset-v2',
+      },
+      {
+        assetKey: 'standard_work_duration_seed',
+        evidenceKind: 'rollback_drill',
+        evidenceRef: 'rollback:duration_learning_runtime:standard_work_duration_seed:asset-v2:rollback_verified',
+        evidenceStatus: 'rollback_verified',
+        publicationKey: 'duration_learning_runtime:standard_work_duration_seed:asset-v2',
       },
       {
         assetKey: 'forecast_confidence_weight',
@@ -1383,54 +1399,54 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
     }])
   })
 
-  it('adapts plan-network runtime publication rows into production publication records', () => {
+  it('adapts canonical 315 publication lifecycle rows without treating a rollback as active runtime', () => {
     const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
       rows: [
         {
-          sourceTable: 'wbs_template_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'wbs_template_runtime:special-seed-version-v2',
-            asset_kind: 'special_work_duration_seed',
-            asset_version_id: 'special-seed-version-v2',
-            runtime_publication_status: 'runtime_published',
-            impact_monitoring: { status: 'monitoring_armed' },
+            publication_key: 'duration_learning_runtime:special_work_duration_seed:asset-v2',
+            asset_key: 'special_work_duration_seed',
+            artifact_key: 'special-work:asset-v2',
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['candidate:special-work:v2'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 5 },
             rollback_execution: { status: 'rollback_verified' },
           },
         },
         {
-          sourceTable: 'wbs_template_runtime_events',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            source_publication_key: 'wbs_reference_days_runtime:wbs-reference-days-v2',
-            event_type: 'impact_monitoring',
-            event_status: 'monitoring_passed',
-            event_payload: {
-              runtimePublication: {
-                assetKind: 'wbs_reference_days',
-              },
-            },
+            publication_key: 'duration_learning_runtime:dependency_rule_candidate:asset-v2',
+            asset_key: 'dependency_rule_candidate',
+            artifact_key: 'dependency-rule:asset-v2',
+            scope_level: 'company',
+            publication_stage: 'canary',
+            source_evidence_refs: ['candidate:dependency-rule:v2'],
+            automation_decision: { stage: 'canary', autoPromotionAllowed: true },
+            monitoring_status: 'collecting',
+            impact_metrics: { observedCount: 1 },
           },
         },
         {
-          sourceTable: 'construction_dependency_rule_runtime_publications',
+          sourceTable: 'duration_learning_runtime_publications',
           row: {
-            publication_key: 'dependency_rule_runtime:dependency-rule-version-v2',
-            dependency_rule_version_id: 'dependency-rule-version-v2',
-            runtime_publication_status: 'runtime_published',
-            dependency_rule_lineage: { assetType: 'dependency_rule_candidate' },
-            impact_monitoring: { status: 'monitoring_armed' },
-            rollback_execution: { status: 'rollback_verified' },
-          },
-        },
-        {
-          sourceTable: 'construction_dependency_rule_runtime_events',
-          row: {
-            source_publication_key: 'critical_path_rule_runtime:critical-path-rule-version-v2',
-            event_type: 'rollback_execution',
-            event_status: 'rollback_executed',
-            event_payload: {
-              runtimePublication: {
-                assetType: 'critical_path_rule_candidate',
-              },
+            publication_key: 'duration_learning_runtime:critical_path_rule_candidate:asset-v2',
+            asset_key: 'critical_path_rule_candidate',
+            artifact_key: 'critical-path:asset-v2',
+            scope_level: 'global',
+            publication_stage: 'rolled_back',
+            source_evidence_refs: ['candidate:critical-path:v2'],
+            automation_decision: { stage: 'rollback', autoPromotionAllowed: false },
+            monitoring_status: 'failed',
+            impact_metrics: { regressionRate: 0.5 },
+            rollback_execution: {
+              reason: 'forced_staging_rollback',
+              rolledBackAt: '2026-06-16T00:00:00.000Z',
+              restoredPublicationKey: 'duration_learning_runtime:critical_path_rule_candidate:asset-v1',
             },
           },
         },
@@ -1441,59 +1457,115 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       {
         assetKey: 'special_work_duration_seed',
         evidenceKind: 'publication_execution',
-        evidenceRef: 'wbs_template_runtime:special-seed-version-v2',
+        evidenceRef: 'duration_learning_runtime_publications:duration_learning_runtime:special_work_duration_seed:asset-v2',
         evidenceStatus: 'published',
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:asset-v2',
       },
       {
         assetKey: 'special_work_duration_seed',
         evidenceKind: 'impact_monitoring',
-        evidenceRef: 'impact_monitoring:wbs_template_runtime:special-seed-version-v2:monitoring_armed',
-        evidenceStatus: 'monitoring_armed',
-        publicationKey: 'wbs_template_runtime:special-seed-version-v2',
+        evidenceRef: 'impact_monitoring:duration_learning_runtime:special_work_duration_seed:asset-v2:monitoring_passed',
+        evidenceStatus: 'monitoring_passed',
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:asset-v2',
       },
       {
         assetKey: 'special_work_duration_seed',
         evidenceKind: 'rollback_drill',
-        evidenceRef: 'rollback:wbs_template_runtime:special-seed-version-v2:rollback_verified',
+        evidenceRef: 'rollback:duration_learning_runtime:special_work_duration_seed:asset-v2:rollback_verified',
         evidenceStatus: 'rollback_verified',
-        publicationKey: 'wbs_template_runtime:special-seed-version-v2',
-      },
-      {
-        assetKey: 'wbs_reference_days',
-        evidenceKind: 'impact_monitoring',
-        evidenceRef: 'impact_monitoring:wbs_reference_days_runtime:wbs-reference-days-v2:monitoring_passed',
-        evidenceStatus: 'monitoring_passed',
-        publicationKey: 'wbs_reference_days_runtime:wbs-reference-days-v2',
+        publicationKey: 'duration_learning_runtime:special_work_duration_seed:asset-v2',
       },
       {
         assetKey: 'dependency_rule_candidate',
         evidenceKind: 'publication_execution',
-        evidenceRef: 'dependency_rule_runtime:dependency-rule-version-v2',
-        evidenceStatus: 'published',
+        evidenceRef: 'duration_learning_runtime_publications:duration_learning_runtime:dependency_rule_candidate:asset-v2',
+        evidenceStatus: 'canary',
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:asset-v2',
       },
       {
         assetKey: 'dependency_rule_candidate',
         evidenceKind: 'impact_monitoring',
-        evidenceRef: 'impact_monitoring:dependency_rule_runtime:dependency-rule-version-v2:monitoring_armed',
-        evidenceStatus: 'monitoring_armed',
-        publicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
-      },
-      {
-        assetKey: 'dependency_rule_candidate',
-        evidenceKind: 'rollback_drill',
-        evidenceRef: 'rollback:dependency_rule_runtime:dependency-rule-version-v2:rollback_verified',
-        evidenceStatus: 'rollback_verified',
-        publicationKey: 'dependency_rule_runtime:dependency-rule-version-v2',
+        evidenceRef: 'impact_monitoring:duration_learning_runtime:dependency_rule_candidate:asset-v2:monitoring_running',
+        evidenceStatus: 'monitoring_running',
+        publicationKey: 'duration_learning_runtime:dependency_rule_candidate:asset-v2',
       },
       {
         assetKey: 'critical_path_rule_candidate',
         evidenceKind: 'rollback_drill',
-        evidenceRef: 'rollback:critical_path_rule_runtime:critical-path-rule-version-v2:rollback_executed',
+        evidenceRef: 'rollback:duration_learning_runtime:critical_path_rule_candidate:asset-v2:rollback_executed',
         evidenceStatus: 'rollback_executed',
-        publicationKey: 'critical_path_rule_runtime:critical-path-rule-version-v2',
+        publicationKey: 'duration_learning_runtime:critical_path_rule_candidate:asset-v2',
       },
     ])
     expect(adapted.rejectedRows).toEqual([])
+  })
+
+  it('accepts trusted consumption only when publication, asset, artifact, and source lineage match', () => {
+    const publicationKey = 'duration_learning_runtime:wbs_reference_days:exact-v1'
+    const publication = {
+      sourceTable: 'duration_learning_runtime_publications' as const,
+      row: {
+        publication_key: publicationKey,
+        asset_key: 'wbs_reference_days',
+        artifact_key: 'wbs-reference:exact-v1',
+        scope_level: 'project',
+        publication_stage: 'stable',
+        source_evidence_refs: ['candidate:wbs-reference:exact-v1'],
+        automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+        monitoring_status: 'failed',
+      },
+    }
+    const validConsumption = {
+      sourceTable: 'duration_learning_runtime_consumptions' as const,
+      row: {
+        consumption_key: 'trusted-consumption:wbs-reference:task-1',
+        company_id: 'company-1',
+        project_id: 'project-1',
+        publication_key: publicationKey,
+        asset_key: 'wbs_reference_days',
+        artifact_key: 'wbs-reference:exact-v1',
+        consumer_key: 'wbsTemplateGenerationService',
+        consumer_surface: 'project_wizard_commit',
+        task_id: 'task-1',
+        duration_day_basis: 'construction_production_day',
+        source_evidence_refs: [`duration_learning_runtime_publications:${publicationKey}`],
+        consumption_context: { generationBatchId: 'batch-1' },
+      },
+    }
+    const mismatchedConsumption = {
+      ...validConsumption,
+      row: {
+        ...validConsumption.row,
+        consumption_key: 'trusted-consumption:wbs-reference:task-2',
+        task_id: 'task-2',
+        artifact_key: 'wbs-reference:other-artifact',
+      },
+    }
+
+    const adapted = collectDurationLiveLearningProductionEvidenceRecordsFromRows({
+      rows: [publication, validConsumption, mismatchedConsumption],
+    })
+
+    expect(adapted.records).toEqual([
+      expect.objectContaining({
+        assetKey: 'wbs_reference_days',
+        evidenceKind: 'publication_execution',
+        publicationKey,
+      }),
+      {
+        assetKey: 'wbs_reference_days',
+        consumerKey: 'wbsTemplateGenerationService',
+        evidenceKind: 'runtime_consumer_observation',
+        evidenceRef: 'runtime_consumption:trusted-consumption:wbs-reference:task-1',
+        publicationKey,
+        evidenceStatus: 'observed',
+        sourceEvidenceRefs: [`duration_learning_runtime_publications:${publicationKey}`],
+      },
+    ])
+    expect(adapted.rejectedRows).toEqual([{
+      ...mismatchedConsumption,
+      reason: 'production_source_row_not_evidence_ready',
+    }])
   })
 
   it('blocks the final production claim when non-network production evidence is supplied only as direct typed records', () => {
@@ -1790,14 +1862,14 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
   })
 
   it('blocks the final production claim when monitoring and rollback belong to a different publication than the consumed artifact', () => {
-    const staleSeedPublicationKey = 'algorithm_seed_versions:seed-version-standard-work-duration-v1'
+    const staleSeedPublicationKey = 'duration_learning_runtime:standard_work_duration_seed:asset-v1'
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       sourceRows: [
         ...buildAllProductionSourceRows().map((source) => {
           if (
-            source.sourceTable !== 'algorithm_learnable_parameter_release_events'
-            || source.row.event_payload?.assetKey !== 'standard_work_duration_seed'
+            source.sourceTable !== 'duration_learning_runtime_publications'
+            || source.row.asset_key !== 'standard_work_duration_seed'
           ) {
             return source
           }
@@ -1805,10 +1877,26 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
             ...source,
             row: {
               ...source.row,
-              source_publication_key: staleSeedPublicationKey,
+              monitoring_status: 'failed',
+              rollback_execution: null,
             },
           }
         }),
+        {
+          sourceTable: 'duration_learning_runtime_publications',
+          row: {
+            publication_key: staleSeedPublicationKey,
+            asset_key: 'standard_work_duration_seed',
+            artifact_key: artifactKeyForAsset('standard_work_duration_seed'),
+            scope_level: 'project',
+            publication_stage: 'stable',
+            source_evidence_refs: ['evidence:standard-work-duration:v1'],
+            automation_decision: { stage: 'stable', autoPromotionAllowed: true },
+            monitoring_status: 'passed',
+            impact_metrics: { observedCount: 2 },
+            rollback_execution: { status: 'rollback_verified' },
+          },
+        },
         ...buildRuntimeConsumerRuntimeCallRows(),
       ],
       records: buildPlanNetworkOutcomeRecords(),
@@ -2011,7 +2099,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
         ...buildAllProductionSourceRows().map((source) => {
           if (
             source.sourceTable !== 'algorithm_learnable_parameter_runtime_publications'
-            || source.row.asset_key !== 'base_duration_benchmark'
+            || source.row.asset_key !== 'duration_cold_start_baseline'
           ) {
             return source
           }
@@ -2038,7 +2126,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       }),
     ]))
     expect(audit.productionGate.missingEvidenceByAsset).toEqual(expect.arrayContaining([{
-      assetKey: 'base_duration_benchmark',
+      assetKey: 'duration_cold_start_baseline',
       missingReasonCodes: expect.arrayContaining([
         'publication_execution_evidence_required',
         'impact_monitoring_evidence_required',
@@ -2049,7 +2137,7 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
   })
 
   it('blocks the final production claim when production outcome evidence belongs to a different publication', () => {
-    const staleOutcomePublicationKey = 'wbs_reference_days_runtime:wbs-reference-days-v1'
+    const staleOutcomePublicationKey = 'duration_learning_runtime:wbs_reference_days:wbs-reference-days-v1'
     const audit = buildDurationLiveLearningProductionClaimAudit({
       completionAudit: buildReadyCompletionAudit(),
       sourceRows: [
@@ -2261,11 +2349,17 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       sourceRows: [
         ...buildAllProductionSourceRows().map((source) => {
           if (source.sourceTable !== 'runtime_consumer_observations') return source
+          const publicationSourceRef = unifiedDurationLearningAssetKeys.has(source.row.asset_key)
+            ? [`duration_learning_runtime_publications:${source.row.publication_key}`]
+            : []
           return {
             ...source,
             row: {
               ...source.row,
-              source_evidence_refs: [`runtime-observation:${source.row.consumer_key}:${source.row.asset_key}`],
+              source_evidence_refs: [
+                ...publicationSourceRef,
+                `runtime-observation:${source.row.consumer_key}:${source.row.asset_key}`,
+              ],
             },
           }
         }),
@@ -2306,7 +2400,10 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
             ...source,
             row: {
               ...source.row,
-              source_evidence_refs: [staleSeedSourceRef],
+              source_evidence_refs: [
+                `duration_learning_runtime_publications:${source.row.publication_key}`,
+                staleSeedSourceRef,
+              ],
             },
           }
         }),
@@ -2322,7 +2419,10 @@ describe('durationLiveLearningProductionEvidenceGateService', () => {
       .toBe('runtime_consumer_observation_runtime_calls_not_ready')
     expect(audit.runtimeConsumerRuntimeCallCoverage.unlinkedConsumerObservations).toEqual([{
       consumerKey: 'durationSuggestionService',
-      sourceEvidenceRefs: [staleSeedSourceRef],
+      sourceEvidenceRefs: [
+        `duration_learning_runtime_publications:${publicationKeyForAsset('standard_work_duration_seed')}`,
+        staleSeedSourceRef,
+      ],
       reason: 'runtime_consumer_observation_not_linked_to_runtime_call',
     }])
     expect(audit.status).toBe('duration_live_learning_production_claim_not_ready')

@@ -9,6 +9,7 @@ import { LoadingState } from '@/components/ui/loading-state'
 import { AlertTriangle, ChevronDown, ChevronUp, CircleAlert, Minus, ShieldAlert, TrendingDown, TrendingUp } from 'lucide-react'
 import { useProject } from '@/contexts/ProjectContext'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { apiGet } from '@/lib/apiClient'
 
 interface RiskTrendData {
   date: string
@@ -94,8 +95,10 @@ export default function RiskTrendChart({ defaultExpanded = true }: RiskTrendChar
 
     setLoading(true)
     try {
-      const response = await fetch(`/api/risk-statistics/trend?projectId=${currentProject.id}&days=${days}`)
-      const result = await response.json()
+      const projectId = String(currentProject.id)
+      const result = await apiGet<{ success: boolean; data: RiskTrendSummary }>(
+        `/api/risk-statistics/trend?projectId=${encodeURIComponent(projectId)}&days=${days}`,
+      )
       if (result.success) {
         setData(result.data)
       }

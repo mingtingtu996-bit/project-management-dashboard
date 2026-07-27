@@ -23,7 +23,7 @@ describe('planning contracts', () => {
         expect.objectContaining({
           method: 'POST',
           path: '/api/task-baselines/:id/confirm',
-          requestShape: '{ version: number }',
+          requestShape: '{ version?: number | null }',
           responseShape: "{ id: string, status: 'confirmed' }",
           errorCodes: ['VERSION_CONFLICT', 'BLOCKING_ISSUES_EXIST', 'VALIDATION_ERROR', 'REQUIRES_REALIGNMENT'],
         }),
@@ -32,6 +32,30 @@ describe('planning contracts', () => {
           path: '/api/task-baselines/:id/revisions',
           requestShape: '{ baseline_version_id: string, reason: string }',
           responseShape: "{ revision_id: string, status: 'revising' }",
+        }),
+        expect.objectContaining({
+          method: 'PUT',
+          path: '/api/task-baselines/:id',
+          requestShape: '{ title?: string, items?: [...] }',
+          responseShape: "{ id: string, status: 'draft' | 'revising' }",
+          errorCodes: ['INVALID_STATE', 'NOT_FOUND', 'VALIDATION_ERROR'],
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/api/task-baselines/generate',
+          requestShape: '{ project_id: string }',
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/api/task-baselines/:id/commit',
+          requestShape: 'PlanningTableCommitRequest<baseline>',
+          responseShape: 'PlanningTableCommitResponse<BaselineItem>',
+          errorCodes: ['FIELD_REGISTRY_STALE', 'INVALID_STATE', 'NOT_FOUND', 'VALIDATION_ERROR'],
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/api/task-baselines/:id/publish',
+          responseShape: "{ id: string, status: 'confirmed' }",
         }),
         expect.objectContaining({
           method: 'POST',
@@ -47,10 +71,23 @@ describe('planning contracts', () => {
         }),
         expect.objectContaining({
           method: 'POST',
-          path: '/api/monthly-plans/:id/force-close',
-          requestShape: '{ reason?: string }',
-          responseShape: "{ id: string, status: 'closed' }",
-          errorCodes: ['FORBIDDEN', 'INVALID_STATE', 'NOT_FOUND'],
+          path: '/api/monthly-plans/generate',
+          requestShape: '{ project_id: string, month: string, title?: string }',
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/api/monthly-plans/:id/commit',
+          requestShape: 'PlanningTableCommitRequest<monthly_plan>',
+          responseShape: 'PlanningTableCommitResponse<MonthlyPlanItem>',
+          errorCodes: ['FIELD_REGISTRY_STALE', 'INVALID_STATE', 'NOT_FOUND', 'VALIDATION_ERROR'],
+        }),
+        expect.objectContaining({
+          method: 'GET',
+          path: '/api/monthly-plans/:id/change-summary',
+        }),
+        expect.objectContaining({
+          method: 'GET',
+          path: '/api/monthly-plans/:id/closeout-summary',
         }),
         expect.objectContaining({
           method: 'POST',
@@ -67,6 +104,16 @@ describe('planning contracts', () => {
         expect.objectContaining({
           method: 'GET',
           path: '/api/progress-deviation',
+        }),
+        expect.objectContaining({
+          method: 'POST',
+          path: '/api/tasks/commit',
+          requestShape: 'PlanningTableCommitRequest<task_list>',
+          responseShape: 'PlanningTableCommitResponse<Task>',
+        }),
+        expect.objectContaining({
+          method: 'GET',
+          path: '/api/tasks/progress-snapshots',
         }),
       ])
     )
@@ -98,6 +145,11 @@ describe('planning state machine', () => {
       planningStateMachine.transition('draft', 'CONFIRM', {
         version: 3,
         expected_version: 3,
+      })
+    ).toBe('confirmed')
+    expect(
+      planningStateMachine.transition('draft', 'CONFIRM', {
+        expected_version: undefined,
       })
     ).toBe('confirmed')
     expect(

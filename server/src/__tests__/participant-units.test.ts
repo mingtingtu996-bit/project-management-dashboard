@@ -60,6 +60,30 @@ vi.mock('../services/dbService.js', () => ({
   SupabaseService: vi.fn(() => state.supabaseInstance),
 }))
 
+vi.mock('../services/deletionRetentionGovernanceService.js', () => ({
+  executeRetention: vi.fn(async () => ({
+    resolvedAction: 'physical_delete',
+    executionMode: 'auto_execute',
+    reason: 'test no references',
+    reasonCode: 'test_no_references',
+  })),
+}))
+
+vi.mock('../database.js', () => ({
+  query: vi.fn(async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('FROM participant_units')) {
+      const projectId = String(params[0] ?? '')
+      const status = String(params[1] ?? 'active')
+      const rows = state.units
+        .filter((unit) => String(unit.project_id ?? '') === projectId)
+        .filter((unit) => sql.includes('COALESCE(unit_status, $2)') ? String(unit.unit_status ?? 'active') === status : true)
+      return { rows, rowCount: rows.length }
+    }
+
+    return { rows: [], rowCount: 0 }
+  }),
+}))
+
 const { default: participantUnitsRouter } = await import('../routes/participant-units.js')
 
 const serverRoot = fileURLToPath(new URL('../..', import.meta.url))

@@ -1,5 +1,5 @@
--- 任务完成总结�?
--- 房地产工程管理系统V4.1 Phase 3.6 数据库迁�?
+-- 任务完成总结表
+-- 房地产工程管理系统V4.1 Phase 3.6 数据库迁移
 -- 执行时间: 2026-03-22
 
 -- 1. task_completion_reports（任务完成总结表）
@@ -14,9 +14,9 @@ CREATE TABLE IF NOT EXISTS task_completion_reports (
   summary TEXT,
   
   -- 效率统计
-  planned_duration INTEGER NOT NULL,      -- 计划工期（天�?
-  actual_duration INTEGER NOT NULL,       -- 实际工期（天�?
-  efficiency_ratio NUMERIC(5, 2) NOT NULL, -- 效率�?
+  planned_duration INTEGER NOT NULL,      -- 计划工期（天）
+  actual_duration INTEGER NOT NULL,       -- 实际工期（天）
+  efficiency_ratio NUMERIC(5, 2) NOT NULL, -- 效率比
   efficiency_status TEXT NOT NULL DEFAULT 'normal' CHECK (efficiency_status IN ('fast', 'normal', 'slow')),
   
   -- 延期统计
@@ -37,23 +37,24 @@ CREATE TABLE IF NOT EXISTS task_completion_reports (
   issues TEXT,
   lessons_learned TEXT,
   
-  -- 元数�?
+  -- 元数据
   generated_by UUID REFERENCES users(id) ON DELETE SET NULL,
   generated_at TIMESTAMPTZ DEFAULT NOW(),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. task_progress_snapshots（任务进度快照表�? 用于效率计算
+-- 2. task_progress_snapshots（任务进度快照表）- 用于效率计算
 CREATE TABLE IF NOT EXISTS task_progress_snapshots (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   progress INTEGER NOT NULL CHECK (progress BETWEEN 0 AND 100),
-  snapshot_date DATE NOT NULL
+  snapshot_date DATE NOT NULL,
   is_auto_generated BOOLEAN DEFAULT TRUE,
-  event_type VARCHAR(50),
-  event_source VARCHAR(50),
   notes TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+
+  -- 唯一约束：同一任务每天最多一条自动生成的快照
+  CONSTRAINT daily_snapshot UNIQUE (task_id, snapshot_date, is_auto_generated)
 );
 
 -- 创建索引
@@ -98,7 +99,7 @@ BEGIN
       '任务已完成，自动生成总结报告',
       EXTRACT(DAY FROM (NEW.planned_end_date - NEW.start_date)),
       EXTRACT(DAY FROM (CURRENT_DATE - NEW.start_date)),
-      -- 效率比暂时设�?，由服务层重新计�?
+      -- 效率比暂时设为1，由服务层重新计算
       1.0,
       'normal',
       NEW.updated_by,
@@ -116,28 +117,23 @@ CREATE TRIGGER trigger_auto_generate_report
   WHEN (NEW.progress = 100 AND (OLD.progress IS NULL OR OLD.progress < 100))
   EXECUTE FUNCTION auto_generate_completion_report();
 
--- 创建触发器：任务进度更新时记录快�?
+-- 创建触发器：任务进度更新时记录快照
 CREATE OR REPLACE FUNCTION auto_record_progress_snapshot()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- 只有当进度发生变化时才记录快�?
+  -- 只有当进度发生变化时才记录快照
   IF NEW.progress IS DISTINCT FROM OLD.progress THEN
-    INSERT INTO task_progress_snapshots (
-      task_id,
-      progress,
-      snapshot_date,
-      event_type,
-      event_source,
-      notes
-    )
+    INSERT INTO task_progress_snapshots (task_id, progress, snapshot_date, notes)
     VALUES (
       NEW.id,
       NEW.progress,
       CURRENT_DATE,
-      'task_update',
-      'db_trigger',
-      '���ȸ���: ' || NEW.progress || '%'
-    );
+      '进度更新: ' || NEW.progress || '%'
+    )
+    ON CONFLICT (task_id, snapshot_date, is_auto_generated)
+    DO UPDATE SET
+      progress = NEW.progress,
+      notes = EXCLUDED.notes;
   END IF;
   
   RETURN NEW;

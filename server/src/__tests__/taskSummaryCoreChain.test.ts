@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+﻿import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   const queryResults = {
@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => {
         {
           id: '22222222-2222-4222-8222-222222222222',
           title: '主体结构施工',
-          assignee: '张三',
+          assignee: '寮犱笁',
           assignee_unit: '总包',
           status: 'completed',
           start_date: '2026-04-01',
@@ -38,29 +38,6 @@ const mocks = vi.hoisted(() => {
           milestone_id: '11111111-1111-4111-8111-111111111111',
         },
       ],
-      error: null,
-    },
-    delay_requests: {
-      data: [
-        {
-          id: 'legacy-delay-1',
-          project_id: 'project-1',
-          task_id: '22222222-2222-4222-8222-222222222222',
-          original_date: '2026-04-10',
-          delayed_date: '2026-04-12',
-          delay_days: 2,
-          delay_type: '主动延期',
-          reason: '材料到货延迟',
-          delay_reason: '材料到货延迟',
-          status: 'approved',
-          created_at: '2026-04-02T00:00:00.000Z',
-          updated_at: '2026-04-02T00:00:00.000Z',
-        },
-      ],
-      error: null,
-    },
-    task_delay_history: {
-      data: [],
       error: null,
     },
     monthly_plans: {
@@ -111,6 +88,8 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('../services/dbService.js', () => ({
+  registerDbServiceBusinessSideEffectAdapters: vi.fn(),
+  assertDbServiceBusinessSideEffectAdaptersRegistered: vi.fn(),
   supabase: mocks.supabase,
   SupabaseService: vi.fn(),
   executeSQL: vi.fn(),
@@ -151,6 +130,18 @@ vi.mock('../services/taskTimelineService.js', () => ({
   isTaskTimelineEventStoreReady: mocks.isTaskTimelineEventStoreReady,
 }))
 
+vi.mock('../auth/access.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../auth/access.js')>(),
+  getProjectPermissionLevel: vi.fn(async () => 'owner'),
+}))
+
+vi.mock('../database.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../database.js')>(),
+  query: vi.fn(async (sql: string) => ({
+    rows: /FROM public\.projects/i.test(String(sql)) ? [{ id: projectId }] : [],
+  })),
+}))
+
 vi.mock('../middleware/logger.js', () => ({
   logger: mocks.logger,
   requestLogger: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -168,19 +159,19 @@ describe('task-summary core chain validation', () => {
       {
         id: 'evt-1',
         kind: 'task',
-        title: '主体结构施工已完成',
+        title: 'task completed',
         description: '任务完成后写入的持久化时间线事件',
         occurredAt: '2026-04-10T08:00:00.000Z',
         taskId: '22222222-2222-4222-8222-222222222222',
-        statusLabel: '已完成',
+        statusLabel: 'completed',
       },
     ])
   })
 
   it('returns persisted timeline events when the timeline store is ready', async () => {
-    const response = await request.get(`/api/task-summaries/projects/${projectId}/task-summary`)
+    const response = await request.get(`/api/task-summaries/projects/${projectId}/task-summary?date_from=2026-04-01`)
 
-    expect(response.status).toBe(200)
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(response.body.success).toBe(true)
     expect(response.body.data.timeline_ready).toBe(true)
     expect(response.body.data.timeline_events).toHaveLength(1)
@@ -191,7 +182,7 @@ describe('task-summary core chain validation', () => {
   it('keeps the timeline empty when the store probe is not ready', async () => {
     mocks.isTaskTimelineEventStoreReady.mockResolvedValueOnce(false)
 
-    const response = await request.get(`/api/task-summaries/projects/${projectId}/task-summary`)
+    const response = await request.get(`/api/task-summaries/projects/${projectId}/task-summary?date_from=2026-05-01`)
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)

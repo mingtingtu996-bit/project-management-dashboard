@@ -1,8 +1,9 @@
 import { v4 as uuidv4 } from 'uuid'
-import { normalizeProjectPermissionLevel } from '../auth/access.js'
 import { logger } from '../middleware/logger.js'
+import { normalizeProjectPermissionLevel } from '../auth/access.js'
+import { getClient, query as rawQuery } from '../database.js'
 import { supabase } from './dbService.js'
-import { writeLog } from './changeLogs.js'
+import { notificationTouchpointService } from './notificationTouchpointService.js'
 import {
   PLANNING_DRAFT_LOCK_REMINDER_MINUTES,
   PLANNING_DRAFT_LOCK_TIMEOUT_MINUTES,
@@ -25,7 +26,6 @@ export class PlanningDraftLockServiceError extends Error {
     this.statusCode = statusCode
   }
 }
-
 function toIso(value: string | Date): string {
   return value instanceof Date ? value.toISOString() : value
 }
@@ -44,6 +44,7 @@ function normalizeRow(row: any): PlanningDraftLockRecord {
     released_by: row.released_by ?? null,
     release_reason: row.release_reason ?? null,
     is_locked: Boolean(row.is_locked),
+    version: Number(row.version ?? 0),
     created_at: toIso(row.created_at ?? new Date()),
     updated_at: toIso(row.updated_at ?? new Date()),
   }
@@ -66,10 +67,7 @@ export function buildDraftLockNotificationRecipients(params: {
   return Array.from(new Set(recipients.filter((recipient): recipient is string => Boolean(recipient))))
 }
 
-export function resolveDraftLockReleasedBy(
-  reason: 'timeout' | 'force_unlock' | 'manual_release',
-  actorUserId: string | null
-): string | null {
+export function resolveDraftLockReleasedBy(reason: 'timeout' | 'manual_release', actorUserId: string | null): string | null {
   return reason === 'timeout' ? null : actorUserId
 }
 
@@ -96,10 +94,6 @@ export function classifyDraftLockConflict(
   return isDraftLockExpired(lock, now) ? 'LOCK_EXPIRED' : 'LOCK_HELD'
 }
 
-export function canForceUnlockDraftLock(role?: string | null): boolean {
-  return normalizeProjectPermissionLevel(role) === 'owner'
-}
-
 async function writeNotification(params: {
   projectId: string
   type: string
@@ -109,65 +103,66 @@ async function writeNotification(params: {
   recipients: string[]
   metadata?: Record<string, unknown>
 }) {
-  const { error } = await supabase.from('notifications').insert({
-    id: uuidv4(),
-    project_id: params.projectId,
-    type: params.type,
-    notification_type: params.type,
-    severity: params.severity,
-    title: params.title,
-    content: params.content,
-    recipients: params.recipients,
-    is_read: false,
-    metadata: params.metadata ?? null,
-    created_at: new Date().toISOString(),
-  })
-
-  if (error) {
+  try {
+    await notificationTouchpointService.emit({
+      id: uuidv4(),
+      project_id: params.projectId,
+      type: params.type,
+      notification_type: 'flow-reminder',
+      severity: params.severity,
+      title: params.title,
+      content: params.content,
+      recipients: params.recipients,
+      is_read: false,
+      metadata: params.metadata ?? null,
+      touchpoint_type: 'dashboard_todo',
+      scope_type: 'project',
+      dedupe_key: `planning_draft_lock:${params.projectId}:${params.type}:${String(params.metadata?.resource_id ?? '')}`,
+      target_route: `/projects/${params.projectId}/planning`,
+      target_label: '查看计划草稿',
+      created_at: new Date().toISOString(),
+    })
+  } catch (error) {
     logger.warn('Failed to write planning lock notification', {
       projectId: params.projectId,
       type: params.type,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     })
   }
 }
 
 export class PlanningDraftLockService {
   async getDraftLock(projectId: string, draftType: PlanningDraftLockKind, resourceId: string) {
-    const { data, error } = await supabase
-      .from('planning_draft_locks')
-      .select('*')
-      .eq('project_id', projectId)
-      .eq('draft_type', draftType)
-      .eq('resource_id', resourceId)
-      .limit(1)
-
-    if (error) throw error
-    if (!data || data.length === 0) return null
-    return normalizeRow(data[0])
+    const result = await rawQuery(
+      `SELECT *
+         FROM public.planning_draft_locks
+        WHERE project_id = $1
+          AND draft_type = $2
+          AND resource_id = $3
+        LIMIT 1`,
+      [projectId, draftType, resourceId],
+    )
+    const row = result.rows?.[0]
+    return row ? normalizeRow(row) : null
   }
 
-  async getProjectRole(projectId: string, userId: string): Promise<'owner' | 'editor' | 'viewer' | null> {
-    const { data: projectRows, error: projectError } = await supabase
-      .from('projects')
-      .select('owner_id')
-      .eq('id', projectId)
-      .limit(1)
-
-    if (projectError) throw projectError
-    const project = Array.isArray(projectRows) ? projectRows[0] : projectRows
-    if (project?.owner_id === userId) return 'owner'
-
-    const { data: memberRows, error: memberError } = await supabase
-      .from('project_members')
-      .select('permission_level')
-      .eq('project_id', projectId)
-      .eq('user_id', userId)
-      .limit(1)
-
-    if (memberError) throw memberError
-    const member = Array.isArray(memberRows) ? memberRows[0] : memberRows
-    return member?.permission_level ? normalizeProjectPermissionLevel(member.permission_level) : null
+  async getProjectRole(projectId: string, userId: string): Promise<'owner' | 'editor' | null> {
+    const result = await rawQuery(
+      `SELECT p.owner_id, pm.permission_level
+         FROM public.projects p
+         LEFT JOIN public.project_members pm
+           ON pm.project_id = p.id
+          AND pm.user_id = $2
+        WHERE p.id = $1
+        LIMIT 1`,
+      [projectId, userId],
+    )
+    const row = result.rows?.[0]
+    if (row?.owner_id === userId) return 'owner'
+    const permissionLevel = row?.permission_level
+      ? normalizeProjectPermissionLevel(row.permission_level)
+      : null
+    return permissionLevel === 'owner' || permissionLevel === 'editor' ? permissionLevel : null
   }
 
   async acquireDraftLock(params: {
@@ -177,44 +172,114 @@ export class PlanningDraftLockService {
     actorUserId: string
   }): Promise<PlanningDraftLockRecord> {
     const now = new Date()
-    const existing = await this.getDraftLock(params.projectId, params.draftType, params.resourceId)
+    const lockedAt = now.toISOString()
+    const lockExpiresAt = new Date(
+      now.getTime() + minutesToMs(PLANNING_DRAFT_LOCK_TIMEOUT_MINUTES),
+    ).toISOString()
+    const client = await getClient()
+    let expiredLock: PlanningDraftLockRecord | null = null
+    let acquired: PlanningDraftLockRecord | null = null
+    try {
+      await client.query('BEGIN')
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtext($1))',
+        [`${params.projectId}:${params.draftType}:${params.resourceId}`],
+      )
+      const existingResult = await client.query(
+        `SELECT *
+           FROM public.planning_draft_locks
+          WHERE project_id = $1
+            AND draft_type = $2
+            AND resource_id = $3
+          FOR UPDATE`,
+        [params.projectId, params.draftType, params.resourceId],
+      )
+      const existing = existingResult.rows?.[0]
+        ? normalizeRow(existingResult.rows[0])
+        : null
 
-    if (existing?.is_locked) {
-      const conflict = classifyDraftLockConflict(existing, now)
-      if (conflict === 'LOCK_HELD' && existing.locked_by && existing.locked_by !== params.actorUserId) {
-        throw new PlanningDraftLockServiceError('LOCK_HELD', '草稿正在被其他人编辑', 409)
+      if (existing?.is_locked) {
+        const conflict = classifyDraftLockConflict(existing, now)
+        if (conflict === 'LOCK_HELD' && existing.locked_by && existing.locked_by !== params.actorUserId) {
+          throw new PlanningDraftLockServiceError('LOCK_HELD', '草稿正在被其他人编辑', 409)
+        }
+        if (conflict === 'LOCK_EXPIRED') expiredLock = existing
       }
-      if (conflict === 'LOCK_EXPIRED') {
-        await this.releaseLockRow(existing, 'timeout', null, true)
-      }
+
+      const writeResult = existing
+        ? await client.query(
+            `UPDATE public.planning_draft_locks
+                SET locked_by = $5,
+                    locked_at = $6,
+                    lock_expires_at = $7,
+                    reminder_sent_at = NULL,
+                    released_at = NULL,
+                    released_by = NULL,
+                    release_reason = NULL,
+                    is_locked = TRUE,
+                    version = COALESCE(version, 0) + 1,
+                    updated_at = $6
+              WHERE id = $1
+                AND project_id = $2
+                AND draft_type = $3
+                AND resource_id = $4
+              RETURNING *`,
+            [
+              existing.id,
+              params.projectId,
+              params.draftType,
+              params.resourceId,
+              params.actorUserId,
+              lockedAt,
+              lockExpiresAt,
+            ],
+          )
+        : await client.query(
+            `INSERT INTO public.planning_draft_locks (
+               id, project_id, draft_type, resource_id, locked_by, locked_at,
+               lock_expires_at, reminder_sent_at, released_at, released_by,
+               release_reason, is_locked, version, created_at, updated_at
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL, NULL, NULL, TRUE, 1, $6, $6)
+             RETURNING *`,
+            [
+              uuidv4(),
+              params.projectId,
+              params.draftType,
+              params.resourceId,
+              params.actorUserId,
+              lockedAt,
+              lockExpiresAt,
+            ],
+          )
+      const row = writeResult.rows?.[0]
+      if (!row) throw new Error('planning draft lock write returned no row')
+      acquired = normalizeRow(row)
+      await client.query('COMMIT')
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined)
+      throw error
+    } finally {
+      client.release()
     }
 
-    const payload = {
-      id: existing?.id ?? uuidv4(),
-      project_id: params.projectId,
-      draft_type: params.draftType,
-      resource_id: params.resourceId,
-      locked_by: params.actorUserId,
-      locked_at: now.toISOString(),
-      lock_expires_at: new Date(now.getTime() + minutesToMs(PLANNING_DRAFT_LOCK_TIMEOUT_MINUTES)).toISOString(),
-      reminder_sent_at: null,
-      released_at: null,
-      released_by: null,
-      release_reason: null,
-      is_locked: true,
-      version: (existing?.version ?? 0) + 1,
-      created_at: existing?.created_at ?? now.toISOString(),
-      updated_at: now.toISOString(),
+    if (expiredLock) {
+      await writeNotification({
+        projectId: expiredLock.project_id,
+        type: 'planning_draft_lock_timeout',
+        severity: 'warning',
+        title: '草稿锁已超时释放',
+        content: '草稿锁在 30 分钟无操作后已自动释放，请重新确认后继续编辑。',
+        recipients: buildDraftLockNotificationRecipients({ lockedBy: expiredLock.locked_by }),
+        metadata: {
+          draft_type: expiredLock.draft_type,
+          resource_id: expiredLock.resource_id,
+          locked_by: expiredLock.locked_by,
+          lock_expires_at: expiredLock.lock_expires_at,
+        },
+      })
     }
 
-    const { data, error } = await supabase
-      .from('planning_draft_locks')
-      .upsert(payload, { onConflict: 'project_id,draft_type,resource_id' })
-      .select('*')
-      .single()
-
-    if (error) throw error
-    return normalizeRow(data)
+    return acquired!
   }
 
   async releaseDraftLock(params: {
@@ -223,45 +288,43 @@ export class PlanningDraftLockService {
     resourceId: string
     actorUserId: string
     actorRole?: string | null
-    reason?: 'manual_release' | 'force_unlock'
+    reason?: 'manual_release'
   }): Promise<PlanningDraftLockRecord | null> {
     const lock = await this.getDraftLock(params.projectId, params.draftType, params.resourceId)
     if (!lock) return null
     if (!lock.is_locked) return lock
 
-    const canUnlock = lock.locked_by === params.actorUserId || canForceUnlockDraftLock(params.actorRole)
-    if (!canUnlock) {
-      throw new PlanningDraftLockServiceError('FORBIDDEN', '只有项目负责人可以强制解锁', 403)
+    if (lock.locked_by !== params.actorUserId) {
+      throw new PlanningDraftLockServiceError('FORBIDDEN', '只有当前编辑人可以释放草稿锁', 403)
     }
 
     return this.releaseLockRow(lock, params.reason ?? 'manual_release', params.actorUserId, true)
   }
 
-  async forceUnlockDraftLock(params: {
-    projectId: string
-    draftType: PlanningDraftLockKind
-    resourceId: string
-    actorUserId: string
-    reason?: string
-  }): Promise<PlanningDraftLockRecord> {
-    const actorRole = await this.getProjectRole(params.projectId, params.actorUserId)
-    if (!canForceUnlockDraftLock(actorRole)) {
-      throw new PlanningDraftLockServiceError('FORBIDDEN', '只有项目负责人可以强制解锁', 403)
+  async sweepTimedOutLocks(now = new Date(), projectIds?: string[] | null) {
+    const scopedProjectIds = Array.isArray(projectIds)
+      ? [...new Set(projectIds.map((projectId) => String(projectId ?? '').trim()).filter(Boolean))]
+      : null
+    if (scopedProjectIds && scopedProjectIds.length === 0) {
+      return {
+        scanned: 0,
+        expired: 0,
+        reminded: 0,
+        released: [],
+        reminderLocks: [],
+      }
     }
 
-    const lock = await this.getDraftLock(params.projectId, params.draftType, params.resourceId)
-    if (!lock) {
-      throw new PlanningDraftLockServiceError('NOT_FOUND', '草稿锁不存在', 404)
-    }
-
-    return this.releaseLockRow(lock, 'force_unlock', params.actorUserId, true, params.reason)
-  }
-
-  async sweepTimedOutLocks(now = new Date()) {
-    const { data, error } = await supabase
+    let query = supabase
       .from('planning_draft_locks')
       .select('*')
       .eq('is_locked', true)
+
+    if (scopedProjectIds) {
+      query = query.in('project_id', scopedProjectIds)
+    }
+
+    const { data, error } = await query
 
     if (error) throw error
 
@@ -299,6 +362,7 @@ export class PlanningDraftLockService {
         .from('planning_draft_locks')
         .update({ reminder_sent_at: reminderAt, updated_at: reminderAt })
         .eq('id', lock.id)
+        .eq('project_id', lock.project_id)
         .select('*')
         .single()
 
@@ -334,29 +398,38 @@ export class PlanningDraftLockService {
 
   private async releaseLockRow(
     lock: PlanningDraftLockRecord,
-    reason: 'timeout' | 'force_unlock' | 'manual_release',
+    reason: 'timeout' | 'manual_release',
     actorUserId: string | null,
-    emitNotification = false,
-    note?: string
+    emitNotification = false
   ): Promise<PlanningDraftLockRecord> {
     const releasedAt = new Date().toISOString()
     const releasedBy = resolveDraftLockReleasedBy(reason, actorUserId)
-    const { data, error } = await supabase
-      .from('planning_draft_locks')
-      .update({
-        is_locked: false,
-        released_at: releasedAt,
-        released_by: releasedBy,
-        release_reason: reason,
-        updated_at: releasedAt,
-      })
-      .eq('id', lock.id)
-      .select('*')
-      .single()
+    const result = await rawQuery(
+      `UPDATE public.planning_draft_locks
+          SET is_locked = FALSE,
+              released_at = $5,
+              released_by = $6,
+              release_reason = $7,
+              updated_at = $5
+        WHERE id = $1
+          AND project_id = $2
+          AND draft_type = $3
+          AND resource_id = $4
+        RETURNING *`,
+      [
+        lock.id,
+        lock.project_id,
+        lock.draft_type,
+        lock.resource_id,
+        releasedAt,
+        releasedBy,
+        reason,
+      ],
+    )
+    const row = result.rows?.[0]
+    if (!row) throw new PlanningDraftLockServiceError('NOT_FOUND', 'draft lock not found', 404)
 
-    if (error) throw error
-
-    const normalized = normalizeRow(data)
+    const normalized = normalizeRow(row)
     if (emitNotification) {
       const recipients =
         reason === 'timeout'
@@ -371,13 +444,10 @@ export class PlanningDraftLockService {
 
       await writeNotification({
         projectId: lock.project_id,
-        type: reason === 'force_unlock' ? 'planning_draft_lock_forced_unlock' : 'planning_draft_lock_released',
-        severity: reason === 'force_unlock' ? 'warning' : 'info',
-        title: reason === 'force_unlock' ? '草稿锁已被强制解锁' : '草稿锁已释放',
-        content:
-          reason === 'force_unlock'
-            ? note || '您的编辑会话已被项目负责人中断，草稿已自动暂存。'
-            : '草稿锁已释放，可以继续进行新的编辑会话。',
+        type: 'planning_draft_lock_released',
+        severity: 'info',
+        title: '草稿锁已释放',
+        content: '草稿锁已释放，你可以继续创建新的编辑会话。',
         recipients,
         metadata: {
           draft_type: lock.draft_type,
@@ -385,20 +455,6 @@ export class PlanningDraftLockService {
           locked_by: lock.locked_by,
           release_reason: reason,
         },
-      })
-    }
-
-    if (reason === 'force_unlock') {
-      await writeLog({
-        project_id: lock.project_id,
-        entity_type: 'draft_lock',
-        entity_id: lock.resource_id,
-        field_name: 'force_unlock',
-        old_value: lock.locked_by,
-        new_value: 'unlocked',
-        change_reason: note ?? 'force_unlock',
-        changed_by: actorUserId,
-        change_source: 'manual_adjusted',
       })
     }
 

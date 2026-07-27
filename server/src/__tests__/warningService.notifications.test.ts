@@ -9,6 +9,7 @@ describe('warningService notification generation', () => {
   it('normalizes warning notifications and dedupes by chain identity', async () => {
     const service = new WarningService()
 
+    vi.spyOn(service, 'scanExecutionImpactSignalWarnings').mockResolvedValue([] as any)
     vi.spyOn(service, 'scanConditionWarnings').mockResolvedValue([
       {
         id: 'w-1',
@@ -58,6 +59,7 @@ describe('warningService notification generation', () => {
   it('collapses same-task delay warnings to the highest-severity notification in one scan cycle', async () => {
     const service = new WarningService()
 
+    vi.spyOn(service, 'scanExecutionImpactSignalWarnings').mockResolvedValue([] as any)
     vi.spyOn(service, 'scanConditionWarnings').mockResolvedValue([] as any)
     vi.spyOn(service, 'scanObstacleWarnings').mockResolvedValue([] as any)
     vi.spyOn(service, 'scanAcceptanceWarnings').mockResolvedValue([] as any)
@@ -113,5 +115,74 @@ describe('warningService notification generation', () => {
       title: '关键路径任务停滞且延期风险持续累积',
     })
     expect(notifications[0].content).toContain('延期 4 次')
+  })
+
+  it('preserves unified impact source entity ids when generating warning notifications', async () => {
+    const service = new WarningService()
+
+    vi.spyOn(service, 'scanAll').mockResolvedValue([
+      {
+        id: 'signal-warning-1',
+        project_id: 'p-1',
+        task_id: 'task-1',
+        warning_type: 'critical_path_delay',
+        warning_level: 'critical',
+        title: '确定延期预警',
+        description: '共享材料阻塞造成确定延期',
+        is_acknowledged: false,
+        created_at: '2026-05-26T00:00:00.000Z',
+        source_entity_type: 'project_material',
+        source_entity_id: 'material-1',
+      },
+    ] as any)
+
+    const notifications = await service.generateNotifications('p-1')
+
+    expect(notifications).toHaveLength(1)
+    expect(notifications[0]).toMatchObject({
+      source_entity_type: 'warning',
+      source_entity_id: 'material-1',
+      task_id: 'task-1',
+      category: 'critical_path_delay',
+    })
+  })
+
+  it('parses reminders from actual due labels like N days later due instead of treating them as zero days', async () => {
+    const service = new WarningService()
+
+    vi.spyOn(service, 'scanConditionWarnings').mockResolvedValue([
+      {
+        id: 'condition-warning-1',
+        project_id: 'p-1',
+        task_id: 'task-1',
+        warning_type: 'condition_due',
+        warning_level: 'warning',
+        title: '条件即将到期',
+        description: '任务"机电调试"的开工窗口3天后到期，当前条件"供电接入"仍未满足',
+        is_acknowledged: false,
+        created_at: '2026-04-13T08:00:00.000Z',
+      },
+    ] as any)
+    vi.spyOn(service, 'scanObstacleWarnings').mockResolvedValue([] as any)
+    vi.spyOn(service, 'scanAcceptanceWarnings').mockResolvedValue([
+      {
+        id: 'acceptance-warning-1',
+        project_id: 'p-1',
+        task_id: 'task-2',
+        warning_type: 'acceptance_expired',
+        warning_level: 'warning',
+        title: '验收即将到期',
+        description: '消防验收"消防专项"当前为待提交，7天后到期',
+        is_acknowledged: false,
+        created_at: '2026-04-13T08:00:00.000Z',
+      },
+    ] as any)
+
+    const reminders = await service.generateReminders('p-1')
+
+    expect(reminders.map((reminder) => reminder.reminder_type)).toEqual([
+      'condition_3day',
+      'acceptance_7day',
+    ])
   })
 })

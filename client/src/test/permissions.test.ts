@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   ROLE_PERMISSIONS,
@@ -10,6 +10,14 @@ import {
 } from '@/lib/permissions'
 
 describe('权限模块', () => {
+  beforeEach(() => {
+    vi.stubEnv('VITE_DISABLE_PERMISSION_SYSTEM', 'false')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   describe('hasPermission', () => {
     it('项目负责人拥有所有权限', () => {
       expect(hasPermission('owner', 'view:project')).toBe(true)
@@ -25,11 +33,11 @@ describe('权限模块', () => {
       expect(hasPermission('editor', 'manage:settings')).toBe(false)
     })
 
-    it('只读成员仅拥有查看权限', () => {
-      expect(hasPermission('viewer', 'view:project')).toBe(true)
-      expect(hasPermission('viewer', 'edit:project')).toBe(false)
-      expect(hasPermission('viewer', 'delete:project')).toBe(false)
-      expect(hasPermission('viewer', 'create:task')).toBe(false)
+    it('none 表示没有项目成员身份和项目权限', () => {
+      expect(hasPermission('none', 'view:project')).toBe(false)
+      expect(hasPermission('none', 'edit:project')).toBe(false)
+      expect(hasPermission('none', 'delete:project')).toBe(false)
+      expect(hasPermission('none', 'create:task')).toBe(false)
     })
   })
 
@@ -39,7 +47,7 @@ describe('权限模块', () => {
     })
 
     it('如果没有任何权限则返回 false', () => {
-      expect(hasAnyPermission('viewer', ['delete:project', 'manage:settings'])).toBe(false)
+      expect(hasAnyPermission('none', ['delete:project', 'manage:settings'])).toBe(false)
     })
   })
 
@@ -57,7 +65,7 @@ describe('权限模块', () => {
     it('返回当前角色模型对应的中文名称', () => {
       expect(getRoleDisplayName('owner')).toBe('项目负责人')
       expect(getRoleDisplayName('editor')).toBe('编辑成员')
-      expect(getRoleDisplayName('viewer')).toBe('只读成员')
+      expect(getRoleDisplayName('none')).toBe('无项目权限')
     })
   })
 
@@ -65,7 +73,7 @@ describe('权限模块', () => {
     it('返回角色描述', () => {
       expect(getRoleDescription('owner')).toContain('完整管理权限')
       expect(getRoleDescription('editor')).toContain('编辑')
-      expect(getRoleDescription('viewer')).toContain('查看')
+      expect(getRoleDescription('none')).toContain('没有此项目')
     })
   })
 
@@ -73,16 +81,16 @@ describe('权限模块', () => {
     it('owner 应该拥有最多权限', () => {
       const ownerPermissions = ROLE_PERMISSIONS.owner.length
       const editorPermissions = ROLE_PERMISSIONS.editor.length
-      const viewerPermissions = ROLE_PERMISSIONS.viewer.length
+      const noAccessPermissions = ROLE_PERMISSIONS.none.length
 
       expect(ownerPermissions).toBeGreaterThan(editorPermissions)
-      expect(editorPermissions).toBeGreaterThan(viewerPermissions)
+      expect(editorPermissions).toBeGreaterThan(noAccessPermissions)
     })
 
-    it('所有角色都应该拥有 view:project 权限', () => {
+    it('只有正式项目角色拥有 view:project 权限', () => {
       expect(ROLE_PERMISSIONS.owner).toContain('view:project')
       expect(ROLE_PERMISSIONS.editor).toContain('view:project')
-      expect(ROLE_PERMISSIONS.viewer).toContain('view:project')
+      expect(ROLE_PERMISSIONS.none).not.toContain('view:project')
     })
   })
 })

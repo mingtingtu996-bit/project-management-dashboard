@@ -1,30 +1,39 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { Breadcrumb } from '@/components/Breadcrumb'
 import { EmptyState } from '@/components/EmptyState'
+import { V14231PageReadinessBoundary } from '@/components/governance/V14231PageReadinessBoundary'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuth } from '@/context/AuthContext'
 import { useStore } from '@/hooks/useStore'
+import { useWorkspaceData } from '@/hooks/useWorkspaceData'
 import { toast } from '@/hooks/use-toast'
-import { apiDelete, apiGet, apiPost, apiPut, getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
-import type { Project } from '@/lib/localDb'
-import { syncProjectCacheFromApi, toPersistedProject } from '@/lib/projectPersistence'
-import { normalizeGlobalRole } from '@/lib/roleLabels'
+import { apiDelete, apiGet, apiPut, getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
+import { resolveCurrentCompanyRole } from '@/lib/companyRole'
+import { fetchProjectsFromApi, normalizeApiProject, type ProjectCatalogItem } from '@/lib/projectApi'
 import type { Issue, Risk } from '@/lib/supabase'
 import { DashboardApiService, type CompanySummaryResponse, type ProjectSummary } from '@/services/dashboardApi'
-import { Activity, FolderKanban, Target } from 'lucide-react'
-
+import { AlertTriangle, FolderKanban } from 'lucide-react'
+import { WizardDraftBadge } from '@/components/project/wizard/WizardDraftBadge'
 import {
-  CompanyCockpitDialogs,
-  CompanyHero,
-  CompanyInsightSection,
-  ProjectOverviewSection,
-} from './CompanyCockpit/components'
+  createWizardProjectDraft,
+  deleteWizardProjectDraft,
+  listCompanyProjectDrafts,
+  type WizardDraftItem,
+} from '@/components/project/wizard/projectWizardApi'
+
+import { CompanyCockpitDialogs } from './CompanyCockpit/components/CompanyCockpitDialogs'
+import { CompanyHero } from './CompanyCockpit/components/CompanyHero'
+import { ProjectOverviewSection } from './CompanyCockpit/components/ProjectOverviewSection'
 import type { CockpitTab, HealthHistory, ProjectFormStatus, ProjectRow } from './CompanyCockpit/types'
-import { formatDelta, mapSummaryStatusToTab, normalizeStatusLabel } from './CompanyCockpit/utils'
+import { displayProjectName, mapSummaryStatusToTab, normalizeStatusLabel } from './CompanyCockpit/utils'
+
+const CompanyInsightSection = lazy(() => import('./CompanyCockpit/components/CompanyInsightSection').then((module) => ({
+  default: module.CompanyInsightSection,
+})))
 
 const DEFAULT_FORM = {
   name: '',
@@ -50,7 +59,7 @@ function normalizeProjectFormStatus(status?: string | null): ProjectFormStatus {
   }
 }
 
-function isArchivedProject(project: Project) {
+function isArchivedProject(project: ProjectCatalogItem) {
   return normalizeProjectFormStatus(project.status) === '已暂停'
 }
 
@@ -61,10 +70,96 @@ const EMPTY_HEALTH_HISTORY: HealthHistory = {
   lastMonthPeriod: null,
 }
 
-function buildHeroSparkline(value: number, previous?: number | null) {
-  const start = typeof previous === 'number' ? previous : value
-  return Array.from({ length: 7 }, (_, index) => ({
-    value: Math.round(start + ((value - start) * index) / 6),
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function hasCompanySummaryMainContract(summary: CompanySummaryResponse | null) {
+  const statusCounts = summary?.statusCounts
+
+  return Boolean(
+    summary
+      && isFiniteNumber(summary.projectCount)
+      && isFiniteNumber(statusCounts?.total)
+      && isFiniteNumber(statusCounts?.inProgress)
+      && isFiniteNumber(statusCounts?.completed)
+      && isFiniteNumber(statusCounts?.paused)
+      && isFiniteNumber(summary.averageHealth)
+      && isFiniteNumber(summary.averageProgress)
+      && isFiniteNumber(summary.attentionProjectCount)
+      && isFiniteNumber(summary.totalUnreadWarningCount)
+      && isFiniteNumber(summary.totalDelayedTaskCount)
+      && isFiniteNumber(summary.lowHealthProjectCount)
+      && isFiniteNumber(summary.overdueMilestoneProjectCount),
+  )
+}
+
+function hasCompanyRankingContract(summary: CompanySummaryResponse | null, projectCount: number) {
+  if (!Array.isArray(summary?.ranking)) return false
+  return projectCount === 0 || summary.ranking.length > 0
+}
+
+function getBusinessHealthScore(summary: ProjectSummary | null) {
+  const value = summary?.businessHealthScore
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function buildKeyNodeLabel(summary: ProjectSummary | null) {
+  const keyNodeSummary = summary?.keyNodeSummary
+  if (!keyNodeSummary || keyNodeSummary.total <= 0) return '暂无关键节点摘要'
+  return `关键节点 ${keyNodeSummary.total} 个`
+}
+
+function getKeyNodeAttentionCount(summary: ProjectSummary | null) {
+  const keyNodeSummary = summary?.keyNodeSummary
+  if (!keyNodeSummary) return 0
+  return (keyNodeSummary.dueSoonCount ?? 0)
+    + (keyNodeSummary.shiftedCount ?? 0)
+    + (keyNodeSummary.blockedCount ?? 0)
+    + (keyNodeSummary.highRiskCount ?? 0)
+}
+
+function buildProjectFromSummary(summary: ProjectSummary): ProjectCatalogItem {
+  const now = new Date().toISOString()
+
+  return {
+    id: summary.id,
+    name: summary.name,
+    description: '',
+    status: summary.status === 'completed' || summary.statusLabel === '已完成'
+      ? 'completed'
+      : summary.status === 'archived' || summary.status === 'paused' || summary.statusLabel === '已暂停'
+        ? 'archived'
+        : 'active',
+    created_at: now,
+    updated_at: now,
+    planned_start_date: summary.plannedStartDate ?? undefined,
+    planned_end_date: summary.plannedEndDate ?? undefined,
+  }
+}
+
+function buildProjectRow(project: ProjectCatalogItem, summary: ProjectSummary | null): ProjectRow {
+  return {
+    project,
+    summary,
+    summaryStatus: normalizeStatusLabel(summary, project),
+    businessHealthScore: getBusinessHealthScore(summary),
+    keyNodeLabel: buildKeyNodeLabel(summary),
+    keyNodeAttentionCount: getKeyNodeAttentionCount(summary),
+    deliveryDaysRemaining: summary?.daysUntilPlannedEnd ?? null,
+  }
+}
+
+function toWizardDraftBadgeItems(drafts: WizardDraftItem[]) {
+  return drafts.map((draft) => ({
+    id: draft.id,
+    name: displayProjectName({ name: draft.name }),
+    draftStep: draft.draft_step ?? draft.wizard_draft_payload?.step ?? 0,
+    updatedAt: draft.draft_updated_at
+      ? new Date(draft.draft_updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : draft.updated_at
+        ? new Date(draft.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : null,
   }))
 }
 
@@ -150,58 +245,112 @@ function CompanyCockpitSkeleton() {
   )
 }
 
+function CompanyInsightSectionFallback() {
+  return (
+    <section className="surface-card overflow-hidden" aria-label="公司洞察加载中">
+      <div className="px-6 py-5">
+        <Skeleton className="h-8 w-32 rounded-full" />
+      </div>
+      <div className="border-t border-slate-100 px-6 py-6">
+        <Skeleton className="h-44 w-full rounded-xl" />
+        <div className="mt-5 grid gap-5 xl:grid-cols-2">
+          <Skeleton className="h-64 rounded-xl" />
+          <Skeleton className="h-64 rounded-xl" />
+        </div>
+      </div>
+    </section>
+  )
+}
+
 export default function CompanyCockpit() {
   useEffect(() => {
     document.title = '公司驾驶舱 | WorkBuddy'
   }, [])
 
   const navigate = useNavigate()
-  const location = useLocation()
   const { user } = useAuth()
+  const workspace = useWorkspaceData()
   const setProjects = useStore((state) => state.setProjects)
-  const isCompanyAdmin = normalizeGlobalRole(user?.globalRole) === 'company_admin'
+  const currentCompanyRole = resolveCurrentCompanyRole(
+    workspace.loading ? user?.currentCompanyRole : (workspace.currentCompany ? workspace.currentCompany.role : null),
+  )
+  const isCurrentCompanyAdmin = currentCompanyRole === 'company_admin'
+  const currentCompanyId = workspace.currentCompany?.id ?? user?.currentCompanyId ?? null
 
-  const [projects, setLocalProjects] = useState<Project[]>([])
+  const [projects, setLocalProjects] = useState<ProjectCatalogItem[]>([])
   const [summaries, setSummaries] = useState<ProjectSummary[]>([])
   const [healthHistory, setHealthHistory] = useState<HealthHistory>(EMPTY_HEALTH_HISTORY)
   const [companySummary, setCompanySummary] = useState<CompanySummaryResponse | null>(null)
   const [companyRisks, setCompanyRisks] = useState<Risk[]>([])
   const [companyIssues, setCompanyIssues] = useState<Issue[]>([])
+  const [wizardDrafts, setWizardDrafts] = useState<WizardDraftItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [projectCatalogLoading, setProjectCatalogLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [dialogMode, setDialogMode] = useState<'create' | 'edit'>('create')
-  const [editTarget, setEditTarget] = useState<Project | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
+  const [editTarget, setEditTarget] = useState<ProjectCatalogItem | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ProjectCatalogItem | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [creatingDraft, setCreatingDraft] = useState(false)
+  const creatingDraftRef = useRef(false)
+  const hasLoadedCompanyCockpitRef = useRef(false)
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState<CockpitTab>('all')
   const [form, setForm] = useState(DEFAULT_FORM)
 
-  const refreshData = useCallback(async (options: { allowEmptyReplace?: boolean } = {}) => {
-    setLoading(true)
+  const refreshSecondaryCompanyData = useCallback(async (companyId?: string | null) => {
+    const [risks, issues, draftRows] = await Promise.all([
+      apiGet<Risk[]>('/api/risks').catch(() => []),
+      apiGet<Issue[]>('/api/issues').catch(() => []),
+      companyId ? listCompanyProjectDrafts(companyId).catch(() => []) : Promise.resolve([]),
+    ])
+
+    setCompanyRisks(risks)
+    setCompanyIssues(issues)
+    setWizardDrafts(draftRows)
+  }, [])
+
+  const refreshData = useCallback(async () => {
+    const shouldShowInitialLoading = !hasLoadedCompanyCockpitRef.current
+    setLoading(shouldShowInitialLoading)
+    setRefreshing(!shouldShowInitialLoading)
+    setProjectCatalogLoading(true)
     setError(null)
-    let shellReady = false
 
     try {
-      const storedProjects = await syncProjectCacheFromApi(options)
+      const projectSyncResultPromise = fetchProjectsFromApi()
+        .then((storedProjects) => ({ storedProjects, error: null as unknown }))
+        .catch((syncError: unknown) => ({ storedProjects: null, error: syncError }))
 
-      setLocalProjects(storedProjects)
-      setProjects(storedProjects)
-      setLoading(false)
-      shellReady = true
+      const summaryData = await DashboardApiService.getCompanySummary()
+      const summaryProjects = (summaryData?.ranking ?? []).map(buildProjectFromSummary)
 
-      const [summaryData, risks, issues] = await Promise.all([
-        DashboardApiService.getCompanySummary(),
-        apiGet<Risk[]>('/api/risks').catch(() => []),
-        apiGet<Issue[]>('/api/issues').catch(() => []),
-      ])
+      if (summaryProjects.length > 0) {
+        setLocalProjects(summaryProjects)
+      }
 
-      setSummaries(summaryData.ranking)
-      setHealthHistory(summaryData.healthHistory)
+      setSummaries(summaryData?.ranking ?? [])
+      setHealthHistory(summaryData?.healthHistory ?? EMPTY_HEALTH_HISTORY)
       setCompanySummary(summaryData)
-      setCompanyRisks(risks)
-      setCompanyIssues(issues)
+      hasLoadedCompanyCockpitRef.current = true
+      setLoading(false)
+      setRefreshing(false)
+
+      const projectSyncResult = await projectSyncResultPromise
+      if (projectSyncResult.storedProjects) {
+        const nextProjects = projectSyncResult.storedProjects.length > 0
+          ? projectSyncResult.storedProjects
+          : summaryProjects
+        setLocalProjects(nextProjects)
+        setProjects(projectSyncResult.storedProjects)
+      } else if (summaryProjects.length === 0) {
+        throw projectSyncResult.error
+      } else {
+        console.warn('Company cockpit project catalog sync failed; using company summary ranking fallback.', projectSyncResult.error)
+      }
+      setProjectCatalogLoading(false)
+
+      void refreshSecondaryCompanyData(currentCompanyId)
     } catch (err) {
       console.error('Failed to load company cockpit data:', err)
       toast({ variant: 'destructive', title: '加载公司数据失败' })
@@ -211,43 +360,35 @@ export default function CompanyCockpit() {
           : getApiErrorMessage(err, '公司驾驶舱加载失败，请稍后重试。'),
       )
     } finally {
-      if (!shellReady) {
-        setLoading(false)
-      }
+      setLoading(false)
+      setRefreshing(false)
+      setProjectCatalogLoading(false)
     }
-  }, [setProjects])
+  }, [currentCompanyId, refreshSecondaryCompanyData, setProjects])
 
   useEffect(() => {
-    if (!isCompanyAdmin) {
+    if (workspace.loading) {
+      return
+    }
+
+    if (!isCurrentCompanyAdmin) {
       setLoading(false)
       setError(null)
       return
     }
 
     void refreshData()
-  }, [isCompanyAdmin, refreshData])
+  }, [isCurrentCompanyAdmin, refreshData, workspace.loading])
 
   useEffect(() => {
-    const handleOpenCreate = () => {
-      setDialogMode('create')
-      setEditTarget(null)
-      setForm(DEFAULT_FORM)
-      setDialogOpen(true)
-    }
-    window.addEventListener('open-create-project', handleOpenCreate)
-    return () => window.removeEventListener('open-create-project', handleOpenCreate)
-  }, [])
-
-  useEffect(() => {
-    const searchParams = new URLSearchParams(location.search)
-    if (searchParams.get('create') !== '1') return
-
-    setDialogMode('create')
-    setEditTarget(null)
-    setForm(DEFAULT_FORM)
-    setDialogOpen(true)
-    navigate('/company', { replace: true })
-  }, [location.search, navigate])
+    if (workspace.loading) return
+    if (isCurrentCompanyAdmin) return
+    toast({
+      title: '公司驾驶舱仅管理视角可见',
+      description: '已返回工作台，你仍可从工作台进入自己参与的项目。',
+    })
+    navigate('/workspace', { replace: true })
+  }, [isCurrentCompanyAdmin, navigate, workspace.loading])
 
   const summaryMap = useMemo(() => new Map(summaries.map((summary) => [summary.id, summary])), [summaries])
 
@@ -271,22 +412,59 @@ export default function CompanyCockpit() {
   const projectRows = useMemo<ProjectRow[]>(() => {
     return filteredProjects.map((project) => {
       const summary = summaryMap.get(project.id) ?? null
-
-      return {
-        project,
-        summary,
-        summaryStatus: normalizeStatusLabel(summary, project),
-        healthScore: summary?.healthScore ?? 0,
-        hasNextMilestone: Boolean(summary?.nextMilestone?.name),
-        milestoneName: summary?.nextMilestone?.name || '暂无关键节点',
-        milestoneDate: summary?.nextMilestone?.targetDate || null,
-        milestoneDaysRemaining: summary?.nextMilestone?.daysRemaining ?? null,
-        deliveryDaysRemaining: summary?.daysUntilPlannedEnd ?? null,
-      }
+      return buildProjectRow(project, summary)
     })
   }, [filteredProjects, summaryMap])
 
+  const rankedProjectRows = useMemo<ProjectRow[]>(() => {
+    const projectMap = new Map(projects.map((project) => [project.id, project]))
+    return summaries.map((summary) => buildProjectRow(
+      projectMap.get(summary.id) ?? buildProjectFromSummary(summary),
+      summary,
+    ))
+  }, [projects, summaries])
+
+  const overviewProjectRows = useMemo<ProjectRow[]>(() => {
+    const filteredProjectIds = new Set(filteredProjects.map((project) => project.id))
+    const rankedRows = rankedProjectRows.filter((row) => filteredProjectIds.has(row.project.id))
+    const rankedProjectIds = new Set(rankedRows.map((row) => row.project.id))
+    const remainingRows = projectRows.filter((row) => !rankedProjectIds.has(row.project.id))
+
+    return [...rankedRows, ...remainingRows]
+  }, [filteredProjects, projectRows, rankedProjectRows])
+
+  const companyStats = useMemo(() => {
+    const statusCounts = companySummary?.statusCounts
+
+    return {
+      total: companySummary?.projectCount ?? null,
+      inProgress: statusCounts?.inProgress ?? null,
+      completed: statusCounts?.completed ?? null,
+      paused: statusCounts?.paused ?? null,
+      averageHealth: companySummary?.averageHealth ?? null,
+      averageProgress: companySummary?.averageProgress ?? null,
+      attentionProjectCount: companySummary?.attentionProjectCount ?? null,
+      totalUnreadWarningCount: companySummary?.totalUnreadWarningCount ?? null,
+      totalDelayedTaskCount: companySummary?.totalDelayedTaskCount ?? null,
+      lowHealthProjectCount: companySummary?.lowHealthProjectCount ?? null,
+      overdueMilestoneProjectCount: companySummary?.overdueMilestoneProjectCount ?? null,
+    }
+  }, [companySummary])
+
+  const companyMainSummaryReady = hasCompanySummaryMainContract(companySummary)
+  const companyRankingReady = hasCompanyRankingContract(companySummary, projects.length)
+  const companySummaryReady = companyMainSummaryReady && companyRankingReady
+
   const listStats = useMemo(() => {
+    if (companyMainSummaryReady) {
+      return {
+        total: companySummary?.statusCounts.total ?? projects.length,
+        inProgress: companySummary?.statusCounts.inProgress ?? 0,
+        completed: companySummary?.statusCounts.completed ?? 0,
+        paused: companySummary?.statusCounts.paused ?? 0,
+      }
+    }
+
     const total = projects.length
     const inProgress = projects.filter((project) => {
       const summary = summaryMap.get(project.id)
@@ -307,23 +485,25 @@ export default function CompanyCockpit() {
       completed,
       paused,
     }
-  }, [projects, summaryMap])
+  }, [companyMainSummaryReady, companySummary, projects, summaryMap])
 
-  const companyStats = useMemo(() => {
-    const statusCounts = companySummary?.statusCounts
+  const supportCompanyStats = useMemo(() => {
+    if (!companySummaryReady) return null
 
     return {
-      total: companySummary?.projectCount ?? 0,
-      inProgress: statusCounts?.inProgress ?? 0,
-      completed: statusCounts?.completed ?? 0,
-      paused: statusCounts?.paused ?? 0,
-      averageHealth: companySummary?.averageHealth ?? 0,
-      averageProgress: companySummary?.averageProgress ?? 0,
-      attentionProjectCount: companySummary?.attentionProjectCount ?? 0,
-      lowHealthProjectCount: companySummary?.lowHealthProjectCount ?? 0,
-      overdueMilestoneProjectCount: companySummary?.overdueMilestoneProjectCount ?? 0,
+      total: companyStats.total as number,
+      inProgress: companyStats.inProgress as number,
+      completed: companyStats.completed as number,
+      paused: companyStats.paused as number,
+      averageHealth: companyStats.averageHealth as number,
+      averageProgress: companyStats.averageProgress as number,
+      attentionProjectCount: companyStats.attentionProjectCount as number,
+      totalUnreadWarningCount: companyStats.totalUnreadWarningCount as number,
+      totalDelayedTaskCount: companyStats.totalDelayedTaskCount as number,
+      lowHealthProjectCount: companyStats.lowHealthProjectCount as number,
+      overdueMilestoneProjectCount: companyStats.overdueMilestoneProjectCount as number,
     }
-  }, [companySummary])
+  }, [companyStats, companySummaryReady])
 
   const tabItems = useMemo(
     () => [
@@ -335,46 +515,8 @@ export default function CompanyCockpit() {
     [listStats.completed, listStats.inProgress, listStats.paused, listStats.total],
   )
 
-  const heroStats = useMemo(
-    () => [
-      {
-        label: '项目总数',
-        value: String(companyStats.total),
-        hint: `进行中 ${companyStats.inProgress} · 已完成 ${companyStats.completed}`,
-        icon: FolderKanban,
-        tone: 'bg-blue-50 text-blue-600',
-        sparklineData: buildHeroSparkline(companyStats.total),
-      },
-      {
-        label: '活跃项目',
-        value: String(companyStats.inProgress),
-        hint: projectRows.length === companyStats.total ? '公司层共享摘要平均值' : `当前筛出 ${projectRows.length} / ${companyStats.total} 个项目`,
-        icon: Target,
-        tone: 'bg-emerald-50 text-emerald-600',
-        sparklineData: buildHeroSparkline(companyStats.inProgress),
-      },
-      {
-        label: '整体健康',
-        value: String(companyStats.averageHealth),
-        hint: formatDelta(healthHistory.change),
-        icon: Activity,
-        tone: 'bg-amber-50 text-amber-600',
-        pill: true,
-        sparklineData: buildHeroSparkline(companyStats.averageHealth, healthHistory.lastMonth),
-      },
-    ],
-    [
-      healthHistory.change,
-      projectRows.length,
-      companyStats.averageHealth,
-      companyStats.completed,
-      companyStats.inProgress,
-      companyStats.total,
-    ],
-  )
-
-  const upsertLocalProject = useCallback((projectSource: { id: string; name?: string }) => {
-    const persistedProject = toPersistedProject(projectSource)
+  const upsertLocalProject = useCallback((projectSource: Parameters<typeof normalizeApiProject>[0]) => {
+    const persistedProject = normalizeApiProject(projectSource)
     setLocalProjects((previous) => {
       const exists = previous.some((project) => project.id === persistedProject.id)
       const next = exists
@@ -394,6 +536,31 @@ export default function CompanyCockpit() {
     })
   }, [setProjects])
 
+  const navigateToModelingWorkbench = useCallback((projectId: string, options: { mode?: 'generate' | 'adjust'; replace?: boolean } = {}) => {
+    const mode = options.mode ?? 'generate'
+    navigate(`/projects/${encodeURIComponent(projectId)}/gantt?modelingWorkbench=${mode}`, { replace: options.replace })
+  }, [navigate])
+
+  const handleCreateProjectDraft = useCallback(async (options: { replace?: boolean } = {}) => {
+    if (creatingDraftRef.current) return
+    creatingDraftRef.current = true
+    setCreatingDraft(true)
+    try {
+      const result = await createWizardProjectDraft({ step: 1, mode: 'new', detailLevel: 'overview' }, currentCompanyId)
+      upsertLocalProject({ id: result.projectId, name: '未命名项目', status: result.status })
+      navigateToModelingWorkbench(result.projectId, { replace: options.replace })
+    } catch (err) {
+      toast({
+        title: '创建项目草稿失败',
+        description: getApiErrorMessage(err, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    } finally {
+      creatingDraftRef.current = false
+      setCreatingDraft(false)
+    }
+  }, [currentCompanyId, navigateToModelingWorkbench, upsertLocalProject])
+
   const handleSubmitProject = async () => {
     if (!form.name.trim()) {
       toast({ title: '请输入项目名称', variant: 'destructive' })
@@ -408,29 +575,24 @@ export default function CompanyCockpit() {
         status: form.status,
       }
 
-      if (dialogMode === 'edit' && editTarget) {
-        const updatedProject = await apiPut<Project>(`/api/projects/${editTarget.id}`, {
+      if (editTarget) {
+        const updatedProject = await apiPut<ProjectCatalogItem>(`/api/projects/${editTarget.id}`, {
           ...payload,
           version: editTarget.version ?? 1,
         })
         upsertLocalProject(updatedProject)
-      } else {
-        const createdProject = await apiPost<Project>('/api/projects', payload)
-        upsertLocalProject(createdProject)
       }
 
-      setDialogOpen(false)
-      setDialogMode('create')
       setEditTarget(null)
       setForm(DEFAULT_FORM)
       toast({
-        title: dialogMode === 'edit' ? '项目已更新' : '项目已创建',
+        title: '项目已更新',
         description: form.name.trim(),
       })
     } catch (err: unknown) {
       console.error('Failed to submit project:', err)
       toast({
-        title: dialogMode === 'edit' ? '保存失败' : '创建失败',
+        title: '保存失败',
         description: getApiErrorMessage(err, '请稍后重试。'),
         variant: 'destructive',
       })
@@ -439,24 +601,22 @@ export default function CompanyCockpit() {
     }
   }
 
-  const handleEditProject = (project: Project) => {
-    setDialogMode('edit')
+  const handleEditProject = (project: ProjectCatalogItem) => {
     setEditTarget(project)
     setForm({
       name: project.name || '',
       description: project.description || '',
       status: normalizeProjectFormStatus(project.status),
     })
-    setDialogOpen(true)
   }
 
-  const handleToggleArchive = async (project: Project) => {
+  const handleToggleArchive = async (project: ProjectCatalogItem) => {
     const archived = isArchivedProject(project)
     const nextStatus: ProjectFormStatus = archived ? '进行中' : '已暂停'
 
     setSubmitting(true)
     try {
-      const updatedProject = await apiPut<Project>(`/api/projects/${project.id}`, {
+      const updatedProject = await apiPut<ProjectCatalogItem>(`/api/projects/${project.id}`, {
         status: nextStatus,
         version: project.version ?? 1,
       })
@@ -477,12 +637,30 @@ export default function CompanyCockpit() {
     }
   }
 
+  const handleDeleteWizardDraft = useCallback(async (projectId: string) => {
+    try {
+      await deleteWizardProjectDraft(projectId)
+      setWizardDrafts((previous) => previous.filter((draft) => draft.id !== projectId))
+      toast({ title: '草稿已删除' })
+    } catch (err) {
+      toast({
+        title: '删除草稿失败',
+        description: getApiErrorMessage(err, '请稍后重试。'),
+        variant: 'destructive',
+      })
+    }
+  }, [])
+
   const handleDeleteProject = async () => {
     if (!deleteTarget) return
 
     setSubmitting(true)
     try {
-      await apiDelete(`/api/projects/${deleteTarget.id}`)
+      await apiDelete(`/api/projects/${deleteTarget.id}`, {
+        headers: {
+          'X-WorkBuddy-Confirm-Action': `delete-project:${deleteTarget.id}`,
+        },
+      })
       removeLocalProject(deleteTarget.id)
       toast({ title: '项目已删除', description: deleteTarget.name })
       setDeleteTarget(null)
@@ -498,15 +676,12 @@ export default function CompanyCockpit() {
     }
   }
 
-  const handleDialogChange = (open: boolean) => {
-    setDialogOpen(open)
-    if (open) return
-    setDialogMode('create')
-    setEditTarget(null)
-    setForm(DEFAULT_FORM)
-  }
+  const knownProjectCount = companyStats.total ?? projects.length
+  const hasKnownProjects = knownProjectCount > 0 || projects.length > 0
+  const showEmptyProjectState = !projectCatalogLoading && !hasKnownProjects
+  const showProjectOverview = projectCatalogLoading || hasKnownProjects
 
-  if (loading) {
+  if (workspace.loading || loading) {
     return (
       <div className="page-shell">
         <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
@@ -515,27 +690,33 @@ export default function CompanyCockpit() {
     )
   }
 
-  if (!isCompanyAdmin) {
-    return (
-      <div className="page-shell" data-testid="company-cockpit-page">
-        <div className="space-y-8">
-          <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
-          <Card data-testid="company-cockpit-access-denied" className="border border-amber-100 bg-amber-50/70 shadow-none">
-            <CardContent className="space-y-3 p-5">
-              <p className="text-lg font-semibold text-slate-900">公司驾驶舱仅公司管理员可见</p>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    )
+  if (!isCurrentCompanyAdmin) {
+    return null
   }
 
   return (
     <div className="page-shell" data-testid="company-cockpit-page">
       <div className="space-y-8">
         <Breadcrumb items={[{ label: '公司驾驶舱' }]} />
+        <V14231PageReadinessBoundary pageKey="CompanyCockpit" />
 
-        {projects.length === 0 ? (
+        {error ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="公司驾驶舱加载失败"
+            description={error}
+            className="rounded-2xl empty-state-frame border-slate-200 bg-white px-6 py-12 shadow-[var(--el-1)]"
+            action={(
+              <Button
+                type="button"
+                onClick={() => void refreshData()}
+                disabled={refreshing}
+              >
+                重新加载
+              </Button>
+            )}
+          />
+        ) : showEmptyProjectState ? (
           <EmptyState
             icon={FolderKanban}
             title="暂无项目"
@@ -544,12 +725,8 @@ export default function CompanyCockpit() {
             action={(
               <Button
                 type="button"
-                onClick={() => {
-                  setDialogMode('create')
-                  setEditTarget(null)
-                  setForm(DEFAULT_FORM)
-                  setDialogOpen(true)
-                }}
+                onClick={() => void handleCreateProjectDraft()}
+                disabled={creatingDraft}
               >
                 创建项目
               </Button>
@@ -559,64 +736,81 @@ export default function CompanyCockpit() {
           <CompanyHero
             search={search}
             onSearchChange={setSearch}
-            onRefresh={() => void refreshData({ allowEmptyReplace: true })}
-            onCreate={() => {
-              setDialogMode('create')
-              setEditTarget(null)
-              setForm(DEFAULT_FORM)
-              setDialogOpen(true)
-            }}
+            onRefresh={() => void refreshData()}
+            onCreate={() => void handleCreateProjectDraft()}
             error={error}
-            heroStats={heroStats}
+            summaryReady={companySummaryReady}
+            isRefreshing={refreshing}
             healthHistory={healthHistory}
             stats={{
+              total: companyStats.total,
               inProgress: companyStats.inProgress,
               completed: companyStats.completed,
               paused: companyStats.paused,
+              averageHealth: companyStats.averageHealth,
+              attentionProjectCount: companyStats.attentionProjectCount,
+              totalUnreadWarningCount: companyStats.totalUnreadWarningCount,
+              totalDelayedTaskCount: companyStats.totalDelayedTaskCount,
+              lowHealthProjectCount: companyStats.lowHealthProjectCount,
+              overdueMilestoneProjectCount: companyStats.overdueMilestoneProjectCount,
             }}
+            draftBadge={(
+              <WizardDraftBadge
+                draftCount={wizardDrafts.length}
+                drafts={toWizardDraftBadgeItems(wizardDrafts)}
+                onResume={(projectId) => navigateToModelingWorkbench(projectId, { mode: 'generate' })}
+                onDelete={(projectId) => void handleDeleteWizardDraft(projectId)}
+              />
+            )}
             focusProjects={[] as never}
             onNavigate={navigate}
           />
         )}
 
-        <CompanyInsightSection
-          projectRows={projectRows}
-          healthHistory={healthHistory}
-          stats={{
-            total: companyStats.total,
-            inProgress: companyStats.inProgress,
-            completed: companyStats.completed,
-            paused: companyStats.paused,
-            averageHealth: companyStats.averageHealth,
-            averageProgress: companyStats.averageProgress,
-          }}
-          companyRisks={companyRisks}
-          companyIssues={companyIssues}
-          onNavigate={navigate}
-        />
+        {companySummaryReady && supportCompanyStats ? (
+          <Suspense fallback={<CompanyInsightSectionFallback />}>
+            <CompanyInsightSection
+              projectRows={rankedProjectRows}
+              healthHistory={healthHistory}
+              stats={{
+                total: supportCompanyStats.total,
+                inProgress: supportCompanyStats.inProgress,
+                completed: supportCompanyStats.completed,
+                paused: supportCompanyStats.paused,
+                averageHealth: supportCompanyStats.averageHealth,
+                averageProgress: supportCompanyStats.averageProgress,
+                attentionProjectCount: supportCompanyStats.attentionProjectCount,
+                totalUnreadWarningCount: supportCompanyStats.totalUnreadWarningCount,
+                totalDelayedTaskCount: supportCompanyStats.totalDelayedTaskCount,
+                lowHealthProjectCount: supportCompanyStats.lowHealthProjectCount,
+              }}
+              companyRisks={companyRisks}
+              companyIssues={companyIssues}
+              summaryReady={companySummaryReady}
+              onNavigate={navigate}
+            />
+          </Suspense>
+        ) : null}
 
-        <ProjectOverviewSection
-          projectRows={projectRows}
-          totalProjects={listStats.total}
-          activeTab={activeTab}
-          tabItems={tabItems}
-          onTabChange={setActiveTab}
-          onCreate={() => {
-            setDialogMode('create')
-            setEditTarget(null)
-            setForm(DEFAULT_FORM)
-            setDialogOpen(true)
-          }}
-          onEdit={handleEditProject}
-          onToggleArchive={(project) => void handleToggleArchive(project)}
-          onDelete={setDeleteTarget}
-          onNavigate={navigate}
-        />
+        {showProjectOverview ? (
+          <ProjectOverviewSection
+            projectRows={overviewProjectRows}
+            totalProjects={listStats.total}
+            loadingMore={projectCatalogLoading}
+            activeTab={activeTab}
+            tabItems={tabItems}
+            onTabChange={setActiveTab}
+            onCreate={() => void handleCreateProjectDraft()}
+            onEdit={handleEditProject}
+            onToggleArchive={(project) => void handleToggleArchive(project)}
+            onDelete={setDeleteTarget}
+            onNavigate={navigate}
+          />
+        ) : null}
 
         <CompanyCockpitDialogs
-          dialogOpen={dialogOpen}
-          onDialogChange={handleDialogChange}
-          dialogMode={dialogMode}
+          editTarget={editTarget}
+          onEditTargetChange={setEditTarget}
           form={form}
           onFormChange={setForm}
           submitting={submitting}

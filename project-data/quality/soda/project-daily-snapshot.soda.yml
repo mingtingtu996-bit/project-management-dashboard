@@ -1,0 +1,5 @@
+checks for project_daily_snapshot:
+  - row_count > 0
+  - missing_count(project_id) = 0
+  - missing_count(snapshot_date) = 0
+  - duplicate_count(project_id, snapshot_date) = 0

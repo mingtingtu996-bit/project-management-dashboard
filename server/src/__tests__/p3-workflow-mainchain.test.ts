@@ -1,20 +1,25 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 function readServerFile(...segments: string[]) {
+  return readFileSync(serverFilePath(...segments), 'utf8')
+}
+
+function serverFilePath(...segments: string[]) {
   const serverRoot = process.cwd().endsWith(`${sep}server`)
     ? process.cwd()
     : resolve(process.cwd(), 'server')
-  return readFileSync(resolve(serverRoot, ...segments), 'utf8')
+  return resolve(serverRoot, ...segments)
 }
 
 describe('P3 workflow main chain contracts', () => {
   it('keeps issue protection and pending_manual_close actions on the unified domain policy', () => {
-    const policySource = readServerFile('src', 'services', 'workflowDomainPolicy.ts')
+    const policySource = readServerFile('src', 'domain', 'riskIssueWorkflowPolicy.ts')
     const issuesRouteSource = readServerFile('src', 'routes', 'issues.ts')
     const issueWriteChainSource = readServerFile('src', 'services', 'issueWriteChainService.ts')
     const taskWriteChainSource = readServerFile('src', 'services', 'taskWriteChainService.ts')
+    const taskCodeTransactionSource = readServerFile('src', 'services', 'taskCodeTransactionService.ts')
     const preMilestonesRouteSource = readServerFile('src', 'routes', 'pre-milestones.ts')
     const risksRouteSource = readServerFile('src', 'routes', 'risks.ts')
 
@@ -31,8 +36,11 @@ describe('P3 workflow main chain contracts', () => {
     expect(issuesRouteSource).toContain('deleteIssueInMainChain')
     expect(issueWriteChainSource).toContain('export async function createIssueInMainChain')
     expect(issueWriteChainSource).toContain('export async function updateIssueInMainChain')
-    expect(taskWriteChainSource).toContain('skipSnapshotWrite: true')
     expect(taskWriteChainSource).toContain('recordTaskProgressSnapshot')
+    expect(taskCodeTransactionSource).not.toContain('recordTaskProgressSnapshot')
+    expect(taskCodeTransactionSource).not.toContain('createTask as')
+    expect(taskCodeTransactionSource).not.toContain('updateTask as')
+    expect(taskCodeTransactionSource).not.toContain('reopenTask as')
     expect(preMilestonesRouteSource).toContain('createIssueInMainChain')
     expect(preMilestonesRouteSource).toContain('/:certificateId/escalate-issue')
     expect(preMilestonesRouteSource).toContain('requireProjectEditor((req) => readProjectId(req))')
@@ -54,12 +62,9 @@ describe('P3 workflow main chain contracts', () => {
     expect(jobsSource).not.toContain('riskDetector')
   })
 
-  it('keeps delay approval fallback isolated with a formal degraded error contract', () => {
-    const delayRequestsSource = readServerFile('src', 'services', 'delayRequests.ts')
-
-    expect(delayRequestsSource).toContain("const DELAY_APPROVED_EVENT = 'delay_approved'")
-    expect(delayRequestsSource).toContain("const DELAY_APPROVAL_DEGRADED_MODE = 'fallback_blocked_non_transactional'")
-    expect(delayRequestsSource).toContain('DELAY_REQUEST_ATOMIC_CHAIN_UNAVAILABLE')
-    expect(delayRequestsSource).not.toContain('runDelayFallback(')
+  it('keeps delay request approval removed from the main workflow chain', () => {
+    expect(existsSync(serverFilePath('src', 'routes', 'delay-requests.ts'))).toBe(false)
+    expect(existsSync(serverFilePath('src', 'services', 'delayRequests.ts'))).toBe(false)
+    expect(existsSync(serverFilePath('src', 'services', 'delayRequestNotificationService.ts'))).toBe(false)
   })
 })

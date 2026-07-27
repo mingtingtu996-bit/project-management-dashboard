@@ -94,7 +94,7 @@ describe('analytics routes', () => {
 
     expect(response.status).toBe(200)
     expect(response.body.success).toBe(true)
-    expect(mocks.getVisibleProjectIds).toHaveBeenCalledWith('user-1', 'company_admin')
+    expect(mocks.getVisibleProjectIds).toHaveBeenCalledWith('user-1', 'company_admin', null)
     expect(mocks.getCompanyTrendAnalytics).toHaveBeenCalledWith('overall_progress', expect.objectContaining({
       from: '2026-04-01',
       to: '2026-04-27',

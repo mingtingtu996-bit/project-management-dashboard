@@ -141,14 +141,17 @@ export function RiskBubbleMatrix({ risks, issues, projectRows }: RiskBubbleMatri
     <Card className="surface-card">
       <CardContent padding="md" className="space-y-4">
         <CardHead
-          eyebrow="MATRIX"
-          title="风险 / 问题 / 阻碍分布"
+          eyebrow="风险信号"
+          title="风险 / 问题 / 阻碍分布提示"
           action={totalSignals > 0 ? (
             <span className="text-xs font-normal text-slate-500">
               共 {totalSignals} 个活跃信号
             </span>
           ) : null}
         />
+        <p className="text-xs leading-5 text-slate-500">
+          仅用于提示分布与筛选入口；责任归因、绩效判断和处置结论需进入项目核查。
+        </p>
         <div className="mb-4 flex items-center justify-center gap-3 text-xs">
           {SIGNAL_LEVELS.map((level) => (
             <span key={level.key} className="flex items-center gap-1">

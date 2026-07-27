@@ -1,8 +1,10 @@
 import { WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX } from '../seeds/wbsTemplateRealProjectCoverageMatrix.js'
 import { WBS_TEMPLATE_PROJECT_RECOMMENDATIONS } from '../seeds/wbsTemplateProjectRecommendations.js'
 import {
+  generateWbsTemplatePhaseChainRows,
   generateWbsTemplateRows,
   loadWbsTemplateNodes,
+  type GeneratedDurationAssetUtilizationSummary,
   type GeneratedTemplateRow,
 } from './wbsTemplateGenerationService.js'
 import type { WbsTemplateProjectRecommendationKey } from './projectScenarioTaxonomyService.js'
@@ -20,6 +22,7 @@ export type WbsTemplateGoldenBenchmarkReplayResult = WbsTemplateGoldenBenchmarkR
   rawScheduleStartDate: string | null
   rawScheduleEndDate: string | null
   rawScheduleDurationDays: number | null
+  durationAssetUtilizationSummary: GeneratedDurationAssetUtilizationSummary | null
   actualGeneratedRowCount: number
   actualTemplateIds: string[]
   actualStableCodePrefixes: string[]
@@ -636,6 +639,7 @@ function buildReplayOperation(params: {
     projectFacts: facts,
     scope: {
       scopeExpansionMode: 'project',
+      benchmarkReplayScopeMode: 'single_project_scope',
       engineering_object_id: `golden:${params.entry.projectCode}:project`,
       phase_object_id: `golden:${params.entry.projectCode}:phase`,
       section_object_id: `golden:${params.entry.projectCode}:section`,
@@ -667,6 +671,34 @@ function buildReplayOperation(params: {
       constructionHoistCount: params.facts.constructionHoistCount,
     },
   }
+}
+
+function buildReplayOperations(params: {
+  entry: typeof WBS_TEMPLATE_REAL_PROJECT_COVERAGE_MATRIX[number]
+  facts: ReplayFacts
+  templateIds: string[]
+  selectedNodesByTemplate: Record<string, string[]>
+  emitGenerationStageTimings?: boolean | null
+}) {
+  const baseOperation = buildReplayOperation(params)
+  return params.templateIds.flatMap((templateId) => {
+    const selectedNodes = params.selectedNodesByTemplate[templateId] ?? []
+    const nodeBatches = selectedNodes.length > 0 ? selectedNodes : [templateId]
+    return nodeBatches.map((selectedNodeId) => ({
+      ...baseOperation,
+      generationBatchId: `golden-runtime:${params.entry.projectCode}:${templateId}:${selectedNodeId}`,
+      primaryCatalogId: templateId,
+      templateIds: [templateId],
+      selectedNodesByTemplate: {
+        [templateId]: selectedNodeId === templateId ? selectedNodes : [selectedNodeId],
+      },
+      scope: {
+        ...baseOperation.scope,
+        phase_object_id: `golden:${params.entry.projectCode}:phase:${templateId}:${selectedNodeId}`,
+        selected_template_ids: [templateId],
+      },
+    }))
+  })
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -747,19 +779,31 @@ export async function runWbsTemplateGoldenBenchmarkReplay(
       entry,
       templateIds: collectTemplateIds(entry.recommendationKey, entry.requiredTemplateIds),
     })
-    const generated = await generateWbsTemplateRows({
-      projectId: REPLAY_PROJECT_ID,
-      surface: 'task_list',
-      detailLevel: 'standard',
-      diagnosticDurationSuggestionMode: options.diagnosticDurationSuggestionMode ?? 'benchmark_plan_reference',
-      operation: buildReplayOperation({
+    const replayOperationParams = {
         entry,
         facts,
         templateIds: replaySelection.templateIds,
         selectedNodesByTemplate: replaySelection.selectedNodesByTemplate,
         emitGenerationStageTimings: options.emitGenerationStageTimings,
-      }),
-    })
+      }
+    const replayOperation = buildReplayOperation(replayOperationParams)
+    const replayOperations = buildReplayOperations(replayOperationParams)
+    const generated = replayOperations.length > 1
+      ? await generateWbsTemplatePhaseChainRows({
+        projectId: REPLAY_PROJECT_ID,
+        surface: 'task_list',
+        detailLevel: 'standard',
+        chainMode: 'none',
+        diagnosticDurationSuggestionMode: options.diagnosticDurationSuggestionMode ?? 'benchmark_plan_reference',
+        operations: replayOperations,
+      })
+      : await generateWbsTemplateRows({
+        projectId: REPLAY_PROJECT_ID,
+        surface: 'task_list',
+        detailLevel: 'standard',
+        diagnosticDurationSuggestionMode: options.diagnosticDurationSuggestionMode ?? 'benchmark_plan_reference',
+        operation: replayOperation,
+      })
 
     const rows = generated.rows
     const actualTemplateIds = uniqueStrings(rows.map((row) => row.values.source_template_id ?? row.values.template_id))
@@ -795,6 +839,7 @@ export async function runWbsTemplateGoldenBenchmarkReplay(
       rawScheduleStartDate: rawScheduleWindow.actualScheduleStartDate,
       rawScheduleEndDate: rawScheduleWindow.actualScheduleEndDate,
       rawScheduleDurationDays: rawScheduleWindow.actualScheduleDurationDays,
+      durationAssetUtilizationSummary: generated.durationAssetUtilizationSummary ?? null,
       scheduleCalibrationSummary: scheduleWindow.scheduleCalibrationSummary,
       actualGeneratedRowCount: rows.length,
       actualTemplateIds,

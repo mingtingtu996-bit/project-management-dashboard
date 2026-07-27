@@ -1,0 +1,109 @@
+name: Production Advisor ACL Remediation 308
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: Exact current main SHA containing migration 308 and this workflow
+        required: true
+        type: string
+      confirmation:
+        description: Type APPLY_PRODUCTION_ADVISOR_ACL_REMEDIATION_308
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lighthouse-host-runtime-mutation
+  cancel-in-progress: false
+
+jobs:
+  remediate-production-advisor-acl:
+    name: Apply Exact Production Advisor ACL Remediation 308
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: Production
+    steps:
+      - name: Checkout exact release
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_sha }}
+          fetch-depth: 0
+
+      - name: Verify exact protected main release
+        env:
+          RELEASE_SHA: ${{ inputs.release_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [ "$CONFIRMATION" = APPLY_PRODUCTION_ADVISOR_ACL_REMEDIATION_308 ]
+          [ "$(git rev-parse HEAD)" = "$RELEASE_SHA" ]
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          [ "$(git rev-parse origin/main)" = "$RELEASE_SHA" ]
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci --workspaces=false --no-fund
+
+      - name: Verify exact production database target identity
+        working-directory: server
+        env:
+          SUPABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_URL }}
+          SUPABASE_MIGRATION_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
+        run: npm run verify:commercial-trigger-rpc-target
+
+      - name: Resolve exact remediation state
+        id: remediation-state
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
+        run: |
+          set -euo pipefail
+          if npm run verify:commercial-trigger-rpc-acl -- --expect hardened; then
+            echo "apply_required=false" >> "$GITHUB_OUTPUT"
+          else
+            npm run verify:commercial-trigger-rpc-acl -- --expect vulnerable
+            echo "apply_required=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify migration 308 is the exact selectable pending migration
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
+        run: npm run migrate:plan -- --only=308_commercial_trigger_rpc_acl_closeout.sql
+
+      - name: Apply migration 308 only
+        if: steps.remediation-state.outputs.apply_required == 'true'
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
+        run: npm run migrate:pending -- --only=308_commercial_trigger_rpc_acl_closeout.sql
+
+      - name: Verify hardened ACL readback
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
+        run: npm run verify:commercial-trigger-rpc-acl -- --expect hardened
+
+      - name: Report next migration phase
+        working-directory: server
+        env:
+          DATABASE_URL: ${{ secrets.PRODUCTION_SUPABASE_MIGRATION_URL }}
+        run: |
+          set -euo pipefail
+          npm run migrate:plan | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo ""
+            echo "Migration 308 ACL readback passed. Refresh the Production Supabase Advisor export before running the normal deployment workflow."
+            echo "No application, host, ingress, or container mutation was performed by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

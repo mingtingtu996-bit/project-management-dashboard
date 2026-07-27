@@ -23,6 +23,7 @@ export interface StandardWorkDurationSeedReplayGovernanceReport {
     filters: {
       sampleStatus: 'active'
       includedInBenchmark: true
+      durationDayBasis: 'construction_production_day'
       wbsNodeType: 'process'
       companyId: string | null
       projectId: string | null
@@ -66,8 +67,10 @@ function normalizeSample(row: DurationExperienceSampleRow): AlgorithmSeedDiscove
     standard_work_code: normalizeText(row.standard_work_code) || null,
     standard_work_name: normalizeText(row.standard_work_name) || null,
     wbs_node_type: normalizeText(row.wbs_node_type) || null,
-    actual_duration: Number(row.actual_duration),
-    planned_duration: row.planned_duration == null ? null : Number(row.planned_duration),
+    actual_duration: Number(row.actual_duration_production_days ?? row.actual_duration),
+    planned_duration: row.planned_duration_production_days == null && row.planned_duration == null
+      ? null
+      : Number(row.planned_duration_production_days ?? row.planned_duration),
     started_at: normalizeText(row.started_at) || null,
     completed_at: normalizeText(row.completed_at) || null,
     confidence_score: row.confidence_score == null ? null : Number(row.confidence_score),
@@ -81,6 +84,7 @@ async function fetchReplaySamples(options: Required<Pick<StandardWorkDurationSee
     .select('*')
     .eq('sample_status', 'active')
     .eq('included_in_benchmark', true)
+    .eq('duration_day_basis', 'construction_production_day')
     .eq('wbs_node_type', 'process')
     .not('actual_duration', 'is', null)
     .not('standard_work_code', 'is', null)
@@ -117,6 +121,7 @@ export async function buildStandardWorkDurationSeedReplayGovernanceReport(
       filters: {
         sampleStatus: 'active',
         includedInBenchmark: true,
+        durationDayBasis: 'construction_production_day',
         wbsNodeType: 'process',
         companyId,
         projectId,

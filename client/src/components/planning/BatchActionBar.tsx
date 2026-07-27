@@ -44,7 +44,7 @@ export function BatchActionBar({
     >
       <div className="mx-auto flex w-full items-center justify-between gap-4 rounded-2xl border border-slate-700/70 bg-slate-950 px-4 py-3 text-white shadow-[var(--el-4)]">
         <div className="flex items-center gap-3">
-          <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-blue-500 px-2 text-xs font-bold text-slate-950">
+          <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-blue-600 px-2 text-xs font-bold text-slate-950">
             {selectedCount}
           </span>
           <span className="text-sm font-medium">条已选中</span>

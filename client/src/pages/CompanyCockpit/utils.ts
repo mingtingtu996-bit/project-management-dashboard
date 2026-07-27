@@ -3,7 +3,39 @@
  */
 
 import type { ProjectSummary } from '@/services/dashboardApi'
-import type { Project } from '@/lib/localDb'
+import type { Project } from '@/lib/supabase'
+
+const INTERNAL_PROJECT_PATTERNS = [
+  /\?{3,}/,
+  /\[shadow\]/i,
+  /\bshadow\b/i,
+  /\bcodex\b/i,
+  /\buiux[-_]?perf\b/i,
+  /\bfullapp\b/i,
+  /\bfixture\b/i,
+  /\bevidence shell\b/i,
+  /\bpublic real-project\b/i,
+  /\bsource:/i,
+]
+
+export function isInternalProjectText(value?: string | null) {
+  const text = String(value ?? '').trim()
+  return INTERNAL_PROJECT_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+export function displayProjectName(project?: Pick<Project, 'name'> | null, fallback = '待命名项目') {
+  const name = String(project?.name ?? '').trim()
+  if (!name || name === '未命名项目') return fallback
+  if (isInternalProjectText(name)) return '候选项目'
+  return name
+}
+
+export function displayProjectDescription(project?: Pick<Project, 'description'> | null) {
+  const description = String(project?.description ?? '').trim()
+  if (!description || description === '暂无项目描述') return '项目资料待补充，进入项目后完善基础信息。'
+  if (isInternalProjectText(description)) return '项目资料待补充，进入项目后完善基础信息。'
+  return description
+}
 
 export function normalizeProjectFallbackStatus(status?: string | null) {
   switch (status) {
@@ -60,7 +92,8 @@ export function statusBadgeClass(status?: string) {
   }
 }
 
-export function healthBadgeClass(score: number) {
+export function healthBadgeClass(score: number | null) {
+  if (score === null) return 'bg-slate-100 text-slate-600'
   if (score >= 80) return 'bg-emerald-50 text-emerald-700'
   if (score >= 60) return 'bg-blue-50 text-blue-700'
   if (score >= 40) return 'bg-amber-50 text-amber-700'
@@ -141,6 +174,6 @@ export function formatDeliveryHint(summary?: ProjectSummary | null) {
 }
 
 export function projectAvatarLabel(name: string) {
-  const compact = name.trim().replace(/\s+/g, '')
+  const compact = displayProjectName({ name }).trim().replace(/\s+/g, '')
   return compact.slice(0, Math.min(2, compact.length)) || '项目'
 }

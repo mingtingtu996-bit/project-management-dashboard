@@ -29,6 +29,8 @@ vi.mock('../services/supabaseService.js', () => ({
   })),
 }))
 
+import projectsRouter from '../routes/projects.js'
+
 function buildApp(router: express.Router) {
   const app = express()
   app.use(express.json())
@@ -49,15 +51,13 @@ describe('project bootstrap route', () => {
       obstacles: [],
       warnings: [],
       issues: [],
-      delayRequests: [],
       changeLogs: [],
       taskProgressSnapshots: [],
     })
   })
 
   it('returns the project initialization payload through one bootstrap request', async () => {
-    const { default: router } = await import('../routes/projects.js')
-    const response = await request(buildApp(router))
+    const response = await request(buildApp(projectsRouter))
       .get(`/api/projects/${projectId}/bootstrap`)
       .query({ changeLogLimit: 25 })
 
@@ -76,8 +76,7 @@ describe('project bootstrap route', () => {
   it('returns 404 when the project does not exist', async () => {
     mocks.getProjectBootstrap.mockResolvedValueOnce(null)
 
-    const { default: router } = await import('../routes/projects.js')
-    const response = await request(buildApp(router)).get(`/api/projects/${projectId}/bootstrap`)
+    const response = await request(buildApp(projectsRouter)).get(`/api/projects/${projectId}/bootstrap`)
 
     expect(response.status).toBe(404)
     expect(response.body).toMatchObject({

@@ -193,7 +193,7 @@ VALUES
     ]},
     {"id":"3","name":"路基工程","level":1,"duration":90,"children":[
       {"id":"3-1","name":"清表换填","level":2,"duration":20},
-      {"id":"3-2","name":"路基填筑压实","level":2,"duration">45},
+      {"id":"3-2","name":"路基填筑压实","level":2,"duration":45},
       {"id":"3-3","name":"边坡防护","level":2,"duration":20}
     ]},
     {"id":"4","name":"路面工程","level":1,"duration":60,"children":[

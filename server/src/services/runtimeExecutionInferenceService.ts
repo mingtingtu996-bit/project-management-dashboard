@@ -8,6 +8,7 @@ import type {
   ProjectScheduleStateEvidence,
   ProjectScheduleStateResult,
 } from './projectScheduleStateService.js'
+import { isLiveCriticalOrNearCriticalTask } from './taskCriticalityProjectionService.js'
 import { signedDurationDayDelta } from '../utils/durationDays.js'
 
 export type RuntimeExecutionInferenceRow = {
@@ -23,7 +24,6 @@ export type RuntimeExecutionInferenceRow = {
   actual_end_date?: string | null
   is_milestone?: boolean | null
   is_critical?: boolean | null
-  baseline_is_critical?: boolean | null
   total_float_days?: number | string | null
   free_float_days?: number | string | null
 }
@@ -120,12 +120,7 @@ function isBlocked(row: RuntimeExecutionInferenceRow) {
 }
 
 function isCriticalOrNearCritical(row: RuntimeExecutionInferenceRow) {
-  const totalFloat = readOptionalNumber(row.total_float_days)
-  const freeFloat = readOptionalNumber(row.free_float_days)
-  return row.is_critical === true
-    || row.baseline_is_critical === true
-    || (totalFloat !== null && totalFloat <= 3)
-    || (freeFloat !== null && freeFloat <= 1)
+  return isLiveCriticalOrNearCriticalTask(row)
 }
 
 function isFloating(row: RuntimeExecutionInferenceRow) {

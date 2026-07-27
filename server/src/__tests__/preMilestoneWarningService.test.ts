@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 process.env.NODE_ENV = 'test'
 process.env.SUPABASE_URL = 'http://127.0.0.1:54321'
@@ -13,6 +13,39 @@ const mocks = vi.hoisted(() => {
     certificate_dependencies: [],
     warnings: [],
   }
+
+  function orderRows(table: TableName, rows: Array<Record<string, any>>) {
+    if (table === 'pre_milestones') {
+      return rows.slice().sort((left, right) => (
+        String(left.expiry_date ?? left.created_at ?? '').localeCompare(String(right.expiry_date ?? right.created_at ?? ''))
+      ))
+    }
+    if (table === 'certificate_work_items') {
+      return rows.slice().sort((left, right) => {
+        const leftSort = Number.isFinite(Number(left.sort_order)) ? Number(left.sort_order) : Number.MAX_SAFE_INTEGER
+        const rightSort = Number.isFinite(Number(right.sort_order)) ? Number(right.sort_order) : Number.MAX_SAFE_INTEGER
+        if (leftSort !== rightSort) return leftSort - rightSort
+        return String(left.created_at ?? '').localeCompare(String(right.created_at ?? ''))
+      })
+    }
+    return rows.slice().sort((left, right) => String(left.created_at ?? '').localeCompare(String(right.created_at ?? '')))
+  }
+
+  const rawQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
+    const normalizedSql = sql.toLowerCase()
+    let table: TableName | null = null
+    if (normalizedSql.includes('from pre_milestones')) table = 'pre_milestones'
+    if (normalizedSql.includes('from certificate_work_items')) table = 'certificate_work_items'
+    if (normalizedSql.includes('from certificate_dependencies')) table = 'certificate_dependencies'
+    if (!table) return { rows: [], rowCount: 0 }
+
+    const projectId = params[0] == null ? null : String(params[0])
+    const rows = orderRows(
+      table,
+      tables[table].filter((row) => !projectId || String(row.project_id) === projectId),
+    )
+    return { rows, rowCount: rows.length }
+  })
 
   function createQueryBuilder(table: TableName) {
     let rows = tables[table].slice()
@@ -44,8 +77,13 @@ const mocks = vi.hoisted(() => {
   return {
     tables,
     from: vi.fn((table: TableName) => createQueryBuilder(table)),
+    rawQuery,
   }
 })
+
+vi.mock('../database.js', () => ({
+  query: mocks.rawQuery,
+}))
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({
@@ -65,16 +103,31 @@ vi.mock('../middleware/logger.js', () => ({
 const { scanPreMilestoneWarnings } = await import('../services/preMilestoneWarningService.js')
 
 describe('pre milestone warning service', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     mocks.from.mockClear()
+    mocks.rawQuery.mockClear()
     mocks.tables.pre_milestones.splice(0, mocks.tables.pre_milestones.length)
     mocks.tables.certificate_work_items.splice(0, mocks.tables.certificate_work_items.length)
     mocks.tables.certificate_dependencies.splice(0, mocks.tables.certificate_dependencies.length)
     mocks.tables.warnings.splice(0, mocks.tables.warnings.length)
   })
 
+  it('fails closed when neither a project scope nor system-job capability is supplied', async () => {
+    await expect(scanPreMilestoneWarnings()).rejects.toThrow(
+      'pre-milestone warning scan requires projectId or systemJob capability',
+    )
+    expect(mocks.rawQuery).not.toHaveBeenCalled()
+  })
+
   it('returns only due permit warnings and adds supplement-chain warnings for certificates', async () => {
     const today = new Date('2026-04-17T00:00:00.000Z')
+    vi.useFakeTimers()
+    vi.setSystemTime(today)
+
     const expiringSoon = new Date(today)
     expiringSoon.setDate(expiringSoon.getDate() + 3)
     const farFuture = new Date(today)
@@ -161,8 +214,18 @@ describe('pre milestone warning service', () => {
       },
     )
 
-    const warnings = await scanPreMilestoneWarnings('project-1')
+    const warnings = await scanPreMilestoneWarnings('project-1', { asOfDate: today })
 
+    expect(mocks.rawQuery).toHaveBeenCalledTimes(4)
+    expect(mocks.rawQuery.mock.calls.map(([sql]) => String(sql))).toEqual([
+      expect.stringContaining('FROM pre_milestones'),
+      expect.stringContaining('FROM pre_milestones'),
+      expect.stringContaining('FROM certificate_work_items'),
+      expect.stringContaining('FROM certificate_dependencies'),
+    ])
+    for (const [, params] of mocks.rawQuery.mock.calls) {
+      expect(params).toEqual(['project-1'])
+    }
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

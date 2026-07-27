@@ -1,0 +1,7 @@
+checks for tasks:
+  - row_count > 0
+  - missing_count(project_id) = 0
+  - missing_count(title) = 0
+  - invalid_count(progress) = 0:
+      valid min: 0
+      valid max: 100

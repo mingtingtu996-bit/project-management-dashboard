@@ -1,6 +1,7 @@
 import type { Response } from 'express'
 
 import type { ApiResponse } from '../types/index.js'
+import { JWT_CONFIG } from './config.js'
 
 export function authSuccess<T>(data: T): ApiResponse<T> {
   return {
@@ -23,20 +24,20 @@ export function authError(code: string, message: string, details?: unknown): Api
 }
 
 export function setAuthTokenCookie(res: Response, token: string): void {
-  res.cookie('auth_token', token, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    path: '/',
+  res.cookie(JWT_CONFIG.cookie.name, token, {
+    httpOnly: JWT_CONFIG.cookie.httpOnly,
+    secure: JWT_CONFIG.cookie.secure,
+    sameSite: JWT_CONFIG.cookie.sameSite,
+    maxAge: JWT_CONFIG.cookie.maxAge,
+    path: JWT_CONFIG.cookie.path,
   })
 }
 
 export function clearAuthTokenCookie(res: Response): void {
-  res.clearCookie('auth_token', {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
-    path: '/',
+  res.clearCookie(JWT_CONFIG.cookie.name, {
+    httpOnly: JWT_CONFIG.cookie.httpOnly,
+    secure: JWT_CONFIG.cookie.secure,
+    sameSite: JWT_CONFIG.cookie.sameSite,
+    path: JWT_CONFIG.cookie.path,
   })
 }

@@ -1,10 +1,15 @@
 import { supabase } from './dbService.js'
-import { isProjectActiveStatus } from '../utils/projectStatus.js'
+import { listActiveProjectIds } from './activeProjectService.js'
 import { getCriticalPathTaskIds } from './criticalPathHelpers.js'
-import { calculateWeightedProgress } from '../utils/progressCalculation.js'
+import { calculateProgressMetrics } from '../utils/progressCalculation.js'
 import { isActiveObstacle } from '../utils/obstacleStatus.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
+import { delayDayDelta, signedDurationDayDelta } from '../utils/durationDays.js'
+import {
+  resolveConstructionCalendarContext,
+} from './constructionCalendar.js'
 import type { WeeklyDigest } from '../types/db.js'
+import { runScopedBatch } from './scopedBatchRunner.js'
 
 function getWeekStart(date: Date): string {
   const d = new Date(date)
@@ -12,10 +17,6 @@ function getWeekStart(date: Date): string {
   const diff = day === 0 ? -6 : 1 - day
   d.setDate(d.getDate() + diff)
   return d.toISOString().slice(0, 10)
-}
-
-function daysBetween(a: string, b: Date): number {
-  return Math.round((b.getTime() - new Date(a).getTime()) / 86400000)
 }
 
 export class WeeklyDigestService {
@@ -28,7 +29,10 @@ export class WeeklyDigestService {
     const prevWeekStartDate = new Date(weekStartDate)
     prevWeekStartDate.setDate(prevWeekStartDate.getDate() - 7)
     const weekStartIso = weekStartDate.toISOString()
-    const weekEndIso = new Date(weekEndDate.getTime() + 86400000).toISOString()
+    const weekEndDateExclusive = new Date(weekEndDate)
+    weekEndDateExclusive.setUTCDate(weekEndDateExclusive.getUTCDate() + 1)
+    const weekEndIso = weekEndDateExclusive.toISOString()
+    const calendar = await resolveConstructionCalendarContext({ projectId })
 
     // Load critical task IDs
     const criticalTaskIdsSet = await getCriticalPathTaskIds(projectId)
@@ -43,7 +47,8 @@ export class WeeklyDigestService {
       planned_start_date?: string | null; planned_end_date?: string | null
       assignee?: string | null
     }>
-    const overallProgress = calculateWeightedProgress(tasks)
+    const progressMetrics = calculateProgressMetrics(tasks)
+    const overallProgress = progressMetrics.currentProgress
 
     // 2. 上周进度（从上周 digest 取）
     const { data: prevDigestRows } = await supabase
@@ -111,12 +116,19 @@ export class WeeklyDigestService {
     )
     const nearestMs = (criticalMilestones[0] as { title: string; planned_end_date: string } | undefined)
     const criticalNearestMilestone = nearestMs?.title ?? null
-    const criticalNearestDelayDays = nearestMs ? daysBetween(nearestMs.planned_end_date, today) : null
+    const criticalNearestCalendarDelta = nearestMs
+      ? signedDurationDayDelta(nearestMs.planned_end_date, today)
+      : null
+    const criticalNearestDelayDays = nearestMs
+      ? (criticalNearestCalendarDelta !== null && criticalNearestCalendarDelta > 0
+          ? delayDayDelta(nearestMs.planned_end_date, today, calendar) ?? 0
+          : criticalNearestCalendarDelta ?? 0)
+      : null
 
     // 6. Top 5 偏差任务（未完成且有计划结束日期，按延期天数降序）
     const incompleteTasks = tasks.filter((task) => !isCompletedTask(task) && Boolean(task.planned_end_date))
     const withDelay = incompleteTasks
-      .map(t => ({ ...t, delayDays: daysBetween(t.planned_end_date!, today) }))
+      .map(t => ({ ...t, delayDays: delayDayDelta(t.planned_end_date!, today, calendar) ?? 0 }))
       .filter(t => t.delayDays > 0)
       .sort((a, b) => b.delayDays - a.delayDays)
       .slice(0, 5)
@@ -130,19 +142,26 @@ export class WeeklyDigestService {
     // 7. 责任主体异常（本周处于 active 异常的记录）
     const { data: alertRows } = await supabase
       .from('responsibility_alert_states')
-      .select('subject_id, subject_name, subject_type')
+      .select('dimension, subject_key, subject_label, subject_user_id, subject_unit_id, current_level')
       .eq('project_id', projectId)
-      .eq('is_active', true)
-    const abnormalResponsibilities = ((alertRows || []) as Array<{ subject_id: string; subject_name: string; subject_type: string }>).map(r => ({
-      subject_id: r.subject_id,
-      name: r.subject_name,
-      type: r.subject_type,
+      .eq('current_level', 'abnormal')
+    const abnormalResponsibilities = ((alertRows || []) as Array<{
+      dimension?: string | null
+      subject_key?: string | null
+      subject_label?: string | null
+      subject_id?: string | null
+      subject_name?: string | null
+      subject_type?: string | null
+    }>).map(r => ({
+      subject_id: r.subject_key ?? r.subject_id ?? '',
+      name: r.subject_label ?? r.subject_name ?? '',
+      type: r.dimension ?? r.subject_type ?? '',
     }))
 
     // 8. 本周新增风险/阻碍
     const { data: newRisks } = await supabase
       .from('risks')
-      .select('severity')
+      .select('severity, level')
       .eq('project_id', projectId)
       .gte('created_at', weekStartIso)
       .lt('created_at', weekEndIso)
@@ -156,8 +175,8 @@ export class WeeklyDigestService {
     const newObstaclesCount = (newObstacles || []).length
 
     const severityOrder: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 }
-    const maxRiskLevel = (newRisks || []).reduce<string | null>((best, r: { severity?: string | null }) => {
-      const s = r.severity ?? ''
+    const maxRiskLevel = (newRisks || []).reduce<string | null>((best, r: { severity?: string | null; level?: string | null }) => {
+      const s = r.severity ?? r.level ?? ''
       if (!best) return s
       return (severityOrder[s] ?? 0) > (severityOrder[best] ?? 0) ? s : best
     }, null)
@@ -184,11 +203,13 @@ export class WeeklyDigestService {
     }, { onConflict: 'project_id,week_start' })
   }
 
-  async generateForAllProjects(): Promise<void> {
-    const { data: projects } = await supabase.from('projects').select('id, status')
-    const activeProjects = ((projects || []) as Array<{ id: string; status?: string | null }>)
-      .filter(p => isProjectActiveStatus(p.status))
-    await Promise.allSettled(activeProjects.map(p => this.generateForProject(p.id)))
+  async generateForAllProjects(projectIds?: string[] | null): Promise<void> {
+    const activeProjectIds = await listActiveProjectIds(projectIds)
+    await runScopedBatch({
+      operationName: 'weekly_digest_generation',
+      scopeIds: activeProjectIds,
+      operation: (projectId) => this.generateForProject(projectId),
+    })
   }
 }
 

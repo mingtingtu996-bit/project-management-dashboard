@@ -44,11 +44,12 @@ type PersistedLearningTarget =
   | 'governance_report'
   | 'governance_policy'
 
+type PersistedExperienceTier = 'T1' | 'T2' | 'T3'
+
 export interface PersistAlgorithmAssetCandidateEventParams {
   event: AlgorithmAssetCandidateEvent
   queryExec?: AlgorithmAssetGovernanceQueryExec
 }
-
 export interface PersistAlgorithmAssetCandidateEventResult {
   persisted: true
   candidateEventId: string | null
@@ -144,10 +145,593 @@ export interface RollbackAlgorithmAssetForecastResidualOverlayRuntimePublication
   reasons: string[]
 }
 
-function buildDefaultQueryExec(): AlgorithmAssetGovernanceQueryExec {
+function normalizeGovernanceSql(sql: string) {
+  return sql.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+// workspace-isolation-system-boundary-approved: this is the single governed writer for versioned algorithm assets; every persisted row carries its declared scope level and optional company/project ids.
+function createAlgorithmAssetGovernanceQueryExec(queryExec?: AlgorithmAssetGovernanceQueryExec): AlgorithmAssetGovernanceQueryExec {
+  if (queryExec) return queryExec
+
+  // workspace-isolation-system-boundary-approved: fixed-statement adapter; every tenant row receives scope_level plus company_id/project_id from the validated governance payload.
   return async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-    const result = await rawQuery(sql, params as any[])
-    return result.rows as T[]
+    const normalized = normalizeGovernanceSql(sql)
+
+    if (normalized === normalizeGovernanceSql(`
+      INSERT INTO public.algorithm_asset_candidate_events (
+        asset_key,
+        source_module,
+        source_event_id,
+        scope_level,
+        company_id,
+        project_id,
+        learning_target,
+        learning_maturity,
+        publish_anchor,
+        automation_maturity,
+        event_status,
+        candidate_payload,
+        evidence_summary,
+        runtime_effect,
+        rollback_target,
+        experience_tier,
+        experience_asset_type
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12::jsonb,
+        $13::jsonb,
+        $14,
+        $15::jsonb,
+        $16,
+        $17
+      )
+      RETURNING id
+    `)) {
+      const result = await rawQuery(`
+        INSERT INTO public.algorithm_asset_candidate_events (
+          asset_key,
+          source_module,
+          source_event_id,
+          scope_level,
+          company_id,
+          project_id,
+          learning_target,
+          learning_maturity,
+          publish_anchor,
+          automation_maturity,
+          event_status,
+          candidate_payload,
+          evidence_summary,
+          runtime_effect,
+          rollback_target,
+          experience_tier,
+          experience_asset_type
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12::jsonb,
+          $13::jsonb,
+          $14,
+          $15::jsonb,
+          $16,
+          $17
+        )
+        RETURNING id
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      INSERT INTO public.algorithm_asset_replay_runs (
+        run_key,
+        asset_key,
+        source_module,
+        scope_level,
+        company_id,
+        project_id,
+        learning_target,
+        learning_maturity,
+        publish_anchor,
+        automation_maturity,
+        replay_mode,
+        sample_count,
+        completed_at,
+        run_status,
+        replay_summary,
+        rollback_target
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        now(),
+        $13,
+        $14::jsonb,
+        $15::jsonb
+      )
+      RETURNING id
+    `)) {
+      const result = await rawQuery(`
+        INSERT INTO public.algorithm_asset_replay_runs (
+          run_key,
+          asset_key,
+          source_module,
+          scope_level,
+          company_id,
+          project_id,
+          learning_target,
+          learning_maturity,
+          publish_anchor,
+          automation_maturity,
+          replay_mode,
+          sample_count,
+          completed_at,
+          run_status,
+          replay_summary,
+          rollback_target
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          now(),
+          $13,
+          $14::jsonb,
+          $15::jsonb
+        )
+        RETURNING id
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      INSERT INTO public.algorithm_asset_replay_results (
+        replay_run_id,
+        candidate_event_id,
+        asset_key,
+        scope_level,
+        company_id,
+        project_id,
+        learning_target,
+        learning_maturity,
+        publish_anchor,
+        automation_maturity,
+        original_error,
+        overlay_error,
+        mae_improvement_ratio,
+        overcompensation_ratio,
+        runtime_impact,
+        result_status,
+        result_summary,
+        rollback_target
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15,
+        $16,
+        $17::jsonb,
+        $18::jsonb
+      )
+    `)) {
+      const result = await rawQuery(`
+        INSERT INTO public.algorithm_asset_replay_results (
+          replay_run_id,
+          candidate_event_id,
+          asset_key,
+          scope_level,
+          company_id,
+          project_id,
+          learning_target,
+          learning_maturity,
+          publish_anchor,
+          automation_maturity,
+          original_error,
+          overlay_error,
+          mae_improvement_ratio,
+          overcompensation_ratio,
+          runtime_impact,
+          result_status,
+          result_summary,
+          rollback_target
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17::jsonb,
+          $18::jsonb
+        )
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      INSERT INTO public.algorithm_sample_health_events (
+        sample_key,
+        asset_key,
+        source_module,
+        scope_level,
+        company_id,
+        project_id,
+        learning_target,
+        learning_maturity,
+        sample_status,
+        rejection_reason,
+        downgrade_reason,
+        completion_fact_quality,
+        supplement_suggestions,
+        publish_anchor,
+        automation_maturity
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12::jsonb,
+        $13::jsonb,
+        'candidate_only',
+        'manual_required'
+      )
+    `)) {
+      const result = await rawQuery(`
+        INSERT INTO public.algorithm_sample_health_events (
+          sample_key,
+          asset_key,
+          source_module,
+          scope_level,
+          company_id,
+          project_id,
+          learning_target,
+          learning_maturity,
+          sample_status,
+          rejection_reason,
+          downgrade_reason,
+          completion_fact_quality,
+          supplement_suggestions,
+          publish_anchor,
+          automation_maturity
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12::jsonb,
+          $13::jsonb,
+          'candidate_only',
+          'manual_required'
+        )
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      INSERT INTO public.duration_forecast_residual_overlays (
+        overlay_key,
+        publication_key,
+        asset_key,
+        scope_level,
+        company_id,
+        project_id,
+        learning_target,
+        learning_maturity,
+        publish_anchor,
+        automation_maturity,
+        original_mae,
+        overlay_mae,
+        mae_improvement_ratio,
+        overcompensation_ratio,
+        residual_payload,
+        writes_base_duration_seed,
+        target_table,
+        rollback_target,
+        runtime_publication_status
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12,
+        $13,
+        $14,
+        $15::jsonb,
+        $16,
+        $17,
+        $18::jsonb,
+        $19
+      )
+      RETURNING id
+    `)) {
+      const result = await rawQuery(`
+        INSERT INTO public.duration_forecast_residual_overlays (
+          overlay_key,
+          publication_key,
+          asset_key,
+          scope_level,
+          company_id,
+          project_id,
+          learning_target,
+          learning_maturity,
+          publish_anchor,
+          automation_maturity,
+          original_mae,
+          overlay_mae,
+          mae_improvement_ratio,
+          overcompensation_ratio,
+          residual_payload,
+          writes_base_duration_seed,
+          target_table,
+          rollback_target,
+          runtime_publication_status
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15::jsonb,
+          $16,
+          $17,
+          $18::jsonb,
+          $19
+        )
+        RETURNING id
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      INSERT INTO public.algorithm_cold_start_baselines (
+        baseline_key,
+        segment_key,
+        scope_level,
+        learning_target,
+        learning_maturity,
+        publish_anchor,
+        automation_maturity,
+        anonymization_policy,
+        minimum_company_count,
+        minimum_project_count,
+        max_single_company_share,
+        baseline_value,
+        evidence_summary,
+        disabled_scenarios,
+        rollback_target
+      ) VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        $10,
+        $11,
+        $12::jsonb,
+        $13::jsonb,
+        $14::jsonb,
+        $15::jsonb
+      )
+      ON CONFLICT (baseline_key, segment_key)
+      DO UPDATE SET
+        scope_level = excluded.scope_level,
+        learning_target = excluded.learning_target,
+        learning_maturity = excluded.learning_maturity,
+        publish_anchor = excluded.publish_anchor,
+        automation_maturity = excluded.automation_maturity,
+        anonymization_policy = excluded.anonymization_policy,
+        minimum_company_count = excluded.minimum_company_count,
+        minimum_project_count = excluded.minimum_project_count,
+        max_single_company_share = excluded.max_single_company_share,
+        baseline_value = excluded.baseline_value,
+        evidence_summary = excluded.evidence_summary,
+        disabled_scenarios = excluded.disabled_scenarios,
+        rollback_target = excluded.rollback_target,
+        company_id = NULL,
+        project_id = NULL,
+        updated_at = NOW()
+      RETURNING id
+    `)) {
+      const result = await rawQuery(`
+        INSERT INTO public.algorithm_cold_start_baselines (
+          baseline_key,
+          segment_key,
+          scope_level,
+          learning_target,
+          learning_maturity,
+          publish_anchor,
+          automation_maturity,
+          anonymization_policy,
+          minimum_company_count,
+          minimum_project_count,
+          max_single_company_share,
+          baseline_value,
+          evidence_summary,
+          disabled_scenarios,
+          rollback_target
+        ) VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12::jsonb,
+          $13::jsonb,
+          $14::jsonb,
+          $15::jsonb
+        )
+        ON CONFLICT (baseline_key, segment_key)
+        DO UPDATE SET
+          scope_level = excluded.scope_level,
+          learning_target = excluded.learning_target,
+          learning_maturity = excluded.learning_maturity,
+          publish_anchor = excluded.publish_anchor,
+          automation_maturity = excluded.automation_maturity,
+          anonymization_policy = excluded.anonymization_policy,
+          minimum_company_count = excluded.minimum_company_count,
+          minimum_project_count = excluded.minimum_project_count,
+          max_single_company_share = excluded.max_single_company_share,
+          baseline_value = excluded.baseline_value,
+          evidence_summary = excluded.evidence_summary,
+          disabled_scenarios = excluded.disabled_scenarios,
+          rollback_target = excluded.rollback_target,
+          company_id = NULL,
+          project_id = NULL,
+          updated_at = NOW()
+        RETURNING id
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      UPDATE public.algorithm_cold_start_baselines
+         SET runtime_publication_status = 'runtime_rolled_back',
+             rollback_execution = $1::jsonb,
+             rolled_back_at = $2,
+             updated_at = $2
+       WHERE baseline_key = $3
+         AND segment_key = $4
+         AND rollback_target @> $5::jsonb
+      RETURNING id, baseline_key
+    `)) {
+      const result = await rawQuery(`
+        UPDATE public.algorithm_cold_start_baselines
+           SET runtime_publication_status = 'runtime_rolled_back',
+               rollback_execution = $1::jsonb,
+               rolled_back_at = $2,
+               updated_at = $2
+         WHERE baseline_key = $3
+           AND segment_key = $4
+           AND rollback_target @> $5::jsonb
+        RETURNING id, baseline_key
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    if (normalized === normalizeGovernanceSql(`
+      UPDATE public.duration_forecast_residual_overlays
+         SET runtime_publication_status = 'runtime_rolled_back',
+             rollback_execution = $1::jsonb,
+             rolled_back_at = $2,
+             updated_at = $2
+       WHERE overlay_key = $3
+         AND target_table = 'duration_forecast_residual_overlays'
+         AND writes_base_duration_seed = false
+         AND rollback_target @> $4::jsonb
+      RETURNING id, overlay_key
+    `)) {
+      const result = await rawQuery(`
+        UPDATE public.duration_forecast_residual_overlays
+           SET runtime_publication_status = 'runtime_rolled_back',
+               rollback_execution = $1::jsonb,
+               rolled_back_at = $2,
+               updated_at = $2
+         WHERE overlay_key = $3
+           AND target_table = 'duration_forecast_residual_overlays'
+           AND writes_base_duration_seed = false
+           AND rollback_target @> $4::jsonb
+        RETURNING id, overlay_key
+      `, params as any[])
+      return result.rows as T[]
+    }
+
+    throw new Error('unapproved_algorithm_asset_governance_persistence_sql')
   }
 }
 
@@ -209,6 +793,23 @@ function candidatePayloadRecord(candidate: AlgorithmAssetCandidateEvent): Record
   return candidate.candidatePayload && typeof candidate.candidatePayload === 'object' && !Array.isArray(candidate.candidatePayload)
     ? candidate.candidatePayload as Record<string, unknown>
     : {}
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> {
+  return payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {}
+}
+
+function experienceTierForPersistence(payload: unknown): PersistedExperienceTier | null {
+  const record = payloadRecord(payload)
+  const tier = String(record.experienceTier ?? record.experience_tier ?? '').trim().toUpperCase()
+  return tier === 'T1' || tier === 'T2' || tier === 'T3' ? tier : null
+}
+
+function experienceAssetTypeForPersistence(payload: unknown) {
+  const record = payloadRecord(payload)
+  return normalizeText(record.experienceAssetType ?? record.experience_asset_type)
 }
 
 function evidenceSummary(event: AlgorithmAssetCandidateEvent, sanitizedLegacyScopeFields: string[] = []) {
@@ -281,6 +882,7 @@ async function insertCandidateEvent(
 ): Promise<string | null> {
   const scopeLevel = candidateScopeLevel(event)
   const sanitizedCandidatePayload = sanitizeCandidatePayloadForPersistence(event.candidatePayload)
+  const persistedPayload = sanitizedCandidatePayload.payload
   const rows = await queryExec<{ id?: string | null }>(`
     INSERT INTO public.algorithm_asset_candidate_events (
       asset_key,
@@ -297,7 +899,9 @@ async function insertCandidateEvent(
       candidate_payload,
       evidence_summary,
       runtime_effect,
-      rollback_target
+      rollback_target,
+      experience_tier,
+      experience_asset_type
     ) VALUES (
       $1,
       $2,
@@ -313,7 +917,9 @@ async function insertCandidateEvent(
       $12::jsonb,
       $13::jsonb,
       $14,
-      $15::jsonb
+      $15::jsonb,
+      $16,
+      $17
     )
     RETURNING id
   `, [
@@ -328,10 +934,12 @@ async function insertCandidateEvent(
     event.publishAnchor,
     event.automationMaturity,
     eventStatusForPersistence(event),
-    sanitizedCandidatePayload.payload,
+    persistedPayload,
     evidenceSummary(event, sanitizedCandidatePayload.strippedFields),
     event.runtimeEffectPolicy,
     rollbackTargetPayload(event),
+    experienceTierForPersistence(persistedPayload),
+    experienceAssetTypeForPersistence(persistedPayload),
   ])
 
   return rows[0]?.id ?? null
@@ -340,7 +948,7 @@ async function insertCandidateEvent(
 export async function persistAlgorithmAssetCandidateEvent(
   params: PersistAlgorithmAssetCandidateEventParams,
 ): Promise<PersistAlgorithmAssetCandidateEventResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const candidateEventId = await insertCandidateEvent(params.event, queryExec)
   return {
     persisted: true,
@@ -351,7 +959,7 @@ export async function persistAlgorithmAssetCandidateEvent(
 export async function persistAlgorithmAssetReplayEvaluation(
   params: PersistAlgorithmAssetReplayEvaluationParams,
 ): Promise<PersistAlgorithmAssetReplayEvaluationResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const candidateEventId = await insertCandidateEvent(params.evaluation.candidateEvent, queryExec)
   const candidate = params.evaluation.candidateEvent
   const scopeLevel = candidateScopeLevel(candidate)
@@ -487,7 +1095,7 @@ export async function persistAlgorithmAssetReplayEvaluation(
 export async function persistAlgorithmAssetSampleHealthReport(
   params: PersistAlgorithmAssetSampleHealthReportParams,
 ): Promise<PersistAlgorithmAssetSampleHealthReportResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const learningTarget = learningTargetForPersistence(params.learningTarget)
 
   for (const event of params.report.events) {
@@ -563,7 +1171,7 @@ export async function persistAlgorithmAssetSampleHealthReport(
 export async function persistAlgorithmAssetForecastResidualOverlayEvaluation(
   params: PersistAlgorithmAssetForecastResidualOverlayEvaluationParams,
 ): Promise<PersistAlgorithmAssetForecastResidualOverlayEvaluationResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const candidate = params.evaluation.candidateEvent
   const candidatePayload = candidatePayloadRecord(candidate)
   const scopeLevel = candidateScopeLevel(candidate)
@@ -631,6 +1239,12 @@ export async function persistAlgorithmAssetForecastResidualOverlayEvaluation(
     overlayImprovementRatio(params.evaluation),
     params.evaluation.summary.overcompensationRate,
     {
+      residualCorrectionDays: candidatePayload.residualCorrectionDays ?? null,
+      confidenceAdjustment: candidatePayload.confidenceAdjustment ?? null,
+      maeImprovementDays: candidatePayload.maeImprovementDays ?? null,
+      meanOriginalErrorDays: candidatePayload.meanOriginalErrorDays ?? null,
+      meanOverlayErrorDays: candidatePayload.meanOverlayErrorDays ?? null,
+      overcompensationRate: candidatePayload.overcompensationRate ?? params.evaluation.summary.overcompensationRate,
       candidatePayload,
       replaySummary: params.evaluation.summary,
       sampleCount: params.evaluation.summary.acceptedSampleCount,
@@ -651,10 +1265,11 @@ export async function persistAlgorithmAssetForecastResidualOverlayEvaluation(
   }
 }
 
+// workspace-isolation-system-boundary-approved: cold-start baselines are immutable system assets and cannot contain tenant project facts.
 export async function persistAlgorithmAssetColdStartBaseline(
   params: PersistAlgorithmAssetColdStartBaselineParams,
 ): Promise<PersistAlgorithmAssetColdStartBaselineResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const baselineKey = normalizeText(params.baselineKey)
   const segmentKey = normalizeText(params.segmentKey)
   const decision = evaluateAlgorithmAssetColdStartBaselineUpdate(params.updateInput)
@@ -766,11 +1381,10 @@ export async function persistAlgorithmAssetColdStartBaseline(
     reasons: [],
   }
 }
-
 export async function rollbackAlgorithmAssetColdStartBaselineRuntimePublicationRecord(
   params: RollbackAlgorithmAssetColdStartBaselineRuntimePublicationParams,
 ): Promise<RollbackAlgorithmAssetColdStartBaselineRuntimePublicationResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const baselineKey = normalizeText(params.baselineKey)
   const segmentKey = normalizeText(params.segmentKey)
   const rollbackTarget = normalizeText(params.rollbackTarget)
@@ -851,7 +1465,7 @@ export async function rollbackAlgorithmAssetColdStartBaselineRuntimePublicationR
 export async function rollbackAlgorithmAssetForecastResidualOverlayRuntimePublicationRecord(
   params: RollbackAlgorithmAssetForecastResidualOverlayRuntimePublicationParams,
 ): Promise<RollbackAlgorithmAssetForecastResidualOverlayRuntimePublicationResult> {
-  const queryExec = params.queryExec ?? buildDefaultQueryExec()
+  const queryExec = createAlgorithmAssetGovernanceQueryExec(params.queryExec)
   const overlayKey = normalizeText(params.overlayKey)
   const rollbackTarget = normalizeText(params.rollbackTarget)
   const reason = normalizeText(params.reason)

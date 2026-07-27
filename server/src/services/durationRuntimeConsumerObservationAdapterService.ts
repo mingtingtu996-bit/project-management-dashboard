@@ -7,8 +7,11 @@ import {
   type DurationRuntimeConsumerRuntimeCallResult,
 } from './durationRuntimeConsumerObservationService.js'
 import type {
-  DurationLiveLearningAssetKey,
-} from './durationLiveLearningClosureService.js'
+  DurationRuntimeConsumerObservedAssetKey,
+} from './durationRuntimeConsumerObservationIntegrationService.js'
+import {
+  CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+} from './constructionOrganizationRuntimeLineageService.js'
 
 export interface RecordDurationRuntimeConsumerFacadeArtifactsInput {
   queryExec: DurationRuntimeConsumerObservationQueryExec
@@ -29,13 +32,15 @@ export interface DurationRuntimeConsumerFacadeArtifactsResult
 
 export interface DurationRuntimeConsumerObservationFacadeRegistration {
   consumerKey: string
-  assetKeys: readonly DurationLiveLearningAssetKey[]
+  assetKeys: readonly DurationRuntimeConsumerObservedAssetKey[]
 }
 
 const RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY: Record<string, string> = {
   durationSuggestionService: 'durationSuggestionService:getTaskDurationSuggestion',
   taskDurationForecastService: 'taskDurationForecastService:forecastTaskDuration',
   projectRemainingDurationForecastService: 'projectRemainingDurationForecastService:buildProjectRemainingDurationForecast',
+  projectCriticalPathService: 'projectCriticalPathService:resolveCriticalPathLearningPublications',
+  projectWizard: 'projectWizard:commitWizardGeneration',
   wbsTemplateGenerationService: 'wbsTemplateGenerationService:generateWbsTemplateRows',
   scheduleAccelerationService: 'scheduleAccelerationService:evaluateRuntimeDelayRecoveryWithCriticalPath',
   scheduleAccelerationRuntimeService: 'scheduleAccelerationRuntimeService:evaluateRuntimeScheduleAcceleration',
@@ -67,6 +72,10 @@ const FACADE_REGISTRATIONS: DurationRuntimeConsumerObservationFacadeRegistration
     ],
   },
   {
+    consumerKey: 'projectCriticalPathService',
+    assetKeys: ['critical_path_rule_candidate'],
+  },
+  {
     consumerKey: 'wbsTemplateGenerationService',
     assetKeys: [
       'special_work_duration_seed',
@@ -80,7 +89,16 @@ const FACADE_REGISTRATIONS: DurationRuntimeConsumerObservationFacadeRegistration
   },
   {
     consumerKey: 'scheduleAccelerationRuntimeService',
-    assetKeys: ['critical_path_rule_candidate'],
+    assetKeys: [
+      'critical_path_rule_candidate',
+      CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+    ],
+  },
+  {
+    consumerKey: 'projectWizard',
+    assetKeys: [
+      CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+    ],
   },
 ]
 
@@ -99,11 +117,20 @@ async function recordConsumerArtifacts(
   const sourceEvidenceRefs = Array.from(new Set((input.sourceEvidenceRefs ?? [])
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)))
+  const runtimeArtifactPublicationKeys = Array.from(new Set(input.artifacts
+    .map((artifact) => String(artifact.publicationKey ?? '').trim())
+    .filter(Boolean)))
+    .sort()
   const runtimeCallResult = await recordDurationRuntimeConsumerRuntimeCall({
     queryExec: input.queryExec,
     consumerKey,
     runtimeEntryRef: input.runtimeEntryRef ?? RUNTIME_ENTRY_REFS_BY_CONSUMER_KEY[consumerKey],
-    callContext: input.callContext,
+    callContext: {
+      ...(input.callContext ?? {}),
+      runtimeAssetMode: input.artifacts.length > 0 ? 'published_artifact' : 'no_published_artifact',
+      runtimeArtifactCount: input.artifacts.length,
+      runtimeArtifactPublicationKeys,
+    },
     sourceEvidenceRefs,
     calledAt: input.calledAt ?? input.observedAt,
     writesRuntimeDirectly: input.writesRuntimeDirectly,
@@ -112,13 +139,20 @@ async function recordConsumerArtifacts(
   const observationsResult = await recordDurationRuntimeConsumerObservedContractArtifacts({
     queryExec: input.queryExec,
     consumerKey,
-    artifacts: input.artifacts.map((artifact) => ({
-      ...artifact,
-      sourceEvidenceRefs: [
-        ...sourceEvidenceRefs,
-        ...(artifact.sourceEvidenceRefs ?? []),
-      ],
-    })),
+    artifacts: input.artifacts.map((artifact) => {
+      const artifactSourceEvidenceRefs = Array.from(new Set((artifact.sourceEvidenceRefs ?? [])
+        .map((item) => String(item ?? '').trim())
+        .filter(Boolean)))
+      return {
+        ...artifact,
+        sourceEvidenceRefs: artifactSourceEvidenceRefs.length > 0
+          ? [
+            ...sourceEvidenceRefs,
+            ...artifactSourceEvidenceRefs,
+          ]
+          : artifact.sourceEvidenceRefs,
+      }
+    }),
     observedAt: input.observedAt,
     writesRuntimeDirectly: input.writesRuntimeDirectly,
     writesFactDirectly: input.writesFactDirectly,
@@ -148,6 +182,12 @@ export function recordProjectRemainingDurationForecastConsumedArtifacts(
   return recordConsumerArtifacts('projectRemainingDurationForecastService', input)
 }
 
+export function recordProjectCriticalPathConsumedArtifacts(
+  input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
+) {
+  return recordConsumerArtifacts('projectCriticalPathService', input)
+}
+
 export function recordWbsTemplateGenerationConsumedArtifacts(
   input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
 ) {
@@ -164,4 +204,10 @@ export function recordScheduleAccelerationRuntimeConsumedArtifacts(
   input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
 ) {
   return recordConsumerArtifacts('scheduleAccelerationRuntimeService', input)
+}
+
+export function recordProjectWizardConsumedArtifacts(
+  input: RecordDurationRuntimeConsumerFacadeArtifactsInput,
+) {
+  return recordConsumerArtifacts('projectWizard', input)
 }

@@ -6,7 +6,7 @@
  */
 
 import type { LucideIcon } from 'lucide-react'
-import type { Project } from '@/lib/localDb'
+import type { ProjectCatalogItem } from '@/lib/projectApi'
 import type { ProjectSummary } from '@/services/dashboardApi'
 
 export type HealthHistory = {
@@ -22,14 +22,12 @@ export type ProjectFormStatus = '未开始' | '进行中' | '已完成' | '已�
 export type CockpitTab = 'all' | 'in_progress' | 'completed' | 'paused'
 
 export type ProjectRow = {
-  project: Project
+  project: ProjectCatalogItem
   summary: ProjectSummary | null
   summaryStatus: string
-  healthScore: number
-  hasNextMilestone: boolean
-  milestoneName: string
-  milestoneDate: string | null
-  milestoneDaysRemaining: number | null
+  businessHealthScore: number | null
+  keyNodeLabel: string
+  keyNodeAttentionCount: number
   deliveryDaysRemaining: number | null
 }
 
@@ -41,17 +39,4 @@ export type HeroStatItem = {
   tone: string
   pill?: boolean
   sparklineData?: Array<{ value: number }>
-}
-
-/**
- * ProjectStats — 旧版驾驶舱组件使用的聚合统计类型。
- * 保留以避免破坏已有子组件，不应在新组件中使用。
- * @deprecated 新组件请使用 ProjectRow 和 ProjectSummary
- */
-export interface ProjectStats {
-  project: { id: string; name: string; [key: string]: any }
-  milestones: Array<{ title?: string; name?: string; planned_end_date?: string; [key: string]: any }>
-  tasks: Array<any>
-  risks: Array<any>
-  [key: string]: any
 }

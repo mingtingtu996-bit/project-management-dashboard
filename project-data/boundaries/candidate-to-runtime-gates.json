@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "workbuddy-data-candidate-to-runtime-gates/v1",
+  "mutationBoundary": "boundary_catalog_only_no_db_mutation_no_runtime_write",
+  "gates": [
+    "source_verification",
+    "download_hash_or_source_locator",
+    "extraction_quality_review",
+    "candidate_review",
+    "mapping_owner_review",
+    "conflict_resolution",
+    "shadow_or_replay_evidence",
+    "data_contract_check",
+    "publication_readiness_review",
+    "controlled_writer_authorization",
+    "rollback_plan",
+    "readback_evidence",
+    "post_write_health_check"
+  ],
+  "currentDefault": "candidate_review_only_until_all_gates_pass"
+}

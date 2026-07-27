@@ -1,0 +1,131 @@
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve, sep } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const migrationName = '331_schedule_acceleration_recommendations.sql'
+const hardeningMigrationName = '332_schedule_acceleration_adoption_hardening.sql'
+const serverRoot = process.cwd().endsWith(`${sep}server`)
+  ? process.cwd()
+  : resolve(process.cwd(), 'server')
+
+function readOptional(...segments: string[]) {
+  const path = resolve(serverRoot, ...segments)
+  return existsSync(path) ? readFileSync(path, 'utf8') : ''
+}
+
+function normalizedSql(...segments: string[]) {
+  return readOptional(...segments).replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+describe('schedule acceleration recommendation migration', () => {
+  it('keeps the original 331 recommendation schema byte-compatible for forward upgrades', () => {
+    const sql = normalizedSql('migrations', migrationName)
+
+    expect(sql).toContain('create table if not exists public.schedule_acceleration_recommendations')
+    expect(sql).toContain("recommendation jsonb not null check (jsonb_typeof(recommendation) = 'object')")
+    expect(sql).toContain("operations jsonb not null check (jsonb_typeof(operations) = 'array')")
+    expect(sql).toContain("recommendation_hash text not null check (recommendation_hash ~ '^[a-f0-9]{64}$')")
+    expect(sql).toContain("operations_hash text not null check (operations_hash ~ '^[a-f0-9]{64}$')")
+    expect(sql).toContain('created_by uuid null references public.users(id) on delete set null')
+    expect(sql).toContain('created_at timestamptz not null default now()')
+    expect(sql).not.toContain('expires_at timestamptz')
+    expect(sql).toContain('unique (project_id, id, recommendation_hash, operations_hash)')
+    expect(sql).toContain('create trigger schedule_acceleration_recommendations_immutable_trigger')
+    expect(sql).toContain('before update on public.schedule_acceleration_recommendations')
+    expect(sql).toContain("raise exception 'schedule acceleration recommendations are immutable'")
+  })
+
+  it('binds task commits to the exact recommendation in the same project', () => {
+    const sql = normalizedSql('migrations', migrationName)
+
+    expect(sql).toContain('add column if not exists recommendation_id uuid')
+    expect(sql).toContain('add column if not exists recommendation_hash text')
+    expect(sql).toContain('add column if not exists operations_hash text')
+    expect(sql).toContain('constraint task_commit_requests_schedule_acceleration_binding_complete')
+    expect(sql).toContain('recommendation_id is null')
+    expect(sql).toContain('recommendation_hash is null')
+    expect(sql).toContain('operations_hash is null')
+    expect(sql).toContain('foreign key ( project_id, recommendation_id, recommendation_hash, operations_hash )')
+    expect(sql).toContain('references public.schedule_acceleration_recommendations (project_id, id, recommendation_hash, operations_hash)')
+    expect(sql).toContain('on update restrict on delete cascade')
+  })
+
+  it('uses migration 332 to upgrade issued identity, expiry, deletion, and commit-ledger immutability', () => {
+    const sql = normalizedSql('migrations', hardeningMigrationName)
+
+    expect(sql).toContain('rename column created_by to issued_by')
+    expect(sql).toContain('rename column created_at to issued_at')
+    expect(sql).toContain('add column if not exists expires_at timestamptz')
+    expect(sql).toContain('alter column issued_by set not null')
+    expect(sql).toContain('alter column expires_at set not null')
+    expect(sql).toContain('before update or delete on public.schedule_acceleration_recommendations')
+    expect(sql).toContain('on update restrict on delete restrict')
+    expect(sql).toContain('create trigger task_commit_requests_immutable_evidence_trigger')
+    expect(sql).toContain('before update or delete on public.task_commit_requests')
+    expect(sql).toContain("old.status = 'running'")
+    expect(sql).toContain("new.status = 'succeeded'")
+    expect(sql).toContain('revoke delete on table public.task_commit_requests from workbuddy_runtime')
+    expect(sql).toContain('drop policy if exists task_commit_requests_runtime_policy')
+    expect(sql).not.toContain('create policy task_commit_requests_runtime_policy on public.task_commit_requests for all')
+  })
+
+  it('disables recommendation immutability before expiry backfill and restores it after hardening', () => {
+    const sql = normalizedSql('migrations', hardeningMigrationName)
+    const dropImmutableTrigger = sql.indexOf(
+      'drop trigger if exists schedule_acceleration_recommendations_immutable_trigger on public.schedule_acceleration_recommendations',
+    )
+    const backfillExpiry = sql.indexOf(
+      "update public.schedule_acceleration_recommendations set expires_at = issued_at + interval '30 minutes' where expires_at is null",
+    )
+    const validateExpiryConstraint = sql.indexOf(
+      'validate constraint schedule_acceleration_recommendations_expires_after_issued',
+    )
+    const restoreImmutableTrigger = sql.indexOf(
+      'create trigger schedule_acceleration_recommendations_immutable_trigger before update or delete on public.schedule_acceleration_recommendations',
+    )
+
+    expect(dropImmutableTrigger).toBeGreaterThanOrEqual(0)
+    expect(backfillExpiry).toBeGreaterThan(dropImmutableTrigger)
+    expect(validateExpiryConstraint).toBeGreaterThan(backfillExpiry)
+    expect(restoreImmutableTrigger).toBeGreaterThan(validateExpiryConstraint)
+  })
+
+  it('keeps recommendation rows private and append-only for the runtime role', () => {
+    const sql = normalizedSql('migrations', migrationName)
+
+    expect(sql).toContain('alter table public.schedule_acceleration_recommendations enable row level security')
+    expect(sql).toContain('alter table public.schedule_acceleration_recommendations force row level security')
+    expect(sql).toContain('revoke all on table public.schedule_acceleration_recommendations from public, anon, authenticated')
+    expect(sql).toContain('grant select, insert on table public.schedule_acceleration_recommendations to workbuddy_runtime')
+    expect(sql).not.toContain('grant select, insert, update')
+    expect(sql).not.toContain('grant select, insert, delete')
+    expect(sql).toContain('for select to workbuddy_runtime')
+    expect(sql).toContain('for insert to workbuddy_runtime')
+  })
+
+  it('rolls back the binding before removing the immutable recommendation store', () => {
+    const sql = normalizedSql('migrations', 'rollback', migrationName)
+    const dropBinding = sql.indexOf('drop constraint if exists task_commit_requests_schedule_acceleration_recommendation_fk')
+    const dropColumns = sql.indexOf('drop column if exists recommendation_id')
+    const dropTable = sql.indexOf('drop table if exists public.schedule_acceleration_recommendations')
+
+    expect(dropBinding).toBeGreaterThanOrEqual(0)
+    expect(dropColumns).toBeGreaterThan(dropBinding)
+    expect(sql).toContain('drop column if exists recommendation_hash')
+    expect(sql).toContain('drop column if exists operations_hash')
+    expect(sql).toContain('drop trigger if exists schedule_acceleration_recommendations_immutable_trigger on public.schedule_acceleration_recommendations')
+    expect(sql).toContain('drop function if exists workbuddy_private.reject_schedule_acceleration_recommendation_mutation()')
+    expect(dropTable).toBeGreaterThan(dropColumns)
+    expect(sql).not.toContain('drop table if exists public.task_commit_requests')
+  })
+
+  it('provides a separate rollback for migration 332 without deleting the base recommendation store', () => {
+    const sql = normalizedSql('migrations', 'rollback', hardeningMigrationName)
+
+    expect(sql).toContain('drop trigger if exists task_commit_requests_immutable_evidence_trigger on public.task_commit_requests')
+    expect(sql).toContain('drop function if exists workbuddy_private.guard_task_commit_request_mutation()')
+    expect(sql).toContain('rename column issued_by to created_by')
+    expect(sql).toContain('rename column issued_at to created_at')
+    expect(sql).not.toContain('drop table if exists public.schedule_acceleration_recommendations')
+  })
+})

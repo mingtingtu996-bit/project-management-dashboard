@@ -2,7 +2,12 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 import { asyncHandler } from '../middleware/errorHandler.js'
-import { authenticate, requireProjectEditor } from '../middleware/auth.js'
+import {
+  authenticate,
+  getAuthorizedRequestProjectId,
+  requireProjectEditor,
+  requireProjectMember,
+} from '../middleware/auth.js'
 import { logger } from '../middleware/logger.js'
 import { validate } from '../middleware/validation.js'
 import { executeSQLOne } from '../services/dbService.js'
@@ -86,7 +91,10 @@ function normalizeCatalogUpdatePayload(body: Record<string, any>) {
   return updates
 }
 
-router.get('/', validate(catalogListQuerySchema, 'query'), asyncHandler(async (req, res) => {
+router.get('/',
+  validate(catalogListQuerySchema, 'query'),
+  requireProjectMember((req) => String(req.query.project_id ?? req.query.projectId ?? '').trim() || undefined),
+  asyncHandler(async (req, res) => {
   const projectId = String(req.query.project_id ?? req.query.projectId ?? '').trim()
   if (!projectId) {
     const response: ApiResponse = {
@@ -143,9 +151,17 @@ router.put('/:id',
   asyncHandler(async (req, res) => {
   const { id } = req.params
   const updates = normalizeCatalogUpdatePayload(req.body ?? {})
+  const projectId = getAuthorizedRequestProjectId(req)
+  if (!projectId) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'PROJECT_SCOPE_REQUIRED', message: '缺少已授权的项目范围' },
+      timestamp: new Date().toISOString(),
+    })
+  }
   logger.info('Updating acceptance catalog', { id })
 
-  const data = await updateAcceptanceCatalog(id, updates)
+  const data = await updateAcceptanceCatalog(id, projectId, updates)
 
   const response: ApiResponse<AcceptanceCatalog | null> = {
     success: true,
@@ -163,8 +179,21 @@ router.delete('/:id',
   validate(catalogIdParamSchema, 'params'),
   asyncHandler(async (req, res) => {
   const { id } = req.params
+  const projectId = getAuthorizedRequestProjectId(req)
+  if (!projectId) {
+    return res.status(403).json({
+      success: false,
+      error: { code: 'PROJECT_SCOPE_REQUIRED', message: '缺少已授权的项目范围' },
+      timestamp: new Date().toISOString(),
+    })
+  }
   logger.info('Deleting acceptance catalog', { id })
-  await deleteAcceptanceCatalog(id)
+  const { enforceRetentionOrBlock, buildRetentionBlockedApiError, buildRetentionBlockedHttpStatus } = await import('../services/deletionRetentionGovernanceService.js')
+  const retention = await enforceRetentionOrBlock({ entityType: 'acceptance_catalog', entityId: id, projectId, userId: req.user?.id ?? null, userAction: 'delete' })
+  if (retention.blocked) {
+    return res.status(buildRetentionBlockedHttpStatus(retention.result)).json({ success: false, error: buildRetentionBlockedApiError(retention.reason, retention.result), timestamp: new Date().toISOString() })
+  }
+  await deleteAcceptanceCatalog(id, projectId)
 
   const response: ApiResponse = {
     success: true,

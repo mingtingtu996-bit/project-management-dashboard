@@ -41,7 +41,6 @@ async function testUpdate() {
     assignee_unit: null,
     updated_at: new Date().toISOString(),
     specialty_type: null,
-    reference_duration: undefined,
     version: task.version || 1,
   };
 

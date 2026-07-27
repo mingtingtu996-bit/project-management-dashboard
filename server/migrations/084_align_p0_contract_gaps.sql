@@ -14,14 +14,25 @@ ALTER TABLE IF EXISTS participant_units
 CREATE INDEX IF NOT EXISTS idx_participant_units_project_id
   ON participant_units(project_id);
 
-WITH project_candidates AS (
-  SELECT
-    participant_unit_id,
-    MIN(project_id) AS project_id,
-    COUNT(DISTINCT project_id) AS project_count
+WITH distinct_unit_projects AS (
+  SELECT DISTINCT participant_unit_id, project_id
   FROM tasks
   WHERE participant_unit_id IS NOT NULL
-  GROUP BY participant_unit_id
+    AND project_id IS NOT NULL
+),
+project_candidates AS (
+  SELECT DISTINCT ON (participant_unit_id)
+    participant_unit_id,
+    project_id,
+    project_count
+  FROM (
+    SELECT
+      participant_unit_id,
+      project_id,
+      COUNT(*) OVER (PARTITION BY participant_unit_id) AS project_count
+    FROM distinct_unit_projects
+  ) scoped_projects
+  ORDER BY participant_unit_id, project_id::text
 )
 UPDATE participant_units pu
 SET project_id = pc.project_id

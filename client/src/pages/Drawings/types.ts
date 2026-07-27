@@ -123,7 +123,7 @@ export interface DrawingLinkedConditionView {
 
 export interface DrawingLinkedTaskView {
   id: string
-  name: string
+  title: string
   status: string
   drawingConditionCount: number
   openConditionCount: number
@@ -196,4 +196,91 @@ export interface DrawingTemplateOption {
   disciplineType: string
   documentPurpose: string
   defaultReviewMode: ReviewMode
+}
+
+export interface DrawingPackageTemplatePreviewItem {
+  itemCode: string
+  itemName: string
+  disciplineType: string
+  isRequired: boolean
+  sortOrder: number
+}
+
+export interface DrawingPackageTemplatePreviewPackage {
+  packageCode: string
+  packageName: string
+  disciplineType: string
+  documentPurpose: string
+  reviewMode: ReviewMode
+  reviewBasis: string
+  scopeLevel: 'project' | 'building' | 'specialty'
+  deliverableRole:
+    | 'site_and_building_execution_base'
+    | 'statutory_review_package'
+    | 'specialty_execution_package'
+    | 'completion_archive_package'
+  linkedConstructionStage: string
+  linkedAcceptancePurpose: string
+  overlaySource?: 'experience_replay_candidate'
+  items: DrawingPackageTemplatePreviewItem[]
+  action: 'will_create' | 'will_skip_existing'
+  selected: boolean
+  existingPackageId: string | null
+}
+
+export interface DrawingPackageTemplatePreview {
+  templateCode: string
+  templateName: string
+  seedVersion: string
+  projectId: string
+  summary: {
+    packageCreateCount: number
+    packageSkipExistingCount: number
+    itemCreateCount: number
+  }
+  templateBoundary: {
+    assetLevel: 'drawing_package'
+    mainPageLogic: 'preserved'
+    applyPolicy: 'create_missing_packages_only'
+  }
+  businessProfile: {
+    businessTypeCode: string
+    businessTypeName: string
+    source: 'project_generation_facts' | 'project_metadata' | 'project_field' | 'default'
+    defaultPackageCodes: string[]
+    optionalPackageCodes: string[]
+    sourcePolicyHints: string[]
+  }
+  experienceOverlay?: {
+    overlayCode: 'drawing_package_experience_overlay'
+    sourceReportCode: string
+    sourceSeedVersion: string
+    additionalPackageCodes: string[]
+    runtimeConsumptionPolicy: 'qualified_experience_overlay_after_replay_gate'
+    qualityGate: {
+      status: 'passed' | 'blocked'
+      packageHitRate: number
+      calibratedSampleCount: number
+      blockReason?: 'experience_replay_quality_gate_not_passed'
+    }
+  } | null
+  packages: DrawingPackageTemplatePreviewPackage[]
+  warnings: Array<{
+    code: string
+    message: string
+    severity: 'info' | 'warning'
+  }>
+}
+
+export interface ApplyDrawingPackageTemplateResult {
+  templateCode: string
+  seedVersion: string
+  projectId: string
+  createdPackageIds: string[]
+  createdItemIds: string[]
+  skippedExisting: Array<{
+    entityType: 'package'
+    key: string
+    reason: string
+  }>
 }

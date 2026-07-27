@@ -1,15 +1,16 @@
 ﻿import { spawn } from 'node:child_process'
 import { access, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { chromium } from 'playwright'
-import { maybeBuildMockAuthResponse, primeBrowserAuth } from './browser-auth-fixture.mjs'
+import { maybeBuildMockAuthResponse, primeBrowserAuth, readFullAppTestManifest } from './browser-auth-fixture.mjs'
+import { recordApiFailure, resolveGanttProjectId } from './verify-gantt-browser.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const scriptsDir = dirname(__filename)
 const repoRoot = join(scriptsDir, '..')
-const outputDir = join(repoRoot, 'artifacts', 'browser-checks')
+const outputDir = join(repoRoot, 'project-testing', 'artifacts', 'browser-checks')
 const previewScript = join(repoRoot, 'scripts', 'serve-client-dist.mjs')
 const distIndexFile = join(repoRoot, 'client', 'dist', 'index.html')
 
@@ -18,19 +19,19 @@ const apiBaseUrl = process.env.API_BASE_URL || 'http://127.0.0.1:3001'
 const shouldUseMockApi = process.env.MOCK_API !== 'false'
 const shouldStartPreview = process.env.START_PREVIEW !== 'false'
 
-const projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
+let projectId = process.env.PROJECT_ID || '422ba093-7a94-4e91-a47a-c1b865185e86'
 const now = new Date().toISOString()
 
 const TEXT = {
-  taskTitle: '涓讳綋缁撴瀯鏂藉伐',
-  taskAssignee: '闃胯揪鏄殑',
-  taskUnit: '鎬诲寘鍗曚綅',
-  changeReason: '椤哄欢鏂藉伐绐楀彛',
+  taskTitle: '主体结构施工',
+  taskAssignee: '阿达是的',
+  taskUnit: '总包单位',
+  changeReason: '顺延施工窗口',
 }
 
 const mockProject = {
   id: projectId,
-  name: '鐢樼壒鍙樻洿璁板綍鑱旇皟椤圭洰',
+  name: '甘特变更记录联调项目',
   description: 'Gantt to reports change log browser verification fixture project',
   status: 'active',
   current_phase: 'construction',
@@ -44,7 +45,7 @@ const mockTask = {
   id: 'task-1',
   project_id: projectId,
   title: TEXT.taskTitle,
-  description: '涓绘ゼ涓讳綋缁撴瀯鎸佺画鎺ㄨ繘',
+  description: '主楼主体结构持续推进',
   status: 'in_progress',
   priority: 'high',
   progress: 48,
@@ -54,8 +55,7 @@ const mockTask = {
   planned_end_date: '2026-06-30',
   assignee_name: TEXT.taskAssignee,
   assignee_user_id: 'user-1',
-  assignee_unit: TEXT.taskUnit,
-  responsible_unit: TEXT.taskUnit,
+  participant_unit_name: TEXT.taskUnit,
   specialty_type: 'structure',
   is_milestone: false,
   wbs_code: '1.1',
@@ -131,20 +131,20 @@ const mockProjectSummary = {
   reviewingConstructionDrawingCount: 0,
   attentionRequired: true,
   scheduleVarianceDays: 4,
-  activeDelayRequests: 1,
+  activeDelayedTasks: 1,
   activeObstacles: 2,
   monthlyCloseStatus: '进行中',
   closeoutOverdueDays: 0,
   unreadWarningCount: 1,
   highestWarningLevel: 'warning',
-  highestWarningSummary: '建议复核主体施工的数据填报',
+  highestWarningSummary: '鸴ʩ',
   shiftedMilestoneCount: 1,
   criticalPathAffectedTasks: 4,
   healthScore: 82,
-  healthStatus: '鍋ュ悍',
+  healthStatus: '健康',
   nextMilestone: {
     id: 'milestone-1',
-    name: '鑺傜偣楠屾敹',
+    name: '节点验收',
     targetDate: '2026-06-20',
     status: '进行中',
     daysRemaining: 63,
@@ -165,7 +165,7 @@ const mockDataQualitySummary = {
   confidence: {
     score: 84,
     flag: 'medium',
-    note: '数据质量存在波动，建议结合现场复核。',
+    note: 'ڲֳˡ',
     timelinessScore: 83,
     anomalyScore: 80,
     consistencyScore: 86,
@@ -178,7 +178,7 @@ const mockDataQualitySummary = {
   },
   prompt: {
     count: 1,
-    summary: '瀛樺湪 1 鏉￠渶瑕侀噸鐐瑰鏍哥殑鏁版嵁璐ㄩ噺寮傚父',
+    summary: '存在 1 条需要重点复核的数据质量异常',
     items: [
       {
         id: 'finding-1',
@@ -196,7 +196,7 @@ const mockDataQualitySummary = {
     severity: 'warning',
     scopeLabel: TEXT.taskTitle,
     findingCount: 3,
-    summary: '建议复核主体施工的数据填报',
+    summary: '鸴ʩ',
   },
   findings: [],
 }
@@ -216,9 +216,92 @@ const mockChangeLogs = [
   },
 ]
 
+const mockBaselines = [
+  {
+    id: 'baseline-v8',
+    project_id: projectId,
+    version: 8,
+    status: 'confirmed',
+    title: 'v8',
+    confirmed_at: '2026-04-15T00:00:00.000Z',
+    updated_at: '2026-04-15T00:00:00.000Z',
+  },
+]
+
+const mockDeviationRow = {
+  id: 'row-task-1',
+  title: TEXT.taskTitle,
+  mainline: 'execution',
+  source_task_id: 'task-1',
+  planned_progress: 60,
+  actual_progress: 48,
+  actual_date: '2026-04-13',
+  deviation_days: 3,
+  deviation_rate: 12,
+  status: 'delayed',
+  reason: TEXT.changeReason,
+  mapping_status: 'mapping_pending',
+}
+
+const mockDeviationAnalysis = {
+  project_id: projectId,
+  baseline_version_id: 'baseline-v8',
+  monthly_plan_version_id: null,
+  summary: {
+    total_items: 1,
+    deviated_items: 1,
+    carryover_items: 0,
+    unresolved_items: 1,
+    baseline_items: 0,
+    monthly_plan_items: 0,
+    execution_items: 1,
+  },
+  rows: [mockDeviationRow],
+  mainlines: [
+    {
+      key: 'execution',
+      label: '执行偏差',
+      summary: {
+        total_items: 1,
+        deviated_items: 1,
+        delayed_items: 1,
+        unresolved_items: 1,
+      },
+      rows: [mockDeviationRow],
+    },
+  ],
+  trend_events: [],
+  chart_data: {
+    baselineDeviation: [],
+    monthlyFulfillment: [],
+    executionDeviation: [
+      {
+        id: 'chart-task-1',
+        title: TEXT.taskTitle,
+        deviation_days: 3,
+        deviation_rate: 12,
+      },
+    ],
+  },
+}
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message)
+  }
+}
+
+async function resolveProjectId() {
+  if (process.env.PROJECT_ID || shouldUseMockApi) return projectId
+  const manifest = await readFullAppTestManifest()
+  projectId = resolveGanttProjectId({ manifest })
+  return projectId
+}
+
+export function readPlanningCellTaskReference(planningCell, titleText) {
+  return {
+    id: String(planningCell || '').split(':')[0] || '',
+    title: String(titleText || '').trim(),
   }
 }
 
@@ -283,6 +366,22 @@ function buildMockResponse(urlString) {
     return json({ success: true, data: mockProject })
   }
 
+  if (pathname === `/api/projects/${projectId}/bootstrap`) {
+    return json({
+      success: true,
+      data: {
+        project: mockProject,
+        tasks: [mockTask],
+        risks: [],
+        conditions: [],
+        obstacles: [],
+        warnings: [],
+        issues: [],
+        taskProgressSnapshots: [],
+      },
+    })
+  }
+
   if (pathname === '/api/tasks') {
     return json({ success: true, data: [mockTask] })
   }
@@ -300,28 +399,27 @@ function buildMockResponse(urlString) {
   }
 
   if (pathname === '/api/task-baselines') {
-    return json({ success: true, data: [] })
+    return json({ success: true, data: mockBaselines })
   }
 
   if (pathname === '/api/progress-deviation') {
+    return json({ success: true, data: mockDeviationAnalysis })
+  }
+
+  if (pathname === '/api/progress-deviation/lock') {
     return json({
       success: true,
       data: {
-        project_id: projectId,
-        baseline_version_id: null,
-        monthly_plan_version_id: null,
-        summary: {
-          total_items: 0,
-          deviated_items: 0,
-          carryover_items: 0,
-          unresolved_items: 0,
-          baseline_items: 0,
-          monthly_plan_items: 0,
-          execution_items: 0,
+        lock: {
+          id: 'lock-1',
+          project_id: projectId,
+          baseline_version_id: 'baseline-v8',
+          resource_id: `${projectId}:baseline-v8`,
+          locked_by: 'browser-check',
+          locked_at: now,
+          lock_expires_at: now,
+          is_locked: true,
         },
-        rows: [],
-        mainlines: [],
-        trend_events: [],
       },
     })
   }
@@ -332,7 +430,6 @@ function buildMockResponse(urlString) {
     || pathname === '/api/task-obstacles'
     || pathname === '/api/warnings'
     || pathname === '/api/issues'
-    || pathname === '/api/delay-requests'
     || pathname === '/api/tasks/progress-snapshots'
   ) {
     return json({ success: true, data: [] })
@@ -369,6 +466,7 @@ function buildMockResponse(urlString) {
 async function main() {
   await mkdir(outputDir, { recursive: true })
   await ensureDistExists()
+  await resolveProjectId()
 
   let previewProcess = null
   const previewAlreadyReady = await isHttpReady(baseUrl)
@@ -401,6 +499,16 @@ async function main() {
       pageErrors.push(error.message)
     })
 
+    page.on('response', (response) => {
+      if (!response.url().includes('/api/') || response.status() < 400) return
+      recordApiFailure(apiFailures, {
+        type: 'response',
+        url: response.url(),
+        status: response.status(),
+        statusText: response.statusText(),
+      })
+    })
+
     await page.route(`${baseUrl}/api/**`, async (route) => {
       const requestUrl = route.request().url()
 
@@ -412,10 +520,18 @@ async function main() {
       const forwardUrl = requestUrl.replace(baseUrl, apiBaseUrl)
       try {
         const response = await route.fetch({ url: forwardUrl })
+        if (response.status() >= 400) {
+          recordApiFailure(apiFailures, {
+            type: 'proxy-response',
+            url: forwardUrl,
+            status: response.status(),
+            statusText: response.statusText(),
+          })
+        }
         await route.fulfill({ response })
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        apiFailures.push({ url: forwardUrl, message })
+        recordApiFailure(apiFailures, { type: 'proxy-error', url: forwardUrl, message })
         await route.fulfill(json({
           success: false,
           error: {
@@ -429,34 +545,50 @@ async function main() {
     const targetUrl = `${baseUrl}/#/projects/${projectId}/gantt`
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' })
     await page.getByTestId('task-workspace-layer-l2').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('gantt-task-select-task-1').waitFor({ state: 'visible', timeout: 20000 })
-    await page.getByTestId('gantt-task-select-task-1').click()
+    await page.getByTestId('gantt-task-rows').waitFor({ state: 'visible', timeout: 20000 })
+    const firstTaskTitleButton = page.getByTestId('gantt-task-title-inline-edit-trigger').first()
+    await firstTaskTitleButton.waitFor({ state: 'visible', timeout: 20000 })
+    const selectedTask = await firstTaskTitleButton.evaluate((element) => {
+      const cell = element.closest('[data-planning-cell]')
+      return {
+        planningCell: cell?.getAttribute('data-planning-cell') || '',
+        titleText: element.textContent || '',
+      }
+    })
+      .then(({ planningCell, titleText }) => readPlanningCellTaskReference(planningCell, titleText))
+    assert(selectedTask.id, 'Gantt first task id is empty')
+    assert(selectedTask.title, 'Gantt first task title is empty')
+    await firstTaskTitleButton.click()
     await page.getByTestId('gantt-task-detail-panel').waitFor({ state: 'visible', timeout: 10000 })
     await page.screenshot({ path: join(outputDir, 'gantt-change-log-source.png'), fullPage: true })
 
     const detailText = await page.getByTestId('gantt-task-detail-panel').innerText()
-    assert(detailText.includes(TEXT.taskTitle), `Task detail panel missing title: ${TEXT.taskTitle}`)
-    assert(detailText.includes(TEXT.taskAssignee), `Task detail panel missing assignee: ${TEXT.taskAssignee}`)
+    assert(detailText.includes(selectedTask.title), `Task detail panel missing title: ${selectedTask.title}`)
+    if (shouldUseMockApi || process.env.BROWSER_VERIFY_TASK_ASSIGNEE) {
+      assert(detailText.includes(TEXT.taskAssignee), `Task detail panel missing assignee: ${TEXT.taskAssignee}`)
+    }
 
-    await page.getByTestId('gantt-open-change-log').click()
+    await page.getByTestId('gantt-open-progress-deviation').click()
     await page.waitForFunction(
-      (expectedProjectId) => window.location.hash.includes(`/projects/${expectedProjectId}/reports?view=change_log&taskId=task-1`),
-      projectId,
+      ({ expectedProjectId, expectedTaskId }) => (
+        window.location.hash.includes(`/projects/${expectedProjectId}/reports?view=progress_deviation`)
+        && window.location.hash.includes(`taskId=${expectedTaskId}`)
+      ),
+      { expectedProjectId: projectId, expectedTaskId: selectedTask.id },
       { timeout: 10000 },
     )
-    await page.getByTestId('change-log-view').waitFor({ state: 'visible', timeout: 10000 })
-    await page.waitForFunction(
-      ([testId, expectedText]) => {
-        const element = document.querySelector(`[data-testid="${testId}"]`)
-        return Boolean(element?.textContent?.includes(expectedText))
-      },
-      ['change-log-view', TEXT.changeReason],
-      { timeout: 10000 },
-    )
+    await page.getByTestId('deviation-shell').waitFor({ state: 'visible', timeout: 20000 })
+    await page.getByTestId('deviation-detail-table').waitFor({ state: 'visible', timeout: 10000 })
     const reportsUrl = page.url()
-    const changeLogText = await page.getByTestId('change-log-view').innerText()
-    assert(reportsUrl.includes('/reports?view=change_log&taskId=task-1'), `Unexpected reports URL: ${reportsUrl}`)
-    assert(changeLogText.includes(TEXT.changeReason), 'Change log view did not render expected task change record')
+    const deviationText = await page.getByTestId('deviation-detail-table').innerText()
+    assert(reportsUrl.includes('/reports?view=progress_deviation'), `Unexpected reports URL: ${reportsUrl}`)
+    assert(reportsUrl.includes(`taskId=${selectedTask.id}`), `Reports URL missing selected task id: ${reportsUrl}`)
+    if (shouldUseMockApi) {
+      assert(deviationText.includes(TEXT.taskTitle), 'Progress deviation view did not render expected task title')
+      assert(deviationText.includes(TEXT.changeReason), 'Progress deviation view did not render expected task deviation reason')
+    } else {
+      assert(deviationText.trim().length > 0, 'Progress deviation detail table rendered empty text')
+    }
     await page.screenshot({ path: join(outputDir, 'gantt-change-log-target.png'), fullPage: true })
 
     assert(apiFailures.length === 0, `API proxy failures detected: ${JSON.stringify(apiFailures)}`)
@@ -467,6 +599,7 @@ async function main() {
       mode: shouldUseMockApi ? 'mock-api' : 'proxy-api',
       targetUrl,
       reportsUrl,
+      selectedTask,
       changeLogVisible: true,
       apiFailures,
       consoleErrors,
@@ -498,7 +631,9 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+}

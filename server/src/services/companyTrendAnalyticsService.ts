@@ -1,4 +1,4 @@
-import { getMetricRegistryEntry, type MetricGranularity, type MetricKey } from '../analytics/metricRegistry.js'
+import { getMetricRegistryEntry, type MetricGranularity, type MetricKey } from './metricRegistryService.js'
 import {
   getCompanyTrendAnalytics as buildCompanyTrendAnalytics,
   resolveTrendDateRange,
@@ -13,8 +13,8 @@ export async function getCompanyTrendAnalytics(
     from?: unknown
     to?: unknown
     granularity?: MetricGranularity
-    projectIds?: string[] | null
-  } = {},
+    projectIds: string[]
+  },
 ): Promise<CompanyTrendResponse> {
   const entry = getMetricRegistryEntry(metric)
   const dateRange = resolveTrendDateRange(options.from, options.to)
@@ -24,6 +24,6 @@ export async function getCompanyTrendAnalytics(
     from: dateRange.from,
     to: dateRange.to,
     granularity,
-    projectIds: options.projectIds ?? null,
+    projectIds: options.projectIds,
   })
 }

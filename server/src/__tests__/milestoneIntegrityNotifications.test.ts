@@ -4,8 +4,10 @@ const state = vi.hoisted(() => ({
   executeSQL: vi.fn(),
   executeSQLOne: vi.fn(),
   listNotifications: vi.fn(),
+  findNotification: vi.fn(async () => null),
   insertNotification: vi.fn(async (notification: Record<string, unknown>) => notification),
   updateNotificationById: vi.fn(async () => undefined),
+  emitNotification: vi.fn(async (notification: Record<string, unknown>) => notification),
   writeLog: vi.fn(async () => undefined),
 }))
 
@@ -16,12 +18,19 @@ vi.mock('../services/dbService.js', () => ({
 
 vi.mock('../services/notificationStore.js', () => ({
   listNotifications: state.listNotifications,
+  findNotification: state.findNotification,
   insertNotification: state.insertNotification,
   updateNotificationById: state.updateNotificationById,
 }))
 
 vi.mock('../services/changeLogs.js', () => ({
   writeLog: state.writeLog,
+}))
+
+vi.mock('../services/notificationTouchpointService.js', () => ({
+  notificationTouchpointService: {
+    emit: state.emitNotification,
+  },
 }))
 
 vi.mock('../services/activeProjectService.js', () => ({
@@ -64,7 +73,7 @@ describe('milestone integrity notification sync', () => {
       },
     )
 
-    expect(state.insertNotification).toHaveBeenCalledWith(expect.objectContaining({
+    expect(state.emitNotification).toHaveBeenCalledWith(expect.objectContaining({
       type: 'milestone_mapping_pending',
       notification_type: 'planning-governance-milestone',
       source_entity_type: 'milestone_integrity',
@@ -120,7 +129,7 @@ describe('milestone integrity notification sync', () => {
     expect(state.updateNotificationById).toHaveBeenCalledWith('notification-1', expect.objectContaining({
       status: 'resolved',
       is_read: true,
-    }))
+    }), expect.objectContaining({ id: 'notification-1', project_id: 'project-1' }))
     expect(state.writeLog).toHaveBeenCalledWith(expect.objectContaining({
       project_id: 'project-1',
       entity_type: 'milestone',
