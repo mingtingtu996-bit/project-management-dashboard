@@ -91,6 +91,27 @@ describe('migration helper entrypoints', () => {
     }
   })
 
+  it('exposes migration 331 through standalone, rollback, CLEAN, and domain registry entrypoints', () => {
+    const migrationName = '331_schedule_acceleration_recommendations.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const registry = JSON.parse(readServerFile('src', 'registry', 'system-domain-registry.json')) as {
+      entries: Array<{ kind: string; id: string; architectureUnit: string; runtimeScope: string }>
+    }
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.schedule_acceleration_recommendations')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.schedule_acceleration_recommendations')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+    expect(registry.entries).toContainEqual(expect.objectContaining({
+      kind: 'migration',
+      id: '331_schedule_acceleration_recommendations',
+      architectureUnit: '预测桥',
+      runtimeScope: 'business_core',
+    }))
+  })
+
   it('pins clean migration helpers to the canonical V4 bundle only', () => {
     const cleanRunner = readServerFile('run-clean-migration.mjs')
     const guidanceRunner = readServerFile('run-migration.js')

@@ -3319,6 +3319,13 @@
     },
     {
       "kind": "migration",
+      "id": "331_schedule_acceleration_recommendations",
+      "architectureUnit": "预测桥",
+      "runtimeScope": "business_core",
+      "assignmentReason": "adds immutable schedule acceleration recommendation snapshots and exact same-project hash binding for atomic task commits"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
