@@ -2183,19 +2183,17 @@ describe('scheduleAccelerationService', () => {
     }))
     expect(feasibility?.accelerationProposal?.rescheduleDraft?.operations).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        type: 'update',
-        clientRowId: 'structure',
+        type: 'update_row',
+        rowId: 'structure',
         values: expect.objectContaining({
           planned_end_date: expect.any(String),
-          duration_reschedule_source: 'target_end_compression',
         }),
       }),
       expect.objectContaining({
-        type: 'update',
-        clientRowId: 'fitout',
+        type: 'update_row',
+        rowId: 'fitout',
         values: expect.objectContaining({
           planned_start_date: expect.any(String),
-          duration_reschedule_policy: 'dependency_propagation_preview',
         }),
       }),
     ]))

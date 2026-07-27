@@ -299,10 +299,22 @@ function mapTargetFeasibilityToTaskIds(
         ...adjustment,
         clientRowId: mapCreatedTaskId(adjustment.clientRowId, idByClientRowId),
       })),
-      operations: feasibility.accelerationProposal.rescheduleDraft.operations.map((operation) => ({
-        ...operation,
-        clientRowId: mapCreatedTaskId(operation.clientRowId, idByClientRowId),
-      })),
+      operations: feasibility.accelerationProposal.rescheduleDraft.operations.map((operation) => (
+        operation.type === 'set_predecessors'
+          ? {
+              ...operation,
+              rowId: mapCreatedTaskId(operation.rowId, idByClientRowId),
+              predecessorTaskIds: operation.predecessorTaskIds.map((id) => mapCreatedTaskId(id, idByClientRowId)),
+              predecessorDependencies: operation.predecessorDependencies.map((dependency) => ({
+                ...dependency,
+                dependencyTaskId: mapCreatedTaskId(dependency.dependencyTaskId, idByClientRowId),
+              })),
+            }
+          : {
+              ...operation,
+              rowId: mapCreatedTaskId(operation.rowId, idByClientRowId),
+            }
+      )),
     }
     : undefined
   const accelerationProposal = feasibility.accelerationProposal

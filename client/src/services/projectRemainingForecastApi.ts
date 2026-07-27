@@ -2,7 +2,7 @@ import { apiPost } from '@/lib/apiClient'
 import { normalizeDurationMetricDto, type DurationMetricDto } from '@/lib/durationMetric'
 import {
   normalizeWbsTargetFeasibility,
-  type WbsAccelerationProposal,
+  type WbsAccelerationRecommendationIdentity,
   type WbsConstructionOrganizationProductOutcomeCloseoutProgress,
   type WbsTargetFeasibility,
 } from './wbsTemplateGenerationApi'
@@ -236,11 +236,8 @@ export async function evaluateProjectScheduleAcceleration(
 
 export async function recordScheduleAccelerationRecommendationAdoption(
   projectId: string,
-  proposal: WbsAccelerationProposal,
-  evidence?: {
-    outcomeRef?: string | null
-    outcomeMetadata?: Record<string, unknown> | null
-  } | null,
+  recommendation: WbsAccelerationRecommendationIdentity,
+  taskCommitRequestId: string,
   options?: RequestInit,
 ): Promise<ScheduleAccelerationRecommendationAdoptionResponse> {
   const normalizedProjectId = String(projectId ?? '').trim()
@@ -255,9 +252,9 @@ export async function recordScheduleAccelerationRecommendationAdoption(
   const raw = await apiPost<any>(
     `/api/projects/${encodeURIComponent(normalizedProjectId)}/schedule-acceleration/recommendations/adopt`,
     {
-      proposal,
-      outcomeRef: evidence?.outcomeRef ?? null,
-      outcomeMetadata: evidence?.outcomeMetadata ?? null,
+      recommendationId: recommendation.id,
+      recommendationHash: recommendation.recommendationHash,
+      taskCommitRequestId,
     },
     options,
   )

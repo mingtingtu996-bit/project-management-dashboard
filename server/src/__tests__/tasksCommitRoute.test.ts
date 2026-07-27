@@ -67,6 +67,8 @@ const mocks = vi.hoisted(() => ({
     deletionResults: input.deletionResults,
   })),
   buildTaskCommitRequestHash: vi.fn(() => 'commit-request-hash'),
+  buildTaskCommitOperationsHash: vi.fn(() => 'commit-operations-hash'),
+  authorizeScheduleAccelerationRecommendationCommit: vi.fn(),
   reserveTaskCommitRequest: vi.fn(),
   completeTaskCommitRequest: vi.fn(),
   recordAcceptancePlanExecutionFacts: vi.fn(),
@@ -196,8 +198,13 @@ vi.mock('../services/durationLearningRuntimeEvidenceOutboxService.js', () => ({
 vi.mock('../services/taskCommitIdempotencyService.js', () => ({
   buildTaskCommitReplaySummary: mocks.buildTaskCommitReplaySummary,
   buildTaskCommitRequestHash: mocks.buildTaskCommitRequestHash,
+  buildTaskCommitOperationsHash: mocks.buildTaskCommitOperationsHash,
   reserveTaskCommitRequest: mocks.reserveTaskCommitRequest,
   completeTaskCommitRequest: mocks.completeTaskCommitRequest,
+}))
+
+vi.mock('../services/scheduleAccelerationRecommendationService.js', () => ({
+  authorizeScheduleAccelerationRecommendationCommit: mocks.authorizeScheduleAccelerationRecommendationCommit,
 }))
 
 vi.mock('../services/projectCriticalPathService.js', () => ({
@@ -300,6 +307,7 @@ describe('tasks commit route', () => {
       kind: 'reserved',
       id: 'commit-request-1',
     })
+    mocks.authorizeScheduleAccelerationRecommendationCommit.mockResolvedValue(undefined)
     mocks.completeTaskCommitRequest.mockResolvedValue(undefined)
     mocks.supabaseService.getTask.mockResolvedValue(buildTask())
     mocks.supabaseService.getTasks.mockResolvedValue([buildTask()])
@@ -564,6 +572,83 @@ describe('tasks commit route', () => {
         changedRowCount: 2,
       }),
     }))
+  })
+
+  it('binds a server-issued acceleration recommendation and the canonical operation hash to the commit ledger', async () => {
+    const operations = [{
+      type: 'update_row',
+      rowId: 'task-1',
+      values: { planned_end_date: '2026-06-18' },
+    }]
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'acceleration-commit-1')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations,
+        clientContext: {
+          requestId: 'acceleration-commit-1',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.buildTaskCommitOperationsHash).toHaveBeenCalledWith(operations)
+    expect(mocks.buildTaskCommitRequestHash).toHaveBeenCalledWith(expect.objectContaining({
+      accelerationRecommendation: {
+        id: 'recommendation-1',
+        recommendationHash: 'recommendation-hash-1',
+        operationsHash: 'commit-operations-hash',
+      },
+    }))
+    expect(mocks.reserveTaskCommitRequest).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ID,
+      requestId: 'acceleration-commit-1',
+      recommendationId: 'recommendation-1',
+      recommendationHash: 'recommendation-hash-1',
+      operationsHash: 'commit-operations-hash',
+    }))
+  })
+
+  it('rejects an expired acceleration recommendation before reserving or mutating a task commit', async () => {
+    mocks.authorizeScheduleAccelerationRecommendationCommit.mockRejectedValueOnce(Object.assign(
+      new Error('The acceleration recommendation has expired.'),
+      { code: 'ACCELERATION_RECOMMENDATION_EXPIRED', statusCode: 409 },
+    ))
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'expired-acceleration-commit')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_row',
+          rowId: 'task-1',
+          values: { planned_end_date: '2026-06-18' },
+        }],
+        clientContext: {
+          requestId: 'expired-acceleration-commit',
+          accelerationRecommendation: {
+            id: 'recommendation-expired',
+            recommendationHash: 'recommendation-hash-expired',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_EXPIRED' })
+    expect(mocks.reserveTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.updateTaskInMainChain).not.toHaveBeenCalled()
+    expect(mocks.writeChangeLog).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
   })
 
   it('replays an already completed commit without repeating writes, audit, or realtime effects', async () => {

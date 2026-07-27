@@ -120,11 +120,13 @@ import {
 } from '../services/taskBatchUpdateService.js'
 import {
   buildTaskCommitReplaySummary,
+  buildTaskCommitOperationsHash,
   buildTaskCommitRequestHash,
   completeTaskCommitRequest,
   reserveTaskCommitRequest,
   type TaskCommitReplaySummary,
 } from '../services/taskCommitIdempotencyService.js'
+import { authorizeScheduleAccelerationRecommendationCommit } from '../services/scheduleAccelerationRecommendationService.js'
 
 const router = Router()
 const supabase = new SupabaseService()
@@ -2193,6 +2195,34 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
     } satisfies ApiResponse)
   }
   const requestId = headerRequestId || bodyRequestId || randomUUID()
+  const rawAccelerationRecommendation = body.clientContext?.accelerationRecommendation
+    ?? body.clientContext?.acceleration_recommendation
+    ?? null
+  const accelerationRecommendation = rawAccelerationRecommendation
+    && typeof rawAccelerationRecommendation === 'object'
+    && !Array.isArray(rawAccelerationRecommendation)
+    ? {
+        id: String((rawAccelerationRecommendation as Record<string, unknown>).id ?? '').trim(),
+        recommendationHash: String(
+          (rawAccelerationRecommendation as Record<string, unknown>).recommendationHash
+            ?? (rawAccelerationRecommendation as Record<string, unknown>).recommendation_hash
+            ?? '',
+        ).trim(),
+      }
+    : null
+  if (rawAccelerationRecommendation && (!accelerationRecommendation?.id || !accelerationRecommendation.recommendationHash)) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'ACCELERATION_RECOMMENDATION_BINDING_INVALID',
+        message: 'Acceleration recommendation identity and hash are required together.',
+      },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse)
+  }
+  const operationsHash = accelerationRecommendation
+    ? buildTaskCommitOperationsHash(body.operations)
+    : null
   const requestHash = buildTaskCommitRequestHash({
     projectId,
     actorId,
@@ -2200,6 +2230,9 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
     resourceId: body.resourceId ?? body.surfaceId ?? null,
     fieldRegistryVersion: body.fieldRegistryVersion,
     operations: body.operations,
+    accelerationRecommendation: accelerationRecommendation
+      ? { ...accelerationRecommendation, operationsHash }
+      : null,
   })
 
   if (!isPlanningFieldRegistryVersionCurrent(body.fieldRegistryVersion)) {
@@ -2242,11 +2275,22 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
 
   try {
     await withDatabaseTransaction(async () => {
+      if (accelerationRecommendation && operationsHash) {
+        await authorizeScheduleAccelerationRecommendationCommit({
+          projectId,
+          recommendationId: accelerationRecommendation.id,
+          recommendationHash: accelerationRecommendation.recommendationHash,
+          operationsHash,
+        })
+      }
       const reservation = await reserveTaskCommitRequest({
         projectId,
         requestId,
         requestHash,
         requestedBy: actorId,
+        recommendationId: accelerationRecommendation?.id ?? null,
+        recommendationHash: accelerationRecommendation?.recommendationHash ?? null,
+        operationsHash,
       })
       if (reservation.kind === 'replay') {
         replaySummary = reservation.summary

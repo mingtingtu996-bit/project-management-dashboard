@@ -48,6 +48,11 @@ import {
   CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
   type ConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
+import { withDatabaseTransaction } from '../database.js'
+import {
+  authorizeScheduleAccelerationRecommendationAdoption,
+  issueScheduleAccelerationRecommendation,
+} from './scheduleAccelerationRecommendationService.js'
 
 const CURRENT_EXECUTION_BASELINE_STATUSES = new Set(['confirmed', 'pending_realign'])
 
@@ -70,10 +75,10 @@ export interface RecordScheduleAccelerationRuntimeConsumptionInput {
 export interface RecordScheduleAccelerationRecommendationAdoptionInput {
   projectId?: string | null
   adoptedBy?: string | null
-  proposal?: Partial<ScheduleAccelerationProposal> | null
+  recommendationId?: string | null
+  recommendationHash?: string | null
+  taskCommitRequestId?: string | null
   adoptedAt?: string | null
-  outcomeRef?: string | null
-  outcomeMetadata?: Record<string, unknown> | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
 }
 
@@ -892,8 +897,16 @@ async function recordLinkedConstructionOrganizationRuntimeConsumerObservation(in
   })
 }
 
-export async function recordScheduleAccelerationRecommendationAdoption(
-  input: RecordScheduleAccelerationRecommendationAdoptionInput,
+async function persistScheduleAccelerationRecommendationAdoption(
+  input: {
+    projectId: string
+    adoptedBy: string
+    adoptedAt: string
+    proposal: ScheduleAccelerationProposal
+    outcomeRef: string
+    outcomeMetadata: Record<string, unknown>
+    runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  },
 ): Promise<ScheduleAccelerationRecommendationAdoptionResult> {
   const projectId = normalizeText(input.projectId)
   if (!projectId) {
@@ -902,7 +915,7 @@ export async function recordScheduleAccelerationRecommendationAdoption(
   const adoptedBy = normalizeText(input.adoptedBy) || null
   const adoptedAt = normalizeText(input.adoptedAt) || new Date().toISOString()
   const recommendationKey = buildScheduleAccelerationRecommendationKey(input.proposal)
-  const proposal = input.proposal ?? {}
+  const proposal = input.proposal
   const targetEndDate = normalizeDate(proposal.targetEndDate)
   const naturalEndDate = normalizeDate(proposal.naturalEndDate)
   const totalRecoverDays = readOptionalNumber(proposal.totalRecoverDays)
@@ -1038,6 +1051,47 @@ export async function recordScheduleAccelerationRecommendationAdoption(
     constructionOrganizationRecommendationDecision,
     constructionOrganizationSavedOutcome,
   }
+}
+
+export async function recordScheduleAccelerationRecommendationAdoption(
+  input: RecordScheduleAccelerationRecommendationAdoptionInput,
+): Promise<ScheduleAccelerationRecommendationAdoptionResult> {
+  const projectId = normalizeText(input.projectId)
+  const adoptedBy = normalizeText(input.adoptedBy)
+  const adoptedAt = normalizeText(input.adoptedAt) || new Date().toISOString()
+
+  return withDatabaseTransaction(async () => {
+    const authority = await authorizeScheduleAccelerationRecommendationAdoption({
+      projectId,
+      adoptedBy,
+      recommendationId: normalizeText(input.recommendationId),
+      recommendationHash: normalizeText(input.recommendationHash),
+      taskCommitRequestId: normalizeText(input.taskCommitRequestId),
+      now: new Date(adoptedAt),
+    })
+    const outcomeRef = `task-list-commit:${projectId}:${authority.taskCommitRequestId}:acceleration-reschedule`
+    const outcomeMetadata = {
+      source: 'authoritative_task_commit_ledger',
+      taskCommitLedgerId: authority.taskCommitLedgerId,
+      taskCommitRequestId: authority.taskCommitRequestId,
+      taskCommitCompletedAt: authority.taskCommitCompletedAt,
+      recommendationId: authority.recommendationId,
+      recommendationHash: authority.recommendationHash,
+      operationsHash: authority.operationsHash,
+      operationCount: authority.proposal.rescheduleDraft?.operations.length ?? 0,
+      taskCommitResultSummary: authority.taskCommitResultSummary,
+    }
+
+    return persistScheduleAccelerationRecommendationAdoption({
+      projectId,
+      adoptedBy,
+      adoptedAt,
+      proposal: authority.proposal,
+      outcomeRef,
+      outcomeMetadata,
+      runtimeConsumerObservationQueryExec: input.runtimeConsumerObservationQueryExec,
+    })
+  })
 }
 
 async function loadPersistedAccelerationRecommendationAdoption(projectId: string) {
@@ -1816,6 +1870,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
   runtimeArtifactPublications?: readonly ScheduleAccelerationRuntimeArtifactPublication[] | null
   runtimeConsumerObservedAt?: string | null
   runtimeConsumerErrorHandler?: (error: unknown) => void
+  issuedBy?: string | null
 }): Promise<{
   rowsEvaluated: number
   projectRemainingForecast: ProjectRemainingDurationForecast
@@ -1858,7 +1913,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     runtimeConsumerObservedAt: params.runtimeConsumerObservedAt,
     runtimeConsumerErrorHandler: params.runtimeConsumerErrorHandler,
   })
-  const targetFeasibility = targetEndDate
+  let targetFeasibility = targetEndDate
     ? await evaluateRuntimeDelayRecoveryWithCriticalPath({
         projectId: params.projectId,
         rows,
@@ -1879,6 +1934,19 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
         runtimeConsumerErrorHandler: params.runtimeConsumerErrorHandler,
       })
     : undefined
+  if (targetFeasibility?.accelerationProposal && normalizeText(params.issuedBy)) {
+    const accelerationRecommendation = await issueScheduleAccelerationRecommendation({
+      projectId: params.projectId,
+      issuedBy: params.issuedBy,
+      proposal: targetFeasibility.accelerationProposal,
+    })
+    if (accelerationRecommendation) {
+      targetFeasibility = {
+        ...targetFeasibility,
+        accelerationRecommendation,
+      }
+    }
+  }
   const upstreamAssetConsumptionReceipts = (
     projectRemainingForecast.calculationContext.upstreamAssetConsumptionReceipts ?? []
   )

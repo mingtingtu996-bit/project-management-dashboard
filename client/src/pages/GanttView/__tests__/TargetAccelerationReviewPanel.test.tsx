@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -305,14 +308,27 @@ function buildTargetFeasibility(): WbsTargetFeasibility {
 }
 
 describe('TargetAccelerationReviewPanel', () => {
+  it('refreshes the adoption callback when the server-issued recommendation identity changes', () => {
+    const clientRoot = process.cwd().endsWith('client') ? process.cwd() : resolve(process.cwd(), 'client')
+    const source = readFileSync(resolve(clientRoot, 'src/pages/GanttView.tsx'), 'utf8')
+    const handlerStart = source.indexOf('const handleAcceptAccelerationRescheduleDraft')
+    const handlerEnd = source.indexOf('const handleEvaluateRuntimeScheduleAcceleration', handlerStart)
+    const handlerSource = source.slice(handlerStart, handlerEnd)
+    const dependencies = handlerSource.slice(handlerSource.lastIndexOf('}, ['))
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0)
+    expect(handlerEnd).toBeGreaterThan(handlerStart)
+    expect(dependencies).toContain('wizardTargetFeasibility')
+  })
+
   it('disables draft acceptance when production-day facts are unavailable even if operations are present', () => {
     const targetFeasibility = buildTargetFeasibility()
     const proposal = targetFeasibility.accelerationProposal
     const draft = proposal?.rescheduleDraft
     if (!proposal || !draft || !proposal.totalRecover) throw new Error('expected actionable proposal fixture')
     draft.operations = [{
-      type: 'update',
-      clientRowId: 'task-structure',
+      type: 'update_row',
+      rowId: 'task-structure',
       values: { planned_end_date: '2026-11-26' },
     }]
     proposal.totalRecover = {
@@ -343,8 +359,8 @@ describe('TargetAccelerationReviewPanel', () => {
     const draft = targetFeasibility.accelerationProposal?.rescheduleDraft
     if (!draft) throw new Error('expected actionable proposal fixture')
     draft.operations = [{
-      type: 'update',
-      clientRowId: 'task-structure',
+      type: 'update_row',
+      rowId: 'task-structure',
       values: { planned_end_date: '2026-11-26' },
     }]
     const onAcceptRescheduleDraft = vi.fn()

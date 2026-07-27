@@ -373,6 +373,7 @@ function serializeTargetFeasibility(feasibility: ScheduleTargetFeasibility | nul
     verdict: feasibility.verdict,
     strategies: feasibility.strategies,
     accelerationProposal: feasibility.accelerationProposal,
+    accelerationRecommendation: feasibility.accelerationRecommendation ?? null,
     durationOutputCode: feasibility.durationOutputCode,
     durationOutputSemanticFieldName: feasibility.durationOutputSemanticFieldName ?? null,
     durationOutputContract: feasibility.durationOutputContract ?? null,
@@ -401,6 +402,7 @@ router.post(
       targetEndDate: targetEndDateOverride,
       asOfDate: normalizeText(req.body?.asOfDate ?? req.body?.as_of_date) || null,
       mode: normalizeMode(req.body?.mode ?? req.body?.targetConstraintMode ?? req.body?.target_constraint_mode),
+      issuedBy: normalizeText((req as any).user?.id) || null,
       runtimeConsumerObservationQueryExec: createDurationRuntimeConsumerObservationQueryExec(),
       context: {
         projectTypeCodes: normalizeStringArray(req.body?.projectTypeCodes ?? req.body?.project_type_codes ?? req.body?.projectTypeCode ?? req.body?.project_type_code),
@@ -451,14 +453,9 @@ router.post(
     const result = await recordScheduleAccelerationRecommendationAdoption({
       projectId,
       adoptedBy: normalizeText((req as any).user?.id) || null,
-      proposal: req.body?.proposal ?? req.body?.accelerationProposal ?? req.body?.acceleration_proposal ?? null,
-      outcomeRef: normalizeText(req.body?.outcomeRef ?? req.body?.outcome_ref) || null,
-      outcomeMetadata:
-        req.body?.outcomeMetadata && typeof req.body.outcomeMetadata === 'object' && !Array.isArray(req.body.outcomeMetadata)
-          ? req.body.outcomeMetadata
-          : req.body?.outcome_metadata && typeof req.body.outcome_metadata === 'object' && !Array.isArray(req.body.outcome_metadata)
-            ? req.body.outcome_metadata
-            : null,
+      recommendationId: normalizeText(req.body?.recommendationId ?? req.body?.recommendation_id) || null,
+      recommendationHash: normalizeText(req.body?.recommendationHash ?? req.body?.recommendation_hash) || null,
+      taskCommitRequestId: normalizeText(req.body?.taskCommitRequestId ?? req.body?.task_commit_request_id) || null,
       runtimeConsumerObservationQueryExec: createDurationRuntimeConsumerObservationQueryExec(),
     })
 

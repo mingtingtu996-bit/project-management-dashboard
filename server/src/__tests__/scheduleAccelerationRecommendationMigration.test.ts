@@ -25,10 +25,12 @@ describe('schedule acceleration recommendation migration', () => {
     expect(sql).toContain("operations jsonb not null check (jsonb_typeof(operations) = 'array')")
     expect(sql).toContain("recommendation_hash text not null check (recommendation_hash ~ '^[a-f0-9]{64}$')")
     expect(sql).toContain("operations_hash text not null check (operations_hash ~ '^[a-f0-9]{64}$')")
+    expect(sql).toContain('issued_by uuid not null references public.users(id) on delete restrict')
+    expect(sql).toContain('issued_at timestamptz not null')
+    expect(sql).toContain('expires_at timestamptz not null check (expires_at > issued_at)')
     expect(sql).toContain('unique (project_id, id, recommendation_hash, operations_hash)')
     expect(sql).toContain('create trigger schedule_acceleration_recommendations_immutable_trigger')
-    expect(sql).toContain('before update on public.schedule_acceleration_recommendations')
-    expect(sql).not.toContain('before update or delete on public.schedule_acceleration_recommendations')
+    expect(sql).toContain('before update or delete on public.schedule_acceleration_recommendations')
     expect(sql).toContain("raise exception 'schedule acceleration recommendations are immutable'")
   })
 
@@ -44,7 +46,7 @@ describe('schedule acceleration recommendation migration', () => {
     expect(sql).toContain('operations_hash is null')
     expect(sql).toContain('foreign key ( project_id, recommendation_id, recommendation_hash, operations_hash )')
     expect(sql).toContain('references public.schedule_acceleration_recommendations (project_id, id, recommendation_hash, operations_hash)')
-    expect(sql).toContain('on update restrict on delete cascade')
+    expect(sql).toContain('on update restrict on delete restrict')
   })
 
   it('keeps recommendation rows private and append-only for the runtime role', () => {

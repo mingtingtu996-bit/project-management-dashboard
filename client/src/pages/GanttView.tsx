@@ -329,78 +329,11 @@ function buildAccelerationReschedulePreviewMap(targetFeasibility: WbsTargetFeasi
 
 function buildAccelerationRescheduleCommitOperations(
   proposal: WbsAccelerationProposal,
-  tasks: Task[],
 ): PlanningTableOperation[] {
   if (!isAccelerationProposalActionable(proposal)) return []
   const draft = proposal.rescheduleDraft
   if (!draft || draft.writePolicy !== 'requires_user_acceptance') return []
-
-  const taskById = new Map(tasks.map((task) => [task.id, task]))
-  const operations: PlanningTableOperation[] = []
-
-  for (const adjustment of draft.taskDateAdjustments) {
-    const taskId = normalizeTaskId(adjustment.clientRowId)
-    if (!taskId || !taskById.has(taskId)) continue
-    const values: Record<string, unknown> = {}
-    if (adjustment.proposedStartDate) values.planned_start_date = adjustment.proposedStartDate
-    if (adjustment.proposedEndDate) values.planned_end_date = adjustment.proposedEndDate
-    if (Object.keys(values).length === 0) continue
-    operations.push({
-      type: 'update_row',
-      rowId: taskId,
-      values,
-    })
-  }
-
-  const dependencyAdjustmentsBySuccessor = new Map<string, typeof draft.dependencyAdjustments>()
-  for (const adjustment of draft.dependencyAdjustments) {
-    const successorId = normalizeTaskId(adjustment.successorClientRowId)
-    const predecessorId = normalizeTaskId(adjustment.predecessorClientRowId)
-    if (!successorId || !predecessorId || !taskById.has(successorId) || !taskById.has(predecessorId)) continue
-    dependencyAdjustmentsBySuccessor.set(successorId, [
-      ...(dependencyAdjustmentsBySuccessor.get(successorId) ?? []),
-      adjustment,
-    ])
-  }
-
-  for (const [successorId, dependencyAdjustments] of dependencyAdjustmentsBySuccessor.entries()) {
-    const successor = taskById.get(successorId)
-    if (!successor) continue
-    const dependencySpecs = new Map<string, {
-      dependencyTaskId: string
-      dependencyType: 'FS' | 'SS' | 'FF' | 'SF' | string
-      lagDays: number
-      source: string
-    }>()
-    for (const predecessorId of successor.dependencies ?? []) {
-      const normalizedPredecessorId = normalizeTaskId(predecessorId)
-      if (!normalizedPredecessorId || !taskById.has(normalizedPredecessorId)) continue
-      dependencySpecs.set(normalizedPredecessorId, {
-        dependencyTaskId: normalizedPredecessorId,
-        dependencyType: 'FS',
-        lagDays: 0,
-        source: 'manual',
-      })
-    }
-    for (const adjustment of dependencyAdjustments) {
-      const predecessorId = normalizeTaskId(adjustment.predecessorClientRowId)
-      dependencySpecs.set(predecessorId, {
-        dependencyTaskId: predecessorId,
-        dependencyType: adjustment.toDependencyType,
-        lagDays: Number(adjustment.lagDaysAfter ?? 0) || 0,
-        source: 'target_end_compression',
-      })
-    }
-    const predecessorDependencies = Array.from(dependencySpecs.values())
-    operations.push({
-      type: 'set_predecessors',
-      rowId: successorId,
-      predecessorTaskIds: predecessorDependencies.map((dependency) => dependency.dependencyTaskId),
-      predecessorDependencies,
-    })
-  }
-
-  return operations
+  return draft.operations as PlanningTableOperation[]
 }
 
 function hasReadySummaryCount(summary: { totalTasks?: unknown } | null | undefined, visibleTaskCount: number): boolean {
@@ -1032,7 +965,16 @@ function GanttViewContent() {
       })
       return
     }
-    const operations = buildAccelerationRescheduleCommitOperations(proposal, tasks as Task[])
+    const accelerationRecommendation = wizardTargetFeasibility?.accelerationRecommendation
+    if (!accelerationRecommendation) {
+      toast({
+        title: '赶工建议已失效',
+        description: '请重新评估目标日期后再提交计划调整。',
+        variant: 'destructive',
+      })
+      return
+    }
+    const operations = buildAccelerationRescheduleCommitOperations(proposal)
     if (operations.length === 0) {
       toast({ title: '没有可提交的重排变更', description: '当前草案没有匹配到可保存的任务日期或前置关系。' })
       return
@@ -1040,22 +982,17 @@ function GanttViewContent() {
 
     setAcceptingAccelerationDraft(true)
     try {
-      const committed = await commitTaskListOperations(operations)
+      const committed = await commitTaskListOperations(operations, accelerationRecommendation)
       applyCommittedTaskRows(committed.rows)
       await refreshGanttProjectData({ includeSummary: true })
       if (id) {
         try {
-          await recordScheduleAccelerationRecommendationAdoption(id, proposal, {
-            outcomeRef: `task-list-commit:${id}:${committed.revision ?? Date.now()}:acceleration-reschedule`,
-            outcomeMetadata: {
-              source: 'gantt_target_acceleration_reschedule_commit',
-              revision: committed.revision ?? null,
-              operationCount: operations.length,
-              governanceSummary: committed.governanceSummary ?? null,
-              criticalPathChangeSummary: committed.criticalPathChangeSummary ?? null,
-              rescheduleDraftOperationCount: proposal.rescheduleDraft?.operations.length ?? 0,
-            },
-          })
+          if (!committed.requestId) throw new Error('Task commit request identity is missing.')
+          await recordScheduleAccelerationRecommendationAdoption(
+            id,
+            accelerationRecommendation,
+            committed.requestId,
+          )
         } catch (adoptionError) {
           toast({
             title: '閲嶆帓宸叉彁浜わ紝但采纳记录未写入',
@@ -1088,6 +1025,7 @@ function GanttViewContent() {
     id,
     refreshGanttProjectData,
     tasks,
+    wizardTargetFeasibility,
   ])
 
   const handleEvaluateRuntimeScheduleAcceleration = React.useCallback(async () => {

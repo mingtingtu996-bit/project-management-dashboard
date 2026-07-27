@@ -22,13 +22,14 @@ CREATE TABLE IF NOT EXISTS public.schedule_acceleration_recommendations (
   operations JSONB NOT NULL CHECK (jsonb_typeof(operations) = 'array'),
   recommendation_hash TEXT NOT NULL CHECK (recommendation_hash ~ '^[a-f0-9]{64}$'),
   operations_hash TEXT NOT NULL CHECK (operations_hash ~ '^[a-f0-9]{64}$'),
-  created_by UUID NULL REFERENCES public.users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  issued_by UUID NOT NULL REFERENCES public.users(id) ON DELETE RESTRICT,
+  issued_at TIMESTAMPTZ NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL CHECK (expires_at > issued_at),
   UNIQUE (project_id, id, recommendation_hash, operations_hash)
 );
 
-CREATE INDEX IF NOT EXISTS idx_schedule_acceleration_recommendations_project_created
-  ON public.schedule_acceleration_recommendations (project_id, created_at DESC, id);
+CREATE INDEX IF NOT EXISTS idx_schedule_acceleration_recommendations_project_issued
+  ON public.schedule_acceleration_recommendations (project_id, issued_at DESC, id);
 
 CREATE OR REPLACE FUNCTION workbuddy_private.reject_schedule_acceleration_recommendation_mutation()
 RETURNS TRIGGER
@@ -45,7 +46,7 @@ $$;
 DROP TRIGGER IF EXISTS schedule_acceleration_recommendations_immutable_trigger
   ON public.schedule_acceleration_recommendations;
 CREATE TRIGGER schedule_acceleration_recommendations_immutable_trigger
-BEFORE UPDATE ON public.schedule_acceleration_recommendations
+BEFORE UPDATE OR DELETE ON public.schedule_acceleration_recommendations
 FOR EACH ROW
 EXECUTE FUNCTION workbuddy_private.reject_schedule_acceleration_recommendation_mutation();
 
@@ -115,7 +116,7 @@ ALTER TABLE public.task_commit_requests
     )
     REFERENCES public.schedule_acceleration_recommendations
       (project_id, id, recommendation_hash, operations_hash)
-    ON UPDATE RESTRICT ON DELETE CASCADE
+    ON UPDATE RESTRICT ON DELETE RESTRICT
     NOT VALID;
 
 ALTER TABLE public.task_commit_requests
