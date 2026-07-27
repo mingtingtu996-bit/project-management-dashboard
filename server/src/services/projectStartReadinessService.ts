@@ -786,8 +786,11 @@ export async function getProjectStartReadiness(
     .filter((task) => isValidDateOnly(text(task.planned_start_date).slice(0, 10)))
     .filter((task) => !isCompletedTask(task))
     .map((task) => buildItem(task, facts, calendarIdentity, asOfDate, evaluatedAt))
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
   const readyTaskCount = items.filter((item) => item.readinessState === 'ready').length
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
   const blockedTaskCount = items.filter((item) => item.readinessState === 'blocked').length
+  // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
   const attentionTaskCount = items.filter((item) => item.readinessState === 'attention').length
   const blockerTaskCountByType: Partial<Record<StartReadinessBlockerType, number>> = {}
   for (const item of items) {

@@ -341,10 +341,14 @@ export async function buildProjectTaskSummaryReadModel(
   const attributionTotals = await getAttributionTotals(input.projectId, allTasks)
 
   return {
+    // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
     stats: {
       total_completed: completedSummaryTasks.length,
+      // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
       on_time_count: completedSummaryTasks.filter((task) => task.status_label === 'on_time').length,
+      // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
       delayed_count: completedSummaryTasks.filter((task) => task.status_label === 'delayed').length,
+      // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
       completed_milestone_count: input.milestones.filter((milestone) => isCompletedMilestone(milestone)).length,
     },
     groups,
