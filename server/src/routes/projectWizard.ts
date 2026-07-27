@@ -12,6 +12,7 @@ import { createTasksInWizardBatch } from '../services/taskWriteChainService.js'
 import { executeProjectCreationUnderCommercialGuard } from '../services/commercialTransactionService.js'
 import { createDurationRuntimeConsumerObservationQueryExec } from '../services/durationRuntimeConsumerObservationService.js'
 import { recordAcceptancePlanExecutionFacts } from '../services/acceptancePlanExecutionFactService.js'
+import { normalizeDurationRiskDistributionDto } from '../services/durationMetricService.js'
 import { deriveWbsFlags, type WbsNodeType } from '../services/wbsSemanticService.js'
 import { replaceWizardGeneratedTaskDependenciesBatch } from '../services/taskStandardModelService.js'
 import {
@@ -3321,11 +3322,17 @@ function readWizardDurationSuggestion(row: GeneratedTemplateRow) {
 function readWizardDurationRiskRange(row: GeneratedTemplateRow) {
   const suggestion = readWizardDurationSuggestion(row)
   const range = readRecord(suggestion.durationRiskRange ?? suggestion.duration_risk_range)
+  const durationRiskDistribution = normalizeDurationRiskDistributionDto(
+    suggestion.durationRiskDistribution
+      ?? suggestion.duration_risk_distribution
+      ?? range.durationRiskDistribution
+      ?? range.duration_risk_distribution,
+  )
   const p20 = readNumber(suggestion.riskP20DurationDays ?? suggestion.risk_p20_duration_days ?? range.p20Days ?? range.p20_days)
   const p50 = readNumber(suggestion.riskP50DurationDays ?? suggestion.risk_p50_duration_days ?? range.p50Days ?? range.p50_days)
   const p80 = readNumber(suggestion.riskP80DurationDays ?? suggestion.risk_p80_duration_days ?? range.p80Days ?? range.p80_days)
-  if (p20 === null && p50 === null && p80 === null) return null
-  return { p20, p50, p80 }
+  if (p20 === null && p50 === null && p80 === null && !durationRiskDistribution) return null
+  return { p20, p50, p80, durationRiskDistribution }
 }
 
 function readWizardDurationAssetCalculation(row: GeneratedTemplateRow) {
@@ -5175,6 +5182,7 @@ function buildCandidateDurationAssetPreview(rows: GeneratedTemplateRow[], idByCl
         riskP20DurationDays: riskRange?.p20 ?? null,
         riskP50DurationDays: riskRange?.p50 ?? null,
         riskP80DurationDays: riskRange?.p80 ?? null,
+        durationRiskDistribution: riskRange?.durationRiskDistribution ?? null,
         calendarBasis: calendar.calendarBasis,
         constructionCalendarWindowCount: calendar.constructionCalendarWindowCount,
         processSeasonalDurationAssetConsumed,

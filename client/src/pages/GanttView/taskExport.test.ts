@@ -80,11 +80,11 @@ describe('Gantt task export duration evidence', () => {
       '自由浮时（生产日）',
       '工期资产依据',
     ]))
-    expect(exported[headers.indexOf('工期风险')]).toBe('建议预留 34 天')
+    expect(exported[headers.indexOf('工期风险')]).toBe('生产日口径不可用')
     expect(exported[headers.indexOf('总浮时（生产日）')]).toBe('0 个生产日')
     expect(exported[headers.indexOf('自由浮时（生产日）')]).toBe('3 个生产日')
     expect(exported.join(' ')).not.toContain('999')
-    expect(exported[headers.indexOf('工期资产依据')]).toBe('施工日历 2 个窗口；运行样本 160 天；季节修正 雨季')
+    expect(exported[headers.indexOf('工期资产依据')]).toBe('施工日历 2 个窗口；运行样本 生产日口径不可用；季节修正 雨季')
     expect(headers.join(' ')).not.toMatch(/P20|P50|P80/)
     expect(exported.join(' ')).not.toMatch(/P20|P50|P80/)
   })
@@ -133,11 +133,11 @@ describe('Gantt task export duration evidence', () => {
       '自由浮时（生产日）',
       '工期资产依据',
     ]))
-    expect(exported[headers.indexOf('工期风险')]).toBe('建议预留 34 天')
+    expect(exported[headers.indexOf('工期风险')]).toBe('生产日口径不可用')
     expect(exported[headers.indexOf('总浮时（生产日）')]).toBe('0 个生产日')
     expect(exported[headers.indexOf('自由浮时（生产日）')]).toBe('3 个生产日')
     expect(exported.join(' ')).not.toContain('999')
-    expect(exported[headers.indexOf('工期资产依据')]).toBe('施工日历 2 个窗口；运行样本 160 天；季节修正 雨季')
+    expect(exported[headers.indexOf('工期资产依据')]).toBe('施工日历 2 个窗口；运行样本 生产日口径不可用；季节修正 雨季')
     expect(headers.join(' ')).not.toMatch(/P20|P50|P80/)
     expect(exported.join(' ')).not.toMatch(/P20|P50|P80/)
   })
@@ -169,7 +169,7 @@ describe('Gantt task export duration evidence', () => {
     expect(exported.join(' ')).not.toContain('999')
   })
 
-  it('exports a plain-language reserve from wizard task metadata', () => {
+  it('does not derive a reserve from raw wizard percentiles without typed provenance', () => {
     const task = {
       id: 'task-2',
       project_id: 'project-1',
@@ -197,7 +197,7 @@ describe('Gantt task export duration evidence', () => {
     const exported = rows[1]
 
     expect(headers).toContain('工期风险')
-    expect(exported[headers.indexOf('工期风险')]).toBe('建议预留 46 天')
+    expect(exported[headers.indexOf('工期风险')]).toBe('生产日口径不可用')
     expect(exported.join(' ')).not.toMatch(/P20|P50|P80/)
   })
 })

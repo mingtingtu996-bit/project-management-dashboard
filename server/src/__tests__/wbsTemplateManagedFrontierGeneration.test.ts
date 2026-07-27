@@ -4884,6 +4884,55 @@ describe('managed-frontier WBS generation', () => {
               'sample-school-structure-002',
               'sample-school-structure-003',
             ],
+            durationRiskDistribution: {
+              p20Duration: {
+                value: 144,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              p50Duration: {
+                value: 160,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              p80Duration: {
+                value: 176,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              reserveDuration: {
+                value: 16,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              source: 'accepted_real_project_outcome',
+              scope: 'company',
+              sampleCount: 3,
+              generatedAt: '2026-07-01T08:00:00.000Z',
+              sourceAsOf: '2026-06-30T23:59:59.000Z',
+              availability: 'available',
+              unavailableReason: null,
+            },
           },
         ],
       },
@@ -4910,6 +4959,34 @@ describe('managed-frontier WBS generation', () => {
     expect(row!.values.duration_evidence_maturity).toBe('L1')
   }, 120_000)
 
+  it('rejects runtime reference-day numbers that omit typed production-day provenance', async () => {
+    const schoolProbe = PROJECT_ORGANIZATION_REAL_WBS_PROBE_CASES.find((probe) => probe.businessType === 'school')
+    expect(schoolProbe).toBeTruthy()
+
+    const generated = await generateDefaultMasterPlanForProbe(schoolProbe!, {
+      defaultMasterPlanRuntimeReferenceDays: {
+        status: 'runtime_calibrated',
+        evidenceLevel: 'runtime_calibrated_l2',
+        runtimeReferenceDays: [{
+          stableCode: 'BTMP-SCH-01',
+          p50Days: 160,
+          p80Days: 176,
+          sampleCount: 3,
+          source: 'accepted_real_project_outcome',
+          sourceSampleIds: ['raw-sample-without-calendar-provenance'],
+        }],
+      },
+    })
+    const row = scheduleRowsForBusinessTypeProfile(generated.rows)
+      .find((candidate) => rowCode(candidate) === 'BTMP-SCH-01')
+    expect(row).toBeTruthy()
+
+    const calculation = (row!.values.duration_asset_calculation ?? {}) as Record<string, unknown>
+    expect(calculation.runtimeReferenceDaysConsumed).toBe(false)
+    expect(calculation.runtimeReferenceDaysP50Days).toBeNull()
+    expect(row!.values.smart_reference_days).not.toBe(160)
+  }, 120_000)
+
   it('preserves runtime reference-day lineage when seasonal assets adjust the same default master-plan row', async () => {
     const schoolProbe = PROJECT_ORGANIZATION_REAL_WBS_PROBE_CASES.find((probe) => probe.businessType === 'school')
     expect(schoolProbe).toBeTruthy()
@@ -4926,6 +5003,55 @@ describe('managed-frontier WBS generation', () => {
             sampleCount: 4,
             source: 'accepted_real_project_outcome',
             sourceSampleIds: ['sample-school-foundation-rain-001'],
+            durationRiskDistribution: {
+              p20Duration: {
+                value: 63,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              p50Duration: {
+                value: 70,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              p80Duration: {
+                value: 84,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              reserveDuration: {
+                value: 14,
+                unit: 'construction_production_day',
+                calendarRef: 'source-work-calendar',
+                calendarVersion: 'source-calendar-v3',
+                timezone: 'Asia/Shanghai',
+                asOf: '2026-06-30',
+                availability: 'available',
+                unavailableReason: null,
+              },
+              source: 'accepted_real_project_outcome',
+              scope: 'company',
+              sampleCount: 4,
+              generatedAt: '2026-07-01T08:00:00.000Z',
+              sourceAsOf: '2026-06-30T23:59:59.000Z',
+              availability: 'available',
+              unavailableReason: null,
+            },
           },
         ],
       },

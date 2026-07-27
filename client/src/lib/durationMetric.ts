@@ -143,20 +143,21 @@ export function normalizeDurationRiskDistribution(value: unknown): DurationRiskD
   }
   if (!source || !scope || !generatedAt || !sourceAsOf) return null
   if (source === 'duration_benchmarks' && sampleCount === null) return null
-  if (!p50Duration || !p80Duration || !reserveDuration) return null
-  if (
-    p50Duration.availability !== 'available'
-    || p80Duration.availability !== 'available'
-    || reserveDuration.availability !== 'available'
-    || p50Duration.unit !== 'construction_production_day'
-    || p80Duration.unit !== 'construction_production_day'
-    || reserveDuration.unit !== 'construction_production_day'
-  ) return null
+  if (!p20Duration || !p50Duration || !p80Duration || !reserveDuration) return null
+  const requiredMetrics = [p20Duration, p50Duration, p80Duration, reserveDuration]
+  if (requiredMetrics.some((metric) => (
+    metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+  ))) return null
   if (!sameDurationMetricIdentity(p50Duration, p80Duration) || !sameDurationMetricIdentity(p50Duration, reserveDuration)) return null
-  if (p20Duration?.availability === 'available' && !sameDurationMetricIdentity(p50Duration, p20Duration)) return null
+  if (!sameDurationMetricIdentity(p50Duration, p20Duration)) return null
   if (p50Duration.asOf !== sourceAsOf.slice(0, 10)) return null
-  const expectedReserve = Math.max(0, Number(p80Duration.value) - Number(p50Duration.value))
-  if (Math.abs(Number(reserveDuration.value) - expectedReserve) > 1e-9) return null
+  const p20 = Number(p20Duration.value)
+  const p50 = Number(p50Duration.value)
+  const p80 = Number(p80Duration.value)
+  const reserve = Number(reserveDuration.value)
+  if (p20 <= 0 || p50 <= 0 || p80 < p50 || p20 > p50) return null
+  if (Math.abs(reserve - Math.max(0, p80 - p50)) > 1e-9) return null
   return {
     p20Duration,
     p50Duration,

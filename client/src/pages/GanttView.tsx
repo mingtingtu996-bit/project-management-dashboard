@@ -25,7 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { toast } from '@/hooks/use-toast'
 import { apiPost, getApiErrorMessage } from '@/lib/apiClient'
-import { formatDurationMetric, formatDurationRiskReserve, readAvailableDurationValue, type DurationRiskDistributionDto } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, normalizeDurationRiskDistribution, readAvailableDurationValue, type DurationRiskDistributionDto } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 import type { DataQualityLiveCheckSummary } from '@/services/dataQualityApi'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
@@ -111,6 +111,7 @@ type WizardDurationAssetPreviewItem = {
   runtimeReferenceDaysP80Days?: number | null
   runtimeReferenceDaysSampleCount?: number | null
   runtimeReferenceDaysMutationBoundary?: string | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   dependencyAssetConsumed?: boolean
   dependencyAssetType?: string | null
   dependencyAssetStableCode?: string | null
@@ -274,9 +275,13 @@ function formatWizardDurationAssetPreviewT2Lineage(item: WizardDurationAssetPrev
 function formatWizardDurationAssetPreviewRuntimeReferenceDays(item: WizardDurationAssetPreviewItem | null | undefined) {
   if (!item?.runtimeReferenceDaysConsumed && !item?.runtimeReferenceDaysStableCode) return null
   const stableCode = item.runtimeReferenceDaysStableCode || '已消费'
-  const referenceDays = item.runtimeReferenceDaysP50Days ?? item.runtimeReferenceDaysP80Days ?? '-'
+  const distribution = normalizeDurationRiskDistribution(item.durationRiskDistribution)
+  const referenceDays = formatDurationMetric(distribution?.p50Duration, {
+    expectedUnit: 'construction_production_day',
+    unavailableLabel: '生产日口径不可用',
+  })
   const sampleCount = item.runtimeReferenceDaysSampleCount ?? '-'
-  return `参考天数 ${stableCode}：${referenceDays} 天 / 样本 ${sampleCount}`
+  return `参考天数 ${stableCode}：${referenceDays} / 样本 ${sampleCount}`
 }
 
 function formatWizardDurationAssetPreviewDependencyLineage(item: WizardDurationAssetPreviewItem | null | undefined) {

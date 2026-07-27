@@ -112,4 +112,30 @@ describe('durationMetric', () => {
       sampleCount: null,
     }))
   })
+
+  it('rejects available distributions with missing or unordered percentiles', () => {
+    const metric = { ...productionMetric, asOf: '2026-07-20' }
+    const distribution = {
+      p20Duration: { ...metric, value: 15 },
+      p50Duration: { ...metric, value: 18 },
+      p80Duration: { ...metric, value: 24 },
+      reserveDuration: { ...metric, value: 6 },
+      source: 'system_standard_duration_asset',
+      scope: 'system',
+      sampleCount: null,
+      generatedAt: '2026-07-21T08:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      availability: 'available',
+      unavailableReason: null,
+    }
+
+    expect(normalizeDurationRiskDistribution({
+      ...distribution,
+      p20Duration: null,
+    })).toBeNull()
+    expect(normalizeDurationRiskDistribution({
+      ...distribution,
+      p20Duration: { ...metric, value: 20 },
+    })).toBeNull()
+  })
 })

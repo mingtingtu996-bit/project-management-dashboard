@@ -4,6 +4,7 @@ import {
   buildCalendarDayDurationMetric,
   buildConstructionProductionDayRiskDistribution,
   buildConstructionProductionDayDurationMetric,
+  normalizeDurationRiskDistributionDto,
 } from '../services/durationMetricService.js'
 
 describe('durationMetricService', () => {
@@ -192,5 +193,62 @@ describe('durationMetricService', () => {
       sampleCount: null,
       reserveDuration: expect.objectContaining({ value: 6, availability: 'available' }),
     }))
+  })
+
+  it('normalizes a complete identified production-day distribution', () => {
+    const distribution = buildConstructionProductionDayRiskDistribution({
+      p20: 8,
+      p50: 10,
+      p80: 14,
+      source: 'accepted_real_project_outcome',
+      scope: 'company',
+      sampleCount: 3,
+      generatedAt: '2026-07-01T08:00:00.000Z',
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+      calendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+      },
+      provenanceAvailability: 'available',
+    })
+
+    expect(normalizeDurationRiskDistributionDto(distribution)).toEqual(distribution)
+  })
+
+  it('rejects available distributions with missing identity, timestamp, or reserve consistency', () => {
+    const metric = (value: number) => ({
+      value,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-06-30',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    const base = {
+      p20Duration: metric(8),
+      p50Duration: metric(10),
+      p80Duration: metric(14),
+      reserveDuration: metric(4),
+      source: 'accepted_real_project_outcome',
+      scope: 'company',
+      sampleCount: 3,
+      generatedAt: '2026-07-01T08:00:00.000Z',
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+      availability: 'available',
+      unavailableReason: null,
+    }
+
+    expect(normalizeDurationRiskDistributionDto({
+      ...base,
+      p50Duration: { ...base.p50Duration, calendarRef: null },
+    })).toBeNull()
+    expect(normalizeDurationRiskDistributionDto({ ...base, sourceAsOf: null })).toBeNull()
+    expect(normalizeDurationRiskDistributionDto({ ...base, reserveDuration: metric(99) })).toBeNull()
   })
 })

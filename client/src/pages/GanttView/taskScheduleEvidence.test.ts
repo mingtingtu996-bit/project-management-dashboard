@@ -85,7 +85,7 @@ describe('withTaskScheduleEvidence', () => {
     expect(row.durationRiskRangeLabel).not.toMatch(/P20|P50|P80/)
     expect(row.criticalFloatLabel).toBe('总浮时 0 个生产日 / 自由浮时 2 个生产日')
     expect(row.criticalFloatLabel).not.toContain('999')
-    expect(row.durationAssetEvidenceLabel).toBe('施工日历 2 个窗口；运行样本 220 天；季节修正 雨季')
+    expect(row.durationAssetEvidenceLabel).toBe('施工日历 2 个窗口；运行样本 230 个生产日；季节修正 雨季')
     expect(row.durationAssetEvidenceLabel).not.toMatch(/P20|P50|P80/)
     expect(row.durationSuggestion).toEqual(expect.objectContaining({
       riskP50DurationDays: 230,

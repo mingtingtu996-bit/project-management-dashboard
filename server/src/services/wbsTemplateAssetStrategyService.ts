@@ -1,7 +1,11 @@
 import {
 getTaskDurationSuggestion
 } from './durationSuggestionService.js'
-import { buildConstructionProductionDayRiskDistribution } from './durationMetricService.js'
+import {
+buildConstructionProductionDayRiskDistribution,
+normalizeDurationRiskDistributionDto,
+type DurationRiskDistributionDto,
+} from './durationMetricService.js'
 import type { ConstructionCalendarContext } from './constructionCalendar.js'
 import {
 T2_DIVISION_RHYTHM_TEMPLATE_SEED,
@@ -1735,6 +1739,7 @@ export type DefaultMasterPlanRuntimeReferenceDay = {
   sampleCount: number | null
   source: string
   sourceSampleIds: string[]
+  durationRiskDistribution: DurationRiskDistributionDto
 }
 
 
@@ -2416,17 +2421,31 @@ export function buildDefaultMasterPlanSeedResolveContext(params: {
 export function normalizeDefaultMasterPlanRuntimeReferenceDay(item: unknown): DefaultMasterPlanRuntimeReferenceDay | null {
   const record = readRecord(item)
   const stableCode = normalizeText(record.stableCode ?? record.stable_code)
-  const p50Days = readOptionalNumber(record.p50Days ?? record.p50_days)
-  if (!stableCode || !p50Days || p50Days <= 0) return null
-  const p80Days = readOptionalNumber(record.p80Days ?? record.p80_days)
-  const sampleCount = readOptionalNumber(record.sampleCount ?? record.sample_count)
+  const durationRiskDistribution = normalizeDurationRiskDistributionDto(
+    record.durationRiskDistribution ?? record.duration_risk_distribution,
+  )
+  if (!stableCode || durationRiskDistribution?.availability !== 'available') return null
+  const p50Days = readOptionalNumber(durationRiskDistribution.p50Duration.value)
+  const p80Days = readOptionalNumber(durationRiskDistribution.p80Duration.value)
+  if (!p50Days || p50Days <= 0 || !p80Days || p80Days < p50Days) return null
+
+  const rawP50Days = readOptionalNumber(record.p50Days ?? record.p50_days)
+  const rawP80Days = readOptionalNumber(record.p80Days ?? record.p80_days)
+  if (rawP50Days !== null && rawP50Days !== p50Days) return null
+  if (rawP80Days !== null && rawP80Days !== p80Days) return null
+
+  const rawSampleCount = readOptionalNumber(record.sampleCount ?? record.sample_count)
+  const distributionSampleCount = durationRiskDistribution.sampleCount
+  if (distributionSampleCount === null) return null
+  if (rawSampleCount !== null && distributionSampleCount !== null && rawSampleCount !== distributionSampleCount) return null
   return {
     stableCode,
     p50Days,
-    p80Days: p80Days && p80Days > 0 ? p80Days : null,
-    sampleCount: sampleCount && sampleCount > 0 ? sampleCount : null,
-    source: normalizeText(record.source) || 'accepted_real_project_outcome',
+    p80Days,
+    sampleCount: distributionSampleCount,
+    source: durationRiskDistribution.source ?? (normalizeText(record.source) || 'accepted_real_project_outcome'),
     sourceSampleIds: uniqueStringArray(readStringArray(record.sourceSampleIds ?? record.source_sample_ids)),
+    durationRiskDistribution,
   }
 }
 
@@ -3234,6 +3253,7 @@ export function buildAssetDurationCalculation(
     runtimeReferenceDaysSampleCount: runtimeReferenceDay?.sampleCount ?? null,
     runtimeReferenceDaysSource: runtimeReferenceDay?.source ?? null,
     runtimeReferenceDaysSourceSampleIds: runtimeReferenceDay?.sourceSampleIds ?? [],
+    runtimeReferenceDaysDurationRiskDistribution: runtimeReferenceDay?.durationRiskDistribution ?? null,
     runtimeReferenceDaysMutationBoundary: runtimeReferenceDay ? 'candidate_only_no_business_fact_write' : null,
     selectedMethodVariantCode: activity.methodVariantCode ?? null,
     mutationBoundary: 'candidate_only_no_business_fact_write',

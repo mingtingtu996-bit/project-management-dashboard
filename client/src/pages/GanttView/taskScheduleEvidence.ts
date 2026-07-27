@@ -1,7 +1,7 @@
 import type { Task } from '../GanttViewTypes'
 import type { DurationSuggestion } from '@/services/durationSuggestionsApi'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
-import { formatDurationMetric, formatDurationRiskReserve } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, normalizeDurationRiskDistribution } from '@/lib/durationMetric'
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -112,6 +112,7 @@ export function getTaskCriticalFloatLabel(
 export function getTaskDurationAssetEvidenceLabel(task: Pick<Task, 'standard_task_metadata'>) {
   const metadata = readRecord(task.standard_task_metadata)
   const calculation = readRecord(metadata.durationAssetCalculation ?? metadata.duration_asset_calculation)
+  const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
   const evidence: string[] = []
   const calendarBasis = String(metadata.calendarBasis ?? metadata.calendar_basis ?? '').trim()
   const calendarWindowCount = readRoundedFiniteNumber(metadata.constructionCalendarWindowCount ?? metadata.construction_calendar_window_count)
@@ -121,8 +122,16 @@ export function getTaskDurationAssetEvidenceLabel(task: Pick<Task, 'standard_tas
   }
 
   if (readTruthyFlag(calculation.runtimeReferenceDaysConsumed ?? calculation.runtime_reference_days_consumed)) {
-    const runtimeP50 = readRoundedFiniteNumber(calculation.runtimeReferenceDaysP50Days ?? calculation.runtime_reference_days_p50_days)
-    evidence.push(runtimeP50 !== null ? `运行样本 ${runtimeP50} 天` : '运行样本 已应用')
+    const distribution = normalizeDurationRiskDistribution(
+      calculation.runtimeReferenceDaysDurationRiskDistribution
+        ?? calculation.runtime_reference_days_duration_risk_distribution
+        ?? suggestion.durationRiskDistribution
+        ?? suggestion.duration_risk_distribution,
+    )
+    evidence.push(`运行样本 ${formatDurationMetric(distribution?.p50Duration, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    })}`)
   }
 
   if (readTruthyFlag(calculation.processSeasonalDurationAssetConsumed ?? calculation.process_seasonal_duration_asset_consumed)) {

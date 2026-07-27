@@ -217,7 +217,7 @@ describe('GanttDetailDrawer duration risk range', () => {
     expect(document.body.textContent).not.toContain('999')
   })
 
-  it('surfaces calendar, runtime sample, and seasonal duration asset evidence from generated task metadata', () => {
+  it('fails closed for a runtime sample that has no typed production-day distribution', () => {
     renderDrawer({
       id: 'task-3',
       project_id: 'project-1',
@@ -239,7 +239,8 @@ describe('GanttDetailDrawer duration risk range', () => {
 
     expect(screen.getByText('工期资产依据')).toBeInTheDocument()
     expect(screen.getByText('施工日历 2 个窗口')).toBeInTheDocument()
-    expect(screen.getByText('运行样本 160 天')).toBeInTheDocument()
+    expect(screen.getByText('运行样本 生产日口径不可用')).toBeInTheDocument()
+    expect(screen.queryByText('运行样本 160 天')).not.toBeInTheDocument()
     expect(screen.queryByText(/P20|P50|P80/)).not.toBeInTheDocument()
     expect(screen.getByText('季节修正 雨季')).toBeInTheDocument()
   })

@@ -25,7 +25,7 @@ import {
 } from '@/services/durationSuggestionsApi'
 import { useDurationForecastRefreshKey } from '@/hooks/useDurationForecastRefreshKey'
 import { inclusiveDurationDays } from '@/lib/durationDays'
-import { formatDurationMetric, formatDurationRiskReserve, readAvailableDurationValue } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, normalizeDurationRiskDistribution, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 import type { Task, TaskCondition, TaskObstacle } from '../GanttViewTypes'
@@ -149,6 +149,7 @@ function formatClimateSignal(value: unknown) {
 function buildDurationAssetEvidence(task?: Task | null) {
   const metadata = readRecord(task?.standard_task_metadata)
   const calculation = readRecord(metadata.durationAssetCalculation ?? metadata.duration_asset_calculation)
+  const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
   const evidence: string[] = []
   const calendarBasis = String(metadata.calendarBasis ?? metadata.calendar_basis ?? '').trim()
   const calendarWindowCount = readFloatDays(metadata.constructionCalendarWindowCount ?? metadata.construction_calendar_window_count)
@@ -158,8 +159,16 @@ function buildDurationAssetEvidence(task?: Task | null) {
   }
 
   if (readTruthFlag(calculation.runtimeReferenceDaysConsumed ?? calculation.runtime_reference_days_consumed)) {
-    const runtimeP50 = readFloatDays(calculation.runtimeReferenceDaysP50Days ?? calculation.runtime_reference_days_p50_days)
-    evidence.push(runtimeP50 !== null ? `运行样本 ${runtimeP50} 天` : '运行样本 已应用')
+    const distribution = normalizeDurationRiskDistribution(
+      calculation.runtimeReferenceDaysDurationRiskDistribution
+        ?? calculation.runtime_reference_days_duration_risk_distribution
+        ?? suggestion.durationRiskDistribution
+        ?? suggestion.duration_risk_distribution,
+    )
+    evidence.push(`运行样本 ${formatDurationMetric(distribution?.p50Duration, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    })}`)
   }
 
   if (readTruthFlag(calculation.processSeasonalDurationAssetConsumed ?? calculation.process_seasonal_duration_asset_consumed)) {

@@ -474,6 +474,39 @@ describe('Step6ProjectProfileConfirmation', () => {
     expect(screen.queryByText('工期风险建议预留 60 天')).not.toBeInTheDocument()
   })
 
+  it('does not display raw runtime reference days without typed production-day provenance', () => {
+    render(
+      <Step6ProjectProfileConfirmation
+        preview={{
+          ...basePreview,
+          profile: {
+            ...basePreview.profile,
+            generation: {
+              ...basePreview.profile.generation,
+              candidateDurationAssetPreview: {
+                totalCount: 1,
+                items: [{
+                  clientRowId: 'raw-runtime-row',
+                  title: 'Raw runtime row',
+                  runtimeReferenceDaysConsumed: true,
+                  runtimeReferenceDaysStableCode: 'BTMP-SCH-01',
+                  runtimeReferenceDaysP50Days: 160,
+                  runtimeReferenceDaysP80Days: 176,
+                  runtimeReferenceDaysSampleCount: 3,
+                }],
+              },
+            },
+          },
+        }}
+        onGenerate={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('参考天数 BTMP-SCH-01：生产日口径不可用 / 样本 3')).toBeInTheDocument()
+    expect(screen.queryByText(/参考天数 BTMP-SCH-01：160 天/)).not.toBeInTheDocument()
+  })
+
   it('shows candidate critical path evidence from the preview without implying production writes', () => {
     render(
       <Step6ProjectProfileConfirmation
