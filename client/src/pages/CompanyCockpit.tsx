@@ -13,7 +13,6 @@ import { useWorkspaceData } from '@/hooks/useWorkspaceData'
 import { toast } from '@/hooks/use-toast'
 import { apiDelete, apiGet, apiPut, getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
 import { resolveCurrentCompanyRole } from '@/lib/companyRole'
-import { readAvailableDurationValue } from '@/lib/durationMetric'
 import { fetchProjectsFromApi, normalizeApiProject, type ProjectCatalogItem } from '@/lib/projectApi'
 import type { Issue, Risk } from '@/lib/supabase'
 import { DashboardApiService, type CompanySummaryResponse, type ProjectSummary } from '@/services/dashboardApi'
@@ -30,7 +29,12 @@ import { CompanyCockpitDialogs } from './CompanyCockpit/components/CompanyCockpi
 import { CompanyHero } from './CompanyCockpit/components/CompanyHero'
 import { ProjectOverviewSection } from './CompanyCockpit/components/ProjectOverviewSection'
 import type { CockpitTab, HealthHistory, ProjectFormStatus, ProjectRow } from './CompanyCockpit/types'
-import { displayProjectName, mapSummaryStatusToTab, normalizeStatusLabel } from './CompanyCockpit/utils'
+import {
+  displayProjectName,
+  mapSummaryStatusToTab,
+  normalizeStatusLabel,
+  readFutureDeliveryDaysRemaining,
+} from './CompanyCockpit/utils'
 
 const CompanyInsightSection = lazy(() => import('./CompanyCockpit/components/CompanyInsightSection').then((module) => ({
   default: module.CompanyInsightSection,
@@ -147,7 +151,7 @@ function buildProjectRow(project: ProjectCatalogItem, summary: ProjectSummary | 
     businessHealthScore: getBusinessHealthScore(summary),
     keyNodeLabel: buildKeyNodeLabel(summary),
     keyNodeAttentionCount: getKeyNodeAttentionCount(summary),
-    deliveryDaysRemaining: readAvailableDurationValue(summary?.futureDueWindow, 'calendar_day'),
+    deliveryDaysRemaining: readFutureDeliveryDaysRemaining(summary),
   }
 }
 

@@ -165,18 +165,29 @@ export function formatTimelineLabel(daysRemaining: number | null, fallback = '�
   return `剩余 ${daysRemaining} 天`
 }
 
+export function readFutureDeliveryDaysRemaining(summary?: ProjectSummary | null) {
+  const daysUntilPlannedEnd = readAvailableDurationValue(summary?.futureDueWindow, 'calendar_day')
+  return daysUntilPlannedEnd !== null && daysUntilPlannedEnd >= 0 ? daysUntilPlannedEnd : null
+}
+
 export function formatDeliveryHint(summary?: ProjectSummary | null) {
   if (!summary?.plannedEndDate) return '未设置计划交付日期'
   const daysUntilPlannedEnd = readAvailableDurationValue(summary.futureDueWindow, 'calendar_day')
   if (daysUntilPlannedEnd === null) return `计划交付 ${summary.plannedEndDate}`
-  const formattedDuration = formatDurationMetric(summary.futureDueWindow, {
-    absolute: true,
+  if (daysUntilPlannedEnd < 0) {
+    const overdueDays = readAvailableDurationValue(summary.actualOverdue, 'construction_production_day')
+    if (overdueDays === null) return `计划交付 ${summary.plannedEndDate} · 实际延期口径暂不可用`
+    const formattedOverdue = formatDurationMetric(summary.actualOverdue, {
+      absolute: true,
+      expectedUnit: 'construction_production_day',
+    })
+    return `计划交付 ${summary.plannedEndDate} · 已延期 ${formattedOverdue}`
+  }
+
+  const formattedRemaining = formatDurationMetric(summary.futureDueWindow, {
     expectedUnit: 'calendar_day',
   })
-
-  return daysUntilPlannedEnd < 0
-    ? `计划交付 ${summary.plannedEndDate} · 已延期 ${formattedDuration}`
-    : `计划交付 ${summary.plannedEndDate} · 剩余 ${formattedDuration}`
+  return `计划交付 ${summary.plannedEndDate} · 剩余 ${formattedRemaining}`
 }
 
 export function projectAvatarLabel(name: string) {
