@@ -388,6 +388,7 @@ describe('duration surface contract', () => {
     const dashboardSource = readSource('pages/Dashboard.tsx')
     const companyCockpitSource = readSource('pages/CompanyCockpit.tsx')
     const companyCockpitUtilsSource = readSource('pages/CompanyCockpit/utils.ts')
+    const projectOverviewSource = readSource('pages/CompanyCockpit/components/ProjectOverviewSection.tsx')
 
     expect(dashboardApiSource).toContain('normalizeDurationMetricDto')
     expect(dashboardApiSource).toContain('futureDueWindow')
@@ -398,6 +399,8 @@ describe('duration surface contract', () => {
     expect(companyCockpitUtilsSource).toContain("readAvailableDurationValue(summary.actualOverdue, 'construction_production_day')")
     expect(companyCockpitUtilsSource).toContain('实际延期口径暂不可用')
     expect(companyCockpitUtilsSource).not.toContain('已延期 ${formattedRemaining}')
+    expect(projectOverviewSource).toContain('formatDeliveryHint(summary)')
+    expect(projectOverviewSource).toContain('data-testid="company-project-delivery-hint"')
 
     for (const [file, source] of Object.entries({
       'pages/Dashboard.tsx': dashboardSource,

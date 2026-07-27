@@ -38,6 +38,7 @@ import {
   progressBarClass,
   displayProjectDescription,
   displayProjectName,
+  formatDeliveryHint,
   projectAvatarLabel,
   statusBadgeClass,
 } from '../utils'
@@ -191,6 +192,7 @@ export function ProjectOverviewSection({
                     : summary ? '当前暂无关键节点关注项。' : '暂不可用'
                   const projectName = displayProjectName(project)
                   const projectDescription = displayProjectDescription(project)
+                  const deliveryHint = summary ? formatDeliveryHint(summary) : null
                   const archived = ['archived', 'paused', '已暂停'].includes(String(project.status ?? ''))
 
                   return (
@@ -224,6 +226,14 @@ export function ProjectOverviewSection({
                             <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-500">
                               {projectDescription}
                             </p>
+                            {deliveryHint ? (
+                              <p
+                                className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500"
+                                data-testid="company-project-delivery-hint"
+                              >
+                                {deliveryHint}
+                              </p>
+                            ) : null}
                           </div>
                         </div>
                       </TableCell>
