@@ -578,6 +578,16 @@ describe('durationLearningAssetAtomicStoreService', () => {
     })
 
     expect(result.status).toBe('stable_promoted')
+    const publicationRead = mocks.query.mock.calls.find(([sql]) => (
+      String(sql).includes('from public.duration_learning_runtime_publications')
+    ))
+    expect(String(publicationRead?.[0])).toContain('company_id = $2::uuid')
+    expect(String(publicationRead?.[0])).toContain('project_id = $3::uuid')
+    expect(publicationRead?.[1]).toEqual([
+      'publication-1',
+      candidate.company_id,
+      candidate.project_id,
+    ])
     expect(mocks.promoteCanary).toHaveBeenCalledWith(expect.objectContaining({
       publicationKey: 'publication-1',
       queryExec: expect.any(Function),
@@ -675,6 +685,8 @@ describe('durationLearningAssetAtomicStoreService', () => {
 
     await expect(promoteDurationBenchmarkRuntimeCanaryAtomically({
       publicationKey: 'publication-1',
+      companyId: candidate.company_id,
+      projectId: candidate.project_id,
     })).rejects.toThrow('duration benchmark activation version mismatch')
 
     expect(mocks.promoteCanary).not.toHaveBeenCalled()

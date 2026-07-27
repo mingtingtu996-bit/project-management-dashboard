@@ -1034,6 +1034,7 @@ async function collectControlOutcomes(
   return splitPeriodRows(rows)
 }
 
+// workspace-isolation-system-job-approved: the singleton impact-monitoring scheduler scans scoped publications across tenants, retains company/project lineage, and is not request-facing.
 export async function collectAlgorithmInterventionEvaluationCandidates(
   queryExec: AlgorithmAssetLearnableParameterReleaseExecutionQueryExec = executeSQL,
   options: { evaluatedAt?: string, prePeriodDays?: number } = {},

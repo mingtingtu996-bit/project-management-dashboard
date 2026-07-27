@@ -292,11 +292,13 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
   publicationKey: string
   promotedAt?: string
   benchmarkId?: string
-  companyId?: string
-  projectId?: string
+  companyId: string
+  projectId: string
   artifactKey?: string
 }) {
   const publicationKey = requireText(input.publicationKey, 'publicationKey')
+  const companyId = requireText(input.companyId, 'companyId')
+  const projectId = requireText(input.projectId, 'projectId')
   return withTransaction(async (client) => {
     const publicationResult = await client.query<PersistenceRow>(
       `select publication_key, asset_key, artifact_key, scope_level,
@@ -304,9 +306,11 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
               monitoring_status
          from public.duration_learning_runtime_publications
         where publication_key = $1
+          and company_id = $2::uuid
+          and project_id = $3::uuid
         limit 1
         for update`,
-      [publicationKey],
+      [publicationKey, companyId, projectId],
     )
     const publication = publicationResult.rows[0]
     if (!publication) throw new Error('duration benchmark runtime publication not found')
@@ -323,12 +327,12 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
       runtimePayload.benchmarkVersion ?? runtimePayload.benchmark_version,
       'benchmarkVersion',
     )
-    const companyId = requireText(publication.company_id, 'publication company_id')
-    const projectId = requireText(publication.project_id, 'publication project_id')
+    const publicationCompanyId = requireText(publication.company_id, 'publication company_id')
+    const publicationProjectId = requireText(publication.project_id, 'publication project_id')
     const artifactKey = requireText(publication.artifact_key, 'publication artifact_key')
     if (input.benchmarkId && input.benchmarkId !== benchmarkId) throw new Error('duration benchmark activation id mismatch')
-    if (input.companyId && input.companyId !== companyId) throw new Error('duration benchmark activation company mismatch')
-    if (input.projectId && input.projectId !== projectId) throw new Error('duration benchmark activation project mismatch')
+    if (companyId !== publicationCompanyId) throw new Error('duration benchmark activation company mismatch')
+    if (projectId !== publicationProjectId) throw new Error('duration benchmark activation project mismatch')
     if (input.artifactKey && input.artifactKey !== artifactKey) throw new Error('duration benchmark activation artifact mismatch')
 
     const durationDayBasis = requireText(runtimePayload.durationDayBasis ?? runtimePayload.duration_day_basis, 'durationDayBasis')
@@ -353,7 +357,7 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
     requireText(runtimePayload.confidenceLevel ?? runtimePayload.confidence_level, 'confidenceLevel')
     requireNonNegativeNumber(runtimePayload.confidenceScore ?? runtimePayload.confidence_score, 'confidenceScore')
 
-    await assertDurationBenchmarkScopeAuthority(client, companyId, projectId)
+    await assertDurationBenchmarkScopeAuthority(client, publicationCompanyId, publicationProjectId)
     const candidateResult = await client.query<PersistenceRow>(
       `select *
          from public.duration_benchmarks
@@ -363,7 +367,7 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
           and benchmark_key = $4
           and is_active = true
         for update`,
-      [benchmarkId, companyId, projectId, artifactKey],
+      [benchmarkId, publicationCompanyId, publicationProjectId, artifactKey],
     )
     const candidate = candidateResult.rows[0]
     if (!candidate) throw new Error('duration benchmark candidate not found')
@@ -439,8 +443,8 @@ export async function promoteDurationBenchmarkRuntimeCanaryAtomically(input: {
 
     await persistCurrentCauseSegments({
       benchmarkId,
-      companyId,
-      projectId,
+      companyId: publicationCompanyId,
+      projectId: publicationProjectId,
       benchmarkKey: artifactKey,
       generatedAt,
       sourceWindowStart,

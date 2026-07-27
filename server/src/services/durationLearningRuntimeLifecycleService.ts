@@ -3944,6 +3944,8 @@ export async function runDurationLearningRuntimeLifecycleSweep(
             && candidate.scope.level === 'project'
             ? await promoteBenchmarkCanary({
                 publicationKey: candidate.publicationKey,
+                companyId: candidate.scope.companyId,
+                projectId: candidate.scope.projectId,
                 promotedAt: observedAt,
               })
             : await promoteCanary({

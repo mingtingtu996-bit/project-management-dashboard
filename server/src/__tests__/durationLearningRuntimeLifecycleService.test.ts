@@ -2246,6 +2246,12 @@ describe('durationLearningRuntimeLifecycleService', () => {
       metrics: expect.objectContaining({ accuracySampleCount: 20, maeBefore: 8, maeAfter: 6 }),
     }))
     expect(promoteBenchmarkCanary).toHaveBeenCalledTimes(projectAtomic ? 1 : 0)
+    if (projectAtomic) {
+      expect(promoteBenchmarkCanary).toHaveBeenCalledWith(expect.objectContaining({
+        companyId: 'company-1',
+        projectId: 'project-1',
+      }))
+    }
     expect(promoteCanary).toHaveBeenCalledTimes(projectAtomic ? 0 : 1)
     expect(rollbackPublication).not.toHaveBeenCalled()
   })

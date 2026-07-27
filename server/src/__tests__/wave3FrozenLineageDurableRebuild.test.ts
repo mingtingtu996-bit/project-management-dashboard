@@ -56,6 +56,9 @@ function sample(input: Partial<DurationExperienceSampleRow> & Pick<DurationExper
     metadata: {
       construction_calendar_ref: 'cn-work-calendar',
       construction_calendar_version: '2026.07',
+      construction_calendar_basis: 'official_construction_calendar_seed',
+      construction_calendar_availability: 'available',
+      construction_calendar_timezone: 'Asia/Shanghai',
       structured_cause_snapshot: { confirmed_causes: [] },
     },
     ...input,
@@ -372,6 +375,7 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
       monitoring_status: 'passed',
       runtime_payload: {
         benchmarkId,
+        benchmarkVersion: dayOneRow.benchmark_version,
         p50Days: candidate.p50Days,
         p75Days: candidate.p75Days,
         p80Days: candidate.p80Days,
@@ -389,7 +393,7 @@ describe('Wave 3 frozen lineage and durable rebuild chain', () => {
         calendarVersion: candidate.calendarVersion,
       },
     }
-    await expect(promoteDurationBenchmarkRuntimeCanaryAtomically({ publicationKey }))
+    await expect(promoteDurationBenchmarkRuntimeCanaryAtomically({ publicationKey, companyId, projectId }))
       .resolves.toMatchObject({ status: 'stable_promoted' })
 
     expect(persistedSegment).toMatchObject({ cause_code: 'material_shortage', sample_count: 1 })

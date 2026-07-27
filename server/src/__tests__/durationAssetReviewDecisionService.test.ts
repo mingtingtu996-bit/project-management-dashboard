@@ -369,6 +369,8 @@ describe('duration asset review decision service', () => {
     }))
     expect(promoteBenchmarkCanary).toHaveBeenCalledWith(expect.objectContaining({
       publicationKey: stableItem.publicationKey,
+      companyId: 'company-1',
+      projectId: 'project-1',
     }))
     expect(promoteCanary).not.toHaveBeenCalled()
     expect(transactionEvents).toEqual([

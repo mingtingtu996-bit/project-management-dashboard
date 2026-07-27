@@ -462,6 +462,8 @@ async function approveStable(input: {
     work: () => candidate.assetKey === 'base_duration_benchmark' && candidate.scope.level === 'project'
       ? input.promoteBenchmarkCanary({
           publicationKey: candidate.publicationKey,
+          companyId: candidate.scope.companyId,
+          projectId: candidate.scope.projectId,
           promotedAt: input.observedAt,
         })
       : input.promoteCanary({
