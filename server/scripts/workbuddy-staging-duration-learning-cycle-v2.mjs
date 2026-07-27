@@ -898,11 +898,26 @@ function monitoringCandidateForProposal(proposal, publicationKey, failure = fals
   }
 }
 
+function createSyntheticLifecycleReviewQueueStore() {
+  return {
+    upsertOpen: async () => ({ disposition: 'created', item: {} }),
+    loadForUpdate: async () => null,
+    resolveByPublication: async () => 0,
+    resolveOpenByPublicationIdentity: async () => 0,
+    decide: async () => null,
+    list: async () => [],
+  }
+}
+
 async function runPureLifecycleSimulation(modules, selected) {
+  const reviewQueueStore = createSyntheticLifecycleReviewQueueStore()
+  const transactionRunner = async (work) => work()
   const candidateResult = await modules.lifecycle.runDurationLearningRuntimeLifecycleSweep({
     candidateProvider: async () => selected.candidates,
     monitoringProvider: async () => [],
     checkpointStore: null,
+    reviewQueueStore,
+    transactionRunner,
     persistPublication: async (input) => ({
       status: 'published',
       publication: {
@@ -928,8 +943,11 @@ async function runPureLifecycleSimulation(modules, selected) {
     candidateProvider: async () => [],
     monitoringProvider: async () => passingMonitoring,
     checkpointStore: null,
+    reviewQueueStore,
+    transactionRunner,
     recordImpact: async () => ({ status: 'impact_recorded', reasons: [] }),
     promoteCanary: async () => ({ status: 'stable_promoted', previousPublicationKey: null, reasons: [] }),
+    promoteBenchmarkCanary: async () => ({ status: 'stable_promoted', previousPublicationKey: null, reasons: [] }),
     rollbackPublication: async () => { throw new Error('unexpected_rollback') },
   })
   assert.equal(stableResult.monitoringPassed, PUBLICATION_COUNT)
@@ -943,6 +961,8 @@ async function runPureLifecycleSimulation(modules, selected) {
     candidateProvider: async () => [],
     monitoringProvider: async () => failingMonitoring,
     checkpointStore: null,
+    reviewQueueStore,
+    transactionRunner,
     recordImpact: async () => ({ status: 'impact_recorded', reasons: [] }),
     promoteCanary: async () => { throw new Error('unexpected_promotion') },
     rollbackPublication: async () => ({ status: 'rollback_executed', restoredPublicationKey: null, reasons: [] }),
