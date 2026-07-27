@@ -15,6 +15,19 @@ const {
   getTaskDurationForecast,
 } = await import('../durationSuggestionsApi')
 
+function productionMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-30',
+    availability: value === null ? 'unavailable' : 'available',
+    unavailableReason: value === null ? 'duration_value_missing' : null,
+  }
+}
+
 function completeAvailableBenchmarkResponse() {
   return {
     durationOutputCode: 'contextual_reference',
@@ -125,6 +138,19 @@ describe('durationSuggestionsApi governed duration outputs', () => {
         p80_days: 24,
         mutation_boundary: 'candidate_only_no_runtime_write',
       },
+      durationRiskDistribution: {
+        p20Duration: productionMetric(15),
+        p50Duration: productionMetric(18),
+        p80Duration: productionMetric(24),
+        reserveDuration: productionMetric(6),
+        source: 'duration_benchmarks',
+        scope: 'company',
+        sampleCount: 24,
+        generatedAt: '2026-07-01T08:00:00.000Z',
+        sourceAsOf: '2026-06-30T23:59:59.000Z',
+        availability: 'available',
+        unavailableReason: null,
+      },
       confidenceLevel: 'medium',
       confidenceScore: 64,
     })
@@ -140,6 +166,14 @@ describe('durationSuggestionsApi governed duration outputs', () => {
         p50_days: 18,
         p80_days: 24,
         mutation_boundary: 'candidate_only_no_runtime_write',
+      }),
+      durationRiskDistribution: expect.objectContaining({
+        availability: 'available',
+        reserveDuration: expect.objectContaining({
+          value: 6,
+          unit: 'construction_production_day',
+          availability: 'available',
+        }),
       }),
     })
   })

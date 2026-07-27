@@ -1,5 +1,5 @@
 import { apiGet, apiPost } from '@/lib/apiClient'
-import { normalizeDurationMetricDto, type DurationMetricDto } from '@/lib/durationMetric'
+import { normalizeDurationMetricDto, type DurationMetricDto, type DurationRiskDistributionDto } from '@/lib/durationMetric'
 import type { PlanningSurface } from '@/components/planning/PlanningCommitModel'
 import type { LinkedProjectionSource, PlanItemKind, ProgressMode, RelationRole, ScheduleParticipation, ScopeExpansionMode } from '@/lib/planItemSemantics'
 
@@ -361,6 +361,7 @@ export interface WbsGeneratedDurationSuggestion {
     mutationBoundary?: string | null
     [key: string]: unknown
   } | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   durationOutputCode?: string | null
   durationOutputSemanticFieldName?: string | null
   planReferenceDays?: number | null

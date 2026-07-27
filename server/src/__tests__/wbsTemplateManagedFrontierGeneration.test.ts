@@ -5278,6 +5278,15 @@ describe('managed-frontier WBS generation', () => {
   it('exposes system-standard duration risk ranges from P20/P50/P80 assets on default master-plan rows', async () => {
     const schoolProbe = PROJECT_ORGANIZATION_REAL_WBS_PROBE_CASES.find((probe) => probe.businessType === 'school')
     expect(schoolProbe).toBeTruthy()
+    constructionCalendarMocks.resolveConstructionCalendarContext.mockResolvedValueOnce({
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    })
 
     const generated = await generateDefaultMasterPlanForProbe(schoolProbe!)
     const teachingStructure = scheduleRowsForBusinessTypeProfile(generated.rows)
@@ -5287,6 +5296,7 @@ describe('managed-frontier WBS generation', () => {
     const suggestion = teachingStructure!.values.duration_suggestion as Record<string, unknown>
     const calculation = rowMetadata(teachingStructure!).durationAssetCalculation as Record<string, unknown>
     const riskRange = suggestion.durationRiskRange as Record<string, unknown> | undefined
+    const riskDistribution = suggestion.durationRiskDistribution as Record<string, any> | undefined
 
     expect(riskRange).toEqual(expect.objectContaining({
       source: 'standard_work_duration_seed+t2_rhythm_template+system_schedule_rules',
@@ -5299,6 +5309,24 @@ describe('managed-frontier WBS generation', () => {
     expect(suggestion.riskP20DurationDays).toBe(riskRange?.p20Days)
     expect(suggestion.riskP50DurationDays).toBe(riskRange?.p50Days)
     expect(suggestion.riskP80DurationDays).toBe(riskRange?.p80Days)
+    expect(riskDistribution).toEqual(expect.objectContaining({
+      availability: 'available',
+      source: 'standard_work_duration_seed+t2_rhythm_template+system_schedule_rules',
+      scope: 'system',
+      p50Duration: expect.objectContaining({
+        value: riskRange?.p50Days,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+      p80Duration: expect.objectContaining({ value: riskRange?.p80Days, availability: 'available' }),
+      reserveDuration: expect.objectContaining({
+        value: Number(riskRange?.p80Days) - Number(riskRange?.p50Days),
+        availability: 'available',
+      }),
+    }))
+    expect(riskDistribution?.p50Duration?.calendarRef).toBeTruthy()
+    expect(riskDistribution?.p50Duration?.calendarVersion).toBeTruthy()
+    expect(riskDistribution?.p50Duration?.asOf).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(Number(riskRange?.p80Days)).toBeGreaterThanOrEqual(Number(calculation.t2RhythmTemplateP80Days ?? 0))
     expect(generated.durationAssetUtilizationSummary).toEqual(expect.objectContaining({
       durationRiskRangeRowCount: expect.any(Number),

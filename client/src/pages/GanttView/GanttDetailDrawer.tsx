@@ -25,7 +25,7 @@ import {
 } from '@/services/durationSuggestionsApi'
 import { useDurationForecastRefreshKey } from '@/hooks/useDurationForecastRefreshKey'
 import { inclusiveDurationDays } from '@/lib/durationDays'
-import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 import type { Task, TaskCondition, TaskObstacle } from '../GanttViewTypes'
@@ -172,8 +172,14 @@ function buildDurationAssetEvidence(task?: Task | null) {
 function readDurationRiskRange(task?: Task | null) {
   const metadata = readRecord(task?.standard_task_metadata)
   const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
-  const range = task?.duration_risk_range ?? {}
+  const range = readRecord(task?.duration_risk_range)
   const suggestionRange = readRecord(suggestion.durationRiskRange ?? suggestion.duration_risk_range)
+  const distribution = suggestion.durationRiskDistribution
+    ?? suggestion.duration_risk_distribution
+    ?? range.durationRiskDistribution
+    ?? range.duration_risk_distribution
+    ?? suggestionRange.durationRiskDistribution
+    ?? suggestionRange.duration_risk_distribution
   const p20 = readDurationRiskDays(
     task?.duration_risk_p20_days
       ?? range.p20_days
@@ -201,17 +207,13 @@ function readDurationRiskRange(task?: Task | null) {
       ?? suggestionRange.p80Days
       ?? suggestionRange.p80_days,
   )
-  if (p20 == null && p50 == null && p80 == null) return null
-  return { p20, p50, p80 }
+  if (!distribution && p20 == null && p50 == null && p80 == null) return null
+  return { distribution }
 }
 
 function durationRiskSummary(range: ReturnType<typeof readDurationRiskRange>) {
   if (!range) return null
-  const baselineDays = range.p50 ?? range.p20
-  if (baselineDays !== null && range.p80 !== null && range.p80 > baselineDays) {
-    return `建议预留 ${range.p80 - baselineDays} 天`
-  }
-  return '工期风险已评估'
+  return formatDurationRiskReserve(range.distribution)
 }
 
 export function GanttDetailDrawer({

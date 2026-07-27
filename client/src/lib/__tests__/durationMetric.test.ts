@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatDurationMetric,
+  formatDurationRiskReserve,
   normalizeDurationMetricDto,
+  normalizeDurationRiskDistribution,
   readAvailableDurationValue,
   type DurationMetricDto,
 } from '../durationMetric'
@@ -61,5 +63,53 @@ describe('durationMetric', () => {
     expect(normalizeDurationMetricDto({ ...productionMetric, asOf: '2024-02-29' })).toEqual(
       expect.objectContaining({ asOf: '2024-02-29', availability: 'available' }),
     )
+  })
+
+  it('normalizes and formats a server-computed production-day risk reserve', () => {
+    const distribution = {
+      p20Duration: { ...productionMetric, value: 15, asOf: '2026-06-30' },
+      p50Duration: { ...productionMetric, value: 18, asOf: '2026-06-30' },
+      p80Duration: { ...productionMetric, value: 24, asOf: '2026-06-30' },
+      reserveDuration: { ...productionMetric, value: 6, asOf: '2026-06-30' },
+      source: 'duration_benchmarks',
+      scope: 'company',
+      sampleCount: 24,
+      generatedAt: '2026-07-01T08:00:00.000Z',
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+      availability: 'available',
+      unavailableReason: null,
+    } as const
+
+    expect(normalizeDurationRiskDistribution(distribution)).toEqual(expect.objectContaining({
+      availability: 'available',
+      reserveDuration: expect.objectContaining({ value: 6 }),
+    }))
+    expect(formatDurationRiskReserve(distribution)).toBe('建议预留 6 个生产日')
+    expect(normalizeDurationRiskDistribution({
+      ...distribution,
+      reserveDuration: { ...productionMetric, value: 60, asOf: '2026-06-30' },
+    })).toBeNull()
+  })
+
+  it('accepts a system-asset risk distribution without fabricating a history sample count', () => {
+    const metric = { ...productionMetric, asOf: '2026-07-20' }
+    const distribution = {
+      p20Duration: { ...metric, value: 15 },
+      p50Duration: { ...metric, value: 18 },
+      p80Duration: { ...metric, value: 24 },
+      reserveDuration: { ...metric, value: 6 },
+      source: 'system_standard_duration_asset',
+      scope: 'system',
+      sampleCount: null,
+      generatedAt: '2026-07-21T08:00:00.000Z',
+      sourceAsOf: '2026-07-20T00:00:00.000Z',
+      availability: 'available',
+      unavailableReason: null,
+    }
+
+    expect(normalizeDurationRiskDistribution(distribution)).toEqual(expect.objectContaining({
+      availability: 'available',
+      sampleCount: null,
+    }))
   })
 })

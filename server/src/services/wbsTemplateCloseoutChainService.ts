@@ -1822,14 +1822,15 @@ export async function buildResidentialMasterPlanRow(params: {
     executionSortKey: ((EXECUTION_PHASE_ORDER[params.activity.executionPhase] ?? 999) * 1_000_000) + params.index,
   }
   const durationRiskRange = isMilestone
-    ? {
-        ...buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, selectedDurationDays),
-        p20Days: 1,
-        p50Days: 1,
-        p80Days: 1,
-        uncertaintyBandDays: 0,
-      }
-    : buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, selectedDurationDays)
+    ? buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, selectedDurationDays, {
+        calendar: params.constructionCalendar,
+        asOf: start,
+        pointEstimate: true,
+      })
+    : buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, selectedDurationDays, {
+        calendar: params.constructionCalendar,
+        asOf: start,
+      })
   const durationSuggestion = {
     recommendedDurationDays: selectedDurationDays,
     conservativeDurationDays: isMilestone ? 1 : Math.ceil(selectedDurationDays * 1.15),
@@ -1837,6 +1838,7 @@ export async function buildResidentialMasterPlanRow(params: {
     riskP50DurationDays: durationRiskRange.p50Days,
     riskP80DurationDays: durationRiskRange.p80Days,
     durationRiskRange,
+    durationRiskDistribution: durationRiskRange.durationRiskDistribution,
     durationOutputCode: 'plan_reference',
     durationOutputSemanticFieldName: 'planReferenceDays',
     durationOutputContract: buildDurationOutputContractSummary('plan_reference'),
@@ -2244,7 +2246,11 @@ export async function buildBusinessTypeMasterPlanRow(params: {
     constructionCalendarAvailability: authoritativeConstructionCalendar ? 'available' : 'unavailable',
     executionSortKey: ((EXECUTION_PHASE_ORDER[activity.executionPhase] ?? 999) * 1_000_000) + 500_000 + params.index,
   }
-  const durationRiskRange = buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, assetBackedDurationDays)
+  const durationRiskRange = buildDefaultMasterPlanDurationRiskRange(durationAssetCalculation, assetBackedDurationDays, {
+    calendar: params.constructionCalendar,
+    asOf: start,
+    pointEstimate: isMilestone,
+  })
   const durationSuggestion = {
     recommendedDurationDays: assetBackedDurationDays,
     conservativeDurationDays: Math.ceil(assetBackedDurationDays * 1.15),
@@ -2252,6 +2258,7 @@ export async function buildBusinessTypeMasterPlanRow(params: {
     riskP50DurationDays: durationRiskRange.p50Days,
     riskP80DurationDays: durationRiskRange.p80Days,
     durationRiskRange,
+    durationRiskDistribution: durationRiskRange.durationRiskDistribution,
     durationOutputCode: 'plan_reference',
     durationOutputSemanticFieldName: 'planReferenceDays',
     durationOutputContract: buildDurationOutputContractSummary('plan_reference'),

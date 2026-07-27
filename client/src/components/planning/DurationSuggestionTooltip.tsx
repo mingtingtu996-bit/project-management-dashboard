@@ -4,6 +4,7 @@ import { Info } from 'lucide-react'
 import { DurationBasisBadge } from '@/components/planning/DurationBasisBadge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { cn } from '@/lib/utils'
+import { formatDurationRiskReserve } from '@/lib/durationMetric'
 import {
   getDurationSuggestion,
   type BenchmarkProvenanceReasonCode,
@@ -84,8 +85,8 @@ function buildBusinessSummary(suggestion: DurationSuggestion | null, days: numbe
   if (suggestion.displaySummary && kind !== 'project_rhythm' && kind !== 'package_child_window') return suggestion.displaySummary
   if (!days) return suggestion.businessReason ? `暂无参考工期；${suggestion.businessReason}` : '暂无参考工期；当前数据不足，先由用户填写。'
 
-  const conservative = readDays(suggestion.conservativeDurationDays)
-  const reserveText = conservative && conservative > days ? `，建议预留 ${conservative} 天` : ''
+  const reserveLabel = formatDurationRiskReserve(suggestion.durationRiskDistribution, '')
+  const reserveText = reserveLabel ? `，${reserveLabel}` : ''
   const reason = suggestion.businessReason ? `，因为${suggestion.businessReason.replace(/[。.]$/, '')}` : ''
   if (kind === 'package_child_window') {
     const params = suggestion.businessReasonParams ?? {}
@@ -106,13 +107,13 @@ function buildBusinessSummary(suggestion: DurationSuggestion | null, days: numbe
 function buildRiskRangeLabel(suggestion: DurationSuggestion | null) {
   if (!suggestion) return null
   const range = readRecord(suggestion.durationRiskRange)
-  const p20 = readDays(suggestion.riskP20DurationDays ?? range.p20Days ?? range.p20_days)
-  const p50 = readDays(suggestion.riskP50DurationDays ?? range.p50Days ?? range.p50_days)
-  const p80 = readDays(suggestion.riskP80DurationDays ?? range.p80Days ?? range.p80_days)
-  if (!p20 && !p50 && !p80) return null
-  const baselineDays = p50 ?? p20
-  if (baselineDays && p80 && p80 > baselineDays) return `建议预留 ${p80 - baselineDays} 天`
-  return '已完成评估'
+  const hasRiskEvidence = Boolean(
+    suggestion.durationRiskDistribution
+    || readDays(suggestion.riskP20DurationDays ?? range.p20Days ?? range.p20_days)
+    || readDays(suggestion.riskP50DurationDays ?? range.p50Days ?? range.p50_days)
+    || readDays(suggestion.riskP80DurationDays ?? range.p80Days ?? range.p80_days),
+  )
+  return hasRiskEvidence ? formatDurationRiskReserve(suggestion.durationRiskDistribution) : null
 }
 
 function buildMutationBoundaryLabel(suggestion: DurationSuggestion | null) {

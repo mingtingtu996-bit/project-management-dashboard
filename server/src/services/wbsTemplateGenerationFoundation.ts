@@ -1,6 +1,7 @@
 import {
 type DurationSuggestion
 } from './durationSuggestionService.js'
+import type { DurationRiskDistributionDto } from './durationMetricService.js'
 import { isValidUUID } from '../utils/id.js'
 import {
 evaluateDurationOutputPromotion,
@@ -951,7 +952,9 @@ export type GeneratedTemplateDurationSuggestion = {
     p80Days: number
     uncertaintyBandDays: number
     mutationBoundary: 'candidate_only_no_business_fact_write' | 'calculation_only_no_business_fact_write'
+    durationRiskDistribution: DurationRiskDistributionDto
   } | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   durationOutputCode?: DurationOutputCode | null
   durationOutputSemanticFieldName?: string | null
   durationOutputContract?: Record<string, unknown> | null

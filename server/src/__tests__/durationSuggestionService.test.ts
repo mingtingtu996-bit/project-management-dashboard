@@ -2238,6 +2238,24 @@ describe('durationSuggestionService', () => {
     expect(suggestion.conservativeDurationDays).toBe(10)
     expect(suggestion.forecastSource).toBe('standard_work_duration_seed')
     expect(suggestion.durationProvenance).toBe('standard_work_duration_seed')
+    expect(suggestion.durationRiskDistribution).toEqual(expect.objectContaining({
+      availability: 'available',
+      source: 'duration_benchmarks',
+      scope: 'company',
+      sampleCount: 24,
+      generatedAt: '2026-07-01T08:00:00.000Z',
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+      p50Duration: expect.objectContaining({
+        value: 4,
+        unit: 'construction_production_day',
+        calendarRef: 'calendar-1',
+        calendarVersion: 'calendar-v3',
+        asOf: '2026-06-30',
+        availability: 'available',
+      }),
+      p80Duration: expect.objectContaining({ value: 8, availability: 'available' }),
+      reserveDuration: expect.objectContaining({ value: 4, availability: 'available' }),
+    }))
     expect(suggestion.businessReasonParams).toEqual(expect.objectContaining({
       companyBenchmarkBlendWeight: 0.7,
       companyBenchmarkP50: 4,
@@ -2390,6 +2408,10 @@ describe('durationSuggestionService', () => {
       })
       const entry = suggestion.benchmarkProvenance?.entries[0] as unknown as Record<string, unknown>
       expect(entry[missingField]).toBeNull()
+      expect(suggestion.durationRiskDistribution).toEqual(expect.objectContaining({
+        availability: 'unavailable',
+        reserveDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+      }))
       expect(JSON.stringify(suggestion.benchmarkProvenance)).not.toContain('2035-01-02T03:04:05.000Z')
     } finally {
       now.mockRestore()

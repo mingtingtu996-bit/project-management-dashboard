@@ -11,7 +11,7 @@ function productionMetric(value: number | null, availability: 'available' | 'una
     calendarRef: availability === 'available' ? 'work_calendar' : null,
     calendarVersion: availability === 'available' ? 'calendar-v1' : null,
     timezone: 'Asia/Shanghai',
-    asOf: '2026-07-07',
+    asOf: '2026-06-30',
     availability,
     unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
   }
@@ -49,6 +49,19 @@ describe('withTaskScheduleEvidence', () => {
           riskP20DurationDays: 198,
           riskP50DurationDays: 230,
           riskP80DurationDays: 276,
+          durationRiskDistribution: {
+            p20Duration: productionMetric(200),
+            p50Duration: productionMetric(230),
+            p80Duration: productionMetric(242),
+            reserveDuration: productionMetric(12),
+            source: 'duration_benchmarks',
+            scope: 'company',
+            sampleCount: 24,
+            generatedAt: '2026-07-01T08:00:00.000Z',
+            sourceAsOf: '2026-06-30T23:59:59.000Z',
+            availability: 'available',
+            unavailableReason: null,
+          },
           durationRiskRange: {
             p20Days: 198,
             p50Days: 230,
@@ -68,7 +81,7 @@ describe('withTaskScheduleEvidence', () => {
 
     const row = withTaskScheduleEvidence(task, networkSchedule(0, 2))
 
-    expect(row.durationRiskRangeLabel).toBe('建议预留 46 天')
+    expect(row.durationRiskRangeLabel).toBe('建议预留 12 个生产日')
     expect(row.durationRiskRangeLabel).not.toMatch(/P20|P50|P80/)
     expect(row.criticalFloatLabel).toBe('总浮时 0 个生产日 / 自由浮时 2 个生产日')
     expect(row.criticalFloatLabel).not.toContain('999')

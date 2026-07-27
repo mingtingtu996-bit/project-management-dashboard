@@ -1,8 +1,10 @@
 import { apiGet, apiPost } from '@/lib/apiClient'
 import {
   normalizeDurationMetricDto,
+  normalizeDurationRiskDistribution,
   readAvailableDurationValue,
   type DurationMetricDto,
+  type DurationRiskDistributionDto,
 } from '@/lib/durationMetric'
 
 export type DurationConfidenceLevel = 'high' | 'medium' | 'low' | 'unavailable' | 'data_pending' | string
@@ -186,6 +188,7 @@ export interface DurationSuggestion {
     mutation_boundary?: string | null
     [key: string]: unknown
   } | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   conservativeDurationDays: number | null
   confidenceLevel: DurationConfidenceLevel | null
   confidenceScore: number | null
@@ -649,6 +652,9 @@ function normalizeDurationSuggestion(raw: any): DurationSuggestion {
     riskP50DurationDays: raw?.riskP50DurationDays ?? raw?.risk_p50_duration_days ?? null,
     riskP80DurationDays: raw?.riskP80DurationDays ?? raw?.risk_p80_duration_days ?? null,
     durationRiskRange: raw?.durationRiskRange ?? raw?.duration_risk_range ?? null,
+    durationRiskDistribution: normalizeDurationRiskDistribution(
+      raw?.durationRiskDistribution ?? raw?.duration_risk_distribution,
+    ),
     conservativeDurationDays: raw?.conservativeDurationDays ?? null,
     confidenceLevel: raw?.confidenceLevel ?? null,
     confidenceScore: raw?.confidenceScore ?? raw?.confidence ?? null,

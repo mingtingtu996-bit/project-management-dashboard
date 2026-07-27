@@ -1,5 +1,7 @@
 import { orderedInclusiveDurationDays, signedDurationDayDelta } from '../utils/durationDays.js'
 import { resolveDefaultMasterPlanOperationalRowFloor } from './defaultMasterPlanRowVolumePolicy.js'
+import { buildConstructionProductionDayRiskDistribution } from './durationMetricService.js'
+import type { ConstructionCalendarContext } from './constructionCalendar.js'
 
 export type ExecutableDefaultMasterPlanAssemblyRow = {
   clientRowId: string
@@ -964,6 +966,46 @@ function normalizeDurationAuthority(
   const rowDurationSource = usesT2Rhythm
     ? SYSTEM_STANDARD_DURATION_SOURCE
     : STANDARD_SEED_ONLY_DURATION_SOURCE
+  const calendarRef = text(metadata.constructionCalendarRef ?? row.values.construction_calendar_ref)
+  const calendarVersion = text(metadata.constructionCalendarVersion ?? row.values.construction_calendar_version)
+  const calendarTimezone = text(metadata.constructionCalendarTimezone ?? row.values.construction_calendar_timezone) || 'Asia/Shanghai'
+  const calendarAvailable = text(metadata.constructionCalendarAvailability ?? row.values.construction_calendar_availability) === 'available'
+    && Boolean(calendarRef && calendarVersion)
+  const constructionCalendar: ConstructionCalendarContext = calendarAvailable
+    ? {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef,
+        calendarVersion,
+        timezone: calendarTimezone,
+        availability: 'available',
+        unavailableReason: null,
+      }
+    : {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: calendarRef || null,
+        calendarVersion: calendarVersion || null,
+        timezone: calendarTimezone,
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      }
+  const riskAsOf = text(row.values.planned_start_date ?? row.values.start_date)
+  const riskTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(riskAsOf) ? `${riskAsOf}T00:00:00.000Z` : null
+  const generatedAt = new Date().toISOString()
+  const durationRiskDistribution = buildConstructionProductionDayRiskDistribution({
+    p20,
+    p50,
+    p80,
+    source: rowDurationSource,
+    scope: 'system',
+    sampleCount: null,
+    generatedAt,
+    sourceAsOf: riskTimestamp,
+    calendar: constructionCalendar,
+    provenanceAvailability: riskTimestamp ? 'available' : 'unavailable',
+    unavailableReason: riskTimestamp ? null : 'duration_risk_source_as_of_invalid',
+  })
   const nextSuggestion = {
     ...suggestion,
     recommendedDurationDays: Math.max(
@@ -979,6 +1021,7 @@ function normalizeDurationAuthority(
     riskP20DurationDays: p20,
     riskP50DurationDays: p50,
     riskP80DurationDays: p80,
+    durationRiskDistribution,
     durationRiskRange: {
       ...record(suggestion.durationRiskRange),
       source: rowDurationSource,
@@ -988,6 +1031,7 @@ function normalizeDurationAuthority(
       p80Days: p80,
       uncertaintyBandDays: p80 - p20,
       mutationBoundary: 'calculation_only_no_business_fact_write',
+      durationRiskDistribution,
     },
     confidenceLevel: 'high',
     confidenceScore: Math.max(0.82, Number(suggestion.confidenceScore) || 0),

@@ -3,6 +3,19 @@ import { describe, expect, it } from 'vitest'
 
 import { DurationSuggestionTooltip } from '@/components/planning/DurationSuggestionTooltip'
 
+function productionMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-30',
+    availability: value === null ? 'unavailable' as const : 'available' as const,
+    unavailableReason: value === null ? 'duration_value_missing' : null,
+  }
+}
+
 describe('DurationSuggestionTooltip', () => {
   it('shows the concise business-facing duration sentence', async () => {
     render(
@@ -384,9 +397,22 @@ describe('DurationSuggestionTooltip', () => {
           durationOutputSemanticFieldName: 'contextualReferenceDays',
           contextualReferenceDays: 18,
           conservativeDurationDays: 24,
-          riskP20DurationDays: 15,
-          riskP50DurationDays: 18,
-          riskP80DurationDays: 24,
+          riskP20DurationDays: 150,
+          riskP50DurationDays: 180,
+          riskP80DurationDays: 240,
+          durationRiskDistribution: {
+            p20Duration: productionMetric(15),
+            p50Duration: productionMetric(18),
+            p80Duration: productionMetric(24),
+            reserveDuration: productionMetric(6),
+            source: 'duration_benchmarks',
+            scope: 'company',
+            sampleCount: 24,
+            generatedAt: '2026-07-01T08:00:00.000Z',
+            sourceAsOf: '2026-06-30T23:59:59.000Z',
+            availability: 'available',
+            unavailableReason: null,
+          },
           durationRiskRange: {
             source: 'default_master_plan_duration_asset_risk_range',
             evidenceLevel: 'candidate_duration_asset_utilization_l1',
@@ -410,7 +436,8 @@ describe('DurationSuggestionTooltip', () => {
     fireEvent.pointerMove(trigger)
 
     await waitFor(() => {
-      expect(screen.getAllByText('工期风险 建议预留 6 天').length).toBeGreaterThan(0)
+      expect(screen.getAllByText('工期风险 建议预留 6 个生产日').length).toBeGreaterThan(0)
+      expect(screen.queryByText(/60 天/)).not.toBeInTheDocument()
       expect(screen.getAllByText('候选证据，不自动写生产运行层').length).toBeGreaterThan(0)
       expect(screen.queryByText(/P20|P50|P80/)).not.toBeInTheDocument()
     })

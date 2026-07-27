@@ -1,7 +1,7 @@
 import type { Task } from '../GanttViewTypes'
 import type { DurationSuggestion } from '@/services/durationSuggestionsApi'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
-import { formatDurationMetric } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve } from '@/lib/durationMetric'
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -58,6 +58,12 @@ export function getTaskDurationRiskRangeLabel(task: Pick<
   const metadata = readRecord(task.standard_task_metadata)
   const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
   const suggestionRange = readRecord(suggestion.durationRiskRange ?? suggestion.duration_risk_range)
+  const distribution = suggestion.durationRiskDistribution
+    ?? suggestion.duration_risk_distribution
+    ?? range.durationRiskDistribution
+    ?? range.duration_risk_distribution
+    ?? suggestionRange.durationRiskDistribution
+    ?? suggestionRange.duration_risk_distribution
   const p20 = readRoundedFiniteNumber(
     task.duration_risk_p20_days
       ?? range.p20_days
@@ -85,11 +91,9 @@ export function getTaskDurationRiskRangeLabel(task: Pick<
       ?? suggestionRange.p80Days
       ?? suggestionRange.p80_days,
   )
-  const baselineDays = p50 ?? p20
-  if (baselineDays !== null && p80 !== null && p80 > baselineDays) {
-    return `建议预留 ${p80 - baselineDays} 天`
-  }
-  return p20 !== null || p50 !== null || p80 !== null ? '工期风险已评估' : ''
+  return distribution || p20 !== null || p50 !== null || p80 !== null
+    ? formatDurationRiskReserve(distribution)
+    : ''
 }
 
 export function getTaskCriticalFloatLabel(

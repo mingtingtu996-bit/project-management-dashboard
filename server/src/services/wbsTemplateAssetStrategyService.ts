@@ -1,6 +1,8 @@
 import {
 getTaskDurationSuggestion
 } from './durationSuggestionService.js'
+import { buildConstructionProductionDayRiskDistribution } from './durationMetricService.js'
+import type { ConstructionCalendarContext } from './constructionCalendar.js'
 import {
 T2_DIVISION_RHYTHM_TEMPLATE_SEED,
 T2_DIVISION_RHYTHM_TEMPLATE_SEED_VERSION,
@@ -3255,6 +3257,11 @@ export function readDurationRiskCandidateDays(
 export function buildDefaultMasterPlanDurationRiskRange(
   durationAssetCalculation: Record<string, unknown>,
   selectedDurationDays: number,
+  options: {
+    calendar?: ConstructionCalendarContext | null
+    asOf?: string | null
+    pointEstimate?: boolean
+  } = {},
 ): NonNullable<GeneratedTemplateDurationSuggestion['durationRiskRange']> {
   const p50Days = clampInteger(selectedDurationDays, 1, 3650, 1)
   const p20Candidates = readDurationRiskCandidateDays(durationAssetCalculation, [
@@ -3273,17 +3280,39 @@ export function buildDefaultMasterPlanDurationRiskRange(
   ])
   const fallbackP20 = Math.max(1, Math.floor(p50Days * 0.85))
   const fallbackP80 = Math.max(p50Days, Math.ceil(p50Days * 1.15))
-  const p20Days = Math.min(p50Days, p20Candidates.length > 0 ? Math.min(...p20Candidates) : fallbackP20)
-  const p80Days = Math.max(p50Days, p80Candidates.length > 0 ? Math.max(...p80Candidates) : fallbackP80)
+  const p20Days = options.pointEstimate
+    ? p50Days
+    : Math.min(p50Days, p20Candidates.length > 0 ? Math.min(...p20Candidates) : fallbackP20)
+  const p80Days = options.pointEstimate
+    ? p50Days
+    : Math.max(p50Days, p80Candidates.length > 0 ? Math.max(...p80Candidates) : fallbackP80)
+  const source = normalizeText(durationAssetCalculation.source) || ASSET_BACKED_MASTER_PLAN_DURATION_CALIBRATION_SOURCE
+  const asOf = normalizeText(options.asOf)
+  const sourceTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(asOf) ? `${asOf}T00:00:00.000Z` : null
+  const generatedAt = new Date().toISOString()
+  const durationRiskDistribution = buildConstructionProductionDayRiskDistribution({
+    p20: p20Days,
+    p50: p50Days,
+    p80: p80Days,
+    source,
+    scope: 'system',
+    sampleCount: null,
+    generatedAt,
+    sourceAsOf: sourceTimestamp,
+    calendar: options.calendar,
+    provenanceAvailability: sourceTimestamp ? 'available' : 'unavailable',
+    unavailableReason: sourceTimestamp ? null : 'duration_risk_source_as_of_invalid',
+  })
 
   return {
-    source: normalizeText(durationAssetCalculation.source) || ASSET_BACKED_MASTER_PLAN_DURATION_CALIBRATION_SOURCE,
+    source,
     evidenceLevel: 'candidate_asset_backed_l1',
     p20Days,
     p50Days,
     p80Days,
     uncertaintyBandDays: Math.max(0, p80Days - p20Days),
     mutationBoundary: 'candidate_only_no_business_fact_write',
+    durationRiskDistribution,
   }
 }
 

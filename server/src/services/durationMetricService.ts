@@ -17,6 +17,20 @@ export type DurationMetricDto = {
   unavailableReason: string | null
 }
 
+export type DurationRiskDistributionDto = {
+  p20Duration: DurationMetricDto
+  p50Duration: DurationMetricDto
+  p80Duration: DurationMetricDto
+  reserveDuration: DurationMetricDto
+  source: string | null
+  scope: string | null
+  sampleCount: number | null
+  generatedAt: string | null
+  sourceAsOf: string | null
+  availability: DurationMetricAvailability
+  unavailableReason: string | null
+}
+
 export function normalizeDurationMetricDto(value: unknown): DurationMetricDto | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const raw = value as Record<string, unknown>
@@ -55,6 +69,20 @@ type ProductionDurationMetricOptions = DurationMetricOptions & {
   calendar?: ConstructionCalendarContext | null
 }
 
+type ProductionDurationRiskDistributionOptions = {
+  p20?: number | null
+  p50?: number | null
+  p80?: number | null
+  source?: string | null
+  scope?: string | null
+  sampleCount?: number | null
+  generatedAt?: string | null
+  sourceAsOf?: string | null
+  calendar?: ConstructionCalendarContext | null
+  provenanceAvailability?: 'available' | 'partial' | 'unavailable' | null
+  unavailableReason?: string | null
+}
+
 export const DEFAULT_DURATION_TIMEZONE = 'Asia/Shanghai'
 
 function normalizeText(value: unknown) {
@@ -77,6 +105,36 @@ function normalizeAsOf(value: unknown) {
     && parsed.getUTCDate() === day
     ? text
     : ''
+}
+
+const STRICT_RFC3339_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/
+
+function normalizeTimestamp(value: unknown) {
+  const text = typeof value === 'string' ? value : ''
+  const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(text)
+  if (!match) return ''
+  const [, yearText, monthText, dayText, hourText, minuteText, secondText, fractionText = '', timezoneText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+  const hour = Number(hourText)
+  const minute = Number(minuteText)
+  const second = Number(secondText)
+  const millisecond = Number(`${fractionText}000`.slice(0, 3))
+  if (month < 1 || month > 12 || day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return ''
+  if ((timezoneText.startsWith('+14:') || timezoneText.startsWith('-14:')) && !timezoneText.endsWith(':00')) return ''
+  const parsed = new Date(text)
+  if (!Number.isFinite(parsed.getTime())) return ''
+  const localShape = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond))
+  if (
+    localShape.getUTCFullYear() !== year
+    || localShape.getUTCMonth() !== month - 1
+    || localShape.getUTCDate() !== day
+    || localShape.getUTCHours() !== hour
+    || localShape.getUTCMinutes() !== minute
+    || localShape.getUTCSeconds() !== second
+  ) return ''
+  return parsed.toISOString()
 }
 
 function unavailableMetric(
@@ -164,6 +222,85 @@ export function buildConstructionProductionDayDurationMetric(
     calendarVersion: normalizeText(calendar?.calendarVersion) || null,
     timezone: normalizeText(calendar?.timezone) || normalizeText(options.timezone) || DEFAULT_DURATION_TIMEZONE,
     asOf: normalizeAsOf(options.asOf),
+    availability: 'available',
+    unavailableReason: null,
+  }
+}
+
+export function buildConstructionProductionDayRiskDistribution(
+  options: ProductionDurationRiskDistributionOptions,
+): DurationRiskDistributionDto {
+  const generatedAt = normalizeTimestamp(options.generatedAt) || null
+  const sourceAsOf = normalizeTimestamp(options.sourceAsOf) || null
+  const metricAsOf = (sourceAsOf ?? generatedAt)?.slice(0, 10) ?? ''
+  const source = normalizeText(options.source) || null
+  const scope = normalizeText(options.scope) || null
+  const sampleCount = Number(options.sampleCount)
+  const normalizedSampleCount = Number.isInteger(sampleCount) && sampleCount > 0 ? sampleCount : null
+  const sampleCountRequired = source === 'duration_benchmarks'
+  const p20 = normalizeValue(options.p20)
+  const p50 = normalizeValue(options.p50)
+  const p80 = normalizeValue(options.p80)
+  const requestedReason = normalizeText(options.unavailableReason)
+  const invalidReason = options.provenanceAvailability !== 'available'
+    ? requestedReason || 'duration_risk_provenance_unavailable'
+    : !source
+      ? 'duration_risk_source_missing'
+      : !scope
+        ? 'duration_risk_scope_missing'
+        : sampleCountRequired && normalizedSampleCount === null
+          ? 'duration_risk_sample_count_invalid'
+          : !generatedAt
+            ? 'duration_risk_generated_at_invalid'
+            : !sourceAsOf
+              ? 'duration_risk_source_as_of_invalid'
+              : !hasIdentifiedConstructionCalendar(options.calendar)
+                ? normalizeText(options.calendar?.unavailableReason) || 'construction_calendar_identity_missing'
+                : p50 === null || p80 === null || p80 < p50
+                  ? 'duration_risk_percentiles_invalid'
+                  : null
+
+  const metricOptions = {
+    asOf: metricAsOf,
+    timezone: options.calendar?.timezone,
+    calendar: options.calendar,
+  }
+  if (invalidReason) {
+    const unavailableCalendar: ConstructionCalendarContext = {
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: options.calendar?.calendarRef ?? null,
+      calendarVersion: options.calendar?.calendarVersion ?? null,
+      timezone: options.calendar?.timezone ?? DEFAULT_DURATION_TIMEZONE,
+      availability: 'unavailable',
+      unavailableReason: invalidReason,
+    }
+    const unavailableOptions = { ...metricOptions, calendar: unavailableCalendar }
+    return {
+      p20Duration: buildConstructionProductionDayDurationMetric(null, unavailableOptions),
+      p50Duration: buildConstructionProductionDayDurationMetric(null, unavailableOptions),
+      p80Duration: buildConstructionProductionDayDurationMetric(null, unavailableOptions),
+      reserveDuration: buildConstructionProductionDayDurationMetric(null, unavailableOptions),
+      source,
+      scope,
+      sampleCount: normalizedSampleCount,
+      generatedAt,
+      sourceAsOf,
+      availability: 'unavailable',
+      unavailableReason: invalidReason,
+    }
+  }
+
+  return {
+    p20Duration: buildConstructionProductionDayDurationMetric(p20, metricOptions),
+    p50Duration: buildConstructionProductionDayDurationMetric(p50, metricOptions),
+    p80Duration: buildConstructionProductionDayDurationMetric(p80, metricOptions),
+    reserveDuration: buildConstructionProductionDayDurationMetric(Math.max(0, p80! - p50!), metricOptions),
+    source,
+    scope,
+    sampleCount: normalizedSampleCount,
+    generatedAt,
+    sourceAsOf,
     availability: 'available',
     unavailableReason: null,
   }

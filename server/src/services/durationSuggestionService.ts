@@ -111,6 +111,11 @@ import {
   type StructuredCauseCode,
 } from '../domain/structuredCauseTaxonomy.js'
 import type { TaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
+import {
+  buildConstructionProductionDayRiskDistribution,
+  DEFAULT_DURATION_TIMEZONE,
+  type DurationRiskDistributionDto,
+} from './durationMetricService.js'
 
 export type DurationCalibrationSource =
   | 'enterprise_override'
@@ -276,6 +281,7 @@ export interface DurationSuggestion {
   benchmarkProvenanceAvailability?: 'available' | 'partial' | 'unavailable' | null
   benchmarkProvenanceReasonCodes?: BenchmarkProvenanceReasonCode[]
   benchmarkProvenanceUnavailableReason?: BenchmarkProvenanceReasonCode | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
 }
 
 export interface DurationSuggestionInput {
@@ -3438,6 +3444,43 @@ function buildBenchmarkProvenance(
   }
 }
 
+function resolveBenchmarkRiskCalendar(
+  provenance: BenchmarkProvenanceSet,
+  workCalendar: ConstructionCalendarContext | null | undefined,
+): ConstructionCalendarContext {
+  const identities = provenance.entries.flatMap((entry) => (
+    entry.calendarRef && entry.calendarVersion
+      ? [{ calendarRef: entry.calendarRef, calendarVersion: entry.calendarVersion }]
+      : entry.aggregateCalendarIdentities
+  ))
+  const uniqueIdentities = [...new Map(identities.map((identity) => [
+    `${identity.calendarRef}\u0000${identity.calendarVersion}`,
+    identity,
+  ])).values()]
+  if (uniqueIdentities.length !== 1) {
+    return {
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: workCalendar?.timezone ?? DEFAULT_DURATION_TIMEZONE,
+      availability: 'unavailable',
+      unavailableReason: uniqueIdentities.length > 1
+        ? 'benchmark_calendar_identity_ambiguous'
+        : 'benchmark_calendar_identity_missing',
+    }
+  }
+  return {
+    basis: 'official_construction_calendar_seed',
+    windows: [],
+    calendarRef: uniqueIdentities[0].calendarRef,
+    calendarVersion: uniqueIdentities[0].calendarVersion,
+    timezone: workCalendar?.timezone ?? DEFAULT_DURATION_TIMEZONE,
+    availability: 'available',
+    unavailableReason: null,
+  }
+}
+
 async function loadBenchmarkBlendRuntimeParameter(
   companyId: string | null | undefined,
   projectId: string | null | undefined,
@@ -5798,6 +5841,23 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
           sampleCount: benchmarkDistributionCandidate.sampleSize,
         }
         : null
+      const benchmarkRiskCalendar = resolveBenchmarkRiskCalendar(
+        benchmarkProvenance.benchmarkProvenance,
+        normalizedInput.workCalendar,
+      )
+      const durationRiskDistribution = buildConstructionProductionDayRiskDistribution({
+        p50: benchmarkDistributionCandidate?.p50 ?? null,
+        p80: benchmarkDistributionCandidate?.p80 ?? null,
+        source: benchmarkDistributionCandidate ? 'duration_benchmarks' : null,
+        scope: benchmarkProvenance.benchmarkScope,
+        sampleCount: benchmarkProvenance.benchmarkSampleCount,
+        generatedAt: benchmarkProvenance.benchmarkGeneratedAt,
+        sourceAsOf: benchmarkProvenance.benchmarkAsOf,
+        calendar: benchmarkRiskCalendar,
+        provenanceAvailability: benchmarkProvenance.benchmarkProvenanceAvailability,
+        unavailableReason: benchmarkProvenance.benchmarkProvenanceUnavailableReason
+          ?? benchmarkRiskCalendar.unavailableReason,
+      })
       const effectiveFactorSummaryWithBenchmarkDistribution = benchmarkDurationDistribution
         ? {
           ...effectiveFactorSummary,
@@ -5827,6 +5887,7 @@ export async function getTaskDurationSuggestion(input: DurationSuggestionInput):
         durationCalibrationSource: benchmarkBlendCalibrationSource,
         durationProvenance: coldStartBaselineApplied ? 'historical_benchmark' : 'standard_work_duration_seed',
         ...benchmarkProvenance,
+        durationRiskDistribution,
         businessReason: seedBusinessReason,
         businessReasonCode: variantFallback.hasFallback ? 'STANDARD_SEED_VARIANT_FALLBACK' : scale.factor === 1 ? 'STANDARD_SEED_REFERENCE' : 'BASED_ON_SEED_AND_COVERAGE',
         businessReasonCodes: [variantFallback.hasFallback ? 'STANDARD_SEED_VARIANT_FALLBACK' : scale.factor === 1 ? 'STANDARD_SEED_REFERENCE' : 'BASED_ON_SEED_AND_COVERAGE'],

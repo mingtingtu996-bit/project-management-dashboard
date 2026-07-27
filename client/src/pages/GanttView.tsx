@@ -25,7 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { toast } from '@/hooks/use-toast'
 import { apiPost, getApiErrorMessage } from '@/lib/apiClient'
-import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, readAvailableDurationValue, type DurationRiskDistributionDto } from '@/lib/durationMetric'
 import { cn } from '@/lib/utils'
 import type { DataQualityLiveCheckSummary } from '@/services/dataQualityApi'
 import { GanttViewSkeleton } from '@/components/ui/page-skeleton'
@@ -295,14 +295,11 @@ function formatWizardDurationAssetPreviewDependencyLineage(item: WizardDurationA
 function formatWizardDurationRiskSummary(item: {
   riskP50DurationDays?: number | null
   riskP80DurationDays?: number | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
 } | null | undefined) {
   if (!item) return '工期风险未评估'
-  const baselineDays = item.riskP50DurationDays
-  const conservativeDays = item.riskP80DurationDays
-  if (baselineDays != null && conservativeDays != null && conservativeDays > baselineDays) {
-    return `工期风险建议预留 ${conservativeDays - baselineDays} 天`
-  }
-  return baselineDays != null || conservativeDays != null ? '工期风险已评估' : '工期风险未评估'
+  if (!item.durationRiskDistribution && item.riskP50DurationDays == null && item.riskP80DurationDays == null) return '工期风险未评估'
+  return `工期风险${formatDurationRiskReserve(item.durationRiskDistribution)}`
 }
 
 function normalizeTaskId(value: unknown) {

@@ -23,7 +23,7 @@ function productionMetric(value: number | null, availability: 'available' | 'una
     calendarRef: availability === 'available' ? 'work_calendar' : null,
     calendarVersion: availability === 'available' ? 'calendar-v1' : null,
     timezone: 'Asia/Shanghai',
-    asOf: '2026-07-07',
+    asOf: '2026-06-30',
     availability,
     unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
   }
@@ -132,10 +132,26 @@ describe('GanttDetailDrawer duration risk range', () => {
       duration_risk_p20_days: 210,
       duration_risk_p50_days: 240,
       duration_risk_p80_days: 285,
+      duration_risk_range: {
+        durationRiskDistribution: {
+          p20Duration: productionMetric(220),
+          p50Duration: productionMetric(240),
+          p80Duration: productionMetric(245),
+          reserveDuration: productionMetric(5),
+          source: 'duration_benchmarks',
+          scope: 'company',
+          sampleCount: 24,
+          generatedAt: '2026-07-01T08:00:00.000Z',
+          sourceAsOf: '2026-06-30T23:59:59.000Z',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
     })
 
     expect(screen.getByText('工期风险')).toBeInTheDocument()
-    expect(screen.getByText('建议预留 45 天')).toBeInTheDocument()
+    expect(screen.getByText('建议预留 5 个生产日')).toBeInTheDocument()
+    expect(screen.queryByText('建议预留 45 天')).not.toBeInTheDocument()
     expect(screen.queryByText(/P20|P50|P80/)).not.toBeInTheDocument()
   })
 
@@ -161,7 +177,8 @@ describe('GanttDetailDrawer duration risk range', () => {
     })
 
     expect(screen.getByText('工期风险')).toBeInTheDocument()
-    expect(screen.getByText('建议预留 46 天')).toBeInTheDocument()
+    expect(screen.getByText('生产日口径不可用')).toBeInTheDocument()
+    expect(screen.queryByText('建议预留 46 天')).not.toBeInTheDocument()
     expect(screen.queryByText(/P20|P50|P80/)).not.toBeInTheDocument()
   })
 

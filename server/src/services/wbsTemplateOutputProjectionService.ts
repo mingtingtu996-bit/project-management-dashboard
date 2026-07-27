@@ -784,6 +784,9 @@ export function buildGeneratedDurationSuggestionValue(
     riskP50DurationDays: durationSuggestion.riskP50DurationDays ?? durationSuggestion.durationRiskRange?.p50Days ?? null,
     riskP80DurationDays: durationSuggestion.riskP80DurationDays ?? durationSuggestion.durationRiskRange?.p80Days ?? null,
     durationRiskRange: durationSuggestion.durationRiskRange ?? null,
+    durationRiskDistribution: durationSuggestion.durationRiskDistribution
+      ?? durationSuggestion.durationRiskRange?.durationRiskDistribution
+      ?? null,
     durationOutputCode: durationSuggestion.durationOutputCode ?? null,
     durationOutputSemanticFieldName: durationSuggestion.durationOutputSemanticFieldName ?? null,
     durationOutputContract: durationSuggestion.durationOutputContract ?? null,

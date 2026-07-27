@@ -6,6 +6,7 @@ import {
   type WbsTargetFeasibility,
 } from '@/services/wbsTemplateGenerationApi'
 import type { DetailLevel, WizardDraftPayload, WizardStep } from './types'
+import type { DurationRiskDistributionDto } from '@/lib/durationMetric'
 
 export interface CompanyProjectTemplateItem {
   id: string
@@ -283,6 +284,7 @@ export interface CandidateDurationAssetPreviewItem {
   riskP20DurationDays?: number | null
   riskP50DurationDays?: number | null
   riskP80DurationDays?: number | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   calendarBasis?: string | null
   constructionCalendarWindowCount?: number | null
   processSeasonalDurationAssetConsumed?: boolean

@@ -429,6 +429,51 @@ describe('Step6ProjectProfileConfirmation', () => {
     expect(onGenerate).toHaveBeenCalledTimes(1)
   })
 
+  it('uses the typed production-day reserve for candidate duration risk', () => {
+    render(
+      <Step6ProjectProfileConfirmation
+        preview={{
+          ...basePreview,
+          profile: {
+            ...basePreview.profile,
+            generation: {
+              ...basePreview.profile.generation,
+              candidateDurationAssetPreview: {
+                totalCount: 1,
+                riskRangeCount: 1,
+                items: [{
+                  clientRowId: 'row-1',
+                  title: '主体结构施工',
+                  riskP20DurationDays: 150,
+                  riskP50DurationDays: 180,
+                  riskP80DurationDays: 240,
+                  durationRiskDistribution: {
+                    p20Duration: durationMetric(15, 'construction_production_day'),
+                    p50Duration: durationMetric(18, 'construction_production_day'),
+                    p80Duration: durationMetric(24, 'construction_production_day'),
+                    reserveDuration: durationMetric(6, 'construction_production_day'),
+                    source: 'duration_benchmarks',
+                    scope: 'company',
+                    sampleCount: 24,
+                    generatedAt: '2026-07-21T08:00:00.000Z',
+                    sourceAsOf: '2026-07-20T23:59:59.000Z',
+                    availability: 'available',
+                    unavailableReason: null,
+                  },
+                }],
+              },
+            },
+          },
+        }}
+        onGenerate={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('工期风险建议预留 6 个生产日')).toBeInTheDocument()
+    expect(screen.queryByText('工期风险建议预留 60 天')).not.toBeInTheDocument()
+  })
+
   it('shows candidate critical path evidence from the preview without implying production writes', () => {
     render(
       <Step6ProjectProfileConfirmation
