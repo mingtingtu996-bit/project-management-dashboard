@@ -356,6 +356,7 @@ describe('taskDurationForecastService', () => {
         p50RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
         p80RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
       },
+      delayRiskIndex: null,
     })
     expect(state.insertedForecasts).toEqual([
       expect.objectContaining({
@@ -371,6 +372,24 @@ describe('taskDurationForecastService', () => {
       }),
     ])
     expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+
+    const analysis = await analyzeTaskDelayRiskWithDurationForecast('task-calendar-unavailable')
+    expect(analysis).toMatchObject({
+      delay_probability: null,
+      delay_risk_index: null,
+      delay_risk: 'unavailable',
+      risk_level: 'unavailable',
+      duration_forecast: {
+        forecastDelay: expect.objectContaining({ value: null, availability: 'unavailable' }),
+        forecastDelayDays: null,
+        probabilityDurationMetrics: {
+          p20RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+          p50RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+          p80RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+        },
+        delayRiskIndex: null,
+      },
+    })
   })
 
   afterEach(() => {
@@ -479,6 +498,7 @@ describe('taskDurationForecastService', () => {
       'project-1:task-remaining-dedupe:remaining_duration_forecast:api_request:2026-06-15',
       'project-1:task-remaining-dedupe:remaining_duration_forecast:api_request:2026-06-15',
     ])
+
   })
 
   it('records v1.4.22.5 runtime consumer evidence for task duration forecast artifacts', async () => {

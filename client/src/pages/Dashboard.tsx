@@ -380,7 +380,6 @@ function DashboardDecisionOverview({
   const showSummarySkeleton = summaryLoading && !summaryData
   const summaryDateLabel = formatDashboardSummaryDate(summaryData?.summaryAsOf)
   const plannedEnd = summaryData?.plannedEndDate ?? currentProject.planned_end_date ?? currentProject.end_date ?? null
-  const daysUntilPlannedEnd = summaryData?.daysUntilPlannedEnd ?? null
   const hasForecastPlanWindow = Boolean(plannedEnd)
   const forecastMissingProgress = !summaryData || conclusion.actual === null
   const forecastNeedsProgress = !forecastMissingProgress && (conclusion.actual ?? 0) < 1
@@ -486,7 +485,14 @@ function DashboardDecisionOverview({
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span>距计划完工</span>
-                  <span className="num-mono text-slate-900">{hasForecastPlanWindow && !forecastNeedsProgress && daysUntilPlannedEnd != null ? `${daysUntilPlannedEnd} 天` : '--'}</span>
+                  <span className="num-mono text-slate-900">
+                    {hasForecastPlanWindow && !forecastNeedsProgress
+                      ? formatDurationMetric(summaryData?.futureDueWindow, {
+                        expectedUnit: 'calendar_day',
+                        unavailableLabel: '--',
+                      })
+                      : '--'}
+                  </span>
                 </div>
               </div>
             </>

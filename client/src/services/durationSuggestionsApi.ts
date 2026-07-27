@@ -126,6 +126,11 @@ function normalizeTaskDurationForecast(raw: any): TaskDurationForecast {
   const semanticReferenceDays = normalizedOutputCode === 'remaining_forecast'
     ? remainingForecastDays
     : null
+  const delayRiskIndex = readAvailableDurationValue(forecastDelay, 'construction_production_day') !== null
+    && typeof raw?.delayRiskIndex === 'number'
+    && Number.isFinite(raw.delayRiskIndex)
+    ? raw.delayRiskIndex
+    : null
   return {
     taskId: raw?.taskId ?? null,
     durationOutputCode,
@@ -137,7 +142,7 @@ function normalizeTaskDurationForecast(raw: any): TaskDurationForecast {
     forecastDelay,
     forecastDelayDays: readAvailableDurationValue(forecastDelay, 'construction_production_day'),
     probabilityDurationMetrics,
-    delayRiskIndex: raw?.delayRiskIndex ?? null,
+    delayRiskIndex,
     confidenceLevel: raw?.confidenceLevel ?? null,
     confidenceScore: raw?.confidenceScore ?? null,
     forecastSource: raw?.forecastSource ?? null,

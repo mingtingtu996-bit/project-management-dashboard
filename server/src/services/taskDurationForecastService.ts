@@ -117,7 +117,7 @@ export interface TaskDurationForecast {
   forecastDelay: DurationMetricDto
   /** @deprecated Use forecastDelay. Removed after the v1.5 compatibility window. */
   forecastDelayDays: number | null
-  delayRiskIndex?: number
+  delayRiskIndex?: number | null
   confidenceLevel: string
   confidenceScore: number
   forecastSource: string
@@ -669,7 +669,7 @@ type ForecastModelResult = {
   forecastFinishDate: string | null
   forecastDelay: DurationMetricDto
   forecastDelayDays: number | null
-  delayRiskIndex: number
+  delayRiskIndex: number | null
   confidenceLevel: string
   confidenceScore: number
   dataMaturity: ForecastMaturity
@@ -1973,7 +1973,9 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     forecastFinishDate: remainingDurationAvailable ? normalizeDate(forecast.forecast_finish_date) : null,
     forecastDelay,
     forecastDelayDays: forecastDelay.availability === 'available' ? forecastDelay.value : null,
-    delayRiskIndex: readNullableNumber(forecast.delay_risk_index) ?? readNullableNumber(metadata.delayRiskIndex) ?? undefined,
+    delayRiskIndex: forecastDelay.availability === 'available'
+      ? readNullableNumber(forecast.delay_risk_index) ?? readNullableNumber(metadata.delayRiskIndex)
+      : null,
     confidenceLevel: remainingDurationAvailable ? normalizeId(forecast.confidence_level) ?? 'medium' : 'unavailable',
     confidenceScore: remainingDurationAvailable ? readNullableNumber(forecast.confidence_score) ?? 50 : 0,
     forecastSource: normalizeId(forecast.forecast_source) ?? 'cached_current',
@@ -5091,7 +5093,7 @@ async function buildRemainingForecastModel(params: {
       forecastFinishDate: null,
       forecastDelay,
       forecastDelayDays: null,
-      delayRiskIndex: 0,
+      delayRiskIndex: null,
       confidenceLevel: 'unavailable',
       confidenceScore: 0,
       dataMaturity: 'L0',
@@ -6052,10 +6054,15 @@ function toGovernedDurationForecastSignal(forecast: TaskDurationForecast) {
     durationOutputCode,
     durationOutputSemanticFieldName,
     remainingForecastDays,
+    remainingDuration: forecast.remainingDuration,
     conservativeDurationDays: forecast.conservativeDurationDays,
     forecastFinishDate: forecast.forecastFinishDate,
+    forecastDelay: forecast.forecastDelay,
     forecastDelayDays: forecast.forecastDelayDays,
-    delayRiskIndex: forecast.delayRiskIndex ?? null,
+    probabilityDurationMetrics: forecast.probabilityDurationMetrics,
+    delayRiskIndex: forecast.forecastDelay.availability === 'available'
+      ? forecast.delayRiskIndex ?? null
+      : null,
     confidenceLevel: forecast.confidenceLevel,
     confidenceScore: forecast.confidenceScore,
     businessReason: forecast.businessReason,
@@ -6077,14 +6084,25 @@ export async function analyzeTaskDelayRiskWithDurationForecast(
   ])
 
   const progress = clampProgress(task?.progress)
-  const forecastDelayDays = Number(forecast.forecastDelayDays ?? 0)
-  const delayRiskIndex = forecast.delayRiskIndex ?? Math.max(
-    0,
-    Math.min(1, (forecastDelayDays / 14) + (obstacleCount * 0.12) + (progress < 30 && forecastDelayDays > 0 ? 0.15 : 0)),
-  )
-  const delayRisk = delayRiskIndex >= 0.7 ? 'high' : delayRiskIndex >= 0.4 ? 'medium' : 'low'
+  const delayAvailable = forecast.forecastDelay.availability === 'available'
+    && forecast.forecastDelay.unit === 'construction_production_day'
+    && Number.isFinite(Number(forecast.forecastDelay.value))
+  const forecastDelayDays = delayAvailable ? Number(forecast.forecastDelay.value) : null
+  const delayRiskIndex = delayAvailable
+    ? forecast.delayRiskIndex ?? Math.max(
+        0,
+        Math.min(1, ((forecastDelayDays ?? 0) / 14) + (obstacleCount * 0.12) + (progress < 30 && (forecastDelayDays ?? 0) > 0 ? 0.15 : 0)),
+      )
+    : null
+  const delayRisk = delayRiskIndex === null
+    ? 'unavailable'
+    : delayRiskIndex >= 0.7
+      ? 'high'
+      : delayRiskIndex >= 0.4
+        ? 'medium'
+        : 'low'
   const riskFactors = [
-    forecastDelayDays > 0 ? `预计完成时间可能比当前计划晚 ${forecastDelayDays} 天。` : null,
+    (forecastDelayDays ?? 0) > 0 ? `预计完成时间可能比当前计划晚 ${forecastDelayDays} 天。` : null,
     obstacleCount > 0 ? `当前还有 ${obstacleCount} 项未关闭阻碍可能影响执行。` : null,
     ...(forecast.topFactors ?? []),
     forecast.factorSummary?.businessReasons?.[0] ?? null,
@@ -6098,12 +6116,14 @@ export async function analyzeTaskDelayRiskWithDurationForecast(
     durationOutputSemanticFieldName: forecast.durationOutputSemanticFieldName ?? 'remainingForecastDays',
     remainingForecastDays: forecast.remainingForecastDays ?? null,
     obstacle_count: obstacleCount,
-    delay_probability: Math.round(delayRiskIndex * 100) / 100,
-    delay_risk_index: Math.round(delayRiskIndex * 100) / 100,
+    delay_probability: delayRiskIndex === null ? null : Math.round(delayRiskIndex * 100) / 100,
+    delay_risk_index: delayRiskIndex === null ? null : Math.round(delayRiskIndex * 100) / 100,
     delay_risk: delayRisk,
     risk_level: delayRisk,
     risk_factors: riskFactors,
-    recommendations: delayRisk === 'high'
+    recommendations: delayRisk === 'unavailable'
+      ? ['Complete the construction calendar identity before relying on delay risk.']
+      : delayRisk === 'high'
       ? ['优先核查关键阻碍、材料就绪、验收时间轴状态和当前现场推进节奏。']
       : ['继续跟踪当前执行节奏，必要时在任务详情查看剩余工期预测。'],
     duration_forecast: toGovernedDurationForecastSignal(forecast),

@@ -3,6 +3,7 @@
  */
 
 import type { ProjectSummary } from '@/services/dashboardApi'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { Project } from '@/lib/supabase'
 
 const INTERNAL_PROJECT_PATTERNS = [
@@ -166,11 +167,16 @@ export function formatTimelineLabel(daysRemaining: number | null, fallback = '�
 
 export function formatDeliveryHint(summary?: ProjectSummary | null) {
   if (!summary?.plannedEndDate) return '未设置计划交付日期'
-  if (summary.daysUntilPlannedEnd === null) return `计划交付 ${summary.plannedEndDate}`
+  const daysUntilPlannedEnd = readAvailableDurationValue(summary.futureDueWindow, 'calendar_day')
+  if (daysUntilPlannedEnd === null) return `计划交付 ${summary.plannedEndDate}`
+  const formattedDuration = formatDurationMetric(summary.futureDueWindow, {
+    absolute: true,
+    expectedUnit: 'calendar_day',
+  })
 
-  return summary.daysUntilPlannedEnd < 0
-    ? `计划交付 ${summary.plannedEndDate} · 已延期 ${Math.abs(summary.daysUntilPlannedEnd)} 天`
-    : `计划交付 ${summary.plannedEndDate} · 剩余 ${summary.daysUntilPlannedEnd} 天`
+  return daysUntilPlannedEnd < 0
+    ? `计划交付 ${summary.plannedEndDate} · 已延期 ${formattedDuration}`
+    : `计划交付 ${summary.plannedEndDate} · 剩余 ${formattedDuration}`
 }
 
 export function projectAvatarLabel(name: string) {

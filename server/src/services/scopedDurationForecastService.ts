@@ -369,10 +369,9 @@ function buildTaskFinishBand(
     }
   }
 
-  const probability = forecastFinish ? forecast?.probabilityDuration : null
-  const p20Remaining = readFiniteNumber(probability?.p20RemainingDays)
-  const p50Remaining = readFiniteNumber(probability?.p50RemainingDays)
-  const p80Remaining = readFiniteNumber(probability?.p80RemainingDays)
+  const p20Remaining = forecastFinish ? forecastProbabilityRemainingDays(forecast, 'p20') : null
+  const p50Remaining = forecastFinish ? forecastProbabilityRemainingDays(forecast, 'p50') : null
+  const p80Remaining = forecastFinish ? forecastProbabilityRemainingDays(forecast, 'p80') : null
   const probabilityCovered = p20Remaining !== null && p50Remaining !== null && p80Remaining !== null
   if (!probabilityCovered) {
     degradationReasons.push('missing_probability_window')
@@ -677,14 +676,21 @@ function forecastProbabilityRemainingDays(
   forecast: TaskDurationForecast | undefined,
   percentile: 'p20' | 'p50' | 'p80',
 ) {
-  const probability = forecast?.probabilityDuration
-  if (!probability) return null
-  const value = percentile === 'p20'
-    ? probability.p20RemainingDays
+  const metrics = forecast?.probabilityDurationMetrics
+  const metric = percentile === 'p20'
+    ? metrics?.p20RemainingDuration
     : percentile === 'p50'
-      ? probability.p50RemainingDays
-      : probability.p80RemainingDays
-  const normalized = readFiniteNumber(value)
+      ? metrics?.p50RemainingDuration
+      : metrics?.p80RemainingDuration
+  if (
+    metric?.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || !normalizeText(metric.calendarRef)
+    || !normalizeText(metric.calendarVersion)
+    || !normalizeText(metric.timezone)
+    || !normalizeDate(metric.asOf)
+  ) return null
+  const normalized = readFiniteNumber(metric.value)
   return normalized !== null && normalized > 0 ? normalized : null
 }
 

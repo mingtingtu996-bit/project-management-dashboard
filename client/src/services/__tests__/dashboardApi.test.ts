@@ -94,6 +94,69 @@ describe('DashboardApiService cache policy', () => {
     )
   })
 
+  it('fails closed when a project future-due metric has incomplete Gregorian identity', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      id: 'project-1',
+      futureDueWindow: {
+        value: 5,
+        unit: 'calendar_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-07-28',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      actualOverdue: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-07-28',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+      milestoneOverview: { items: [], stats: { total: 0, pending: 0, completed: 0, overdue: 0, upcomingSoon: 0, completionRate: 0 } },
+    })
+
+    const summary = await DashboardApiService.getProjectSummary('project-1')
+
+    expect(summary?.futureDueWindow).toBeNull()
+    expect(summary?.actualOverdue).toMatchObject({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    })
+  })
+
+  it('builds upcoming deliveries from the typed Gregorian due window instead of the legacy number', async () => {
+    mocks.apiGet.mockResolvedValueOnce([{
+      id: 'project-1',
+      name: 'Project 1',
+      status: 'active',
+      statusLabel: 'in_progress',
+      plannedEndDate: '2026-08-01',
+      daysUntilPlannedEnd: 999,
+      futureDueWindow: {
+        value: 4,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-07-28',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      milestoneOverview: { items: [], stats: { total: 0, pending: 0, completed: 0, overdue: 0, upcomingSoon: 0, completionRate: 0 } },
+    }])
+
+    await expect(DashboardApiService.getUpcomingDeliveries(30)).resolves.toEqual([expect.objectContaining({
+      projectId: 'project-1',
+      futureDueWindow: expect.objectContaining({ value: 4, unit: 'calendar_day' }),
+    })])
+  })
+
   it('normalizes malformed company summary payloads', async () => {
     mocks.apiGet.mockResolvedValueOnce({
       projectCount: 1,

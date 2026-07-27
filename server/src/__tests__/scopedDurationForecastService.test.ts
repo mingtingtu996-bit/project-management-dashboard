@@ -248,6 +248,62 @@ describe('scopedDurationForecastService', () => {
     expect(result.delayDays).toBeNull()
   })
 
+  it('does not use legacy probability values when typed probability metrics are unavailable', () => {
+    const first = forecast('first', '2026-07-17', [4, 5, 7])
+    const second = forecast('second', '2026-07-22', [4, 5, 7])
+    for (const item of [first, second]) {
+      item.probabilityDurationMetrics = {
+        p20RemainingDuration: {
+          ...item.probabilityDurationMetrics.p20RemainingDuration,
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        p50RemainingDuration: {
+          ...item.probabilityDurationMetrics.p50RemainingDuration,
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        p80RemainingDuration: {
+          ...item.probabilityDurationMetrics.p80RemainingDuration,
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+      }
+    }
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      simulationSeed: 'typed-probability-unavailable',
+      rows: [
+        row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-17' }),
+        row('second', { planned_start_date: '2026-07-18', planned_end_date: '2026-07-22' }, [
+          { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+        ]),
+      ],
+      forecasts: [first, second],
+      attributions: new Map([
+        ['first', attribution()],
+        ['second', attribution()],
+      ]),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    }).dimensions.division[0]
+
+    expect(result.probabilityCoverageRate).toBe(0)
+    expect(result.probabilityBasis).not.toBe('monte_carlo')
+    expect(result.networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'pert_analytic',
+      p20RemainingDays: null,
+      p50RemainingDays: null,
+      p80RemainingDays: null,
+    }))
+    expect(result.degradationReasons).toContain('missing_probability_window')
+  })
+
   it('uses the same correlated Monte Carlo basis for a dependency-backed scoped network', () => {
     const rows = [
       row('a1', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-22' }),

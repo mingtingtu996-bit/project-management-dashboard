@@ -614,6 +614,27 @@ describe('durationSuggestionsApi governed duration outputs', () => {
     expect(forecast).not.toHaveProperty('conservativeRemainingDays')
   })
 
+  it('does not accept a delay risk index when the typed delay metric is unavailable', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      taskId: 'task-1',
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingDuration: productionMetric(6),
+      forecastDelay: productionMetric(null),
+      forecastDelayDays: 0,
+      delayRiskIndex: 0,
+    })
+
+    const forecast = await getTaskDurationForecast('task-1')
+
+    expect(forecast.forecastDelay).toEqual(expect.objectContaining({
+      value: null,
+      availability: 'unavailable',
+    }))
+    expect(forecast.forecastDelayDays).toBeNull()
+    expect(forecast.delayRiskIndex).toBeNull()
+  })
+
   it('does not expose naked recommended duration from remaining forecast responses', async () => {
     mocks.apiGet.mockResolvedValueOnce({
       task_id: 'task-1',

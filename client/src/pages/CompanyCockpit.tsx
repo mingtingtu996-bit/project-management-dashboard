@@ -13,6 +13,7 @@ import { useWorkspaceData } from '@/hooks/useWorkspaceData'
 import { toast } from '@/hooks/use-toast'
 import { apiDelete, apiGet, apiPut, getApiErrorMessage, isBackendUnavailableError } from '@/lib/apiClient'
 import { resolveCurrentCompanyRole } from '@/lib/companyRole'
+import { readAvailableDurationValue } from '@/lib/durationMetric'
 import { fetchProjectsFromApi, normalizeApiProject, type ProjectCatalogItem } from '@/lib/projectApi'
 import type { Issue, Risk } from '@/lib/supabase'
 import { DashboardApiService, type CompanySummaryResponse, type ProjectSummary } from '@/services/dashboardApi'
@@ -146,7 +147,7 @@ function buildProjectRow(project: ProjectCatalogItem, summary: ProjectSummary | 
     businessHealthScore: getBusinessHealthScore(summary),
     keyNodeLabel: buildKeyNodeLabel(summary),
     keyNodeAttentionCount: getKeyNodeAttentionCount(summary),
-    deliveryDaysRemaining: summary?.daysUntilPlannedEnd ?? null,
+    deliveryDaysRemaining: readAvailableDurationValue(summary?.futureDueWindow, 'calendar_day'),
   }
 }
 

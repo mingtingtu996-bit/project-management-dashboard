@@ -6,6 +6,7 @@ import {
   buildKeyNodeSummary,
   buildMilestoneKpiComparisons,
   buildMilestoneOverview,
+  buildProjectFutureDueWindow,
   buildProjectKpiComparisons,
   calculateBaselineDeviationRate,
   calculateDelayMetrics,
@@ -599,6 +600,27 @@ describe('buildProjectKpiComparisons', () => {
     expect(result.weekly.progress).toMatchObject({ previous: null, delta: null, status: 'insufficient_history' })
     expect(result.weekly.todos).toMatchObject({ previous: null, delta: null, status: 'insufficient_history' })
   })
+
+  it('does not turn an unavailable production-day deviation into a numeric KPI', () => {
+    const result = buildProjectKpiComparisons(
+      { progress: 35, deviation: null, risks: 2, todos: 4 } as any,
+      {
+        snapshot_date: '2026-04-01',
+        overall_progress: 31,
+        delay_days: 2,
+        active_risk_count: 5,
+        today_todo_count: 1,
+      },
+    )
+
+    expect(result.weekly.deviation).toEqual({
+      current: null,
+      previous: 2,
+      delta: null,
+      periodLabel: '较上周',
+      status: 'unavailable',
+    })
+  })
 })
 
 describe('buildMilestoneKpiComparisons', () => {
@@ -731,7 +753,7 @@ describe('projects summary query shape', () => {
 })
 
 describe('asOf-sensitive project summary metrics', () => {
-  it('calculates open-task delay days from the supplied asOf date', () => {
+  it('fails closed for project actual-overdue duration when calendar identity is unavailable', () => {
     const result = calculateDelayMetrics([
       {
         id: 'task-overdue',
@@ -742,8 +764,18 @@ describe('asOf-sensitive project summary metrics', () => {
 
     expect(result).toMatchObject({
       delayedTaskCount: 1,
-      delayDays: 8,
+      delayDays: null,
       delayCount: 1,
+      actualOverdue: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-04-18',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
     })
   })
 
@@ -760,7 +792,36 @@ describe('asOf-sensitive project summary metrics', () => {
       delayedTaskCount: 1,
       delayDays: 5,
       delayCount: 1,
+      actualOverdue: {
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'cn-work-calendar',
+        calendarVersion: '2026.02',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-03-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
     })
+  })
+
+  it('keeps project future-due windows on Gregorian calendar days regardless of construction shutdowns', () => {
+    const asOf = new Date('2026-02-10T16:30:00.000Z')
+
+    const withCalendar = buildProjectFutureDueWindow('2026-03-01', asOf, SHUTDOWN_CALENDAR)
+    const withoutCalendar = buildProjectFutureDueWindow('2026-03-01', asOf, null)
+
+    expect(withCalendar).toEqual({
+      value: 18,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-02-11',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    expect(withoutCalendar).toEqual(withCalendar)
   })
 
   it('keeps baseline deviation tied to the supplied asOf date', () => {

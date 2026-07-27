@@ -143,11 +143,11 @@ export type ProjectDailySnapshotMilestoneKpiRow = {
 }
 
 export type ProjectKpiComparisonMetric = {
-  current: number
+  current: number | null
   previous: number | null
   delta: number | null
   periodLabel: '较上周' | '较上月'
-  status: 'ready' | 'insufficient_history'
+  status: 'ready' | 'insufficient_history' | 'unavailable'
 }
 
 export type ProjectKpiComparisons = {
@@ -804,6 +804,8 @@ export interface ProjectExecutionSummary {
   statusLabel: string
   plannedStartDate: string | null
   plannedEndDate: string | null
+  futureDueWindow: DurationMetricDto
+  actualOverdue: DurationMetricDto
   daysUntilPlannedEnd: number | null
   totalTasks: number
   leafTaskCount: number
@@ -813,7 +815,7 @@ export interface ProjectExecutionSummary {
   delayedTaskCount: number
   overdueTaskCount: number
   laggedTaskCount: number
-  delayDays: number
+  delayDays: number | null
   delayCount: number
   overallProgress: number
   plannedProgress: number | null
@@ -845,7 +847,7 @@ export interface ProjectExecutionSummary {
   issuedConstructionDrawingCount: number
   reviewingConstructionDrawingCount: number
   attentionRequired: boolean
-  scheduleVarianceDays: number
+  scheduleVarianceDays: number | null
   activeDelayedTasks: number
   activeObstacles: number
   monthlyCloseStatus: MonthlyCloseStatus
@@ -1029,11 +1031,13 @@ export function calculateDelayMetrics(
   calendar?: ConstructionCalendarContext | null,
 ): {
   delayedTaskCount: number
-  delayDays: number
+  delayDays: number | null
   delayCount: number
+  actualOverdue: DurationMetricDto
 } {
+  const durationAsOf = businessDateKey(asOf, calendar?.timezone ?? DEFAULT_DURATION_TIMEZONE)
   let delayedTaskCount = 0
-  let delayDays = 0
+  let rawDelayDays = 0
   let delayCount = 0
 
   for (const task of tasks) {
@@ -1051,16 +1055,16 @@ export function calculateDelayMetrics(
       if (!Number.isNaN(actualEndDate.getTime()) && taskDelayDays > 0) {
         // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
         delayedTaskCount += 1
-        delayDays += taskDelayDays
+        rawDelayDays += taskDelayDays
       }
       continue
     }
 
-    const activeDelayDays = Math.max(0, delayDayDelta(plannedEnd, asOf, calendar) ?? 0)
+    const activeDelayDays = Math.max(0, delayDayDelta(plannedEnd, durationAsOf, calendar) ?? 0)
     if (!isCompletedTask(task) && activeDelayDays > 0) {
       // eslint-disable-next-line -- summary-service-aggregation-approved; ssot: service-owned-summary
       delayedTaskCount += 1
-      delayDays += activeDelayDays
+      rawDelayDays += activeDelayDays
     }
 
     delayCount += Number((task as any).delay_count ?? 0)
@@ -1070,7 +1074,31 @@ export function calculateDelayMetrics(
     delayCount = delayedTaskCount
   }
 
-  return { delayedTaskCount, delayDays, delayCount }
+  const actualOverdue = buildConstructionProductionDayDurationMetric(rawDelayDays, {
+    asOf: durationAsOf,
+    timezone: calendar?.timezone ?? DEFAULT_DURATION_TIMEZONE,
+    calendar,
+  })
+
+  return {
+    delayedTaskCount,
+    delayDays: actualOverdue.availability === 'available' ? actualOverdue.value : null,
+    delayCount,
+    actualOverdue,
+  }
+}
+
+export function buildProjectFutureDueWindow(
+  plannedEndDate: string | null | undefined,
+  asOf = new Date(),
+  calendar?: ConstructionCalendarContext | null,
+): DurationMetricDto {
+  const timezone = calendar?.timezone ?? DEFAULT_DURATION_TIMEZONE
+  const durationAsOf = businessDateKey(asOf, timezone)
+  return buildCalendarDayDurationMetric(
+    plannedEndDate ? signedDurationDayDelta(durationAsOf, plannedEndDate) : null,
+    { asOf: durationAsOf, timezone },
+  )
 }
 
 const getDelayMetrics = calculateDelayMetrics
@@ -1342,7 +1370,7 @@ async function loadPreviousMonthlyMilestoneKpiSnapshot(projectId: string, asOf =
 }
 
 export function buildProjectKpiComparisons(
-  current: { progress: number; deviation: number; risks: number; todos: number },
+  current: { progress: number; deviation: number | null; risks: number; todos: number },
   previous: ProjectDailySnapshotKpiRow | null,
 ): ProjectKpiComparisons {
   return {
@@ -1370,12 +1398,21 @@ export function buildMilestoneKpiComparisons(
 }
 
 function buildKpiComparisonMetric(
-  current: number,
+  current: number | null,
   previous: number | null,
   periodLabel: ProjectKpiComparisonMetric['periodLabel'] = '较上周',
 ): ProjectKpiComparisonMetric {
-  const normalizedCurrent = roundKpiNumber(current)
+  const normalizedCurrent = current === null ? null : roundKpiNumber(current)
   const normalizedPrevious = previous === null ? null : roundKpiNumber(previous)
+  if (normalizedCurrent === null) {
+    return {
+      current: null,
+      previous: normalizedPrevious,
+      delta: null,
+      periodLabel,
+      status: 'unavailable',
+    }
+  }
   return {
     current: normalizedCurrent,
     previous: normalizedPrevious,
@@ -1389,7 +1426,7 @@ async function buildWeeklyKpiComparisons(
   projectId: string,
   current: {
     progress: number
-    deviation: number
+    deviation: number | null
     risks: number
     todos: number
   },
@@ -2427,7 +2464,12 @@ async function calculateSummaryForProject(
     ? { todayTodoCount: 0 }
     : await buildAttentionSummary(project.id, project.company_id ?? null, null)
   const todayTodoCount = attentionSummary.todayTodoCount
-  const { delayedTaskCount, delayDays, delayCount } = getDelayMetrics(leafTasks, asOf, calendar)
+  const {
+    delayedTaskCount,
+    delayDays,
+    delayCount,
+    actualOverdue,
+  } = getDelayMetrics(leafTasks, asOf, calendar)
   const laggedTaskCount = leafTasks.filter((task) => getTaskLagLevel(task) !== null).length
   const planningGovernance = summarizePlanningGovernanceStates(governanceStates)
   const attentionRequired = health.score < 60 || milestoneOverview.stats.overdue > 0
@@ -2477,8 +2519,9 @@ async function calculateSummaryForProject(
   })
   const plannedStartDate = project.planned_start_date || project.start_date || null
   const plannedEndDate = project.planned_end_date || project.end_date || null
-  const daysUntilPlannedEnd = plannedEndDate
-    ? signedDurationDayDelta(asOf, plannedEndDate)
+  const futureDueWindow = buildProjectFutureDueWindow(plannedEndDate, asOf, calendar)
+  const daysUntilPlannedEnd = futureDueWindow.availability === 'available'
+    ? futureDueWindow.value
     : null
   const kpiComparisons = companyOverviewOnly || dashboardFastRead
     ? buildProjectKpiComparisons({
@@ -2501,6 +2544,8 @@ async function calculateSummaryForProject(
     statusLabel,
     plannedStartDate,
     plannedEndDate,
+    futureDueWindow,
+    actualOverdue,
     daysUntilPlannedEnd,
     totalTasks: tasks.length,
     leafTaskCount: leafTasks.length,

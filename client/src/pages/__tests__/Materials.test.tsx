@@ -433,6 +433,40 @@ describe('Materials page', () => {
     )
   })
 
+  it('does not present unavailable task delay evidence as low risk', async () => {
+    materialsApiMock.analyzeLinkedTaskDelayRisk.mockResolvedValueOnce({
+      task_id: 'task-1',
+      task_title: 'Facade frame installation',
+      progress_deviation: -0.1,
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingForecastDays: null,
+      obstacle_count: 1,
+      delay_probability: null,
+      delay_risk: 'unavailable',
+      risk_factors: ['construction_calendar_identity_missing'],
+      recommendations: ['complete construction calendar configuration'],
+    })
+
+    await renderPage(root)
+
+    await act(async () => {
+      click(container.querySelector('[data-testid="material-detail-trigger-material-1"]'))
+      await flush()
+      await flush()
+    })
+
+    await act(async () => {
+      click(document.body.querySelector('[data-testid="materials-arrival-suggestion-fetch"]'))
+      await flush()
+      await flush()
+    })
+
+    expect(document.body.textContent).toContain('执行风险评估：暂不可用')
+    expect(document.body.textContent).not.toContain('执行风险评估：低风险')
+    expect(document.body.textContent).toContain('2026-04-21')
+  })
+
   it('does not show naked recommended duration as material task reference days', async () => {
     materialsApiMock.getSystemArrivalSuggestion.mockResolvedValueOnce({
       id: 'estimate-1',

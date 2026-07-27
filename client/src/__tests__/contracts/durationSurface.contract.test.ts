@@ -383,6 +383,28 @@ describe('duration surface contract', () => {
     expect(ganttDialogsSource).not.toContain('elapsedLocalDaysSince')
   })
 
+  it('locks project summary delivery and overdue surfaces to typed duration facts', () => {
+    const dashboardApiSource = readSource('services/dashboardApi.ts')
+    const dashboardSource = readSource('pages/Dashboard.tsx')
+    const companyCockpitSource = readSource('pages/CompanyCockpit.tsx')
+    const companyCockpitUtilsSource = readSource('pages/CompanyCockpit/utils.ts')
+
+    expect(dashboardApiSource).toContain('normalizeDurationMetricDto')
+    expect(dashboardApiSource).toContain('futureDueWindow')
+    expect(dashboardApiSource).toContain('actualOverdue')
+    expect(dashboardSource).toContain('formatDurationMetric(summaryData?.futureDueWindow')
+    expect(companyCockpitSource).toContain("readAvailableDurationValue(summary?.futureDueWindow, 'calendar_day')")
+    expect(companyCockpitUtilsSource).toContain("readAvailableDurationValue(summary.futureDueWindow, 'calendar_day')")
+
+    for (const [file, source] of Object.entries({
+      'pages/Dashboard.tsx': dashboardSource,
+      'pages/CompanyCockpit.tsx': companyCockpitSource,
+      'pages/CompanyCockpit/utils.ts': companyCockpitUtilsSource,
+    })) {
+      expect(source, file).not.toContain('.daysUntilPlannedEnd')
+    }
+  })
+
   it('locks frontend lag and delay summaries to date-only shared helpers', () => {
     const taskBusinessStatusSource = readSource('lib/taskBusinessStatus.ts')
     const durationDaysSource = readSource('lib/durationDays.ts')
