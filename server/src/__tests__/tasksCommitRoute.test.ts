@@ -748,6 +748,40 @@ describe('tasks commit route', () => {
     expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
   })
 
+  it('rolls back rather than partially applying filtered recommendation dependency specs', async () => {
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'invalid-acceleration-dependency-spec')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'set_predecessors',
+          rowId: 'task-1',
+          predecessorTaskIds: ['task-2'],
+          predecessorDependencies: [{
+            dependencyType: 'SS',
+            lagDays: 1,
+            sourceType: 'target_end_compression',
+          }],
+        }],
+        clientContext: {
+          requestId: 'invalid-acceleration-dependency-spec',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_INVALID' })
+    expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
   it('preserves server-issued dependency provenance for recommendation-bound operations', async () => {
     const operations = [{
       type: 'set_predecessors',

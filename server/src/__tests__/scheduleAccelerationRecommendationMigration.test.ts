@@ -69,6 +69,27 @@ describe('schedule acceleration recommendation migration', () => {
     expect(sql).not.toContain('create policy task_commit_requests_runtime_policy on public.task_commit_requests for all')
   })
 
+  it('disables recommendation immutability before expiry backfill and restores it after hardening', () => {
+    const sql = normalizedSql('migrations', hardeningMigrationName)
+    const dropImmutableTrigger = sql.indexOf(
+      'drop trigger if exists schedule_acceleration_recommendations_immutable_trigger on public.schedule_acceleration_recommendations',
+    )
+    const backfillExpiry = sql.indexOf(
+      "update public.schedule_acceleration_recommendations set expires_at = issued_at + interval '30 minutes' where expires_at is null",
+    )
+    const validateExpiryConstraint = sql.indexOf(
+      'validate constraint schedule_acceleration_recommendations_expires_after_issued',
+    )
+    const restoreImmutableTrigger = sql.indexOf(
+      'create trigger schedule_acceleration_recommendations_immutable_trigger before update or delete on public.schedule_acceleration_recommendations',
+    )
+
+    expect(dropImmutableTrigger).toBeGreaterThanOrEqual(0)
+    expect(backfillExpiry).toBeGreaterThan(dropImmutableTrigger)
+    expect(validateExpiryConstraint).toBeGreaterThan(backfillExpiry)
+    expect(restoreImmutableTrigger).toBeGreaterThan(validateExpiryConstraint)
+  })
+
   it('keeps recommendation rows private and append-only for the runtime role', () => {
     const sql = normalizedSql('migrations', migrationName)
 

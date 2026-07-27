@@ -29,6 +29,9 @@ ALTER INDEX IF EXISTS public.idx_schedule_acceleration_recommendations_project_c
 ALTER TABLE public.schedule_acceleration_recommendations
   ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
+DROP TRIGGER IF EXISTS schedule_acceleration_recommendations_immutable_trigger
+  ON public.schedule_acceleration_recommendations;
+
 UPDATE public.schedule_acceleration_recommendations
    SET expires_at = issued_at + INTERVAL '30 minutes'
  WHERE expires_at IS NULL;
@@ -88,8 +91,6 @@ ALTER TABLE public.schedule_acceleration_recommendations
     REFERENCES public.users(id)
     ON UPDATE RESTRICT ON DELETE RESTRICT;
 
-DROP TRIGGER IF EXISTS schedule_acceleration_recommendations_immutable_trigger
-  ON public.schedule_acceleration_recommendations;
 CREATE TRIGGER schedule_acceleration_recommendations_immutable_trigger
 BEFORE UPDATE OR DELETE ON public.schedule_acceleration_recommendations
 FOR EACH ROW

@@ -461,13 +461,16 @@ export async function replaceTaskDependencies(
   const transactionClient = isDatabaseTransactionActive() ? await getClient() : null
   const validation = await validateTaskDependencies(taskId, dependencies, projectId, transactionClient)
   const client = transactionClient ?? await getClient()
+  const ownsTransaction = !transactionClient
   const hasExplicitUserWrites = validation.dependencies.some((dependency) => (
     isExplicitUserDependencySource(dependency.source_type)
   ))
   const preserveCurrentTaskFacts = options.preserveCurrentTaskFacts ?? !hasExplicitUserWrites
 
   try {
-    await client.query('BEGIN')
+    if (ownsTransaction) {
+      await client.query('BEGIN')
+    }
 
     const { rows: activeDependencies } = await client.query(
       `SELECT id, dependency_task_id, source_type
@@ -585,7 +588,9 @@ export async function replaceTaskDependencies(
       })
     }
 
-    await client.query('COMMIT')
+    if (ownsTransaction) {
+      await client.query('COMMIT')
+    }
     await registerDatabasePostCommitEffect('task_dependencies_replaced', async () => {
       clearCriticalPathCache(validation.projectId)
       clearProjectCriticalPathSnapshotCache(validation.projectId)
@@ -593,10 +598,14 @@ export async function replaceTaskDependencies(
     })
     return insertedRows
   } catch (error: any) {
-    await client.query('ROLLBACK').catch(() => {})
+    if (ownsTransaction) {
+      await client.query('ROLLBACK').catch(() => {})
+    }
     throw taskDependencyError('TASK_DEPENDENCY_WRITE_FAILED', `Failed to write task dependencies: ${error?.message ?? String(error)}`, 500)
   } finally {
-    client.release()
+    if (ownsTransaction) {
+      client.release()
+    }
   }
 }
 

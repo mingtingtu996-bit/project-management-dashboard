@@ -1139,10 +1139,21 @@ function readOperationDependencySpecs(
     const sourceType = preserveRecommendationSource
       ? String(record.sourceType ?? record.source_type ?? '').trim() || 'target_end_compression'
       : 'manual'
+    const rawDependencyType = String(record.dependencyType ?? record.dependency_type ?? 'FS').trim().toUpperCase()
+    const rawLagDays = Number(record.lagDays ?? record.lag_days ?? 0)
+    if (
+      preserveRecommendationSource
+      && (
+        !['FS', 'SS', 'FF', 'SF'].includes(rawDependencyType)
+        || !Number.isFinite(rawLagDays)
+      )
+    ) {
+      return null
+    }
     return {
       dependencyTaskId,
-      dependencyType: normalizeDependencyType(record.dependencyType ?? record.dependency_type),
-      lagDays: Number(record.lagDays ?? record.lag_days ?? 0) || 0,
+      dependencyType: normalizeDependencyType(rawDependencyType),
+      lagDays: rawLagDays || 0,
       sourceType,
       metadata: preserveRecommendationSource
         ? acceptedAccelerationDependencyMetadata(sourceType)
@@ -2763,6 +2774,12 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
           continue
         }
         const dependencySpecs = readOperationDependencySpecs(operation, Boolean(accelerationRecommendation))
+        const rawDependencySpecs = Array.isArray(operation.predecessorDependencies)
+          ? operation.predecessorDependencies
+          : []
+        if (accelerationRecommendation && rawDependencySpecs.length !== dependencySpecs.length) {
+          throw accelerationRecommendationOperationError(operationType, taskId, 'normalized_operation_empty')
+        }
         const dependencyWrites = dependencySpecs.length > 0
           ? dependencySpecs
             .map((dependency) => ({
