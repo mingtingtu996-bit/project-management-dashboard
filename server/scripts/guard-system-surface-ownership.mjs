@@ -325,7 +325,7 @@ function inferTableAssignment(table) {
   if (/^(algorithm|duration_context|duration_experience|duration_benchmarks|progress_asset|progress_knowledge|regional_climate|construction_dependency_replay|t2_|policy_template|acceptance_template_policy_auto_publish|certificate_template_policy_auto_publish)/.test(id)) {
     return assignment("学习治理环", "governance", "governed learning or policy table surface")
   }
-  if (/^(construction_organization_plan_network_runtime|duration_algorithm_accuracy|duration_forecast|duration_plan_network|duration_suggestion|task_duration_forecasts|project_climate|project_weather|weather|runtime_consumer)/.test(id)) {
+  if (/^(construction_organization_plan_network_runtime|duration_algorithm_accuracy|duration_forecast|duration_plan_network|duration_suggestion|task_duration_forecasts|project_climate|project_weather|weather|runtime_consumer|schedule_acceleration)/.test(id)) {
     return assignment("预测桥", "business_core", "forecast and runtime-consumer table surface")
   }
   if (/^(certificate|construction_drawing|drawing|material|project_materials|pre_milestone)/.test(id)) {

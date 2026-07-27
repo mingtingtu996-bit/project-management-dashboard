@@ -3322,14 +3322,16 @@
       "id": "331_schedule_acceleration_recommendations",
       "architectureUnit": "预测桥",
       "runtimeScope": "business_core",
-      "assignmentReason": "adds immutable schedule acceleration recommendation snapshots and exact same-project hash binding for atomic task commits"
+      "assignmentReason": "adds immutable schedule acceleration recommendation snapshots and exact same-project hash binding for atomic task commits",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
       "kind": "migration",
       "id": "332_schedule_acceleration_adoption_hardening",
       "architectureUnit": "预测桥",
       "runtimeScope": "business_core",
-      "assignmentReason": "hardens recommendation expiry, task-commit ledger immutability, and append-only adoption authority"
+      "assignmentReason": "hardens recommendation expiry, task-commit ledger immutability, and append-only adoption authority",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
       "kind": "migration",
@@ -6469,6 +6471,14 @@
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",
       "assignmentReason": "generated_by_v14232a_heuristic_requires_review_for_low_confidence_edges"
+    },
+    {
+      "kind": "service",
+      "id": "scheduleAccelerationRecommendationService",
+      "architectureUnit": "预测桥",
+      "runtimeScope": "business_core",
+      "assignmentReason": "persists immutable server-issued schedule acceleration recommendations and validates exact proposal identity before adoption",
+      "production_readiness_source": "docs/plans/v1.4.23.1-A体系收口台账与验收门禁矩阵.md#4.7.05-C-13"
     },
     {
       "kind": "service",

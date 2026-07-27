@@ -6955,6 +6955,7 @@ describe('v1.4.22.1 project wizard route side effects', () => {
       clientRowId: 'task-2',
     }))
     expect(proposal.rescheduleDraft.operations[0]).toEqual(expect.objectContaining({
+      rowId: 'task-2',
       clientRowId: 'task-2',
     }))
     expect(response.body.data.generation).not.toHaveProperty('projectManagerReviewPackage')

@@ -362,11 +362,13 @@ export type ScheduleAccelerationRescheduleDraft = {
     | {
         type: 'update_row'
         rowId: string
+        clientRowId?: string
         values: Record<string, unknown>
       }
     | {
         type: 'set_predecessors'
         rowId: string
+        clientRowId?: string
         predecessorTaskIds: string[]
         predecessorDependencies: Array<{
           dependencyTaskId: string
