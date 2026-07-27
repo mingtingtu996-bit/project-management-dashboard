@@ -77,7 +77,7 @@ export interface CriticalTaskSnapshot {
   title: string
   standardWorkCodes?: string[]
   /** @deprecated Use float. */
-  floatDays: number
+  floatDays: number | null
   float: DurationMetricDto
   /** @deprecated Use duration. */
   durationDays: number
@@ -87,7 +87,7 @@ export interface CriticalTaskSnapshot {
   latestStartOffsetDays?: number
   latestFinishOffsetDays?: number
   /** @deprecated Use freeFloat. */
-  freeFloatDays?: number
+  freeFloatDays?: number | null
   freeFloat: DurationMetricDto
   p50DurationDays?: number
   p80DurationDays?: number
@@ -109,10 +109,10 @@ export interface CriticalTaskNetworkSchedule {
   latestStartOffsetDays: number
   latestFinishOffsetDays: number
   /** @deprecated Use float. */
-  floatDays: number
+  floatDays: number | null
   float: DurationMetricDto
   /** @deprecated Use freeFloat. */
-  freeFloatDays: number
+  freeFloatDays: number | null
   freeFloat: DurationMetricDto
   /** @deprecated Use duration. */
   durationDays: number
@@ -327,7 +327,7 @@ export function evaluateCriticalPathRuleCandidateLiveLearningEvidence(
     ...snapshot.autoTaskIds,
     ...snapshot.displayTaskIds,
   ]).size
-  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays)).length
+  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays ?? Number.NaN)).length
   const criticalPathProjectionEvidencePresent = criticalTaskCount > 0 && projectedFloatTaskCount > 0
   const actualOutcomeEventRecorded = input.criticalPathOutcomeEventRecorded && snapshot.projectDurationDays > 0
   const hasAllLearningScopes = CRITICAL_PATH_RULE_LEARNING_SCOPE_ORDER.every((scope) => enabledLearningScopes.includes(scope))
@@ -833,7 +833,7 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
   const predictedDurationDays = Math.max(0, Math.round(snapshot.projectDurationDays))
   const durationErrorDays = Math.abs(actualSpan.actualDurationDays - predictedDurationDays)
   const outcomeToleranceDays = criticalPathOutcomeToleranceDays(predictedDurationDays)
-  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays)).length
+  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays ?? Number.NaN)).length
   const standardWorkCodesByTaskId = new Map(
     snapshot.tasks.map((task) => [task.taskId, task.standardWorkCodes ?? []]),
   )
@@ -1771,7 +1771,14 @@ function buildProjectionAnalysisFromSnapshot(
     earliestFinish.set(schedule.taskId, schedule.earliestFinishOffsetDays)
     latestStart.set(schedule.taskId, schedule.latestStartOffsetDays)
     latestFinish.set(schedule.taskId, schedule.latestFinishOffsetDays)
-    float.set(schedule.taskId, schedule.floatDays)
+    const floatDays = schedule.float.availability === 'available'
+      && schedule.float.unit === 'construction_production_day'
+      && schedule.float.value !== null
+      ? schedule.float.value
+      : null
+    if (floatDays !== null) {
+      float.set(schedule.taskId, floatDays)
+    }
   }
 
   return {
@@ -3305,16 +3312,20 @@ async function buildProjectCriticalPathSnapshotWithContext(
     .map((taskId): CriticalTaskNetworkSchedule | null => {
       const node = analysis.taskMap.get(taskId)
       if (!node) return null
+      const rawFloatDays = Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))
+      const rawFreeFloatDays = buildFreeFloatDays(taskId, analysis)
+      const float = productionDuration(rawFloatDays)
+      const freeFloat = productionDuration(rawFreeFloatDays)
       return {
         taskId,
         earliestStartOffsetDays: Math.max(0, Math.round(analysis.earliestStart.get(taskId) ?? 0)),
         earliestFinishOffsetDays: Math.max(0, Math.round(analysis.earliestFinish.get(taskId) ?? 0)),
         latestStartOffsetDays: Math.max(0, Math.round(analysis.latestStart.get(taskId) ?? 0)),
         latestFinishOffsetDays: Math.max(0, Math.round(analysis.latestFinish.get(taskId) ?? 0)),
-        floatDays: Math.max(0, Math.round(analysis.float.get(taskId) ?? 0)),
-        float: productionDuration(Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))),
-        freeFloatDays: buildFreeFloatDays(taskId, analysis),
-        freeFloat: productionDuration(buildFreeFloatDays(taskId, analysis)),
+        floatDays: float.value,
+        float,
+        freeFloatDays: freeFloat.value,
+        freeFloat,
         durationDays: node.duration,
         duration: productionDuration(node.duration),
         isAutoCritical: autoCriticalTaskIdSet.has(taskId),
@@ -3331,24 +3342,25 @@ async function buildProjectCriticalPathSnapshotWithContext(
       const schedule = networkScheduleByTaskId.get(taskId)
       const durationLearningPublicationKeys = learningPublicationKeysByTaskId.get(taskId) ?? []
       const standardWorkCodes = readCriticalPathTaskStableCodes(row)
-      const floatDays = analysis.float.get(taskId) ?? 0
+      const rawFloatDays = analysis.float.get(taskId) ?? 0
+      const float = schedule?.float ?? productionDuration(rawFloatDays)
       const durationDays = node?.duration ?? getTaskDurationDays(row, constructionCalendar)
-      const freeFloatDays = schedule?.freeFloatDays
+      const freeFloat = schedule?.freeFloat ?? productionDuration(buildFreeFloatDays(taskId, analysis))
       return {
         taskId,
         title: row.title || taskId,
         ...(standardWorkCodes.length > 0 ? { standardWorkCodes } : {}),
-        floatDays,
-        float: productionDuration(floatDays),
+        floatDays: float.value,
+        float,
         durationDays,
         duration: productionDuration(durationDays),
-        freeFloat: productionDuration(freeFloatDays),
+        freeFloatDays: freeFloat.value,
+        freeFloat,
         ...(schedule ? {
           earliestStartOffsetDays: schedule.earliestStartOffsetDays,
           earliestFinishOffsetDays: schedule.earliestFinishOffsetDays,
           latestStartOffsetDays: schedule.latestStartOffsetDays,
           latestFinishOffsetDays: schedule.latestFinishOffsetDays,
-          freeFloatDays: schedule.freeFloatDays,
         } : {}),
         ...(node?.p50DurationDays ? { p50DurationDays: node.p50DurationDays } : {}),
         ...(node?.p80DurationDays ? { p80DurationDays: node.p80DurationDays } : {}),

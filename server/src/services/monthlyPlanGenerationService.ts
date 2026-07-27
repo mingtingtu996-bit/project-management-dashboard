@@ -1544,11 +1544,11 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
     return new Map(items.map((item) => {
       const taskId = normalizeText(item.source_task_id)
       const task = taskId ? byTaskId.get(taskId) : null
-      const floatDays = task ? Number(task.floatDays ?? 0) : null
+      const floatDays = readAvailableProductionDuration(task?.float)
       return [getStableCandidateKey(item), {
         fresh_float_days: floatDays,
-        critical_float_tier: criticalFloatTier(floatDays),
         fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+        ...(floatDays === null ? {} : { critical_float_tier: criticalFloatTier(floatDays) }),
       }]
     }))
   } catch (error) {

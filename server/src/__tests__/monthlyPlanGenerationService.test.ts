@@ -1248,8 +1248,8 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
   it('uses fresh near-critical float tier in capacity allocation priority instead of metadata only', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       tasks: [
-        { taskId: 'pseudo-task', floatDays: 8, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Pseudo critical' },
-        { taskId: 'near-task', floatDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
+        { taskId: 'pseudo-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Pseudo critical' },
+        { taskId: 'near-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
       ],
       displayTaskIds: [],
       autoTaskIds: [],
@@ -1314,11 +1314,67 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     }))
   })
 
+  it('does not derive a critical tier from a legacy raw float when typed float is unavailable', async () => {
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      tasks: [{
+        taskId: 'unavailable-float-task',
+        floatDays: 0,
+        float: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        isAutoCritical: false,
+        isManualAttention: false,
+        isManualInserted: false,
+        durationDays: 21,
+        title: 'Unavailable float',
+      }],
+      displayTaskIds: [],
+      autoTaskIds: [],
+    })
+    mocks.forecastBatchTasks.mockResolvedValue([
+      { taskId: 'unavailable-float-task', remainingDurationDays: 21, forecastFinishDate: '2026-05-31', forecastDelayDays: 0, confidenceLevel: 'medium' },
+    ])
+
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'unavailable-float-item',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'unavailable-float-task',
+        title: 'Unavailable float',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        sort_order: 1,
+        is_critical: false,
+        generation_metadata: {
+          resource_class: 'civil_crew',
+          scope_keys: { building: 'A', floor: '1F', zone: 'east', workface: 'wf-1' },
+        },
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'unavailable-float-task')
+
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      fresh_float_days: null,
+      monthly_capacity_priority: 'new_work',
+    }))
+    expect(item?.generation_metadata.algorithm_context?.critical_float_tier).toBeUndefined()
+  })
+
   it('uses fresh pseudo-critical float tier over stale baseline critical flags when allocating capacity', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       tasks: [
-        { taskId: 'stale-critical-task', floatDays: 8, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Stale critical' },
-        { taskId: 'near-task', floatDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
+        { taskId: 'stale-critical-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Stale critical' },
+        { taskId: 'near-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
       ],
       displayTaskIds: [],
       autoTaskIds: [],
@@ -1553,9 +1609,9 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
   it('splits capacity pools by readiness state, scope, resource class, and fresh float tiers', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       tasks: [
-        { taskId: 'ready-task', floatDays: 0, isAutoCritical: true, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Ready critical' },
-        { taskId: 'conditional-task', floatDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Conditional near critical' },
-        { taskId: 'backup-task', floatDays: 8, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Backup pseudo critical' },
+        { taskId: 'ready-task', floatDays: 0, float: { value: 0, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: true, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Ready critical' },
+        { taskId: 'conditional-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Conditional near critical' },
+        { taskId: 'backup-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Backup pseudo critical' },
       ],
       displayTaskIds: ['ready-task'],
       autoTaskIds: ['ready-task'],

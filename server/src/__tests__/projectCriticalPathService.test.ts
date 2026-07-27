@@ -366,11 +366,15 @@ describe('project critical path service', () => {
       availability: 'unavailable',
     }))
     expect(snapshot.tasks[0]).toEqual(expect.objectContaining({
+      floatDays: null,
+      freeFloatDays: null,
       duration: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
     }))
     expect(snapshot.networkSchedule?.[0]).toEqual(expect.objectContaining({
+      floatDays: null,
+      freeFloatDays: null,
       duration: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
@@ -1230,6 +1234,16 @@ describe('project critical path service', () => {
   })
 
   it('projects live CPM criticality and float fields back to task rows after recalculation', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
+
     await recalculateProjectCriticalPath('project-1')
 
     expect(mocks.tables.tasks.find((row) => row.id === 'task-a')).toEqual(expect.objectContaining({
@@ -2544,6 +2558,15 @@ describe('project critical path service', () => {
   })
 
   it('persists task float projections from the same snapshot exposed by the API', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
     mocks.tables.tasks = [
       {
         id: 'task-before-wait',
