@@ -1276,6 +1276,27 @@ describe('project critical path service', () => {
     ])
   })
 
+  it('persists null raw float projection aliases when calendar identity is unavailable', async () => {
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-a')).toEqual(expect.objectContaining({
+      is_critical: false,
+      total_float_days: null,
+      free_float_days: null,
+    }))
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-b')).toEqual(expect.objectContaining({
+      is_critical: true,
+      total_float_days: null,
+      free_float_days: null,
+    }))
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-c')).toEqual(expect.objectContaining({
+      is_critical: false,
+      total_float_days: null,
+      free_float_days: null,
+    }))
+    expect(mocks.updates).toHaveLength(1)
+  })
+
   it('uses E2 remaining-duration forecasts for in-progress CPM task nodes', async () => {
     mocks.tables.tasks = [
       {

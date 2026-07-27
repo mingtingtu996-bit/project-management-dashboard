@@ -1682,15 +1682,20 @@ async function persistCriticalPathTaskProjection(projectId: string, analysis: CP
   if (analysis.taskMap.size === 0) return
   const updatedAt = new Date().toISOString()
   const projections = [...analysis.taskMap.keys()].map((taskId) => {
-    const totalFloatDays = Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))
-    const freeFloatDays = buildFreeFloatDays(taskId, analysis)
+    const rawTotalFloatDays = analysis.float.get(taskId)
+    const totalFloatDays = rawTotalFloatDays === undefined
+      ? null
+      : Math.max(0, Math.round(rawTotalFloatDays))
+    const freeFloatDays = totalFloatDays === null ? null : buildFreeFloatDays(taskId, analysis)
     const isCritical = criticalTaskIds.has(taskId)
     return {
       taskId,
       isCritical,
       totalFloatDays,
       freeFloatDays,
-      criticalityWeight: criticalityWeightFromFloat(isCritical, totalFloatDays, freeFloatDays),
+      criticalityWeight: totalFloatDays === null || freeFloatDays === null
+        ? (isCritical ? 1.35 : 1)
+        : criticalityWeightFromFloat(isCritical, totalFloatDays, freeFloatDays),
     }
   })
   if (projections.length === 0) return
