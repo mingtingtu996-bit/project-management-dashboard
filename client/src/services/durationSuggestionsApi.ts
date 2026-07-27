@@ -65,7 +65,13 @@ export interface TaskDurationForecast {
   remainingDuration: DurationMetricDto | null
   conservativeDurationDays: number | null
   forecastFinishDate: string | null
+  forecastDelay: DurationMetricDto | null
   forecastDelayDays: number | null
+  probabilityDurationMetrics: {
+    p20RemainingDuration: DurationMetricDto | null
+    p50RemainingDuration: DurationMetricDto | null
+    p80RemainingDuration: DurationMetricDto | null
+  } | null
   delayRiskIndex?: number | null
   confidenceLevel: DurationConfidenceLevel | null
   confidenceScore: number | null
@@ -101,6 +107,17 @@ export interface TaskDurationForecast {
 
 function normalizeTaskDurationForecast(raw: any): TaskDurationForecast {
   const remainingDuration = normalizeDurationMetricDto(raw?.remainingDuration)
+  const forecastDelay = normalizeDurationMetricDto(raw?.forecastDelay)
+  const rawProbabilityDurationMetrics = raw?.probabilityDurationMetrics
+  const probabilityDurationMetrics = rawProbabilityDurationMetrics
+    && typeof rawProbabilityDurationMetrics === 'object'
+    && !Array.isArray(rawProbabilityDurationMetrics)
+    ? {
+        p20RemainingDuration: normalizeDurationMetricDto(rawProbabilityDurationMetrics.p20RemainingDuration),
+        p50RemainingDuration: normalizeDurationMetricDto(rawProbabilityDurationMetrics.p50RemainingDuration),
+        p80RemainingDuration: normalizeDurationMetricDto(rawProbabilityDurationMetrics.p80RemainingDuration),
+      }
+    : null
   const remainingForecastDays = readAvailableDurationValue(remainingDuration, 'construction_production_day')
   const durationOutputCode = raw?.durationOutputCode ?? null
   const normalizedOutputCode = String(durationOutputCode ?? '').trim()
@@ -115,7 +132,9 @@ function normalizeTaskDurationForecast(raw: any): TaskDurationForecast {
     remainingDuration,
     conservativeDurationDays: semanticReferenceDays == null ? null : raw?.conservativeDurationDays ?? null,
     forecastFinishDate: raw?.forecastFinishDate ?? null,
-    forecastDelayDays: raw?.forecastDelayDays ?? null,
+    forecastDelay,
+    forecastDelayDays: readAvailableDurationValue(forecastDelay, 'construction_production_day'),
+    probabilityDurationMetrics,
     delayRiskIndex: raw?.delayRiskIndex ?? null,
     confidenceLevel: raw?.confidenceLevel ?? null,
     confidenceScore: raw?.confidenceScore ?? null,

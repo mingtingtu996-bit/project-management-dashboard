@@ -333,6 +333,7 @@ describe('taskDurationForecastService', () => {
       remainingDurationDays: null,
       remainingForecastDays: null,
       forecastFinishDate: null,
+      forecastDelayDays: null,
       confidenceLevel: 'unavailable',
       remainingDuration: {
         value: null,
@@ -343,6 +344,17 @@ describe('taskDurationForecastService', () => {
         asOf: '2026-05-18',
         availability: 'unavailable',
         unavailableReason: 'construction_calendar_identity_missing',
+      },
+      forecastDelay: {
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+      probabilityDurationMetrics: {
+        p20RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+        p50RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
+        p80RemainingDuration: expect.objectContaining({ value: null, availability: 'unavailable' }),
       },
     })
     expect(state.insertedForecasts).toEqual([
@@ -493,11 +505,53 @@ describe('taskDurationForecastService', () => {
         },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
+        forecastDelay: {
+          value: 2,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastDelayDays: 2,
         confidenceLevel: 'medium',
         confidenceScore: 68,
         forecastSource: 'task_remaining_forecast',
         businessReason: 'Runtime forecast from residual overlay.',
+        probabilityDurationMetrics: {
+          p20RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p50RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p80RemainingDuration: {
+            value: 9,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
       },
       observedAt: '2026-06-15T11:00:00.000Z',
       runtimeArtifactPublications: [
@@ -573,11 +627,53 @@ describe('taskDurationForecastService', () => {
         },
         conservativeRemainingDays: 9,
         forecastFinishDate: '2026-06-22',
+        forecastDelay: {
+          value: 2,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
         forecastDelayDays: 2,
         confidenceLevel: 'medium',
         confidenceScore: 68,
         forecastSource: 'task_remaining_forecast',
         businessReason: 'Runtime forecast from residual overlay.',
+        probabilityDurationMetrics: {
+          p20RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p50RemainingDuration: {
+            value: 6,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          p80RemainingDuration: {
+            value: 9,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-15',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
       },
       observedAt: '2026-06-15T11:00:00.000Z',
       runtimeArtifactPublications: [
@@ -4640,6 +4736,28 @@ describe('taskDurationForecastService', () => {
       p50RemainingDays: 10,
       p80RemainingDays: 16,
       source: 'duration_benchmarks',
+    }))
+    expect(forecast.probabilityDurationMetrics).toEqual({
+      p20RemainingDuration: expect.objectContaining({
+        value: 8,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+      p50RemainingDuration: expect.objectContaining({
+        value: 10,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+      p80RemainingDuration: expect.objectContaining({
+        value: 16,
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+    })
+    expect(forecast.forecastDelay).toEqual(expect.objectContaining({
+      value: forecast.forecastDelayDays,
+      unit: 'construction_production_day',
+      availability: 'available',
     }))
     expect(probabilityDuration.p80RemainingDays).toBeGreaterThan(forecast.remainingDurationDays ?? 0)
     expect(forecast.forecastSources?.forecastPaths).toMatchObject({

@@ -88,7 +88,26 @@ vi.mock('../services/projectCriticalPathService.js', () => ({
 }))
 
 vi.mock('../services/taskDurationForecastService.js', () => ({
-  forecastBatchTasks: mocks.forecastBatchTasks,
+  forecastBatchTasks: vi.fn(async (...args: any[]) => {
+    const forecasts = await (mocks.forecastBatchTasks as (...values: any[]) => Promise<any[]>)(...args)
+    return forecasts.map((forecast: any) => {
+      const availableMetric = (value: unknown) => ({
+        value: Number.isFinite(Number(value)) ? Number(value) : null,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-01',
+        availability: Number.isFinite(Number(value)) ? 'available' : 'unavailable',
+        unavailableReason: Number.isFinite(Number(value)) ? null : 'duration_value_missing',
+      })
+      return {
+        ...forecast,
+        remainingDuration: forecast.remainingDuration ?? availableMetric(forecast.remainingDurationDays),
+        forecastDelay: forecast.forecastDelay ?? availableMetric(forecast.forecastDelayDays),
+      }
+    })
+  }),
 }))
 
 vi.mock('../services/projectProductivityCompensationService.js', () => ({
@@ -815,6 +834,60 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
         target_progress_capacity_allocatable_target: 47,
       }),
     }))
+  })
+
+  it('does not use naked E2 values when typed production-day facts are unavailable', async () => {
+    const unavailableMetric = {
+      value: null,
+      unit: 'construction_production_day',
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-05-01',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+    mocks.forecastBatchTasks.mockResolvedValue([{
+      taskId: 'unavailable-task',
+      remainingDurationDays: 45,
+      remainingDuration: unavailableMetric,
+      forecastFinishDate: '2026-06-14',
+      forecastDelayDays: 14,
+      forecastDelay: unavailableMetric,
+      confidenceLevel: 'unavailable',
+    }])
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'baseline-item-unavailable',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'unavailable-task',
+        title: 'Unavailable forecast work',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-20',
+        target_progress: 100,
+        sort_order: 1,
+        is_critical: false,
+        is_milestone: false,
+        manual_override_fields: {},
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'unavailable-task')
+
+    expect(source.generationSummary).toMatchObject({
+      forecastDelayedCount: 0,
+      maxForecastDelayDays: 0,
+    })
+    expect(item?.target_progress).toBe(21)
+    expect(item?.target_progress).not.toBe(47)
+    expect(item?.generation_metadata?.algorithm_context?.e2_remaining_forecast_days).toBeNull()
+    expect(item?.generation_metadata?.algorithm_context?.e2_forecast_delay_days).toBeNull()
   })
 
   it('deducts construction calendar shutdown windows from monthly capacity workdays', async () => {

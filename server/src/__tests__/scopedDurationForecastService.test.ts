@@ -58,6 +58,16 @@ function forecast(
   confidenceLevel = 'high',
   confidenceScore = 90,
 ): TaskDurationForecast {
+  const durationMetric = (value: number | null) => ({
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-13',
+    availability: value === null ? 'unavailable' as const : 'available' as const,
+    unavailableReason: value === null ? 'duration_value_missing' : null,
+  })
   return {
     taskId,
     recommendedDurationDays: probability?.[1] ?? null,
@@ -74,6 +84,7 @@ function forecast(
       unavailableReason: probability ? null : 'duration_value_missing',
     },
     forecastFinishDate: finishDate,
+    forecastDelay: durationMetric(probability ? 0 : null),
     forecastDelayDays: 0,
     confidenceLevel,
     confidenceScore,
@@ -92,6 +103,11 @@ function forecast(
           confidenceBandWidthDays: probability[2] - probability[0],
         }
       : null,
+    probabilityDurationMetrics: {
+      p20RemainingDuration: durationMetric(probability?.[0] ?? null),
+      p50RemainingDuration: durationMetric(probability?.[1] ?? null),
+      p80RemainingDuration: durationMetric(probability?.[2] ?? null),
+    },
   }
 }
 

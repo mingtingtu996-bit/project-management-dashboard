@@ -481,6 +481,48 @@ describe('durationSuggestionsApi governed duration outputs', () => {
       remainingDurationDays: 99,
       forecastFinishDate: '2026-06-20',
       forecastDelayDays: 2,
+      forecastDelay: {
+        value: 2,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-15',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      probabilityDurationMetrics: {
+        p20RemainingDuration: {
+          value: 4,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        p50RemainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        p80RemainingDuration: {
+          value: 9,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
       confidenceLevel: 'medium',
       confidenceScore: 66,
     })
@@ -497,6 +539,13 @@ describe('durationSuggestionsApi governed duration outputs', () => {
         availability: 'available',
       }),
       forecastFinishDate: '2026-06-20',
+      forecastDelay: expect.objectContaining({ value: 2, availability: 'available' }),
+      forecastDelayDays: 2,
+      probabilityDurationMetrics: expect.objectContaining({
+        p20RemainingDuration: expect.objectContaining({ value: 4, availability: 'available' }),
+        p50RemainingDuration: expect.objectContaining({ value: 6, availability: 'available' }),
+        p80RemainingDuration: expect.objectContaining({ value: 9, availability: 'available' }),
+      }),
     })
     expect(forecast).not.toHaveProperty('recommendedDurationDays')
     expect(forecast).not.toHaveProperty('remainingDurationDays')

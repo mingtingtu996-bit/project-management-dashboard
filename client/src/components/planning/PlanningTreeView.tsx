@@ -2123,9 +2123,9 @@ export function PlanningTreeView({
   const renderDurationForecastSummary = (forecast?: TaskDurationForecast | null) => {
     if (!forecast) return null
     const remainingDays = readAvailableDurationValue(forecast.remainingDuration, 'construction_production_day')
-    const delayDays = Number(forecast.forecastDelayDays ?? 0)
+    const delayDays = readAvailableDurationValue(forecast.forecastDelay, 'construction_production_day')
     const hasRemaining = remainingDays !== null
-    const hasDelay = Number.isFinite(delayDays) && delayDays > 0
+    const hasDelay = delayDays !== null && delayDays > 0
     const toneClass = hasDelay
       ? 'border-amber-200 bg-amber-50 text-amber-800'
       : hasRemaining && remainingDays <= 0
@@ -2134,10 +2134,12 @@ export function PlanningTreeView({
     const primary = hasRemaining
       ? remainingDays <= 0
         ? '已完成'
-        : `预计还需 ${Math.ceil(remainingDays)} 天`
+        : `预计还需 ${Math.ceil(remainingDays)} 个生产日`
       : '待判断'
-    const secondary = hasDelay
-      ? `偏晚 ${Math.ceil(delayDays)} 天`
+    const secondary = delayDays === null
+      ? '生产日口径不可用'
+      : hasDelay
+        ? `偏晚 ${Math.ceil(delayDays)} 个生产日`
       : forecast.forecastFinishDate
         ? `预计 ${forecast.forecastFinishDate.slice(5)}`
         : '按当前事实'

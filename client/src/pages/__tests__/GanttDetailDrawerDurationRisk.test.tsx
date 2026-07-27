@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { GanttDetailDrawer } from '../GanttView/GanttDetailDrawer'
 import type { Task } from '../GanttViewTypes'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
+import { getTaskDurationForecast, type TaskDurationForecast } from '@/services/durationSuggestionsApi'
 
 vi.mock('@/services/durationSuggestionsApi', () => ({
   getTaskDurationForecast: vi.fn(async () => null),
@@ -88,6 +89,39 @@ function renderDrawer(task: Task, criticalSchedule?: CriticalTaskNetworkSchedule
 }
 
 describe('GanttDetailDrawer duration risk range', () => {
+  it('shows unavailable production-day delay without presenting it as no deviation', async () => {
+    const unavailableMetric = productionMetric(null, 'unavailable')
+    vi.mocked(getTaskDurationForecast).mockResolvedValueOnce({
+      taskId: 'task-unavailable-delay',
+      remainingForecastDays: null,
+      remainingDuration: unavailableMetric,
+      conservativeDurationDays: null,
+      forecastFinishDate: null,
+      forecastDelay: unavailableMetric,
+      forecastDelayDays: null,
+      probabilityDurationMetrics: {
+        p20RemainingDuration: unavailableMetric,
+        p50RemainingDuration: unavailableMetric,
+        p80RemainingDuration: unavailableMetric,
+      },
+      confidenceLevel: 'unavailable',
+      confidenceScore: 0,
+      forecastSource: 'unavailable',
+      businessReason: 'Construction calendar identity is unavailable.',
+    } satisfies TaskDurationForecast)
+
+    renderDrawer({
+      id: 'task-unavailable-delay',
+      project_id: 'project-1',
+      title: 'Unavailable delay task',
+      created_at: '2026-07-07T00:00:00.000Z',
+      updated_at: '2026-07-07T00:00:00.000Z',
+    })
+
+    expect(await screen.findAllByText('生产日口径不可用')).not.toHaveLength(0)
+    expect(screen.queryByText('无明显偏差')).not.toBeInTheDocument()
+  })
+
   it('presents generated duration uncertainty as a plain-language reserve from task read DTOs', () => {
     renderDrawer({
       id: 'task-1',

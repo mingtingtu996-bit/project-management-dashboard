@@ -114,7 +114,9 @@ export interface TaskDurationForecast {
   remainingDurationDays: number | null
   conservativeRemainingDays?: number | null
   forecastFinishDate: string | null
-  forecastDelayDays: number
+  forecastDelay: DurationMetricDto
+  /** @deprecated Use forecastDelay. Removed after the v1.5 compatibility window. */
+  forecastDelayDays: number | null
   delayRiskIndex?: number
   confidenceLevel: string
   confidenceScore: number
@@ -129,6 +131,13 @@ export interface TaskDurationForecast {
   businessFactorBadges?: BusinessFactorBadge[]
   forecastSources?: Record<string, unknown> | null
   probabilityDuration?: DurationProbabilityWindow | null
+  probabilityDurationMetrics: DurationProbabilityMetricWindow
+}
+
+export interface DurationProbabilityMetricWindow {
+  p20RemainingDuration: DurationMetricDto
+  p50RemainingDuration: DurationMetricDto
+  p80RemainingDuration: DurationMetricDto
 }
 
 export interface TaskDurationForecastRuntimeArtifactPublication {
@@ -658,7 +667,8 @@ type ForecastModelResult = {
   remainingDuration: DurationMetricDto
   conservativeRemainingDays: number | null
   forecastFinishDate: string | null
-  forecastDelayDays: number
+  forecastDelay: DurationMetricDto
+  forecastDelayDays: number | null
   delayRiskIndex: number
   confidenceLevel: string
   confidenceScore: number
@@ -668,6 +678,7 @@ type ForecastModelResult = {
   forecastSources: Record<string, unknown>
   calculationContext: Record<string, unknown>
   probabilityDuration: DurationProbabilityWindow | null
+  probabilityDurationMetrics: DurationProbabilityMetricWindow
 }
 
 const OPEN_OBSTACLE_STATUSES = ['pending', 'open', 'in_progress', '\u5f85\u5904\u7406', '\u5904\u7406\u4e2d']
@@ -803,6 +814,38 @@ const DEFAULT_STUCK_FINISHING_POLICIES: Record<ProgressCurveType, {
 type WorkCalendarHolidayWindow = ConstructionCalendarWindow & ResolvedAlgorithmSeedRecord<AlgorithmSeedRecordPayload>
 
 type WorkCalendarContext = ConstructionCalendarContext<WorkCalendarHolidayWindow>
+
+function buildProbabilityDurationMetrics(input: {
+  p20: number | null | undefined
+  p50: number | null | undefined
+  p80: number | null | undefined
+  asOf: string
+  calendar?: ConstructionCalendarContext | null
+}): DurationProbabilityMetricWindow {
+  const buildMetric = (value: number | null | undefined) => buildConstructionProductionDayDurationMetric(value, {
+    asOf: input.asOf,
+    calendar: input.calendar,
+  })
+  return {
+    p20RemainingDuration: buildMetric(input.p20),
+    p50RemainingDuration: buildMetric(input.p50),
+    p80RemainingDuration: buildMetric(input.p80),
+  }
+}
+
+function normalizeProbabilityDurationMetrics(
+  value: unknown,
+  asOf: string,
+): DurationProbabilityMetricWindow {
+  const record = normalizeForecastRecord(value) ?? {}
+  const normalize = (key: keyof DurationProbabilityMetricWindow) => normalizeDurationMetricDto(record[key])
+    ?? buildConstructionProductionDayDurationMetric(null, { asOf, calendar: null })
+  return {
+    p20RemainingDuration: normalize('p20RemainingDuration'),
+    p50RemainingDuration: normalize('p50RemainingDuration'),
+    p80RemainingDuration: normalize('p80RemainingDuration'),
+  }
+}
 
 function normalizeForecastOptions(options?: ForecastTaskDurationOptions): NormalizedForecastOptions {
   const rawTrigger = String(options?.triggerContext ?? '').trim() as ForecastTriggerContext
@@ -1908,6 +1951,15 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
       calendar: null,
     })
   const remainingDurationAvailable = remainingDuration.availability === 'available'
+  const forecastDelay = normalizeDurationMetricDto(metadata.forecastDelay)
+    ?? buildConstructionProductionDayDurationMetric(null, {
+      asOf: generatedAsOf,
+      calendar: null,
+    })
+  const probabilityDurationMetrics = normalizeProbabilityDurationMetrics(
+    metadata.probabilityDurationMetrics,
+    generatedAsOf,
+  )
 
   return withRemainingForecastOutputContract({
     taskId: normalizeId(forecast.task_id) ?? taskId,
@@ -1919,7 +1971,8 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     remainingDuration,
     conservativeRemainingDays: remainingDurationAvailable ? readNullableNumber(metadata.conservativeRemainingDays) : null,
     forecastFinishDate: remainingDurationAvailable ? normalizeDate(forecast.forecast_finish_date) : null,
-    forecastDelayDays: remainingDurationAvailable ? readNullableNumber(forecast.forecast_delay_days) ?? 0 : 0,
+    forecastDelay,
+    forecastDelayDays: forecastDelay.availability === 'available' ? forecastDelay.value : null,
     delayRiskIndex: readNullableNumber(forecast.delay_risk_index) ?? readNullableNumber(metadata.delayRiskIndex) ?? undefined,
     confidenceLevel: remainingDurationAvailable ? normalizeId(forecast.confidence_level) ?? 'medium' : 'unavailable',
     confidenceScore: remainingDurationAvailable ? readNullableNumber(forecast.confidence_score) ?? 50 : 0,
@@ -1934,6 +1987,7 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     businessFactorBadges: badges,
     forecastSources,
     probabilityDuration: normalizeProbabilityDurationWindow(metadata.probabilityDuration),
+    probabilityDurationMetrics,
   })
 }
 
@@ -5001,6 +5055,17 @@ async function buildRemainingForecastModel(params: {
       asOf: forecastAsOf,
       calendar: params.workCalendar,
     })
+    const forecastDelay = buildConstructionProductionDayDurationMetric(null, {
+      asOf: forecastAsOf,
+      calendar: params.workCalendar,
+    })
+    const probabilityDurationMetrics = buildProbabilityDurationMetrics({
+      p20: null,
+      p50: null,
+      p80: null,
+      asOf: forecastAsOf,
+      calendar: params.workCalendar,
+    })
     const unavailableReason = remainingDuration.unavailableReason ?? 'construction_calendar_identity_missing'
     const forecastSources = {
       candidates: [],
@@ -5024,7 +5089,8 @@ async function buildRemainingForecastModel(params: {
       remainingDuration,
       conservativeRemainingDays: null,
       forecastFinishDate: null,
-      forecastDelayDays: 0,
+      forecastDelay,
+      forecastDelayDays: null,
       delayRiskIndex: 0,
       confidenceLevel: 'unavailable',
       confidenceScore: 0,
@@ -5032,6 +5098,7 @@ async function buildRemainingForecastModel(params: {
       businessFactorBadges: [],
       topFactors: ['Construction calendar identity is unavailable; production-day forecast is not consumable.'],
       probabilityDuration: null,
+      probabilityDurationMetrics,
       forecastSources,
       calculationContext: {
         ...params.calculationContext,
@@ -5051,6 +5118,10 @@ async function buildRemainingForecastModel(params: {
   })) {
     const finish = actualEnd ?? plannedEnd ?? today
     const forecastDelayDays = delayProductionDaysAfter(plannedEnd, finish, params.workCalendar)
+    const forecastDelay = buildConstructionProductionDayDurationMetric(forecastDelayDays, {
+      asOf: forecastAsOf,
+      calendar: params.workCalendar,
+    })
     return {
       optimisticRemainingDays: 0,
       remainingDurationDays: 0,
@@ -5060,6 +5131,7 @@ async function buildRemainingForecastModel(params: {
       }),
       conservativeRemainingDays: 0,
       forecastFinishDate: finish.toISOString().slice(0, 10),
+      forecastDelay,
       forecastDelayDays,
       delayRiskIndex: forecastDelayDays > 0 ? clamp(forecastDelayDays / 14, 0, 1) : 0,
       confidenceLevel: params.referenceConfidenceLevel ?? 'high',
@@ -5068,6 +5140,13 @@ async function buildRemainingForecastModel(params: {
       businessFactorBadges: [],
       topFactors: ['任务已经完成，预测结果以实际完成日期为准。'],
       probabilityDuration: null,
+      probabilityDurationMetrics: buildProbabilityDurationMetrics({
+        p20: 0,
+        p50: 0,
+        p80: 0,
+        asOf: forecastAsOf,
+        calendar: params.workCalendar,
+      }),
       forecastSources: {
         candidates: [],
         completed: true,
@@ -5607,6 +5686,17 @@ async function buildRemainingForecastModel(params: {
 
   forecastSources.forecastPaths.optimistic.remainingDays = optimisticRemainingDays
   forecastSources.forecastPaths.conservative.remainingDays = conservativeRemainingDays
+  const forecastDelay = buildConstructionProductionDayDurationMetric(forecastDelayDays, {
+    asOf: forecastAsOf,
+    calendar: params.workCalendar,
+  })
+  const probabilityDurationMetrics = buildProbabilityDurationMetrics({
+    p20: probabilityDuration?.p20RemainingDays ?? optimisticRemainingDays,
+    p50: probabilityDuration?.p50RemainingDays ?? remainingDurationDays,
+    p80: probabilityDuration?.p80RemainingDays ?? conservativeRemainingDays,
+    asOf: forecastAsOf,
+    calendar: params.workCalendar,
+  })
 
   return {
     optimisticRemainingDays,
@@ -5617,6 +5707,7 @@ async function buildRemainingForecastModel(params: {
     }),
     conservativeRemainingDays,
     forecastFinishDate,
+    forecastDelay,
     forecastDelayDays,
     delayRiskIndex,
     confidenceLevel: forecastConfidenceLevel,
@@ -5626,6 +5717,7 @@ async function buildRemainingForecastModel(params: {
     businessFactorBadges,
     forecastSources,
     probabilityDuration,
+    probabilityDurationMetrics,
     calculationContext: {
       ...params.calculationContext,
       remaining_duration_forecast: forecastSources,
@@ -5807,6 +5899,8 @@ async function refreshTaskDurationForecast(
       durationOutputSemanticFieldName: durationOutputContract?.semanticFieldName ?? 'remainingForecastDays',
       executionReferenceDays,
       remainingDuration: forecastDates.remainingDuration,
+      forecastDelay: forecastDates.forecastDelay,
+      probabilityDurationMetrics: forecastDates.probabilityDurationMetrics,
       recommendedDurationDaysPolicy: 'new_task_reference_only_not_written_by_execution_forecast',
       optimisticRemainingDays: forecastDates.optimisticRemainingDays,
       conservativeRemainingDays: forecastDates.conservativeRemainingDays,
@@ -5871,7 +5965,9 @@ async function refreshTaskDurationForecast(
     remainingDuration: forecastDates.remainingDuration,
     conservativeRemainingDays: forecastDates.conservativeRemainingDays,
     probabilityDuration: forecastDates.probabilityDuration,
+    probabilityDurationMetrics: forecastDates.probabilityDurationMetrics,
     forecastFinishDate: forecastDates.forecastFinishDate,
+    forecastDelay: forecastDates.forecastDelay,
     forecastDelayDays: forecastDates.forecastDelayDays,
     delayRiskIndex: forecastDates.delayRiskIndex,
     confidenceLevel: forecastDates.confidenceLevel,

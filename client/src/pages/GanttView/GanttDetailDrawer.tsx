@@ -25,7 +25,7 @@ import {
 } from '@/services/durationSuggestionsApi'
 import { useDurationForecastRefreshKey } from '@/hooks/useDurationForecastRefreshKey'
 import { inclusiveDurationDays } from '@/lib/durationDays'
-import { formatDurationMetric } from '@/lib/durationMetric'
+import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 import type { Task, TaskCondition, TaskObstacle } from '../GanttViewTypes'
@@ -96,10 +96,16 @@ function formatForecastConfidence(value?: string | null) {
   return value || '-'
 }
 
-function formatForecastDelay(days?: number | null) {
-  const value = Number(days ?? 0)
-  if (!Number.isFinite(value) || value <= 0) return '无明显偏差'
-  return `较计划偏晚 ${Math.round(value)} 天`
+function formatForecastDelay(metric: TaskDurationForecast['forecastDelay']) {
+  const value = readAvailableDurationValue(metric, 'construction_production_day')
+  if (value === null) {
+    return formatDurationMetric(metric, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    })
+  }
+  if (value <= 0) return '无明显偏差'
+  return `较计划偏晚 ${Math.round(value)} 个生产日`
 }
 
 function getForecastBadgeClass(severity?: string | null) {
@@ -358,7 +364,7 @@ export function GanttDetailDrawer({
                   <DurationBasisBadge basis="remaining" compact variant="outline" className="bg-white/70" />
                   执行中剩余工期预测
                 </span>
-                <span>{formatForecastDelay(durationForecast.forecastDelayDays)}</span>
+                <span>{formatForecastDelay(durationForecast.forecastDelay)}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-blue-700">
                 <span>{formatDurationMetric(durationForecast.remainingDuration, {
