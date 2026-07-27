@@ -262,6 +262,13 @@ describe('canonical cause benchmark migration', () => {
     expect(sourceIndex).toBeGreaterThan(migration323Index)
     expect(migration325Index).toBeGreaterThan(sourceIndex)
     expect(standaloneBody).toBe(cleanMigration324Body)
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 325')
+    const bundledMigrationNumbers = Array.from(
+      clean.matchAll(/^-- Source: (\d+)_/gm),
+      (match) => Number(match[1]),
+    )
+    const latestBundledMigration = Math.max(...bundledMigrationNumbers)
+    expect(clean.split('\n', 1)[0]).toBe(
+      `-- CANONICAL: current clean bootstrap bundle, synchronized through migration ${latestBundledMigration}`,
+    )
   })
 })

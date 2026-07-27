@@ -326,6 +326,10 @@ describe('t2RhythmScheduleCandidateNetworkService', () => {
       },
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
+        availability: 'available',
+        calendarRef: 'cn-work-calendar',
+        calendarVersion: '2026.07',
+        timezone: 'Asia/Shanghai',
         windows: [],
       },
     })
@@ -396,6 +400,10 @@ describe('t2RhythmScheduleCandidateNetworkService', () => {
       },
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
+        availability: 'available',
+        calendarRef: 'cn-work-calendar',
+        calendarVersion: '2026.07',
+        timezone: 'Asia/Shanghai',
         windows: [],
       },
     })

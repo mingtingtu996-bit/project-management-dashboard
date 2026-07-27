@@ -22,6 +22,10 @@ const serverRoot = process.cwd().replace(/\\/g, '/').endsWith('/server') ? proce
 
 const SHUTDOWN_CALENDAR: ConstructionCalendarContext = {
   basis: 'official_construction_calendar_seed',
+  availability: 'available',
+  calendarRef: 'cn-work-calendar',
+  calendarVersion: '2026.02',
+  timezone: 'Asia/Shanghai',
   windows: [{
     holidayCode: 'spring-festival-shutdown',
     holidayName: 'Spring Festival shutdown',

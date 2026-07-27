@@ -57,6 +57,7 @@ vi.mock('../services/criticalPathHelpers.js', () => ({
 }))
 
 vi.mock('../services/constructionCalendar.js', () => ({
+  isAuthoritativeConstructionCalendar: vi.fn(() => false),
   resolveConstructionCalendarContext: vi.fn(async () => {
     if (state.calendarMode === 'pending') return new Promise(() => {})
     return {

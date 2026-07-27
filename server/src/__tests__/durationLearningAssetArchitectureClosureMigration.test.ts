@@ -123,7 +123,12 @@ describe('v1.4.23.1 learning asset architecture closure migration', () => {
     expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_experience_collection_queue')
     expect(rollback).toContain('DROP POLICY IF EXISTS project_productivity_calibration_backend_runtime')
     expect(rollback).toContain('CREATE POLICY project_productivity_calibration_write_service_role')
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 325')
+    const latestBundledMigration = Math.max(
+      ...Array.from(clean.matchAll(/^-- Source: (\d+)_/gm), (match) => Number(match[1])),
+    )
+    expect(clean.split('\n', 1)[0]).toBe(
+      `-- CANONICAL: current clean bootstrap bundle, synchronized through migration ${latestBundledMigration}`,
+    )
     expect(clean).toContain(sourceHeader)
     expect(bundledMigration).toBe(migration)
   })
