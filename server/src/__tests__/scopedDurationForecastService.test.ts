@@ -160,6 +160,78 @@ describe('scopedDurationForecastService', () => {
     })
   })
 
+  it('keeps target gap in Gregorian days while reporting delay in construction production days', () => {
+    const shutdownCalendar: ConstructionCalendarContext = {
+      ...calendar,
+      windows: [{
+        holidayCode: 'site_shutdown',
+        startDate: '2026-07-19',
+        endDate: '2026-07-21',
+        counts_as_construction_shutdown: true,
+      }],
+    }
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-cross-shutdown', { planned_end_date: '2026-07-18' })],
+      forecasts: [forecast('task-cross-shutdown', '2026-07-22', [5, 8, 12])],
+      attributions: new Map([['task-cross-shutdown', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: shutdownCalendar,
+    }).dimensions.division[0]
+
+    expect(result.targetGap).toMatchObject({
+      value: 4,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(result.delay).toMatchObject({
+      value: 1,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      availability: 'available',
+    })
+    expect(result.targetGapDays).toBe(4)
+    expect(result.delayDays).toBe(1)
+  })
+
+  it('keeps Gregorian target gap available but fails production-day delay closed without calendar identity', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-missing-calendar', { planned_end_date: '2026-07-18' })],
+      forecasts: [forecast('task-missing-calendar', '2026-07-22', [5, 8, 12])],
+      attributions: new Map([['task-missing-calendar', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    }).dimensions.division[0]
+
+    expect(result.targetGap).toMatchObject({
+      value: 4,
+      unit: 'calendar_day',
+      availability: 'available',
+    })
+    expect(result.delay).toMatchObject({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+    expect(result.targetGapDays).toBe(4)
+    expect(result.delayDays).toBeNull()
+  })
+
   it('uses the same correlated Monte Carlo basis for a dependency-backed scoped network', () => {
     const rows = [
       row('a1', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-22' }),

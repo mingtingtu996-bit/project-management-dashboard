@@ -10,13 +10,14 @@ import {
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
 import { orderDurationBand } from './durationEngineeringPlausibilityGuardrailService.js'
-import { delayDayDelta, normalizeDateOnlyText } from '../utils/durationDays.js'
+import { delayDayDelta, normalizeDateOnlyText, signedDurationDayDelta } from '../utils/durationDays.js'
 import { isCompletedTask } from '../utils/taskStatus.js'
 import {
   simulateDurationNetworkProbability,
   type DurationNetworkProbabilityResult,
 } from './durationNetworkMonteCarloService.js'
 import {
+  buildCalendarDayDurationMetric,
   buildConstructionProductionDayDurationMetric,
   type DurationMetricDto,
 } from './durationMetricService.js'
@@ -800,11 +801,16 @@ function buildGroupForecast(input: {
     rowById,
     calendar,
   } = input
-  const durationMetric = (value: number | null) => buildConstructionProductionDayDurationMetric(value, {
+  const productionDurationMetric = (value: number | null) => buildConstructionProductionDayDurationMetric(value, {
     asOf: asOfDate,
     timezone: calendar?.timezone,
     calendar,
   })
+  const calendarDurationMetric = (value: number | null) => buildCalendarDayDurationMetric(value, {
+    asOf: asOfDate,
+    timezone: calendar?.timezone,
+  })
+  const hasProductionCalendar = isAuthoritativeConstructionCalendar(calendar)
   const completedTasks = bucket.tasks.filter((task) => task.completed)
   const activeTasks = bucket.tasks.filter((task) => !task.completed)
   const targetFinishDate = latestDate(bucket.tasks.map((task) => {
@@ -832,9 +838,12 @@ function buildGroupForecast(input: {
     const completionFinishDate = actualFinishDate ?? latestDate(completedTasks.map((task) => {
       return normalizeDate(task.row.values.planned_end_date ?? task.row.values.end_date)
     }))
-    const targetGapDays = delayDayDelta(targetFinishDate, completionFinishDate, calendar)
-    const remainingDurationDays = completionFinishDate ? 0 : null
-    const delayDays = targetGapDays === null ? null : Math.max(0, targetGapDays)
+    const targetGapDays = signedDurationDayDelta(targetFinishDate, completionFinishDate)
+    const remainingDurationDays = completionFinishDate && hasProductionCalendar ? 0 : null
+    const productionDelayDays = hasProductionCalendar
+      ? delayDayDelta(targetFinishDate, completionFinishDate, calendar)
+      : null
+    const delayDays = productionDelayDays === null ? null : Math.max(0, productionDelayDays)
     return {
       id: bucket.id,
       dimension: bucket.dimension,
@@ -853,9 +862,9 @@ function buildGroupForecast(input: {
       p50FinishDate: completionFinishDate,
       p80FinishDate: completionFinishDate,
       expectedFinishDate: completionFinishDate,
-      remainingDuration: durationMetric(remainingDurationDays),
-      targetGap: durationMetric(targetGapDays),
-      delay: durationMetric(delayDays),
+      remainingDuration: productionDurationMetric(remainingDurationDays),
+      targetGap: calendarDurationMetric(targetGapDays),
+      delay: productionDurationMetric(delayDays),
       remainingDurationDays,
       targetGapDays,
       delayDays,
@@ -960,12 +969,19 @@ function buildGroupForecast(input: {
     ...input.globalDegradationReasons.filter((reason) => reason === 'task_dependencies_unavailable'),
   ])
   const confidence = governingConfidence(governingIds, forecastByTaskId)
-  const remainingDurationDays = productionDaysFromAsOf(asOfDate, ordered.p50, calendar)
-  const targetGapDays = delayDayDelta(targetFinishDate, ordered.p50, calendar)
-  const currentOverdueDays = bands.reduce<number | null>((maximum, band) => {
-    if (band.currentOverdueDays === null) return maximum
-    return maximum === null ? band.currentOverdueDays : Math.max(maximum, band.currentOverdueDays)
-  }, null)
+  const remainingDurationDays = hasProductionCalendar
+    ? productionDaysFromAsOf(asOfDate, ordered.p50, calendar)
+    : null
+  const targetGapDays = signedDurationDayDelta(targetFinishDate, ordered.p50)
+  const productionTargetDelayDays = hasProductionCalendar
+    ? delayDayDelta(targetFinishDate, ordered.p50, calendar)
+    : null
+  const currentOverdueDays = hasProductionCalendar
+    ? bands.reduce<number | null>((maximum, band) => {
+        if (band.currentOverdueDays === null) return maximum
+        return maximum === null ? band.currentOverdueDays : Math.max(maximum, band.currentOverdueDays)
+      }, null)
+    : null
   const degradationReasons = unique(reasons)
   const dataStatus: ScopedDurationForecastDataStatus = !ordered.p50
     ? 'insufficient_data'
@@ -975,9 +991,9 @@ function buildGroupForecast(input: {
       && degradationReasons.length === 0
       ? 'ready'
       : 'degraded'
-  const delayDays = targetGapDays === null
+  const delayDays = productionTargetDelayDays === null
     ? currentOverdueDays
-    : Math.max(0, targetGapDays)
+    : Math.max(0, productionTargetDelayDays)
 
   return {
     id: bucket.id,
@@ -997,9 +1013,9 @@ function buildGroupForecast(input: {
     p50FinishDate: ordered.p50,
     p80FinishDate: ordered.p80,
     expectedFinishDate: ordered.p50,
-    remainingDuration: durationMetric(remainingDurationDays),
-    targetGap: durationMetric(targetGapDays),
-    delay: durationMetric(delayDays),
+    remainingDuration: productionDurationMetric(remainingDurationDays),
+    targetGap: calendarDurationMetric(targetGapDays),
+    delay: productionDurationMetric(delayDays),
     remainingDurationDays,
     targetGapDays,
     delayDays,
@@ -1010,12 +1026,12 @@ function buildGroupForecast(input: {
     probabilityBasis: monteCarloApplied ? 'monte_carlo' : 'pert_analytic',
     networkProbability: {
       ...networkProbabilityResult,
-      p20RemainingDuration: durationMetric(networkProbabilityResult.p20DurationDays),
-      p50RemainingDuration: durationMetric(networkProbabilityResult.p50DurationDays),
-      p80RemainingDuration: durationMetric(networkProbabilityResult.p80DurationDays),
-      p20RemainingDays: networkProbabilityResult.p20DurationDays,
-      p50RemainingDays: networkProbabilityResult.p50DurationDays,
-      p80RemainingDays: networkProbabilityResult.p80DurationDays,
+      p20RemainingDuration: productionDurationMetric(networkProbabilityResult.p20DurationDays),
+      p50RemainingDuration: productionDurationMetric(networkProbabilityResult.p50DurationDays),
+      p80RemainingDuration: productionDurationMetric(networkProbabilityResult.p80DurationDays),
+      p20RemainingDays: hasProductionCalendar ? networkProbabilityResult.p20DurationDays : null,
+      p50RemainingDays: hasProductionCalendar ? networkProbabilityResult.p50DurationDays : null,
+      p80RemainingDays: hasProductionCalendar ? networkProbabilityResult.p80DurationDays : null,
       p20FinishDate: monteCarloBand?.p20 ?? analyticOrdered.p20,
       p50FinishDate: monteCarloBand?.p50 ?? analyticOrdered.p50,
       p80FinishDate: monteCarloBand?.p80 ?? analyticOrdered.p80,
