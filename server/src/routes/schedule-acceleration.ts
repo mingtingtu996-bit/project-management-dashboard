@@ -450,6 +450,25 @@ router.post(
       return res.status(400).json(response)
     }
 
+    const legacyAdoptionFields = [
+      'proposal',
+      'outcomeRef',
+      'outcome_ref',
+      'outcomeMetadata',
+      'outcome_metadata',
+    ]
+    if (legacyAdoptionFields.some((field) => Object.prototype.hasOwnProperty.call(req.body ?? {}, field))) {
+      const response: ApiResponse = {
+        success: false,
+        error: {
+          code: 'ACCELERATION_ADOPTION_LEGACY_PAYLOAD_REJECTED',
+          message: 'Adoption accepts only server-issued recommendation and task-commit identities.',
+        },
+        timestamp: new Date().toISOString(),
+      }
+      return res.status(400).json(response)
+    }
+
     const result = await recordScheduleAccelerationRecommendationAdoption({
       projectId,
       adoptedBy: normalizeText((req as any).user?.id) || null,

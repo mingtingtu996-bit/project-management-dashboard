@@ -510,7 +510,7 @@ describe('schedule acceleration route', () => {
     }))
   })
 
-  it('passes only server-issued recommendation identity and the real task commit request to adoption', async () => {
+  it('rejects legacy proposal and outcome fields before recording adoption', async () => {
     const response = await request(buildApp())
       .post('/api/projects/project-1/schedule-acceleration/recommendations/adopt')
       .send({
@@ -520,17 +520,9 @@ describe('schedule acceleration route', () => {
         outcomeMetadata: { operationCount: 3 },
       })
 
-    expect(response.status).toBe(200)
-    expect(mocks.recordScheduleAccelerationRecommendationAdoption).toHaveBeenCalledWith(expect.objectContaining({
-      projectId: 'project-1',
-      recommendationId: 'recommendation-1',
-      recommendationHash: 'sha256:proposal-1',
-      taskCommitRequestId: 'task-commit-request-1',
-    }))
-    const adoptionInput = mocks.recordScheduleAccelerationRecommendationAdoption.mock.calls.at(-1)?.[0]
-    expect(adoptionInput).not.toHaveProperty('proposal')
-    expect(adoptionInput).not.toHaveProperty('outcomeRef')
-    expect(adoptionInput).not.toHaveProperty('outcomeMetadata')
+    expect(response.status).toBe(400)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_ADOPTION_LEGACY_PAYLOAD_REJECTED' })
+    expect(mocks.recordScheduleAccelerationRecommendationAdoption).not.toHaveBeenCalled()
   })
 
   it('rejects recommendation adoption by read-only project members', async () => {

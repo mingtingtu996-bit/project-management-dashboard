@@ -112,6 +112,26 @@ describe('migration helper entrypoints', () => {
     }))
   })
 
+  it('exposes migration 332 through standalone, rollback, CLEAN, and domain registry entrypoints', () => {
+    const migrationName = '332_schedule_acceleration_adoption_hardening.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const registry = JSON.parse(readServerFile('src', 'registry', 'system-domain-registry.json')) as {
+      entries: Array<{ kind: string; id: string; architectureUnit: string; runtimeScope: string }>
+    }
+
+    expect(forward).toContain('task_commit_requests_immutable_evidence_trigger')
+    expect(rollback).toContain('DROP TRIGGER IF EXISTS task_commit_requests_immutable_evidence_trigger')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+    expect(registry.entries).toContainEqual(expect.objectContaining({
+      kind: 'migration',
+      id: '332_schedule_acceleration_adoption_hardening',
+      runtimeScope: 'business_core',
+    }))
+  })
+
   it('pins clean migration helpers to the canonical V4 bundle only', () => {
     const cleanRunner = readServerFile('run-clean-migration.mjs')
     const guidanceRunner = readServerFile('run-migration.js')

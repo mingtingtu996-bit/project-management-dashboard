@@ -651,6 +651,149 @@ describe('tasks commit route', () => {
     expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
   })
 
+  it('rolls back a recommendation-bound commit when a hashed task target no longer exists', async () => {
+    mocks.supabaseService.getTask.mockResolvedValueOnce(null)
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'missing-acceleration-target')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_row',
+          rowId: 'deleted-task-1',
+          values: { planned_end_date: '2026-06-18' },
+        }],
+        clientContext: {
+          requestId: 'missing-acceleration-target',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_TARGET_MISSING' })
+    expect(mocks.updateTaskInMainChain).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('rolls back when a recommendation-bound predecessor operation target no longer exists', async () => {
+    mocks.supabaseService.getTask.mockResolvedValueOnce(null)
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'missing-acceleration-dependency-target')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'set_predecessors',
+          rowId: 'deleted-task-1',
+          predecessorTaskIds: ['task-2'],
+          predecessorDependencies: [{
+            dependencyTaskId: 'task-2',
+            dependencyType: 'FS',
+            lagDays: 0,
+            sourceType: 'target_end_compression',
+          }],
+        }],
+        clientContext: {
+          requestId: 'missing-acceleration-dependency-target',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_TARGET_MISSING' })
+    expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('rolls back when a recommendation-bound update normalizes to an empty patch', async () => {
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'empty-acceleration-operation')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_row',
+          rowId: 'task-1',
+          values: { duration: 12 },
+        }],
+        clientContext: {
+          requestId: 'empty-acceleration-operation',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_INVALID' })
+    expect(mocks.updateTaskInMainChain).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('preserves server-issued dependency provenance for recommendation-bound operations', async () => {
+    const operations = [{
+      type: 'set_predecessors',
+      rowId: 'task-1',
+      predecessorTaskIds: ['task-2'],
+      predecessorDependencies: [{
+        dependencyTaskId: 'task-2',
+        dependencyType: 'SS',
+        lagDays: 1,
+        sourceType: 'target_end_compression',
+      }],
+    }]
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'acceleration-dependency-source')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations,
+        clientContext: {
+          requestId: 'acceleration-dependency-source',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.replaceTaskDependencies).toHaveBeenCalledWith('task-1', [{
+      dependencyTaskId: 'task-2',
+      dependencyType: 'SS',
+      lagDays: 1,
+      sourceType: 'target_end_compression',
+      metadata: expect.objectContaining({
+        source: 'target_end_compression',
+        learningSignal: 'accepted_schedule_acceleration_recommendation',
+      }),
+    }], {
+      projectId: PROJECT_ID,
+      preserveCurrentTaskFacts: false,
+    })
+  })
+
   it('replays an already completed commit without repeating writes, audit, or realtime effects', async () => {
     mocks.reserveTaskCommitRequest.mockResolvedValueOnce({
       kind: 'replay',

@@ -1108,7 +1108,18 @@ function manualDependencyCorrectionMetadata() {
   }
 }
 
-function readOperationDependencySpecs(operation: PlanningTableOperation) {
+function acceptedAccelerationDependencyMetadata(sourceType: string) {
+  return {
+    source: sourceType,
+    learningSignal: 'accepted_schedule_acceleration_recommendation',
+    recommendationPolicy: 'server_issued_hash_bound_task_commit',
+  }
+}
+
+function readOperationDependencySpecs(
+  operation: PlanningTableOperation,
+  preserveRecommendationSource = false,
+) {
   const raw = Array.isArray(operation.predecessorDependencies)
     ? operation.predecessorDependencies
     : []
@@ -1125,12 +1136,17 @@ function readOperationDependencySpecs(operation: PlanningTableOperation) {
       ?? '',
     ).trim()
     if (!dependencyTaskId) return null
+    const sourceType = preserveRecommendationSource
+      ? String(record.sourceType ?? record.source_type ?? '').trim() || 'target_end_compression'
+      : 'manual'
     return {
       dependencyTaskId,
       dependencyType: normalizeDependencyType(record.dependencyType ?? record.dependency_type),
       lagDays: Number(record.lagDays ?? record.lag_days ?? 0) || 0,
-      sourceType: 'manual',
-      metadata: manualDependencyCorrectionMetadata(),
+      sourceType,
+      metadata: preserveRecommendationSource
+        ? acceptedAccelerationDependencyMetadata(sourceType)
+        : manualDependencyCorrectionMetadata(),
     }
   }).filter((item): item is {
     dependencyTaskId: string
@@ -1139,6 +1155,20 @@ function readOperationDependencySpecs(operation: PlanningTableOperation) {
     sourceType: string
     metadata: ReturnType<typeof manualDependencyCorrectionMetadata>
   } => Boolean(item))
+}
+
+function accelerationRecommendationOperationError(
+  operationType: string,
+  rowId: string,
+  reason: 'target_missing' | 'normalized_operation_empty',
+) {
+  const code = reason === 'target_missing'
+    ? 'ACCELERATION_RECOMMENDATION_OPERATION_TARGET_MISSING'
+    : 'ACCELERATION_RECOMMENDATION_OPERATION_INVALID'
+  return Object.assign(
+    new Error(`The issued ${operationType} operation cannot be applied to task ${rowId || '<missing>'}.`),
+    { code, statusCode: 409 },
+  )
 }
 
 function mapGeneratedDependencySourceType(source: GeneratedTemplateDependency['source'] | string | null | undefined) {
@@ -2609,11 +2639,26 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
 
       if (operationType === 'update_row') {
         const taskId = resolveCommitRowId(readOperationRowId(operation))
-        if (!taskId) continue
+        if (!taskId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
         const current = await loadCommitTask(taskId)
-        if (!current || String(current.project_id) !== projectId) continue
+        if (!current || String(current.project_id) !== projectId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
         const patch = normalizePlanningFieldPatch(readOperationValues(operation))
-        if (Object.keys(patch).length === 0) continue
+        if (Object.keys(patch).length === 0) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'normalized_operation_empty')
+          }
+          continue
+        }
         const result = await updateTaskInMainChain(taskId, { ...patch, updated_by: actorId } as Partial<Task>, current.version ?? undefined)
         rememberCommitTask(result?.task)
         markChanged(taskId, Object.keys(patch))
@@ -2704,10 +2749,20 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
 
       if (operationType === 'set_predecessors') {
         const taskId = resolveCommitRowId(readOperationRowId(operation))
-        if (!taskId) continue
+        if (!taskId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
         const current = await loadCommitTask(taskId)
-        if (!current || String(current.project_id) !== projectId) continue
-        const dependencySpecs = readOperationDependencySpecs(operation)
+        if (!current || String(current.project_id) !== projectId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
+        const dependencySpecs = readOperationDependencySpecs(operation, Boolean(accelerationRecommendation))
         const dependencyWrites = dependencySpecs.length > 0
           ? dependencySpecs
             .map((dependency) => ({
@@ -2722,8 +2777,10 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
               dependencyTaskId,
               dependencyType: 'FS' as const,
               lagDays: 0,
-              sourceType: 'manual',
-              metadata: manualDependencyCorrectionMetadata(),
+              sourceType: accelerationRecommendation ? 'target_end_compression' : 'manual',
+              metadata: accelerationRecommendation
+                ? acceptedAccelerationDependencyMetadata('target_end_compression')
+                : manualDependencyCorrectionMetadata(),
             }))
         await replaceTaskDependencies(taskId, dependencyWrites, {
           projectId,

@@ -251,6 +251,7 @@ export interface NormalizedTaskDependencyWrite {
 
 export const TASK_DEPENDENCY_SOURCE_PRIORITY = {
   manual: 100,
+  target_end_compression: 95,
   current_task_fact: 90,
   template_internal_flow: 60,
   template_cross_item_workflow: 55,

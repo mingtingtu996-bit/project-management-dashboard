@@ -468,16 +468,19 @@ function readNestedRecord(record: Record<string, unknown> | null | undefined, ..
     : null
 }
 
-export function buildScheduleAccelerationRecommendationKey(proposal?: Partial<ScheduleAccelerationProposal> | null) {
-  const targetEndDate = normalizeDate(proposal?.targetEndDate) ?? 'no-target'
-  const naturalEndDate = normalizeDate(proposal?.naturalEndDate) ?? 'no-natural'
-  const totalRecoverDays = readOptionalNumber(proposal?.totalRecoverDays)
-  return [
-    'schedule_acceleration',
-    targetEndDate,
-    naturalEndDate,
-    totalRecoverDays !== null ? String(Math.max(0, Math.round(totalRecoverDays))) : 'no-recover',
-  ].join(':')
+export function buildScheduleAccelerationRecommendationKey(input: {
+  recommendationId?: string | null
+  taskCommitRequestId?: string | null
+}) {
+  const recommendationId = normalizeText(input.recommendationId)
+  const taskCommitRequestId = normalizeText(input.taskCommitRequestId)
+  if (!recommendationId || !taskCommitRequestId) {
+    throw Object.assign(new Error('Recommendation and task commit identities are required.'), {
+      code: 'ACCELERATION_ADOPTION_IDENTITY_REQUIRED',
+      statusCode: 400,
+    })
+  }
+  return ['schedule_acceleration', recommendationId, taskCommitRequestId].join(':')
 }
 
 function isUniqueRecommendationActionConflict(error: unknown) {
@@ -902,6 +905,13 @@ async function persistScheduleAccelerationRecommendationAdoption(
     projectId: string
     adoptedBy: string
     adoptedAt: string
+    recommendationId: string
+    recommendationHash: string
+    operationsHash: string
+    taskCommitLedgerId: string
+    taskCommitRequestId: string
+    taskCommitCompletedAt: string | null
+    taskCommitResultSummary: Record<string, unknown>
     proposal: ScheduleAccelerationProposal
     outcomeRef: string
     outcomeMetadata: Record<string, unknown>
@@ -914,7 +924,10 @@ async function persistScheduleAccelerationRecommendationAdoption(
   }
   const adoptedBy = normalizeText(input.adoptedBy) || null
   const adoptedAt = normalizeText(input.adoptedAt) || new Date().toISOString()
-  const recommendationKey = buildScheduleAccelerationRecommendationKey(input.proposal)
+  const recommendationKey = buildScheduleAccelerationRecommendationKey({
+    recommendationId: input.recommendationId,
+    taskCommitRequestId: input.taskCommitRequestId,
+  })
   const proposal = input.proposal
   const targetEndDate = normalizeDate(proposal.targetEndDate)
   const naturalEndDate = normalizeDate(proposal.naturalEndDate)
@@ -924,10 +937,17 @@ async function persistScheduleAccelerationRecommendationAdoption(
     proposal,
     source: 'target_acceleration_review_panel',
     policy: 'user_adoption_required_for_acceleration_backtest',
+    recommendationId: input.recommendationId,
+    recommendationHash: input.recommendationHash,
+    operationsHash: input.operationsHash,
+    taskCommitLedgerId: input.taskCommitLedgerId,
+    taskCommitRequestId: input.taskCommitRequestId,
+    taskCommitCompletedAt: input.taskCommitCompletedAt,
+    taskCommitResultSummary: input.taskCommitResultSummary,
   }
 
-  const existingActions = await executeSQL<{ id?: string | null }>(
-    `SELECT id
+  const existingActions = await executeSQL<{ id?: string | null; adopted_at?: string | null }>(
+    `SELECT id, adopted_at
        FROM recommendation_actions
       WHERE project_id = ?
         AND recommendation_kind = ?
@@ -937,6 +957,15 @@ async function persistScheduleAccelerationRecommendationAdoption(
     [projectId, 'schedule_acceleration', recommendationKey, 'adopted'],
   )
   const existingActionId = normalizeText(existingActions[0]?.id)
+  if (existingActionId) {
+    return {
+      adopted: true,
+      recommendationKey,
+      adoptedAt: normalizeText(existingActions[0]?.adopted_at) || adoptedAt,
+      constructionOrganizationRecommendationDecision: null,
+      constructionOrganizationSavedOutcome: null,
+    }
+  }
 
   const updateParams = [
     targetEndDate,
@@ -948,22 +977,8 @@ async function persistScheduleAccelerationRecommendationAdoption(
     actionContext,
   ]
 
-  if (existingActionId) {
+  try {
     await executeSQL(
-      `UPDATE recommendation_actions
-          SET target_end_date = ?,
-              natural_end_date = ?,
-              total_recover_days = ?,
-              acceleration_target_days = ?,
-              adopted_at = ?,
-              adopted_by = ?,
-              action_context = ?
-        WHERE id = ?`,
-      [...updateParams, existingActionId],
-    )
-  } else {
-    try {
-      await executeSQL(
         `INSERT INTO recommendation_actions (
             project_id,
             recommendation_kind,
@@ -987,32 +1002,17 @@ async function persistScheduleAccelerationRecommendationAdoption(
           ...updateParams,
           adoptedAt,
         ],
-      )
-    } catch (error) {
-      if (!isUniqueRecommendationActionConflict(error)) {
-        throw error
-      }
-      await executeSQL(
-        `UPDATE recommendation_actions
-            SET target_end_date = ?,
-                natural_end_date = ?,
-                total_recover_days = ?,
-                acceleration_target_days = ?,
-                adopted_at = ?,
-                adopted_by = ?,
-                action_context = ?
-          WHERE project_id = ?
-            AND recommendation_kind = ?
-            AND recommendation_key = ?
-            AND action_type = ?`,
-        [
-          ...updateParams,
-          projectId,
-          'schedule_acceleration',
-          recommendationKey,
-          'adopted',
-        ],
-      )
+    )
+  } catch (error) {
+    if (!isUniqueRecommendationActionConflict(error)) {
+      throw error
+    }
+    return {
+      adopted: true,
+      recommendationKey,
+      adoptedAt,
+      constructionOrganizationRecommendationDecision: null,
+      constructionOrganizationSavedOutcome: null,
     }
   }
 
@@ -1086,6 +1086,13 @@ export async function recordScheduleAccelerationRecommendationAdoption(
       projectId,
       adoptedBy,
       adoptedAt,
+      recommendationId: authority.recommendationId,
+      recommendationHash: authority.recommendationHash,
+      operationsHash: authority.operationsHash,
+      taskCommitLedgerId: authority.taskCommitLedgerId,
+      taskCommitRequestId: authority.taskCommitRequestId,
+      taskCommitCompletedAt: authority.taskCommitCompletedAt,
+      taskCommitResultSummary: authority.taskCommitResultSummary,
       proposal: authority.proposal,
       outcomeRef,
       outcomeMetadata,

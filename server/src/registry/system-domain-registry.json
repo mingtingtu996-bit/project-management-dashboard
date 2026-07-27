@@ -3326,6 +3326,13 @@
     },
     {
       "kind": "migration",
+      "id": "332_schedule_acceleration_adoption_hardening",
+      "architectureUnit": "预测桥",
+      "runtimeScope": "business_core",
+      "assignmentReason": "hardens recommendation expiry, task-commit ledger immutability, and append-only adoption authority"
+    },
+    {
+      "kind": "migration",
       "id": "CLEAN_MIGRATION",
       "architectureUnit": "底座：平台运行观测",
       "runtimeScope": "platform_foundation",

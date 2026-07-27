@@ -68,6 +68,7 @@ const {
   buildRuntimeScheduleAccelerationRows,
   buildRuntimeScheduleAccelerationRowsWithDiagnostics,
   buildRuntimeProjectRemainingDurationForecast,
+  buildScheduleAccelerationRecommendationKey,
   clearProjectRemainingForecastRuntimeCacheForTest,
   evaluateRuntimeScheduleAcceleration,
   recordScheduleAccelerationRecommendationAdoption,
@@ -1623,7 +1624,7 @@ describe('scheduleAccelerationRuntimeService', () => {
 
     expect(result).toEqual(expect.objectContaining({
       adopted: true,
-      recommendationKey: 'schedule_acceleration:2027-03-31:2027-04-30:12',
+      recommendationKey: 'schedule_acceleration:recommendation-1:task-commit-request-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
     }))
 
@@ -1640,7 +1641,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       params: [
         'project-1',
         'schedule_acceleration',
-        'schedule_acceleration:2027-03-31:2027-04-30:12',
+        'schedule_acceleration:recommendation-1:task-commit-request-1',
         'adopted',
       ],
     }))
@@ -1653,7 +1654,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(mutation?.params).toEqual(expect.arrayContaining([
       'project-1',
       'schedule_acceleration',
-      'schedule_acceleration:2027-03-31:2027-04-30:12',
+      'schedule_acceleration:recommendation-1:task-commit-request-1',
       'adopted',
       '2027-03-31',
       '2027-04-30',
@@ -2884,6 +2885,73 @@ describe('scheduleAccelerationRuntimeService', () => {
     })
 
     expect(mocks.executeSQL).not.toHaveBeenCalled()
+  })
+
+  it('keys adoption evidence by immutable recommendation and task-commit identity', () => {
+    const first = buildScheduleAccelerationRecommendationKey({
+      recommendationId: 'recommendation-1',
+      taskCommitRequestId: 'task-commit-1',
+    } as any)
+    const second = buildScheduleAccelerationRecommendationKey({
+      recommendationId: 'recommendation-2',
+      taskCommitRequestId: 'task-commit-2',
+    } as any)
+
+    expect(first).toBe('schedule_acceleration:recommendation-1:task-commit-1')
+    expect(second).toBe('schedule_acceleration:recommendation-2:task-commit-2')
+    expect(second).not.toBe(first)
+  })
+
+  it('persists authoritative recommendation and commit binding in append-only adoption context', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mocks.executeSQL.mockResolvedValue([])
+
+    await recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:20:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })
+
+    const actionInsert = mocks.executeSQL.mock.calls
+      .map(([sql, params]) => ({ sql: String(sql), params: params as unknown[] }))
+      .find((call) => call.sql.includes('INSERT INTO recommendation_actions'))
+    expect(actionInsert?.params[2]).toBe('schedule_acceleration:recommendation-1:task-commit-request-1')
+    expect(actionInsert?.params[10]).toEqual(expect.objectContaining({
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      operationsHash: authority.operationsHash,
+      taskCommitLedgerId: 'commit-ledger-1',
+      taskCommitRequestId: 'task-commit-request-1',
+    }))
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => String(sql).includes('UPDATE recommendation_actions'))).toBe(false)
+  })
+
+  it('treats a repeated immutable adoption identity as a read-only replay', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mocks.executeSQL.mockResolvedValueOnce([{
+      id: 'existing-action-1',
+      adopted_at: '2027-02-15T00:20:00.000Z',
+    }])
+
+    const result = await recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:25:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      adopted: true,
+      recommendationKey: 'schedule_acceleration:recommendation-1:task-commit-request-1',
+      adoptedAt: '2027-02-15T00:20:00.000Z',
+    }))
+    expect(mocks.executeSQL).toHaveBeenCalledTimes(1)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => /INSERT|UPDATE/i.test(String(sql)))).toBe(false)
   })
 
   it.each([
