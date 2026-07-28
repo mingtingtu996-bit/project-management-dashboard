@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 type Row = Record<string, any>
-type Filter = { type: 'eq' | 'not'; column: string; value: unknown }
+type Filter = { type: 'eq' | 'not' | 'in'; column: string; value: unknown }
 
 function productionSample(row: Row): Row {
   return {
     ...row,
+    sample_strength: row.sample_strength ?? 'strong',
     duration_day_basis: 'construction_production_day',
     actual_duration_production_days: row.actual_duration ?? null,
     planned_duration_production_days: row.planned_duration ?? null,
@@ -20,6 +21,10 @@ const mocks = vi.hoisted(() => {
   function applyFilters(rows: Row[], filters: Filter[]) {
     return filters.reduce((result, filter) => {
       if (filter.type === 'eq') return result.filter((row) => row[filter.column] === filter.value)
+      if (filter.type === 'in' && Array.isArray(filter.value)) {
+        const values = filter.value
+        return result.filter((row) => values.includes(row[filter.column]))
+      }
       if (filter.type === 'not' && filter.column === 'actual_duration' && filter.value === null) {
         return result.filter((row) => row.actual_duration != null)
       }
@@ -50,6 +55,10 @@ const mocks = vi.hoisted(() => {
       }),
       not: vi.fn((column: string, _operator: string, value: unknown) => {
         filters.push({ type: 'not', column, value })
+        return builder
+      }),
+      in: vi.fn((column: string, values: unknown[]) => {
+        if (column !== 'sample_strength') filters.push({ type: 'in', column, value: values })
         return builder
       }),
       order: vi.fn((column: string, options: { ascending: boolean }) => {
@@ -167,6 +176,49 @@ describe('durationContextSampleReadModelService', () => {
     expect(builder.not).toHaveBeenCalledWith('actual_duration', 'is', null)
     expect(builder.order).toHaveBeenCalledWith('completed_at', { ascending: false })
     expect(builder.limit).toHaveBeenCalledWith(80)
+  })
+
+  it('rejects weak and unusable samples even when legacy rows claim benchmark inclusion', async () => {
+    mocks.state.durationExperienceSamples = [
+      productionSample({
+        id: 'strong',
+        project_id: 'project-a',
+        actual_duration: 8,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        sample_strength: 'strong',
+      }),
+      productionSample({
+        id: 'medium',
+        project_id: 'project-a',
+        actual_duration: 9,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        sample_strength: 'medium',
+      }),
+      productionSample({
+        id: 'weak',
+        project_id: 'project-a',
+        actual_duration: 10,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        sample_strength: 'weak',
+      }),
+      productionSample({
+        id: 'unusable',
+        project_id: 'project-a',
+        actual_duration: 11,
+        sample_status: 'active',
+        included_in_benchmark: true,
+        sample_strength: 'unusable',
+      }),
+    ]
+
+    const rows = await loadProjectBaselineCalibrationDurationExperienceSamples('project-a')
+
+    expect(rows.map((row) => row.id)).toEqual(['strong', 'medium'])
+    const builder = mocks.from.mock.results[0]?.value
+    expect(builder.in).toHaveBeenCalledWith('sample_strength', ['strong', 'medium'])
   })
 
   it('loads PM recovery eligibility samples with the governed filters and 30-row cap', async () => {
@@ -294,6 +346,7 @@ describe('durationContextSampleReadModelService', () => {
       reuse_scope: 'project',
       fact_source: 'actual_outcome',
       evidence_fingerprint: 'sha256:sample-a',
+      sample_strength: 'strong',
       source_lineage: { sourceType: 'task_actual_dates' },
       duration_day_basis: 'construction_production_day',
       actual_duration_production_days: 8,
@@ -334,6 +387,7 @@ describe('durationContextSampleReadModelService', () => {
       reuse_scope: 'project',
       fact_source: 'actual_outcome',
       evidence_fingerprint: `sha256:${index + 1}`,
+      sample_strength: 'strong',
       source_lineage: { sourceType: 'task_actual_dates' },
       duration_day_basis: 'construction_production_day',
       actual_duration_production_days: 8,

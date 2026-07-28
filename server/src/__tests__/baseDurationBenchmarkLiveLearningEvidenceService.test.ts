@@ -148,6 +148,7 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
             id: `base-sample-${learningScope}`,
             sample_status: 'active',
             included_in_benchmark: true,
+            sample_strength: 'strong',
             actual_duration: 6 + index,
             completed_at: '2026-06-14T00:00:00.000Z',
             learning_scope: learningScope,
@@ -245,6 +246,37 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
     expect(decision.productionLineage.rejectedRecords).toEqual([])
   })
 
+  it('does not count weak or unusable production samples even when benchmark inclusion is forged true', () => {
+    const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
+      enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
+      sourceRows: ['global', 'industry', 'company', 'project'].map((learningScope, index) => ({
+        sourceTable: 'duration_experience_samples' as const,
+        row: {
+          id: `ineligible-base-sample-${learningScope}`,
+          sample_status: 'active',
+          included_in_benchmark: true,
+          sample_strength: index % 2 === 0 ? 'weak' : 'unusable',
+          actual_duration: 6 + index,
+          completed_at: '2026-06-14T00:00:00.000Z',
+          learning_scope: learningScope,
+          learning_scope_source: durationLearningScopeSource(learningScope),
+          metadata: {
+            liveLearningAssetKey: 'base_duration_benchmark',
+            learningScope,
+          },
+        },
+      })),
+    })
+
+    expect(decision.benchmarkLineage.acceptedSampleCounts).toEqual({
+      global: 0,
+      industry: 0,
+      company: 0,
+      project: 0,
+    })
+    expect(decision.status).toBe('base_duration_benchmark_live_learning_not_ready')
+  })
+
   it('keeps base duration benchmark not ready when production evidence is supplied only as direct typed records', () => {
     const decision = buildBaseDurationBenchmarkLiveLearningEvidenceFromProductionRows({
       enabledLearningScopes: ['system', 'industry_baseline', 'company', 'project'],
@@ -326,6 +358,7 @@ describe('baseDurationBenchmarkLiveLearningEvidenceService', () => {
             id: `forged-base-sample-${learningScope}`,
             sample_status: 'active',
             included_in_benchmark: true,
+            sample_strength: 'strong',
             actual_duration: 6 + index,
             completed_at: '2026-06-14T00:00:00.000Z',
             learning_scope: learningScope,

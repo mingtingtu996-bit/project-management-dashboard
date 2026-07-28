@@ -39,17 +39,21 @@ vi.mock('../services/dbService.js', () => ({
 vi.mock('../services/durationContextSampleReadModelService.js', () => ({
   loadProgressVelocityProjectDurationExperienceSamples: vi.fn(async (input: Record<string, unknown>) => {
     state.sampleReadModelCalls.push({ scope: 'project', input })
-    return state.durationExperienceSamples.filter((row) => (
-      row.project_id === input.projectId
-      && (row.company_id ?? (row.metadata as Record<string, unknown> | undefined)?.company_id) === input.companyId
-    ))
+    return state.durationExperienceSamples
+      .filter((row) => (
+        row.project_id === input.projectId
+        && (row.company_id ?? (row.metadata as Record<string, unknown> | undefined)?.company_id) === input.companyId
+      ))
+      .map((row) => ({ sample_strength: 'strong', ...row }))
   }),
   loadProgressVelocityCompanyDurationExperienceSamples: vi.fn(async (input: Record<string, unknown>) => {
     state.sampleReadModelCalls.push({ scope: 'company', input })
-    return state.durationExperienceSamples.filter((row) => (
-      (row.company_id ?? (row.metadata as Record<string, unknown> | undefined)?.company_id) === input.companyId
-      && row.project_id !== input.excludeProjectId
-    ))
+    return state.durationExperienceSamples
+      .filter((row) => (
+        (row.company_id ?? (row.metadata as Record<string, unknown> | undefined)?.company_id) === input.companyId
+        && row.project_id !== input.excludeProjectId
+      ))
+      .map((row) => ({ sample_strength: 'strong', ...row }))
   }),
 }))
 
@@ -777,7 +781,7 @@ describe('progressVelocityLearningService', () => {
     }))
   })
 
-  it('ignores forecast sidecars whose actual numerator was not sourced from real actual dates', async () => {
+  it('rejects weak or unusable samples even when legacy rows claim benchmark inclusion', async () => {
     state.tasks = []
     state.snapshots = []
     state.durationExperienceSamples = Array.from({ length: 5 }, (_, index) => ({
@@ -792,7 +796,7 @@ describe('progressVelocityLearningService', () => {
       completed_at: `2026-04-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
       sample_status: 'active',
       included_in_benchmark: true,
-      sample_strength: 'weak',
+      sample_strength: index % 2 === 0 ? 'weak' : 'unusable',
       confidence_level: 'low',
       metadata: {
         company_id: 'company-1',
@@ -828,22 +832,6 @@ describe('progressVelocityLearningService', () => {
       now: new Date('2026-05-16T00:00:00.000Z'),
     })
 
-    expect(result).toMatchObject({
-      sampleCount: 5,
-      durationRatio: 1.5,
-      multiplier: 1.35,
-      groupKey: 'template:template-1:structure:frame',
-    })
-    expect(result?.metadata).toEqual(expect.objectContaining({
-      learningTarget: 'actual_to_planned',
-      sampleRatios: [1.5, 1.5, 1.5, 1.5, 1.5],
-      sampleRatioBases: [
-        'actual_to_planned',
-        'actual_to_planned',
-        'actual_to_planned',
-        'actual_to_planned',
-        'actual_to_planned',
-      ],
-    }))
+    expect(result).toBeNull()
   })
 })

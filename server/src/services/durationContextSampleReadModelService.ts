@@ -109,6 +109,8 @@ const DURATION_EXPERIENCE_SAMPLE_COLUMNS = [
   'metadata',
 ].join(', ')
 
+const BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS = ['strong', 'medium'] as const
+
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
@@ -116,6 +118,12 @@ function normalizeText(value: unknown) {
 function normalizeDateText(value: unknown) {
   const text = normalizeText(value)
   return text ? text.slice(0, 10) : ''
+}
+
+function hasBenchmarkEligibleSampleStrength(row: DurationExperienceSampleRow) {
+  return BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS.includes(
+    normalizeText(row.sample_strength).toLowerCase() as typeof BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS[number],
+  )
 }
 
 function hasGovernedProjectSampleIdentity(row: DurationExperienceSampleRow) {
@@ -129,6 +137,7 @@ function hasGovernedProjectSampleIdentity(row: DurationExperienceSampleRow) {
     && typeof sourceLineage === 'object'
     && Object.keys(sourceLineage).length > 0
     && normalizeText(row.experience_tier) === 'T1'
+    && hasBenchmarkEligibleSampleStrength(row)
     && normalizeText(row.reuse_scope) === 'project'
     && ['actual_outcome', 'hybrid'].includes(normalizeText(row.fact_source)),
   )
@@ -163,6 +172,7 @@ async function loadDurationExperienceSamples(
   }
   sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+  sampleQuery = chainCall(sampleQuery, 'in', 'sample_strength', [...BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS])
   sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
   sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
   if (query.orderCompletedAt) {
@@ -173,7 +183,7 @@ async function loadDurationExperienceSamples(
 
   const result = await resolveQueryResult(sampleQuery)
   if (result.error || !Array.isArray(result.data)) return []
-  return result.data as DurationExperienceSampleRow[]
+  return (result.data as DurationExperienceSampleRow[]).filter(hasBenchmarkEligibleSampleStrength)
 }
 
 async function loadTenantScopedProgressVelocitySamples(input: {
@@ -193,6 +203,7 @@ async function loadTenantScopedProgressVelocitySamples(input: {
   if (projectId) sampleQuery = chainCall(sampleQuery, 'eq', 'project_id', projectId)
   sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+  sampleQuery = chainCall(sampleQuery, 'in', 'sample_strength', [...BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS])
   sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
   sampleQuery = chainCall(sampleQuery, 'not', 'actual_duration', 'is', null)
   const requestedLimit = Number(input.limit ?? 200)
@@ -202,6 +213,7 @@ async function loadTenantScopedProgressVelocitySamples(input: {
   if (result.error || !Array.isArray(result.data)) return []
   const excludedProjectId = normalizeText(input.excludeProjectId)
   return (result.data as DurationExperienceSampleRow[])
+    .filter(hasBenchmarkEligibleSampleStrength)
     .filter((row) => normalizeText(row.company_id) === companyId)
     .filter((row) => !projectId || normalizeText(row.project_id) === projectId)
     .filter((row) => !excludedProjectId || normalizeText(row.project_id) !== excludedProjectId)
@@ -250,6 +262,7 @@ export async function loadTemplateDurationGovernanceSamples(
     if (projectId) sampleQuery = chainCall(sampleQuery, 'eq', 'project_id', projectId)
     sampleQuery = chainCall(sampleQuery, 'eq', 'sample_status', 'active')
     sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+    sampleQuery = chainCall(sampleQuery, 'in', 'sample_strength', [...BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS])
     sampleQuery = chainCall(sampleQuery, 'eq', 'experience_tier', 'T1')
     sampleQuery = chainCall(sampleQuery, 'eq', 'reuse_scope', 'project')
     sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
@@ -293,6 +306,7 @@ export async function loadProjectProductivityCalibrationDurationExperienceSample
   sampleQuery = chainCall(sampleQuery, 'eq', 'project_id', projectId)
   sampleQuery = chainCall(sampleQuery, 'in', 'sample_status', ['active', 'accepted'])
   sampleQuery = chainCall(sampleQuery, 'eq', 'included_in_benchmark', true)
+  sampleQuery = chainCall(sampleQuery, 'in', 'sample_strength', [...BENCHMARK_ELIGIBLE_SAMPLE_STRENGTHS])
   sampleQuery = chainCall(sampleQuery, 'eq', 'experience_tier', 'T1')
   sampleQuery = chainCall(sampleQuery, 'eq', 'reuse_scope', 'project')
   sampleQuery = chainCall(sampleQuery, 'eq', 'duration_day_basis', 'construction_production_day')
