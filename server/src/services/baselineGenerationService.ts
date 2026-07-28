@@ -298,9 +298,16 @@ type BaselineDurationSuggestion = {
   durationProvenance?: string | null
 }
 
+type BaselineDurationSuggestionMetrics = {
+  missingPlanDateCount: number
+  suggestedDurationCount: number
+  unavailableDurationSuggestionCount: number
+}
+
 type BaselineGenerationDateOptions = {
   forecastByTaskId?: Map<string, CachedDurationForecastRow>
   durationSuggestionByTaskId?: Map<string, BaselineDurationSuggestion>
+  durationSuggestionMetrics?: BaselineDurationSuggestionMetrics
   constructionCalendar?: ConstructionCalendarContext | null
   durationAsOfDate?: string | null
   planningReplayReadbackByTaskId?: Map<string, PlanningReplayCalibrationReadback>
@@ -2136,8 +2143,15 @@ async function loadMissingDateDurationSuggestions(
   }
 }
 
-async function getMissingDateDurationSuggestionMetrics(taskRows: TaskBaselineTaskRow[]) {
-  return (await loadMissingDateDurationSuggestions(taskRows)).metrics
+async function getMissingDateDurationSuggestionMetrics(
+  taskRows: TaskBaselineTaskRow[],
+  options: BaselineGenerationDateOptions = {},
+) {
+  if (options.durationSuggestionMetrics) return options.durationSuggestionMetrics
+  return (await loadMissingDateDurationSuggestions(taskRows, {
+    constructionCalendar: options.constructionCalendar,
+    durationAsOfDate: options.durationAsOfDate,
+  })).metrics
 }
 
 async function getHealthRiskMetrics(projectId: string) {
@@ -2239,6 +2253,7 @@ async function getProjectFactMetrics(
   projectId: string,
   taskRows: TaskBaselineTaskRow[],
   criticalTaskIds: Set<string> = new Set(),
+  dateOptions: BaselineGenerationDateOptions = {},
 ): Promise<BaselineProjectFactMetrics> {
   const taskIds = new Set(taskRows.map((task) => task.id).filter(Boolean))
   if (!projectId || taskIds.size === 0) return { ...EMPTY_PROJECT_FACT_METRICS }
@@ -2269,7 +2284,7 @@ async function getProjectFactMetrics(
     safeSelectProjectRows('issues', projectId) as Promise<ExternalIssueRow[]>,
     listProjectWarningProjectionRows(projectId),
     safeSelectProjectRows('monthly_plan_items', projectId),
-    getMissingDateDurationSuggestionMetrics(taskRows),
+    getMissingDateDurationSuggestionMetrics(taskRows, dateOptions),
     getHealthRiskMetrics(projectId),
   ])
 
@@ -2366,6 +2381,8 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   criticalTaskIds?: Set<string>
   asOf?: string
   timezone?: string | null
+  constructionCalendar?: ConstructionCalendarContext | null
+  durationSuggestionMetrics?: BaselineDurationSuggestionMetrics
 }): Promise<BaselineGenerationCandidate> {
   const diffItems = buildBaselineDiffItems(params.sourceItems, params.candidateItems)
   const diffCounts = buildBaselineDiffCounts(diffItems)
@@ -2383,7 +2400,16 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   )
   const totalFinishShiftValue = totalFinishShiftDelta === null ? null : Math.abs(totalFinishShiftDelta)
   const milestoneMaxShiftValue = getBaselineMilestoneMaxShiftDays(params.sourceItems, params.candidateItems)
-  const timezone = String(params.timezone ?? '').trim() || DEFAULT_DURATION_TIMEZONE
+  const constructionCalendar = params.constructionCalendar !== undefined
+    ? params.constructionCalendar
+    : await resolveConstructionCalendarContext({
+        projectId: params.baseline.project_id,
+        onError: (error) => logger.warn('[baselineGenerationService] failed to resolve construction calendar context for candidate', {
+          projectId: params.baseline.project_id,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      })
+  const timezone = String(params.timezone ?? constructionCalendar?.timezone ?? '').trim() || DEFAULT_DURATION_TIMEZONE
   const asOf = params.asOf === undefined ? businessDateKey(new Date(), timezone) : params.asOf
   const totalFinishShift = buildCalendarDayDurationMetric(totalFinishShiftValue, { asOf, timezone })
   const milestoneMaxShift = buildCalendarDayDurationMetric(milestoneMaxShiftValue, { asOf, timezone })
@@ -2396,7 +2422,11 @@ export async function buildBaselineGenerationCandidateV1474(params: {
   const [forecastMetrics, directSeedMetrics, projectFactMetrics, buildingPatternExecutionProfile] = await Promise.all([
     getForecastMetrics(params.taskRows),
     getDirectSeedMetrics(params.taskRows),
-    getProjectFactMetrics(params.baseline.project_id, params.taskRows, criticalTaskIds),
+    getProjectFactMetrics(params.baseline.project_id, params.taskRows, criticalTaskIds, {
+      durationSuggestionMetrics: params.durationSuggestionMetrics,
+      constructionCalendar,
+      durationAsOfDate: asOf,
+    }),
     buildBuildingPatternExecutionProfile(params.baseline.project_id, params.taskRows, 'task_facts'),
   ])
   const constructionRhythmExpansion = buildConstructionRhythmExpansion(buildingPatternExecutionProfile, params.taskRows)
@@ -2790,6 +2820,7 @@ async function loadBaselineGenerationDateOptions(
   return {
     forecastByTaskId,
     durationSuggestionByTaskId: durationSuggestions.durationSuggestionByTaskId,
+    durationSuggestionMetrics: durationSuggestions.metrics,
     constructionCalendar,
     durationAsOfDate,
     planningReplayReadbackByTaskId,
@@ -2828,6 +2859,10 @@ export async function prepareBaselineGenerationForProject(params: {
         candidateItems: generatedItems,
         taskRows,
         criticalTaskIds,
+        asOf: dateOptions.durationAsOfDate ?? undefined,
+        timezone: dateOptions.constructionCalendar?.timezone ?? undefined,
+        constructionCalendar: dateOptions.constructionCalendar,
+        durationSuggestionMetrics: dateOptions.durationSuggestionMetrics,
       })
     : null
 
@@ -2882,6 +2917,10 @@ export async function prepareBaselineGenerationForBaseline(
     candidateItems: generatedItems,
     taskRows,
     criticalTaskIds,
+    asOf: dateOptions.durationAsOfDate ?? undefined,
+    timezone: dateOptions.constructionCalendar?.timezone ?? undefined,
+    constructionCalendar: dateOptions.constructionCalendar,
+    durationSuggestionMetrics: dateOptions.durationSuggestionMetrics,
   })
 
   return {

@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   supabaseFrom: vi.fn(),
   buildProjectCriticalPathSnapshot: vi.fn(),
   getProjectCriticalPathSnapshot: vi.fn(),
+  resolveConstructionCalendarContext: vi.fn(),
 }))
 
 vi.mock('../services/taskDurationForecastService.js', () => ({
@@ -31,6 +32,14 @@ vi.mock('../services/projectCriticalPathService.js', () => ({
 vi.mock('../services/planningReplayCalibrationService.js', () => ({
   readPlanningReplayCalibrationReadback: mocks.readPlanningReplayCalibrationReadback,
 }))
+
+vi.mock('../services/constructionCalendar.js', async () => {
+  const actual = await vi.importActual<typeof import('../services/constructionCalendar.js')>('../services/constructionCalendar.js')
+  return {
+    ...actual,
+    resolveConstructionCalendarContext: mocks.resolveConstructionCalendarContext,
+  }
+})
 
 vi.mock('../middleware/logger.js', () => ({
   logger: {
@@ -86,6 +95,16 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     mocks.supabaseFrom.mockReset()
     mocks.buildProjectCriticalPathSnapshot.mockReset()
     mocks.getProjectCriticalPathSnapshot.mockReset()
+    mocks.resolveConstructionCalendarContext.mockReset()
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'calendar_day',
+      windows: [],
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
     vi.restoreAllMocks()
     algorithmSeedResolver.clearAlgorithmSeedResolverCache()
   })
@@ -2162,5 +2181,209 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(candidate.metrics.suggestedDurationCount).toBe(0)
     expect(candidate.generationSummary.missingPlanDateCount).toBe(1)
     expect(candidate.generationSummary.suggestedDurationCount).toBe(0)
+  })
+
+  it('uses one frozen calendar and asOf context for baseline generation and candidate scoring', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-31T16:30:00.000Z'))
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    mockSupabaseRows({
+      task_baselines: [{
+        id: 'baseline-1',
+        project_id: 'project-1',
+        version: 1,
+        status: 'confirmed',
+      }],
+      task_baseline_items: [],
+      tasks: [{
+        id: 'task-missing-end',
+        project_id: 'project-1',
+        title: 'In-progress task missing its end date',
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+        actual_start_date: '2026-06-01',
+        status: 'in_progress',
+        progress: 20,
+        is_executable: true,
+        is_wbs_summary: false,
+        sort_order: 1,
+      }],
+      duration_forecasts: [],
+    })
+    mocks.getTaskDurationSuggestion.mockResolvedValue({
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingDuration: {
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      confidenceLevel: 'medium',
+    })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      displayTaskIds: ['task-missing-end'],
+      autoTaskIds: ['task-missing-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      watchedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 5,
+      calculationStatus: 'fresh',
+    })
+    mocks.buildProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['task-missing-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: ['task-missing-end'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [{
+        taskId: 'task-missing-end',
+        title: 'In-progress task missing its end date',
+        floatDays: 0,
+        durationDays: 5,
+        earliestStartOffsetDays: 0,
+        earliestFinishOffsetDays: 5,
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+      }],
+      networkSchedule: [{
+        taskId: 'task-missing-end',
+        earliestStartOffsetDays: 0,
+        earliestFinishOffsetDays: 5,
+        floatDays: 0,
+      }],
+      projectDurationDays: 5,
+      calculationStatus: 'fresh',
+      networkLineage: { criticalPathInputHash: 'hash-missing-end' },
+    })
+
+    try {
+      const preparation = await prepareBaselineGenerationForProject({ projectId: 'project-1' })
+
+      expect(preparation.generatedItems[0]).toEqual(expect.objectContaining({
+        planned_start_date: '2026-06-01',
+        planned_end_date: '2026-06-05',
+      }))
+      expect(preparation.candidate?.metrics.suggestedDurationCount).toBe(1)
+      expect(preparation.candidate?.reasons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'duration_suggestion_input', severity: 'info' }),
+      ]))
+      expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(1)
+      expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a stale remaining suggestion consistently in baseline generation and candidate scoring', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-31T16:30:00.000Z'))
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      windows: [],
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    mockSupabaseRows({
+      task_baselines: [{ id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed' }],
+      task_baseline_items: [],
+      tasks: [{
+        id: 'task-stale-end',
+        project_id: 'project-1',
+        title: 'Task with stale remaining suggestion',
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+        actual_start_date: '2026-06-01',
+        status: 'in_progress',
+        progress: 20,
+        is_executable: true,
+        is_wbs_summary: false,
+        sort_order: 1,
+      }],
+      duration_forecasts: [],
+    })
+    mocks.getTaskDurationSuggestion.mockResolvedValue({
+      durationOutputCode: 'remaining_forecast',
+      remainingDuration: {
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-31',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      confidenceLevel: 'medium',
+    })
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      displayTaskIds: ['task-stale-end'],
+      autoTaskIds: ['task-stale-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      watchedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      edges: [],
+      tasks: [],
+      projectDurationDays: 1,
+      calculationStatus: 'fresh',
+    })
+    mocks.buildProjectCriticalPathSnapshot.mockResolvedValue({
+      projectId: 'project-1',
+      autoTaskIds: ['task-stale-end'],
+      manualAttentionTaskIds: [],
+      manualInsertedTaskIds: [],
+      primaryChain: null,
+      alternateChains: [],
+      displayTaskIds: ['task-stale-end'],
+      watchedTaskIds: [],
+      edges: [],
+      tasks: [],
+      networkSchedule: [],
+      projectDurationDays: 1,
+      calculationStatus: 'fresh',
+      networkLineage: { criticalPathInputHash: 'hash-stale-end' },
+    })
+
+    try {
+      const preparation = await prepareBaselineGenerationForProject({ projectId: 'project-1' })
+
+      expect(preparation.generatedItems[0]?.planned_end_date).toBe('2026-06-01')
+      expect(preparation.generatedItems[0]?.source_reason).not.toContain('E1 duration suggestion')
+      expect(preparation.candidate?.metrics.suggestedDurationCount).toBe(0)
+      expect(preparation.candidate?.reasons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: 'duration_suggestion_input', severity: 'warning' }),
+      ]))
+      expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
