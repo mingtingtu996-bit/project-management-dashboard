@@ -187,6 +187,143 @@ test('public ingress probe retries transient network readiness and reports targe
   assert.match(publicProbe, /sleep 5/u)
 })
 
+test('initial ingress may commit an origin-ready candidate only with explicit public-block confirmation', async () => {
+  const workflow = await source('.github/workflows/provision-domain-ingress.yml')
+  assert.match(workflow, /origin_bootstrap_confirmation:/u)
+  assert.match(workflow, /COMMIT_ORIGIN_READY_PUBLIC_BLOCKED/u)
+  assert.match(workflow, /id:\s*public-probe[\s\S]*?continue-on-error:\s*true/u)
+
+  const originProbe = yamlStepRun(workflow, 'origin-probe')
+  const syntax = spawnSync(bash, ['-n'], { input: originProbe, encoding: 'utf8' })
+  assert.equal(syntax.status, 0, syntax.stderr)
+  assert.match(originProbe, /--resolve "\$host:80:\$origin_ip"/u)
+  assert.match(originProbe, /--resolve "\$host:443:\$origin_ip"/u)
+  assert.match(originProbe, /\[ "\$status" = 308 \]/u)
+  assert.match(originProbe, /Strict-Transport-Security/u)
+  assert.match(originProbe, /200\|502/u)
+
+  const finalize = yamlStepRun(workflow, 'finalize')
+  assert.match(finalize, /BOOTSTRAP_MODE.*initial/u)
+  assert.match(finalize, /ORIGIN_BOOTSTRAP_CONFIRMATION.*COMMIT_ORIGIN_READY_PUBLIC_BLOCKED/u)
+  assert.match(finalize, /origin_ingress_ready=true/u)
+  assert.match(finalize, /public_domain_ready=false/u)
+  assert.match(
+    finalize,
+    /ORIGIN_INGRESS_READY=\$origin_ingress_ready PUBLIC_DOMAIN_READY=\$public_domain_ready/u,
+  )
+  assert.match(workflow, /originIngressReady/u)
+  assert.match(workflow, /publicDomainReady/u)
+})
+
+test('ingress commit persists atomic machine-readable origin and public readiness state', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const writeCommittedState = script.match(
+    /(write_committed_state\(\) \{[\s\S]*?\n\})\n\ncommit_activation/u,
+  )?.[1]
+  const commitActivation = script.match(
+    /(commit_activation\(\) \{[\s\S]*?\n\})\n\nmkdir -p/u,
+  )?.[1]
+  assert.ok(writeCommittedState, 'write_committed_state must remain executable in isolation')
+  assert.ok(commitActivation, 'commit_activation must remain executable in isolation')
+
+  const sha = '4'.repeat(40)
+  const valid = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+COMMITTED_STATE_FILE="$ROOT_DIR/committed-ingress-state.json"
+active="$ROOT_DIR/releases/${sha}"
+mkdir -p "$active"
+touch "$ROOT_DIR/current"
+printf '%s' "$active" > "$ROOT_DIR/current-target"
+cat > "$STATE_FILE" <<STATE
+ACTIVATED_SHA=${sha}
+ACTIVATED_TARGET=$active
+PREVIOUS_TARGET=
+STATE
+require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+require_boolean() { case "$2" in true|false) ;; *) return 2 ;; esac; }
+load_state() { source "$STATE_FILE"; }
+readlink() {
+  if [ "$1" = -f ] && [ -f "$2-target" ]; then cat "$2-target"; return 0; fi
+  command readlink "$@"
+}
+${writeCommittedState}
+${commitActivation}
+RELEASE_SHA=${sha} ORIGIN_INGRESS_READY=true PUBLIC_DOMAIN_READY=false commit_activation
+test ! -f "$STATE_FILE"
+node -e '
+  const fs = require("node:fs");
+  const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (state.releaseSha !== process.argv[2]
+    || state.originIngressReady !== true
+    || state.publicDomainReady !== false) process.exit(1);
+' "$COMMITTED_STATE_FILE" ${sha}
+`)
+  assert.equal(valid.status, 0, `${valid.stdout}\n${valid.stderr}`)
+
+  const invalid = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+STATE_FILE="$ROOT_DIR/pending-activation.env"
+COMMITTED_STATE_FILE="$ROOT_DIR/committed-ingress-state.json"
+active="$ROOT_DIR/releases/${sha}"
+mkdir -p "$active"
+touch "$ROOT_DIR/current"
+printf '%s' "$active" > "$ROOT_DIR/current-target"
+cat > "$STATE_FILE" <<STATE
+ACTIVATED_SHA=${sha}
+ACTIVATED_TARGET=$active
+PREVIOUS_TARGET=
+STATE
+require_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
+require_boolean() { case "$2" in true|false) ;; *) return 2 ;; esac; }
+load_state() { source "$STATE_FILE"; }
+readlink() {
+  if [ "$1" = -f ] && [ -f "$2-target" ]; then cat "$2-target"; return 0; fi
+  command readlink "$@"
+}
+${writeCommittedState}
+${commitActivation}
+if RELEASE_SHA=${sha} ORIGIN_INGRESS_READY=yes PUBLIC_DOMAIN_READY=false commit_activation; then
+  exit 91
+fi
+test -f "$STATE_FILE"
+test ! -f "$COMMITTED_STATE_FILE"
+`)
+  assert.equal(invalid.status, 0, `${invalid.stdout}\n${invalid.stderr}`)
+})
+
+test('deploy preflight uses origin-direct ingress only for explicit staging bootstrap', async () => {
+  const workflow = await source('.github/workflows/deploy.yml')
+  const preflight = yamlStepRun(workflow, 'ingress-preflight')
+  const syntax = spawnSync(bash, ['-n'], { input: preflight, encoding: 'utf8' })
+  assert.equal(syntax.status, 0, syntax.stderr)
+  assert.match(preflight, /\[ "\$DEPLOY_TARGET" = staging \]/u)
+  assert.match(preflight, /--resolve "\$EXPECTED_PUBLIC_HOST:80:\$origin_ip"/u)
+  assert.match(preflight, /--resolve "\$EXPECTED_PUBLIC_HOST:443:\$origin_ip"/u)
+  assert.match(preflight, /\[ "\$redirect_status" = 308 \]/u)
+  assert.match(preflight, /Strict-Transport-Security/u)
+  assert.match(preflight, /originIngressReady=true publicDomainReady=false/u)
+})
+
+test('application postdeploy origin fallback is staging-only and reports public readiness separately', async () => {
+  const [workflow, deployScript] = await Promise.all([
+    source('.github/workflows/deploy.yml'),
+    source('scripts/deploy-lighthouse-server.sh'),
+  ])
+
+  assert.match(workflow, /ORIGIN_INGRESS_IP="\$DEPLOY_HOST"/u)
+  assert.match(deployScript, /ORIGIN_INGRESS_IP/u)
+  assert.match(deployScript, /\[ "\$DEPLOY_TARGET" = staging \]/u)
+  assert.match(deployScript, /--resolve "\$EXPECTED_PUBLIC_HOST:443:\$ORIGIN_INGRESS_IP"/u)
+  assert.match(deployScript, /--resolve "\$EXPECTED_PUBLIC_HOST:80:\$ORIGIN_INGRESS_IP"/u)
+  assert.match(deployScript, /"originIngressReady":true/u)
+  assert.match(deployScript, /"publicDomainReady":/u)
+})
+
 test('local HTTPS probe rejects wrong runtime identity and missing HSTS', async () => {
   const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
   const match = script.match(/(probe_https\(\) \{[\s\S]*?\n\})\n\nprobe_ingress_pair/u)
@@ -385,6 +522,61 @@ test -d "$active"
 `)
 
   assert.equal(result.status, 0, result.stderr)
+})
+
+test('rollback verification honors a committed origin-ready public-blocked state', async () => {
+  const script = await source('scripts/provision-lighthouse-domain-ingress.sh')
+  const readCommittedReadiness = script.match(
+    /(read_committed_public_readiness\(\) \{[\s\S]*?\n\})\n\nverify_ingress_release/u,
+  )?.[1]
+  const verifyIngressRelease = script.match(
+    /(verify_ingress_release\(\) \{[\s\S]*?\n\})\n\nverify_ingress_stopped/u,
+  )?.[1]
+  assert.ok(readCommittedReadiness, 'committed public readiness reader must remain executable in isolation')
+  assert.ok(verifyIngressRelease, 'verify_ingress_release must remain executable in isolation')
+
+  const sha = '6'.repeat(40)
+  const result = runBash(`
+set -euo pipefail
+ROOT_DIR="$(mktemp -d)"
+trap 'rm -rf "$ROOT_DIR"' EXIT
+COMMITTED_STATE_FILE="$ROOT_DIR/committed-ingress-state.json"
+release_dir="$ROOT_DIR/releases/${sha}"
+mkdir -p "$release_dir"
+touch "$ROOT_DIR/current"
+printf '%s' "$release_dir" > "$ROOT_DIR/current-target"
+printf '%s' '{"status":"committed","releaseSha":"${sha}","originIngressReady":true,"publicDomainReady":false}' > "$COMMITTED_STATE_FILE"
+readlink() {
+  if [ "$1" = -f ] && [ -f "$2-target" ]; then cat "$2-target"; return 0; fi
+  command readlink "$@"
+}
+python3() {
+  node -e '
+    const fs = require("node:fs");
+    const state = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    if (state.releaseSha !== process.argv[2]
+      || state.originIngressReady !== true
+      || typeof state.publicDomainReady !== "boolean") process.exit(1);
+    process.stdout.write(String(state.publicDomainReady));
+  ' "$2" "$3"
+}
+probe_ingress_pair() {
+  if [ -n "\${1:-}" ]; then
+    printf local > "$ROOT_DIR/local-called"
+    return 0
+  fi
+  printf public > "$ROOT_DIR/public-called"
+  return 1
+}
+sleep() { :; }
+${readCommittedReadiness}
+${verifyIngressRelease}
+verify_ingress_release "$release_dir"
+test -f "$ROOT_DIR/local-called"
+test ! -f "$ROOT_DIR/public-called"
+`)
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`)
 })
 
 test('initial rollback preserves its state when compose down fails', async () => {

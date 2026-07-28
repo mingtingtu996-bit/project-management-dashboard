@@ -19,6 +19,11 @@ on:
         description: Type PROVISION_DOMAIN_INGRESS
         required: true
         type: string
+      origin_bootstrap_confirmation:
+        description: Type COMMIT_ORIGIN_READY_PUBLIC_BLOCKED only for an initial ICP-blocked bootstrap
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -36,6 +41,7 @@ jobs:
     env:
       RELEASE_SHA: ${{ inputs.release_sha }}
       BOOTSTRAP_MODE: ${{ inputs.bootstrap_mode }}
+      ORIGIN_BOOTSTRAP_CONFIRMATION: ${{ inputs.origin_bootstrap_confirmation }}
       PRODUCTION_HOST: ${{ vars.PRODUCTION_DEPLOY_PUBLIC_HOST || 'zhuxucloud.com' }}
       STAGING_HOST: ${{ vars.STAGING_DEPLOY_PUBLIC_HOST || 'staging.zhuxucloud.com' }}
       PRODUCTION_PROJECT_REF: wwdrkjnbvcbfytwnnyvs
@@ -54,6 +60,16 @@ jobs:
           [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [ "$PRODUCTION_HOST" = zhuxucloud.com ]
           [ "$STAGING_HOST" = staging.zhuxucloud.com ]
+          case "$ORIGIN_BOOTSTRAP_CONFIRMATION" in
+            ''|COMMIT_ORIGIN_READY_PUBLIC_BLOCKED) ;;
+            *) echo "Invalid origin bootstrap confirmation." >&2; exit 1 ;;
+          esac
+          if [ -n "$ORIGIN_BOOTSTRAP_CONFIRMATION" ]; then
+            [ "$BOOTSTRAP_MODE" = initial ] || {
+              echo "Origin bootstrap confirmation is valid only for initial mode." >&2
+              exit 1
+            }
+          fi
           for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_PRIVATE_KEY DEPLOY_KNOWN_HOSTS; do
             [ -n "${!name}" ] || { echo "Missing required production SSH value: $name" >&2; exit 1; }
           done
@@ -106,8 +122,80 @@ jobs:
             "sudo -n env ACTION=activate RELEASE_SHA=$RELEASE_SHA RELEASE_ARCHIVE=$remote_archive PRODUCTION_HOST=$PRODUCTION_HOST STAGING_HOST=$STAGING_HOST BOOTSTRAP_MODE=$BOOTSTRAP_MODE bash -s" \
             < scripts/provision-lighthouse-domain-ingress.sh
 
+      - name: Verify both domains directly through the governed origin
+        id: origin-probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          resolve_origin_ipv4() {
+            local candidate="$DEPLOY_HOST"
+            local octet
+            if [[ ! "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+              candidate="$(getent ahostsv4 "$DEPLOY_HOST" | awk '$2 == "STREAM" { print $1; exit }')"
+            fi
+            [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+            IFS=. read -r -a octets <<< "$candidate"
+            [ "${#octets[@]}" -eq 4 ] || return 1
+            for octet in "${octets[@]}"; do
+              ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
+            done
+            printf '%s' "$candidate"
+          }
+          probe_origin_domain() {
+            local host="$1"
+            local expected_target="$2"
+            local expected_project_ref="$3"
+            local origin_ip="$4"
+            local headers="$RUNNER_TEMP/origin-$host.headers"
+            local body="$RUNNER_TEMP/origin-$host.readyz.json"
+            local result status location https_status attempt
+            for attempt in $(seq 1 12); do
+              result="$(curl --silent --show-error --connect-timeout 5 --max-time 20 --max-redirs 0 \
+                --resolve "$host:80:$origin_ip" \
+                --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+                "http://$host/api/readyz" 2>&1)" || true
+              status="${result%% *}"
+              location="${result#* }"
+              if [ "$status" = 308 ] && [ "$location" = "https://$host/api/readyz" ]; then break; fi
+              if [ "$attempt" -eq 12 ]; then return 1; fi
+              sleep 5
+            done
+            for attempt in $(seq 1 12); do
+              https_status="$(curl --silent --show-error --connect-timeout 5 --max-time 30 \
+                --resolve "$host:443:$origin_ip" \
+                --dump-header "$headers" --output "$body" --write-out '%{http_code}' \
+                "https://$host/api/readyz" 2>&1)" || true
+              if tr -d '\r' < "$headers" 2>/dev/null | grep -qi '^Strict-Transport-Security:'; then break; fi
+              if [ "$attempt" -eq 12 ]; then return 1; fi
+              sleep 5
+            done
+            if [ "$https_status" = 200 ]; then
+              node --input-type=module - "$body" "$expected_target" "$expected_project_ref" <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          const expectedTarget = process.argv[3];
+          const expectedProjectRef = process.argv[4];
+          if (readiness.status !== 'ready'
+            || readiness.build?.deployTarget !== expectedTarget
+            || readiness.build?.supabaseProjectRef !== expectedProjectRef
+            || readiness.build?.databaseProjectRef !== expectedProjectRef) process.exit(1);
+          NODE
+            fi
+            if [ "$BOOTSTRAP_MODE" = initial ]; then
+              case "$https_status" in 200|502) ;; *) return 1 ;; esac
+            else
+              [ "$https_status" = 200 ]
+            fi
+          }
+          origin_ip="$(resolve_origin_ipv4)"
+          probe_origin_domain "$PRODUCTION_HOST" production "$PRODUCTION_PROJECT_REF" "$origin_ip"
+          probe_origin_domain "$STAGING_HOST" staging "$STAGING_PROJECT_REF" "$origin_ip"
+          echo "origin_ingress_ready=true" >> "$GITHUB_OUTPUT"
+          echo "origin_ip=$origin_ip" >> "$GITHUB_OUTPUT"
+
       - name: Verify both domains from the public runner
         id: public-probe
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -172,15 +260,35 @@ jobs:
         shell: bash
         env:
           PUBLIC_PROBE_OUTCOME: ${{ steps.public-probe.outcome }}
+          ORIGIN_PROBE_OUTCOME: ${{ steps.origin-probe.outcome }}
         run: |
-          if [ "$PUBLIC_PROBE_OUTCOME" = success ]; then
-            remote_action="ACTION=commit RELEASE_SHA=$RELEASE_SHA"
+          set -euo pipefail
+          origin_ingress_ready=false
+          public_domain_ready=false
+          final_action=rollback
+          if [ "$ORIGIN_PROBE_OUTCOME" = success ] && [ "$PUBLIC_PROBE_OUTCOME" = success ]; then
+            origin_ingress_ready=true
+            public_domain_ready=true
+            final_action=commit
+          elif [ "$ORIGIN_PROBE_OUTCOME" = success ] \
+            && [ "$PUBLIC_PROBE_OUTCOME" != success ] \
+            && [ "$BOOTSTRAP_MODE" = initial ] \
+            && [ "$ORIGIN_BOOTSTRAP_CONFIRMATION" = COMMIT_ORIGIN_READY_PUBLIC_BLOCKED ]; then
+            origin_ingress_ready=true
+            public_domain_ready=false
+            final_action=commit
+          fi
+          if [ "$final_action" = commit ]; then
+            remote_action="ACTION=commit RELEASE_SHA=$RELEASE_SHA ORIGIN_INGRESS_READY=$origin_ingress_ready PUBLIC_DOMAIN_READY=$public_domain_ready"
           else
             remote_action="ACTION=rollback FAILED_RELEASE_SHA=$RELEASE_SHA"
           fi
           ssh -p "$DEPLOY_PORT" -i ~/.ssh/workbuddy-domain-ingress -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" "sudo -n env $remote_action bash -s" \
             < scripts/provision-lighthouse-domain-ingress.sh
+          echo "origin_ingress_ready=$origin_ingress_ready" >> "$GITHUB_OUTPUT"
+          echo "public_domain_ready=$public_domain_ready" >> "$GITHUB_OUTPUT"
+          echo "final_action=$final_action" >> "$GITHUB_OUTPUT"
 
       - name: Recover pending activation after finalize failure
         if: ${{ always() && steps.activate.outcome == 'success' && steps.finalize.outcome == 'failure' }}
@@ -192,16 +300,21 @@ jobs:
             < scripts/provision-lighthouse-domain-ingress.sh
 
       - name: Publish committed ingress summary
-        if: ${{ success() && steps.public-probe.outcome == 'success' && steps.finalize.outcome == 'success' }}
+        if: ${{ success() && steps.finalize.outcome == 'success' && steps.finalize.outputs.final_action == 'commit' }}
         shell: bash
         run: |
           {
             echo '### Domain ingress provisioned'
             echo ''
             echo "- Release SHA: \`$RELEASE_SHA\`"
-            echo '- Public TLS: pass'
-            echo '- Exact HTTP 308 redirects: pass'
-            echo '- HSTS header and domain policy applicability: pass'
+            echo '- originIngressReady: ${{ steps.finalize.outputs.origin_ingress_ready }}'
+            echo '- publicDomainReady: ${{ steps.finalize.outputs.public_domain_ready }}'
+            echo '- Origin TLS, exact HTTP 308, and HSTS: pass'
+            if [ "${{ steps.finalize.outputs.public_domain_ready }}" = true ]; then
+              echo '- Public-domain TLS, exact HTTP 308, and HSTS: pass'
+            else
+              echo '- Public-domain acceptance: pending; final same-SHA acceptance still requires the real domains.'
+            fi
             echo '- Application/database/source mutations: none'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -210,3 +323,4 @@ jobs:
         shell: bash
         run: |
           [ "${{ steps.finalize.outcome }}" = success ]
+          [ "${{ steps.finalize.outputs.final_action }}" = commit ]

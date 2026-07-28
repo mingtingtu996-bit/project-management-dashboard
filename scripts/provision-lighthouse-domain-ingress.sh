@@ -6,6 +6,7 @@ ROOT_DIR="${ROOT_DIR:-/opt/workbuddy-ingress}"
 COMPOSE_PROJECT="${COMPOSE_PROJECT:-workbuddy-ingress}"
 CADDY_IMAGE="caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d"
 STATE_FILE="$ROOT_DIR/pending-activation.env"
+COMMITTED_STATE_FILE="$ROOT_DIR/committed-ingress-state.json"
 EXPECTED_PRODUCTION_HOST="${EXPECTED_PRODUCTION_HOST:-zhuxucloud.com}"
 EXPECTED_STAGING_HOST="${EXPECTED_STAGING_HOST:-staging.zhuxucloud.com}"
 PRODUCTION_PROJECT_REF="${PRODUCTION_PROJECT_REF:-wwdrkjnbvcbfytwnnyvs}"
@@ -28,6 +29,16 @@ require_hostname() {
     echo "public host must be a normalized DNS hostname" >&2
     exit 2
   }
+}
+
+require_boolean() {
+  case "$2" in
+    true|false) ;;
+    *)
+      echo "$1 must be true or false" >&2
+      return 2
+      ;;
+  esac
 }
 
 compose_file_for() {
@@ -166,11 +177,32 @@ probe_ingress_pair() {
   case "$staging_status" in 200|502) ;; *) return 1 ;; esac
 }
 
+read_committed_public_readiness() {
+  local release_dir="$1"
+  local expected_sha="${release_dir##*/}"
+  [ -f "$COMMITTED_STATE_FILE" ] || return 1
+  python3 - "$COMMITTED_STATE_FILE" "$expected_sha" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding='utf-8') as handle:
+    state = json.load(handle)
+if (state.get('releaseSha') != sys.argv[2]
+        or state.get('originIngressReady') is not True
+        or not isinstance(state.get('publicDomainReady'), bool)):
+    raise SystemExit(1)
+print(str(state['publicDomainReady']).lower(), end='')
+PY
+}
+
 verify_ingress_release() {
-  local release_dir="$1" attempt
+  local release_dir="$1" attempt committed_public_ready=unknown
   [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$release_dir" ] || return 1
+  committed_public_ready="$(read_committed_public_readiness "$release_dir" 2>/dev/null)" || committed_public_ready=unknown
   for attempt in $(seq 1 6); do
-    if probe_ingress_pair 127.0.0.1 && probe_ingress_pair; then return 0; fi
+    if probe_ingress_pair 127.0.0.1; then
+      if [ "$committed_public_ready" = false ]; then return 0; fi
+      if probe_ingress_pair; then return 0; fi
+    fi
     if [ "$attempt" -lt 6 ]; then sleep 5; fi
   done
   return 1
@@ -234,15 +266,44 @@ rollback() {
   printf '%s\n' '{"status":"rolled_back","sourceMutation":false,"databaseMutation":false}'
 }
 
+write_committed_state() {
+  local activated_sha="$1" origin_ready="$2" public_ready="$3"
+  local state_candidate="${COMMITTED_STATE_FILE}.next.$$"
+  rm -f "$state_candidate" || return 1
+  if ! printf '{"status":"committed","releaseSha":"%s","originIngressReady":%s,"publicDomainReady":%s,"sourceMutation":false,"databaseMutation":false}\n' \
+    "$activated_sha" "$origin_ready" "$public_ready" > "$state_candidate"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+  if ! chmod 600 "$state_candidate"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+  if ! mv -f "$state_candidate" "$COMMITTED_STATE_FILE"; then
+    rm -f "$state_candidate"
+    return 1
+  fi
+}
+
 commit_activation() {
   local activated_sha="${RELEASE_SHA:-}"
+  local origin_ready="${ORIGIN_INGRESS_READY:-}"
+  local public_ready="${PUBLIC_DOMAIN_READY:-}"
   require_sha "$activated_sha"
+  require_boolean ORIGIN_INGRESS_READY "$origin_ready" || return
+  require_boolean PUBLIC_DOMAIN_READY "$public_ready" || return
+  if [ "$public_ready" = true ] && [ "$origin_ready" != true ]; then
+    echo "Public domain readiness cannot be committed without origin ingress readiness." >&2
+    return 2
+  fi
   if [ ! -f "$STATE_FILE" ]; then
     [ "$(readlink -f "$ROOT_DIR/current" 2>/dev/null || true)" = "$ROOT_DIR/releases/$activated_sha" ] || {
       echo "No matching active ingress release exists for idempotent commit." >&2
       exit 2
     }
-    printf '%s\n' '{"status":"already_committed","sourceMutation":false,"databaseMutation":false}'
+    write_committed_state "$activated_sha" "$origin_ready" "$public_ready" || return
+    printf '{"status":"already_committed","releaseSha":"%s","originIngressReady":%s,"publicDomainReady":%s,"sourceMutation":false,"databaseMutation":false}\n' \
+      "$activated_sha" "$origin_ready" "$public_ready"
     return
   fi
   load_state
@@ -254,8 +315,10 @@ commit_activation() {
     echo "Current ingress release changed; refusing stale commit." >&2
     exit 2
   }
+  write_committed_state "$activated_sha" "$origin_ready" "$public_ready" || return
   rm -f "$STATE_FILE"
-  printf '%s\n' '{"status":"committed","sourceMutation":false,"databaseMutation":false}'
+  printf '{"status":"committed","releaseSha":"%s","originIngressReady":%s,"publicDomainReady":%s,"sourceMutation":false,"databaseMutation":false}\n' \
+    "$activated_sha" "$origin_ready" "$public_ready"
 }
 
 mkdir -p "$ROOT_DIR"
