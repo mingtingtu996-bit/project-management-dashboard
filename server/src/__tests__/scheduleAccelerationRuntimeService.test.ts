@@ -776,6 +776,41 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
   })
 
+  it('rejects an available remaining metric with the wrong unit when no dated runtime fact exists', async () => {
+    mocks.getTasks.mockResolvedValue([{
+      id: 'task-wrong-duration-unit',
+      project_id: 'project-1',
+      title: 'Undated runtime task',
+      planned_start_date: null,
+      planned_end_date: null,
+      start_date: null,
+      end_date: null,
+      actual_start_date: null,
+      actual_end_date: null,
+      status: 'in_progress',
+      progress: 40,
+      standard_task_metadata: {
+        durationContributionMode: 'duration_bearing',
+        rowProjectionMode: 'schedule_row',
+      },
+    }])
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([{
+      taskId: 'task-wrong-duration-unit',
+      remainingDuration: buildAvailableDurationMetric(5, 'calendar_day', '2026-06-10'),
+    }] as any)
+
+    await expect(buildRuntimeProjectRemainingDurationForecast({
+      projectId: 'project-1',
+      asOfDate: '2026-06-10',
+    })).rejects.toMatchObject({
+      code: 'PROJECT_REMAINING_FORECAST_UNAVAILABLE',
+      operation: 'runtime_remaining_forecast_evidence',
+    })
+
+    expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
+  })
+
   it('normalizes DB circuit failures during runtime task reads as forecast unavailable', async () => {
     mocks.getTasks.mockRejectedValue(new Error('dbService.getTasks REST page 1 skipped because Supabase REST circuit is open'))
 

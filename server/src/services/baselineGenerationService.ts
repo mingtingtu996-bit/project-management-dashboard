@@ -2107,6 +2107,7 @@ async function loadMissingDateDurationSuggestions(
     zoneObjectId: task.physical_zone_object_id ?? task.functional_area_object_id,
     plannedStartDate: taskPlanStartDate(task),
     plannedEndDate: taskPlanEndDate(task),
+    workCalendar: options?.constructionCalendar,
     progress: task.progress,
     responsibleUnitId: task.participant_unit_id,
     acceptanceRequired: task.acceptance_required,

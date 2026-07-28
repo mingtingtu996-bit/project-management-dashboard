@@ -2186,7 +2186,7 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
   it('uses one frozen calendar and asOf context for baseline generation and candidate scoring', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-31T16:30:00.000Z'))
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+    const frozenCalendar = {
       basis: 'official_construction_calendar_seed',
       windows: [],
       calendarRef: 'work_calendar',
@@ -2194,7 +2194,8 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       timezone: 'Asia/Shanghai',
       availability: 'available',
       unavailableReason: null,
-    })
+    } as const
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(frozenCalendar)
     mockSupabaseRows({
       task_baselines: [{
         id: 'baseline-1',
@@ -2203,19 +2204,34 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
         status: 'confirmed',
       }],
       task_baseline_items: [],
-      tasks: [{
-        id: 'task-missing-end',
-        project_id: 'project-1',
-        title: 'In-progress task missing its end date',
-        planned_start_date: '2026-06-01',
-        planned_end_date: null,
-        actual_start_date: '2026-06-01',
-        status: 'in_progress',
-        progress: 20,
-        is_executable: true,
-        is_wbs_summary: false,
-        sort_order: 1,
-      }],
+      tasks: [
+        {
+          id: 'task-missing-end',
+          project_id: 'project-1',
+          title: 'In-progress task missing its end date',
+          planned_start_date: '2026-06-01',
+          planned_end_date: null,
+          actual_start_date: '2026-06-01',
+          status: 'in_progress',
+          progress: 20,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 1,
+        },
+        {
+          id: 'task-missing-end-2',
+          project_id: 'project-1',
+          title: 'Second in-progress task missing its end date',
+          planned_start_date: '2026-06-01',
+          planned_end_date: null,
+          actual_start_date: '2026-06-01',
+          status: 'in_progress',
+          progress: 10,
+          is_executable: true,
+          is_wbs_summary: false,
+          sort_order: 2,
+        },
+      ],
       duration_forecasts: [],
     })
     mocks.getTaskDurationSuggestion.mockResolvedValue({
@@ -2286,11 +2302,14 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
         planned_start_date: '2026-06-01',
         planned_end_date: '2026-06-05',
       }))
-      expect(preparation.candidate?.metrics.suggestedDurationCount).toBe(1)
+      expect(preparation.candidate?.metrics.suggestedDurationCount).toBe(2)
       expect(preparation.candidate?.reasons).toEqual(expect.arrayContaining([
         expect.objectContaining({ code: 'duration_suggestion_input', severity: 'info' }),
       ]))
-      expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(1)
+      expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledTimes(2)
+      for (const [input] of mocks.getTaskDurationSuggestion.mock.calls) {
+        expect(input).toEqual(expect.objectContaining({ workCalendar: frozenCalendar }))
+      }
       expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledTimes(1)
     } finally {
       vi.useRealTimers()

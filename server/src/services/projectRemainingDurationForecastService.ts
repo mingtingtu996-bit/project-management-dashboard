@@ -625,7 +625,16 @@ function readRowProbabilityDurationMetrics(
     asOfDate,
     calendar,
   )
-  if (p20 === null || p50 === null || p80 === null || p20 <= 0 || p50 <= 0 || p80 <= 0) return null
+  if (
+    p20 === null
+    || p50 === null
+    || p80 === null
+    || p20 <= 0
+    || p50 <= 0
+    || p80 <= 0
+    || p20 > p50
+    || p50 > p80
+  ) return null
   return { p20, p50, p80 }
 }
 
@@ -1120,6 +1129,8 @@ export function buildProjectRemainingDurationForecast(params: {
   const latestStartGateFinishDate = latestDate(startGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestFinishGateFinishDate = latestDate(finishGateRows.map((row) => (
     readExplicitExternalGateFinishDate(row)
+      ? readExternalGateFinishDate(row, asOfDate, constructionCalendar)
+      : null
   )))
   const latestCommitmentFinishDate = normalizeDate(monthlyCommitments.latestCommitmentFinishDate)
   const networkProbabilityResult = buildNetworkProbability({
@@ -1205,6 +1216,8 @@ export function buildProjectRemainingDurationForecast(params: {
   ])
   const latestHandoverGateFinishDate = latestDate(handoverGateRows.map((row) => (
     readExplicitExternalGateFinishDate(row)
+      ? readExternalGateFinishDate(row, asOfDate, constructionCalendar)
+      : null
   )))
   const handoverBaseFinishDate = latestDate([finishGateFinishDate, internalWorkFinishDate])
   const handoverGateFinishDate = latestDate([

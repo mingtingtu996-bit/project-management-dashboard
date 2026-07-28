@@ -1688,6 +1688,69 @@ describe('project critical path service', () => {
     }
   })
 
+  it('does not publish or arbitrate inverted typed probability percentiles', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = [
+      {
+        id: 'main-critical',
+        project_id: 'project-variance-inverted',
+        title: 'Main critical chain',
+        start_date: '2026-06-01',
+        end_date: '2026-06-10',
+        planned_end_date: '2026-06-10',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+      {
+        id: 'near-critical-variable',
+        project_id: 'project-variance-inverted',
+        title: 'Near critical invalid percentile work',
+        start_date: '2026-06-01',
+        end_date: '2026-06-09',
+        planned_end_date: '2026-06-09',
+        status: 'in_progress',
+        progress: 50,
+        actual_start_date: '2026-06-01',
+      },
+    ]
+    mocks.tables.task_dependencies = []
+    mocks.listCurrentTaskDurationForecasts.mockResolvedValue([
+      {
+        taskId: 'main-critical',
+        remainingDuration: availableProductionDayMetric(10),
+      },
+      {
+        taskId: 'near-critical-variable',
+        remainingDuration: availableProductionDayMetric(9),
+        probabilityDuration: {
+          p50RemainingDays: 9,
+          p80RemainingDays: 30,
+          confidenceBandWidthDays: 21,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: availableProductionDayMetric(16),
+          p50RemainingDuration: availableProductionDayMetric(9),
+          p80RemainingDuration: availableProductionDayMetric(30),
+        },
+      },
+    ] as any)
+
+    try {
+      const snapshot = await getProjectCriticalPathSnapshot('project-variance-inverted')
+      const task = snapshot.tasks.find((item) => item.taskId === 'near-critical-variable') as any
+
+      expect(task).toBeUndefined()
+      expect(snapshot.alternateChains).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ taskIds: ['near-critical-variable'], isHighVarianceNearCritical: true }),
+      ]))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('uses construction production days for planned CPM task durations', async () => {
     mocks.resolveConstructionCalendarContext.mockResolvedValue({
       basis: 'official_construction_calendar_seed',

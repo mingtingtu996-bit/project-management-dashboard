@@ -19,7 +19,11 @@ import { getProjectCriticalPathSnapshot } from './projectCriticalPathService.js'
 import { listCurrentTaskDurationForecasts } from './taskDurationForecastService.js'
 import { getTaskDurationSuggestion } from './durationSuggestionService.js'
 import { buildRuntimeExecutionInference } from './runtimeExecutionInferenceService.js'
-import { resolveConstructionCalendarContext, type ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  isAuthoritativeConstructionCalendar,
+  resolveConstructionCalendarContext,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 import {
   backtestEarliestPendingDurationAccuracyPrediction,
   recordDurationAccuracyPrediction,
@@ -1432,23 +1436,54 @@ function isRuntimeDurationBearingRow(row: ScheduleAccelerationRow) {
   return (!mode || mode === 'schedule_row') && contributionMode === 'duration_bearing'
 }
 
-function hasRuntimeRemainingForecastEvidence(rows: ScheduleAccelerationRow[]) {
+function hasMatchingRuntimeRemainingDuration(
+  value: unknown,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return false
+  const metric = normalizeDurationMetricDto(value)
+  const durationValue = Number(metric?.value)
+  return Boolean(
+    metric
+      && metric.availability === 'available'
+      && metric.unit === 'construction_production_day'
+      && metric.calendarRef === calendar.calendarRef
+      && metric.calendarVersion === calendar.calendarVersion
+      && metric.timezone === calendar.timezone
+      && metric.asOf === asOfDate
+      && Number.isFinite(durationValue)
+      && durationValue > 0,
+  )
+}
+
+function hasRuntimeRemainingForecastEvidence(
+  rows: ScheduleAccelerationRow[],
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
   return rows.some((row) => {
     const mode = normalizeText(row.rowProjectionMode ?? row.values.row_projection_mode)
     if (mode && mode !== 'schedule_row') return false
     const values = row.values
-    const remainingDuration = normalizeDurationMetricDto(values.remaining_duration ?? values.remainingDuration)
     return Boolean(
       normalizeDate(values.planned_end_date ?? values.end_date)
         ?? normalizeDate(values.actual_end_date)
-        ?? (remainingDuration?.availability === 'available' ? 'remaining_duration' : null)
-        ?? (readOptionalNumber(values.critical_path_span_days) != null ? 'critical_path_span_days' : null),
+        ?? (hasMatchingRuntimeRemainingDuration(
+          values.remaining_duration ?? values.remainingDuration,
+          asOfDate,
+          calendar,
+        ) ? 'remaining_duration' : null),
     )
   })
 }
 
-function assertRuntimeRemainingForecastEvidence(rows: ScheduleAccelerationRow[]) {
-  if (hasRuntimeRemainingForecastEvidence(rows)) return
+function assertRuntimeRemainingForecastEvidence(
+  rows: ScheduleAccelerationRow[],
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (hasRuntimeRemainingForecastEvidence(rows, asOfDate, calendar)) return
   throw new ProjectRemainingForecastUnavailableError(
     'runtime remaining forecast evidence unavailable',
     'runtime_remaining_forecast_evidence',
@@ -1894,7 +1929,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     accelerationContext,
     durationAsOfDate,
   } = await buildRuntimeForecastInputs(params.projectId, params.context, params.asOfDate)
-  assertRuntimeRemainingForecastEvidence(rows)
+  assertRuntimeRemainingForecastEvidence(rows, durationAsOfDate, constructionCalendar)
   const targetEndDate = await resolveRuntimeTargetEndDate(params.projectId, params.targetEndDate)
   const constructionOrganizationLineage = readConstructionOrganizationPlanNetworkRuntimeLineage(
     {
@@ -2060,7 +2095,7 @@ async function computeRuntimeProjectRemainingDurationForecast(params: {
     mergedRuntimeContext,
     monthlyCommitments,
   } = await buildRuntimeForecastInputs(params.projectId, params.context, params.asOfDate)
-  assertRuntimeRemainingForecastEvidence(rows)
+  assertRuntimeRemainingForecastEvidence(rows, durationAsOfDate, constructionCalendar)
   const targetEndDate = await resolveRuntimeTargetEndDate(params.projectId, params.targetEndDate)
   const projectRemainingForecast = buildProjectRemainingDurationForecast({
     rows,

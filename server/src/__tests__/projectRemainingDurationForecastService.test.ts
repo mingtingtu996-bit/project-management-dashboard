@@ -698,7 +698,7 @@ describe('projectRemainingDurationForecastService', () => {
     }))
   })
 
-  it('orders inverted E2 confidence-band dates before choosing the governing project finish', () => {
+  it('rejects inverted typed E2 percentiles instead of relabeling them as a usable confidence band', () => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
@@ -716,16 +716,20 @@ describe('projectRemainingDurationForecastService', () => {
       targetEndDate: '2026-06-25',
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-07-05')
+    expect(forecast.forecastFinishDate).toBe('2026-06-20')
     expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
-      optimisticBandFinishDate: '2026-06-18',
-      confidenceBandFinishDate: '2026-07-05',
+      optimisticBandFinishDate: null,
+      confidenceBandFinishDate: null,
       confidenceBandDecision: expect.objectContaining({
-        status: 'applied',
-        governingFinishSource: 'confidence_band',
+        status: 'not_applicable',
+        governingFinishSource: 'deterministic_finish',
       }),
     }))
-    expect((forecast.calculationContext as any).durationPlausibilityWarnings).toEqual(expect.arrayContaining([
+    expect(forecast.calculationContext.criticalPath.networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'pert_analytic',
+      fallbackReasons: expect.arrayContaining(['insufficient_network_task_count']),
+    }))
+    expect((forecast.calculationContext as any).durationPlausibilityWarnings).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ ruleId: 'duration.band.order' }),
     ]))
   })
@@ -1218,6 +1222,48 @@ describe('projectRemainingDurationForecastService', () => {
         parallelWaitCount: 1,
         finishGateCount: 0,
       }),
+    }))
+  })
+
+  it('keeps governed typed remaining finish aligned across serial gate context and the final forecast', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-work',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-11',
+            remaining_duration: availableProductionDayMetric(2),
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'finish-gate',
+          values: {
+            title: 'Completion acceptance gate',
+            planned_start_date: '2026-06-11',
+            planned_end_date: '2026-06-12',
+            remaining_duration: availableProductionDayMetric(5),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'finish_gate',
+              acceptanceRequired: true,
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-14')
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      latestGateFinishDate: '2026-06-14',
+      finishGateFinishDate: '2026-06-14',
+      serializedGateFinishDate: '2026-06-14',
     }))
   })
 

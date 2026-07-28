@@ -1890,6 +1890,7 @@ function readMatchingForecastProbabilityWindow(
   const p50 = readMatchingForecastDurationMetric(metrics?.p50RemainingDuration, asOfDate, calendar)
   const p80 = readMatchingForecastDurationMetric(metrics?.p80RemainingDuration, asOfDate, calendar)
   if (!p20 || !p50 || !p80) return null
+  if (p20 > p50 || p50 > p80) return null
   return { p20, p50, p80 }
 }
 
