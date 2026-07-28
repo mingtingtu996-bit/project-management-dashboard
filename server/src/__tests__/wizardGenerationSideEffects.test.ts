@@ -3234,7 +3234,7 @@ describe('v1.4.22.1 project wizard route side effects', () => {
             code: 'runtime_reference_days',
             label: '运行参考工期',
             reference: 'STD-MEP-RESERVATION',
-            evidenceLevel: 'runtime_calibrated_l2 / P50 5 / P80 7 / 样本 3',
+            evidenceLevel: 'runtime_calibrated_l2',
             usageStatus: 'candidate_asset_used',
             consumptionPolicy: 'optional_published_learning_overlay',
           }),

@@ -4314,11 +4314,13 @@ function buildWizardDurationAssetReviewSummary(
       candidate.runtimeReferenceDaysStableCode,
       candidate.runtime_reference_days_stable_code,
     ) || null
-    const p50 = readNumber(candidate.runtimeReferenceDaysP50Days ?? candidate.runtime_reference_days_p50_days)
-    const p80 = readNumber(candidate.runtimeReferenceDaysP80Days ?? candidate.runtime_reference_days_p80_days)
-    const sampleCount = readNumber(
-      candidate.runtimeReferenceDaysSampleCount ?? candidate.runtime_reference_days_sample_count,
+    const distribution = normalizeDurationRiskDistributionDto(
+      candidate.runtimeReferenceDaysDurationRiskDistribution
+        ?? candidate.runtime_reference_days_duration_risk_distribution,
     )
+    const p50 = distribution?.availability === 'available' ? distribution.p50Duration.value : null
+    const p80 = distribution?.availability === 'available' ? distribution.p80Duration.value : null
+    const sampleCount = distribution?.availability === 'available' ? distribution.sampleCount : null
     const evidenceLevel = joinWizardDurationAssetEvidenceParts([
       firstText(candidate.runtimeReferenceDaysEvidenceLevel, candidate.runtime_reference_days_evidence_level),
       p50 == null ? null : `P50 ${p50}`,
