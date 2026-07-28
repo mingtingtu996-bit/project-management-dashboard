@@ -153,6 +153,19 @@ function isConfirmCloseRiskRequest(urlString, method, riskId) {
   return url.pathname === `/api/risks/${riskId}/confirm-close`
 }
 
+const mockCauseTaxonomy = {
+  version: 'v1.0.0',
+  entries: [
+    {
+      code: 'other',
+      label: '其他',
+      category: 'other',
+      linkedDeviationReasonTypes: [],
+      priority: 999,
+    },
+  ],
+}
+
 async function isHttpReady(url) {
   try {
     const response = await fetch(url)
@@ -189,7 +202,7 @@ function startPreviewServer() {
   })
 }
 
-function buildMockResponse(urlString, method, fixtureRisks = mockRisks) {
+export function buildMockResponse(urlString, method, fixtureRisks = mockRisks) {
   const url = new URL(urlString)
   const { pathname } = url
   const authResponse = maybeBuildMockAuthResponse(pathname, json)
@@ -232,6 +245,10 @@ function buildMockResponse(urlString, method, fixtureRisks = mockRisks) {
         canEdit: true,
       },
     })
+  }
+
+  if (pathname === '/api/cause-attributions/taxonomy') {
+    return json({ success: true, data: mockCauseTaxonomy })
   }
 
   if (pathname === '/api/warnings') {

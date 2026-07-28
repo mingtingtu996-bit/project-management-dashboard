@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  buildMockResponse,
   extractRiskGuardEntityIdFromDetailTestId,
   preparePendingRiskFixture,
   resolveRiskGuardProjectId,
@@ -44,4 +45,12 @@ test('risk-guard verification prepares the same stale pending-risk fixture in mo
   })
   assert.equal(prepared.staleVersionInjected, true)
   assert.equal(prepared.patchedRisks[1].version, 3)
+})
+
+test('risk-guard mock exposes a controlled taxonomy for structured closure', () => {
+  const response = buildMockResponse('http://127.0.0.1:3001/api/cause-attributions/taxonomy', 'GET')
+  const body = JSON.parse(response.body)
+
+  assert.equal(body.success, true)
+  assert.equal(body.data.entries.some((entry) => entry.code === 'other'), true)
 })
