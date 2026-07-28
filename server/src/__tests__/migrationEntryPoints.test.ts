@@ -35,6 +35,103 @@ describe('migration helper entrypoints', () => {
     expect(mismatches).toEqual([])
   })
 
+  it('exposes migration 324 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '324_canonical_cause_and_benchmark_provenance.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.duration_benchmark_cause_segments')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_benchmark_cause_segments')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+  })
+
+  it('exposes migration 325 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '325_duration_asset_review_queue.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.duration_asset_review_items')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.duration_asset_review_items')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+  })
+
+  it('exposes migration 326 through standalone, rollback, and canonical CLEAN entrypoints', () => {
+    const migrationName = '326_execution_fact_governance.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.execution_fact_events')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.execution_fact_events')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+  })
+
+  it('keeps every closeout migration from 327 through 330 aligned across forward, CLEAN, and rollback entrypoints', () => {
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const migrationNames = [
+      '327_task_write_finalization_outbox.sql',
+      '328_duration_asset_platform_operator.sql',
+      '329_algorithm_intervention_evaluations.sql',
+      '330_task_dependency_heuristic_retirement.sql',
+    ]
+
+    for (const migrationName of migrationNames) {
+      const forward = readServerFile('migrations', migrationName)
+      const rollback = readServerFile('migrations', 'rollback', migrationName)
+
+      expect(clean, migrationName).toContain(`-- Source: ${migrationName}`)
+      expect(clean, migrationName).toContain(forward.trim())
+      expect(rollback.trim().length, migrationName).toBeGreaterThan(0)
+    }
+  })
+
+  it('exposes migration 331 through standalone, rollback, CLEAN, and domain registry entrypoints', () => {
+    const migrationName = '331_schedule_acceleration_recommendations.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const registry = JSON.parse(readServerFile('src', 'registry', 'system-domain-registry.json')) as {
+      entries: Array<{ kind: string; id: string; architectureUnit: string; runtimeScope: string }>
+    }
+
+    expect(forward).toContain('CREATE TABLE IF NOT EXISTS public.schedule_acceleration_recommendations')
+    expect(rollback).toContain('DROP TABLE IF EXISTS public.schedule_acceleration_recommendations')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+    expect(registry.entries).toContainEqual(expect.objectContaining({
+      kind: 'migration',
+      id: '331_schedule_acceleration_recommendations',
+      architectureUnit: '预测桥',
+      runtimeScope: 'business_core',
+    }))
+  })
+
+  it('exposes migration 332 through standalone, rollback, CLEAN, and domain registry entrypoints', () => {
+    const migrationName = '332_schedule_acceleration_adoption_hardening.sql'
+    const forward = readServerFile('migrations', migrationName)
+    const rollback = readServerFile('migrations', 'rollback', migrationName)
+    const clean = readServerFile('migrations', 'CLEAN_MIGRATION_V4.sql')
+    const registry = JSON.parse(readServerFile('src', 'registry', 'system-domain-registry.json')) as {
+      entries: Array<{ kind: string; id: string; architectureUnit: string; runtimeScope: string }>
+    }
+
+    expect(forward).toContain('task_commit_requests_immutable_evidence_trigger')
+    expect(rollback).toContain('DROP TRIGGER IF EXISTS task_commit_requests_immutable_evidence_trigger')
+    expect(clean).toContain(`-- Source: ${migrationName}`)
+    expect(clean).toContain(forward.trim())
+    expect(registry.entries).toContainEqual(expect.objectContaining({
+      kind: 'migration',
+      id: '332_schedule_acceleration_adoption_hardening',
+      runtimeScope: 'business_core',
+    }))
+  })
+
   it('pins clean migration helpers to the canonical V4 bundle only', () => {
     const cleanRunner = readServerFile('run-clean-migration.mjs')
     const guidanceRunner = readServerFile('run-migration.js')

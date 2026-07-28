@@ -6,6 +6,7 @@ import {
   type WbsTargetFeasibility,
 } from '@/services/wbsTemplateGenerationApi'
 import type { DetailLevel, WizardDraftPayload, WizardStep } from './types'
+import { normalizeDurationRiskDistribution, type DurationRiskDistributionDto } from '@/lib/durationMetric'
 
 export interface CompanyProjectTemplateItem {
   id: string
@@ -283,6 +284,7 @@ export interface CandidateDurationAssetPreviewItem {
   riskP20DurationDays?: number | null
   riskP50DurationDays?: number | null
   riskP80DurationDays?: number | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   calendarBasis?: string | null
   constructionCalendarWindowCount?: number | null
   processSeasonalDurationAssetConsumed?: boolean
@@ -303,6 +305,7 @@ export interface CandidateDurationAssetPreviewItem {
   runtimeReferenceDaysP50Days?: number | null
   runtimeReferenceDaysP80Days?: number | null
   runtimeReferenceDaysSampleCount?: number | null
+  runtimeReferenceDaysDurationRiskDistribution?: DurationRiskDistributionDto | null
   runtimeReferenceDaysMutationBoundary?: string | null
   dependencyAssetConsumed?: boolean
   dependencyAssetType?: string | null
@@ -587,6 +590,22 @@ export interface WizardProfilePreview {
   }
 }
 
+function normalizeCandidateDurationAssetPreview(
+  preview: CandidateDurationAssetPreview | null | undefined,
+): CandidateDurationAssetPreview | null | undefined {
+  if (!preview) return preview
+  return {
+    ...preview,
+    items: preview.items?.map((item) => ({
+      ...item,
+      durationRiskDistribution: normalizeDurationRiskDistribution(item.durationRiskDistribution),
+      runtimeReferenceDaysDurationRiskDistribution: normalizeDurationRiskDistribution(
+        item.runtimeReferenceDaysDurationRiskDistribution,
+      ),
+    })),
+  }
+}
+
 function normalizeWizardCreateResult(result: WizardCreateResult): WizardCreateResult {
   if (!result.generation) return result
   return {
@@ -594,6 +613,7 @@ function normalizeWizardCreateResult(result: WizardCreateResult): WizardCreateRe
     generation: {
       ...result.generation,
       targetFeasibility: normalizeWbsTargetFeasibility(result.generation.targetFeasibility),
+      candidateDurationAssetPreview: normalizeCandidateDurationAssetPreview(result.generation.candidateDurationAssetPreview),
     },
   }
 }
@@ -602,13 +622,24 @@ function normalizeWizardGenerationStatus(result: WizardGenerationStatus): Wizard
   return {
     ...result,
     targetFeasibility: normalizeWbsTargetFeasibility(result.targetFeasibility),
+    candidateDurationAssetPreview: normalizeCandidateDurationAssetPreview(result.candidateDurationAssetPreview),
   }
 }
 
 function normalizeWizardProfilePreview(result: WizardProfilePreview): WizardProfilePreview {
+  const generation = result.profile?.generation
   return {
     ...result,
     targetFeasibility: normalizeWbsTargetFeasibility(result.targetFeasibility),
+    ...(generation ? {
+      profile: {
+        ...result.profile,
+        generation: {
+          ...generation,
+          candidateDurationAssetPreview: normalizeCandidateDurationAssetPreview(generation.candidateDurationAssetPreview),
+        },
+      },
+    } : {}),
   }
 }
 

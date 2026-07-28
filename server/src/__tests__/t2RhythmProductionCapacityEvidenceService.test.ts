@@ -6,6 +6,18 @@ import {
 } from '../services/t2RhythmProductionCapacityEvidenceService.js'
 import { buildT2RhythmScheduleCandidatePackage } from '../services/t2DivisionRhythmTemplateRegistryService.js'
 
+function identifiedConstructionCalendar() {
+  return {
+    basis: 'official_construction_calendar_seed' as const,
+    windows: [],
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 describe('t2RhythmProductionCapacityEvidenceService', () => {
   it('builds ready T2 production capacity evidence from resource sidecar, workfaces, and official calendar context', () => {
     const evidence = buildT2RhythmProductionCapacityEvidence({
@@ -29,10 +41,7 @@ describe('t2RhythmProductionCapacityEvidenceService', () => {
           },
         ],
       },
-      constructionCalendar: {
-        basis: 'official_construction_calendar_seed',
-        windows: [],
-      },
+      constructionCalendar: identifiedConstructionCalendar(),
     })
 
     expect(evidence).toEqual(expect.objectContaining({
@@ -72,10 +81,7 @@ describe('t2RhythmProductionCapacityEvidenceService', () => {
           },
         ],
       },
-      constructionCalendar: {
-        basis: 'official_construction_calendar_seed',
-        windows: [],
-      },
+      constructionCalendar: identifiedConstructionCalendar(),
     })
 
     expect(evidence.status).toBe('partial')
@@ -117,10 +123,7 @@ describe('t2RhythmProductionCapacityEvidenceService', () => {
           workfaceKeys: ['floor-01', 'floor-02'],
         }],
       },
-      constructionCalendar: {
-        basis: 'official_construction_calendar_seed',
-        windows: [],
-      },
+      constructionCalendar: identifiedConstructionCalendar(),
     })
 
     const coverage = buildT2RhythmProductionCapacityCoverage({
@@ -158,5 +161,30 @@ describe('t2RhythmProductionCapacityEvidenceService', () => {
       'construction_rhythm_expansion:workfaces',
       'construction_calendar:official_construction_calendar_seed',
     ]))
+  })
+
+  it('does not expose working-day capacity when official calendar identity is unavailable', () => {
+    const evidence = buildT2RhythmProductionCapacityEvidence({
+      resourceSidecar: {
+        availableParallelWorkfaces: 2,
+        availableCrewStreams: 2,
+      },
+      constructionRhythmExpansion: {
+        workfaceCandidateCount: 2,
+        dominantRhythmUnits: ['floor'],
+      },
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    })
+
+    expect(evidence.productionCapacity.calendarBasis).toBe('calendar_day')
+    expect(evidence.evidenceRefs).toContain('construction_calendar:calendar_day')
   })
 })

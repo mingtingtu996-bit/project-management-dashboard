@@ -379,6 +379,11 @@ function serializeDurationSuggestion(suggestion: any) {
     planReferenceDays,
     contextualReferenceDays,
     remainingForecastDays,
+    riskP20DurationDays: suggestion?.riskP20DurationDays ?? null,
+    riskP50DurationDays: suggestion?.riskP50DurationDays ?? null,
+    riskP80DurationDays: suggestion?.riskP80DurationDays ?? null,
+    durationRiskRange: suggestion?.durationRiskRange ?? null,
+    durationRiskDistribution: suggestion?.durationRiskDistribution ?? null,
     conservativeDurationDays,
     confidenceLevel,
     confidenceScore,
@@ -398,6 +403,17 @@ function serializeDurationSuggestion(suggestion: any) {
     dataUpgradePath: suggestion?.dataUpgradePath ?? null,
     dataUpgradeBlockedBy: suggestion?.dataUpgradeBlockedBy ?? null,
     factorAvailability: suggestion?.factorAvailability ?? null,
+    benchmarkGeneratedAt: suggestion?.benchmarkGeneratedAt ?? null,
+    benchmarkAsOf: suggestion?.benchmarkAsOf ?? null,
+    benchmarkWindowStart: suggestion?.benchmarkWindowStart ?? null,
+    benchmarkVersion: suggestion?.benchmarkVersion ?? null,
+    benchmarkSampleCount: suggestion?.benchmarkSampleCount ?? null,
+    benchmarkDayBasis: suggestion?.benchmarkDayBasis ?? null,
+    benchmarkScope: suggestion?.benchmarkScope ?? null,
+    benchmarkProvenance: suggestion?.benchmarkProvenance ?? null,
+    benchmarkProvenanceAvailability: suggestion?.benchmarkProvenanceAvailability ?? null,
+    benchmarkProvenanceReasonCodes: suggestion?.benchmarkProvenanceReasonCodes ?? null,
+    benchmarkProvenanceUnavailableReason: suggestion?.benchmarkProvenanceUnavailableReason ?? null,
     durationBoundaryRole: suggestion?.durationBoundaryRole ?? null,
     parentDurationBoundaryPolicy: suggestion?.parentDurationBoundaryPolicy ?? null,
     nonAdditiveWithParentDuration: suggestion?.nonAdditiveWithParentDuration ?? null,
@@ -416,7 +432,14 @@ function serializeDurationSuggestion(suggestion: any) {
 function serializeTaskDurationForecast(forecast: any) {
   const durationOutputCode = forecast?.durationOutputCode ?? null
   const durationOutputSemanticFieldName = forecast?.durationOutputSemanticFieldName ?? null
-  const remainingForecastDays = forecast?.remainingForecastDays ?? null
+  const remainingDuration = forecast?.remainingDuration ?? null
+  const forecastDelay = forecast?.forecastDelay ?? null
+  const probabilityDurationMetrics = forecast?.probabilityDurationMetrics ?? null
+  const remainingForecastDays = remainingDuration?.availability === 'available'
+    && remainingDuration?.unit === 'construction_production_day'
+    && Number.isFinite(Number(remainingDuration?.value))
+    ? Number(remainingDuration.value)
+    : null
   const normalizedOutputCode = String(durationOutputCode ?? '').trim()
   const semanticReferenceDays = normalizedOutputCode === 'remaining_forecast' ? remainingForecastDays : null
   return {
@@ -424,9 +447,16 @@ function serializeTaskDurationForecast(forecast: any) {
     durationOutputCode,
     durationOutputSemanticFieldName,
     remainingForecastDays,
+    remainingDuration,
     conservativeDurationDays: semanticReferenceDays == null ? null : forecast?.conservativeDurationDays ?? null,
     forecastFinishDate: forecast?.forecastFinishDate ?? null,
-    forecastDelayDays: forecast?.forecastDelayDays ?? 0,
+    forecastDelay,
+    forecastDelayDays: forecastDelay?.availability === 'available'
+      && forecastDelay?.unit === 'construction_production_day'
+      && Number.isFinite(Number(forecastDelay?.value))
+      ? Number(forecastDelay.value)
+      : null,
+    probabilityDurationMetrics,
     delayRiskIndex: forecast?.delayRiskIndex ?? null,
     confidenceLevel: forecast?.confidenceLevel ?? null,
     confidenceScore: forecast?.confidenceScore ?? null,

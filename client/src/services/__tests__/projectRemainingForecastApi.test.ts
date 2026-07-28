@@ -560,22 +560,12 @@ describe('projectRemainingForecastApi governed project duration output', () => {
     })
 
     const response = await recordScheduleAccelerationRecommendationAdoption('project-1', {
-      mode: 'preview_only',
-      source: 'target_end_compression',
-      targetEndDate: '2027-03-31',
-      naturalEndDate: '2027-04-30',
-      overshootDays: 30,
-      totalRecoverDays: 12,
-      remainingGapDays: 18,
-      verdict: 'needs_scope_decision',
-      actions: [],
-      protectedConstraints: [],
-    } as any, {
-      outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
-      outcomeMetadata: {
-        operationCount: 3,
-      },
-    })
+      id: 'recommendation-1',
+      recommendationHash: 'recommendation-hash-1',
+      operationsHash: 'operations-hash-1',
+      issuedAt: '2027-02-15T00:00:00.000Z',
+      expiresAt: '2027-02-15T00:30:00.000Z',
+    }, 'task-commit-request-1')
 
     expect(response).toMatchObject({
       adopted: true,
@@ -601,14 +591,9 @@ describe('projectRemainingForecastApi governed project duration output', () => {
     expect(mocks.apiPost).toHaveBeenCalledWith(
       '/api/projects/project-1/schedule-acceleration/recommendations/adopt',
       {
-        proposal: expect.objectContaining({
-          targetEndDate: '2027-03-31',
-          naturalEndDate: '2027-04-30',
-        }),
-        outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
-        outcomeMetadata: expect.objectContaining({
-          operationCount: 3,
-        }),
+        recommendationId: 'recommendation-1',
+        recommendationHash: 'recommendation-hash-1',
+        taskCommitRequestId: 'task-commit-request-1',
       },
       undefined,
     )

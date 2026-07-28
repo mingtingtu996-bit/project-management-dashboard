@@ -429,6 +429,97 @@ describe('Step6ProjectProfileConfirmation', () => {
     expect(onGenerate).toHaveBeenCalledTimes(1)
   })
 
+  it('uses the typed production-day reserve for candidate duration risk', () => {
+    render(
+      <Step6ProjectProfileConfirmation
+        preview={{
+          ...basePreview,
+          profile: {
+            ...basePreview.profile,
+            generation: {
+              ...basePreview.profile.generation,
+              candidateDurationAssetPreview: {
+                totalCount: 1,
+                riskRangeCount: 1,
+                items: [{
+                  clientRowId: 'row-1',
+                  title: '主体结构施工',
+                  riskP20DurationDays: 150,
+                  riskP50DurationDays: 180,
+                  riskP80DurationDays: 240,
+                  durationRiskDistribution: {
+                    p20Duration: durationMetric(15, 'construction_production_day'),
+                    p50Duration: durationMetric(18, 'construction_production_day'),
+                    p80Duration: durationMetric(24, 'construction_production_day'),
+                    reserveDuration: durationMetric(6, 'construction_production_day'),
+                    source: 'duration_benchmarks',
+                    scope: 'company',
+                    sampleCount: 24,
+                    generatedAt: '2026-07-21T08:00:00.000Z',
+                    sourceAsOf: '2026-07-20T23:59:59.000Z',
+                    availability: 'available',
+                    unavailableReason: null,
+                  },
+                }],
+              },
+            },
+          },
+        }}
+        onGenerate={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('工期风险建议预留 6 个生产日')).toBeInTheDocument()
+    expect(screen.queryByText('工期风险建议预留 60 天')).not.toBeInTheDocument()
+  })
+
+  it('does not display raw runtime reference days without typed production-day provenance', () => {
+    render(
+      <Step6ProjectProfileConfirmation
+        preview={{
+          ...basePreview,
+          profile: {
+            ...basePreview.profile,
+            generation: {
+              ...basePreview.profile.generation,
+              candidateDurationAssetPreview: {
+                totalCount: 1,
+                items: [{
+                  clientRowId: 'raw-runtime-row',
+                  title: 'Raw runtime row',
+                  runtimeReferenceDaysConsumed: true,
+                  runtimeReferenceDaysStableCode: 'BTMP-SCH-01',
+                  runtimeReferenceDaysP50Days: 160,
+                  runtimeReferenceDaysP80Days: 176,
+                  runtimeReferenceDaysSampleCount: 3,
+                  durationRiskDistribution: {
+                    p20Duration: durationMetric(150, 'construction_production_day'),
+                    p50Duration: durationMetric(160, 'construction_production_day'),
+                    p80Duration: durationMetric(176, 'construction_production_day'),
+                    reserveDuration: durationMetric(16, 'construction_production_day'),
+                    source: 'system_standard_duration_asset',
+                    scope: 'system',
+                    sampleCount: null,
+                    generatedAt: '2026-07-21T08:00:00.000Z',
+                    sourceAsOf: '2026-07-20T00:00:00.000Z',
+                    availability: 'available',
+                    unavailableReason: null,
+                  },
+                }],
+              },
+            },
+          },
+        }}
+        onGenerate={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('参考天数 BTMP-SCH-01：生产日口径不可用 / 样本 3')).toBeInTheDocument()
+    expect(screen.queryByText(/参考天数 BTMP-SCH-01：160 天/)).not.toBeInTheDocument()
+  })
+
   it('shows candidate critical path evidence from the preview without implying production writes', () => {
     render(
       <Step6ProjectProfileConfirmation

@@ -2013,6 +2013,11 @@ describe('v1.4.7.2 WBS template generation service', () => {
             endDate: '2026-06-03',
             countsAsConstructionShutdown: true,
           }],
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
         },
         scope: {
           building_object_id: 'building-1',
@@ -2652,6 +2657,11 @@ describe('v1.4.7.2 WBS template generation service', () => {
             endDate: '2026-06-26',
             countsAsConstructionShutdown: true,
           }],
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          availability: 'available',
+          unavailableReason: null,
         },
         scope: {
           physical_zone_object_id: 'zone-1',

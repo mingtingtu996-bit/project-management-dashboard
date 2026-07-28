@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -30,6 +30,7 @@ import { DataConfidenceBreakdown } from '@/components/DataConfidenceBreakdown'
 import { EmptyState } from '@/components/EmptyState'
 import { V14231PageReadinessBoundary } from '@/components/governance/V14231PageReadinessBoundary'
 import { ProjectRemainingForecastCard } from '@/components/ProjectRemainingForecastCard'
+import { ProjectStartReadinessPanel } from '@/components/ProjectStartReadinessPanel'
 import RecentTasksCard from '@/components/RecentTasksCard'
 import {
   ConstructionOrganizationScenarioSummary,
@@ -67,6 +68,7 @@ import type { WbsConstructionOrganizationScenarioSummary } from '@/services/wbsT
 
 type ProjectStatus = '未开始' | '进行中' | '已完成' | '已暂停'
 type CurrentProjectEntity = NonNullable<ReturnType<typeof useStore.getState>['currentProject']>
+type DashboardSupportTab = 'forecast' | 'trend' | 'execution' | 'readiness'
 
 type TodayProgressItem = {
   id: string
@@ -378,7 +380,6 @@ function DashboardDecisionOverview({
   const showSummarySkeleton = summaryLoading && !summaryData
   const summaryDateLabel = formatDashboardSummaryDate(summaryData?.summaryAsOf)
   const plannedEnd = summaryData?.plannedEndDate ?? currentProject.planned_end_date ?? currentProject.end_date ?? null
-  const daysUntilPlannedEnd = summaryData?.daysUntilPlannedEnd ?? null
   const hasForecastPlanWindow = Boolean(plannedEnd)
   const forecastMissingProgress = !summaryData || conclusion.actual === null
   const forecastNeedsProgress = !forecastMissingProgress && (conclusion.actual ?? 0) < 1
@@ -484,7 +485,14 @@ function DashboardDecisionOverview({
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span>距计划完工</span>
-                  <span className="num-mono text-slate-900">{hasForecastPlanWindow && !forecastNeedsProgress && daysUntilPlannedEnd != null ? `${daysUntilPlannedEnd} 天` : '--'}</span>
+                  <span className="num-mono text-slate-900">
+                    {hasForecastPlanWindow && !forecastNeedsProgress
+                      ? formatDurationMetric(summaryData?.futureDueWindow, {
+                        expectedUnit: 'calendar_day',
+                        unavailableLabel: '--',
+                      })
+                      : '--'}
+                  </span>
                 </div>
               </div>
             </>
@@ -1392,6 +1400,7 @@ function DashboardMonthlyTrend({ projectId, embedded = false }: { projectId: str
 
 export default function Dashboard() {
   const { toast } = useToast()
+  const location = useLocation()
   const currentProject = useStore((state) => state.currentProject)
   const updateProject = useStore((state) => state.updateProject)
   const [summary, setSummary] = useState<ProjectSummary | null>(null)
@@ -1408,8 +1417,10 @@ export default function Dashboard() {
   const dataQualityAbortRef = useRef<AbortController | null>(null)
   const healthDetailsAbortRef = useRef<AbortController | null>(null)
   const todayProgressAbortRef = useRef<AbortController | null>(null)
-  type DashboardSupportTab = 'forecast' | 'trend' | 'execution'
-  const [activeSupportTab, setActiveSupportTab] = useState<DashboardSupportTab | null>(null)
+  const requestedSupportTab = new URLSearchParams(location.search).get('tab')
+  const [activeSupportTab, setActiveSupportTab] = useState<DashboardSupportTab | null>(() => (
+    requestedSupportTab === 'readiness' ? 'readiness' : null
+  ))
   const projectId = currentProject?.id ?? ''
   const { isOwner } = usePermissions({ projectId })
   const [dataQualityActionLoading, setDataQualityActionLoading] = useState(false)
@@ -1603,6 +1614,10 @@ export default function Dashboard() {
       controller.abort()
     }
   }, [loadDataQualitySummary, loadHealthDetails, projectId, summaryData?.id, fetchCompleteTime])
+
+  useEffect(() => {
+    if (requestedSupportTab === 'readiness') setActiveSupportTab('readiness')
+  }, [requestedSupportTab])
 
   useEffect(() => {
     if (activeSupportTab !== 'execution') return undefined
@@ -1838,6 +1853,9 @@ export default function Dashboard() {
             <TabsTrigger value="execution" onClick={() => setActiveSupportTab('execution')} className="relative rounded-none bg-transparent px-0 py-2.5 text-xs font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-800 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
               执行明细
             </TabsTrigger>
+            <TabsTrigger value="readiness" onClick={() => setActiveSupportTab('readiness')} className="relative rounded-none bg-transparent px-0 py-2.5 text-xs font-medium text-slate-500 shadow-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:rounded-full after:bg-transparent hover:text-slate-700 data-[state=active]:bg-transparent data-[state=active]:text-slate-800 data-[state=active]:shadow-none data-[state=active]:after:bg-blue-600">
+              开工条件
+            </TabsTrigger>
           </TabsList>
 
           <div className={activeSupportTab === null ? 'min-h-0' : 'min-h-[25rem]'}>
@@ -1902,6 +1920,10 @@ export default function Dashboard() {
                   </div>
                 </div>
               ) : null}
+            </TabsContent>
+
+            <TabsContent value="readiness" className="pt-5">
+              {activeSupportTab === 'readiness' ? <ProjectStartReadinessPanel projectId={projectId} /> : null}
             </TabsContent>
           </div>
         </Tabs>

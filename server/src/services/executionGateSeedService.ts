@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import type { Task } from '../types/db.js'
 import { executeSQL } from './dbService.js'
+import { withDatabaseTransaction } from '../database.js'
+import { recordAcceptancePlanExecutionFacts } from './acceptancePlanExecutionFactService.js'
 
 type GateTask = Partial<Task> & Record<string, unknown>
 
@@ -674,7 +676,7 @@ function matchesExistingAcceptanceGate(row: AcceptancePlanIdentityRow, template:
     || normalizeText(notes.gateCode ?? notes.gate_code) === template.gateCode
 }
 
-export async function syncExecutionGateSeedTemplatesForTask(params: SyncExecutionGateSeedTemplatesParams) {
+async function syncExecutionGateSeedTemplatesForTaskInTransaction(params: SyncExecutionGateSeedTemplatesParams) {
   const { task, actorId } = params
   const derivation = deriveExecutionGateSeedTemplates(task)
   if (!derivation.taskId || !derivation.projectId) {
@@ -795,6 +797,20 @@ export async function syncExecutionGateSeedTemplatesForTask(params: SyncExecutio
        ) VALUES (?, 'acceptance_plan', ?, 'task', ?, 'covers_task', 'explicit', 'active', ?, ?)`,
       [derivation.projectId, planId, derivation.taskId, ts, ts],
     )
+    await recordAcceptancePlanExecutionFacts({
+      projectId: derivation.projectId,
+      planId,
+      previous: null,
+      next: {
+        status: 'pending',
+        actual_date: null,
+      },
+      sourceModule: 'executionGateSeedService',
+      sourceMutationId: `execution-gate:acceptance-plan:${planId}:create`,
+      observedAt: ts,
+      actorUserId: actorId,
+      forceInitial: true,
+    })
     createdAcceptanceGateCount += 1
   }
 
@@ -805,4 +821,8 @@ export async function syncExecutionGateSeedTemplatesForTask(params: SyncExecutio
     skippedAcceptanceGateCount,
     summary: derivation.summary,
   }
+}
+
+export async function syncExecutionGateSeedTemplatesForTask(params: SyncExecutionGateSeedTemplatesParams) {
+  return withDatabaseTransaction(async () => syncExecutionGateSeedTemplatesForTaskInTransaction(params))
 }

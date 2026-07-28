@@ -12,7 +12,18 @@ const mocks = vi.hoisted(() => ({
   getTaskDurationSuggestion: vi.fn(),
   resolveConstructionCalendarContext: vi.fn(),
   hydrateDurationAlgorithmInput: vi.fn(),
+  query: vi.fn(),
+  withDatabaseTransaction: vi.fn(),
 }))
+
+vi.mock('../database.js', async () => {
+  const actual = await vi.importActual<typeof import('../database.js')>('../database.js')
+  return {
+    ...actual,
+    query: mocks.query,
+    withDatabaseTransaction: mocks.withDatabaseTransaction,
+  }
+})
 
 vi.mock('../services/dbService.js', () => ({
   getTasks: mocks.getTasks,
@@ -57,11 +68,177 @@ const {
   buildRuntimeScheduleAccelerationRows,
   buildRuntimeScheduleAccelerationRowsWithDiagnostics,
   buildRuntimeProjectRemainingDurationForecast,
+  buildScheduleAccelerationRecommendationKey,
   clearProjectRemainingForecastRuntimeCacheForTest,
   evaluateRuntimeScheduleAcceleration,
   recordScheduleAccelerationRecommendationAdoption,
   recordScheduleAccelerationRuntimeConsumption,
 } = await import('../services/scheduleAccelerationRuntimeService.js')
+const { buildTaskCommitRequestHash } = await import('../services/taskCommitIdempotencyService.js')
+
+function buildAvailableDurationMetric(
+  value: number,
+  unit: 'calendar_day' | 'construction_production_day',
+) {
+  return {
+    value,
+    unit,
+    calendarRef: unit === 'calendar_day' ? 'gregorian' : 'work_calendar',
+    calendarVersion: unit === 'calendar_day' ? 'ISO-8601' : 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2027-02-15',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
+function buildAuthoritativeAccelerationProposal(overrides: Record<string, unknown> = {}) {
+  return {
+    mode: 'preview_only' as const,
+    source: 'target_end_compression' as const,
+    targetEndDate: '2027-03-31',
+    naturalEndDate: '2027-04-30',
+    overshootDays: 30,
+    overshoot: buildAvailableDurationMetric(30, 'calendar_day'),
+    totalRecoverDays: 12,
+    totalRecover: buildAvailableDurationMetric(12, 'construction_production_day'),
+    remainingGapDays: 18,
+    remainingGap: buildAvailableDurationMetric(18, 'construction_production_day'),
+    verdict: 'needs_scope_decision' as const,
+    actions: [{
+      type: 'fast_track' as const,
+      affectedRowIds: ['task-1'],
+      recoverDays: 12,
+      recoverDuration: buildAvailableDurationMetric(12, 'construction_production_day'),
+      rawRecoverDays: 12,
+      reworkRiskDiscountDays: 0,
+      effectiveRecoverDays: 12,
+      riskLevel: 'medium' as const,
+      explanation: 'authoritative acceleration proposal',
+      dependencyAdjustments: [],
+    }],
+    protectedConstraints: [],
+    rescheduleDraft: {
+      mode: 'proposal_review' as const,
+      source: 'target_end_compression' as const,
+      writePolicy: 'requires_user_acceptance' as const,
+      taskDateAdjustments: [],
+      dependencyAdjustments: [],
+      resourceAdjustments: [],
+      operations: [{
+        type: 'update_row' as const,
+        rowId: 'task-1',
+        values: { planned_end_date: '2027-04-18' },
+      }],
+    },
+    ...overrides,
+  }
+}
+
+function mockAuthoritativeAccelerationAdoption(overrides: {
+  recommendation?: Record<string, unknown>
+  commit?: Record<string, unknown>
+} = {}) {
+  const proposal = (overrides.recommendation?.proposal
+    ?? buildAuthoritativeAccelerationProposal()) as ReturnType<typeof buildAuthoritativeAccelerationProposal>
+  const recommendationHash = buildTaskCommitRequestHash(proposal)
+  const operationsHash = buildTaskCommitRequestHash(proposal.rescheduleDraft.operations)
+  mocks.query
+    .mockResolvedValueOnce({
+      rows: [{
+        id: 'recommendation-1',
+        project_id: 'project-1',
+        recommendation_hash: recommendationHash,
+        proposal,
+        operations: proposal.rescheduleDraft.operations,
+        operations_hash: operationsHash,
+        issued_by: 'user-1',
+        issued_at: '2027-02-15T00:00:00.000Z',
+        expires_at: '2099-02-15T00:30:00.000Z',
+        ...overrides.recommendation,
+      }],
+      rowCount: 1,
+    })
+    .mockResolvedValueOnce({
+      rows: [{
+        id: 'commit-ledger-1',
+        project_id: 'project-1',
+        request_id: 'task-commit-request-1',
+        requested_by: 'user-1',
+        status: 'succeeded',
+        recommendation_id: 'recommendation-1',
+        recommendation_hash: recommendationHash,
+        operations_hash: operationsHash,
+        result_summary: { changedRowCount: 1 },
+        completed_at: '2027-02-15T00:10:00.000Z',
+        ...overrides.commit,
+      }],
+      rowCount: 1,
+    })
+  return { proposal, recommendationHash, operationsHash }
+}
+
+function mockSuccessfulAdoptionPersistence() {
+  mocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
+    const sqlText = String(sql)
+    if (sqlText.includes('SELECT id, adopted_at') && sqlText.includes('FROM recommendation_actions')) {
+      return []
+    }
+    if (sqlText.includes('INSERT INTO recommendation_actions') && sqlText.includes('RETURNING id')) {
+      return [{ id: `action:${String(params[2] ?? '')}`, adopted_at: params[8] }]
+    }
+    if (sqlText.includes('INSERT INTO duration_plan_network_outcomes') && sqlText.includes('RETURNING id')) {
+      return [{ id: params[0] }]
+    }
+    return []
+  })
+}
+
+async function recordAuthoritativeAccelerationAdoptionForTest(input: {
+  projectId: string
+  adoptedBy: string
+  adoptedAt?: string
+  recommendationId?: string
+  taskCommitRequestId?: string
+  taskCommitLedgerId?: string
+  proposal?: Record<string, any>
+  outcomeMetadata?: Record<string, unknown>
+  runtimeConsumerObservationQueryExec?: ReturnType<typeof createRecordingQueryExec>['queryExec']
+}) {
+  const baseProposal = buildAuthoritativeAccelerationProposal()
+  const proposal = buildAuthoritativeAccelerationProposal({
+    ...(input.proposal ?? {}),
+    overshoot: input.proposal?.overshoot ?? baseProposal.overshoot,
+    totalRecover: input.proposal?.totalRecover ?? baseProposal.totalRecover,
+    remainingGap: input.proposal?.remainingGap ?? baseProposal.remainingGap,
+    actions: Array.isArray(input.proposal?.actions) && input.proposal.actions.length > 0
+      ? input.proposal.actions
+      : baseProposal.actions,
+    protectedConstraints: input.proposal?.protectedConstraints ?? baseProposal.protectedConstraints,
+    rescheduleDraft: input.proposal?.rescheduleDraft ?? baseProposal.rescheduleDraft,
+  })
+  const authority = mockAuthoritativeAccelerationAdoption({
+    recommendation: { id: input.recommendationId ?? 'recommendation-1', proposal },
+    commit: {
+      id: input.taskCommitLedgerId ?? 'commit-ledger-1',
+      request_id: input.taskCommitRequestId ?? 'task-commit-request-1',
+      recommendation_id: input.recommendationId ?? 'recommendation-1',
+      result_summary: {
+        changedRowCount: proposal.rescheduleDraft.operations.length,
+        ...(input.outcomeMetadata ?? {}),
+      },
+    },
+  })
+  return recordScheduleAccelerationRecommendationAdoption({
+    projectId: input.projectId,
+    adoptedBy: input.adoptedBy,
+    adoptedAt: input.adoptedAt,
+    recommendationId: input.recommendationId ?? 'recommendation-1',
+    recommendationHash: authority.recommendationHash,
+    taskCommitRequestId: input.taskCommitRequestId ?? 'task-commit-request-1',
+    runtimeConsumerObservationQueryExec: input.runtimeConsumerObservationQueryExec,
+  })
+}
 
 function createRecordingQueryExec() {
   const calls: Array<{ sql: string, params: unknown[] }> = []
@@ -95,6 +272,9 @@ describe('scheduleAccelerationRuntimeService', () => {
     delete process.env.SCHEDULE_ACCELERATION_RUNTIME_OPTIONAL_READ_TIMEOUT_MS
     clearProjectRemainingForecastRuntimeCacheForTest()
     vi.clearAllMocks()
+    mocks.query.mockReset()
+    mocks.withDatabaseTransaction.mockImplementation(async (work: () => Promise<unknown>) => work())
+    mocks.query.mockResolvedValue({ rows: [], rowCount: 0 })
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-critical',
@@ -314,11 +494,12 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(rows[0]?.values.duration_contribution_mode).toBe('summary_only')
   })
 
-  it('returns a governed project-level remaining forecast beside runtime acceleration feasibility', async () => {
+  it('returns a governed project-level remaining forecast without issuing an empty acceleration recommendation', async () => {
     const result = await evaluateRuntimeScheduleAcceleration({
       projectId: 'project-1',
       targetEndDate: '2026-06-25',
       asOfDate: '2026-06-10',
+      issuedBy: 'user-1',
     })
 
     expect(result.rowsEvaluated).toBe(2)
@@ -361,6 +542,9 @@ describe('scheduleAccelerationRuntimeService', () => {
       }),
     }))
     expect(result.targetFeasibility?.scenario).toBe('runtime_delay_recovery')
+    expect(result.targetFeasibility?.accelerationProposal?.rescheduleDraft).toBeUndefined()
+    expect(result.targetFeasibility?.accelerationRecommendation).toBeUndefined()
+    expect(mocks.query).not.toHaveBeenCalled()
     expect(result.targetFeasibility?.accelerationProposal?.calculationBasis.runtimeContext).toEqual(expect.objectContaining({
       runtimeInferenceSummary: expect.objectContaining({
         factType: 'inferred',
@@ -381,6 +565,64 @@ describe('scheduleAccelerationRuntimeService', () => {
         'runtime_inference_advisory_only',
       ]),
     }))
+  })
+
+  it('issues an immutable recommendation only when runtime acceleration has authoritative commit operations', async () => {
+    mocks.getTasks.mockResolvedValueOnce([{
+      id: 'task-critical',
+      project_id: 'project-1',
+      title: 'Critical structure remaining work',
+      planned_start_date: '2026-06-01',
+      planned_end_date: '2026-06-28',
+      status: 'in_progress',
+      progress: 40,
+      is_critical: true,
+      total_float_days: 0,
+      free_float_days: 0,
+      standard_task_metadata: {
+        durationContributionMode: 'duration_bearing',
+        rowProjectionMode: 'schedule_row',
+      },
+    }])
+    mocks.query.mockResolvedValueOnce({
+      rows: [{
+        id: 'recommendation-issued-1',
+        issued_at: '2027-02-15T00:00:00.000Z',
+        expires_at: '2027-02-15T00:30:00.000Z',
+      }],
+      rowCount: 1,
+    })
+
+    const result = await evaluateRuntimeScheduleAcceleration({
+      projectId: 'project-1',
+      targetEndDate: '2026-06-20',
+      asOfDate: '2026-06-10',
+      issuedBy: 'user-1',
+    })
+
+    expect(result.targetFeasibility?.accelerationProposal?.rescheduleDraft?.operations.length).toBeGreaterThan(0)
+    expect(result.targetFeasibility?.accelerationRecommendation).toEqual(expect.objectContaining({
+      id: 'recommendation-issued-1',
+      recommendationHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      operationsHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      issuedAt: '2027-02-15T00:00:00.000Z',
+      expiresAt: '2027-02-15T00:30:00.000Z',
+    }))
+    expect(mocks.query).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT INTO public.schedule_acceleration_recommendations'),
+      expect.arrayContaining(['project-1', 'user-1']),
+    )
+    const issuanceCall = mocks.query.mock.calls.find(([sql]) => (
+      String(sql).includes('INSERT INTO public.schedule_acceleration_recommendations')
+    ))
+    expect(String(issuanceCall?.[0])).toContain('recommendation,')
+    expect(String(issuanceCall?.[0])).toContain('operations,')
+    expect(String(issuanceCall?.[0])).not.toContain('proposal,')
+    expect(issuanceCall?.[1]).toEqual(expect.arrayContaining([
+      JSON.stringify(result.targetFeasibility?.accelerationProposal),
+      JSON.stringify(result.targetFeasibility?.accelerationProposal?.rescheduleDraft?.operations),
+      'user-1',
+    ]))
   })
 
   it('does not create runtime target proposals or operations when the production calendar identity is unavailable', async () => {
@@ -1388,9 +1630,9 @@ describe('scheduleAccelerationRuntimeService', () => {
   })
 
   it('records acceleration adoption with explicit persisted fields instead of literal SQL placeholders', async () => {
-    mocks.executeSQL.mockResolvedValue([])
+    mockSuccessfulAdoptionPersistence()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
@@ -1404,9 +1646,13 @@ describe('scheduleAccelerationRuntimeService', () => {
 
     expect(result).toEqual(expect.objectContaining({
       adopted: true,
-      recommendationKey: 'schedule_acceleration:2027-03-31:2027-04-30:12',
+      recommendationKey: 'schedule_acceleration:recommendation-1:task-commit-request-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
     }))
+
+    const commitRead = mocks.query.mock.calls.find(([sql]) => String(sql).includes('FROM public.task_commit_requests'))
+    expect(String(commitRead?.[0])).toContain('WHERE project_id = $1')
+    expect(commitRead?.[1]).toEqual(['project-1', 'task-commit-request-1'])
 
     const calls = mocks.executeSQL.mock.calls.map(([sql, params]) => ({
       sql: String(sql),
@@ -1417,7 +1663,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       params: [
         'project-1',
         'schedule_acceleration',
-        'schedule_acceleration:2027-03-31:2027-04-30:12',
+        'schedule_acceleration:recommendation-1:task-commit-request-1',
         'adopted',
       ],
     }))
@@ -1425,12 +1671,14 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(mutation).toBeTruthy()
     expect(mutation?.sql).not.toContain("'schedule_acceleration'")
     expect(mutation?.sql).not.toContain("'adopted'")
-    expect(mutation?.sql).not.toContain('ON CONFLICT')
+    expect(mutation?.sql).toContain('ON CONFLICT (project_id, recommendation_kind, recommendation_key, action_type)')
+    expect(mutation?.sql).toContain('DO NOTHING')
+    expect(mutation?.sql).toContain('RETURNING id, adopted_at')
     expect(mutation?.sql).not.toContain('CAST(? AS jsonb)')
     expect(mutation?.params).toEqual(expect.arrayContaining([
       'project-1',
       'schedule_acceleration',
-      'schedule_acceleration:2027-03-31:2027-04-30:12',
+      'schedule_acceleration:recommendation-1:task-commit-request-1',
       'adopted',
       '2027-03-31',
       '2027-04-30',
@@ -1446,9 +1694,9 @@ describe('scheduleAccelerationRuntimeService', () => {
   })
 
   it('links an adopted acceleration proposal to the construction organization runtime recommendation when plan-network identity is present', async () => {
-    mocks.executeSQL.mockResolvedValue([])
+    mockSuccessfulAdoptionPersistence()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
@@ -1521,7 +1769,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(constructionOrganizationInsert?.params).toEqual(expect.arrayContaining([
       'project-1',
       'construction_organization_plan_network',
-      'construction_organization_plan_network:pub-accelerate-tower-first:draft-accelerate-tower-first:option-accelerate-tower-first:accelerationRecovery',
+      'construction_organization_plan_network:pub-accelerate-tower-first:draft-accelerate-tower-first:option-accelerate-tower-first:accelerationRecovery:schedule_acceleration:recommendation-1:task-commit-request-1',
       'adopted',
       '2027-02-15T00:00:00.000Z',
       'user-1',
@@ -1540,13 +1788,12 @@ describe('scheduleAccelerationRuntimeService', () => {
   })
 
   it('records a construction organization saved outcome only when a published plan-network adoption has a real commit ref', async () => {
-    mocks.executeSQL.mockResolvedValue([])
+    mockSuccessfulAdoptionPersistence()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
-      outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
       outcomeMetadata: {
         operationCount: 3,
         governanceSummary: { dateAdjustmentCount: 2, dependencyChangeCount: 1 },
@@ -1601,10 +1848,10 @@ describe('scheduleAccelerationRuntimeService', () => {
       .find((call) => call.sql.includes('INSERT INTO duration_plan_network_outcomes'))
     expect(outcomeInsert).toBeTruthy()
     expect(outcomeInsert?.params).toEqual(expect.arrayContaining([
-      'construction-organization-plan-network-outcome:pub-accelerate-tower-first:draft-accelerate-tower-first:option-accelerate-tower-first:accelerationRecovery',
+      'construction-organization-plan-network-outcome:project-1:pub-accelerate-tower-first:draft-accelerate-tower-first:option-accelerate-tower-first:accelerationRecovery:schedule_acceleration:recommendation-1:task-commit-request-1',
       'construction_organization_plan_network',
       'accepted',
-      'task-list-commit:project-1:123:acceleration-reschedule',
+      'task-list-commit:project-1:task-commit-request-1:acceleration-reschedule',
       'project',
       'schedule_acceleration_reschedule_commit',
       'project-1',
@@ -1615,7 +1862,7 @@ describe('scheduleAccelerationRuntimeService', () => {
         outcomeSource: 'schedule_acceleration_reschedule_commit',
         duration_day_unit: 'construction_production_day',
         durationDayUnit: 'construction_production_day',
-        operationCount: 3,
+        operationCount: 1,
         writesTaskDependencies: false,
         writesPlanDates: false,
         writesAccelerationDraft: false,
@@ -1624,14 +1871,13 @@ describe('scheduleAccelerationRuntimeService', () => {
   })
 
   it('records runtime consumer observation when acceleration adoption persists a construction organization saved outcome', async () => {
-    mocks.executeSQL.mockResolvedValue([])
+    mockSuccessfulAdoptionPersistence()
     const { calls: observationCalls, queryExec } = createRecordingQueryExec()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
-      outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
       outcomeMetadata: {
         operationCount: 3,
       },
@@ -1699,7 +1945,7 @@ describe('scheduleAccelerationRuntimeService', () => {
         businessType: 'general_civil',
         useCase: 'accelerationRecovery',
         optionId: 'option-accelerate-tower-first',
-        outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
+        outcomeRef: 'task-list-commit:project-1:task-commit-request-1:acceleration-reschedule',
         outcomeSource: 'schedule_acceleration_reschedule_commit',
       }),
       expect.arrayContaining([
@@ -1712,10 +1958,10 @@ describe('scheduleAccelerationRuntimeService', () => {
     ]))
   })
 
-  it('does not fabricate a construction organization saved outcome when the adoption has no commit ref', async () => {
-    mocks.executeSQL.mockResolvedValue([])
+  it('does not fabricate a construction organization saved outcome without published plan-network identity', async () => {
+    mockSuccessfulAdoptionPersistence()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
@@ -1730,21 +1976,6 @@ describe('scheduleAccelerationRuntimeService', () => {
         verdict: 'needs_scope_decision',
         actions: [],
         protectedConstraints: [],
-        calculationBasis: {
-          naturalDurationDays: 118,
-          totalRecoverCapRatio: 0.12,
-          seasonalFactor: 1,
-          projectTypeProfile: 'residential',
-          criticalCandidateDays: 12,
-          resourceGroupedCandidateDays: 0,
-          hardConstraintDays: 0,
-          constructionOrganizationScenario: {
-            recommendedPlanOption: {
-              publicationKey: 'pub-accelerate-tower-first',
-              businessType: 'general_civil',
-            },
-          },
-        },
       } as any,
     })
 
@@ -1754,19 +1985,10 @@ describe('scheduleAccelerationRuntimeService', () => {
     )).toBe(false)
   })
 
-  it('updates the linked construction organization site decision when the same acceleration adoption is submitted again', async () => {
-    mocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
-      const sqlText = String(sql)
-      if (
-        sqlText.includes('INSERT INTO recommendation_actions')
-        && params.includes('construction_organization_plan_network')
-      ) {
-        throw new Error('23505 duplicate key value violates unique constraint "recommendation_actions_unique_action"')
-      }
-      return []
-    })
+  it('keeps a repeated linked construction organization decision append-only', async () => {
+    mockSuccessfulAdoptionPersistence()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
@@ -1809,20 +2031,125 @@ describe('scheduleAccelerationRuntimeService', () => {
       status: 'recommendation_decision_recorded',
       decisionPersisted: true,
     }))
-    const updateCall = mocks.executeSQL.mock.calls
-      .map(([sql, params]) => ({ sql: String(sql), params: params as unknown[] }))
-      .find((call) =>
-        call.sql.includes('UPDATE recommendation_actions')
-        && call.params.includes('construction_organization_plan_network')
-        && call.params.includes('construction_organization_plan_network:pub-accelerate-tower-first:draft-accelerate-tower-first:option-accelerate-tower-first:accelerationRecovery'),
-      )
-    expect(updateCall).toBeTruthy()
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => String(sql).includes('UPDATE recommendation_actions'))).toBe(false)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => String(sql).includes('UPDATE duration_plan_network_outcomes'))).toBe(false)
+  })
+
+  it('uses exact readback for linked action and outcome conflicts without mutating prior evidence', async () => {
+    mocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
+      const sqlText = String(sql)
+      if (sqlText.includes('SELECT id, adopted_at') && params.includes('schedule_acceleration')) return []
+      if (sqlText.includes('INSERT INTO recommendation_actions') && params.includes('schedule_acceleration')) {
+        return [{ id: 'schedule-action-1', adopted_at: params[8] }]
+      }
+      if (sqlText.includes('INSERT INTO recommendation_actions') && params.includes('construction_organization_plan_network')) {
+        return []
+      }
+      if (sqlText.includes('SELECT id') && sqlText.includes('FROM recommendation_actions')) {
+        return [{ id: 'linked-action-1' }]
+      }
+      if (sqlText.includes('INSERT INTO duration_plan_network_outcomes')) return []
+      if (sqlText.includes('SELECT id') && sqlText.includes('FROM duration_plan_network_outcomes')) {
+        return [{ id: params[0] }]
+      }
+      return []
+    })
+
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      proposal: {
+        calculationBasis: {
+          constructionOrganizationScenario: {
+            recommendedPlanOption: {
+              optionId: 'option-accelerate-tower-first',
+              draftNetworkKey: 'draft-accelerate-tower-first',
+              publicationKey: 'pub-accelerate-tower-first',
+              selectedScenarioIds: ['tower-early-release'],
+              businessType: 'general_civil',
+            },
+          },
+        },
+      },
+    })
+
+    expect(result.constructionOrganizationRecommendationDecision?.decisionPersisted).toBe(true)
+    expect(result.constructionOrganizationSavedOutcome?.outcomePersisted).toBe(true)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => /^\s*UPDATE\s+/i.test(String(sql)))).toBe(false)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => (
+      String(sql).includes('INSERT INTO recommendation_actions')
+      && String(sql).includes('ON CONFLICT')
+      && String(sql).includes('DO NOTHING')
+    ))).toBe(true)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => (
+      String(sql).includes('INSERT INTO duration_plan_network_outcomes')
+      && String(sql).includes('ON CONFLICT (id)')
+      && String(sql).includes('DO NOTHING')
+    ))).toBe(true)
+  })
+
+  it('creates distinct linked action and outcome identities for separate accepted commits', async () => {
+    mockSuccessfulAdoptionPersistence()
+    const proposal = {
+      calculationBasis: {
+        constructionOrganizationScenario: {
+          recommendedPlanOption: {
+            optionId: 'option-accelerate-tower-first',
+            draftNetworkKey: 'draft-accelerate-tower-first',
+            publicationKey: 'pub-accelerate-tower-first',
+            selectedScenarioIds: ['tower-early-release'],
+            businessType: 'general_civil',
+          },
+        },
+      },
+    }
+
+    await recordAuthoritativeAccelerationAdoptionForTest({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      recommendationId: 'recommendation-1',
+      taskCommitRequestId: 'task-commit-request-1',
+      taskCommitLedgerId: 'commit-ledger-1',
+      proposal,
+    })
+    await recordAuthoritativeAccelerationAdoptionForTest({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      recommendationId: 'recommendation-2',
+      taskCommitRequestId: 'task-commit-request-2',
+      taskCommitLedgerId: 'commit-ledger-2',
+      proposal,
+    })
+
+    const linkedActionKeys = mocks.executeSQL.mock.calls
+      .filter(([sql, params]) => (
+        String(sql).includes('INSERT INTO recommendation_actions')
+        && (params as unknown[]).includes('construction_organization_plan_network')
+      ))
+      .map(([, params]) => (params as unknown[])[2])
+    expect(linkedActionKeys).toEqual([
+      expect.stringContaining('schedule_acceleration:recommendation-1:task-commit-request-1'),
+      expect.stringContaining('schedule_acceleration:recommendation-2:task-commit-request-2'),
+    ])
+    expect(new Set(linkedActionKeys).size).toBe(2)
+
+    const outcomeIds = mocks.executeSQL.mock.calls
+      .filter(([sql]) => String(sql).includes('INSERT INTO duration_plan_network_outcomes'))
+      .map(([, params]) => (params as unknown[])[0])
+    expect(outcomeIds).toEqual([
+      expect.stringContaining('project-1:pub-accelerate-tower-first'),
+      expect.stringContaining('project-1:pub-accelerate-tower-first'),
+    ])
+    expect(String(outcomeIds[0])).toContain('schedule_acceleration:recommendation-1:task-commit-request-1')
+    expect(String(outcomeIds[1])).toContain('schedule_acceleration:recommendation-2:task-commit-request-2')
+    expect(new Set(outcomeIds).size).toBe(2)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => /^\s*UPDATE\s+/i.test(String(sql)))).toBe(false)
   })
 
   it('does not fabricate construction organization site adoption when an acceleration proposal lacks plan-network identity', async () => {
-    mocks.executeSQL.mockResolvedValue([])
+    mockSuccessfulAdoptionPersistence()
 
-    const result = await recordScheduleAccelerationRecommendationAdoption({
+    const result = await recordAuthoritativeAccelerationAdoptionForTest({
       projectId: 'project-1',
       adoptedBy: 'user-1',
       adoptedAt: '2027-02-15T00:00:00.000Z',
@@ -2658,6 +2985,220 @@ describe('scheduleAccelerationRuntimeService', () => {
     ]))
     expect(runtimeCall?.params[5]).toBe(false)
     expect(runtimeCall?.params[6]).toBe(false)
+  })
+
+  it('rejects client-supplied proposal adoption before any decision or outcome write', async () => {
+    mocks.executeSQL.mockResolvedValue([])
+
+    await expect(recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      proposal: {
+        targetEndDate: '2027-03-31',
+        naturalEndDate: '2027-04-30',
+        totalRecoverDays: 12,
+      },
+      outcomeRef: 'forged-client-outcome',
+    } as any)).rejects.toMatchObject({
+      code: 'ACCELERATION_RECOMMENDATION_ID_REQUIRED',
+      statusCode: 400,
+    })
+
+    expect(mocks.executeSQL).not.toHaveBeenCalled()
+  })
+
+  it('keys adoption evidence by immutable recommendation and task-commit identity', () => {
+    const first = buildScheduleAccelerationRecommendationKey({
+      recommendationId: 'recommendation-1',
+      taskCommitRequestId: 'task-commit-1',
+    } as any)
+    const second = buildScheduleAccelerationRecommendationKey({
+      recommendationId: 'recommendation-2',
+      taskCommitRequestId: 'task-commit-2',
+    } as any)
+
+    expect(first).toBe('schedule_acceleration:recommendation-1:task-commit-1')
+    expect(second).toBe('schedule_acceleration:recommendation-2:task-commit-2')
+    expect(second).not.toBe(first)
+  })
+
+  it('persists authoritative recommendation and commit binding in append-only adoption context', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mockSuccessfulAdoptionPersistence()
+
+    await recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:20:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })
+
+    const actionInsert = mocks.executeSQL.mock.calls
+      .map(([sql, params]) => ({ sql: String(sql), params: params as unknown[] }))
+      .find((call) => call.sql.includes('INSERT INTO recommendation_actions'))
+    expect(actionInsert?.params[2]).toBe('schedule_acceleration:recommendation-1:task-commit-request-1')
+    expect(actionInsert?.params[10]).toEqual(expect.objectContaining({
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      operationsHash: authority.operationsHash,
+      taskCommitLedgerId: 'commit-ledger-1',
+      taskCommitRequestId: 'task-commit-request-1',
+    }))
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => String(sql).includes('UPDATE recommendation_actions'))).toBe(false)
+  })
+
+  it('treats a repeated immutable adoption identity as a read-only replay', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mocks.executeSQL.mockResolvedValueOnce([{
+      id: 'existing-action-1',
+      adopted_at: '2027-02-15T00:20:00.000Z',
+    }])
+
+    const result = await recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:25:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      adopted: true,
+      recommendationKey: 'schedule_acceleration:recommendation-1:task-commit-request-1',
+      adoptedAt: '2027-02-15T00:20:00.000Z',
+    }))
+    expect(mocks.executeSQL).toHaveBeenCalledTimes(1)
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => /INSERT|UPDATE/i.test(String(sql)))).toBe(false)
+  })
+
+  it('uses an atomic no-op insert and exact readback for a concurrent immutable adoption replay', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mocks.executeSQL
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'existing-action-1',
+        adopted_at: '2027-02-15T00:20:00.000Z',
+      }])
+
+    const result = await recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:25:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      adopted: true,
+      adoptedAt: '2027-02-15T00:20:00.000Z',
+    }))
+    expect(mocks.executeSQL).toHaveBeenCalledTimes(3)
+    expect(String(mocks.executeSQL.mock.calls[1]?.[0])).toMatch(
+      /ON CONFLICT\s*\(project_id, recommendation_kind, recommendation_key, action_type\)\s*DO NOTHING\s*RETURNING id, adopted_at/i,
+    )
+    expect(mocks.executeSQL.mock.calls[2]?.[1]).toEqual([
+      'project-1',
+      'schedule_acceleration',
+      'schedule_acceleration:recommendation-1:task-commit-request-1',
+      'adopted',
+    ])
+    expect(mocks.executeSQL.mock.calls.some(([sql]) => String(sql).includes('UPDATE recommendation_actions'))).toBe(false)
+  })
+
+  it('fails closed when a no-op adoption insert has no exact conflict readback', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mocks.executeSQL
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+
+    await expect(recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:25:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })).rejects.toMatchObject({
+      code: 'ACCELERATION_ADOPTION_CONFLICT_READBACK_MISSING',
+      statusCode: 409,
+    })
+  })
+
+  it.each([
+    {
+      name: 'hash mismatch',
+      expectedCode: 'ACCELERATION_RECOMMENDATION_HASH_MISMATCH',
+      recommendation: { recommendation_hash: 'different-hash' },
+    },
+    {
+      name: 'expired recommendation',
+      expectedCode: 'ACCELERATION_RECOMMENDATION_EXPIRED',
+      recommendation: { expires_at: '2000-01-01T00:00:00.000Z' },
+    },
+    {
+      name: 'project mismatch',
+      expectedCode: 'ACCELERATION_RECOMMENDATION_PROJECT_MISMATCH',
+      recommendation: { project_id: 'project-2' },
+    },
+    {
+      name: 'unsuccessful commit',
+      expectedCode: 'ACCELERATION_TASK_COMMIT_NOT_SUCCEEDED',
+      commit: { status: 'running' },
+    },
+    {
+      name: 'actor mismatch',
+      expectedCode: 'ACCELERATION_TASK_COMMIT_ACTOR_MISMATCH',
+      commit: { requested_by: 'user-2' },
+    },
+    {
+      name: 'recommendation binding mismatch',
+      expectedCode: 'ACCELERATION_TASK_COMMIT_BINDING_MISMATCH',
+      commit: { recommendation_id: 'recommendation-2' },
+    },
+    {
+      name: 'operations hash mismatch',
+      expectedCode: 'ACCELERATION_TASK_COMMIT_OPERATIONS_MISMATCH',
+      commit: { operations_hash: 'different-operations-hash' },
+    },
+    {
+      name: 'unavailable typed production-day fact',
+      expectedCode: 'ACCELERATION_RECOMMENDATION_FACTS_UNAVAILABLE',
+      recommendation: {
+        proposal: buildAuthoritativeAccelerationProposal({
+          totalRecover: {
+            ...buildAvailableDurationMetric(12, 'construction_production_day'),
+            value: null,
+            availability: 'unavailable',
+            unavailableReason: 'construction_calendar_identity_missing',
+          },
+        }),
+      },
+    },
+  ])('rejects $name before any adoption, outcome, or runtime evidence mutation', async ({
+    expectedCode,
+    recommendation,
+    commit,
+  }) => {
+    const authority = mockAuthoritativeAccelerationAdoption({ recommendation, commit })
+
+    await expect(recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    } as any)).rejects.toMatchObject({
+      code: expectedCode,
+      statusCode: expect.any(Number),
+    })
+
+    expect(mocks.executeSQL).not.toHaveBeenCalled()
   })
 
   it('records a reasoned call-only trace when no published artifact or assembly evidence exists', async () => {

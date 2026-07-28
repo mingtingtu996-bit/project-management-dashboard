@@ -447,7 +447,7 @@ function buildReadyBusinessPathSourceFiles() {
       `,
     },
     {
-      sourcePath: 'server/src/services/wbsTemplateGenerationService.ts',
+      sourcePath: 'server/src/services/wbsTemplateGenerationOrchestrator.ts',
       sourceText: `
         import { recordWbsTemplateGenerationConsumedArtifacts } from './durationRuntimeConsumerObservationAdapterService.js'
         const WBS_TEMPLATE_GENERATION_CONSUMER_ASSET_KEYS = new Set([

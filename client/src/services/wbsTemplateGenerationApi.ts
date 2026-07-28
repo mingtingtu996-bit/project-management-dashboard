@@ -1,5 +1,5 @@
 import { apiGet, apiPost } from '@/lib/apiClient'
-import { normalizeDurationMetricDto, type DurationMetricDto } from '@/lib/durationMetric'
+import { normalizeDurationMetricDto, type DurationMetricDto, type DurationRiskDistributionDto } from '@/lib/durationMetric'
 import type { PlanningSurface } from '@/components/planning/PlanningCommitModel'
 import type { LinkedProjectionSource, PlanItemKind, ProgressMode, RelationRole, ScheduleParticipation, ScopeExpansionMode } from '@/lib/planItemSemantics'
 
@@ -361,6 +361,7 @@ export interface WbsGeneratedDurationSuggestion {
     mutationBoundary?: string | null
     [key: string]: unknown
   } | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
   durationOutputCode?: string | null
   durationOutputSemanticFieldName?: string | null
   planReferenceDays?: number | null
@@ -525,6 +526,15 @@ export interface WbsTargetFeasibility {
     explanation: string
   }>
   accelerationProposal?: WbsAccelerationProposal | null
+  accelerationRecommendation?: WbsAccelerationRecommendationIdentity | null
+}
+
+export interface WbsAccelerationRecommendationIdentity {
+  id: string
+  recommendationHash: string
+  operationsHash: string
+  issuedAt: string
+  expiresAt: string
 }
 
 export interface WbsConstructionOrganizationProjectOrganizationScheme {
@@ -802,11 +812,24 @@ export interface WbsAccelerationRescheduleDraft {
     recoverDuration?: DurationMetricDto | null
     basis: 'p50_to_p20' | 'resource_crash_preview'
   }>
-  operations: Array<{
-    type: 'update'
-    clientRowId: string
-    values: Record<string, unknown>
-  }>
+  operations: Array<
+    | {
+        type: 'update_row'
+        rowId: string
+        values: Record<string, unknown>
+      }
+    | {
+        type: 'set_predecessors'
+        rowId: string
+        predecessorTaskIds: string[]
+        predecessorDependencies: Array<{
+          dependencyTaskId: string
+          dependencyType: string
+          lagDays: number
+          sourceType: string
+        }>
+      }
+  >
 }
 
 export type WbsAccelerationProposalAction =

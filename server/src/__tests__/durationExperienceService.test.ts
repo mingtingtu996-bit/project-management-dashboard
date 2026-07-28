@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => {
     resolveV1474BuildingPatternMatch: vi.fn(),
     resolveAlgorithmSeedRecords: vi.fn(),
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
+    listCurrentExecutionFacts: vi.fn(),
     structuredCauseRows: [] as Record<string, unknown>[],
   }
 })
@@ -69,6 +70,10 @@ vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
   backtestEarliestPendingDurationAccuracyPrediction: mocks.backtestEarliestPendingDurationAccuracyPrediction,
 }))
 
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
+}))
+
 const {
   collectDurationExperienceSampleFromTask,
   retireDurationExperienceSampleForTask,
@@ -99,6 +104,25 @@ function completedTask(overrides: Record<string, unknown> = {}) {
   } as any
 }
 
+function structuredCauseRow(overrides: Record<string, unknown> = {}) {
+  const status = String(overrides.status ?? 'confirmed')
+  return {
+    id: '00000000-0000-4000-8000-000000000001',
+    company_id: 'company-1',
+    project_id: 'project-1',
+    subject_type: 'task',
+    subject_id: 'task-cause-snapshot',
+    event_type: 'completion',
+    status,
+    cause_code: 'material_shortage',
+    cause_role: 'primary',
+    taxonomy_version: 'v1.0.0',
+    confirmation_source: status === 'candidate' ? 'candidate' : 'user_confirmed',
+    confirmed_at: status === 'candidate' ? null : '2026-05-05T07:00:00.000Z',
+    ...overrides,
+  }
+}
+
 describe('durationExperienceService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -119,6 +143,7 @@ describe('durationExperienceService', () => {
       return []
     })
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
     mocks.resolveAlgorithmSeedRecords.mockResolvedValue([{
       stableCode: 'authoritative-calendar-identity',
       calendarKind: 'authority_marker',
@@ -331,29 +356,116 @@ describe('durationExperienceService', () => {
     const causeQuery = mocks.rawQuery.mock.calls.find(([sql]) =>
       String(sql).includes('FROM public.structured_cause_attributions'),
     )
-    expect(causeQuery?.[0]).toContain('company_id = $1')
-    expect(causeQuery?.[0]).toContain('project_id = $2')
-    expect(causeQuery?.[0]).toContain("subject_type = 'task'")
-    expect(causeQuery?.[0]).toContain('subject_id = $3')
-    expect(causeQuery?.[1]).toEqual(['company-1', 'project-1', 'task-cause-snapshot'])
+    expect(causeQuery?.[0]).toContain('WHERE subject_id = $1')
+    expect(causeQuery?.[1]).toEqual(['task-cause-snapshot'])
+  })
+
+  it('keeps a manual cause candidate out of benchmarks until confirmation', async () => {
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000011',
+      status: 'candidate',
+      cause_code: 'other',
+    })]
+
+    await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
+
+    const payload = mocks.insert.mock.calls.at(-1)?.[0]
+    expect(payload.included_in_benchmark).toBe(false)
+    expect(payload.metadata).toEqual(expect.objectContaining({
+      structuredCauseAvailability: 'review_required',
+      structuredCauseCode: 'other',
+      structuredCauseTaxonomyVersion: 'v1.0.0',
+    }))
+  })
+
+  it('does not let another confirmed cause bypass a manual review candidate', async () => {
+    mocks.structuredCauseRows = [
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000021',
+        cause_code: 'material_shortage',
+        cause_role: 'contributing',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000022',
+        status: 'candidate',
+        cause_code: 'other',
+        review_reason_codes: ['manual_text_requires_user_confirmation'],
+      }),
+    ]
+
+    await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
+
+    const payload = mocks.insert.mock.calls.at(-1)?.[0]
+    expect(payload.included_in_benchmark).toBe(false)
+    expect(payload.metadata).toEqual(expect.objectContaining({
+      structuredCauseAvailability: 'review_required',
+      structuredCauseCode: 'other',
+      structuredCauseTaxonomyVersion: 'v1.0.0',
+    }))
+  })
+
+  it('requires a confirmed canonical cause before cause-linked evidence is benchmark eligible', async () => {
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000031',
+      cause_code: 'legacy_weather_delay',
+      taxonomy_version: 'legacy/v1',
+    })]
+
+    await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
+
+    const payload = mocks.insert.mock.calls.at(-1)?.[0]
+    expect(payload.included_in_benchmark).toBe(false)
+    expect(payload.metadata).toEqual(expect.objectContaining({
+      structuredCauseAvailability: 'review_required',
+      structuredCauseCode: null,
+      structuredCauseTaxonomyVersion: 'v1.0.0',
+    }))
+    expect(JSON.stringify(payload.metadata.structured_cause_snapshot)).not.toContain('legacy_weather_delay')
+  })
+
+  it('fails benchmark eligibility closed when structured causes cannot be read', async () => {
+    mocks.rawQuery.mockImplementation(async (sql: string) => {
+      if (sql.includes('FROM public.structured_cause_attributions')) {
+        throw new Error('structured cause read unavailable')
+      }
+      return []
+    })
+
+    await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
+
+    const payload = mocks.insert.mock.calls.at(-1)?.[0]
+    expect(payload.included_in_benchmark).toBe(false)
+    expect(payload.metadata).toEqual(expect.objectContaining({
+      structuredCauseAvailability: 'unavailable',
+      structuredCauseCode: null,
+      structuredCauseTaxonomyVersion: 'v1.0.0',
+    }))
+  })
+
+  it('marks confirmed canonical cause evidence available for benchmark use', async () => {
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000041',
+      cause_code: 'weather_impact',
+    })]
+
+    await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
+
+    const payload = mocks.insert.mock.calls.at(-1)?.[0]
+    expect(payload.included_in_benchmark).toBe(true)
+    expect(payload.metadata).toEqual(expect.objectContaining({
+      structuredCauseAvailability: 'available',
+      structuredCauseCode: 'weather_impact',
+      structuredCauseTaxonomyVersion: 'v1.0.0',
+    }))
   })
 
   it('stores only confirmed cause fields and keeps responsibility as user-confirmed context', async () => {
-    mocks.structuredCauseRows = [{
-      id: 'attribution-1',
-      company_id: 'company-1',
-      project_id: 'project-1',
-      subject_type: 'task',
-      subject_id: 'task-cause-snapshot',
-      status: 'confirmed',
-      cause_code: 'material_shortage',
-      cause_role: 'primary',
-      taxonomy_version: 'construction-cause/v1',
-      confirmation_source: 'user_confirmed',
+    mocks.structuredCauseRows = [structuredCauseRow({
+      id: '00000000-0000-4000-8000-000000000051',
       responsibility_class: 'contractor_attributable',
       raw_text: 'must not enter duration metadata',
       confidence: 0.99,
-    }]
+    })]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
 
@@ -363,11 +475,13 @@ describe('durationExperienceService', () => {
       confirmed_count: 1,
       candidate_count: 0,
       confirmed_causes: [{
-        attribution_id: 'attribution-1',
+        attribution_id: '00000000-0000-4000-8000-000000000051',
         cause_code: 'material_shortage',
         cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
+        taxonomy_version: 'v1.0.0',
+        event_type: 'completion',
         confirmation_source: 'user_confirmed',
+        confirmed_at: '2026-05-05T07:00:00.000Z',
         user_confirmed_context: {
           responsibility_class: 'contractor_attributable',
         },
@@ -379,43 +493,21 @@ describe('durationExperienceService', () => {
 
   it('keeps multiple confirmed causes deterministic while candidate causes remain count-only', async () => {
     mocks.structuredCauseRows = [
-      {
-        id: 'candidate-1',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000061',
         status: 'candidate',
-        cause_code: 'candidate_must_not_group',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: null,
-      },
-      {
-        id: 'confirmed-2',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
-        cause_code: 'weather_delay',
+        cause_code: 'other',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000062',
+        cause_code: 'weather_impact',
         cause_role: 'contributing',
-        taxonomy_version: 'construction-cause/v1',
         confirmation_source: 'deterministic_policy',
         responsibility_class: 'owner_attributable',
-      },
-      {
-        id: 'confirmed-1',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
-        cause_code: 'material_shortage',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: 'user_confirmed',
-      },
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000063',
+      }),
     ]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
@@ -425,50 +517,39 @@ describe('durationExperienceService', () => {
       confirmed_count: 2,
       candidate_count: 1,
       confirmed_causes: [
-        { attribution_id: 'confirmed-1', cause_code: 'material_shortage', cause_role: 'primary' },
-        { attribution_id: 'confirmed-2', cause_code: 'weather_delay', cause_role: 'contributing' },
+        { attribution_id: '00000000-0000-4000-8000-000000000063', cause_code: 'material_shortage', cause_role: 'primary' },
+        { attribution_id: '00000000-0000-4000-8000-000000000062', cause_code: 'weather_impact', cause_role: 'contributing' },
       ],
     })
-    expect(JSON.stringify(metadata.structured_cause_snapshot)).not.toContain('candidate_must_not_group')
+    expect(JSON.stringify(metadata.structured_cause_snapshot)).not.toContain('"other"')
     expect(metadata.benchmark_context_key).not.toContain('cause=')
     expect(JSON.stringify(metadata.structured_cause_snapshot)).not.toContain('owner_attributable')
+    expect(metadata).toEqual(expect.objectContaining({
+      structuredCauseAvailability: 'review_required',
+      structuredCauseCode: 'material_shortage',
+      structuredCauseTaxonomyVersion: 'v1.0.0',
+    }))
+    expect(mocks.insert.mock.calls.at(-1)?.[0].included_in_benchmark).toBe(false)
   })
 
   it('defensively excludes structured causes returned from another company or project', async () => {
     mocks.structuredCauseRows = [
-      {
-        id: 'cross-project',
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000071',
         company_id: 'company-1',
         project_id: 'project-2',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
-        cause_code: 'cross_project_cause',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: 'user_confirmed',
-      },
-      {
-        id: 'cross-company',
+        cause_code: 'weather_impact',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000072',
         company_id: 'company-2',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
         status: 'candidate',
-        cause_code: 'cross_company_candidate',
-      },
-      {
-        id: 'same-scope',
-        company_id: 'company-1',
-        project_id: 'project-1',
-        subject_type: 'task',
-        subject_id: 'task-cause-snapshot',
-        status: 'confirmed',
-        cause_code: 'same_scope_cause',
-        cause_role: 'primary',
-        taxonomy_version: 'construction-cause/v1',
-        confirmation_source: 'user_confirmed',
-      },
+        cause_code: 'other',
+      }),
+      structuredCauseRow({
+        id: '00000000-0000-4000-8000-000000000073',
+        cause_code: 'quality_rework',
+      }),
     ]
 
     await collectDurationExperienceSampleFromTask(completedTask(), { actorId: 'user-1' } as any)
@@ -477,10 +558,10 @@ describe('durationExperienceService', () => {
     expect(snapshot.confirmed_count).toBe(1)
     expect(snapshot.candidate_count).toBe(0)
     expect(snapshot.confirmed_causes).toEqual([
-      expect.objectContaining({ attribution_id: 'same-scope', cause_code: 'same_scope_cause' }),
+      expect.objectContaining({ attribution_id: '00000000-0000-4000-8000-000000000073', cause_code: 'quality_rework' }),
     ])
-    expect(JSON.stringify(snapshot)).not.toContain('cross_project_cause')
-    expect(JSON.stringify(snapshot)).not.toContain('cross_company_candidate')
+    expect(JSON.stringify(snapshot)).not.toContain('weather_impact')
+    expect(JSON.stringify(snapshot)).not.toContain('"other"')
   })
 
   it('collects an actual-end completion fact even when status and progress synchronization lag', async () => {
@@ -512,6 +593,62 @@ describe('durationExperienceService', () => {
       actual_duration: 5,
       sample_strength: 'strong',
       included_in_benchmark: true,
+    }))
+  })
+
+  it('uses current execution facts before deciding whether a completion sample is eligible', async () => {
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.actual_start_date',
+        value: '2026-05-02T00:00:00.000Z',
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.actual_end_date',
+        value: '2026-05-04T00:00:00.000Z',
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.progress',
+        value: 100,
+      },
+      {
+        entityId: 'task-execution-fact-completion',
+        entityType: 'task',
+        factType: 'task.status',
+        value: 'completed',
+      },
+    ])
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-execution-fact-completion',
+      status: 'todo',
+      progress: 0,
+      actual_start_date: null,
+      actual_end_date: null,
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-execution-fact-completion'],
+      factTypes: expect.arrayContaining([
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.first_progress_at',
+        'task.progress',
+        'task.status',
+      ]),
+    }))
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-execution-fact-completion',
+      actual_duration: 3,
+      completed_at: '2026-05-04T00:00:00.000Z',
     }))
   })
 

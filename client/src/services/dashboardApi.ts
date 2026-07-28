@@ -1,4 +1,9 @@
 import { apiGet, isAbortError } from '@/lib/apiClient'
+import {
+  normalizeDurationMetricDto,
+  readAvailableDurationValue,
+  type DurationMetricDto,
+} from '@/lib/durationMetric'
 import { normalizeMilestoneOverview, type MilestoneOverview } from '@/lib/milestoneOverview'
 import {
   buildCriticalPathSummaryModel,
@@ -8,11 +13,11 @@ import {
 export type { CriticalPathSummaryModel } from '@/lib/criticalPath'
 
 export interface ProjectKpiComparisonMetric {
-  current: number
+  current: number | null
   previous: number | null
   delta: number | null
   periodLabel: '较上周' | '较上月'
-  status: 'ready' | 'insufficient_history'
+  status: 'ready' | 'insufficient_history' | 'unavailable'
   sparkline?: number[]
 }
 
@@ -65,6 +70,8 @@ export interface ProjectSummary {
   statusLabel: string
   plannedStartDate?: string | null
   plannedEndDate: string | null
+  futureDueWindow?: DurationMetricDto | null
+  actualOverdue?: DurationMetricDto | null
   daysUntilPlannedEnd: number | null
   totalTasks: number
   leafTaskCount: number
@@ -74,7 +81,7 @@ export interface ProjectSummary {
   delayedTaskCount: number
   overdueTaskCount?: number
   laggedTaskCount?: number
-  delayDays: number
+  delayDays: number | null
   delayCount: number
   overallProgress: number | null
   plannedProgress?: number | null
@@ -106,7 +113,7 @@ export interface ProjectSummary {
   issuedConstructionDrawingCount: number
   reviewingConstructionDrawingCount: number
   attentionRequired?: boolean
-  scheduleVarianceDays?: number
+  scheduleVarianceDays?: number | null
   activeDelayedTasks?: number
   activeObstacles?: number
   monthlyCloseStatus?: '未开始' | '进行中' | '已完成' | '已超期'
@@ -201,7 +208,7 @@ interface DeliveryCountdownItem {
   projectId: string
   projectName: string
   plannedEnd: string
-  daysLeft: number
+  futureDueWindow: DurationMetricDto
   status: string
 }
 
@@ -211,6 +218,17 @@ function normalizeArray<T>(value: T[] | null | undefined): T[] {
 
 function normalizeNullableNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeProjectSummary(value: ProjectSummary): ProjectSummary {
+  return {
+    ...value,
+    futureDueWindow: normalizeDurationMetricDto(value.futureDueWindow),
+    actualOverdue: normalizeDurationMetricDto(value.actualOverdue),
+    delayDays: normalizeNullableNumber(value.delayDays),
+    scheduleVarianceDays: normalizeNullableNumber(value.scheduleVarianceDays),
+    milestoneOverview: normalizeMilestoneOverview(value.milestoneOverview),
+  }
 }
 
 function normalizeStatusCounts(
@@ -227,7 +245,7 @@ function normalizeStatusCounts(
 
 function normalizeCompanySummary(value: CompanySummaryResponse | null | undefined): CompanySummaryResponse {
   const raw = (value ?? {}) as Partial<CompanySummaryResponse>
-  const ranking = Array.isArray(raw.ranking) ? raw.ranking : null
+  const ranking = Array.isArray(raw.ranking) ? raw.ranking.map(normalizeProjectSummary) : null
   const projectCount = normalizeNullableNumber(raw.projectCount)
   const healthHistory = raw.healthHistory ?? {
     thisMonth: null,
@@ -287,7 +305,7 @@ export class DashboardApiService {
       '/api/company/dashboard/projects-summary',
       withFreshSummaryOptions(options),
     )
-    return normalizeArray(data)
+    return normalizeArray(data).map(normalizeProjectSummary)
   }
 
   static async getCompanySummary(options?: RequestInit): Promise<CompanySummaryResponse> {
@@ -306,9 +324,7 @@ export class DashboardApiService {
         `/api/projects/${encodeURIComponent(projectId)}/dashboard/project-summary`,
         withFreshSummaryOptions(options),
       )
-      return data
-        ? { ...data, milestoneOverview: normalizeMilestoneOverview(data.milestoneOverview) }
-        : null
+      return data ? normalizeProjectSummary(data) : null
     } catch (error) {
       if (isAbortError(error)) {
         throw error
@@ -351,17 +367,23 @@ export class DashboardApiService {
     const summaries = await this.getAllProjectsSummary()
 
     return summaries
-      .filter((summary) => {
-        if (!summary.plannedEndDate || summary.daysUntilPlannedEnd === null) return false
-        if (summary.statusLabel === '已完成') return false
-        return summary.daysUntilPlannedEnd >= 0 && summary.daysUntilPlannedEnd <= days
-      })
-      .sort((left, right) => (left.daysUntilPlannedEnd ?? 0) - (right.daysUntilPlannedEnd ?? 0))
       .map((summary) => ({
+        summary,
+        daysLeft: readAvailableDurationValue(summary.futureDueWindow, 'calendar_day'),
+      }))
+      .filter(({ summary, daysLeft }) => (
+        Boolean(summary.plannedEndDate)
+        && summary.statusLabel !== '已完成'
+        && daysLeft !== null
+        && daysLeft >= 0
+        && daysLeft <= days
+      ))
+      .sort((left, right) => (left.daysLeft ?? 0) - (right.daysLeft ?? 0))
+      .map(({ summary }) => ({
         projectId: summary.id,
         projectName: summary.name,
         plannedEnd: summary.plannedEndDate as string,
-        daysLeft: summary.daysUntilPlannedEnd as number,
+        futureDueWindow: summary.futureDueWindow as DurationMetricDto,
         status: normalizeSummaryStatus(summary.status),
       }))
   }

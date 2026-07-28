@@ -330,6 +330,10 @@ describe('durationAlgorithmInputHydrationService', () => {
         },
         constructionCalendar: {
           basis: 'official_construction_calendar_seed',
+          availability: 'available',
+          calendarRef: 'cn-work-calendar',
+          calendarVersion: '2026.02',
+          timezone: 'Asia/Shanghai',
           windows: [{
             holidayCode: 'spring_festival_2026',
             startDate: '2026-02-16',

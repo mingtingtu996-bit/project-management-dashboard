@@ -89,6 +89,7 @@ vi.mock('../services/companySummaryService.js', () => ({
 }))
 
 vi.mock('../services/constructionCalendar.js', () => ({
+  isAuthoritativeConstructionCalendar: vi.fn(() => false),
   resolveConstructionCalendarContext: vi.fn(async () => ({ basis: 'calendar_day', windows: [] })),
 }))
 

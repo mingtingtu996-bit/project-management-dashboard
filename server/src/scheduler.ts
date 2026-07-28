@@ -1,6 +1,7 @@
 import { algorithmSeedCandidateDiscoveryJob } from './jobs/algorithmSeedCandidateDiscoveryJob.js'
 import { algorithmAssetLearnableParameterImpactMonitoringJob } from './jobs/algorithmAssetLearnableParameterImpactMonitoringJob.js'
 import { durationLearningRuntimeEvidenceOutboxDrainJob } from './jobs/durationLearningRuntimeEvidenceOutboxDrainJob.js'
+import { taskWriteFinalizationOutboxJob } from './jobs/taskWriteFinalizationOutboxJob.js'
 import { acceptanceTemplatePolicyAutoPublishJob } from './jobs/acceptanceTemplatePolicyAutoPublishJob.js'
 import { certificateTemplatePolicyAutoPublishJob } from './jobs/certificateTemplatePolicyAutoPublishJob.js'
 import { constructionDependencyReplayCalibrationJob } from './jobs/constructionDependencyReplayCalibrationJob.js'
@@ -41,6 +42,7 @@ import { planningGovernanceService } from './services/planningGovernanceService.
 import { scanAllProjectBaselineValidity } from './services/baselineGovernanceService.js'
 import { scanStableDurationPublicationBaselineImpacts } from './services/durationAssetBaselineRevisionBridgeService.js'
 import { materialArrivalReminderService } from './services/materialArrivalReminderService.js'
+import { syncAllProjectStartReadinessNotifications } from './services/projectStartReadinessNotificationService.js'
 import { recordProjectDailySnapshots } from './services/projectDailySnapshotService.js'
 import { runScheduledProjectDailySnapshotCycle } from './services/scheduledDurationJobResultPolicyService.js'
 import { SystemAnomalyService } from './services/systemAnomalyService.js'
@@ -141,6 +143,8 @@ class ConditionAlertJob {
               lease.assertActive()
               const autoEscalatedIssues = await this.warningService.autoEscalateRisksToIssues()
               lease.assertActive()
+              const startReadinessNotifications = await syncAllProjectStartReadinessNotifications()
+              lease.assertActive()
 
               return {
                 warnings: warnings.length,
@@ -149,6 +153,7 @@ class ConditionAlertJob {
                 acceptanceExpiredIssues: acceptanceExpiredIssues.length,
                 autoEscalatedRisks: autoEscalatedRisks.length,
                 autoEscalatedIssues: autoEscalatedIssues.length,
+                startReadinessNotifications,
               }
             },
           )
@@ -1113,6 +1118,9 @@ export async function startAllJobs(options: SchedulerStartOptions = {}) {
   durationLearningRuntimeEvidenceOutboxDrainJob.start()
   console.log('Duration learning runtime evidence outbox drain job started (every 5 minutes)')
 
+  taskWriteFinalizationOutboxJob.start()
+  console.log('Task write finalization outbox job started (every minute)')
+
   constructionOrganizationPlanNetworkRuntimeEvidenceJob.start()
   console.log('Construction organization plan network runtime evidence job started (daily 07:20)')
 
@@ -1188,6 +1196,7 @@ function stopScheduledJobTimers() {
   policyTemplateReleaseImpactMonitoringJob.stop()
   algorithmAssetLearnableParameterImpactMonitoringJob.stop()
   durationLearningRuntimeEvidenceOutboxDrainJob.stop()
+  taskWriteFinalizationOutboxJob.stop()
   constructionOrganizationPlanNetworkRuntimeEvidenceJob.stop()
   drawingPackageExperienceIterationJob.stop()
   projectWeatherForecastJob.stop()

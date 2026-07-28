@@ -68,6 +68,7 @@ const MonitoringDashboard = lazy(() => import('@/components/monitoring/Monitorin
 const CustomBusinessTypeAdmin = lazy(() => import('@/pages/CustomBusinessTypeAdmin'))
 const DurationAccuracyAdmin = lazy(() => import('@/pages/DurationAccuracyAdmin'))
 const RuleAssetGovernanceWorkbenchAdmin = lazy(() => import('@/pages/RuleAssetGovernanceWorkbenchAdmin'))
+const DurationAssetsAdmin = lazy(() => import('@/pages/DurationAssetsAdmin'))
 const BillingSettings = lazy(() => import('@/pages/BillingSettings'))
 const PENDING_AUTH_REDIRECT_KEY = 'pending_auth_redirect'
 const DASHBOARD_FIRST_SCREEN_BACKGROUND_SYNC_DELAY_MS = 5_000
@@ -394,6 +395,7 @@ function AppContent() {
                 <Route path="/admin/business-types" element={withRouteBoundary(<CustomBusinessTypeAdmin />)} />
                 <Route path="/admin/duration-accuracy" element={withRouteBoundary(<DurationAccuracyAdmin />)} />
                 <Route path="/admin/rule-assets/governance-workbench" element={withRouteBoundary(<RuleAssetGovernanceWorkbenchAdmin />)} />
+                <Route path="/admin/duration-assets" element={withRouteBoundary(<DurationAssetsAdmin />)} />
                 <Route
                   path="/projects/:id"
                   element={<ProjectRouteElement />}

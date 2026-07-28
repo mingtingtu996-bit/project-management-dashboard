@@ -35,6 +35,7 @@ vi.mock('../services/projectHealthService.js', () => ({
 }))
 
 vi.mock('../services/constructionCalendar.js', () => ({
+  isAuthoritativeConstructionCalendar: vi.fn(() => false),
   resolveConstructionCalendarContext: mocks.resolveConstructionCalendarContext,
 }))
 

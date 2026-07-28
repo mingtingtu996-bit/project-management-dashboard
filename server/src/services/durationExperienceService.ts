@@ -24,28 +24,21 @@ import {
   readConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
 import {
+  effectiveConstructionCalendarBasis,
+  effectiveConstructionCalendarWindowCount,
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
 } from './constructionCalendar.js'
-import { hasIdentifiedConstructionCalendar } from './durationMetricService.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
 import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './durationLearningRuntimeConsumptionService.js'
+import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
+import {
+  listCurrentExecutionFacts,
+  type ExecutionFactEvent,
+} from './executionFactGovernanceService.js'
 
 type SampleStrength = 'strong' | 'medium' | 'weak' | 'unusable'
-
-type StructuredCauseAttributionSnapshotRow = {
-  id?: unknown
-  company_id?: unknown
-  project_id?: unknown
-  subject_type?: unknown
-  subject_id?: unknown
-  status?: unknown
-  cause_code?: unknown
-  cause_role?: unknown
-  taxonomy_version?: unknown
-  confirmation_source?: unknown
-  responsibility_class?: unknown
-}
 
 export interface DurationExperienceCollectionOptions {
   previousTask?: Task | null
@@ -75,93 +68,58 @@ function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
 
-function emptyStructuredCauseSnapshot() {
-  return {
-    schema_version: 'structured_cause_snapshot/v1',
-    confirmed_count: 0,
-    candidate_count: 0,
-    confirmed_causes: [] as Array<Record<string, unknown>>,
+const TASK_DURATION_EXPERIENCE_FACT_TYPES = [
+  'task.actual_start_date',
+  'task.actual_end_date',
+  'task.first_progress_at',
+  'task.progress',
+  'task.status',
+] as const
+
+function applyCurrentTaskExecutionFacts(task: Task, facts: ExecutionFactEvent[]): Task {
+  const authoritativeTask = { ...task }
+  for (const fact of facts) {
+    if (fact.entityType !== 'task' || fact.entityId !== task.id) continue
+    switch (fact.factType) {
+      case 'task.actual_start_date':
+        authoritativeTask.actual_start_date = fact.value == null ? undefined : String(fact.value)
+        break
+      case 'task.actual_end_date':
+        authoritativeTask.actual_end_date = fact.value == null ? undefined : String(fact.value)
+        break
+      case 'task.first_progress_at':
+        authoritativeTask.first_progress_at = fact.value == null ? null : String(fact.value)
+        break
+      case 'task.progress': {
+        const progress = Number(fact.value)
+        authoritativeTask.progress = Number.isFinite(progress) ? progress : 0
+        break
+      }
+      case 'task.status': {
+        const status = String(fact.value ?? '')
+        if (['todo', 'pending', 'in_progress', 'completed', 'blocked', 'cancelled'].includes(status)) {
+          authoritativeTask.status = status as Task['status']
+        }
+        break
+      }
+      default:
+        break
+    }
   }
+  return authoritativeTask
 }
 
-async function readTaskStructuredCauseSnapshot(params: {
-  companyId: string
-  projectId: string
-  taskId: string
-}) {
-  try {
-    const result = await query(
-      `SELECT id, company_id, project_id, subject_type, subject_id, status,
-              cause_code, cause_role, taxonomy_version, confirmation_source,
-              responsibility_class
-         FROM public.structured_cause_attributions
-        WHERE company_id = $1
-          AND project_id = $2
-          AND subject_type = 'task'
-          AND subject_id = $3
-          AND status IN ('confirmed', 'candidate')
-        ORDER BY CASE WHEN cause_role = 'primary' THEN 0 ELSE 1 END,
-                 cause_role ASC,
-                 id ASC`,
-      [params.companyId, params.projectId, params.taskId],
-    )
-    const rows = (Array.isArray(result) ? result : result?.rows ?? []) as StructuredCauseAttributionSnapshotRow[]
-    const scopedRows = rows.filter((row) => (
-      normalizeText(row.company_id) === params.companyId
-      && normalizeText(row.project_id) === params.projectId
-      && normalizeText(row.subject_type) === 'task'
-      && normalizeText(row.subject_id) === params.taskId
-    ))
-    const confirmedCauses = scopedRows
-      .filter((row) => normalizeText(row.status) === 'confirmed')
-      .map((row) => {
-        const confirmationSource = normalizeText(row.confirmation_source) || null
-        const responsibilityClass = normalizeText(row.responsibility_class) || null
-        return {
-          attribution_id: normalizeText(row.id) || null,
-          cause_code: normalizeText(row.cause_code) || null,
-          cause_role: normalizeText(row.cause_role) || null,
-          taxonomy_version: normalizeText(row.taxonomy_version) || null,
-          confirmation_source: confirmationSource,
-          ...(confirmationSource === 'user_confirmed' && responsibilityClass
-            ? {
-                user_confirmed_context: {
-                  responsibility_class: responsibilityClass,
-                },
-              }
-            : {}),
-        }
-      })
-      .filter((row) => Boolean(
-        row.attribution_id
-        && row.cause_code
-        && row.cause_role
-        && row.taxonomy_version,
-      ))
-      .sort((left, right) => {
-        const leftPrimary = left.cause_role === 'primary' ? 0 : 1
-        const rightPrimary = right.cause_role === 'primary' ? 0 : 1
-        return leftPrimary - rightPrimary
-          || String(left.cause_role).localeCompare(String(right.cause_role))
-          || String(left.cause_code).localeCompare(String(right.cause_code))
-          || String(left.attribution_id).localeCompare(String(right.attribution_id))
-      })
-
-    return {
-      schema_version: 'structured_cause_snapshot/v1',
-      confirmed_count: confirmedCauses.length,
-      candidate_count: scopedRows.filter((row) => normalizeText(row.status) === 'candidate').length,
-      confirmed_causes: confirmedCauses,
-    }
-  } catch (error) {
-    logger.warn('[durationExperienceService] failed to read structured causes for duration sample', {
-      companyId: params.companyId,
-      projectId: params.projectId,
-      taskId: params.taskId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-    return emptyStructuredCauseSnapshot()
-  }
+async function applyTaskExecutionFactAuthority(task: Task): Promise<Task> {
+  const projectId = normalizeText(task.project_id)
+  const taskId = normalizeText(task.id)
+  if (!projectId || !taskId) return task
+  const facts = await listCurrentExecutionFacts({
+    projectId,
+    entityType: 'task',
+    entityIds: [taskId],
+    factTypes: [...TASK_DURATION_EXPERIENCE_FACT_TYPES],
+  })
+  return applyCurrentTaskExecutionFacts(task, facts)
 }
 
 function buildDurationExperienceEvidenceFingerprint(input: {
@@ -731,6 +689,7 @@ export async function collectDurationExperienceSampleFromTask(
   options: DurationExperienceCollectionOptions = {},
 ): Promise<boolean> {
   if (!task?.id || !task.project_id) return false
+  task = await applyTaskExecutionFactAuthority(task)
   if (!isCompletedTask({
     status: task.status,
     progress: task.progress,
@@ -757,35 +716,41 @@ export async function collectDurationExperienceSampleFromTask(
       error: error instanceof Error ? error.message : String(error),
     }),
   })
-  const hasProductionCalendar = hasIdentifiedConstructionCalendar(constructionCalendar)
-   const actualDurationProductionDays = hasProductionCalendar
-     ? Math.max(1, productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar))
-     : null
-   const plannedDurationProductionDays = hasProductionCalendar
-     ? plannedStartDate && plannedEndDate
-       ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
-       : actualDurationProductionDays
-     : null
-   const durationDayBasis = hasProductionCalendar ? 'construction_production_day' : 'calendar_day'
-   const actualDuration = actualDurationProductionDays ?? actualDurationCalendarDays
-   const plannedDuration = plannedDurationProductionDays ?? plannedDurationCalendarDays
-   const constructionCalendarAsOf = actualEndDate.toISOString().slice(0, 10)
+  const hasAuthoritativeCalendar = isAuthoritativeConstructionCalendar(constructionCalendar)
+  const durationDayBasis = hasAuthoritativeCalendar
+    ? 'construction_production_day' as const
+    : 'calendar_day' as const
+  const actualDurationProductionDays = hasAuthoritativeCalendar
+    ? Math.max(1, productionDaysBetweenInclusive(actualStartDate, actualEndDate, constructionCalendar))
+    : null
+  const plannedDurationProductionDays = hasAuthoritativeCalendar
+    ? plannedStartDate && plannedEndDate
+      ? Math.max(1, productionDaysBetweenInclusive(plannedStartDate, plannedEndDate, constructionCalendar))
+      : actualDurationProductionDays
+    : null
+  const actualDuration = actualDurationProductionDays ?? actualDurationCalendarDays
+  const plannedDuration = plannedDurationProductionDays ?? plannedDurationCalendarDays
+  const constructionCalendarAsOf = actualEndDate.toISOString().slice(0, 10)
   const progressQuality = await resolveProgressQualityForSample(task)
   const dateSampleStrength = weakerSampleStrength(actualStart.strength, actualEnd.strength)
   const measuredSampleStrength = progressQuality.sampleStrength
     ? weakerSampleStrength(dateSampleStrength, progressQuality.sampleStrength)
     : dateSampleStrength
-  const finalSampleStrength: SampleStrength = hasProductionCalendar ? measuredSampleStrength : 'unusable'
+  const finalSampleStrength: SampleStrength = hasAuthoritativeCalendar
+    ? measuredSampleStrength
+    : 'unusable'
   const confidence = confidenceForStrength(finalSampleStrength)
   const companyId = await resolveCompanyId(String(task.project_id))
   if (!companyId) {
     throw new Error('Duration experience sample tenant ownership could not be resolved.')
   }
-  const structuredCauseSnapshot = await readTaskStructuredCauseSnapshot({
+  const structuredCauseRead = await readTaskStructuredCauseAuthority({
     companyId,
     projectId: String(task.project_id),
     taskId: String(task.id),
   })
+  const structuredCauseSnapshot = structuredCauseRead.snapshot
+  const structuredCauseResolution = structuredCauseRead.resolution
   const durationLearningRuntimeConsumptions = await readTrustedDurationLearningRuntimeConsumptionsForTask({
     queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
       // database-query-dynamic-approved: the canonical 315 consumption reader owns fixed parameterized SELECTs; this adapter only supplies the database executor.
@@ -841,6 +806,9 @@ export async function collectDurationExperienceSampleFromTask(
     method_variant_codes: methodVariantCodes,
     element_variant_codes: elementVariantCodes,
     structured_cause_snapshot: structuredCauseSnapshot,
+    structuredCauseAvailability: structuredCauseResolution.availability,
+    structuredCauseCode: structuredCauseResolution.causeCode,
+    structuredCauseTaxonomyVersion: structuredCauseResolution.taxonomyVersion,
     duration_learning_runtime_consumptions: durationLearningRuntimeConsumptions,
     algorithm_fact_context: summarizeAlgorithmFactContext(factContext),
     climate_region: climate.regionCode,
@@ -882,16 +850,14 @@ export async function collectDurationExperienceSampleFromTask(
     actual_duration_production_days: actualDurationProductionDays,
     planned_duration_calendar_days: plannedDurationCalendarDays,
     planned_duration_production_days: plannedDurationProductionDays,
-    construction_calendar_basis: constructionCalendar.basis,
-    construction_calendar_window_count: constructionCalendar.windows.length,
-    construction_calendar_availability: constructionCalendar.availability ?? 'unavailable',
+    construction_calendar_basis: effectiveConstructionCalendarBasis(constructionCalendar),
+    construction_calendar_window_count: effectiveConstructionCalendarWindowCount(constructionCalendar),
     construction_calendar_ref: constructionCalendar.calendarRef ?? null,
     construction_calendar_version: constructionCalendar.calendarVersion ?? null,
     construction_calendar_timezone: constructionCalendar.timezone ?? null,
     construction_calendar_as_of: constructionCalendarAsOf,
-    construction_calendar_unavailable_reason: hasProductionCalendar
-      ? null
-      : constructionCalendar.unavailableReason ?? 'construction_calendar_identity_missing',
+    construction_calendar_availability: constructionCalendar.availability ?? 'unavailable',
+    construction_calendar_unavailable_reason: constructionCalendar.unavailableReason ?? null,
     raw_task_title: task.title ?? null,
     title_weak_alias: normalizeText(backendStandardMapping.source) === 'algorithm_seed_rule'
       ? task.title ?? null
@@ -982,7 +948,7 @@ export async function collectDurationExperienceSampleFromTask(
     actual_duration_production_days: actualDurationProductionDays,
     planned_duration_calendar_days: plannedDurationCalendarDays,
     planned_duration_production_days: plannedDurationProductionDays,
-    construction_calendar_basis: constructionCalendar.basis,
+    construction_calendar_basis: effectiveConstructionCalendarBasis(constructionCalendar),
     planned_duration: plannedDuration,
     actual_duration: actualDuration,
     started_at: actualStartDate.toISOString(),
@@ -1011,16 +977,14 @@ export async function collectDurationExperienceSampleFromTask(
       actualStartSource: actualStart.source,
       actualEndSource: actualEnd.source,
       durationDayBasis,
-      constructionCalendarBasis: constructionCalendar.basis,
-      constructionCalendarWindowCount: constructionCalendar.windows.length,
-      constructionCalendarAvailability: constructionCalendar.availability ?? 'unavailable',
+      constructionCalendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
+      constructionCalendarWindowCount: effectiveConstructionCalendarWindowCount(constructionCalendar),
       constructionCalendarRef: constructionCalendar.calendarRef ?? null,
       constructionCalendarVersion: constructionCalendar.calendarVersion ?? null,
       constructionCalendarTimezone: constructionCalendar.timezone ?? null,
       constructionCalendarAsOf,
-      constructionCalendarUnavailableReason: hasProductionCalendar
-        ? null
-        : constructionCalendar.unavailableReason ?? 'construction_calendar_identity_missing',
+      constructionCalendarAvailability: constructionCalendar.availability ?? 'unavailable',
+      constructionCalendarUnavailableReason: constructionCalendar.unavailableReason ?? null,
       collectedTrigger: options.trigger ?? 'task_completion',
       collectedBy: options.actorId ?? null,
     },
@@ -1029,7 +993,9 @@ export async function collectDurationExperienceSampleFromTask(
     sample_status: 'active',
     confidence_level: confidence.level,
     confidence_score: confidence.score,
-    included_in_benchmark: finalSampleStrength !== 'weak' && finalSampleStrength !== 'unusable',
+    included_in_benchmark: finalSampleStrength !== 'weak'
+      && finalSampleStrength !== 'unusable'
+      && structuredCauseRead.causeBenchmarkEligible,
     metadata,
     updated_at: now,
   }

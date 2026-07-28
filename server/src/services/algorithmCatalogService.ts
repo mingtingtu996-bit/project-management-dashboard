@@ -187,7 +187,7 @@ const SEED_SOURCE_FILES: Partial<Record<AlgorithmSeedType, string>> = {
   standard_internal_flow: 'server/src/seeds/standardInternalFlowSeed.ts',
   regional_climate_rules: 'server/src/seeds/v1474RegionalClimateRuleSeed.ts',
   risk_issue_warning_rule: 'server/src/services/riskIssueWarningRuleRegistry.ts',
-  progress_deviation_cause: 'server/src/seeds/progressDeviationCauseRegistry.ts',
+  progress_deviation_cause: 'server/src/domain/structuredCauseTaxonomy.ts',
   responsibility_health_rule: 'server/src/seeds/responsibilityHealthRuleSeed.ts',
   milestone_integrity_rule: 'server/src/seeds/milestoneIntegrityRuleSeed.ts',
 }

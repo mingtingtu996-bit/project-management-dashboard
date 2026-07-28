@@ -291,15 +291,22 @@ function ensureHeartbeatLoop() {
 
   heartbeatTimer = setInterval(() => {
     for (const [clientId, client] of realtimeClients.entries()) {
-      if (!client.isAlive) {
-        client.socket.terminate()
-        realtimeClients.delete(clientId)
-        continue
-      }
+      try {
+        if (!client.isAlive) {
+          client.socket.terminate()
+          realtimeClients.delete(clientId)
+          continue
+        }
 
-      client.isAlive = false
-      if (client.socket.readyState === WebSocket.OPEN) {
-        client.socket.ping()
+        client.isAlive = false
+        if (client.socket.readyState === WebSocket.OPEN) {
+          client.socket.ping()
+        }
+      } catch (error) {
+        logger.warn('Realtime heartbeat client check failed', {
+          clientId,
+          error: error instanceof Error ? error.message : String(error),
+        })
       }
     }
     void revalidateRealtimeClientsNow()

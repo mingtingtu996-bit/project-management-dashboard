@@ -8,6 +8,18 @@ const repoRoot = process.cwd().endsWith('\\client') || process.cwd().endsWith('/
   ? resolve(process.cwd(), '..')
   : process.cwd()
 
+const WBS_TEMPLATE_GENERATION_IMPLEMENTATION_FILES = [
+  'wbsTemplateGenerationFoundation.ts',
+  'wbsTemplateScopeClassificationService.ts',
+  'wbsTemplateDurationAssemblyService.ts',
+  'wbsTemplateOutputProjectionService.ts',
+  'wbsTemplateDependencyCandidateService.ts',
+  'wbsTemplateAssetStrategyService.ts',
+  'wbsTemplateCloseoutChainService.ts',
+  'wbsTemplateAuditFormattingService.ts',
+  'wbsTemplateGenerationOrchestrator.ts',
+] as const
+
 const SURFACE_FIXTURE = {
   taskId: 'task-same-truth',
   plannedStart: '2026-05-01',
@@ -25,6 +37,12 @@ function readSource(relativeToSrc: string) {
 
 function readRepoSource(relativeToRepo: string) {
   return readFileSync(resolve(repoRoot, relativeToRepo), 'utf8')
+}
+
+function readWbsTemplateGenerationImplementationSource() {
+  return WBS_TEMPLATE_GENERATION_IMPLEMENTATION_FILES
+    .map((fileName) => readRepoSource(`server/src/services/${fileName}`))
+    .join('\n')
 }
 
 function listFiles(root: string): string[] {
@@ -163,9 +181,16 @@ describe('duration surface contract', () => {
 
     expect(tooltipSource).not.toContain('duration-reference-freeze-trigger')
     expect(tooltipSource).not.toContain('duration-reference-freeze-indicator')
-    expect(tooltipSource).not.toContain('generatedAt')
+    expect(tooltipSource).not.toContain('suggestion.generatedAt')
     expect(tooltipSource).not.toContain('referenceFrozenAt')
     expect(tooltipSource).not.toContain('isReferenceFrozen')
+    expect(tooltipSource).toContain('benchmarkGeneratedAt')
+    expect(tooltipSource).toContain('benchmarkProvenance')
+    expect(apiSource).toContain('benchmarkGeneratedAt')
+    expect(apiSource).toContain('benchmarkProvenance')
+    expect(apiSource).toContain("export type BenchmarkScope = 'project' | 'company' | 'industry' | 'global' | 'mixed'")
+    expect(apiSource).not.toContain("'project' | 'company' | 'system'")
+    expect(apiSource).not.toMatch(/\bgeneratedAt\??:/)
     expect(apiSource).not.toContain('referenceFrozenAt')
     expect(apiSource).not.toContain('isReferenceFrozen')
   })
@@ -358,6 +383,34 @@ describe('duration surface contract', () => {
     expect(ganttDialogsSource).not.toContain('elapsedLocalDaysSince')
   })
 
+  it('locks project summary delivery and overdue surfaces to typed duration facts', () => {
+    const dashboardApiSource = readSource('services/dashboardApi.ts')
+    const dashboardSource = readSource('pages/Dashboard.tsx')
+    const companyCockpitSource = readSource('pages/CompanyCockpit.tsx')
+    const companyCockpitUtilsSource = readSource('pages/CompanyCockpit/utils.ts')
+    const projectOverviewSource = readSource('pages/CompanyCockpit/components/ProjectOverviewSection.tsx')
+
+    expect(dashboardApiSource).toContain('normalizeDurationMetricDto')
+    expect(dashboardApiSource).toContain('futureDueWindow')
+    expect(dashboardApiSource).toContain('actualOverdue')
+    expect(dashboardSource).toContain('formatDurationMetric(summaryData?.futureDueWindow')
+    expect(companyCockpitSource).toContain('readFutureDeliveryDaysRemaining(summary)')
+    expect(companyCockpitUtilsSource).toContain("readAvailableDurationValue(summary.futureDueWindow, 'calendar_day')")
+    expect(companyCockpitUtilsSource).toContain("readAvailableDurationValue(summary.actualOverdue, 'construction_production_day')")
+    expect(companyCockpitUtilsSource).toContain('实际延期口径暂不可用')
+    expect(companyCockpitUtilsSource).not.toContain('已延期 ${formattedRemaining}')
+    expect(projectOverviewSource).toContain('formatDeliveryHint(summary)')
+    expect(projectOverviewSource).toContain('data-testid="company-project-delivery-hint"')
+
+    for (const [file, source] of Object.entries({
+      'pages/Dashboard.tsx': dashboardSource,
+      'pages/CompanyCockpit.tsx': companyCockpitSource,
+      'pages/CompanyCockpit/utils.ts': companyCockpitUtilsSource,
+    })) {
+      expect(source, file).not.toContain('.daysUntilPlannedEnd')
+    }
+  })
+
   it('locks frontend lag and delay summaries to date-only shared helpers', () => {
     const taskBusinessStatusSource = readSource('lib/taskBusinessStatus.ts')
     const durationDaysSource = readSource('lib/durationDays.ts')
@@ -399,7 +452,7 @@ describe('duration surface contract', () => {
   })
 
   it('asserts package parent rows do not expose package seed reference as the final parent duration', () => {
-    const wbsGenerationSource = readRepoSource('server/src/services/wbsTemplateGenerationService.ts')
+    const wbsGenerationSource = readWbsTemplateGenerationImplementationSource()
     const tooltipSource = readSource('components/planning/DurationSuggestionTooltip.tsx')
 
     expect(wbsGenerationSource).toContain("planDurationTruthSource: 'child_plan_window_rollup'")

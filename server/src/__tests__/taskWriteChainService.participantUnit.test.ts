@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   createTaskInMainChain as createTaskInMainChainFn,
   createTasksInWizardBatch as createTasksInWizardBatchFn,
+  finalizeTaskWriteFromLegacyMutation as finalizeTaskWriteFromLegacyMutationFn,
   reopenTaskInMainChain as reopenTaskInMainChainFn,
   updateTaskInMainChain as updateTaskInMainChainFn,
 } from '../services/taskWriteChainService.js'
@@ -141,9 +142,11 @@ const state = vi.hoisted(() => {
     })),
     inferAndPersistTaskStructuredCauseAttributions: vi.fn(async () => []),
     collectDurationExperienceSampleFromTask: vi.fn(async () => true),
+    collectDurationExperienceSampleWithTaskLock: vi.fn(async () => true),
     retireDurationExperienceSampleForTask: vi.fn(async () => true),
     enqueueDurationExperienceCollectionFailure: vi.fn(async () => undefined),
     applyTaskMaterialLifecycleFeedback: vi.fn(async () => undefined),
+    enqueuePassiveReorderDetection: vi.fn(async () => undefined),
     supabase: { from },
     from,
     participantUnitSelect,
@@ -175,7 +178,7 @@ vi.mock('../middleware/logger.js', () => ({
 
 vi.mock('../services/systemAnomalyService.js', () => ({
   SystemAnomalyService: class {
-    enqueuePassiveReorderDetection = vi.fn(async () => undefined)
+    enqueuePassiveReorderDetection = state.enqueuePassiveReorderDetection
   },
 }))
 
@@ -207,6 +210,7 @@ vi.mock('../services/durationExperienceService.js', () => ({
 }))
 
 vi.mock('../services/durationExperienceReconciliationService.js', () => ({
+  collectDurationExperienceSampleWithTaskLock: state.collectDurationExperienceSampleWithTaskLock,
   enqueueDurationExperienceCollectionFailure: state.enqueueDurationExperienceCollectionFailure,
 }))
 
@@ -259,11 +263,18 @@ vi.mock('../database.js', () => ({
 describe('taskWriteChainService participant unit lookup', () => {
   let createTaskInMainChain: typeof createTaskInMainChainFn
   let createTasksInWizardBatch: typeof createTasksInWizardBatchFn
+  let finalizeTaskWriteFromLegacyMutation: typeof finalizeTaskWriteFromLegacyMutationFn
   let reopenTaskInMainChain: typeof reopenTaskInMainChainFn
   let updateTaskInMainChain: typeof updateTaskInMainChainFn
 
   beforeAll(async () => {
-    ;({ createTaskInMainChain, createTasksInWizardBatch, reopenTaskInMainChain, updateTaskInMainChain } = await import('../services/taskWriteChainService.js'))
+    ;({
+      createTaskInMainChain,
+      createTasksInWizardBatch,
+      finalizeTaskWriteFromLegacyMutation,
+      reopenTaskInMainChain,
+      updateTaskInMainChain,
+    } = await import('../services/taskWriteChainService.js'))
   }, 180_000)
 
   beforeEach(() => {
@@ -276,6 +287,7 @@ describe('taskWriteChainService participant unit lookup', () => {
     })
     state.getTask.mockResolvedValue(null)
     state.recordTaskProgressSnapshot.mockResolvedValue(undefined)
+    state.enqueuePassiveReorderDetection.mockResolvedValue(undefined)
     state.createTasksWithCodeInWizardBatchTransaction.mockClear()
     state.reopenTask.mockImplementation(async (_taskId: string, updates: Record<string, unknown>) => ({
       id: 'task-1',
@@ -606,7 +618,7 @@ describe('taskWriteChainService participant unit lookup', () => {
   })
 
   it('infers structured task causes before collecting the completion learning sample', async () => {
-    state.getTask.mockResolvedValue({
+    const previousTask = {
       id: 'task-1',
       project_id: 'project-1',
       title: 'material-delayed task',
@@ -617,36 +629,132 @@ describe('taskWriteChainService participant unit lookup', () => {
       actual_start_date: '2026-04-01',
       building_object_id: 'building-1',
       version: 3,
-    })
-    state.updateTaskWithCodeInTransaction.mockResolvedValue({
-      task: {
-        id: 'task-1',
-        project_id: 'project-1',
-        title: 'material-delayed task',
-        status: 'completed',
-        progress: 100,
-        planned_start_date: '2026-04-01',
-        planned_end_date: '2026-04-10',
-        actual_start_date: '2026-04-01',
-        actual_end_date: '2026-04-18',
-        building_object_id: 'building-1',
-        version: 4,
-      },
-    } as never)
-
-    await updateTaskInMainChain('task-1', {
+    } as any
+    const completedTask = {
+      ...previousTask,
       status: 'completed',
       progress: 100,
       actual_end_date: '2026-04-18',
       updated_by: 'user-1',
-    }, 3)
+      version: 4,
+    } as any
+
+    await finalizeTaskWriteFromLegacyMutation(completedTask, previousTask, 'user-1')
 
     expect(state.inferAndPersistTaskStructuredCauseAttributions).toHaveBeenCalledWith({
       task: expect.objectContaining({ id: 'task-1', status: 'completed' }),
     })
-    expect(state.collectDurationExperienceSampleFromTask).toHaveBeenCalled()
+    expect(state.collectDurationExperienceSampleWithTaskLock).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      taskId: 'task-1',
+      previousTask: expect.objectContaining({ id: 'task-1', status: 'in_progress' }),
+      actorId: 'user-1',
+      trigger: 'task_completion',
+    })
     expect(state.inferAndPersistTaskStructuredCauseAttributions.mock.invocationCallOrder[0])
-      .toBeLessThan(state.collectDurationExperienceSampleFromTask.mock.invocationCallOrder[0])
+      .toBeLessThan(state.collectDurationExperienceSampleWithTaskLock.mock.invocationCallOrder[0])
+  })
+
+  it('passes the controlled correction reason into the transactional task writer', async () => {
+    state.getTask.mockResolvedValue({
+      id: 'task-1',
+      project_id: 'project-1',
+      title: 'corrected task',
+      status: 'in_progress',
+      progress: 40,
+      actual_start_date: '2026-06-01',
+      actual_end_date: null,
+      first_progress_at: '2026-06-01T08:00:00.000Z',
+      building_object_id: 'building-1',
+      version: 3,
+    })
+
+    await updateTaskInMainChain(
+      'task-1',
+      { actual_end_date: '2026-06-05', updated_by: 'user-1' },
+      3,
+      {
+        allowManualActualDates: true,
+        executionFactCorrectionReason: 'Verified against signed site record',
+      },
+    )
+
+    expect(state.updateTaskWithCodeInTransaction).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ actual_end_date: '2026-06-05' }),
+      3,
+      'user-1',
+      'project-1',
+      { correctionReason: 'Verified against signed site record' },
+    )
+  })
+
+  it('reports partial canonical finalization failure after attempting later recoverable steps', async () => {
+    const previousTask = {
+      id: 'task-1',
+      project_id: 'project-1',
+      status: 'in_progress',
+      progress: 80,
+      building_object_id: 'building-1',
+    } as any
+    const completedTask = {
+      ...previousTask,
+      status: 'completed',
+      progress: 100,
+      actual_end_date: '2026-04-18',
+    } as any
+    state.inferAndPersistTaskStructuredCauseAttributions.mockRejectedValueOnce(
+      new Error('structured cause store unavailable'),
+    )
+
+    await expect(finalizeTaskWriteFromLegacyMutation(
+      completedTask,
+      previousTask,
+      'user-1',
+    )).rejects.toMatchObject({
+      name: 'TaskWriteFinalizationIncompleteError',
+      details: expect.objectContaining({
+        taskId: 'task-1',
+        failedSteps: expect.arrayContaining([
+          expect.objectContaining({ step: 'infer_structured_causes' }),
+        ]),
+      }),
+    })
+    expect(state.collectDurationExperienceSampleWithTaskLock).toHaveBeenCalled()
+    expect(state.applyTaskMaterialLifecycleFeedback).toHaveBeenCalled()
+  })
+
+  it('reports asynchronous passive reorder enqueue failure as retryable finalization work', async () => {
+    const previousTask = {
+      id: 'task-1',
+      project_id: 'project-1',
+      status: 'in_progress',
+      progress: 80,
+      building_object_id: 'building-1',
+    } as any
+    const completedTask = {
+      ...previousTask,
+      status: 'completed',
+      progress: 100,
+      actual_end_date: '2026-04-18',
+    } as any
+    state.enqueuePassiveReorderDetection.mockRejectedValueOnce(
+      new Error('passive reorder queue unavailable'),
+    )
+
+    await expect(finalizeTaskWriteFromLegacyMutation(
+      completedTask,
+      previousTask,
+      'user-1',
+    )).rejects.toMatchObject({
+      name: 'TaskWriteFinalizationIncompleteError',
+      details: expect.objectContaining({
+        taskId: 'task-1',
+        failedSteps: expect.arrayContaining([
+          expect.objectContaining({ step: 'queue_passive_reorder_detection' }),
+        ]),
+      }),
+    })
   })
 
   it('rejects disabled participant units before creating the task row', async () => {

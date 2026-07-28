@@ -634,6 +634,8 @@ describe('default master-plan executable assembly duration assets', () => {
         sequencingBasis: 'heuristic_stagger',
         dependencyRuleEvidence: expect.objectContaining({
           evidenceLevel: 'heuristic_fallback_l0',
+          productionWritePolicy: 'candidate_only_requires_governed_dependency_rule_publication',
+          createsProductionTaskDependency: false,
         }),
       }),
     ]))

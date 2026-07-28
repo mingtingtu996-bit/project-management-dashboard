@@ -1433,6 +1433,47 @@ describe('progress deviation backend contract', () => {
     })
   }, 30_000)
 
+  it('exposes canonical cause availability for known and unknown forecast factors', async () => {
+    const { projectId, baselineVersionId, monthlyPlanVersionId } = seedAnalysisFixtures()
+    const forecast = state.tables.task_duration_forecasts.find((row) => row.id === 'forecast-1') as any
+    forecast.factor_summary.factors.push({
+      key: 'unregistered_factor',
+      label: 'unregistered contributor',
+      multiplier: 1.1,
+      extraDays: 2,
+      confidenceDelta: -0.02,
+      actionPolicy: 'candidate_only',
+      reason: 'unregistered factor must remain visible but unavailable',
+      source: 'external_runtime_input',
+    })
+
+    const report = await getProgressDeviationAnalysis({
+      project_id: projectId,
+      baseline_version_id: baselineVersionId,
+      monthly_plan_version_id: monthlyPlanVersionId,
+    })
+    const row = report.mainlines[0].rows.find((item) => item.id === 'baseline-item-1')
+    const reasons = row?.attribution?.delay_reasons ?? []
+    const known = reasons.find((reason) => (reason.evidence as any)?.factor_key === 'resource_conflict')
+    const unknown = reasons.find((reason) => (reason.evidence as any)?.factor_key === 'unregistered_factor')
+
+    expect(known).toEqual(expect.objectContaining({
+      canonicalCauseAvailability: 'available',
+      canonicalCauseCode: 'site_capacity_pressure',
+      canonicalCauseTaxonomyVersion: 'v1.0.0',
+      responsibility_basis: 'site_capacity',
+    }))
+    expect(unknown).toEqual(expect.objectContaining({
+      canonicalCauseAvailability: 'unavailable',
+      canonicalCauseCode: null,
+      canonicalCauseTaxonomyVersion: null,
+      responsibility_basis: null,
+      attribution_role: 'evidence_candidate',
+      review_status: 'canonical_cause_unavailable',
+      impact_days: null,
+    }))
+  })
+
   it('fails closed for deviation, impact, wait and responsibility durations when construction calendar identity is missing', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-18T08:00:00.000Z'))

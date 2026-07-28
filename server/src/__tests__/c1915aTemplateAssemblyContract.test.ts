@@ -102,6 +102,11 @@ describe('C-19.15a non-live template assembly contract', () => {
       constructionCalendar: {
         basis: 'official_construction_calendar_seed',
         windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
     const constructionOrganizationScenario = {

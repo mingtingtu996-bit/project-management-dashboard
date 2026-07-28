@@ -136,7 +136,7 @@ describe('projectHealthDeviationSummaryService', () => {
     }))
   })
 
-  it('uses the shared cause registry, dedupes a reason type per forecast, and ignores unknown factors', async () => {
+  it('dedupes known canonical causes and exposes unknown factors as unavailable', async () => {
     mocks.tables.task_duration_forecasts.push(
       {
         project_id: 'project-1',
@@ -172,12 +172,16 @@ describe('projectHealthDeviationSummaryService', () => {
     expect(causes.map((cause) => cause.code)).toEqual([
       'site_capacity_pressure',
       'external_readiness',
-      'calendar_productivity',
+      'weather_impact',
+      'unavailable:unregistered_factor',
     ])
     expect(causes[0]).toEqual(expect.objectContaining({
       count: 2,
       maxDelayDays: 6,
       factorKeys: ['resource_conflict', 'progress_velocity'],
+      canonicalCauseAvailability: 'available',
+      canonicalCauseCode: 'site_capacity_pressure',
+      canonicalCauseTaxonomyVersion: 'v1.0.0',
       responsibilityBasis: 'site_capacity',
     }))
     expect(causes[1]).toEqual(expect.objectContaining({
@@ -190,7 +194,47 @@ describe('projectHealthDeviationSummaryService', () => {
       factorKeys: ['weather_forecast_impact'],
       responsibilityBasis: 'calendar_productivity',
     }))
-    expect(causes.some((cause) => cause.code === 'unregistered_factor')).toBe(false)
+    expect(causes[3]).toEqual(expect.objectContaining({
+      count: 1,
+      maxDelayDays: 6,
+      factorKeys: ['unregistered_factor'],
+      canonicalCauseAvailability: 'unavailable',
+      canonicalCauseCode: null,
+      canonicalCauseTaxonomyVersion: null,
+      responsibilityBasis: null,
+      confidenceWeight: 0,
+      reasons: ['must not create a parallel cause code'],
+    }))
+  })
+
+  it('merges different legacy reason types into one canonical cause row', async () => {
+    mocks.tables.task_duration_forecasts.push({
+      project_id: 'project-1',
+      task_id: 'task-1',
+      is_current: true,
+      generated_at: '2026-05-20T08:00:00.000Z',
+      forecast_delay_days: 4,
+      factor_summary: {
+        factors: [
+          { key: 'workflow_sequence', reason: 'sequence drift' },
+          { key: 'process_constraint', reason: 'inspection hold point' },
+        ],
+      },
+    })
+
+    const summary = await buildProjectHealthDeviationSummary('project-1')
+    const causes = summary.deviationSummary.durationDeviationCauses as Array<Record<string, unknown>>
+
+    expect(causes).toHaveLength(1)
+    expect(causes[0]).toEqual(expect.objectContaining({
+      code: 'workflow_sequence',
+      canonicalCauseCode: 'workflow_sequence',
+      canonicalCauseTaxonomyVersion: 'v1.0.0',
+      count: 1,
+      factorKeys: ['workflow_sequence', 'process_constraint'],
+      sourceReasonTypes: ['workflow_sequence', 'process_constraint'],
+      reasons: ['sequence drift', 'inspection hold point'],
+    }))
   })
 
   it('prefers latest snapshot health fields and falls back to persisted project health', async () => {

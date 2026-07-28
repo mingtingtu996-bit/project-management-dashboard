@@ -58,12 +58,33 @@ function forecast(
   confidenceLevel = 'high',
   confidenceScore = 90,
 ): TaskDurationForecast {
+  const durationMetric = (value: number | null) => ({
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-13',
+    availability: value === null ? 'unavailable' as const : 'available' as const,
+    unavailableReason: value === null ? 'duration_value_missing' : null,
+  })
   return {
     taskId,
     recommendedDurationDays: probability?.[1] ?? null,
     conservativeDurationDays: probability?.[2] ?? null,
     remainingDurationDays: probability?.[1] ?? null,
+    remainingDuration: {
+      value: probability?.[1] ?? null,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-13',
+      availability: probability ? 'available' : 'unavailable',
+      unavailableReason: probability ? null : 'duration_value_missing',
+    },
     forecastFinishDate: finishDate,
+    forecastDelay: durationMetric(probability ? 0 : null),
     forecastDelayDays: 0,
     confidenceLevel,
     confidenceScore,
@@ -82,6 +103,11 @@ function forecast(
           confidenceBandWidthDays: probability[2] - probability[0],
         }
       : null,
+    probabilityDurationMetrics: {
+      p20RemainingDuration: durationMetric(probability?.[0] ?? null),
+      p50RemainingDuration: durationMetric(probability?.[1] ?? null),
+      p80RemainingDuration: durationMetric(probability?.[2] ?? null),
+    },
   }
 }
 
@@ -150,6 +176,134 @@ describe('scopedDurationForecastService', () => {
     })
   })
 
+  it('keeps target gap in Gregorian days while reporting delay in construction production days', () => {
+    const shutdownCalendar: ConstructionCalendarContext = {
+      ...calendar,
+      windows: [{
+        holidayCode: 'site_shutdown',
+        startDate: '2026-07-19',
+        endDate: '2026-07-21',
+        counts_as_construction_shutdown: true,
+      }],
+    }
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-cross-shutdown', { planned_end_date: '2026-07-18' })],
+      forecasts: [forecast('task-cross-shutdown', '2026-07-22', [5, 8, 12])],
+      attributions: new Map([['task-cross-shutdown', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: shutdownCalendar,
+    }).dimensions.division[0]
+
+    expect(result.targetGap).toMatchObject({
+      value: 4,
+      unit: 'calendar_day',
+      calendarRef: 'gregorian',
+      calendarVersion: 'ISO-8601',
+      availability: 'available',
+    })
+    expect(result.delay).toMatchObject({
+      value: 1,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      availability: 'available',
+    })
+    expect(result.targetGapDays).toBe(4)
+    expect(result.delayDays).toBe(1)
+  })
+
+  it('keeps Gregorian target gap available but fails production-day delay closed without calendar identity', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [row('task-missing-calendar', { planned_end_date: '2026-07-18' })],
+      forecasts: [forecast('task-missing-calendar', '2026-07-22', [5, 8, 12])],
+      attributions: new Map([['task-missing-calendar', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    }).dimensions.division[0]
+
+    expect(result.targetGap).toMatchObject({
+      value: 4,
+      unit: 'calendar_day',
+      availability: 'available',
+    })
+    expect(result.delay).toMatchObject({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })
+    expect(result.targetGapDays).toBe(4)
+    expect(result.delayDays).toBeNull()
+  })
+
+  it('does not use legacy probability values when typed probability metrics are unavailable', () => {
+    const first = forecast('first', '2026-07-17', [4, 5, 7])
+    const second = forecast('second', '2026-07-22', [4, 5, 7])
+    for (const item of [first, second]) {
+      item.probabilityDurationMetrics = {
+        p20RemainingDuration: {
+          ...item.probabilityDurationMetrics.p20RemainingDuration,
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        p50RemainingDuration: {
+          ...item.probabilityDurationMetrics.p50RemainingDuration,
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        p80RemainingDuration: {
+          ...item.probabilityDurationMetrics.p80RemainingDuration,
+          value: null,
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+      }
+    }
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      simulationSeed: 'typed-probability-unavailable',
+      rows: [
+        row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-17' }),
+        row('second', { planned_start_date: '2026-07-18', planned_end_date: '2026-07-22' }, [
+          { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+        ]),
+      ],
+      forecasts: [first, second],
+      attributions: new Map([
+        ['first', attribution()],
+        ['second', attribution()],
+      ]),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    }).dimensions.division[0]
+
+    expect(result.probabilityCoverageRate).toBe(0)
+    expect(result.probabilityBasis).not.toBe('monte_carlo')
+    expect(result.networkProbability).toEqual(expect.objectContaining({
+      probabilityBasis: 'pert_analytic',
+      p20RemainingDays: null,
+      p50RemainingDays: null,
+      p80RemainingDays: null,
+    }))
+    expect(result.degradationReasons).toContain('missing_probability_window')
+  })
+
   it('uses the same correlated Monte Carlo basis for a dependency-backed scoped network', () => {
     const rows = [
       row('a1', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-22' }),
@@ -181,6 +335,256 @@ describe('scopedDurationForecastService', () => {
     }))
     expect(division.p80FinishDate).toBe(division.networkProbability?.p80FinishDate)
     expect(division.p80FinishDate).not.toBe(division.p50FinishDate)
+  })
+
+  it('returns the authoritative network target-date contract for an arbitrary target date', () => {
+    const rows = [
+      row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-17' }),
+      row('second', { planned_start_date: '2026-07-18', planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const common = {
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22', [5, 5, 5])),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    }
+
+    const immediate = buildScopedDurationForecasts({
+      ...common,
+      targetDate: '2026-07-13',
+      simulationSeed: 'target-date-seed-1',
+    } as any).dimensions.division[0] as any
+    const later = buildScopedDurationForecasts({
+      ...common,
+      targetDate: '2026-12-31',
+      simulationSeed: 'target-date-seed-1',
+    } as any).dimensions.division[0] as any
+
+    expect(immediate.targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-07-13',
+      availability: 'available',
+      unavailableReason: null,
+      completionProbability: 0,
+      probabilityBasis: 'monte_carlo',
+      sampleCount: 1000,
+      confidenceInterval: expect.objectContaining({
+        confidenceLevel: 0.95,
+        lowerProbability: 0,
+        upperProbability: expect.any(Number),
+        method: 'wilson_score',
+      }),
+      governingTaskIds: ['first', 'second'],
+      analyticAdvisory: null,
+      targetDuration: expect.objectContaining({
+        unit: 'construction_production_day',
+        availability: 'available',
+      }),
+    }))
+    expect(later.targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-12-31',
+      availability: 'available',
+      unavailableReason: null,
+      completionProbability: 1,
+      probabilityBasis: 'monte_carlo',
+      sampleCount: 1000,
+      confidenceInterval: expect.objectContaining({
+        confidenceLevel: 0.95,
+        lowerProbability: expect.any(Number),
+        upperProbability: 1,
+        method: 'wilson_score',
+      }),
+      governingTaskIds: ['first', 'second'],
+      analyticAdvisory: null,
+    }))
+  })
+
+  it('is deterministic for a fixed simulation seed and consumes that seed', () => {
+    const rows = [
+      row('first', { planned_start_date: '2026-07-13', planned_end_date: '2026-07-20' }),
+      row('second', { planned_start_date: '2026-07-21', planned_end_date: '2026-07-31' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const common = {
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-08-03',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-31', [4, 8, 16])),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(['first', 'second']),
+      constructionCalendar: calendar,
+    }
+
+    const first = buildScopedDurationForecasts({
+      ...common,
+      simulationSeed: 'fixed-seed-a',
+    } as any).dimensions.division[0] as any
+    const repeated = buildScopedDurationForecasts({
+      ...common,
+      simulationSeed: 'fixed-seed-a',
+    } as any).dimensions.division[0] as any
+    const otherSeed = buildScopedDurationForecasts({
+      ...common,
+      simulationSeed: 'fixed-seed-b',
+    } as any).dimensions.division[0] as any
+
+    expect(repeated.targetDateCompletion).toEqual(first.targetDateCompletion)
+    expect(repeated.networkProbability.inputHash).toBe(first.networkProbability.inputHash)
+    expect(otherSeed.networkProbability.inputHash).not.toBe(first.networkProbability.inputHash)
+    expect(first.targetDateCompletion.confidenceInterval.lowerProbability)
+      .toBeLessThanOrEqual(first.targetDateCompletion.completionProbability)
+    expect(first.targetDateCompletion.confidenceInterval.upperProbability)
+      .toBeGreaterThanOrEqual(first.targetDateCompletion.completionProbability)
+  })
+
+  it('fails the authoritative result closed and labels the task-only estimate as advisory', () => {
+    const rows = [
+      row('first', { planned_end_date: '2026-07-20' }),
+      row('second', { planned_end_date: '2026-07-22' }),
+    ]
+
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-21',
+      simulationSeed: 'network-unavailable-seed',
+      rows,
+      forecasts: [
+        forecast('first', '2026-07-20', [5, 8, 12]),
+        forecast('second', '2026-07-22', [6, 10, 14]),
+      ],
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    } as any).dimensions.division[0] as any
+
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      availability: 'unavailable',
+      unavailableReason: 'network_probability_unavailable',
+      completionProbability: null,
+      confidenceInterval: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      governingTaskIds: [],
+      reasonCodes: expect.arrayContaining([
+        'dependency_network_missing',
+        'network_probability_unavailable',
+      ]),
+      analyticAdvisory: expect.objectContaining({
+        completionProbability: expect.any(Number),
+        probabilityBasis: 'pert_analytic',
+        governingTaskIds: expect.arrayContaining(['second']),
+      }),
+    }))
+  })
+
+  it.each([
+    [undefined, 'simulation_seed_missing'],
+    ['contains spaces', 'simulation_seed_invalid'],
+  ])('fails target-date probability closed for simulation seed %s', (simulationSeed, reasonCode) => {
+    const rows = [
+      row('first', { planned_end_date: '2026-07-20' }),
+      row('second', { planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-21',
+      simulationSeed,
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22')),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+    } as any).dimensions.division[0] as any
+
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      availability: 'unavailable',
+      unavailableReason: reasonCode,
+      completionProbability: null,
+      confidenceInterval: null,
+      probabilityBasis: 'unavailable',
+      sampleCount: 0,
+      governingTaskIds: [],
+      reasonCodes: expect.arrayContaining([reasonCode]),
+      analyticAdvisory: null,
+    }))
+  })
+
+  it('fails target-date probability closed when required dependency evidence is unavailable', () => {
+    const rows = [
+      row('first', { planned_end_date: '2026-07-20' }),
+      row('second', { planned_end_date: '2026-07-22' }, [
+        { clientRowId: 'first', dependencyType: 'FS', lagDays: 0 },
+      ]),
+    ]
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-21',
+      simulationSeed: 'dependency-evidence-seed',
+      rows,
+      forecasts: rows.map((item) => forecast(item.clientRowId, '2026-07-22')),
+      attributions: new Map(rows.map((item) => [item.clientRowId, attribution()])),
+      criticalTaskIds: new Set(),
+      constructionCalendar: calendar,
+      globalDegradationReasons: ['task_dependencies_unavailable'],
+    } as any).dimensions.division[0] as any
+
+    expect(result.networkProbability.probabilityBasis).toBe('monte_carlo')
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      availability: 'unavailable',
+      completionProbability: null,
+      probabilityBasis: 'unavailable',
+      governingTaskIds: [],
+      reasonCodes: expect.arrayContaining([
+        'task_dependencies_unavailable',
+        'network_probability_unavailable',
+      ]),
+      analyticAdvisory: {
+        completionProbability: 0.4,
+        probabilityBasis: 'pert_analytic',
+        governingTaskIds: ['first', 'second'],
+      },
+    }))
+  })
+
+  it('fails target-date probability closed without authoritative calendar identity', () => {
+    const result = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      targetDate: '2026-07-31',
+      simulationSeed: 'calendar-authority-seed',
+      rows: [row('task-1', { planned_end_date: '2026-07-20' })],
+      forecasts: [forecast('task-1', '2026-07-20')],
+      attributions: new Map([['task-1', attribution()]]),
+      criticalTaskIds: new Set(),
+      constructionCalendar: {
+        basis: 'calendar_day', windows: [], calendarRef: null, calendarVersion: null,
+        timezone: 'Asia/Shanghai', availability: 'unavailable', unavailableReason: 'calendar_identity_missing',
+      },
+    } as any).dimensions.division[0] as any
+
+    expect(result.targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-07-31',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+      completionProbability: null,
+      confidenceInterval: null,
+      probabilityBasis: 'unavailable',
+      governingTaskIds: [],
+      analyticAdvisory: null,
+      reasonCodes: expect.arrayContaining(['construction_calendar_identity_missing']),
+      targetDuration: expect.objectContaining({ availability: 'unavailable', value: null }),
+    }))
   })
 
   it('does not count a future task release offset twice in scoped Monte Carlo', () => {
@@ -233,6 +637,11 @@ describe('scopedDurationForecastService', () => {
           start_date: '2026-07-18',
           end_date: '2026-07-20',
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
@@ -292,6 +701,7 @@ describe('scopedDurationForecastService', () => {
     const result = buildScopedDurationForecasts({
       projectId: 'project-1',
       asOfDate: '2026-07-13',
+      targetDate: '2026-07-31',
       rows: [
         row('task-a', {
           status: 'completed',
@@ -313,6 +723,12 @@ describe('scopedDurationForecastService', () => {
       forecastState: 'completed',
       dataStatus: 'degraded',
       degradationReasons: expect.arrayContaining(['missing_actual_completion']),
+      targetDateCompletion: expect.objectContaining({
+        targetDate: '2026-07-31',
+        completionProbability: null,
+        probabilityBasis: 'unavailable',
+        reasonCodes: ['missing_actual_completion'],
+      }),
     }))
   })
 

@@ -462,8 +462,10 @@ function formatDelayRiskLabel(risk?: string | null) {
       return '高风险'
     case 'medium':
       return '中风险'
-    default:
+    case 'low':
       return '低风险'
+    default:
+      return '暂不可用'
   }
 }
 

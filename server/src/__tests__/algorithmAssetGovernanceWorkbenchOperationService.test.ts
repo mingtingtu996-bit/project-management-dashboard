@@ -2749,4 +2749,99 @@ describe('algorithmAssetGovernanceWorkbenchOperationService', () => {
     ]))
     expect(publishAlgorithmSeedOverride).not.toHaveBeenCalled()
   })
+
+  it('delegates duration asset review decisions exactly once with server authority and no direct runtime write', async () => {
+    const serverTime = '2026-07-24T09:30:00.000Z'
+    const getCurrentTime = vi.fn(() => serverTime)
+    const decideDurationAssetReviewItem = vi.fn(async (): Promise<any> => ({
+      status: 'rejected',
+      reviewItemId: 'review-1',
+      publicationKey: null,
+      idempotent: false,
+    }))
+    const queryExec = vi.fn(async () => [])
+
+    const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+      action: 'duration_asset_review_decision',
+      assetType: 'duration_learning_runtime',
+      evidenceToken: 'duration-review-decision-1',
+      domainWriterKey: 'duration_asset_review_decision_service',
+      reviewItemId: 'review-1',
+      reviewDecision: 'reject',
+      decisionNotes: 'evidence conflict remains unresolved',
+      companyId: 'company-1',
+      requestedByUserId: 'user-1',
+      authorizedProjectIds: ['project-1'],
+      authority: {
+        kind: 'operator',
+        companyId: 'company-attacker',
+        authorizedProjectIds: ['project-attacker'],
+        reviewerUserId: 'operator-attacker',
+      },
+      visibleProjectIds: ['project-attacker'],
+      executedAt: '2099-01-01T00:00:00.000Z',
+      queryExec,
+      dependencies: {
+        decideDurationAssetReviewItem,
+        getCurrentTime,
+      },
+    } as any)
+
+    expect(decideDurationAssetReviewItem).toHaveBeenCalledTimes(1)
+    expect(decideDurationAssetReviewItem).toHaveBeenCalledWith({
+      reviewItemId: 'review-1',
+      decision: 'reject',
+      decisionReason: 'evidence conflict remains unresolved',
+      authority: {
+        kind: 'company_admin',
+        companyId: 'company-1',
+        authorizedProjectIds: ['project-1'],
+        reviewerUserId: 'user-1',
+      },
+      queryExec,
+      observedAt: serverTime,
+    })
+    expect(getCurrentTime).toHaveBeenCalledTimes(1)
+    expect(result).toEqual(expect.objectContaining({
+      status: 'operation_delegated',
+      operationAction: 'duration_asset_review_decision',
+      assetType: 'duration_learning_runtime',
+      writesRuntimeDirectly: false,
+      workbenchDoesNotGrantPublishRights: true,
+      delegatedToDomainWriter: true,
+      domainWriterKey: 'duration_asset_review_decision_service',
+      domainResult: expect.objectContaining({ status: 'rejected' }),
+    }))
+  })
+
+  it('blocks duration review decisions without the exact writer and governed decision fields', async () => {
+    const decideDurationAssetReviewItem = vi.fn()
+
+    const result = await executeAlgorithmAssetGovernanceWorkbenchOperation({
+      action: 'duration_asset_review_decision',
+      assetType: 'duration_learning_runtime',
+      evidenceToken: 'duration-review-decision-2',
+      domainWriterKey: 'operator_duration_review_writer',
+      reviewDecision: 'approve',
+      companyId: 'company-1',
+      requestedByUserId: 'user-1',
+      authorizedProjectIds: ['project-1'],
+      dependencies: {
+        decideDurationAssetReviewItem,
+      },
+    })
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'operation_blocked',
+      writesRuntimeDirectly: false,
+      workbenchDoesNotGrantPublishRights: true,
+      delegatedToDomainWriter: false,
+      reasons: expect.arrayContaining([
+        'domain_writer_not_registered_for_asset_type',
+        'review_item_id_required',
+        'decision_notes_required',
+      ]),
+    }))
+    expect(decideDurationAssetReviewItem).not.toHaveBeenCalled()
+  })
 })

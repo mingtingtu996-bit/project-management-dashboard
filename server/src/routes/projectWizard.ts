@@ -11,6 +11,8 @@ import { getClient, query as rawQuery } from '../database.js'
 import { createTasksInWizardBatch } from '../services/taskWriteChainService.js'
 import { executeProjectCreationUnderCommercialGuard } from '../services/commercialTransactionService.js'
 import { createDurationRuntimeConsumerObservationQueryExec } from '../services/durationRuntimeConsumerObservationService.js'
+import { recordAcceptancePlanExecutionFacts } from '../services/acceptancePlanExecutionFactService.js'
+import { normalizeDurationRiskDistributionDto } from '../services/durationMetricService.js'
 import { deriveWbsFlags, type WbsNodeType } from '../services/wbsSemanticService.js'
 import { replaceWizardGeneratedTaskDependenciesBatch } from '../services/taskStandardModelService.js'
 import {
@@ -127,6 +129,7 @@ import {
 import type { ApiResponse } from '../types/index.js'
 import type { PlanningTableOperation } from '../types/planningTable.js'
 import { orderedInclusiveDurationDays } from '../utils/durationDays.js'
+import { isUnconfirmedHeuristicDependency } from '../services/dependencyAuthorityService.js'
 
 const router = Router()
 
@@ -297,10 +300,25 @@ function mapTargetFeasibilityToTaskIds(
         ...adjustment,
         clientRowId: mapCreatedTaskId(adjustment.clientRowId, idByClientRowId),
       })),
-      operations: feasibility.accelerationProposal.rescheduleDraft.operations.map((operation) => ({
-        ...operation,
-        clientRowId: mapCreatedTaskId(operation.clientRowId, idByClientRowId),
-      })),
+      operations: feasibility.accelerationProposal.rescheduleDraft.operations.map((operation) => {
+        const taskId = mapCreatedTaskId(operation.rowId || operation.clientRowId, idByClientRowId)
+        return operation.type === 'set_predecessors'
+          ? {
+              ...operation,
+              rowId: taskId,
+              clientRowId: taskId,
+              predecessorTaskIds: operation.predecessorTaskIds.map((id) => mapCreatedTaskId(id, idByClientRowId)),
+              predecessorDependencies: operation.predecessorDependencies.map((dependency) => ({
+                ...dependency,
+                dependencyTaskId: mapCreatedTaskId(dependency.dependencyTaskId, idByClientRowId),
+              })),
+            }
+          : {
+              ...operation,
+              rowId: taskId,
+              clientRowId: taskId,
+            }
+      }),
     }
     : undefined
   const accelerationProposal = feasibility.accelerationProposal
@@ -3056,6 +3074,7 @@ function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<s
   const taskId = idByClientRowId.get(row.clientRowId)
   if (!taskId) return []
   return row.predecessorDependencies
+    .filter((dependency) => !isUnconfirmedHeuristicDependency(dependency))
     .map((dependency) => {
       const dependencyTaskId = idByClientRowId.get(dependency.clientRowId)
       if (!dependencyTaskId) return null
@@ -3078,6 +3097,35 @@ function buildDependencyWrites(row: GeneratedTemplateRow, idByClientRowId: Map<s
     } => Boolean(item))
 }
 
+async function recordWizardAcceptancePlanFacts(input: {
+  projectId: string
+  planId: string
+  previous?: Record<string, any> | null
+  next: Record<string, any>
+  sourceMutationId: string
+  observedAt: string
+  actorUserId?: string | null
+  forceInitial?: boolean
+  transactionClient: TransactionClientLike
+}) {
+  await recordAcceptancePlanExecutionFacts({
+    projectId: input.projectId,
+    planId: input.planId,
+    previous: input.previous ?? null,
+    next: input.next,
+    sourceMutationId: input.sourceMutationId,
+    observedAt: input.observedAt,
+    actorUserId: input.actorUserId ?? null,
+    forceInitial: input.forceInitial,
+    sourceModule: 'projectWizard',
+    queryExec: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
+      const result = await input.transactionClient.query(sql, params)
+      return (result.rows ?? []) as T[]
+    },
+    isTransactionActive: () => true,
+  })
+}
+
 async function writePassedMilestones(params: {
   projectId: string
   payload: z.infer<typeof wizardPayloadSchema>
@@ -3093,6 +3141,9 @@ async function writePassedMilestones(params: {
   let count = 0
   const ids: string[] = []
   for (const code of milestones) {
+    if (!params.transactionClient) {
+      throw new Error('Wizard acceptance plan facts require a transaction client')
+    }
     const id = uuidv4()
     const exec = params.transactionClient
       ? params.transactionClient.query.bind(params.transactionClient)
@@ -3115,6 +3166,19 @@ async function writePassedMilestones(params: {
         ts,
       ],
     )
+    await recordWizardAcceptancePlanFacts({
+      projectId,
+      planId: id,
+      next: {
+        status: 'passed',
+        actual_date: normalizeDate(payload.actualStartDate) ?? ts.slice(0, 10),
+      },
+      sourceMutationId: `wizard:acceptance-plan:${id}:create`,
+      observedAt: ts,
+      actorUserId: actorId,
+      forceInitial: true,
+      transactionClient: params.transactionClient,
+    })
     // eslint-disable-next-line -- route-level-aggregation-approved
     count += 1
     ids.push(id)
@@ -3258,11 +3322,17 @@ function readWizardDurationSuggestion(row: GeneratedTemplateRow) {
 function readWizardDurationRiskRange(row: GeneratedTemplateRow) {
   const suggestion = readWizardDurationSuggestion(row)
   const range = readRecord(suggestion.durationRiskRange ?? suggestion.duration_risk_range)
+  const durationRiskDistribution = normalizeDurationRiskDistributionDto(
+    suggestion.durationRiskDistribution
+      ?? suggestion.duration_risk_distribution
+      ?? range.durationRiskDistribution
+      ?? range.duration_risk_distribution,
+  )
   const p20 = readNumber(suggestion.riskP20DurationDays ?? suggestion.risk_p20_duration_days ?? range.p20Days ?? range.p20_days)
   const p50 = readNumber(suggestion.riskP50DurationDays ?? suggestion.risk_p50_duration_days ?? range.p50Days ?? range.p50_days)
   const p80 = readNumber(suggestion.riskP80DurationDays ?? suggestion.risk_p80_duration_days ?? range.p80Days ?? range.p80_days)
-  if (p20 === null && p50 === null && p80 === null) return null
-  return { p20, p50, p80 }
+  if (p20 === null && p50 === null && p80 === null && !durationRiskDistribution) return null
+  return { p20, p50, p80, durationRiskDistribution }
 }
 
 function readWizardDurationAssetCalculation(row: GeneratedTemplateRow) {
@@ -3286,8 +3356,39 @@ function readWizardConstructionCalendarEvidence(row: GeneratedTemplateRow) {
       ?? metadata.constructionCalendarWindowCount
       ?? metadata.construction_calendar_window_count,
   ) ?? 0
-  const consumed = Boolean((calendarBasis && calendarBasis !== 'calendar_day') || constructionCalendarWindowCount > 0)
-  return { consumed, calendarBasis: calendarBasis || null, constructionCalendarWindowCount }
+  const calendarRef = firstText(
+    values.construction_calendar_ref,
+    values.constructionCalendarRef,
+    metadata.constructionCalendarRef,
+    metadata.construction_calendar_ref,
+  )
+  const calendarVersion = firstText(
+    values.construction_calendar_version,
+    values.constructionCalendarVersion,
+    metadata.constructionCalendarVersion,
+    metadata.construction_calendar_version,
+  )
+  const timezone = firstText(
+    values.construction_calendar_timezone,
+    values.constructionCalendarTimezone,
+    metadata.constructionCalendarTimezone,
+    metadata.construction_calendar_timezone,
+  )
+  const availability = firstText(
+    values.construction_calendar_availability,
+    values.constructionCalendarAvailability,
+    metadata.constructionCalendarAvailability,
+    metadata.construction_calendar_availability,
+  )
+  const consumed = calendarBasis === 'official_construction_calendar_seed'
+    && constructionCalendarWindowCount > 0
+    && Boolean(calendarRef && calendarVersion && timezone)
+    && availability === 'available'
+  return {
+    consumed,
+    calendarBasis: consumed ? calendarBasis : 'calendar_day',
+    constructionCalendarWindowCount: consumed ? constructionCalendarWindowCount : 0,
+  }
 }
 
 function buildWizardDurationAssetAppliedPlanEndDate(
@@ -4213,11 +4314,13 @@ function buildWizardDurationAssetReviewSummary(
       candidate.runtimeReferenceDaysStableCode,
       candidate.runtime_reference_days_stable_code,
     ) || null
-    const p50 = readNumber(candidate.runtimeReferenceDaysP50Days ?? candidate.runtime_reference_days_p50_days)
-    const p80 = readNumber(candidate.runtimeReferenceDaysP80Days ?? candidate.runtime_reference_days_p80_days)
-    const sampleCount = readNumber(
-      candidate.runtimeReferenceDaysSampleCount ?? candidate.runtime_reference_days_sample_count,
+    const distribution = normalizeDurationRiskDistributionDto(
+      candidate.runtimeReferenceDaysDurationRiskDistribution
+        ?? candidate.runtime_reference_days_duration_risk_distribution,
     )
+    const p50 = distribution?.availability === 'available' ? distribution.p50Duration.value : null
+    const p80 = distribution?.availability === 'available' ? distribution.p80Duration.value : null
+    const sampleCount = distribution?.availability === 'available' ? distribution.sampleCount : null
     const evidenceLevel = joinWizardDurationAssetEvidenceParts([
       firstText(candidate.runtimeReferenceDaysEvidenceLevel, candidate.runtime_reference_days_evidence_level),
       p50 == null ? null : `P50 ${p50}`,
@@ -4863,6 +4966,10 @@ function buildCandidateDurationAssetPreview(rows: GeneratedTemplateRow[], idByCl
         calculation.runtimeReferenceDaysSampleCount
           ?? calculation.runtime_reference_days_sample_count,
       )
+      const runtimeReferenceDaysDurationRiskDistribution = normalizeDurationRiskDistributionDto(
+        calculation.runtimeReferenceDaysDurationRiskDistribution
+          ?? calculation.runtime_reference_days_duration_risk_distribution,
+      )
       const runtimeReferenceDaysMutationBoundary = firstText(
         calculation.runtimeReferenceDaysMutationBoundary,
         calculation.runtime_reference_days_mutation_boundary,
@@ -5081,6 +5188,7 @@ function buildCandidateDurationAssetPreview(rows: GeneratedTemplateRow[], idByCl
         riskP20DurationDays: riskRange?.p20 ?? null,
         riskP50DurationDays: riskRange?.p50 ?? null,
         riskP80DurationDays: riskRange?.p80 ?? null,
+        durationRiskDistribution: riskRange?.durationRiskDistribution ?? null,
         calendarBasis: calendar.calendarBasis,
         constructionCalendarWindowCount: calendar.constructionCalendarWindowCount,
         processSeasonalDurationAssetConsumed,
@@ -5102,6 +5210,7 @@ function buildCandidateDurationAssetPreview(rows: GeneratedTemplateRow[], idByCl
         runtimeReferenceDaysP50Days,
         runtimeReferenceDaysP80Days,
         runtimeReferenceDaysSampleCount,
+        runtimeReferenceDaysDurationRiskDistribution,
         runtimeReferenceDaysMutationBoundary,
         dependencyAssetConsumed,
         dependencyAssetType,
@@ -6054,6 +6163,16 @@ async function writeWizardGeneratedAcceptancePlans(params: {
         ts,
       ],
     )
+    await recordWizardAcceptancePlanFacts({
+      projectId: params.projectId,
+      planId: id,
+      next: { status: 'draft', actual_date: null },
+      sourceMutationId: `wizard:acceptance-plan:${id}:create`,
+      observedAt: ts,
+      actorUserId: params.actorId,
+      forceInitial: true,
+      transactionClient: params.transactionClient,
+    })
     ids.push(id)
     materializations.push({
       clientRowId: row.clientRowId,
@@ -6094,6 +6213,16 @@ async function writeWizardGeneratedAcceptancePlans(params: {
           ts,
         ],
       )
+      await recordWizardAcceptancePlanFacts({
+        projectId: params.projectId,
+        planId: id,
+        next: { status: 'draft', actual_date: null },
+        sourceMutationId: `wizard:acceptance-plan:${id}:create`,
+        observedAt: ts,
+        actorUserId: params.actorId,
+        forceInitial: true,
+        transactionClient: params.transactionClient,
+      })
       ids.push(id)
       materializations.push({
         clientRowId,

@@ -9,7 +9,10 @@ import {
 } from '../seeds/v1475DependencyIntentTemplates.js'
 import { delayDayDelta, inclusiveDurationDays } from '../utils/durationDays.js'
 import { logger } from '../middleware/logger.js'
-import type { ConstructionCalendarContext } from './constructionCalendar.js'
+import {
+  isAuthoritativeConstructionCalendar,
+  type ConstructionCalendarContext,
+} from './constructionCalendar.js'
 import { createAndPersistAlgorithmAssetCandidateEvent } from './algorithmAssetCandidateEventAdapterService.js'
 import type { AlgorithmAssetGovernanceQueryExec } from './algorithmAssetGovernancePersistenceService.js'
 import {
@@ -1325,7 +1328,7 @@ async function recordDependencyRulePlanNetworkOutcomes(
 ) {
   const companyId = normalizeNullableText(options.companyId)
   const queueItems = flattenCalibrationQueueCandidates(report)
-  const durationDayUnit = options.constructionCalendar?.basis === 'official_construction_calendar_seed'
+  const durationDayUnit = isAuthoritativeConstructionCalendar(options.constructionCalendar)
     ? 'construction_production_day'
     : 'calendar_day_no_construction_calendar_context'
 

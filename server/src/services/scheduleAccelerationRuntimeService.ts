@@ -48,6 +48,11 @@ import {
   CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
   type ConstructionOrganizationPlanNetworkRuntimeLineage,
 } from './constructionOrganizationRuntimeLineageService.js'
+import { withDatabaseTransaction } from '../database.js'
+import {
+  authorizeScheduleAccelerationRecommendationAdoption,
+  issueScheduleAccelerationRecommendation,
+} from './scheduleAccelerationRecommendationService.js'
 
 const CURRENT_EXECUTION_BASELINE_STATUSES = new Set(['confirmed', 'pending_realign'])
 
@@ -70,10 +75,10 @@ export interface RecordScheduleAccelerationRuntimeConsumptionInput {
 export interface RecordScheduleAccelerationRecommendationAdoptionInput {
   projectId?: string | null
   adoptedBy?: string | null
-  proposal?: Partial<ScheduleAccelerationProposal> | null
+  recommendationId?: string | null
+  recommendationHash?: string | null
+  taskCommitRequestId?: string | null
   adoptedAt?: string | null
-  outcomeRef?: string | null
-  outcomeMetadata?: Record<string, unknown> | null
   runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
 }
 
@@ -463,21 +468,19 @@ function readNestedRecord(record: Record<string, unknown> | null | undefined, ..
     : null
 }
 
-export function buildScheduleAccelerationRecommendationKey(proposal?: Partial<ScheduleAccelerationProposal> | null) {
-  const targetEndDate = normalizeDate(proposal?.targetEndDate) ?? 'no-target'
-  const naturalEndDate = normalizeDate(proposal?.naturalEndDate) ?? 'no-natural'
-  const totalRecoverDays = readOptionalNumber(proposal?.totalRecoverDays)
-  return [
-    'schedule_acceleration',
-    targetEndDate,
-    naturalEndDate,
-    totalRecoverDays !== null ? String(Math.max(0, Math.round(totalRecoverDays))) : 'no-recover',
-  ].join(':')
-}
-
-function isUniqueRecommendationActionConflict(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? '')
-  return /23505|duplicate key|unique constraint|recommendation_actions_unique_action/i.test(message)
+export function buildScheduleAccelerationRecommendationKey(input: {
+  recommendationId?: string | null
+  taskCommitRequestId?: string | null
+}) {
+  const recommendationId = normalizeText(input.recommendationId)
+  const taskCommitRequestId = normalizeText(input.taskCommitRequestId)
+  if (!recommendationId || !taskCommitRequestId) {
+    throw Object.assign(new Error('Recommendation and task commit identities are required.'), {
+      code: 'ACCELERATION_ADOPTION_IDENTITY_REQUIRED',
+      statusCode: 400,
+    })
+  }
+  return ['schedule_acceleration', recommendationId, taskCommitRequestId].join(':')
 }
 
 function buildConstructionOrganizationRecommendationKey(input: {
@@ -499,11 +502,15 @@ function buildConstructionOrganizationRecommendationKey(input: {
 }
 
 function buildConstructionOrganizationOutcomeId(input: {
+  projectId?: string | null
   publicationKey?: string | null
   draftNetworkKey?: string | null
   optionId?: string | null
   useCase?: string | null
+  scheduleAccelerationRecommendationKey?: string | null
 }) {
+  const projectId = normalizeText(input.projectId)
+  const scheduleAccelerationRecommendationKey = normalizeText(input.scheduleAccelerationRecommendationKey)
   const scopedIdentity = [
     normalizeText(input.publicationKey),
     normalizeText(input.draftNetworkKey),
@@ -511,7 +518,9 @@ function buildConstructionOrganizationOutcomeId(input: {
     normalizeText(input.useCase),
   ].filter(Boolean).join(':')
   const identity = scopedIdentity || normalizeText(input.publicationKey)
-  return identity ? `construction-organization-plan-network-outcome:${identity}` : null
+  return projectId && identity && scheduleAccelerationRecommendationKey
+    ? `construction-organization-plan-network-outcome:${projectId}:${identity}:${scheduleAccelerationRecommendationKey}`
+    : null
 }
 
 function extractConstructionOrganizationRecommendationDecisionFromAccelerationProposal(
@@ -591,6 +600,7 @@ async function recordLinkedConstructionOrganizationRecommendationDecision(input:
 }): Promise<ScheduleAccelerationRecommendationAdoptionResult['constructionOrganizationRecommendationDecision']> {
   const decision = extractConstructionOrganizationRecommendationDecisionFromAccelerationProposal(input.proposal)
   if (!decision) return null
+  const recommendationKey = `${decision.recommendationKey}:${input.scheduleAccelerationRecommendationKey}`
 
   const actionContext = {
     source: 'construction_organization_plan_network_runtime_evidence_service',
@@ -624,8 +634,7 @@ async function recordLinkedConstructionOrganizationRecommendationDecision(input:
     ],
   }
 
-  try {
-    await executeSQL(
+  const insertedActions = await executeSQL<{ id?: string | null }>(
       `INSERT INTO recommendation_actions (
           project_id,
           recommendation_kind,
@@ -640,11 +649,14 @@ async function recordLinkedConstructionOrganizationRecommendationDecision(input:
           action_context,
           created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (project_id, recommendation_kind, recommendation_key, action_type)
+        DO NOTHING
+        RETURNING id`,
       [
         input.projectId,
         CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
-        decision.recommendationKey,
+        recommendationKey,
         'adopted',
         null,
         null,
@@ -655,37 +667,36 @@ async function recordLinkedConstructionOrganizationRecommendationDecision(input:
         actionContext,
         input.adoptedAt,
       ],
-    )
-  } catch (error) {
-    if (!isUniqueRecommendationActionConflict(error)) {
-      throw error
-    }
-    await executeSQL(
-      `UPDATE recommendation_actions
-          SET adopted_at = ?,
-              adopted_by = ?,
-              action_context = ?
+  )
+  if (!normalizeText(insertedActions[0]?.id)) {
+    const existingActions = await executeSQL<{ id?: string | null }>(
+      `SELECT id
+         FROM recommendation_actions
         WHERE project_id = ?
           AND recommendation_kind = ?
           AND recommendation_key = ?
-          AND action_type = ?`,
+          AND action_type = ?
+        LIMIT 1`,
       [
-        input.adoptedAt,
-        input.adoptedBy,
-        actionContext,
         input.projectId,
         CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
-        decision.recommendationKey,
+        recommendationKey,
         'adopted',
       ],
     )
+    if (!normalizeText(existingActions[0]?.id)) {
+      throw Object.assign(new Error('Linked construction organization decision conflict could not be read back exactly.'), {
+        code: 'CONSTRUCTION_ORGANIZATION_DECISION_CONFLICT_READBACK_MISSING',
+        statusCode: 409,
+      })
+    }
   }
 
   return {
     source: 'construction_organization_plan_network_runtime_evidence_service',
     status: 'recommendation_decision_recorded',
     recommendationKind: CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
-    recommendationKey: decision.recommendationKey,
+    recommendationKey,
     actionType: 'adopted',
     decisionPersisted: true,
     writesTaskDependencies: false,
@@ -747,20 +758,14 @@ async function recordLinkedConstructionOrganizationSavedOutcome(input: {
   }
 
   const outcomeId = buildConstructionOrganizationOutcomeId({
+    projectId: input.projectId,
     publicationKey: decision.publicationKey,
     draftNetworkKey: decision.draftNetworkKey,
     optionId: decision.optionId,
     useCase: CONSTRUCTION_ORGANIZATION_ACCELERATION_USE_CASE,
+    scheduleAccelerationRecommendationKey: input.scheduleAccelerationRecommendationKey,
   })
   if (!outcomeId) return null
-  const existingOutcomes = await executeSQL<{ id?: string | null }>(
-    `SELECT id
-       FROM duration_plan_network_outcomes
-      WHERE id = ?
-      LIMIT 1`,
-    [outcomeId],
-  )
-  const existingOutcomeId = normalizeText(existingOutcomes[0]?.id)
   const persistedValues = [
     'accepted',
     outcomeRef,
@@ -775,25 +780,7 @@ async function recordLinkedConstructionOrganizationSavedOutcome(input: {
     false,
   ]
 
-  if (existingOutcomeId) {
-    await executeSQL(
-      `UPDATE duration_plan_network_outcomes
-          SET outcome_status = ?,
-              outcome_ref = ?,
-              learning_scope = ?,
-              learning_scope_source = ?,
-              company_id = ?,
-              project_id = ?,
-              publication_key = ?,
-              metadata = ?,
-              observed_at = ?,
-              writes_runtime_directly = ?,
-              writes_fact_directly = ?
-        WHERE id = ?`,
-      [...persistedValues, outcomeId],
-    )
-  } else {
-    await executeSQL(
+  const insertedOutcomes = await executeSQL<{ id?: string | null }>(
       `INSERT INTO duration_plan_network_outcomes (
           id,
           asset_key,
@@ -809,13 +796,30 @@ async function recordLinkedConstructionOrganizationSavedOutcome(input: {
           writes_runtime_directly,
           writes_fact_directly
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id)
+        DO NOTHING
+        RETURNING id`,
       [
         outcomeId,
-      CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
+        CONSTRUCTION_ORGANIZATION_PLAN_NETWORK_ASSET_KEY,
         ...persistedValues,
       ],
+  )
+  if (!normalizeText(insertedOutcomes[0]?.id)) {
+    const existingOutcomes = await executeSQL<{ id?: string | null }>(
+      `SELECT id
+         FROM duration_plan_network_outcomes
+        WHERE id = ?
+        LIMIT 1`,
+      [outcomeId],
     )
+    if (!normalizeText(existingOutcomes[0]?.id)) {
+      throw Object.assign(new Error('Linked construction organization outcome conflict could not be read back exactly.'), {
+        code: 'CONSTRUCTION_ORGANIZATION_OUTCOME_CONFLICT_READBACK_MISSING',
+        statusCode: 409,
+      })
+    }
   }
 
   return {
@@ -892,8 +896,23 @@ async function recordLinkedConstructionOrganizationRuntimeConsumerObservation(in
   })
 }
 
-export async function recordScheduleAccelerationRecommendationAdoption(
-  input: RecordScheduleAccelerationRecommendationAdoptionInput,
+async function persistScheduleAccelerationRecommendationAdoption(
+  input: {
+    projectId: string
+    adoptedBy: string
+    adoptedAt: string
+    recommendationId: string
+    recommendationHash: string
+    operationsHash: string
+    taskCommitLedgerId: string
+    taskCommitRequestId: string
+    taskCommitCompletedAt: string | null
+    taskCommitResultSummary: Record<string, unknown>
+    proposal: ScheduleAccelerationProposal
+    outcomeRef: string
+    outcomeMetadata: Record<string, unknown>
+    runtimeConsumerObservationQueryExec?: DurationRuntimeConsumerObservationQueryExec | null
+  },
 ): Promise<ScheduleAccelerationRecommendationAdoptionResult> {
   const projectId = normalizeText(input.projectId)
   if (!projectId) {
@@ -901,8 +920,11 @@ export async function recordScheduleAccelerationRecommendationAdoption(
   }
   const adoptedBy = normalizeText(input.adoptedBy) || null
   const adoptedAt = normalizeText(input.adoptedAt) || new Date().toISOString()
-  const recommendationKey = buildScheduleAccelerationRecommendationKey(input.proposal)
-  const proposal = input.proposal ?? {}
+  const recommendationKey = buildScheduleAccelerationRecommendationKey({
+    recommendationId: input.recommendationId,
+    taskCommitRequestId: input.taskCommitRequestId,
+  })
+  const proposal = input.proposal
   const targetEndDate = normalizeDate(proposal.targetEndDate)
   const naturalEndDate = normalizeDate(proposal.naturalEndDate)
   const totalRecoverDays = readOptionalNumber(proposal.totalRecoverDays)
@@ -911,19 +933,40 @@ export async function recordScheduleAccelerationRecommendationAdoption(
     proposal,
     source: 'target_acceleration_review_panel',
     policy: 'user_adoption_required_for_acceleration_backtest',
+    recommendationId: input.recommendationId,
+    recommendationHash: input.recommendationHash,
+    operationsHash: input.operationsHash,
+    taskCommitLedgerId: input.taskCommitLedgerId,
+    taskCommitRequestId: input.taskCommitRequestId,
+    taskCommitCompletedAt: input.taskCommitCompletedAt,
+    taskCommitResultSummary: input.taskCommitResultSummary,
   }
 
-  const existingActions = await executeSQL<{ id?: string | null }>(
-    `SELECT id
-       FROM recommendation_actions
-      WHERE project_id = ?
-        AND recommendation_kind = ?
-        AND recommendation_key = ?
-        AND action_type = ?
-      LIMIT 1`,
-    [projectId, 'schedule_acceleration', recommendationKey, 'adopted'],
-  )
-  const existingActionId = normalizeText(existingActions[0]?.id)
+  const loadExistingAction = async () => {
+    const rows = await executeSQL<{ id?: string | null; adopted_at?: string | null }>(
+      `SELECT id, adopted_at
+         FROM recommendation_actions
+        WHERE project_id = ?
+          AND recommendation_kind = ?
+          AND recommendation_key = ?
+          AND action_type = ?
+        LIMIT 1`,
+      [projectId, 'schedule_acceleration', recommendationKey, 'adopted'],
+    )
+    const row = rows[0]
+    return normalizeText(row?.id) ? row : null
+  }
+  const existingAction = await loadExistingAction()
+  const existingActionId = normalizeText(existingAction?.id)
+  if (existingActionId) {
+    return {
+      adopted: true,
+      recommendationKey,
+      adoptedAt: normalizeText(existingAction?.adopted_at) || adoptedAt,
+      constructionOrganizationRecommendationDecision: null,
+      constructionOrganizationSavedOutcome: null,
+    }
+  }
 
   const updateParams = [
     targetEndDate,
@@ -935,22 +978,7 @@ export async function recordScheduleAccelerationRecommendationAdoption(
     actionContext,
   ]
 
-  if (existingActionId) {
-    await executeSQL(
-      `UPDATE recommendation_actions
-          SET target_end_date = ?,
-              natural_end_date = ?,
-              total_recover_days = ?,
-              acceleration_target_days = ?,
-              adopted_at = ?,
-              adopted_by = ?,
-              action_context = ?
-        WHERE id = ?`,
-      [...updateParams, existingActionId],
-    )
-  } else {
-    try {
-      await executeSQL(
+  const insertedActions = await executeSQL<{ id?: string | null; adopted_at?: string | null }>(
         `INSERT INTO recommendation_actions (
             project_id,
             recommendation_kind,
@@ -965,7 +993,10 @@ export async function recordScheduleAccelerationRecommendationAdoption(
             action_context,
             created_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (project_id, recommendation_kind, recommendation_key, action_type)
+          DO NOTHING
+          RETURNING id, adopted_at`,
         [
           projectId,
           'schedule_acceleration',
@@ -974,32 +1005,22 @@ export async function recordScheduleAccelerationRecommendationAdoption(
           ...updateParams,
           adoptedAt,
         ],
-      )
-    } catch (error) {
-      if (!isUniqueRecommendationActionConflict(error)) {
-        throw error
-      }
-      await executeSQL(
-        `UPDATE recommendation_actions
-            SET target_end_date = ?,
-                natural_end_date = ?,
-                total_recover_days = ?,
-                acceleration_target_days = ?,
-                adopted_at = ?,
-                adopted_by = ?,
-                action_context = ?
-          WHERE project_id = ?
-            AND recommendation_kind = ?
-            AND recommendation_key = ?
-            AND action_type = ?`,
-        [
-          ...updateParams,
-          projectId,
-          'schedule_acceleration',
-          recommendationKey,
-          'adopted',
-        ],
-      )
+  )
+  const insertedActionId = normalizeText(insertedActions[0]?.id)
+  if (!insertedActionId) {
+    const conflictingAction = await loadExistingAction()
+    if (!conflictingAction) {
+      throw Object.assign(new Error('Concurrent adoption conflict could not be read back exactly.'), {
+        code: 'ACCELERATION_ADOPTION_CONFLICT_READBACK_MISSING',
+        statusCode: 409,
+      })
+    }
+    return {
+      adopted: true,
+      recommendationKey,
+      adoptedAt: normalizeText(conflictingAction.adopted_at) || adoptedAt,
+      constructionOrganizationRecommendationDecision: null,
+      constructionOrganizationSavedOutcome: null,
     }
   }
 
@@ -1038,6 +1059,54 @@ export async function recordScheduleAccelerationRecommendationAdoption(
     constructionOrganizationRecommendationDecision,
     constructionOrganizationSavedOutcome,
   }
+}
+
+export async function recordScheduleAccelerationRecommendationAdoption(
+  input: RecordScheduleAccelerationRecommendationAdoptionInput,
+): Promise<ScheduleAccelerationRecommendationAdoptionResult> {
+  const projectId = normalizeText(input.projectId)
+  const adoptedBy = normalizeText(input.adoptedBy)
+  const adoptedAt = normalizeText(input.adoptedAt) || new Date().toISOString()
+
+  return withDatabaseTransaction(async () => {
+    const authority = await authorizeScheduleAccelerationRecommendationAdoption({
+      projectId,
+      adoptedBy,
+      recommendationId: normalizeText(input.recommendationId),
+      recommendationHash: normalizeText(input.recommendationHash),
+      taskCommitRequestId: normalizeText(input.taskCommitRequestId),
+      now: new Date(adoptedAt),
+    })
+    const outcomeRef = `task-list-commit:${projectId}:${authority.taskCommitRequestId}:acceleration-reschedule`
+    const outcomeMetadata = {
+      source: 'authoritative_task_commit_ledger',
+      taskCommitLedgerId: authority.taskCommitLedgerId,
+      taskCommitRequestId: authority.taskCommitRequestId,
+      taskCommitCompletedAt: authority.taskCommitCompletedAt,
+      recommendationId: authority.recommendationId,
+      recommendationHash: authority.recommendationHash,
+      operationsHash: authority.operationsHash,
+      operationCount: authority.proposal.rescheduleDraft?.operations.length ?? 0,
+      taskCommitResultSummary: authority.taskCommitResultSummary,
+    }
+
+    return persistScheduleAccelerationRecommendationAdoption({
+      projectId,
+      adoptedBy,
+      adoptedAt,
+      recommendationId: authority.recommendationId,
+      recommendationHash: authority.recommendationHash,
+      operationsHash: authority.operationsHash,
+      taskCommitLedgerId: authority.taskCommitLedgerId,
+      taskCommitRequestId: authority.taskCommitRequestId,
+      taskCommitCompletedAt: authority.taskCommitCompletedAt,
+      taskCommitResultSummary: authority.taskCommitResultSummary,
+      proposal: authority.proposal,
+      outcomeRef,
+      outcomeMetadata,
+      runtimeConsumerObservationQueryExec: input.runtimeConsumerObservationQueryExec,
+    })
+  })
 }
 
 async function loadPersistedAccelerationRecommendationAdoption(projectId: string) {
@@ -1816,6 +1885,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
   runtimeArtifactPublications?: readonly ScheduleAccelerationRuntimeArtifactPublication[] | null
   runtimeConsumerObservedAt?: string | null
   runtimeConsumerErrorHandler?: (error: unknown) => void
+  issuedBy?: string | null
 }): Promise<{
   rowsEvaluated: number
   projectRemainingForecast: ProjectRemainingDurationForecast
@@ -1858,7 +1928,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
     runtimeConsumerObservedAt: params.runtimeConsumerObservedAt,
     runtimeConsumerErrorHandler: params.runtimeConsumerErrorHandler,
   })
-  const targetFeasibility = targetEndDate
+  let targetFeasibility = targetEndDate
     ? await evaluateRuntimeDelayRecoveryWithCriticalPath({
         projectId: params.projectId,
         rows,
@@ -1879,6 +1949,19 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
         runtimeConsumerErrorHandler: params.runtimeConsumerErrorHandler,
       })
     : undefined
+  if (targetFeasibility?.accelerationProposal && normalizeText(params.issuedBy)) {
+    const accelerationRecommendation = await issueScheduleAccelerationRecommendation({
+      projectId: params.projectId,
+      issuedBy: params.issuedBy,
+      proposal: targetFeasibility.accelerationProposal,
+    })
+    if (accelerationRecommendation) {
+      targetFeasibility = {
+        ...targetFeasibility,
+        accelerationRecommendation,
+      }
+    }
+  }
   const upstreamAssetConsumptionReceipts = (
     projectRemainingForecast.calculationContext.upstreamAssetConsumptionReceipts ?? []
   )

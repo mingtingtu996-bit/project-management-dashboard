@@ -6,6 +6,7 @@ import type { PlanningFieldRegistryResponse } from '@/hooks/usePlanningFieldRegi
 import { getApiErrorMessage } from '@/lib/apiClient'
 import { commitTaskListTable } from '@/services/planningCommitApi'
 import type { PlanningTableOperation } from '@/components/planning/PlanningCommitModel'
+import type { WbsAccelerationRecommendationIdentity } from '@/services/wbsTemplateGenerationApi'
 
 import type { Task } from '../GanttViewTypes'
 import {
@@ -79,7 +80,10 @@ export function useGanttTaskCommitActions({
     return refreshedVersion
   }, [fieldRegistryVersion, refetchFieldRegistry])
 
-  const commitTaskListOperations = useCallback(async (operations: PlanningTableOperation[]) => {
+  const commitTaskListOperations = useCallback(async (
+    operations: PlanningTableOperation[],
+    accelerationRecommendation?: WbsAccelerationRecommendationIdentity | null,
+  ) => {
     const resolvedProjectId = currentProjectId || projectId
     if (!resolvedProjectId) throw new Error('项目不存在，无法保存任务')
     if (operations.length === 0) throw new Error('没有需要保存的任务变更')
@@ -96,6 +100,14 @@ export function useGanttTaskCommitActions({
           deletedIds: buildTaskTableDraftDeletedIds(taskTableDraftPatches),
           projectId: resolvedProjectId,
         }),
+        ...(accelerationRecommendation
+          ? {
+              accelerationRecommendation: {
+                id: accelerationRecommendation.id,
+                recommendationHash: accelerationRecommendation.recommendationHash,
+              },
+            }
+          : {}),
       },
     })
   }, [currentProjectId, getTaskListFieldRegistryVersion, projectId, taskTableDraftPatches, tasks])

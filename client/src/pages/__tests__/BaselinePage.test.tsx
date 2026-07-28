@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { usePlanningStore } from '@/hooks/usePlanningStore'
+import { resetStructuredCauseTaxonomyCacheForTests } from '@/hooks/useStructuredCauseTaxonomy'
 import { useStore } from '@/hooks/useStore'
 import { apiGet, apiPost, getApiErrorMessage } from '@/lib/apiClient'
 import type { BaselineItem, BaselineVersion } from '@/types/planning'
@@ -39,6 +40,19 @@ let details: Record<string, BaselineDetail>
 let generateCandidateDefaultMasterPlanDraft = false
 let generateCandidateDefaultMasterPlanDraftGovernanceOnly = false
 let generationCandidateDurationMetrics: Record<string, unknown>
+
+const causeTaxonomyFixture = {
+  version: 'v1.0.0',
+  entries: [
+    ['predecessor_delay', '前置工作传导'], ['material_shortage', '材料短缺或晚到'],
+    ['labor_shortage', '劳动力不足'], ['equipment_unavailable', '设备机械不可用'],
+    ['design_change', '设计变更'], ['drawing_delay', '图纸或审批延误'],
+    ['quality_rework', '质量返工'], ['weather_impact', '天气影响'],
+    ['owner_decision', '业主决策等待'], ['government_inspection', '政府检查审批'],
+    ['site_capacity_pressure', '现场承载不足'], ['workflow_sequence', '工序顺序调整'],
+    ['external_readiness', '外部条件未就绪'], ['other', '其他'],
+  ].map(([code, label], priority) => ({ code, label, category: 'test', linkedDeviationReasonTypes: [], priority })),
+}
 
 function calendarDayMetric(value: number | null, availability: 'available' | 'unavailable' = 'available') {
   return {
@@ -427,6 +441,7 @@ describe('BaselinePage planning workflow', () => {
   })
 
   beforeEach(() => {
+    resetStructuredCauseTaxonomyCacheForTests()
     seedBaselineFixtures()
     generateCandidateDefaultMasterPlanDraft = false
     generateCandidateDefaultMasterPlanDraftGovernanceOnly = false
@@ -459,6 +474,7 @@ describe('BaselinePage planning workflow', () => {
     })
 
     mockedApiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/cause-attributions/taxonomy') return causeTaxonomyFixture as never
       if (url.startsWith('/api/planning/field-registry?')) {
         return planningFieldRegistryFixture() as never
       }
@@ -1127,6 +1143,39 @@ describe('BaselinePage planning workflow', () => {
     })
 
     await waitForText(container, ['已发布新版项目基线', 'v7 已确认'])
+    cleanup()
+  })
+
+  it('rejects an inferred publish cause that is absent from the current taxonomy response', async () => {
+    const defaultGet = mockedApiGet.getMockImplementation()
+    mockedApiGet.mockImplementation(async (url: string) => (
+      url === '/api/cause-attributions/taxonomy'
+        ? {
+            version: 'v1.0.0',
+            entries: [{
+              code: 'material_shortage', label: '材料短缺或晚到', category: 'resource',
+              linkedDeviationReasonTypes: [], priority: 1,
+            }],
+          } as never
+        : defaultGet?.(url) as never
+    ))
+    const { container, cleanup } = renderBaselinePage()
+
+    await waitForText(container, ['生成新版基线'])
+    await clickButtonByText(container, '生成新版基线')
+    await waitForCondition(() => Boolean(container.querySelector('[data-baseline-editor-cell="baseline-v7-item-3:title"]')))
+    await clickButtonByText(container, '保存')
+    await waitForText(container, ['发布项目基线'])
+    await clickButtonByText(container, '发布项目基线')
+    await setTextareaValue(
+      document.body.querySelector('#baseline-publish-change-reason') as HTMLTextAreaElement,
+      '现场工序调整后发布新版基线。',
+    )
+
+    const submit = Array.from(document.body.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('确认发布')) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    expect(mockedApiPost.mock.calls.some(([url]) => url === '/api/task-baselines/baseline-v7/publish')).toBe(false)
     cleanup()
   })
 

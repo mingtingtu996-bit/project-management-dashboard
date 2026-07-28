@@ -1,7 +1,14 @@
 import type { DurationContributionMode } from './durationContributionMode.js'
+import {
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  translateLegacyProgressFactor,
+  type StructuredCauseCode,
+} from '../domain/structuredCauseTaxonomy.js'
 
 export type ProgressDeviationCauseRule = {
   factorKeys: string[]
+  canonicalCauseCode: StructuredCauseCode
+  taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
   reason: string
   reasonType: string
   allowedModes: DurationContributionMode[]
@@ -13,6 +20,8 @@ export type ProgressDeviationCauseRule = {
 export type ProgressDeviationCauseRuleMatch = {
   reason: string
   reasonType: string
+  canonicalCauseCode: StructuredCauseCode
+  taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
   priority: number
   confidenceWeight: number
   responsibilityBasis: ProgressDeviationCauseRule['responsibilityBasis']
@@ -21,6 +30,8 @@ export type ProgressDeviationCauseRuleMatch = {
 export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   {
     factorKeys: ['resource_conflict', 'progress_velocity'],
+    canonicalCauseCode: 'site_capacity_pressure',
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
     reason: '\u73b0\u573a\u627f\u8f7d\u538b\u529b',
     reasonType: 'site_capacity_pressure',
     allowedModes: ['duration_bearing'],
@@ -30,6 +41,8 @@ export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   },
   {
     factorKeys: ['workflow_sequence'],
+    canonicalCauseCode: 'workflow_sequence',
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
     reason: '\u6d41\u6c34\u8282\u594f\u504f\u5dee',
     reasonType: 'workflow_sequence',
     allowedModes: ['duration_bearing'],
@@ -39,6 +52,8 @@ export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   },
   {
     factorKeys: ['seasonal_productivity', 'process_seasonal_sensitivity', 'weather_forecast_impact', 'productivity_compensation'],
+    canonicalCauseCode: 'weather_impact',
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
     reason: '\u5b63\u8282/\u65e5\u5386\u4ea7\u80fd\u5f71\u54cd',
     reasonType: 'calendar_productivity',
     allowedModes: ['duration_bearing'],
@@ -48,6 +63,8 @@ export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   },
   {
     factorKeys: ['process_constraint'],
+    canonicalCauseCode: 'workflow_sequence',
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
     reason: '\u5de5\u5e8f\u786c\u7ea6\u675f\u672a\u6ee1\u8db3',
     reasonType: 'process_constraint',
     allowedModes: ['duration_bearing', 'quality_gate', 'external_wait', 'handover_marker'],
@@ -57,6 +74,8 @@ export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   },
   {
     factorKeys: ['external_readiness'],
+    canonicalCauseCode: 'external_readiness',
+    taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
     reason: '\u5916\u90e8\u6761\u4ef6\u672a\u6ee1\u8db3',
     reasonType: 'external_readiness',
     allowedModes: ['duration_bearing', 'quality_gate', 'external_wait', 'handover_marker'],
@@ -66,13 +85,34 @@ export const PROGRESS_DEVIATION_CAUSE_RULES: ProgressDeviationCauseRule[] = [
   },
 ]
 
-const RULE_BY_FACTOR_KEY = new Map<string, ProgressDeviationCauseRule>()
+export function buildProgressDeviationCauseRuleIndex(
+  rules: readonly ProgressDeviationCauseRule[],
+): Map<string, ProgressDeviationCauseRule> {
+  const index = new Map<string, ProgressDeviationCauseRule>()
 
-for (const rule of PROGRESS_DEVIATION_CAUSE_RULES) {
-  for (const key of rule.factorKeys) {
-    RULE_BY_FACTOR_KEY.set(key, rule)
+  for (const rule of rules) {
+    for (const factorKey of rule.factorKeys) {
+      if (index.has(factorKey)) {
+        throw new Error(`progress_deviation_cause_duplicate_factor:${factorKey}`)
+      }
+
+      const translation = translateLegacyProgressFactor(factorKey)
+      if (
+        !translation
+        || translation.causeCode !== rule.canonicalCauseCode
+        || translation.taxonomyVersion !== rule.taxonomyVersion
+      ) {
+        throw new Error(`progress_deviation_cause_translation_mismatch:${factorKey}`)
+      }
+
+      index.set(factorKey, rule)
+    }
   }
+
+  return index
 }
+
+const RULE_BY_FACTOR_KEY = buildProgressDeviationCauseRuleIndex(PROGRESS_DEVIATION_CAUSE_RULES)
 
 export function resolveProgressDeviationCauseRule(
   factorKey: string,
@@ -84,6 +124,8 @@ export function resolveProgressDeviationCauseRule(
   return {
     reason: rule.reason,
     reasonType: rule.reasonType,
+    canonicalCauseCode: rule.canonicalCauseCode,
+    taxonomyVersion: rule.taxonomyVersion,
     priority: rule.priority,
     confidenceWeight: rule.defaultConfidenceWeight,
     responsibilityBasis: rule.responsibilityBasis,

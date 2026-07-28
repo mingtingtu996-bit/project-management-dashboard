@@ -207,6 +207,7 @@ const mocks = vi.hoisted(() => {
     recordDurationAccuracyPrediction: vi.fn(),
     recordDurationAccuracyBacktest: vi.fn(),
     backtestEarliestPendingDurationAccuracyPrediction: vi.fn(),
+    listCurrentExecutionFacts: vi.fn(async () => []),
     listCurrentTaskDurationForecasts: vi.fn(),
     resolveConstructionCalendarContext: vi.fn(),
     readLiveProjectGenerationFacts: vi.fn(),
@@ -237,6 +238,10 @@ vi.mock('../services/durationAlgorithmAccuracyService.js', () => ({
   backtestEarliestPendingDurationAccuracyPrediction: mocks.backtestEarliestPendingDurationAccuracyPrediction,
 }))
 
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  listCurrentExecutionFacts: mocks.listCurrentExecutionFacts,
+}))
+
 vi.mock('../services/taskDurationForecastService.js', () => ({
   listCurrentTaskDurationForecasts: mocks.listCurrentTaskDurationForecasts,
 }))
@@ -263,6 +268,18 @@ const {
   listCriticalPathOverrides,
   recalculateProjectCriticalPath,
 } = await import('../services/projectCriticalPathService.js')
+
+function useAuthoritativeConstructionCalendar() {
+  mocks.resolveConstructionCalendarContext.mockResolvedValue({
+    basis: 'official_construction_calendar_seed',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    availability: 'available',
+    unavailableReason: null,
+    windows: [],
+  })
+}
 
 describe('project critical path service', () => {
   beforeEach(() => {
@@ -319,16 +336,9 @@ describe('project critical path service', () => {
     mocks.recordDurationAccuracyPrediction.mockResolvedValue(null)
     mocks.recordDurationAccuracyBacktest.mockResolvedValue(null)
     mocks.backtestEarliestPendingDurationAccuracyPrediction.mockResolvedValue(null)
+    mocks.listCurrentExecutionFacts.mockResolvedValue([])
     mocks.listCurrentTaskDurationForecasts.mockResolvedValue([])
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({
-      basis: 'official_construction_calendar_seed',
-      calendarRef: 'work_calendar',
-      calendarVersion: 'calendar-v1',
-      timezone: 'Asia/Shanghai',
-      availability: 'available',
-      unavailableReason: null,
-      windows: [],
-    })
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     mocks.readLiveProjectGenerationFacts.mockResolvedValue({})
   })
 
@@ -342,7 +352,6 @@ describe('project critical path service', () => {
   })
 
   it('fails closed for project, task, chain and network production-day metrics without calendar identity', async () => {
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     const snapshot = await getProjectCriticalPathSnapshot('project-1')
 
     expect(snapshot.projectDuration).toEqual(expect.objectContaining({
@@ -357,19 +366,22 @@ describe('project critical path service', () => {
       availability: 'unavailable',
     }))
     expect(snapshot.tasks[0]).toEqual(expect.objectContaining({
+      floatDays: null,
+      freeFloatDays: null,
       duration: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
     }))
     expect(snapshot.networkSchedule?.[0]).toEqual(expect.objectContaining({
+      floatDays: null,
+      freeFloatDays: null,
       duration: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       float: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
       freeFloat: expect.objectContaining({ value: null, unit: 'construction_production_day', availability: 'unavailable' }),
     }))
   })
 
-  it('does not persist CPM production-day prediction or outcome evidence without calendar identity', async () => {
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
+  it('does not persist production-day learning evidence without authoritative calendar identity', async () => {
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       status: 'completed',
@@ -378,13 +390,8 @@ describe('project critical path service', () => {
       actual_end_date: row.end_date,
     }))
 
-    const result = await recalculateProjectCriticalPath('project-1')
+    await recalculateProjectCriticalPath('project-1')
 
-    expect(result.snapshot.projectDuration).toEqual(expect.objectContaining({
-      value: null,
-      unit: 'construction_production_day',
-      availability: 'unavailable',
-    }))
     expect(mocks.recordDurationAccuracyPrediction).not.toHaveBeenCalled()
     expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).not.toHaveBeenCalled()
     expect(mocks.rawQuery.mock.calls.some((call) => (
@@ -392,7 +399,46 @@ describe('project critical path service', () => {
     ))).toBe(false)
   })
 
+  it('uses current execution facts instead of stale task compatibility columns for completed outcomes', async () => {
+    useAuthoritativeConstructionCalendar()
+    mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
+      ...row,
+      status: row.id === 'task-b' ? 'todo' : 'completed',
+      progress: row.id === 'task-b' ? 0 : 100,
+      actual_start_date: row.id === 'task-b' ? null : row.start_date,
+      actual_end_date: row.id === 'task-b' ? null : row.end_date,
+    }))
+    mocks.listCurrentExecutionFacts.mockResolvedValue([
+      { entityType: 'task', entityId: 'task-b', factType: 'task.status', value: 'completed' },
+      { entityType: 'task', entityId: 'task-b', factType: 'task.progress', value: 100 },
+      { entityType: 'task', entityId: 'task-b', factType: 'task.actual_start_date', value: '2026-04-01' },
+      { entityType: 'task', entityId: 'task-b', factType: 'task.actual_end_date', value: '2026-04-08' },
+    ])
+
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.listCurrentExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      entityType: 'task',
+      entityIds: ['task-a', 'task-b', 'task-c'],
+      factTypes: [
+        'task.actual_start_date',
+        'task.actual_end_date',
+        'task.first_progress_at',
+        'task.progress',
+        'task.status',
+      ],
+    }))
+    expect(mocks.backtestEarliestPendingDurationAccuracyPrediction).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1',
+      actualStartDate: '2026-04-01',
+      actualFinishDate: '2026-04-08',
+      actualDurationDays: 8,
+    }))
+  })
+
   it('uses a published critical-path rule as a watched-task prior without rewriting CPM facts', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((task) => task.id === 'task-a'
       ? { ...task, standard_work_code: 'SW-LEARNED-WATCH' }
       : task)
@@ -843,16 +889,7 @@ describe('project critical path service', () => {
   })
 
   it('records CPM project-duration prediction snapshots for accuracy backtesting', async () => {
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({
-      basis: 'official_construction_calendar_seed',
-      calendarRef: 'work_calendar',
-      calendarVersion: 'calendar-v1',
-      timezone: 'Asia/Shanghai',
-      availability: 'available',
-      unavailableReason: null,
-      windows: [],
-    })
-
+    useAuthoritativeConstructionCalendar()
     const result = await recalculateProjectCriticalPath('project-1')
 
     expect(result.projectDuration).toBe(8)
@@ -909,6 +946,7 @@ describe('project critical path service', () => {
   })
 
   it('records construction organization plan-network publication lineage on E3 CPM prediction events', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.task_dependencies = [
       ...mocks.tables.task_dependencies,
       {
@@ -961,6 +999,7 @@ describe('project critical path service', () => {
   })
 
   it('carries construction organization plan-network lineage into completed CPM backtests', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.task_dependencies = [
       ...mocks.tables.task_dependencies,
       {
@@ -1007,6 +1046,7 @@ describe('project critical path service', () => {
   })
 
   it('closes the earliest pending CPM prediction instead of the current recalculation key when the project is complete', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       status: 'completed',
@@ -1033,6 +1073,7 @@ describe('project critical path service', () => {
   })
 
   it('records completed critical-path replay as a plan-network outcome without mutating facts or runtime artifacts', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       status: 'completed',
@@ -1069,17 +1110,15 @@ describe('project critical path service', () => {
         source: 'project_critical_path_cpm',
         algorithm_version: 'critical_path_cpm_v1',
         duration_day_unit: 'construction_production_day',
-        construction_calendar: expect.objectContaining({
+        construction_calendar: {
           basis: 'official_construction_calendar_seed',
           calendarRef: 'work_calendar',
           calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
           availability: 'available',
-        }),
-        duration_metric: expect.objectContaining({
-          value: 8,
-          unit: 'construction_production_day',
-          availability: 'available',
-        }),
+          unavailableReason: null,
+          windows: [],
+        },
         prediction_duration_days: 8,
         actual_duration_days: 8,
         duration_error_days: 0,
@@ -1115,6 +1154,7 @@ describe('project critical path service', () => {
   })
 
   it('counts one completed project network as one replay outcome while retaining all distinct task ids', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       end_date: row.id === 'task-c' ? '2026-04-10' : row.end_date,
@@ -1139,6 +1179,7 @@ describe('project critical path service', () => {
   })
 
   it('records completed critical-path impact against the exact consumed publication, artifact, and input tasks', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = mocks.tables.tasks.map((row) => ({
       ...row,
       standard_work_code: row.id === 'task-b' ? 'SW-LEARNED-CRITICAL' : row.standard_work_code,
@@ -1193,6 +1234,16 @@ describe('project critical path service', () => {
   })
 
   it('projects live CPM criticality and float fields back to task rows after recalculation', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
+
     await recalculateProjectCriticalPath('project-1')
 
     expect(mocks.tables.tasks.find((row) => row.id === 'task-a')).toEqual(expect.objectContaining({
@@ -1223,6 +1274,27 @@ describe('project critical path service', () => {
       expect.objectContaining({ task_id: 'task-b', is_critical: true, total_float_days: 0 }),
       expect.objectContaining({ task_id: 'task-c', is_critical: false, total_float_days: 2 }),
     ])
+  })
+
+  it('persists null raw float projection aliases when calendar identity is unavailable', async () => {
+    await recalculateProjectCriticalPath('project-1')
+
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-a')).toEqual(expect.objectContaining({
+      is_critical: false,
+      total_float_days: null,
+      free_float_days: null,
+    }))
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-b')).toEqual(expect.objectContaining({
+      is_critical: true,
+      total_float_days: null,
+      free_float_days: null,
+    }))
+    expect(mocks.tables.tasks.find((row) => row.id === 'task-c')).toEqual(expect.objectContaining({
+      is_critical: false,
+      total_float_days: null,
+      free_float_days: null,
+    }))
+    expect(mocks.updates).toHaveLength(1)
   })
 
   it('uses E2 remaining-duration forecasts for in-progress CPM task nodes', async () => {
@@ -1542,7 +1614,6 @@ describe('project critical path service', () => {
   })
 
   it('keeps CPM lineage hashes stable when typed duration DTOs are decorated', async () => {
-    mocks.resolveConstructionCalendarContext.mockResolvedValue({ basis: 'calendar_day', windows: [] })
     const withoutCalendarIdentity = await buildProjectCriticalPathSnapshot(
       'project-1',
       mocks.tables.tasks as Parameters<typeof buildProjectCriticalPathSnapshot>[1],
@@ -1621,6 +1692,7 @@ describe('project critical path service', () => {
   })
 
   it('surfaces T2 phase-1 rhythm network evidence in E3 CPM snapshots without using it as authoritative task dependencies', async () => {
+    useAuthoritativeConstructionCalendar()
     mocks.tables.tasks = [
       {
         id: 'cold-a',
@@ -2370,6 +2442,25 @@ describe('project critical path service', () => {
         status: 'active',
       },
       {
+        id: 'dep-c-a-unconfirmed-heuristic',
+        project_id: 'project-typed',
+        task_id: 'task-c',
+        dependency_task_id: 'task-a',
+        dependency_type: 'FS',
+        lag_days: 0,
+        required_for_start: true,
+        status: 'active',
+        source_type: 'template_generated',
+        metadata: {
+          source: 'heuristic_stagger',
+          sequencingBasis: 'heuristic_stagger',
+          intentCode: 'sequencing_fallback:heuristic_stagger',
+          dependencyRuleEvidence: {
+            evidenceLevel: 'heuristic_fallback_l0',
+          },
+        },
+      },
+      {
         id: 'dep-legacy-a-inactive',
         project_id: 'project-typed',
         task_id: 'task-a',
@@ -2488,6 +2579,15 @@ describe('project critical path service', () => {
   })
 
   it('persists task float projections from the same snapshot exposed by the API', async () => {
+    mocks.resolveConstructionCalendarContext.mockResolvedValue({
+      basis: 'official_construction_calendar_seed',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      availability: 'available',
+      unavailableReason: null,
+      windows: [],
+    })
     mocks.tables.tasks = [
       {
         id: 'task-before-wait',

@@ -20,6 +20,7 @@ import {
 import { assembleDurationInput } from './durationInputAssemblerService.js'
 import { buildDownstreamDurationAssetConsumption } from './durationAssetDownstreamConsumptionService.js'
 import {
+  isAuthoritativeConstructionCalendar,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -46,6 +47,11 @@ import {
   businessDateKey,
   type DurationMetricDto,
 } from './durationMetricService.js'
+import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
+import {
+  listCurrentExecutionFacts,
+  type ExecutionFactEvent,
+} from './executionFactGovernanceService.js'
 
 const criticalPathSnapshotCache = new Map<string, CachedCriticalPathSnapshot>()
 const criticalPathRecalculationByProject = new Map<string, Promise<ProjectCriticalPathResult>>()
@@ -71,7 +77,7 @@ export interface CriticalTaskSnapshot {
   title: string
   standardWorkCodes?: string[]
   /** @deprecated Use float. */
-  floatDays: number
+  floatDays: number | null
   float: DurationMetricDto
   /** @deprecated Use duration. */
   durationDays: number
@@ -81,7 +87,7 @@ export interface CriticalTaskSnapshot {
   latestStartOffsetDays?: number
   latestFinishOffsetDays?: number
   /** @deprecated Use freeFloat. */
-  freeFloatDays?: number
+  freeFloatDays?: number | null
   freeFloat: DurationMetricDto
   p50DurationDays?: number
   p80DurationDays?: number
@@ -103,10 +109,10 @@ export interface CriticalTaskNetworkSchedule {
   latestStartOffsetDays: number
   latestFinishOffsetDays: number
   /** @deprecated Use float. */
-  floatDays: number
+  floatDays: number | null
   float: DurationMetricDto
   /** @deprecated Use freeFloat. */
-  freeFloatDays: number
+  freeFloatDays: number | null
   freeFloat: DurationMetricDto
   /** @deprecated Use duration. */
   durationDays: number
@@ -321,7 +327,7 @@ export function evaluateCriticalPathRuleCandidateLiveLearningEvidence(
     ...snapshot.autoTaskIds,
     ...snapshot.displayTaskIds,
   ]).size
-  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays)).length
+  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays ?? Number.NaN)).length
   const criticalPathProjectionEvidencePresent = criticalTaskCount > 0 && projectedFloatTaskCount > 0
   const actualOutcomeEventRecorded = input.criticalPathOutcomeEventRecorded && snapshot.projectDurationDays > 0
   const hasAllLearningScopes = CRITICAL_PATH_RULE_LEARNING_SCOPE_ORDER.every((scope) => enabledLearningScopes.includes(scope))
@@ -496,6 +502,7 @@ interface CriticalPathTaskRow {
   planned_end_date?: string | null
   actual_start_date?: string | null
   actual_end_date?: string | null
+  first_progress_at?: string | null
   status?: string | null
   progress?: number | string | null
   is_milestone?: boolean | null
@@ -754,7 +761,7 @@ function cpmSpanDays(
   const startDate = typeof start === 'string' ? parseDate(start) : start ?? null
   const endDate = typeof end === 'string' ? parseDate(end) : end ?? null
   if (!startDate || !endDate) return null
-  if (calendar?.windows?.length) {
+  if (isAuthoritativeConstructionCalendar(calendar)) {
     return Math.max(1, productionDaysBetweenInclusive(startDate, endDate, calendar))
   }
   return inclusiveDurationDays(startDate, endDate)
@@ -771,6 +778,7 @@ async function resolveCriticalPathConstructionCalendar(projectId: string) {
 }
 
 function buildCompletedProjectActualSpan(rows: CriticalPathTaskRow[], calendar?: ConstructionCalendarContext | null) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return null
   const durationRows = rows.filter((row) => !row.is_milestone)
   if (durationRows.length === 0) return null
   if (!durationRows.every(isCompletedCriticalPathRow)) return null
@@ -811,23 +819,21 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
 }) {
   const { projectId, snapshot, actualSpan, constructionCalendar } = params
   const networkLineage = snapshot.networkLineage
-  const projectDuration = snapshot.projectDuration
   if (
-    snapshot.calculationStatus !== 'fresh'
+    !isAuthoritativeConstructionCalendar(constructionCalendar)
+    || snapshot.projectDuration.availability !== 'available'
+    || snapshot.calculationStatus !== 'fresh'
     || !networkLineage?.criticalPathInputHash
     || !networkLineage.criticalSetHash
-    || projectDuration.unit !== 'construction_production_day'
-    || projectDuration.availability !== 'available'
-    || projectDuration.value === null
-    || projectDuration.value <= 0
+    || snapshot.projectDurationDays <= 0
   ) {
     return
   }
 
-  const predictedDurationDays = Math.max(0, Math.round(projectDuration.value))
+  const predictedDurationDays = Math.max(0, Math.round(snapshot.projectDurationDays))
   const durationErrorDays = Math.abs(actualSpan.actualDurationDays - predictedDurationDays)
   const outcomeToleranceDays = criticalPathOutcomeToleranceDays(predictedDurationDays)
-  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays)).length
+  const projectedFloatTaskCount = snapshot.tasks.filter((task) => Number.isFinite(task.floatDays ?? Number.NaN)).length
   const standardWorkCodesByTaskId = new Map(
     snapshot.tasks.map((task) => [task.taskId, task.standardWorkCodes ?? []]),
   )
@@ -847,8 +853,7 @@ async function recordCriticalPathRulePlanNetworkOutcome(params: {
   const metadata: Record<string, unknown> = {
     source: 'project_critical_path_cpm',
     algorithm_version: networkLineage.criticalPathAlgorithmVersion,
-    duration_day_unit: projectDuration.unit,
-    duration_metric: projectDuration,
+    duration_day_unit: 'construction_production_day',
     construction_calendar: constructionCalendar,
     prediction_duration_days: predictedDurationDays,
     actual_duration_days: actualSpan.actualDurationDays,
@@ -1077,6 +1082,7 @@ function buildDependencyEdges(tasks: TaskNode[], dependencies: CriticalPathDepen
 
   dependencies.forEach((dependency, index) => {
     if (!isActiveRequiredDependency(dependency)) return
+    if (isUnconfirmedHeuristicDependency(dependency)) return
     const fromTask = taskMap.get(dependency.dependency_task_id)
     const toTask = taskMap.get(dependency.task_id)
     if (!fromTask || !toTask || fromTask.id === toTask.id) return
@@ -1676,15 +1682,20 @@ async function persistCriticalPathTaskProjection(projectId: string, analysis: CP
   if (analysis.taskMap.size === 0) return
   const updatedAt = new Date().toISOString()
   const projections = [...analysis.taskMap.keys()].map((taskId) => {
-    const totalFloatDays = Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))
-    const freeFloatDays = buildFreeFloatDays(taskId, analysis)
+    const rawTotalFloatDays = analysis.float.get(taskId)
+    const totalFloatDays = rawTotalFloatDays === undefined
+      ? null
+      : Math.max(0, Math.round(rawTotalFloatDays))
+    const freeFloatDays = totalFloatDays === null ? null : buildFreeFloatDays(taskId, analysis)
     const isCritical = criticalTaskIds.has(taskId)
     return {
       taskId,
       isCritical,
       totalFloatDays,
       freeFloatDays,
-      criticalityWeight: criticalityWeightFromFloat(isCritical, totalFloatDays, freeFloatDays),
+      criticalityWeight: totalFloatDays === null || freeFloatDays === null
+        ? (isCritical ? 1.35 : 1)
+        : criticalityWeightFromFloat(isCritical, totalFloatDays, freeFloatDays),
     }
   })
   if (projections.length === 0) return
@@ -1765,7 +1776,14 @@ function buildProjectionAnalysisFromSnapshot(
     earliestFinish.set(schedule.taskId, schedule.earliestFinishOffsetDays)
     latestStart.set(schedule.taskId, schedule.latestStartOffsetDays)
     latestFinish.set(schedule.taskId, schedule.latestFinishOffsetDays)
-    float.set(schedule.taskId, schedule.floatDays)
+    const floatDays = schedule.float.availability === 'available'
+      && schedule.float.unit === 'construction_production_day'
+      && schedule.float.value !== null
+      ? schedule.float.value
+      : null
+    if (floatDays !== null) {
+      float.set(schedule.taskId, floatDays)
+    }
   }
 
   return {
@@ -1797,7 +1815,7 @@ function isRuntimeInProgressRow(row: CriticalPathTaskRow) {
   const status = String(row.status ?? '').trim().toLowerCase()
   const progress = Number(row.progress ?? 0)
   return status === 'in_progress'
-    || Boolean(row.actual_start_date && !row.actual_end_date)
+    || Boolean((row.actual_start_date || row.first_progress_at) && !row.actual_end_date)
     || (Number.isFinite(progress) && progress > 0 && progress < 100)
 }
 
@@ -2145,6 +2163,7 @@ const CRITICAL_PATH_TASK_SELECT_COLUMNS = [
   'planned_end_date',
   'actual_start_date',
   'actual_end_date',
+  'first_progress_at',
   'status',
   'progress',
   'is_milestone',
@@ -2161,7 +2180,58 @@ const CRITICAL_PATH_TASK_SELECT_COLUMNS = [
   'created_at',
 ].join(', ')
 
+const CRITICAL_PATH_TASK_EXECUTION_FACT_TYPES = [
+  'task.actual_start_date',
+  'task.actual_end_date',
+  'task.first_progress_at',
+  'task.progress',
+  'task.status',
+] as const
+
+function applyCurrentTaskExecutionFacts(
+  rows: CriticalPathTaskRow[],
+  facts: ExecutionFactEvent[],
+): CriticalPathTaskRow[] {
+  const rowsById = new Map(rows.map((row) => [row.id, { ...row }]))
+  for (const fact of facts) {
+    const row = rowsById.get(fact.entityId)
+    if (!row || fact.entityType !== 'task') continue
+    switch (fact.factType) {
+      case 'task.actual_start_date':
+        row.actual_start_date = fact.value == null ? null : String(fact.value)
+        break
+      case 'task.actual_end_date':
+        row.actual_end_date = fact.value == null ? null : String(fact.value)
+        break
+      case 'task.first_progress_at':
+        row.first_progress_at = fact.value == null ? null : String(fact.value)
+        break
+      case 'task.progress':
+        row.progress = fact.value == null ? null : Number(fact.value)
+        break
+      case 'task.status':
+        row.status = fact.value == null ? null : String(fact.value)
+        break
+      default:
+        break
+    }
+  }
+  return rows.map((row) => rowsById.get(row.id) ?? row)
+}
+
+async function applyCriticalPathExecutionFactAuthority(projectId: string, rows: CriticalPathTaskRow[]) {
+  if (rows.length === 0) return rows
+  const facts = await listCurrentExecutionFacts({
+    projectId,
+    entityType: 'task',
+    entityIds: rows.map((row) => row.id),
+    factTypes: [...CRITICAL_PATH_TASK_EXECUTION_FACT_TYPES],
+  })
+  return applyCurrentTaskExecutionFacts(rows, facts)
+}
+
 async function loadCriticalPathTaskRows(projectId: string): Promise<CriticalPathTaskRow[]> {
+  let rows: CriticalPathTaskRow[] | null = null
   if (process.env.NODE_ENV !== 'test') {
     try {
       const result = await rawQuery(
@@ -2171,7 +2241,7 @@ async function loadCriticalPathTaskRows(projectId: string): Promise<CriticalPath
           ORDER BY created_at ASC`,
         [projectId],
       )
-      return result.rows as CriticalPathTaskRow[]
+      rows = result.rows as CriticalPathTaskRow[]
     } catch (error) {
       logger.warn('[projectCriticalPathService] direct task read failed, falling back to dbService', {
         projectId,
@@ -2180,11 +2250,13 @@ async function loadCriticalPathTaskRows(projectId: string): Promise<CriticalPath
     }
   }
 
-  const rows = await executeSQL<CriticalPathTaskRow>(
-    `SELECT ${CRITICAL_PATH_TASK_SELECT_COLUMNS} FROM tasks WHERE project_id = ? ORDER BY created_at ASC`,
-    [projectId],
-  )
-  return (rows || []) as CriticalPathTaskRow[]
+  if (!rows) {
+    rows = await executeSQL<CriticalPathTaskRow>(
+      `SELECT ${CRITICAL_PATH_TASK_SELECT_COLUMNS} FROM tasks WHERE project_id = ? ORDER BY created_at ASC`,
+      [projectId],
+    )
+  }
+  return await applyCriticalPathExecutionFactAuthority(projectId, rows || [])
 }
 
 async function loadCriticalPathOverrideRows(projectId: string): Promise<CriticalPathOverrideRow[]> {
@@ -3245,16 +3317,20 @@ async function buildProjectCriticalPathSnapshotWithContext(
     .map((taskId): CriticalTaskNetworkSchedule | null => {
       const node = analysis.taskMap.get(taskId)
       if (!node) return null
+      const rawFloatDays = Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))
+      const rawFreeFloatDays = buildFreeFloatDays(taskId, analysis)
+      const float = productionDuration(rawFloatDays)
+      const freeFloat = productionDuration(rawFreeFloatDays)
       return {
         taskId,
         earliestStartOffsetDays: Math.max(0, Math.round(analysis.earliestStart.get(taskId) ?? 0)),
         earliestFinishOffsetDays: Math.max(0, Math.round(analysis.earliestFinish.get(taskId) ?? 0)),
         latestStartOffsetDays: Math.max(0, Math.round(analysis.latestStart.get(taskId) ?? 0)),
         latestFinishOffsetDays: Math.max(0, Math.round(analysis.latestFinish.get(taskId) ?? 0)),
-        floatDays: Math.max(0, Math.round(analysis.float.get(taskId) ?? 0)),
-        float: productionDuration(Math.max(0, Math.round(analysis.float.get(taskId) ?? 0))),
-        freeFloatDays: buildFreeFloatDays(taskId, analysis),
-        freeFloat: productionDuration(buildFreeFloatDays(taskId, analysis)),
+        floatDays: float.value,
+        float,
+        freeFloatDays: freeFloat.value,
+        freeFloat,
         durationDays: node.duration,
         duration: productionDuration(node.duration),
         isAutoCritical: autoCriticalTaskIdSet.has(taskId),
@@ -3271,24 +3347,25 @@ async function buildProjectCriticalPathSnapshotWithContext(
       const schedule = networkScheduleByTaskId.get(taskId)
       const durationLearningPublicationKeys = learningPublicationKeysByTaskId.get(taskId) ?? []
       const standardWorkCodes = readCriticalPathTaskStableCodes(row)
-      const floatDays = analysis.float.get(taskId) ?? 0
+      const rawFloatDays = analysis.float.get(taskId) ?? 0
+      const float = schedule?.float ?? productionDuration(rawFloatDays)
       const durationDays = node?.duration ?? getTaskDurationDays(row, constructionCalendar)
-      const freeFloatDays = schedule?.freeFloatDays
+      const freeFloat = schedule?.freeFloat ?? productionDuration(buildFreeFloatDays(taskId, analysis))
       return {
         taskId,
         title: row.title || taskId,
         ...(standardWorkCodes.length > 0 ? { standardWorkCodes } : {}),
-        floatDays,
-        float: productionDuration(floatDays),
+        floatDays: float.value,
+        float,
         durationDays,
         duration: productionDuration(durationDays),
-        freeFloat: productionDuration(freeFloatDays),
+        freeFloatDays: freeFloat.value,
+        freeFloat,
         ...(schedule ? {
           earliestStartOffsetDays: schedule.earliestStartOffsetDays,
           earliestFinishOffsetDays: schedule.earliestFinishOffsetDays,
           latestStartOffsetDays: schedule.latestStartOffsetDays,
           latestFinishOffsetDays: schedule.latestFinishOffsetDays,
-          freeFloatDays: schedule.freeFloatDays,
         } : {}),
         ...(node?.p50DurationDays ? { p50DurationDays: node.p50DurationDays } : {}),
         ...(node?.p80DurationDays ? { p80DurationDays: node.p80DurationDays } : {}),
@@ -3551,10 +3628,9 @@ async function recalculateProjectCriticalPathInternal(projectId: string): Promis
     : constructionOrganizationLineage
       ? mergeConstructionOrganizationLineageIntoContext({}, constructionOrganizationLineage)
       : undefined
-  const productionDurationAvailable = snapshot.projectDuration.availability === 'available'
-    && snapshot.projectDuration.unit === 'construction_production_day'
-    && snapshot.projectDuration.value !== null
-  if (productionDurationAvailable) {
+  const productionDayEvidenceAvailable = isAuthoritativeConstructionCalendar(constructionCalendar)
+    && snapshot.projectDuration.availability === 'available'
+  if (productionDayEvidenceAvailable) {
     await recordDurationAccuracyPrediction({
       engineCode: 'critical_path_cpm',
       outputKind: 'critical_path_project_duration',
@@ -3564,13 +3640,12 @@ async function recalculateProjectCriticalPathInternal(projectId: string): Promis
       modelVersion: 'critical_path_cpm_v1',
       predictedStartDate: earliestDate(rows.map((row) => row.start_date ?? row.planned_start_date)),
       predictedFinishDate: latestDate(rows.map((row) => row.end_date ?? row.planned_end_date)),
-      predictedDurationDays: snapshot.projectDuration.value,
+      predictedDurationDays: snapshot.projectDurationDays,
       predictedAt: snapshot.calculatedAt ?? null,
       predictionContext: mergeConstructionOrganizationLineageIntoContext({
         taskCount: tasks.length,
         eligibleTaskCount: snapshot.networkSchedule?.length ?? 0,
-        durationDayUnit: snapshot.projectDuration.unit,
-        durationMetric: snapshot.projectDuration,
+        durationDayUnit: 'construction_production_day',
         constructionCalendar,
         autoTaskIds: snapshot.autoTaskIds,
         manualAttentionTaskIds: snapshot.manualAttentionTaskIds,
@@ -3600,7 +3675,6 @@ async function recalculateProjectCriticalPathInternal(projectId: string): Promis
         actualContext: mergeConstructionOrganizationLineageIntoContext({
           source: 'completed_project_task_span',
           durationBasis: 'project_actual_span',
-          durationMetric: snapshot.projectDuration,
           skippedCurrentDedupeKey: cpmDedupeKey,
           taskCount: tasks.length,
         }, constructionOrganizationLineage),

@@ -205,20 +205,39 @@ describe('duration learning runtime evidence outbox migration', () => {
     expect(sourceDeleteTrigger).toMatch(/outbox\.subject_type = v_subject_type\s+AND \(\s*outbox\.subject_id = OLD\.id\s+OR outbox\.input_subject_ids \? OLD\.id::text\s*\)/i)
   })
 
-  it('is the exact canonical EOF block after unchanged migration 322', () => {
+  it('is the exact canonical block between unchanged migration 322 and migration 324', () => {
     const migration = readSql('migrations', migrationName).trim()
+    const migration322Name = '322_duration_learning_legacy_runtime_retirement.sql'
+    const migration322 = readSql('migrations', migration322Name).trim()
     const clean = readSql('migrations', 'CLEAN_MIGRATION_V4.sql')
     const sourceHeader = [
       '-- ============================================================',
       `-- Source: ${migrationName}`,
       '-- ============================================================',
     ].join('\n')
+    const migration322Header = [
+      '-- ============================================================',
+      `-- Source: ${migration322Name}`,
+      '-- ============================================================',
+    ].join('\n')
+    const migration324Header = [
+      '-- ============================================================',
+      '-- Source: 324_canonical_cause_and_benchmark_provenance.sql',
+      '-- ============================================================',
+    ].join('\n')
     const sourceIndex = clean.indexOf(sourceHeader)
-    const migration322Index = clean.indexOf('Source: 322_duration_learning_legacy_runtime_retirement.sql')
+    const migration322Index = clean.indexOf(migration322Header)
+    const migration324Index = clean.indexOf(migration324Header)
 
     expect(sourceIndex).toBeGreaterThan(migration322Index)
-    expect(clean.slice(sourceIndex + sourceHeader.length).trim()).toBe(migration)
-    expect(clean.trimEnd().endsWith(migration)).toBe(true)
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 323')
+    expect(clean.slice(migration322Index + migration322Header.length, sourceIndex).trim()).toBe(migration322)
+    expect(migration324Index).toBeGreaterThan(sourceIndex)
+    expect(clean.slice(sourceIndex + sourceHeader.length, migration324Index).trim()).toBe(migration)
+    const latestBundledMigration = Math.max(
+      ...Array.from(clean.matchAll(/^-- Source: (\d+)_/gm), (match) => Number(match[1])),
+    )
+    expect(clean.split('\n', 1)[0]).toBe(
+      `-- CANONICAL: current clean bootstrap bundle, synchronized through migration ${latestBundledMigration}`,
+    )
   })
 })

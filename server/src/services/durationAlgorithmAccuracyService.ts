@@ -3,6 +3,7 @@ import { logger } from '../middleware/logger.js'
 import { orderedInclusiveDurationDays, signedDurationDayDelta, type DurationDateInput } from '../utils/durationDays.js'
 import { buildStandardWorkDurationSeedReplayGovernanceReport } from './standardWorkDurationSeedReplayGovernanceService.js'
 import {
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
@@ -351,14 +352,11 @@ function buildActualDurationForPrediction(input: DurationAccuracyBacktestInput, 
   const context = readRecord(prediction.prediction_context)
   const actualStart = parseConstructionCalendarDate(input.actualStartDate)
   const actualFinish = parseConstructionCalendarDate(input.actualFinishDate)
-  if (
-    context
-    && readPredictionDurationDayUnit(context.durationDayUnit) === 'construction_production_day'
-    && actualStart
-    && actualFinish
-  ) {
+  if (context && readPredictionDurationDayUnit(context.durationDayUnit) === 'construction_production_day') {
     const calendar = readRecord(context.constructionCalendar) as ConstructionCalendarContext | null
-    return productionDaysBetweenInclusive(actualStart, actualFinish, calendar)
+    return actualStart && actualFinish && isAuthoritativeConstructionCalendar(calendar)
+      ? productionDaysBetweenInclusive(actualStart, actualFinish, calendar)
+      : null
   }
 
   return buildActualDuration(input)

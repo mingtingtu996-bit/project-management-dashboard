@@ -2,10 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   executeSQL: vi.fn(),
+  withDatabaseTransaction: vi.fn(),
+  recordAcceptancePlanExecutionFacts: vi.fn(),
+  transactionActive: false,
+  factTransactionStates: [] as boolean[],
 }))
 
 vi.mock('../services/dbService.js', () => ({
   executeSQL: mocks.executeSQL,
+}))
+
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: mocks.withDatabaseTransaction,
+}))
+
+vi.mock('../services/acceptancePlanExecutionFactService.js', () => ({
+  recordAcceptancePlanExecutionFacts: mocks.recordAcceptancePlanExecutionFacts,
 }))
 
 const {
@@ -17,6 +29,20 @@ describe('executionGateSeedService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.executeSQL.mockResolvedValue([])
+    mocks.transactionActive = false
+    mocks.factTransactionStates.length = 0
+    mocks.withDatabaseTransaction.mockImplementation(async (work: () => Promise<unknown>) => {
+      mocks.transactionActive = true
+      try {
+        return await work()
+      } finally {
+        mocks.transactionActive = false
+      }
+    })
+    mocks.recordAcceptancePlanExecutionFacts.mockImplementation(async () => {
+      mocks.factTransactionStates.push(mocks.transactionActive)
+      return []
+    })
   })
 
   it('derives condition and acceptance gate templates from GB50300-backed task metadata', () => {
@@ -333,6 +359,17 @@ describe('executionGateSeedService', () => {
       'project-1',
       'task-3',
     ]))
+    expect(mocks.recordAcceptancePlanExecutionFacts).toHaveBeenCalledTimes(2)
+    expect(mocks.recordAcceptancePlanExecutionFacts.mock.calls.map(([input]) => input)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceModule: 'executionGateSeedService',
+          next: { status: 'pending', actual_date: null },
+          forceInitial: true,
+        }),
+      ]),
+    )
+    expect(mocks.factTransactionStates).toEqual([true, true])
   })
 
   it('normalizes Date task dates before writing seed-backed acceptance planned_date', async () => {

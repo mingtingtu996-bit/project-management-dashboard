@@ -1,4 +1,5 @@
 import { executeSQL } from './dbService.js'
+import { withDatabaseTransaction } from '../database.js'
 import {
   persistDurationLearningRuntimePublication,
   promoteDurationLearningRuntimeCanary,
@@ -9,6 +10,7 @@ import {
   type DurationLearningRuntimeScope,
   type PersistDurationLearningRuntimePublicationInput,
 } from './durationLearningRuntimePublicationService.js'
+import { promoteDurationBenchmarkRuntimeCanaryAtomically } from './durationLearningAssetAtomicStoreService.js'
 import {
   buildDurationContextPolicyLearningOperationIdentity,
   createDatabaseDurationContextPolicyLearningCheckpointStore,
@@ -27,6 +29,15 @@ import {
   type DrainDurationLearningRuntimeEvidenceOutboxResult,
   type ProcessDurationLearningRuntimeEvidenceOutboxResult,
 } from './durationLearningRuntimeEvidenceOutboxService.js'
+import {
+  buildDurationAssetReviewDecisionFingerprint,
+  buildDurationAssetReviewPayload,
+  buildDurationAssetReviewSourceKey,
+  createDatabaseDurationAssetReviewQueueStore,
+  type DurationAssetReviewQueueStore,
+  type DurationAssetReviewTransactionRunner,
+  type DurationAssetReviewWriteResult,
+} from './durationAssetReviewQueueService.js'
 
 const STRUCTURAL_ASSET_KEYS = new Set<DurationLearningRuntimeAssetKey>([
   'dependency_rule_candidate',
@@ -104,6 +115,9 @@ export interface DurationLearningRuntimeMonitoringCandidate {
   maeBefore: number | null
   maeAfter: number | null
   regressionRate: number | null
+  runtimePayload: Record<string, unknown>
+  sourceCandidateRefs: string[]
+  sourceEvidenceRefs: string[]
   sourceAutomationDecision?: Record<string, unknown>
 }
 
@@ -133,13 +147,16 @@ export interface DurationLearningRuntimeLifecycleSweepResult {
   stablePromotionReused: number
   rollbackExecuted: number
   rollbackReused: number
+  reviewItemsOpened: number
+  reviewItemsReused: number
+  reviewItemsResolved: number
   failed: number
   failureRefs: DurationLearningRuntimeLifecycleFailureRef[]
   collectionCursorAdvanced: boolean
 }
 
 export interface DurationLearningRuntimeLifecycleFailureRef {
-  phase: 'evidence_outbox' | 'candidate_collection' | 'candidate_publication' | 'monitoring_collection' | 'monitoring' | 'collection_cursor'
+  phase: 'evidence_outbox' | 'candidate_collection' | 'candidate_publication' | 'monitoring_collection' | 'monitoring' | 'review_queue' | 'collection_cursor'
   reference: string
   message: string
 }
@@ -176,7 +193,11 @@ export interface RunDurationLearningRuntimeLifecycleSweepInput {
   collectionCursorStore?: DurationLearningRuntimeCollectionCursorStore | null
   recordImpact?: typeof recordDurationLearningRuntimeImpact
   promoteCanary?: typeof promoteDurationLearningRuntimeCanary
+  promoteBenchmarkCanary?: typeof promoteDurationBenchmarkRuntimeCanaryAtomically
   rollbackPublication?: typeof rollbackDurationLearningRuntimePublication
+  reviewQueueStore?: DurationAssetReviewQueueStore
+  transactionRunner?: DurationAssetReviewTransactionRunner
+  stableDecisionEvaluator?: typeof stableAutomationDecision
   evidenceOutboxProcessor?: ((input: {
     queryExec: DurationLearningRuntimePublicationQueryExec
     ownerId: string
@@ -546,6 +567,12 @@ function positiveNumber(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null
 }
 
+function timestamp(value: unknown) {
+  const normalized = text(value)
+  const parsed = Date.parse(normalized)
+  return normalized && Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
+}
+
 function uniqueTexts(values: readonly unknown[]) {
   return [...new Set(values.map(text).filter(Boolean))].sort()
 }
@@ -637,7 +664,7 @@ function aggregateProposal(
   const taskIds = uniqueTexts(proposals.flatMap((proposal) => proposal.taskIds ?? []))
   const conflictCount = proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.conflictCount), 0)
   const sampleCount = proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.sampleCount), 0)
-  const runtimePayload = aggregateRuntimePayload(proposals)
+  const runtimePayload = aggregateRuntimePayload(proposals, scope)
   const proposalKey = `duration-learning-aggregate:${proposalGroupingIdentity(first)}:${scopeIdentity(scope)}:${payloadFingerprint(runtimePayload)}`
   const aggregate: DurationLearningRuntimeCandidateProposal = {
     proposalKey,
@@ -733,6 +760,59 @@ function weightedSignedPayloadNumber(
   return Math.round(values.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight)
 }
 
+function weightedPayloadMetric(
+  proposals: DurationLearningRuntimeCandidateProposal[],
+  keys: string[],
+) {
+  const values = proposals.flatMap((proposal) => {
+    const raw = keys.map((key) => proposal.runtimePayload[key]).find((value) => optionalNumber(value) !== null)
+    const value = optionalNumber(raw)
+    return value === null ? [] : [{ value, weight: Math.max(1, proposal.sampleCount) }]
+  })
+  if (values.length !== proposals.length) return null
+  const totalWeight = values.reduce((sum, item) => sum + item.weight, 0)
+  return Number((values.reduce((sum, item) => sum + item.value * item.weight, 0) / totalWeight).toFixed(6))
+}
+
+function aggregatePayloadTimestamp(
+  proposals: DurationLearningRuntimeCandidateProposal[],
+  keys: string[],
+  order: 'earliest' | 'latest',
+) {
+  const values = proposals.map((proposal) => (
+    keys.map((key) => timestamp(proposal.runtimePayload[key])).find(Boolean) ?? ''
+  ))
+  if (values.some((value) => !value)) return null
+  values.sort()
+  return order === 'earliest' ? values[0] : values.at(-1) ?? null
+}
+
+function aggregateCalendarIdentities(proposals: DurationLearningRuntimeCandidateProposal[]) {
+  const identities = proposals.flatMap((proposal) => {
+    const payload = proposal.runtimePayload
+    const directRef = text(payload.calendarRef ?? payload.calendar_ref)
+    const directVersion = text(payload.calendarVersion ?? payload.calendar_version)
+    const aggregateProvenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
+    const nested = list(aggregateProvenance.calendarIdentities ?? aggregateProvenance.calendar_identities)
+      .map(record)
+      .map((identity) => ({
+        calendarRef: text(identity.calendarRef ?? identity.calendar_ref),
+        calendarVersion: text(identity.calendarVersion ?? identity.calendar_version),
+      }))
+      .filter((identity) => identity.calendarRef && identity.calendarVersion)
+    return [
+      ...(directRef && directVersion ? [{ calendarRef: directRef, calendarVersion: directVersion }] : []),
+      ...nested,
+    ]
+  })
+  return [...new Map(
+    identities.map((identity) => [`${identity.calendarRef}\u0000${identity.calendarVersion}`, identity] as const),
+  ).values()].sort((left, right) => (
+    left.calendarRef.localeCompare(right.calendarRef)
+    || left.calendarVersion.localeCompare(right.calendarVersion)
+  ))
+}
+
 function nodeIdentity(node: Record<string, unknown>) {
   return text(node.sourceId ?? node.source_id ?? node.stableCode ?? node.stable_code ?? node.path)
 }
@@ -792,17 +872,91 @@ function aggregatePayloadNodes(proposals: DurationLearningRuntimeCandidatePropos
     })
 }
 
-function aggregateRuntimePayload(proposals: DurationLearningRuntimeCandidateProposal[]) {
+function aggregateRuntimePayload(
+  proposals: DurationLearningRuntimeCandidateProposal[],
+  scope: DurationLearningRuntimeScope,
+) {
   const first = proposals[0]
   if (first.assetKey === 'base_duration_benchmark') {
     const productionDaySamples = proposals.flatMap((proposal) => proposal.productionDaySamples ?? [])
+      .map(positiveNumber)
+      .filter((value): value is number => value !== null)
+    const pooledMean = productionDaySamples.length > 0
+      ? productionDaySamples.reduce((sum, value) => sum + value, 0) / productionDaySamples.length
+      : null
+    const meanDays = pooledMean === null
+      ? weightedPayloadMetric(proposals, ['meanDays', 'mean_days', 'p50Days', 'p50_days'])
+      : Number(pooledMean.toFixed(6))
+    const variance = pooledMean === null
+      ? weightedPayloadMetric(proposals, ['variance'])
+      : Number((productionDaySamples.reduce((sum, value) => sum + (value - pooledMean) ** 2, 0)
+          / productionDaySamples.length).toFixed(6))
+    const coefficientOfVariation = meanDays && variance !== null
+      ? Number((Math.sqrt(Math.max(0, variance)) / meanDays).toFixed(6))
+      : weightedPayloadMetric(proposals, ['coefficientOfVariation', 'coefficient_of_variation'])
+    const sourceBenchmarkIds = uniqueTexts(proposals.flatMap((proposal) => {
+      const payload = proposal.runtimePayload
+      const direct = text(payload.benchmarkId ?? payload.benchmark_id)
+      const provenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
+      return [direct, ...list(provenance.sourceBenchmarkIds ?? provenance.source_benchmark_ids).map(text)]
+    }))
+    const sourceBenchmarkVersions = uniqueTexts(proposals.flatMap((proposal) => {
+      const payload = proposal.runtimePayload
+      const direct = text(payload.benchmarkVersion ?? payload.benchmark_version)
+      const provenance = record(payload.aggregateProvenance ?? payload.aggregate_provenance)
+      return [direct, ...list(provenance.sourceBenchmarkVersions ?? provenance.source_benchmark_versions).map(text)]
+    }))
+    const sourceAsOf = aggregatePayloadTimestamp(proposals, ['sourceAsOf', 'source_as_of'], 'latest')
+    const benchmarkVersion = `aggregate:${scope.level}:${hashDurationContextPolicyLearningValue({
+      scope,
+      sourceBenchmarkIds,
+      sourceBenchmarkVersions,
+      sourceAsOf,
+    }).slice(0, 16)}`
+    const confidenceLevels = proposals.map((proposal) => text(
+      proposal.runtimePayload.confidenceLevel ?? proposal.runtimePayload.confidence_level,
+    ))
+    const confidenceRank: Record<string, number> = { low: 1, medium: 2, high: 3 }
+    const confidenceLevel = confidenceLevels.every(Boolean)
+      ? [...confidenceLevels].sort((left, right) => (
+          (confidenceRank[left] ?? 0) - (confidenceRank[right] ?? 0)
+          || left.localeCompare(right)
+        ))[0]
+      : null
     return {
+      benchmarkKind: 'aggregate_all_cause',
+      causeApplicability: 'all_cause',
+      benchmarkVersion,
       p50Days: pooledPercentile(productionDaySamples, 0.5)
         ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
+      p75Days: pooledPercentile(productionDaySamples, 0.75)
+        ?? weightedPayloadNumber(proposals, ['p75Days', 'p75_days'])
+        ?? weightedPayloadNumber(proposals, ['p80Days', 'p80_days']),
       p80Days: pooledPercentile(productionDaySamples, 0.8)
         ?? weightedPayloadNumber(proposals, ['p80Days', 'p80_days'])
         ?? weightedPayloadNumber(proposals, ['p50Days', 'p50_days']),
+      meanDays,
+      variance,
+      coefficientOfVariation,
+      sampleCount: proposals.reduce((sum, proposal) => sum + nonNegativeInteger(proposal.sampleCount), 0),
+      confidenceLevel,
+      confidenceScore: Math.min(...proposals.map((proposal) => (
+        optionalNumber(proposal.runtimePayload.confidenceScore ?? proposal.runtimePayload.confidence_score) ?? -1
+      ))),
       durationDayBasis: 'construction_production_day',
+      generatedAt: aggregatePayloadTimestamp(proposals, ['generatedAt', 'generated_at'], 'latest'),
+      sourceWindowStart: aggregatePayloadTimestamp(proposals, ['sourceWindowStart', 'source_window_start'], 'earliest'),
+      sourceAsOf,
+      aggregateProvenance: {
+        schemaVersion: 'duration-benchmark-aggregate/v1',
+        scopeLevel: scope.level,
+        sourceBenchmarkIds,
+        sourceBenchmarkVersions,
+        sourceProjectIds: uniqueTexts(proposals.flatMap((proposal) => proposal.projectIds)),
+        sourceCompanyIds: uniqueTexts(proposals.flatMap((proposal) => proposal.companyIds)),
+        sourceIndustryKeys: canonicalIndustryKeys(proposals.flatMap((proposal) => proposal.industryKeys)),
+        calendarIdentities: aggregateCalendarIdentities(proposals),
+      },
     }
   }
   if (first.assetKey === 'standard_work_duration_seed') {
@@ -1040,7 +1194,38 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
   const scope = scopeFromRow(row, industryKey)
   const p50Days = positiveNumber(row.p50_days)
   if (!id || !artifactKey || !scope || !p50Days) return null
-  const p80Days = positiveNumber(row.p80_days) ?? p50Days
+  const benchmarkVersion = text(row.benchmark_version)
+  const p75Days = positiveNumber(row.p75_days)
+  const p80Days = positiveNumber(row.p80_days)
+  const meanDays = positiveNumber(row.mean_days)
+  const variance = optionalNumber(row.variance)
+  const coefficientOfVariation = optionalNumber(row.coefficient_of_variation)
+  const sampleCount = nonNegativeInteger(row.sample_count)
+  const confidenceLevel = text(row.confidence_level)
+  const confidenceScore = optionalNumber(row.confidence_score)
+  const durationDayBasis = text(row.duration_day_basis)
+  const generatedAt = timestamp(row.generated_at)
+  const sourceWindowStart = timestamp(row.source_window_start)
+  const sourceAsOf = timestamp(row.source_as_of)
+  const calendarRef = text(metadata.calendar_ref ?? metadata.calendarRef)
+  const calendarVersion = text(metadata.calendar_version ?? metadata.calendarVersion)
+  const identityBlockingReasons = [
+    ...(benchmarkVersion ? [] : ['benchmark_version_required']),
+    ...(durationDayBasis === 'construction_production_day' ? [] : ['benchmark_production_day_basis_required']),
+    ...(p75Days ? [] : ['benchmark_p75_days_required']),
+    ...(p80Days ? [] : ['benchmark_p80_days_required']),
+    ...(meanDays ? [] : ['benchmark_mean_days_required']),
+    ...(variance !== null && variance >= 0 ? [] : ['benchmark_variance_required']),
+    ...(coefficientOfVariation !== null && coefficientOfVariation >= 0 ? [] : ['benchmark_coefficient_of_variation_required']),
+    ...(sampleCount > 0 ? [] : ['benchmark_sample_count_required']),
+    ...(confidenceLevel ? [] : ['benchmark_confidence_level_required']),
+    ...(confidenceScore !== null && confidenceScore >= 0 ? [] : ['benchmark_confidence_score_required']),
+    ...(generatedAt ? [] : ['benchmark_generated_at_required']),
+    ...(sourceWindowStart ? [] : ['benchmark_source_window_start_required']),
+    ...(sourceAsOf ? [] : ['benchmark_source_as_of_required']),
+    ...(calendarRef ? [] : ['benchmark_calendar_ref_required']),
+    ...(calendarVersion ? [] : ['benchmark_calendar_version_required']),
+  ]
   const projectId = text(row.project_id)
   const companyId = text(row.company_id)
   return withAutomationDecision({
@@ -1049,13 +1234,27 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
     artifactKey,
     scope,
     runtimePayload: {
+      benchmarkId: id,
+      benchmarkVersion,
       p50Days,
+      p75Days,
       p80Days,
-      durationDayBasis: text(row.duration_day_basis),
+      meanDays,
+      variance,
+      coefficientOfVariation,
+      sampleCount,
+      confidenceLevel,
+      confidenceScore,
+      durationDayBasis,
+      calendarRef,
+      calendarVersion,
+      generatedAt,
+      sourceWindowStart,
+      sourceAsOf,
     },
     sourceCandidateRefs: [`duration_benchmarks:${id}`],
     sourceEvidenceRefs: evidenceRefs(metadata, `duration_benchmarks:${id}:metadata`),
-    sampleCount: nonNegativeInteger(row.sample_count),
+    sampleCount,
     projectIds: uniqueTexts([projectId]),
     companyIds: uniqueTexts([companyId]),
     industryKeys: uniqueTexts([industryKey]),
@@ -1069,9 +1268,7 @@ function benchmarkProposalFromRow(row: SourceRow): DurationLearningRuntimeCandid
     conflictCount: nonNegativeInteger(metadata.conflictCount ?? metadata.conflict_count),
     replayPassed: metadata.replayPassed !== false && metadata.replay_passed !== false,
     qualityModel: producerQualityModel('base_duration_benchmark', metadata),
-    blockingReasons: text(row.duration_day_basis) === 'construction_production_day'
-      ? []
-      : ['benchmark_production_day_basis_required'],
+    blockingReasons: identityBlockingReasons,
     policyEvaluationRequired: true,
     automationEvidence: automationEvidenceFrom(metadata),
   })
@@ -2211,6 +2408,26 @@ export async function collectDurationLearningRuntimeCandidateProposals(
   return (await collectDurationLearningRuntimeCandidateBatch(queryExec)).candidates
 }
 
+export async function findDurationLearningRuntimeProposalForReview(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  sourceKey: string
+  reasonCodes: readonly string[]
+  maxBatches?: number
+}): Promise<DurationLearningRuntimeCandidateProposal | null> {
+  const sourceKey = text(input.sourceKey)
+  const maxBatches = Math.max(1, Math.min(64, nonNegativeInteger(input.maxBatches) || 32))
+  let cursorState = emptyCollectionCursorState()
+  for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+    const batch = await collectDurationLearningRuntimeCandidateBatch(input.queryExec, cursorState)
+    for (const proposal of expandDurationLearningRuntimeCandidateScopes(batch.candidates)) {
+      if (candidateReviewSourceKey(proposal, input.reasonCodes) === sourceKey) return proposal
+    }
+    if (cursorOutputHash(batch.nextCursorState) === cursorOutputHash(cursorState)) break
+    cursorState = batch.nextCursorState
+  }
+  return null
+}
+
 function optionalNumber(value: unknown) {
   if (value === null || value === undefined || value === '') return null
   const parsed = Number(value)
@@ -2262,13 +2479,16 @@ function monitoringCandidateFromRow(row: SourceRow): DurationLearningRuntimeMoni
     maeBefore: optionalNumber(row.mae_before),
     maeAfter: optionalNumber(row.mae_after),
     regressionRate: optionalNumber(row.regression_rate),
+    runtimePayload: record(row.runtime_payload),
+    sourceCandidateRefs: uniqueTexts(Array.isArray(row.source_candidate_refs) ? row.source_candidate_refs : []),
+    sourceEvidenceRefs: uniqueTexts(Array.isArray(row.source_evidence_refs) ? row.source_evidence_refs : []),
     sourceAutomationDecision: record(row.automation_decision),
   }
 }
 
-function durationLearningRuntimeMonitoringCollectorSql() {
-  return `/* duration-learning-monitor-collector */
-    with active_publications as (
+function durationLearningRuntimeMonitoringCollectorSql(mode: 'batch' | 'exact_for_review' = 'batch') {
+  const selectedPublicationsSql = mode === 'batch'
+    ? `active_publications as (
       select publication.publication_key,
              'monitor:active'::text as collector_stream_key,
              0 as collector_priority
@@ -2297,7 +2517,25 @@ function durationLearningRuntimeMonitoringCollectorSql() {
       select * from active_publications
       union all
       select * from stable_publications
-    )
+    )`
+    : `selected_publications as (
+      select publication.publication_key
+        from public.duration_learning_runtime_publications publication
+       where publication.publication_key = $1
+         and publication.publication_stage = 'canary'
+       limit 1
+    )`
+  const elapsedAtSql = mode === 'exact_for_review' ? '$2::timestamptz' : 'now()'
+  const endingSql = mode === 'exact_for_review'
+    ? 'for update of publication'
+    : 'order by selected.collector_priority, publication.publication_key'
+  const collectorColumnsSql = mode === 'batch'
+    ? `,
+             selected.collector_stream_key,
+             publication.publication_key as collector_group_key`
+    : ''
+  return `/* duration-learning-monitor-collector:${mode} */
+    with ${selectedPublicationsSql}
     select publication.publication_key,
              publication.asset_key,
              publication.artifact_key,
@@ -2307,9 +2545,12 @@ function durationLearningRuntimeMonitoringCollectorSql() {
             publication.company_id,
             publication.project_id,
             publication.industry_key,
+            publication.runtime_payload,
+            publication.source_candidate_refs,
+            publication.source_evidence_refs,
             publication.automation_decision,
             publication.monitoring_window_hours,
-            extract(epoch from (now() - publication.monitoring_started_at)) / 3600.0 as monitoring_elapsed_hours,
+            extract(epoch from (${elapsedAtSql} - publication.monitoring_started_at)) / 3600.0 as monitoring_elapsed_hours,
             coalesce(observation.observed_count, 0) as observed_count,
             coalesce(observation.rejected_observation_count, 0) as rejected_observation_count,
             coalesce(network.accepted_outcome_count, 0) as accepted_outcome_count,
@@ -2317,9 +2558,7 @@ function durationLearningRuntimeMonitoringCollectorSql() {
             coalesce(accuracy.accuracy_sample_count, 0) as accuracy_sample_count,
              accuracy.mae_before,
              accuracy.mae_after,
-             accuracy.regression_rate,
-             selected.collector_stream_key,
-             publication.publication_key as collector_group_key
+             accuracy.regression_rate${collectorColumnsSql}
        from selected_publications selected
        join public.duration_learning_runtime_publications publication
          on publication.publication_key = selected.publication_key
@@ -2657,7 +2896,7 @@ function durationLearningRuntimeMonitoringCollectorSql() {
                  )
             )
        ) accuracy on true
-      order by selected.collector_priority, publication.publication_key`
+      ${endingSql}`
 }
 
 function uniqueMonitoringRows(rows: SourceRow[]) {
@@ -2684,7 +2923,7 @@ export async function collectDurationLearningRuntimeMonitoringBatch(
   const activePosition = cursorPositionFor(cursorState, activeKey)
   const stablePosition = cursorPositionFor(cursorState, stableKey)
   const runQuery = (activeAfter: string, stableAfter: string) => queryExec<SourceRow>(
-    durationLearningRuntimeMonitoringCollectorSql(),
+    durationLearningRuntimeMonitoringCollectorSql('batch'),
     [activeAfter, stableAfter, ACTIVE_MONITORING_LIMIT, STABLE_MONITORING_LIMIT],
   )
   const initialRows = await runQuery(activePosition.lastGroupKey ?? '', stablePosition.lastGroupKey ?? '')
@@ -2737,6 +2976,18 @@ export async function collectDurationLearningRuntimeMonitoringCandidates(
   return (await collectDurationLearningRuntimeMonitoringBatch(queryExec)).candidates
 }
 
+export async function findDurationLearningRuntimeMonitoringCandidateForReview(input: {
+  queryExec: DurationLearningRuntimePublicationQueryExec
+  publicationKey: string
+  observedAt: string
+}): Promise<DurationLearningRuntimeMonitoringCandidate | null> {
+  const rows = await input.queryExec<SourceRow>(
+    durationLearningRuntimeMonitoringCollectorSql('exact_for_review'),
+    [text(input.publicationKey), text(input.observedAt)],
+  )
+  return rows[0] ? monitoringCandidateFromRow(rows[0]) : null
+}
+
 function emptySweepResult(): DurationLearningRuntimeLifecycleSweepResult {
   return {
     evidenceOutboxClaimed: 0,
@@ -2764,21 +3015,129 @@ function emptySweepResult(): DurationLearningRuntimeLifecycleSweepResult {
     stablePromotionReused: 0,
     rollbackExecuted: 0,
     rollbackReused: 0,
+    reviewItemsOpened: 0,
+    reviewItemsReused: 0,
+    reviewItemsResolved: 0,
     failed: 0,
     failureRefs: [],
     collectionCursorAdvanced: false,
   }
 }
 
-function proposalCanEnterCanary(proposal: DurationLearningRuntimeCandidateProposal) {
+export function proposalCanEnterManualCanary(proposal: DurationLearningRuntimeCandidateProposal) {
   return proposal.sampleCount > 0
     && proposal.replayPassed
     && proposal.sourceCandidateRefs.length > 0
     && proposal.sourceEvidenceRefs.length > 0
     && Object.keys(proposal.runtimePayload).length > 0
     && (proposal.blockingReasons?.length ?? 0) === 0
+    && proposal.conflictCount === 0
+}
+
+function proposalCanEnterCanary(proposal: DurationLearningRuntimeCandidateProposal) {
+  return proposalCanEnterManualCanary(proposal)
     && proposal.policyEvaluationRequired === true
     && proposal.automationDecision?.autoPromotionAllowed === true
+}
+
+function normalizedPublicationBlockReasonCodes(reasonCodes: readonly unknown[]) {
+  const normalized = uniqueTexts(reasonCodes).sort()
+  return normalized.length > 0 ? normalized : ['runtime_publication_not_published']
+}
+
+export function reviewRequirementForProposal(
+  proposal: DurationLearningRuntimeCandidateProposal,
+  publicationBlockReasonCodes: readonly unknown[] = [],
+) {
+  const reasonCodes = [
+    ...(proposal.conflictCount > 0 ? ['candidate_conflict_detected'] : []),
+    ...(proposal.sampleCount > 0 ? [] : ['candidate_samples_missing']),
+    ...(proposal.replayPassed ? [] : ['candidate_replay_not_passed']),
+    ...(proposal.sourceCandidateRefs.length > 0 ? [] : ['candidate_reference_missing']),
+    ...(proposal.sourceEvidenceRefs.length > 0 ? [] : ['evidence_reference_missing']),
+    ...(Object.keys(proposal.runtimePayload).length > 0 ? [] : ['runtime_payload_unavailable']),
+    ...(proposal.blockingReasons ?? []),
+    ...(proposal.policyEvaluationRequired ? [] : ['automation_policy_evaluation_missing']),
+    ...(proposal.automationDecision?.manualReviewRequired ? proposal.automationDecision.reasonCodes : []),
+    ...(proposal.automationDecision?.autoPromotionAllowed === true ? [] : ['automatic_eligibility_not_granted']),
+    ...publicationBlockReasonCodes,
+  ]
+  const normalizedReasonCodes = uniqueTexts(reasonCodes).sort()
+  return {
+    reviewKind: 'candidate_publication' as const,
+    reasonCodes: normalizedReasonCodes,
+    decisionFingerprint: buildDurationAssetReviewDecisionFingerprint({
+      runtimePayload: proposal.runtimePayload,
+      sourceCandidateRefs: proposal.sourceCandidateRefs,
+      sourceEvidenceRefs: proposal.sourceEvidenceRefs,
+      conflictState: { conflictCount: proposal.conflictCount },
+      replayState: { replayPassed: proposal.replayPassed },
+      policyEvidence: {
+        evaluationRequired: proposal.policyEvaluationRequired === true,
+        stage: proposal.automationDecision?.stage ?? null,
+        autoPromotionAllowed: proposal.automationDecision?.autoPromotionAllowed ?? null,
+        manualReviewRequired: proposal.automationDecision?.manualReviewRequired ?? null,
+        reasonCodes: proposal.automationDecision?.reasonCodes ?? [],
+        evidence: proposal.automationEvidence ? record(proposal.automationEvidence) : null,
+      },
+      reasonCodes: normalizedReasonCodes,
+      monitoringEvidence: null,
+    }),
+  }
+}
+
+function candidateReviewSourceKey(
+  proposal: DurationLearningRuntimeCandidateProposal,
+  reviewReasonCodes: readonly unknown[] = [],
+) {
+  const requirement = reviewRequirementForProposal(proposal, reviewReasonCodes)
+  return buildDurationAssetReviewSourceKey({
+    reviewKind: requirement.reviewKind,
+    assetKey: proposal.assetKey,
+    artifactKey: proposal.artifactKey,
+    proposalKey: proposal.proposalKey,
+    publicationKey: null,
+    decisionFingerprint: requirement.decisionFingerprint,
+    scope: proposal.scope,
+  })
+}
+
+function candidateReviewQueueInput(
+  proposal: DurationLearningRuntimeCandidateProposal,
+  publicationBlockReasonCodes: readonly unknown[] = [],
+) {
+  const requirement = reviewRequirementForProposal(proposal, publicationBlockReasonCodes)
+  return {
+    reviewKind: requirement.reviewKind,
+    assetKey: proposal.assetKey,
+    artifactKey: proposal.artifactKey,
+    proposalKey: proposal.proposalKey,
+    publicationKey: null,
+    decisionFingerprint: requirement.decisionFingerprint,
+    scope: proposal.scope,
+    candidateEventRef: proposal.sourceCandidateRefs[0] ?? null,
+    conflictRef: proposal.conflictCount > 0 ? proposal.sourceEvidenceRefs[0] ?? null : null,
+    reasonCodes: requirement.reasonCodes,
+    reviewPayload: buildDurationAssetReviewPayload({
+      stableKeys: {
+        proposalKey: proposal.proposalKey,
+        artifactKey: proposal.artifactKey,
+      },
+      counts: {
+        sampleCount: nonNegativeInteger(proposal.sampleCount),
+        conflictCount: nonNegativeInteger(proposal.conflictCount),
+        projectCount: uniqueTexts(proposal.projectIds).length,
+        companyCount: uniqueTexts(proposal.companyIds).length,
+        industryCount: uniqueTexts(proposal.industryKeys).length,
+        blockingReasonCount: uniqueTexts(proposal.blockingReasons ?? []).length,
+      },
+      stage: proposal.automationDecision?.stage ?? null,
+      scope: proposal.scope,
+      reasonCodes: requirement.reasonCodes,
+      sourceCandidateRefs: proposal.sourceCandidateRefs,
+      sourceEvidenceRefs: proposal.sourceEvidenceRefs,
+    }),
+  }
 }
 
 function publicationKeyFor(proposal: DurationLearningRuntimeCandidateProposal) {
@@ -2848,6 +3207,8 @@ function evaluateMonitoring(candidate: DurationLearningRuntimeMonitoringCandidat
     ...(structural && weakOrRejectedRate > 0.05 ? ['structural_outcome_conflict_rate_exceeds_limit'] : []),
   ]
   const metrics = {
+    monitoringWindowHours: candidate.monitoringWindowHours,
+    monitoringElapsedHours: candidate.monitoringElapsedHours,
     observedCount: candidate.observedCount,
     rejectedObservationCount: candidate.rejectedObservationCount,
     acceptedOutcomeCount: candidate.acceptedOutcomeCount,
@@ -2873,6 +3234,14 @@ function evaluateMonitoring(candidate: DurationLearningRuntimeMonitoringCandidat
   return measured
     ? { status: 'passed', reasons: [], metrics }
     : { status: 'pending', reasons: ['measured_monitoring_evidence_insufficient'], metrics }
+}
+
+export type DurationLearningRuntimeMonitoringEvaluation = ReturnType<typeof evaluateMonitoring>
+
+function policyEffectiveMonitoringElapsedHours(candidate: DurationLearningRuntimeMonitoringCandidate) {
+  const monitoringWindowHours = Math.max(0, finiteNumber(candidate.monitoringWindowHours))
+  const monitoringElapsedHours = Math.max(0, finiteNumber(candidate.monitoringElapsedHours))
+  return Math.min(monitoringElapsedHours, monitoringWindowHours)
 }
 
 function stableAutomationDecision(
@@ -2910,7 +3279,7 @@ function stableAutomationDecision(
   const sourceObservationWindowDays = nonNegativeInteger(
     sourceObserved.observationWindowDays ?? sourceObserved.observation_window_days,
   )
-  const postPublicationObservationDays = Math.floor(candidate.monitoringElapsedHours / 24)
+  const postPublicationObservationDays = Math.floor(policyEffectiveMonitoringElapsedHours(candidate) / 24)
 
   return evaluateDurationLearningAssetAutomationPolicy({
     experienceTier,
@@ -2991,11 +3360,147 @@ function stableAutomationDecision(
   })
 }
 
+export type DurationLearningRuntimeStableDecision = ReturnType<typeof stableAutomationDecision>
+
+function monitoringMetricsForReviewIdentity(
+  candidate: DurationLearningRuntimeMonitoringCandidate,
+  evaluation: DurationLearningRuntimeMonitoringEvaluation,
+) {
+  const monitoringWindowHours = Math.max(0, finiteNumber(candidate.monitoringWindowHours))
+  return {
+    ...evaluation.metrics,
+    monitoringWindowHours,
+    monitoringElapsedHours: policyEffectiveMonitoringElapsedHours(candidate),
+  }
+}
+
+export function reviewRequirementForMonitoringCandidate(
+  candidate: DurationLearningRuntimeMonitoringCandidate,
+  evaluation: DurationLearningRuntimeMonitoringEvaluation,
+  stableDecision: DurationLearningRuntimeStableDecision,
+) {
+  const sourceDecision = record(candidate.sourceAutomationDecision)
+  const sourceObserved = record(sourceDecision.observed)
+  const reasonCodes = uniqueTexts([
+    ...evaluation.reasons,
+    ...stableDecision.reasonCodes,
+  ]).sort()
+  return {
+    reviewKind: 'stable_promotion' as const,
+    reasonCodes,
+    decisionFingerprint: buildDurationAssetReviewDecisionFingerprint({
+      runtimePayload: record(candidate.runtimePayload),
+      sourceCandidateRefs: uniqueTexts(candidate.sourceCandidateRefs ?? []),
+      sourceEvidenceRefs: uniqueTexts(candidate.sourceEvidenceRefs ?? []),
+      conflictState: {
+        conflictCount: nonNegativeInteger(sourceObserved.conflictCount ?? sourceObserved.conflict_count),
+      },
+      replayState: {
+        replayPassed: typeof (sourceObserved.replayPassed ?? sourceObserved.replay_passed) === 'boolean'
+          ? Boolean(sourceObserved.replayPassed ?? sourceObserved.replay_passed)
+          : null,
+      },
+      policyEvidence: {
+        evaluationRequired: true,
+        stage: stableDecision.stage,
+        autoPromotionAllowed: stableDecision.autoPromotionAllowed,
+        manualReviewRequired: stableDecision.manualReviewRequired,
+        reasonCodes: stableDecision.reasonCodes,
+        evidence: sourceDecision,
+      },
+      reasonCodes,
+      monitoringEvidence: {
+        publicationKey: candidate.publicationKey,
+        monitoringStatus: evaluation.status,
+        monitoringMetrics: monitoringMetricsForReviewIdentity(candidate, evaluation),
+        stableDecision: record(stableDecision),
+      },
+    }),
+  }
+}
+
+function monitoringReviewQueueInput(
+  candidate: DurationLearningRuntimeMonitoringCandidate,
+  evaluation: DurationLearningRuntimeMonitoringEvaluation,
+  stableDecision: DurationLearningRuntimeStableDecision,
+) {
+  const requirement = reviewRequirementForMonitoringCandidate(candidate, evaluation, stableDecision)
+  const monitoringEvidence = {
+    publicationKey: candidate.publicationKey,
+    monitoringStatus: evaluation.status,
+    monitoringMetrics: evaluation.metrics,
+    stableDecision: record(stableDecision),
+  }
+  return {
+    reviewKind: requirement.reviewKind,
+    assetKey: candidate.assetKey,
+    artifactKey: candidate.artifactKey,
+    proposalKey: null,
+    publicationKey: candidate.publicationKey,
+    decisionFingerprint: requirement.decisionFingerprint,
+    scope: candidate.scope,
+    candidateEventRef: candidate.sourceCandidateRefs?.[0] ?? null,
+    conflictRef: null,
+    reasonCodes: requirement.reasonCodes,
+    reviewPayload: buildDurationAssetReviewPayload({
+      stableKeys: {
+        publicationKey: candidate.publicationKey,
+        artifactKey: candidate.artifactKey,
+      },
+      counts: {
+        observedCount: nonNegativeInteger(candidate.observedCount),
+        rejectedObservationCount: nonNegativeInteger(candidate.rejectedObservationCount),
+        acceptedOutcomeCount: nonNegativeInteger(candidate.acceptedOutcomeCount),
+        weakOrRejectedOutcomeCount: nonNegativeInteger(candidate.weakOrRejectedOutcomeCount),
+        accuracySampleCount: nonNegativeInteger(candidate.accuracySampleCount),
+      },
+      stage: stableDecision.stage,
+      scope: candidate.scope,
+      reasonCodes: requirement.reasonCodes,
+      sourceCandidateRefs: candidate.sourceCandidateRefs ?? [],
+      sourceEvidenceRefs: candidate.sourceEvidenceRefs ?? [],
+      monitoringEvidence,
+    }),
+  }
+}
+
+export function evaluateDurationLearningRuntimeMonitoringCandidate(
+  candidate: DurationLearningRuntimeMonitoringCandidate,
+  stableDecisionEvaluator: typeof stableAutomationDecision = stableAutomationDecision,
+) {
+  const evaluation = evaluateMonitoring(candidate)
+  return {
+    evaluation,
+    stableDecision: evaluation.status === 'passed' && candidate.publicationStage === 'canary'
+      ? stableDecisionEvaluator(candidate, evaluation.metrics)
+      : null,
+  }
+}
+
+class DurationLearningRuntimeReviewQueueError extends Error {
+  constructor(readonly queueCause: unknown) {
+    super(queueCause instanceof Error ? queueCause.message : String(queueCause))
+    this.name = 'DurationLearningRuntimeReviewQueueError'
+  }
+}
+
 export async function runDurationLearningRuntimeLifecycleSweep(
   input: RunDurationLearningRuntimeLifecycleSweepInput = {},
 ) {
   const queryExec = input.queryExec ?? executeSQL
   const persistPublication = input.persistPublication ?? persistDurationLearningRuntimePublication
+  const usesCustomLifecycleIo = input.queryExec !== undefined
+    || input.candidateProvider !== undefined
+    || input.monitoringProvider !== undefined
+    || input.persistPublication !== undefined
+    || input.recordImpact !== undefined
+    || input.promoteCanary !== undefined
+    || input.promoteBenchmarkCanary !== undefined
+    || input.rollbackPublication !== undefined
+  const transactionRunner: DurationAssetReviewTransactionRunner | null = input.transactionRunner
+    ?? (usesCustomLifecycleIo ? null : (work) => withDatabaseTransaction(work))
+  const reviewQueueStore = input.reviewQueueStore
+    ?? (usesCustomLifecycleIo ? null : createDatabaseDurationAssetReviewQueueStore())
   const checkpointStore = input.checkpointStore === undefined
     ? input.candidateProvider || input.persistPublication
       ? null
@@ -3005,7 +3510,9 @@ export async function runDurationLearningRuntimeLifecycleSweep(
     || `duration-learning-runtime-lifecycle:${process.env.HOSTNAME ?? 'local'}:${process.pid}`
   const recordImpact = input.recordImpact ?? recordDurationLearningRuntimeImpact
   const promoteCanary = input.promoteCanary ?? promoteDurationLearningRuntimeCanary
+  const promoteBenchmarkCanary = input.promoteBenchmarkCanary ?? promoteDurationBenchmarkRuntimeCanaryAtomically
   const rollbackPublication = input.rollbackPublication ?? rollbackDurationLearningRuntimePublication
+  const stableDecisionEvaluator = input.stableDecisionEvaluator ?? stableAutomationDecision
   const observedAt = input.observedAt ?? new Date().toISOString()
   const result = emptySweepResult()
   const evidenceOutboxProcessor = input.evidenceOutboxProcessor ?? null
@@ -3029,6 +3536,27 @@ export async function runDurationLearningRuntimeLifecycleSweep(
   const operationBlockedError = (operation: string, response: { reasons?: readonly string[] }) => new Error(
     `${operation}_blocked:${(response.reasons ?? []).join(',') || 'unknown'}`,
   )
+  const requireReviewQueueStore = () => {
+    if (!reviewQueueStore) throw new Error('duration_learning_runtime_review_queue_store_required')
+    return reviewQueueStore
+  }
+  const requireTransactionRunner = () => {
+    if (!transactionRunner) throw new Error('duration_learning_runtime_transaction_runner_required')
+    return transactionRunner
+  }
+  const runReviewQueueOperation = async <T>(work: (store: DurationAssetReviewQueueStore) => Promise<T>) => {
+    try {
+      return await work(requireReviewQueueStore())
+    } catch (error) {
+      throw error instanceof DurationLearningRuntimeReviewQueueError
+        ? error
+        : new DurationLearningRuntimeReviewQueueError(error)
+    }
+  }
+  const recordReviewWrite = (write: DurationAssetReviewWriteResult) => {
+    if (write.disposition === 'created') result.reviewItemsOpened += 1
+    else result.reviewItemsReused += 1
+  }
 
   if (evidenceOutboxProcessor) {
     try {
@@ -3128,16 +3656,19 @@ export async function runDurationLearningRuntimeLifecycleSweep(
 
   for (const proposal of expanded) {
     try {
-      if (proposal.conflictCount > 0) {
-        result.manualFallback += 1
-        continue
-      }
-      if (proposal.policyEvaluationRequired && proposal.automationDecision?.manualReviewRequired) {
-        result.manualFallback += 1
-        continue
-      }
       if (!proposalCanEnterCanary(proposal)) {
-        result.candidateCollecting += 1
+        const reviewWrite = await runReviewQueueOperation((store) => store.upsertOpen(
+          candidateReviewQueueInput(proposal),
+        ))
+        recordReviewWrite(reviewWrite)
+        if (proposal.conflictCount > 0 || (
+          proposal.policyEvaluationRequired === true
+          && proposal.automationDecision?.manualReviewRequired === true
+        )) {
+          result.manualFallback += 1
+        } else {
+          result.candidateCollecting += 1
+        }
         continue
       }
       const publicationKey = publicationKeyFor(proposal)
@@ -3166,6 +3697,20 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         monitoringWindowHours: STRUCTURAL_ASSET_KEYS.has(proposal.assetKey) ? 168 : 72,
         publishedAt: observedAt,
       }
+      const resolveCurrentCandidateReviews = () => runReviewQueueOperation((store) => (
+        store.resolveOpenByPublicationIdentity({
+          reviewKind: 'candidate_publication',
+          assetKey: proposal.assetKey,
+          artifactKey: proposal.artifactKey,
+          scope: proposal.scope,
+          proposalKey: proposal.proposalKey,
+          publicationKey,
+          reviewedAt: observedAt,
+          resolutionSource: 'automatic_publication',
+          reviewerUserId: null,
+          decisionReason: 'automatic_candidate_publication',
+        })
+      ))
       if (checkpointStore) {
         const checkpointed = await executeDurationContextPolicyLearningStage({
           identity: buildRuntimePublicationCheckpointIdentity(proposal, publicationKey),
@@ -3173,23 +3718,57 @@ export async function runDurationLearningRuntimeLifecycleSweep(
           stageInput: buildRuntimePublicationCheckpointInput(proposal, publicationKey),
           ownerId: checkpointOwnerId,
           store: checkpointStore,
-          execute: async () => {
+          execute: () => requireTransactionRunner()(async () => {
             const publication = await persistPublication(publicationInput)
             if (publication.status !== 'published') {
               throw new Error(`duration_learning_runtime_publication_blocked:${publication.reasons.join(',')}`)
             }
-            return publication
-          },
+            const reviewItemsResolved = await resolveCurrentCandidateReviews()
+            return { publication, reviewItemsResolved }
+          }),
         })
-        if (checkpointed.disposition === 'reused') result.candidateCheckpointReused += 1
-        else result.canaryPublished += 1
+        if (checkpointed.disposition === 'reused') {
+          const reviewItemsResolved = await requireTransactionRunner()(
+            resolveCurrentCandidateReviews,
+          )
+          result.candidateCheckpointReused += 1
+          result.reviewItemsResolved += reviewItemsResolved
+        } else {
+          result.canaryPublished += 1
+          result.reviewItemsResolved += checkpointed.output.reviewItemsResolved
+        }
         continue
       }
-      const publication = await persistPublication(publicationInput)
-      if (publication.status === 'published') result.canaryPublished += 1
-      else result.candidateCollecting += 1
+      const published = await requireTransactionRunner()(async () => {
+        const publication = await persistPublication(publicationInput)
+        if (publication.status !== 'published') {
+          const reviewWrite = await runReviewQueueOperation((store) => store.upsertOpen(
+            candidateReviewQueueInput(
+              proposal,
+              normalizedPublicationBlockReasonCodes(publication.reasons),
+            ),
+          ))
+          return { publication, reviewItemsResolved: 0, reviewWrite }
+        }
+        const reviewItemsResolved = await resolveCurrentCandidateReviews()
+        return { publication, reviewItemsResolved, reviewWrite: null }
+      })
+      if (published.publication.status === 'published') {
+        result.canaryPublished += 1
+        result.reviewItemsResolved += published.reviewItemsResolved
+      } else {
+        if (!published.reviewWrite) {
+          throw new Error('duration_learning_runtime_blocked_publication_review_required')
+        }
+        recordReviewWrite(published.reviewWrite)
+        result.candidateCollecting += 1
+      }
     } catch (error) {
-      addFailure('candidate_publication', proposal.proposalKey, error)
+      if (error instanceof DurationLearningRuntimeReviewQueueError) {
+        addFailure('review_queue', proposal.proposalKey, error.queueCause)
+      } else {
+        addFailure('candidate_publication', proposal.proposalKey, error)
+      }
     }
   }
 
@@ -3211,7 +3790,11 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         result.monitoringFailed += 1
         continue
       }
-      const evaluation = evaluateMonitoring(candidate)
+      const monitoringDecision = evaluateDurationLearningRuntimeMonitoringCandidate(
+        candidate,
+        stableDecisionEvaluator,
+      )
+      const evaluation = monitoringDecision.evaluation
       if (evaluation.status === 'pending') {
         const impact = await recordImpact({
           queryExec,
@@ -3251,14 +3834,65 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         continue
       }
       if (candidate.publicationStage === 'canary') {
-        const stableDecision = stableAutomationDecision(candidate, evaluation.metrics)
+        const stableDecision = monitoringDecision.stableDecision
+        if (!stableDecision) throw new Error('duration_learning_runtime_stable_decision_required')
         const stableMetrics = {
           ...evaluation.metrics,
           stableAutomationDecision: stableDecision,
         }
         if (!stableDecision.autoPromotionAllowed) {
-          if (stableDecision.manualReviewRequired) result.manualFallback += 1
-          if (stableDecision.retainPreviousStable && stableDecision.stage === 'blocked_retain_previous') {
+          const retainPreviousStable = stableDecision.retainPreviousStable
+            && stableDecision.stage === 'blocked_retain_previous'
+          if (stableDecision.manualReviewRequired) {
+            const manualReview = await requireTransactionRunner()(async () => {
+              const reviewWrite = await runReviewQueueOperation((store) => store.upsertOpen(
+                monitoringReviewQueueInput(candidate, evaluation, stableDecision),
+              ))
+              const impact = await recordImpact({
+                queryExec,
+                publicationKey: candidate.publicationKey,
+                monitoringStatus: retainPreviousStable ? 'failed' : 'collecting',
+                metrics: stableMetrics,
+                observedAt,
+              })
+              const rollback = retainPreviousStable
+                ? await rollbackPublication({
+                    queryExec,
+                    publicationKey: candidate.publicationKey,
+                    assetKey: candidate.assetKey,
+                    artifactKey: candidate.artifactKey,
+                    scope: candidate.scope,
+                    reason: `duration_learning_stable_policy_blocked:${stableDecision.reasonCodes.join(',')}`,
+                    rolledBackAt: observedAt,
+                  })
+                : null
+              if (rollback) {
+                if (
+                  rollback.status !== 'rollback_executed'
+                  && rollback.status !== 'rollback_already_executed'
+                ) {
+                  throw operationBlockedError('duration_learning_runtime_rollback', rollback)
+                }
+                if (impact.status !== 'impact_recorded' && rollback.status !== 'rollback_already_executed') {
+                  throw operationBlockedError('duration_learning_runtime_impact', impact)
+                }
+              } else if (impact.status !== 'impact_recorded') {
+                throw operationBlockedError('duration_learning_runtime_impact', impact)
+              }
+              return { reviewWrite, rollback }
+            })
+            recordReviewWrite(manualReview.reviewWrite)
+            result.manualFallback += 1
+            if (manualReview.rollback) {
+              if (manualReview.rollback.status === 'rollback_executed') result.rollbackExecuted += 1
+              else result.rollbackReused += 1
+              result.monitoringFailed += 1
+            } else {
+              result.monitoringPending += 1
+            }
+            continue
+          }
+          if (retainPreviousStable) {
             const impact = await recordImpact({
               queryExec,
               publicationKey: candidate.publicationKey,
@@ -3295,7 +3929,55 @@ export async function runDurationLearningRuntimeLifecycleSweep(
           }
           continue
         }
-        evaluation.metrics = stableMetrics
+        const stablePublication = await requireTransactionRunner()(async () => {
+          const impact = await recordImpact({
+            queryExec,
+            publicationKey: candidate.publicationKey,
+            monitoringStatus: 'passed',
+            metrics: stableMetrics,
+            observedAt,
+          })
+          if (impact.status !== 'impact_recorded') {
+            throw operationBlockedError('duration_learning_runtime_impact', impact)
+          }
+          const promotion = candidate.assetKey === 'base_duration_benchmark'
+            && candidate.scope.level === 'project'
+            ? await promoteBenchmarkCanary({
+                publicationKey: candidate.publicationKey,
+                companyId: candidate.scope.companyId,
+                projectId: candidate.scope.projectId,
+                promotedAt: observedAt,
+              })
+            : await promoteCanary({
+                queryExec,
+                publicationKey: candidate.publicationKey,
+                promotedAt: observedAt,
+              })
+          if (promotion.status !== 'stable_promoted' && promotion.status !== 'stable_already_promoted') {
+            throw operationBlockedError('duration_learning_runtime_promotion', promotion)
+          }
+          const reviewItemsResolved = await runReviewQueueOperation((store) => (
+            store.resolveOpenByPublicationIdentity({
+              reviewKind: 'stable_promotion',
+              assetKey: candidate.assetKey,
+              artifactKey: candidate.artifactKey,
+              scope: candidate.scope,
+              proposalKey: null,
+              publicationKey: candidate.publicationKey,
+              reviewedAt: observedAt,
+              resolutionSource: 'automatic_publication',
+              reviewerUserId: null,
+              decisionReason: 'automatic_stable_promotion',
+            })
+          ))
+          return { promotion, reviewItemsResolved }
+        })
+        const promotion = stablePublication.promotion
+        if (promotion.status === 'stable_promoted') result.stablePromoted += 1
+        else result.stablePromotionReused += 1
+        result.reviewItemsResolved += stablePublication.reviewItemsResolved
+        result.monitoringPassed += 1
+        continue
       }
       const impact = await recordImpact({
         queryExec,
@@ -3305,19 +3987,13 @@ export async function runDurationLearningRuntimeLifecycleSweep(
         observedAt,
       })
       if (impact.status !== 'impact_recorded') throw operationBlockedError('duration_learning_runtime_impact', impact)
-      if (candidate.publicationStage === 'canary') {
-        const promotion = await promoteCanary({
-          queryExec,
-          publicationKey: candidate.publicationKey,
-          promotedAt: observedAt,
-        })
-        if (promotion.status === 'stable_promoted') result.stablePromoted += 1
-        else if (promotion.status === 'stable_already_promoted') result.stablePromotionReused += 1
-        else throw operationBlockedError('duration_learning_runtime_promotion', promotion)
-      }
       result.monitoringPassed += 1
     } catch (error) {
-      addFailure('monitoring', candidate.publicationKey, error)
+      if (error instanceof DurationLearningRuntimeReviewQueueError) {
+        addFailure('review_queue', candidate.publicationKey, error.queueCause)
+      } else {
+        addFailure('monitoring', candidate.publicationKey, error)
+      }
     }
   }
 

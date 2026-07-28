@@ -23,15 +23,32 @@ function readSql(path: string) {
 }
 
 describe('commercial trigger RPC ACL closeout migration', () => {
-  it('keeps the staging-ledgered migration and clean bundle bytes immutable', () => {
+  it('keeps the staging-ledgered migration and its clean-bundle segment immutable', () => {
     const sql = readSql(migrationPath)
     expect(createHash('sha256').update(sql).digest('hex')).toBe(
       '7d920e2696673975d8a2e4fe2e07a28f294a108b8dc12d6a9f95544bb0dbb85f',
     )
     const cleanSql = readSql(cleanMigrationPath)
-    expect(createHash('sha256').update(cleanSql).digest('hex')).toBe(
-      '6747ad961a0df9797397776fc7f456f869a690dbb6f7740a85910525eceb4d9e',
-    )
+    const sourceHeader = [
+      '-- ============================================================',
+      `-- Source: ${migrationName}`,
+      '-- ============================================================',
+    ].join('\n')
+    const nextSourceHeader = [
+      '-- ============================================================',
+      '-- Source: 309_v14231_runtime_consumer_evidence_runtime_rls.sql',
+      '-- ============================================================',
+    ].join('\n')
+    const normalizedCleanSql = cleanSql.replace(/\r\n/g, '\n')
+    const sourceIndex = normalizedCleanSql.indexOf(sourceHeader)
+    const nextSourceIndex = normalizedCleanSql.indexOf(nextSourceHeader, sourceIndex + sourceHeader.length)
+    const bundledMigration = normalizedCleanSql
+      .slice(sourceIndex + sourceHeader.length, nextSourceIndex)
+      .trim()
+
+    expect(sourceIndex).toBeGreaterThan(-1)
+    expect(nextSourceIndex).toBeGreaterThan(sourceIndex)
+    expect(bundledMigration).toBe(sql.replace(/\r\n/g, '\n').trim())
   })
 
   it('removes direct API execution while preserving backend runtime access', () => {

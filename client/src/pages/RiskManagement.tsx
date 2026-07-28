@@ -31,6 +31,7 @@ import { Pagination } from '@/components/ui/Pagination'
 import { useToast } from '@/hooks/use-toast'
 import { useStore } from '@/hooks/useStore'
 import { usePermissions } from '@/hooks/usePermissions'
+import { useStructuredCauseTaxonomy } from '@/hooks/useStructuredCauseTaxonomy'
 import { CHART_AXIS_COLORS, CHART_SERIES } from '@/lib/chartPalette'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
 import { elapsedLocalDaysSince } from '@/lib/dateDistance'
@@ -114,21 +115,6 @@ type IssueRow = {
 
 type ClosureResultCode = 'resolved' | 'mitigated' | 'transferred' | 'accepted' | 'duplicate' | 'invalidated'
 type ClosureEffectiveness = 'resolved' | 'partially_resolved' | 'transferred' | 'accepted' | 'undetermined'
-type ClosureCauseCode =
-  | 'predecessor_delay'
-  | 'material_shortage'
-  | 'labor_shortage'
-  | 'equipment_unavailable'
-  | 'design_change'
-  | 'drawing_delay'
-  | 'quality_rework'
-  | 'weather_impact'
-  | 'owner_decision'
-  | 'government_inspection'
-  | 'site_capacity_pressure'
-  | 'workflow_sequence'
-  | 'external_readiness'
-  | 'other'
 type ClosureResponsibilityClass =
   | 'none'
   | 'owner_attributable'
@@ -233,22 +219,6 @@ const CLOSURE_EFFECTIVENESS_OPTIONS: Array<{ value: ClosureEffectiveness; label:
   { value: 'accepted', label: '已接受' },
   { value: 'undetermined', label: '待观察' },
 ]
-const CLOSURE_CAUSE_OPTIONS: Array<{ value: ClosureCauseCode; label: string }> = [
-  { value: 'predecessor_delay', label: '前置工作传导' },
-  { value: 'material_shortage', label: '材料短缺或晚到' },
-  { value: 'labor_shortage', label: '劳动力不足' },
-  { value: 'equipment_unavailable', label: '设备机械不可用' },
-  { value: 'design_change', label: '设计变更' },
-  { value: 'drawing_delay', label: '图纸或审批延误' },
-  { value: 'quality_rework', label: '质量返工' },
-  { value: 'weather_impact', label: '天气影响' },
-  { value: 'owner_decision', label: '业主决策等待' },
-  { value: 'government_inspection', label: '政府检查审批' },
-  { value: 'site_capacity_pressure', label: '现场承载不足' },
-  { value: 'workflow_sequence', label: '工序顺序约束' },
-  { value: 'external_readiness', label: '外部条件未就绪' },
-  { value: 'other', label: '其他' },
-]
 const CLOSURE_RESPONSIBILITY_OPTIONS: Array<{ value: ClosureResponsibilityClass; label: string }> = [
   { value: 'none', label: '暂不判定' },
   { value: 'owner_attributable', label: '发包人原因' },
@@ -279,7 +249,7 @@ function normalizeSeverity(value: unknown): RiskRow['severity'] {
   return 'medium'
 }
 
-function inferClosureCauseCode(row: RiskRow | IssueRow): ClosureCauseCode {
+function inferClosureCauseCode(row: RiskRow | IssueRow): string {
   const token = `${row.sourceType} ${row.title} ${row.description ?? ''}`.toLowerCase()
   if (/(material|supplier|材料|到货|供应商)/.test(token)) return 'material_shortage'
   if (/(labor|worker|personnel|人员|劳动力|班组)/.test(token)) return 'labor_shortage'
@@ -774,6 +744,7 @@ export default function RiskManagement() {
   const { toast } = useToast()
   const currentProject = useStore((state) => state.currentProject)
   const { canEdit } = usePermissions({ projectId: params.id || currentProject?.id })
+  const causeTaxonomy = useStructuredCauseTaxonomy()
   const rawTasks = useStore((state) => state.tasks)
   const rawWarnings = useStore((state) => state.warnings)
   const rawIssueRows = useStore((state) => state.issueRows)
@@ -828,13 +799,19 @@ export default function RiskManagement() {
   const [manualIssueSeverity, setManualIssueSeverity] = useState<IssueRow['severity']>('medium')
   const [closureResultCode, setClosureResultCode] = useState<ClosureResultCode>('resolved')
   const [closureEffectiveness, setClosureEffectiveness] = useState<ClosureEffectiveness>('resolved')
-  const [closureCauseCode, setClosureCauseCode] = useState<ClosureCauseCode>('other')
+  const [closureCauseCode, setClosureCauseCode] = useState('')
   const [closureResponsibilityClass, setClosureResponsibilityClass] = useState<ClosureResponsibilityClass>('none')
   const [closureResultSummary, setClosureResultSummary] = useState('')
   const [closureResponsibilityBasis, setClosureResponsibilityBasis] = useState('')
   const [closureError, setClosureError] = useState<string | null>(null)
+  const selectedClosureCause = causeTaxonomy.resolveCode(closureCauseCode)
   const [priorityDrafts, setPriorityDrafts] = useState<Record<string, number>>({})
   const [muteDurationHours, setMuteDurationHours] = useState<AllowedMuteHours>(24)
+
+  useEffect(() => {
+    if (closureCauseCode && !selectedClosureCause) setClosureCauseCode('')
+  }, [closureCauseCode, selectedClosureCause])
+
   const routeRiskFilters = useMemo(() => {
     const query = new URLSearchParams(location.search)
     return {
@@ -1180,7 +1157,7 @@ export default function RiskManagement() {
   ) => {
     setClosureResultCode(entityType === 'risk' ? 'mitigated' : 'resolved')
     setClosureEffectiveness('resolved')
-    setClosureCauseCode(inferClosureCauseCode(row))
+    setClosureCauseCode(causeTaxonomy.resolveCode(inferClosureCauseCode(row))?.code ?? '')
     setClosureResponsibilityClass('none')
     setClosureResultSummary('')
     setClosureResponsibilityBasis('')
@@ -1190,13 +1167,18 @@ export default function RiskManagement() {
     } else {
       setDialogState({ type: 'structured-close', entityType, row: row as IssueRow, pendingManualClose })
     }
-  }, [])
+  }, [causeTaxonomy])
 
   const handleSubmitStructuredClose = useCallback(async () => {
     if (!projectId || dialogState?.type !== 'structured-close') return
     const summary = closureResultSummary.trim()
     if (!summary) {
       setClosureError('请填写实际处理结果。')
+      return
+    }
+    const confirmedTaxonomyCause = causeTaxonomy.resolveCode(closureCauseCode)
+    if (!confirmedTaxonomyCause) {
+      setClosureError('请从当前原因分类中选择有效项。')
       return
     }
 
@@ -1207,7 +1189,7 @@ export default function RiskManagement() {
       const confirmedCause = await apiPost<{ id?: string }>(
         `/api/cause-attributions/projects/${encodeURIComponent(projectId)}/subjects/${entityType}/${encodeURIComponent(row.id)}/confirm`,
         {
-          causeCode: closureCauseCode,
+          causeCode: confirmedTaxonomyCause.code,
           causeRole: 'primary',
           rawText: summary,
           ...(closureResponsibilityClass === 'none'
@@ -1253,6 +1235,7 @@ export default function RiskManagement() {
     }
   }, [
     closureCauseCode,
+    causeTaxonomy,
     closureEffectiveness,
     closureResponsibilityBasis,
     closureResponsibilityClass,
@@ -2276,11 +2259,15 @@ export default function RiskManagement() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="closure-cause-code">原因分类</Label>
-                  <Select value={closureCauseCode} onValueChange={(value) => setClosureCauseCode(value as ClosureCauseCode)}>
+                  <Select
+                    value={closureCauseCode || undefined}
+                    onValueChange={setClosureCauseCode}
+                    disabled={causeTaxonomy.status !== 'ready'}
+                  >
                     <SelectTrigger id="closure-cause-code"><SelectValue /></SelectTrigger>
                     <SelectContent align="start">
-                      {CLOSURE_CAUSE_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      {causeTaxonomy.entries.map((entry) => (
+                        <SelectItem key={entry.code} value={entry.code}>{entry.label}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -2325,7 +2312,12 @@ export default function RiskManagement() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setDialogState(null)} disabled={saving}>取消</Button>
-              <Button data-testid="structured-close-submit" onClick={() => void handleSubmitStructuredClose()} loading={saving}>确认关闭</Button>
+              <Button
+                data-testid="structured-close-submit"
+                onClick={() => void handleSubmitStructuredClose()}
+                loading={saving}
+                disabled={saving || !closureResultSummary.trim() || !selectedClosureCause}
+              >确认关闭</Button>
             </DialogFooter>
           </DialogContent>
         ) : null}

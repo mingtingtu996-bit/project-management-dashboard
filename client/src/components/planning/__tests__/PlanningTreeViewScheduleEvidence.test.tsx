@@ -4,6 +4,55 @@ import { describe, expect, it } from 'vitest'
 import { PlanningTreeView, type PlanningTreeRow } from '../PlanningTreeView'
 
 describe('PlanningTreeView schedule evidence columns', () => {
+  it('does not present an unavailable production-day delay as a normal forecast', async () => {
+    const unavailableMetric = {
+      value: null,
+      unit: 'construction_production_day' as const,
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-07',
+      availability: 'unavailable' as const,
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+    render(
+      <PlanningTreeView
+        title="Execution tasks"
+        rows={[{
+          id: 'row-unavailable-delay',
+          title: 'Unavailable delay task',
+          depth: 1,
+          sequenceLabel: '1',
+          durationLabel: '12 天',
+          durationForecast: {
+            taskId: 'row-unavailable-delay',
+            remainingForecastDays: null,
+            remainingDuration: unavailableMetric,
+            conservativeDurationDays: null,
+            forecastFinishDate: null,
+            forecastDelay: unavailableMetric,
+            forecastDelayDays: null,
+            probabilityDurationMetrics: {
+              p20RemainingDuration: unavailableMetric,
+              p50RemainingDuration: unavailableMetric,
+              p80RemainingDuration: unavailableMetric,
+            },
+            confidenceLevel: 'unavailable',
+            confidenceScore: 0,
+            forecastSource: 'unavailable',
+            businessReason: 'Construction calendar identity is unavailable.',
+          },
+        } as PlanningTreeRow]}
+        variant="task"
+        rowMode="read"
+        viewMode="list"
+      />,
+    )
+
+    expect(await screen.findByText('生产日口径不可用')).toBeVisible()
+    expect(screen.queryByText('按当前事实')).not.toBeInTheDocument()
+  })
+
   it('shows task schedule evidence extra columns from the task field registry', async () => {
     render(
       <PlanningTreeView

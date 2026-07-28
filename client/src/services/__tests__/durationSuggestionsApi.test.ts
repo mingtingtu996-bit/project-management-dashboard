@@ -15,6 +15,62 @@ const {
   getTaskDurationForecast,
 } = await import('../durationSuggestionsApi')
 
+function productionMetric(value: number | null) {
+  return {
+    value,
+    unit: 'construction_production_day',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-06-30',
+    availability: value === null ? 'unavailable' : 'available',
+    unavailableReason: value === null ? 'duration_value_missing' : null,
+  }
+}
+
+function completeAvailableBenchmarkResponse() {
+  return {
+    durationOutputCode: 'contextual_reference',
+    durationOutputSemanticFieldName: 'contextualReferenceDays',
+    contextualReferenceDays: 7,
+    conservativeDurationDays: 9,
+    confidenceLevel: 'medium',
+    confidenceScore: 70,
+    benchmarkGeneratedAt: '2026-07-01T08:00:00.000Z',
+    benchmarkAsOf: '2026-06-30T23:59:59.000Z',
+    benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+    benchmarkVersion: 'v7',
+    benchmarkSampleCount: 24,
+    benchmarkDayBasis: 'construction_production_day',
+    benchmarkScope: 'company',
+    benchmarkProvenanceAvailability: 'available',
+    benchmarkProvenanceReasonCodes: [],
+    benchmarkProvenanceUnavailableReason: null,
+    benchmarkProvenance: {
+      mode: 'single',
+      entries: [{
+        source: 'persisted_benchmark',
+        benchmarkId: 'benchmark-1',
+        publicationKey: null,
+        benchmarkVersion: 'v7',
+        scope: 'company',
+        generatedAt: '2026-07-01T08:00:00.000Z',
+        sourceAsOf: '2026-06-30T23:59:59.000Z',
+        sourceWindowStart: '2026-04-01T00:00:00.000Z',
+        sampleCount: 24,
+        dayBasis: 'construction_production_day',
+        calendarRef: 'calendar-1',
+        calendarVersion: 'calendar-v3',
+        aggregateCalendarIdentities: [],
+        causeSegment: null,
+        blendWeight: null,
+        availability: 'available',
+        reasonCodes: [],
+      }],
+    },
+  }
+}
+
 describe('durationSuggestionsApi governed duration outputs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -82,6 +138,19 @@ describe('durationSuggestionsApi governed duration outputs', () => {
         p80_days: 24,
         mutation_boundary: 'candidate_only_no_runtime_write',
       },
+      durationRiskDistribution: {
+        p20Duration: productionMetric(15),
+        p50Duration: productionMetric(18),
+        p80Duration: productionMetric(24),
+        reserveDuration: productionMetric(6),
+        source: 'duration_benchmarks',
+        scope: 'company',
+        sampleCount: 24,
+        generatedAt: '2026-07-01T08:00:00.000Z',
+        sourceAsOf: '2026-06-30T23:59:59.000Z',
+        availability: 'available',
+        unavailableReason: null,
+      },
       confidenceLevel: 'medium',
       confidenceScore: 64,
     })
@@ -98,8 +167,312 @@ describe('durationSuggestionsApi governed duration outputs', () => {
         p80_days: 24,
         mutation_boundary: 'candidate_only_no_runtime_write',
       }),
+      durationRiskDistribution: expect.objectContaining({
+        availability: 'available',
+        reserveDuration: expect.objectContaining({
+          value: 6,
+          unit: 'construction_production_day',
+          availability: 'available',
+        }),
+      }),
     })
   })
+
+  it('normalizes complete camelCase benchmark provenance without reviving retired aliases', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      durationOutputCode: 'contextual_reference',
+      durationOutputSemanticFieldName: 'contextualReferenceDays',
+      contextualReferenceDays: 7,
+      conservativeDurationDays: 9,
+      confidenceLevel: 'medium',
+      confidenceScore: 70,
+      benchmarkGeneratedAt: '2026-07-01T08:00:00.000Z',
+      benchmarkAsOf: '2026-06-30T23:59:59.000Z',
+      benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+      benchmarkVersion: 'v7',
+      benchmarkSampleCount: 24,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'company',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [{
+          source: 'persisted_benchmark',
+          benchmarkId: 'benchmark-1',
+          publicationKey: null,
+          benchmarkVersion: 'v7',
+          scope: 'company',
+          generatedAt: '2026-07-01T08:00:00.000Z',
+          sourceAsOf: '2026-06-30T23:59:59.000Z',
+          sourceWindowStart: '2026-04-01T00:00:00.000Z',
+          sampleCount: 24,
+          dayBasis: 'construction_production_day',
+          calendarRef: 'calendar-1',
+          calendarVersion: 'calendar-v3',
+          aggregateCalendarIdentities: [],
+          causeSegment: null,
+          blendWeight: null,
+          availability: 'available',
+          reasonCodes: [],
+        }],
+      },
+      generatedAt: '2035-01-02T03:04:05.000Z',
+      benchmark_generated_at: '2035-01-02T03:04:05.000Z',
+      referenceFrozenAt: '2035-01-02T03:04:05.000Z',
+      isReferenceFrozen: true,
+    })
+
+    const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: '2026-07-01T08:00:00.000Z',
+      benchmarkAsOf: '2026-06-30T23:59:59.000Z',
+      benchmarkWindowStart: '2026-04-01T00:00:00.000Z',
+      benchmarkVersion: 'v7',
+      benchmarkSampleCount: 24,
+      benchmarkDayBasis: 'construction_production_day',
+      benchmarkScope: 'company',
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenance: {
+        mode: 'single',
+        entries: [expect.objectContaining({
+          source: 'persisted_benchmark',
+          benchmarkVersion: 'v7',
+          scope: 'company',
+          aggregateCalendarIdentities: [],
+          availability: 'available',
+          reasonCodes: [],
+        })],
+      },
+    })
+    expect(suggestion).not.toHaveProperty('generatedAt')
+    expect(suggestion).not.toHaveProperty('benchmark_generated_at')
+    expect(suggestion).not.toHaveProperty('referenceFrozenAt')
+    expect(suggestion).not.toHaveProperty('isReferenceFrozen')
+  })
+
+  it('fails closed instead of passing malformed benchmark provenance JSON through', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      durationOutputCode: 'contextual_reference',
+      contextualReferenceDays: 7,
+      conservativeDurationDays: 9,
+      confidenceLevel: 'medium',
+      confidenceScore: 70,
+      benchmarkScope: 'system',
+      benchmarkDayBasis: 'calendar_day',
+      benchmarkProvenanceAvailability: 'sometimes',
+      benchmarkProvenanceReasonCodes: ['benchmark_version_missing', 'unknown_reason'],
+      benchmarkProvenanceUnavailableReason: 'unknown_reason',
+      benchmarkProvenance: {
+        mode: 'combined',
+        entries: [{ scope: 'system', aggregateCalendarIdentities: {} }],
+      },
+    })
+
+    const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+    expect(suggestion).toMatchObject({
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: null,
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: null,
+    })
+  })
+
+  it.each([
+    {
+      name: 'an empty available set',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries = [] },
+    },
+    {
+      name: 'a missing persisted source identity',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].benchmarkId = null },
+    },
+    {
+      name: 'a missing benchmark version',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].benchmarkVersion = null },
+    },
+    {
+      name: 'a missing generated timestamp',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].generatedAt = null },
+    },
+    {
+      name: 'a date-only generated timestamp in both scalar and entry fields',
+      mutate: (payload: any) => {
+        payload.benchmarkGeneratedAt = '2026-07-01'
+        payload.benchmarkProvenance.entries[0].generatedAt = '2026-07-01'
+      },
+    },
+    {
+      name: 'a missing source-as-of timestamp',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].sourceAsOf = null },
+    },
+    {
+      name: 'a space-separated source-as-of timestamp in both scalar and entry fields',
+      mutate: (payload: any) => {
+        payload.benchmarkAsOf = '2026-06-30 23:59:59'
+        payload.benchmarkProvenance.entries[0].sourceAsOf = '2026-06-30 23:59:59'
+      },
+    },
+    {
+      name: 'a missing source-window timestamp',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].sourceWindowStart = null },
+    },
+    {
+      name: 'a source-window timestamp with surrounding whitespace in both scalar and entry fields',
+      mutate: (payload: any) => {
+        payload.benchmarkWindowStart = ' 2026-04-01T00:00:00.000Z '
+        payload.benchmarkProvenance.entries[0].sourceWindowStart = ' 2026-04-01T00:00:00.000Z '
+      },
+    },
+    {
+      name: 'an invalid sample count',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].sampleCount = null },
+    },
+    {
+      name: 'a missing production-day basis',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].dayBasis = null },
+    },
+    {
+      name: 'a missing scope',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].scope = null },
+    },
+    {
+      name: 'a missing calendar identity',
+      mutate: (payload: any) => {
+        payload.benchmarkProvenance.entries[0].calendarRef = null
+        payload.benchmarkProvenance.entries[0].calendarVersion = null
+      },
+    },
+    {
+      name: 'a missing runtime publication key',
+      mutate: (payload: any) => {
+        payload.benchmarkProvenance.entries[0].source = 'runtime_publication'
+        payload.benchmarkProvenance.entries[0].benchmarkId = null
+      },
+    },
+    {
+      name: 'a missing cause identity',
+      mutate: (payload: any) => { payload.benchmarkProvenance.entries[0].source = 'cause_segment' },
+    },
+    {
+      name: 'entry reason codes that contradict availability',
+      mutate: (payload: any) => {
+        payload.benchmarkProvenance.entries[0].reasonCodes = ['benchmark_version_missing']
+      },
+    },
+    {
+      name: 'set reason codes that contradict availability',
+      mutate: (payload: any) => {
+        payload.benchmarkProvenanceReasonCodes = ['benchmark_version_missing']
+        payload.benchmarkProvenanceUnavailableReason = 'benchmark_version_missing'
+      },
+    },
+    {
+      name: 'a scalar sample count inconsistent with its set',
+      mutate: (payload: any) => { payload.benchmarkSampleCount = 25 },
+    },
+  ])('fails closed for available benchmark provenance with $name', async ({ mutate }) => {
+    const payload: any = completeAvailableBenchmarkResponse()
+    mutate(payload)
+    mocks.apiGet.mockResolvedValueOnce(payload)
+
+    const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+    expect(suggestion).toMatchObject({
+      benchmarkGeneratedAt: null,
+      benchmarkAsOf: null,
+      benchmarkWindowStart: null,
+      benchmarkVersion: null,
+      benchmarkSampleCount: null,
+      benchmarkDayBasis: null,
+      benchmarkScope: null,
+      benchmarkProvenanceAvailability: null,
+      benchmarkProvenanceReasonCodes: [],
+      benchmarkProvenanceUnavailableReason: null,
+      benchmarkProvenance: null,
+    })
+  })
+
+  it('accepts a runtime aggregate whose publication key is the public source identity', async () => {
+    const payload: any = completeAvailableBenchmarkResponse()
+    Object.assign(payload, {
+      benchmarkVersion: 'aggregate:industry:0123456789abcdef',
+      benchmarkScope: 'industry',
+      benchmarkSampleCount: 100,
+    })
+    Object.assign(payload.benchmarkProvenance.entries[0], {
+      source: 'runtime_publication',
+      benchmarkId: null,
+      publicationKey: 'runtime-industry-1',
+      benchmarkVersion: 'aggregate:industry:0123456789abcdef',
+      scope: 'industry',
+      sampleCount: 100,
+      calendarRef: null,
+      calendarVersion: null,
+      aggregateCalendarIdentities: [{ calendarRef: 'calendar-1', calendarVersion: 'calendar-v3' }],
+    })
+    mocks.apiGet.mockResolvedValueOnce(payload)
+
+    const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+    expect(suggestion).toMatchObject({
+      benchmarkProvenanceAvailability: 'available',
+      benchmarkScope: 'industry',
+      benchmarkProvenance: {
+        entries: [expect.objectContaining({
+          source: 'runtime_publication',
+          benchmarkId: null,
+          publicationKey: 'runtime-industry-1',
+        })],
+      },
+    })
+  })
+
+  it.each(['company', 'industry', 'global'] as const)(
+    'fails closed when malformed runtime %s aggregate JSON includes a benchmark id',
+    async (scope) => {
+      const payload: any = completeAvailableBenchmarkResponse()
+      Object.assign(payload, {
+        benchmarkVersion: `aggregate:${scope}:0123456789abcdef`,
+        benchmarkScope: scope,
+        benchmarkSampleCount: 100,
+      })
+      Object.assign(payload.benchmarkProvenance.entries[0], {
+        source: 'runtime_publication',
+        benchmarkId: 'forbidden-aggregate-id',
+        publicationKey: `runtime-${scope}-1`,
+        benchmarkVersion: `aggregate:${scope}:0123456789abcdef`,
+        scope,
+        sampleCount: 100,
+        calendarRef: null,
+        calendarVersion: null,
+        aggregateCalendarIdentities: [{ calendarRef: 'calendar-1', calendarVersion: 'calendar-v3' }],
+      })
+      mocks.apiGet.mockResolvedValueOnce(payload)
+
+      const suggestion = await getDurationSuggestion({ projectId: 'project-1' })
+
+      expect(suggestion).toMatchObject({
+        benchmarkGeneratedAt: null,
+        benchmarkAsOf: null,
+        benchmarkWindowStart: null,
+        benchmarkVersion: null,
+        benchmarkSampleCount: null,
+        benchmarkDayBasis: null,
+        benchmarkScope: null,
+        benchmarkProvenanceAvailability: null,
+        benchmarkProvenanceReasonCodes: [],
+        benchmarkProvenanceUnavailableReason: null,
+        benchmarkProvenance: null,
+      })
+    },
+  )
 
   it('does not expose or derive user-facing reference days from template fast estimates', async () => {
     mocks.apiGet.mockResolvedValueOnce({
@@ -129,9 +502,61 @@ describe('durationSuggestionsApi governed duration outputs', () => {
       durationOutputCode: 'remaining_forecast',
       durationOutputSemanticFieldName: 'remainingForecastDays',
       remainingForecastDays: 6,
+      remainingDuration: {
+        value: 6,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-15',
+        availability: 'available',
+        unavailableReason: null,
+      },
       remainingDurationDays: 99,
       forecastFinishDate: '2026-06-20',
       forecastDelayDays: 2,
+      forecastDelay: {
+        value: 2,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-15',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      probabilityDurationMetrics: {
+        p20RemainingDuration: {
+          value: 4,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        p50RemainingDuration: {
+          value: 6,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+        p80RemainingDuration: {
+          value: 9,
+          unit: 'construction_production_day',
+          calendarRef: 'work_calendar',
+          calendarVersion: 'calendar-v1',
+          timezone: 'Asia/Shanghai',
+          asOf: '2026-06-15',
+          availability: 'available',
+          unavailableReason: null,
+        },
+      },
       confidenceLevel: 'medium',
       confidenceScore: 66,
     })
@@ -143,7 +568,18 @@ describe('durationSuggestionsApi governed duration outputs', () => {
       durationOutputCode: 'remaining_forecast',
       durationOutputSemanticFieldName: 'remainingForecastDays',
       remainingForecastDays: 6,
+      remainingDuration: expect.objectContaining({
+        value: 6,
+        availability: 'available',
+      }),
       forecastFinishDate: '2026-06-20',
+      forecastDelay: expect.objectContaining({ value: 2, availability: 'available' }),
+      forecastDelayDays: 2,
+      probabilityDurationMetrics: expect.objectContaining({
+        p20RemainingDuration: expect.objectContaining({ value: 4, availability: 'available' }),
+        p50RemainingDuration: expect.objectContaining({ value: 6, availability: 'available' }),
+        p80RemainingDuration: expect.objectContaining({ value: 9, availability: 'available' }),
+      }),
     })
     expect(forecast).not.toHaveProperty('recommendedDurationDays')
     expect(forecast).not.toHaveProperty('remainingDurationDays')
@@ -176,6 +612,27 @@ describe('durationSuggestionsApi governed duration outputs', () => {
     expect(forecast).not.toHaveProperty('remainingDurationDays')
     expect(forecast).not.toHaveProperty('optimisticRemainingDays')
     expect(forecast).not.toHaveProperty('conservativeRemainingDays')
+  })
+
+  it('does not accept a delay risk index when the typed delay metric is unavailable', async () => {
+    mocks.apiGet.mockResolvedValueOnce({
+      taskId: 'task-1',
+      durationOutputCode: 'remaining_forecast',
+      durationOutputSemanticFieldName: 'remainingForecastDays',
+      remainingDuration: productionMetric(6),
+      forecastDelay: productionMetric(null),
+      forecastDelayDays: 0,
+      delayRiskIndex: 0,
+    })
+
+    const forecast = await getTaskDurationForecast('task-1')
+
+    expect(forecast.forecastDelay).toEqual(expect.objectContaining({
+      value: null,
+      availability: 'unavailable',
+    }))
+    expect(forecast.forecastDelayDays).toBeNull()
+    expect(forecast.delayRiskIndex).toBeNull()
   })
 
   it('does not expose naked recommended duration from remaining forecast responses', async () => {

@@ -17,6 +17,7 @@ export interface DurationNetworkProbabilityInput {
   dependencies: readonly CriticalPathDurationNetworkDependency[]
   simulationCount?: number
   scenarioCorrelation?: number
+  completionTargetDays?: number | null
 }
 
 export interface DurationNetworkProbabilityResult {
@@ -28,6 +29,8 @@ export interface DurationNetworkProbabilityResult {
   p20DurationDays: number | null
   p50DurationDays: number | null
   p80DurationDays: number | null
+  completionTargetDays: number | null
+  completionProbability: number | null
   inputHash: string
   fallbackReasons: string[]
 }
@@ -49,6 +52,12 @@ function normalizeSimulationCount(value: unknown) {
   return Number.isFinite(parsed)
     ? Math.round(clamp(parsed, 100, 5000))
     : DEFAULT_SIMULATION_COUNT
+}
+
+function normalizeCompletionTargetDays(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
 }
 
 function stableInput(input: DurationNetworkProbabilityInput) {
@@ -153,6 +162,8 @@ function fallback(
     p20DurationDays: null,
     p50DurationDays: null,
     p80DurationDays: null,
+    completionTargetDays: normalizeCompletionTargetDays(input.completionTargetDays),
+    completionProbability: null,
     inputHash,
     fallbackReasons: [...new Set(reasons)],
   }
@@ -181,7 +192,9 @@ export function simulateDurationNetworkProbability(
 ): DurationNetworkProbabilityResult {
   const serialized = stableInput(input)
   const inputHash = hashString(serialized)
-  const cached = readCached(serialized)
+  const completionTargetDays = normalizeCompletionTargetDays(input.completionTargetDays)
+  const cacheKey = `${serialized}:completion-target:${completionTargetDays ?? 'none'}`
+  const cached = readCached(cacheKey)
   if (cached) return cached
 
   if (input.tasks.length < 2) {
@@ -252,9 +265,13 @@ export function simulateDurationNetworkProbability(
     p20DurationDays: percentile(projectDurations, 0.2),
     p50DurationDays: percentile(projectDurations, 0.5),
     p80DurationDays: percentile(projectDurations, 0.8),
+    completionTargetDays,
+    completionProbability: completionTargetDays === null
+      ? null
+      : Number((projectDurations.filter((duration) => duration <= completionTargetDays).length / simulationCount).toFixed(6)),
     inputHash,
     fallbackReasons: [],
   }
-  writeCache(serialized, result)
+  writeCache(cacheKey, result)
   return result
 }

@@ -489,19 +489,9 @@ describe('schedule acceleration route', () => {
     const response = await request(buildApp())
       .post('/api/projects/project-1/schedule-acceleration/recommendations/adopt')
       .send({
-        proposal: {
-          source: 'target_end_compression',
-          targetEndDate: '2027-03-31',
-          naturalEndDate: '2027-04-30',
-          totalRecoverDays: 12,
-          remainingGapDays: 18,
-          accelerationTargetDays: 88,
-          actions: [{ type: 'crashing', affectedRowIds: ['task-1'], recoverDays: 12 }],
-        },
-        outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
-        outcomeMetadata: {
-          operationCount: 3,
-        },
+        recommendationId: 'recommendation-1',
+        recommendationHash: 'recommendation-hash-1',
+        taskCommitRequestId: 'task-commit-request-1',
       })
 
     expect(response.status).toBe(200)
@@ -513,16 +503,26 @@ describe('schedule acceleration route', () => {
     expect(mocks.recordScheduleAccelerationRecommendationAdoption).toHaveBeenCalledWith(expect.objectContaining({
       projectId: 'project-1',
       adoptedBy: 'user-1',
-      proposal: expect.objectContaining({
-        targetEndDate: '2027-03-31',
-        naturalEndDate: '2027-04-30',
-      }),
-      outcomeRef: 'task-list-commit:project-1:123:acceleration-reschedule',
-      outcomeMetadata: expect.objectContaining({
-        operationCount: 3,
-      }),
+      recommendationId: 'recommendation-1',
+      recommendationHash: 'recommendation-hash-1',
+      taskCommitRequestId: 'task-commit-request-1',
       runtimeConsumerObservationQueryExec: 'runtime-observation-query-exec',
     }))
+  })
+
+  it('rejects legacy proposal and outcome fields before recording adoption', async () => {
+    const response = await request(buildApp())
+      .post('/api/projects/project-1/schedule-acceleration/recommendations/adopt')
+      .send({
+        recommendationId: 'recommendation-1',
+        recommendationHash: 'sha256:proposal-1',
+        taskCommitRequestId: 'task-commit-request-1',
+        outcomeMetadata: { operationCount: 3 },
+      })
+
+    expect(response.status).toBe(400)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_ADOPTION_LEGACY_PAYLOAD_REJECTED' })
+    expect(mocks.recordScheduleAccelerationRecommendationAdoption).not.toHaveBeenCalled()
   })
 
   it('rejects recommendation adoption by read-only project members', async () => {

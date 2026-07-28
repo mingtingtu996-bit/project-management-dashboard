@@ -3,6 +3,11 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 import {
+  discoverAlgorithmTunablesFromRuntimeSource,
+  discoverAlgorithmTunablesInSource,
+} from './helpers/algorithmTunableSourceDiscovery.js'
+import * as registryModule from '../services/algorithmAssetLearnableParameterRegistryService.js'
+import {
   evaluateAlgorithmAssetParameterRuntimeUse,
   getAlgorithmAssetLearnableParameter,
   listAlgorithmAssetLearnableParameters,
@@ -26,6 +31,32 @@ function joinedSql(calls: Array<{ sql: string }>) {
 const serviceSourcePath = fileURLToPath(new URL('../services/algorithmAssetLearnableParameterRegistryService.ts', import.meta.url))
 
 describe('algorithmAssetLearnableParameterRegistryService', () => {
+  it('discovers structured algorithm settings without matching comments or strings', () => {
+    const discovered = discoverAlgorithmTunablesInSource(`
+      const documentation = 'simulationCount: 5, scenarioCorrelation: 0.1'
+      // const IGNORED_DEFAULT_WEIGHT = 0.5
+      const DEFAULT_REPO_ROOT = '/tmp/workbuddy'
+      const DEFAULT_DURATION_TIMEZONE = 'Asia/Shanghai'
+      const FORECAST_POLICY = {
+        simulationCount: 500,
+        nested: { scenarioCorrelation: 0.25 },
+      }
+      function run() {
+        engine({
+          simulationCount: 1000,
+          scenarioCorrelation: 0.35,
+        })
+      }
+    `, 'server/src/services/exampleForecastService.ts')
+
+    expect(discovered).toHaveLength(3)
+    expect(discovered).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sourceSymbol: 'FORECAST_POLICY', kind: 'declaration', line: 6 }),
+      expect.objectContaining({ sourceSymbol: 'run.simulationCount', kind: 'inline_call_option', line: 12 }),
+      expect.objectContaining({ sourceSymbol: 'run.scenarioCorrelation', kind: 'inline_call_option', line: 13 }),
+    ]))
+  })
+
   it('registers the required v1.4.22.3 learnable parameter families with governance fields', () => {
     const parameters = listAlgorithmAssetLearnableParameters()
     const keys = parameters.map((parameter) => parameter.parameterKey)
@@ -65,6 +96,81 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
       }))
     }
     expect(validateAlgorithmAssetLearnableParameterRegistry().status).toBe('pass')
+  })
+
+  it('keeps every source-defined service tunable explicitly governed or frozen', () => {
+    const inventoryFactory = (registryModule as typeof registryModule & {
+      listAlgorithmAssetTunableParameterSourceInventory?: () => Array<{
+        inventoryKey: string
+        classification: string
+        owner?: string
+        reason?: string
+        sourcePath: string
+        sourceSymbols: string[]
+        registryParameterKeys: string[]
+      }>
+    }).listAlgorithmAssetTunableParameterSourceInventory
+
+    expect(inventoryFactory).toEqual(expect.any(Function))
+
+    const inventory = inventoryFactory!()
+    const discovered = discoverAlgorithmTunablesFromRuntimeSource()
+    expect(discovered).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
+        sourceSymbol: 'DEFAULT_SIMULATION_COUNT',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/durationNetworkMonteCarloService.ts',
+        sourceSymbol: 'DEFAULT_SCENARIO_CORRELATION',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/constructionDependencyReplayCalibrationService.ts',
+        sourceSymbol: 'DEFAULT_ZERO_LAG_REVIEW_THRESHOLD_DAYS',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/progressVelocityLearningService.ts',
+        sourceSymbol: 'CROSS_PROJECT_SAMPLE_WEIGHT',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/projectHealthService.ts',
+        sourceSymbol: 'HEALTH_WEIGHTS',
+      }),
+      expect.objectContaining({
+        sourcePath: 'server/src/services/wbsReconciliationService.ts',
+        sourceSymbol: 'SIMILARITY_THRESHOLD',
+      }),
+    ]))
+
+    const classifiedSources = inventory.flatMap((entry) => entry.sourceSymbols.map((sourceSymbol) => ({
+      sourcePath: entry.sourcePath,
+      sourceSymbol,
+    })))
+    const discoveredSources = discovered.map(({ sourcePath, sourceSymbol }) => ({ sourcePath, sourceSymbol }))
+    const compareSources = (left: { sourcePath: string, sourceSymbol: string }, right: { sourcePath: string, sourceSymbol: string }) => (
+      left.sourcePath.localeCompare(right.sourcePath) || left.sourceSymbol.localeCompare(right.sourceSymbol)
+    )
+    expect([...classifiedSources].sort(compareSources)).toEqual(discoveredSources)
+    expect(new Set(classifiedSources.map((entry) => `${entry.sourcePath}::${entry.sourceSymbol}`)).size)
+      .toBe(classifiedSources.length)
+    expect(new Set(inventory.map((entry) => entry.inventoryKey)).size).toBe(inventory.length)
+
+    const registeredKeys = new Set(listAlgorithmAssetLearnableParameters().map((parameter) => parameter.parameterKey))
+    for (const entry of inventory) {
+      expect(entry.owner).toEqual(expect.any(String))
+      expect(entry.owner?.trim()).not.toBe('')
+      expect(entry.reason).toEqual(expect.any(String))
+      expect(entry.reason?.trim()).not.toBe('')
+      if (entry.classification === 'governed_learnable') {
+        expect(entry.registryParameterKeys.length).toBeGreaterThan(0)
+        for (const parameterKey of entry.registryParameterKeys) {
+          expect(registeredKeys).toContain(parameterKey)
+        }
+      } else {
+        expect(entry.classification).toBe('frozen')
+        expect(entry.registryParameterKeys).toEqual([])
+      }
+    }
   })
 
   it('persists learnable parameter registry definitions without granting runtime writes', async () => {

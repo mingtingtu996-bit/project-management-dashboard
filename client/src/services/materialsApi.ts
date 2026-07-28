@@ -117,10 +117,10 @@ export interface MaterialTaskDelayRisk {
   progress_deviation: number
   durationOutputCode?: 'remaining_forecast' | string | null
   durationOutputSemanticFieldName?: 'remainingForecastDays' | string | null
-  remainingForecastDays: number
+  remainingForecastDays: number | null
   obstacle_count: number
-  delay_probability: number
-  delay_risk: 'low' | 'medium' | 'high'
+  delay_probability: number | null
+  delay_risk: 'low' | 'medium' | 'high' | 'unavailable'
   risk_factors: string[]
   recommendations: string[]
 }

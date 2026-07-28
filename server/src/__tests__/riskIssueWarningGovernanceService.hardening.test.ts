@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 const mocks = vi.hoisted(() => {
   const emit = vi.fn(async (_payload: Record<string, unknown>) => undefined)
+  const createIssue = vi.fn(async (input: Record<string, unknown>) => ({ id: 'issue-from-condition', ...input }))
   const confirmWarningAsRiskOnChain = vi.fn(async () => ({ id: 'risk-from-chain' }))
   const convertRiskToIssueAtomic = vi.fn(async () => ({ id: 'issue-from-chain' }))
   const updateRows: Array<Record<string, unknown>> = []
@@ -60,6 +61,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     emit,
+    createIssue,
     confirmWarningAsRiskOnChain,
     convertRiskToIssueAtomic,
     updateRows,
@@ -69,6 +71,7 @@ const mocks = vi.hoisted(() => {
 })
 
 vi.mock('../services/dbService.js', () => ({
+  createIssue: mocks.createIssue,
   supabase: {
     from: mocks.from,
   },
@@ -88,6 +91,8 @@ vi.mock('../services/upgradeChainService.js', () => ({
 import {
   confirmWarningAsRisk,
   convertRiskToIssue,
+  ensureIssueFromExpiredAcceptance,
+  ensureIssueFromExpiredCondition,
   markSourceResolved,
   syncBusinessWarnings,
   upsertWarningsFromGovernanceSignals,
@@ -95,6 +100,7 @@ import {
 
 beforeEach(() => {
   mocks.emit.mockClear()
+  mocks.createIssue.mockClear()
   mocks.confirmWarningAsRiskOnChain.mockClear()
   mocks.convertRiskToIssueAtomic.mockClear()
   mocks.updateRows.splice(0, mocks.updateRows.length)
@@ -153,6 +159,48 @@ beforeEach(() => {
 })
 
 describe('risk/issue/warning governance service hardening', () => {
+  it('creates an expired-condition issue through the execution-fact governed write chain', async () => {
+    await expect(ensureIssueFromExpiredCondition({
+      id: 'condition-1',
+      project_id: 'project-1',
+      task_id: 'task-1',
+      name: 'Site handover',
+      description: 'The site handover condition expired.',
+    })).resolves.toBe('issue-from-condition')
+
+    expect(mocks.createIssue).toHaveBeenCalledWith(expect.objectContaining({
+      project_id: 'project-1',
+      task_id: 'task-1',
+      source_type: 'condition_expired',
+      source_entity_type: 'task_condition',
+      source_entity_id: 'condition-1',
+      status: 'open',
+    }))
+    expect(mocks.queryLog).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'issues', method: 'insert' }),
+    ]))
+  })
+
+  it('creates an expired-acceptance issue through the execution-fact governed write chain', async () => {
+    await expect(ensureIssueFromExpiredAcceptance({
+      id: 'acceptance-1',
+      project_id: 'project-1',
+      acceptance_name: 'Fire acceptance',
+      description: 'The acceptance plan expired.',
+    })).resolves.toBe('issue-from-condition')
+
+    expect(mocks.createIssue).toHaveBeenCalledWith(expect.objectContaining({
+      project_id: 'project-1',
+      source_type: 'condition_expired',
+      source_entity_type: 'acceptance_plan',
+      source_entity_id: 'acceptance-1',
+      status: 'open',
+    }))
+    expect(mocks.queryLog).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'issues', method: 'insert' }),
+    ]))
+  })
+
   it('creates warnings only from promoted deduped governance signals and persists attribution metadata', async () => {
     const result = await upsertWarningsFromGovernanceSignals([
       {
@@ -279,6 +327,46 @@ describe('risk/issue/warning governance service hardening', () => {
       'execution_impact',
       'execution_impact',
     ])
+  })
+
+  it('uses the project business date for both condition and acceptance overdue scans', async () => {
+    const dateFilters: Array<{ table: string; field: string; value: unknown }> = []
+    mocks.from.mockImplementation((table: string) => {
+      const query: Record<string, any> = {
+        select: vi.fn(() => query),
+        update: vi.fn(() => query),
+        insert: vi.fn(() => query),
+        eq: vi.fn(() => query),
+        in: vi.fn(() => query),
+        is: vi.fn(() => query),
+        lt: vi.fn((field: string, value: unknown) => {
+          dateFilters.push({ table, field, value })
+          return query
+        }),
+        match: vi.fn(() => query),
+        limit: vi.fn(() => query),
+        or: vi.fn(() => query),
+        maybeSingle: vi.fn(async () => ({ data: null, error: null })),
+        single: vi.fn(async () => ({ data: null, error: null })),
+        catch: vi.fn(async () => undefined),
+        then: vi.fn((resolve: any) => resolve({
+          data: table === 'projects'
+            ? [{ id: 'project-1', metadata: { business_timezone: 'America/Los_Angeles' } }]
+            : [],
+          error: null,
+        })),
+      }
+      return query
+    })
+
+    await syncBusinessWarnings('project-1', {
+      now: new Date('2026-07-26T00:30:00.000Z'),
+    })
+
+    expect(dateFilters).toEqual(expect.arrayContaining([
+      { table: 'task_conditions', field: 'target_date', value: '2026-07-25' },
+      { table: 'acceptance_plans', field: 'planned_date', value: '2026-07-25' },
+    ]))
   })
 
   it('delegates warning and risk escalation to the atomic upgrade chain', async () => {

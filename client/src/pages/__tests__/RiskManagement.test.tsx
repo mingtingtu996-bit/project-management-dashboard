@@ -8,6 +8,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import RiskManagement from '../RiskManagement'
+import { resetStructuredCauseTaxonomyCacheForTests } from '@/hooks/useStructuredCauseTaxonomy'
 import { useStore } from '@/hooks/useStore'
 import { apiDelete, apiGet, apiPost, apiPut } from '@/lib/apiClient'
 
@@ -52,6 +53,19 @@ const mockedUseParams = vi.mocked(useParams)
 const fetchMock = vi.fn()
 const originalConsoleError = console.error
 let consoleErrorSpy: ReturnType<typeof vi.spyOn> | null = null
+
+const causeTaxonomyFixture = {
+  version: 'v1.0.0',
+  entries: [
+    ['predecessor_delay', '前置工作传导'], ['material_shortage', '材料短缺或晚到'],
+    ['labor_shortage', '劳动力不足'], ['equipment_unavailable', '设备机械不可用'],
+    ['design_change', '设计变更'], ['drawing_delay', '图纸或审批延误'],
+    ['quality_rework', '质量返工'], ['weather_impact', '天气影响'],
+    ['owner_decision', '业主决策等待'], ['government_inspection', '政府检查审批'],
+    ['site_capacity_pressure', '现场承载不足'], ['workflow_sequence', '工序顺序约束'],
+    ['external_readiness', '外部条件未就绪'], ['other', '其他'],
+  ].map(([code, label], priority) => ({ code, label, category: 'test', linkedDeviationReasonTypes: [], priority })),
+}
 
 function flush() {
   return new Promise((resolve) => setTimeout(resolve, 0))
@@ -192,6 +206,7 @@ describe('RiskManagement', () => {
   let obstaclesData: Array<Record<string, unknown>>
 
   beforeEach(() => {
+    resetStructuredCauseTaxonomyCacheForTests()
     document.body.appendChild(container)
     container.innerHTML = ''
     root = createRoot(container)
@@ -288,6 +303,7 @@ describe('RiskManagement', () => {
     })
 
     mockedApiGet.mockImplementation(async (url: string) => {
+      if (url === '/api/cause-attributions/taxonomy') return causeTaxonomyFixture as never
       if (url.includes('/api/risk-statistics/trend')) {
         return {
           trend: [
@@ -1274,6 +1290,42 @@ describe('RiskManagement', () => {
         closure_cause_attribution_id: 'cause-risk-close-1',
       }),
     )
+  })
+
+  it('keeps structured closure submission disabled when the current taxonomy is empty', async () => {
+    risksData = [{
+      id: 'risk-empty-taxonomy', project_id: projectId, task_id: 'task-7', title: '材料到货延期风险',
+      description: '幕墙材料未按计划到场', source_type: 'obstacle_escalated', level: 'high', probability: 70,
+      impact: 80, status: 'mitigating', created_at: '2026-04-01T00:00:00.000Z',
+      updated_at: '2026-04-03T00:00:00.000Z', version: 5,
+    }]
+    issuesData = []
+    warningsData = []
+    obstaclesData = []
+    const defaultGet = mockedApiGet.getMockImplementation()
+    mockedApiGet.mockImplementation(async (url: string) => (
+      url === '/api/cause-attributions/taxonomy'
+        ? { version: 'v1.0.0', entries: [] } as never
+        : defaultGet?.(url) as never
+    ))
+
+    await act(async () => {
+      root?.render(<RiskManagement />)
+      await flush()
+      await flush()
+    })
+    clickTestId(container, 'risk-stream-risks')
+    await waitForCondition(() => container.textContent?.includes('材料到货延期风险'), container)
+    clickButtonText(container, '关闭风险')
+    await waitForCondition(() => Boolean(document.body.querySelector('[data-testid="structured-close-dialog"]')))
+    setElementValue(
+      document.body.querySelector('[data-testid="closure-result-summary"]') as HTMLTextAreaElement,
+      '材料已到场。',
+    )
+
+    const submit = document.body.querySelector('[data-testid="structured-close-submit"]') as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+    expect(mockedApiPost.mock.calls.some(([url]) => String(url).includes('/cause-attributions/'))).toBe(false)
   })
 
   it('records a controlled cause before submitting a structured issue closure outcome', async () => {

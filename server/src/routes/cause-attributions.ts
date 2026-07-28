@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 
 import { getRequestCompanyId } from '../auth/companyContext.js'
+import { CANONICAL_STRUCTURED_CAUSE_CODES } from '../domain/structuredCauseTaxonomy.js'
 import { authenticate, requireProjectEditor, requireProjectMember } from '../middleware/auth.js'
 import { asyncHandler } from '../middleware/errorHandler.js'
 import { validate } from '../middleware/validation.js'
@@ -13,6 +14,8 @@ import {
   persistStructuredCauseCandidates,
   recordUserConfirmedStructuredCauseAttribution,
   rejectStructuredCauseAttribution,
+  STRUCTURED_CAUSE_TAXONOMY,
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
 } from '../services/structuredCauseAttributionService.js'
 
 const router = Router()
@@ -43,10 +46,15 @@ const inferBodySchema = z.object({
   rawText: z.string().trim().max(4000).optional().nullable(),
 })
 
+const eventTypeSchema = z.enum(['delay', 'completion', 'closure', 'baseline_change'])
+const causeRoleSchema = z.enum(['primary', 'contributing', 'transmitted'])
+
 const listQuerySchema = z.object({
   subjectType: z.enum(['task', 'risk', 'issue', 'baseline_change']).optional(),
   subjectId: z.string().trim().min(1).optional(),
   status: z.enum(['candidate', 'confirmed', 'rejected', 'superseded']).optional(),
+  eventType: eventTypeSchema.optional(),
+  causeRole: causeRoleSchema.optional(),
 })
 
 const responsibilityClassSchema = z.enum([
@@ -57,26 +65,11 @@ const responsibilityClassSchema = z.enum([
   'undetermined',
 ])
 
-const causeCodeSchema = z.enum([
-  'predecessor_delay',
-  'material_shortage',
-  'labor_shortage',
-  'equipment_unavailable',
-  'design_change',
-  'drawing_delay',
-  'quality_rework',
-  'weather_impact',
-  'owner_decision',
-  'government_inspection',
-  'site_capacity_pressure',
-  'workflow_sequence',
-  'external_readiness',
-  'other',
-])
+const causeCodeSchema = z.enum(CANONICAL_STRUCTURED_CAUSE_CODES)
 
 const userConfirmedCauseBodySchema = z.object({
   causeCode: causeCodeSchema,
-  causeRole: z.enum(['primary', 'contributing', 'transmitted']).default('primary'),
+  causeRole: causeRoleSchema.default('primary'),
   eventType: z.enum(['delay', 'completion']).optional(),
   rawText: z.string().trim().min(1).max(4000),
   responsibilityClass: responsibilityClassSchema.optional().nullable(),
@@ -104,6 +97,17 @@ function requireCompanyId(req: Parameters<typeof getRequestCompanyId>[0]) {
   }
   return companyId
 }
+
+router.get('/taxonomy', (_req, res) => {
+  res.json({
+    success: true,
+    data: {
+      version: STRUCTURED_CAUSE_TAXONOMY_VERSION,
+      entries: STRUCTURED_CAUSE_TAXONOMY,
+    },
+    timestamp: new Date().toISOString(),
+  })
+})
 
 router.post(
   '/projects/:projectId/tasks/:taskId/infer',
@@ -164,6 +168,8 @@ router.get(
       subjectType: req.query.subjectType as 'task' | 'risk' | 'issue' | 'baseline_change' | undefined,
       subjectId: String(req.query.subjectId ?? '').trim() || null,
       status: req.query.status as 'candidate' | 'confirmed' | 'rejected' | 'superseded' | undefined,
+      eventType: req.query.eventType as 'delay' | 'completion' | 'closure' | 'baseline_change' | undefined,
+      causeRole: req.query.causeRole as 'primary' | 'contributing' | 'transmitted' | undefined,
     })
     res.json({ success: true, data: rows, timestamp: new Date().toISOString() })
   }),

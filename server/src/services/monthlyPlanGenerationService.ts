@@ -62,6 +62,7 @@ import {
   type PlanningReplayCalibrationReadback,
 } from './planningReplayCalibrationService.js'
 import {
+  effectiveConstructionCalendarBasis,
   isConstructionProductionDay,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
@@ -224,8 +225,27 @@ export type MonthWindow = {
 type MonthlyE2ForecastSummary = {
   remainingDurationDays: number | null
   forecastFinishDate: string | null
-  forecastDelayDays: number
+  forecastDelayDays: number | null
   confidenceLevel: string
+}
+
+function readAvailableProductionDuration(
+  metric: { value?: unknown; unit?: unknown; availability?: unknown } | null | undefined,
+) {
+  if (metric?.availability !== 'available' || metric.unit !== 'construction_production_day') return null
+  const value = Number(metric.value)
+  return Number.isFinite(value) ? value : null
+}
+
+function toMonthlyE2ForecastSummary(forecast: Awaited<ReturnType<typeof forecastBatchTasks>>[number]): MonthlyE2ForecastSummary {
+  const remainingDurationDays = readAvailableProductionDuration(forecast.remainingDuration)
+  const forecastDelayDays = readAvailableProductionDuration(forecast.forecastDelay)
+  return {
+    remainingDurationDays,
+    forecastFinishDate: remainingDurationDays === null ? null : forecast.forecastFinishDate,
+    forecastDelayDays,
+    confidenceLevel: normalizeText(forecast.confidenceLevel) || 'unknown',
+  }
 }
 
 type MonthlyE2InclusionContext = {
@@ -386,12 +406,7 @@ async function buildMonthlyE2InclusionContext(
     for (const forecast of forecasts) {
       const taskId = normalizeText(forecast.taskId)
       if (!taskId) continue
-      const summary: MonthlyE2ForecastSummary = {
-        remainingDurationDays: forecast.remainingDurationDays,
-        forecastFinishDate: forecast.forecastFinishDate,
-        forecastDelayDays: Number(forecast.forecastDelayDays ?? 0),
-        confidenceLevel: normalizeText(forecast.confidenceLevel) || 'unknown',
-      }
+      const summary = toMonthlyE2ForecastSummary(forecast)
       forecastsByTaskId.set(taskId, summary)
       if (dateFallsInMonth(summary.forecastFinishDate, monthWindow)) {
         includedTaskIds.add(taskId)
@@ -1246,7 +1261,7 @@ async function getForecastMetrics(
       forecastsByTaskId: new Map<string, {
         remainingDurationDays: number | null
         forecastFinishDate: string | null
-        forecastDelayDays: number
+        forecastDelayDays: number | null
         confidenceLevel: string
       }>(),
     }
@@ -1259,17 +1274,12 @@ async function getForecastMetrics(
       : []
     const forecastsByTaskId = new Map<string, MonthlyE2ForecastSummary>(precomputed?.forecastsByTaskId ?? [])
     for (const forecast of forecasts) {
-      forecastsByTaskId.set(forecast.taskId, {
-        remainingDurationDays: forecast.remainingDurationDays,
-        forecastFinishDate: forecast.forecastFinishDate,
-        forecastDelayDays: Number(forecast.forecastDelayDays ?? 0),
-        confidenceLevel: forecast.confidenceLevel,
-      })
+      forecastsByTaskId.set(forecast.taskId, toMonthlyE2ForecastSummary(forecast))
     }
     return [...forecastsByTaskId.entries()].reduce((summary, [taskId, forecast]) => {
       if (!taskIdSet.has(taskId)) return summary
-      const delay = Number(forecast.forecastDelayDays ?? 0)
-      if (delay > 0) {
+      const delay = forecast.forecastDelayDays
+      if (delay !== null && delay > 0) {
         summary.forecastDelayedCount += 1
         summary.maxForecastDelayDays = Math.max(summary.maxForecastDelayDays, delay)
       }
@@ -1288,7 +1298,7 @@ async function getForecastMetrics(
       forecastsByTaskId: new Map<string, {
         remainingDurationDays: number | null
         forecastFinishDate: string | null
-        forecastDelayDays: number
+        forecastDelayDays: number | null
         confidenceLevel: string
       }>(),
     })
@@ -1301,7 +1311,7 @@ async function getForecastMetrics(
       forecastsByTaskId: new Map<string, {
         remainingDurationDays: number | null
         forecastFinishDate: string | null
-        forecastDelayDays: number
+        forecastDelayDays: number | null
         confidenceLevel: string
       }>(),
     }
@@ -1372,7 +1382,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
       effectiveCapacityFactor: 1,
       basis: 'estimated_workday_default_capacity_ceiling',
       realCapacityPolicy: 'default_capacity_not_real_field_capacity',
-      calendarBasis: constructionCalendar?.basis ?? 'calendar_day',
+      calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
       calendarSource: 'resolveConstructionCalendarContext',
       calendarShutdownDeductedDays,
     }
@@ -1389,7 +1399,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
     effectiveCapacityFactor,
     basis: 'workday_default_capacity_with_calendar_factor_ceiling',
     realCapacityPolicy: 'default_capacity_not_real_field_capacity',
-    calendarBasis: constructionCalendar?.basis ?? 'calendar_day',
+    calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
     calendarSource: 'resolveConstructionCalendarContext',
     calendarShutdownDeductedDays,
   }
@@ -1534,11 +1544,11 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
     return new Map(items.map((item) => {
       const taskId = normalizeText(item.source_task_id)
       const task = taskId ? byTaskId.get(taskId) : null
-      const floatDays = task ? Number(task.floatDays ?? 0) : null
+      const floatDays = readAvailableProductionDuration(task?.float)
       return [getStableCandidateKey(item), {
         fresh_float_days: floatDays,
-        critical_float_tier: criticalFloatTier(floatDays),
         fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
+        ...(floatDays === null ? {} : { critical_float_tier: criticalFloatTier(floatDays) }),
       }]
     }))
   } catch (error) {

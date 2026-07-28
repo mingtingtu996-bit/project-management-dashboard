@@ -11,7 +11,7 @@ function productionMetric(value: number | null, availability: 'available' | 'una
     calendarRef: availability === 'available' ? 'work_calendar' : null,
     calendarVersion: availability === 'available' ? 'calendar-v1' : null,
     timezone: 'Asia/Shanghai',
-    asOf: '2026-07-07',
+    asOf: '2026-06-30',
     availability,
     unavailableReason: availability === 'available' ? null : 'construction_calendar_identity_missing',
   }
@@ -49,6 +49,19 @@ describe('withTaskScheduleEvidence', () => {
           riskP20DurationDays: 198,
           riskP50DurationDays: 230,
           riskP80DurationDays: 276,
+          durationRiskDistribution: {
+            p20Duration: productionMetric(200),
+            p50Duration: productionMetric(230),
+            p80Duration: productionMetric(242),
+            reserveDuration: productionMetric(12),
+            source: 'duration_benchmarks',
+            scope: 'company',
+            sampleCount: 24,
+            generatedAt: '2026-07-01T08:00:00.000Z',
+            sourceAsOf: '2026-06-30T23:59:59.000Z',
+            availability: 'available',
+            unavailableReason: null,
+          },
           durationRiskRange: {
             p20Days: 198,
             p50Days: 230,
@@ -58,6 +71,19 @@ describe('withTaskScheduleEvidence', () => {
         durationAssetCalculation: {
           runtimeReferenceDaysConsumed: true,
           runtimeReferenceDaysP50Days: 220,
+          runtimeReferenceDaysDurationRiskDistribution: {
+            p20Duration: productionMetric(210),
+            p50Duration: productionMetric(220),
+            p80Duration: productionMetric(230),
+            reserveDuration: productionMetric(10),
+            source: 'duration_benchmarks',
+            scope: 'company',
+            sampleCount: 24,
+            generatedAt: '2026-07-01T08:00:00.000Z',
+            sourceAsOf: '2026-06-30T23:59:59.000Z',
+            availability: 'available',
+            unavailableReason: null,
+          },
           processSeasonalDurationAssetConsumed: true,
           processSeasonalClimateSignal: 'rainy_season',
         },
@@ -68,15 +94,48 @@ describe('withTaskScheduleEvidence', () => {
 
     const row = withTaskScheduleEvidence(task, networkSchedule(0, 2))
 
-    expect(row.durationRiskRangeLabel).toBe('建议预留 46 天')
+    expect(row.durationRiskRangeLabel).toBe('建议预留 12 个生产日')
     expect(row.durationRiskRangeLabel).not.toMatch(/P20|P50|P80/)
     expect(row.criticalFloatLabel).toBe('总浮时 0 个生产日 / 自由浮时 2 个生产日')
     expect(row.criticalFloatLabel).not.toContain('999')
-    expect(row.durationAssetEvidenceLabel).toBe('施工日历 2 个窗口；运行样本 220 天；季节修正 雨季')
+    expect(row.durationAssetEvidenceLabel).toBe('施工日历 2 个窗口；运行样本 220 个生产日；季节修正 雨季')
     expect(row.durationAssetEvidenceLabel).not.toMatch(/P20|P50|P80/)
     expect(row.durationSuggestion).toEqual(expect.objectContaining({
       riskP50DurationDays: 230,
     }))
+  })
+
+  it('does not mislabel a generic suggestion distribution as runtime sample evidence', () => {
+    const task = {
+      id: 'task-runtime-without-specific-distribution',
+      project_id: 'project-1',
+      title: 'Runtime provenance gap',
+      standard_task_metadata: {
+        durationSuggestion: {
+          durationRiskDistribution: {
+            p20Duration: productionMetric(200),
+            p50Duration: productionMetric(230),
+            p80Duration: productionMetric(242),
+            reserveDuration: productionMetric(12),
+            source: 'duration_benchmarks',
+            scope: 'company',
+            sampleCount: 24,
+            generatedAt: '2026-07-01T08:00:00.000Z',
+            sourceAsOf: '2026-06-30T23:59:59.000Z',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
+        durationAssetCalculation: {
+          runtimeReferenceDaysConsumed: true,
+          runtimeReferenceDaysP50Days: 220,
+        },
+      },
+      created_at: '2026-07-07T00:00:00.000Z',
+      updated_at: '2026-07-07T00:00:00.000Z',
+    } satisfies Task
+
+    expect(withTaskScheduleEvidence(task).durationAssetEvidenceLabel).toBe('运行样本 生产日口径不可用')
   })
 
   it('keeps CPM float evidence fail-closed when typed calendar identity is unavailable', () => {

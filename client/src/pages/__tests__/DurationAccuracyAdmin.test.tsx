@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
@@ -19,7 +20,11 @@ vi.mock('@/services/v14231ReadinessApi', async () => {
   }
 })
 
-const { default: DurationAccuracyAdmin } = await import('../DurationAccuracyAdmin')
+const { default: DurationAccuracyAdminPage } = await import('../DurationAccuracyAdmin')
+
+function DurationAccuracyAdmin() {
+  return <MemoryRouter><DurationAccuracyAdminPage /></MemoryRouter>
+}
 
 const summary = {
   projectId: null,
@@ -129,6 +134,11 @@ describe('DurationAccuracyAdmin', () => {
         requiresLiveEvidenceForUpgrade: true,
       },
     }))
+  })
+
+  it('renders the unified duration assets accuracy link', async () => {
+    render(<DurationAccuracyAdmin />)
+    expect(await screen.findByRole('link', { name: '\u6253\u5f00\u7edf\u4e00\u5de5\u671f\u8d44\u4ea7\u9875' })).toHaveAttribute('href', '/admin/duration-assets?tab=accuracy')
   })
 
   it('renders real samples, replay, publications, runtime calls and observations without exposing dangerous commands', async () => {

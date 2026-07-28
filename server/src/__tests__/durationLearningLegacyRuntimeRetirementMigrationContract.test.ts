@@ -161,7 +161,12 @@ describe('duration learning legacy runtime retirement migration', () => {
     expect(nextSourceIndex).toBeGreaterThan(sourceIndex)
     expect(clean.slice(sourceIndex + sourceHeader.length, nextSourceIndex).trim()).toBe(migration)
     expect(clean.indexOf('Source: 323_duration_learning_runtime_evidence_outbox.sql')).toBeGreaterThan(sourceIndex)
-    expect(clean).toContain('CANONICAL: current clean bootstrap bundle, synchronized through migration 323')
+    const latestBundledMigration = Math.max(
+      ...Array.from(clean.matchAll(/^-- Source: (\d+)_/gm), (match) => Number(match[1])),
+    )
+    expect(clean.split('\n', 1)[0]).toBe(
+      `-- CANONICAL: current clean bootstrap bundle, synchronized through migration ${latestBundledMigration}`,
+    )
   })
 
   it('removes production-reachable legacy runtime services after canonical 315 wiring', () => {

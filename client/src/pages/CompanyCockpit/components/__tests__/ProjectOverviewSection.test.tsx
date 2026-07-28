@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
+import type { DurationMetricDto } from '@/lib/durationMetric'
+
 import { ProjectOverviewSection } from '../ProjectOverviewSection'
 import type { ProjectRow } from '../../types'
 
@@ -39,6 +41,41 @@ function buildProjectRow(index: number, overrides: ProjectRowOverride = {}): Pro
     deliveryDaysRemaining: 30,
     ...(overrides as Partial<ProjectRow>),
   }
+}
+
+function durationMetric(
+  value: number | null,
+  unit: DurationMetricDto['unit'],
+  availability: DurationMetricDto['availability'] = 'available',
+): DurationMetricDto {
+  return {
+    value: availability === 'available' ? value : null,
+    unit,
+    calendarRef: availability === 'available'
+      ? unit === 'calendar_day' ? 'gregorian' : 'calendar-project-1'
+      : null,
+    calendarVersion: availability === 'available'
+      ? unit === 'calendar_day' ? 'gregorian-v1' : 'calendar-project-1-v3'
+      : null,
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-28',
+    availability,
+    unavailableReason: availability === 'available' ? null : 'construction_calendar_unavailable',
+  }
+}
+
+function buildDeliveryRow(
+  futureDueWindow: DurationMetricDto,
+  actualOverdue: DurationMetricDto | null,
+) {
+  const row = buildProjectRow(1)
+  row.summary = {
+    ...row.summary,
+    plannedEndDate: '2026-07-14',
+    futureDueWindow,
+    actualOverdue,
+  } as never
+  return row
 }
 
 const defaultProps = {
@@ -94,6 +131,45 @@ describe('ProjectOverviewSection', () => {
     expect(screen.queryByText('健康信号 0')).not.toBeInTheDocument()
     expect(screen.queryByText('0%')).not.toBeInTheDocument()
     expect(screen.queryByText('风险数 0')).not.toBeInTheDocument()
+  })
+
+  it('renders actual overdue from the production-day fact instead of the negative Gregorian window', () => {
+    renderSection([
+      buildDeliveryRow(
+        durationMetric(-14, 'calendar_day'),
+        durationMetric(2, 'construction_production_day'),
+      ),
+    ])
+
+    expect(screen.getByTestId('company-project-delivery-hint')).toHaveTextContent(
+      '计划交付 2026-07-14 · 已延期 2 个生产日',
+    )
+    expect(screen.getByTestId('company-project-delivery-hint')).not.toHaveTextContent('14 个日历天')
+  })
+
+  it('renders an explicit unavailable state when actual overdue lacks calendar authority', () => {
+    renderSection([
+      buildDeliveryRow(
+        durationMetric(-14, 'calendar_day'),
+        durationMetric(null, 'construction_production_day', 'unavailable'),
+      ),
+    ])
+
+    expect(screen.getByTestId('company-project-delivery-hint')).toHaveTextContent(
+      '计划交付 2026-07-14 · 实际延期口径暂不可用',
+    )
+    expect(screen.getByTestId('company-project-delivery-hint')).not.toHaveTextContent('14 个日历天')
+    expect(screen.getByTestId('company-project-delivery-hint')).not.toHaveTextContent('已延期 0')
+  })
+
+  it('renders a positive future due window as a Gregorian countdown', () => {
+    renderSection([
+      buildDeliveryRow(durationMetric(14, 'calendar_day'), null),
+    ])
+
+    expect(screen.getByTestId('company-project-delivery-hint')).toHaveTextContent(
+      '计划交付 2026-07-14 · 剩余 14 个日历天',
+    )
   })
 
   it('routes destructive project actions through the row action menu', async () => {

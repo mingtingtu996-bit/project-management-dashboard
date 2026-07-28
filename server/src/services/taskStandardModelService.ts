@@ -12,6 +12,7 @@ import { clearCriticalPathCache } from './criticalPathHelpers.js'
 import { clearProjectCriticalPathSnapshotCache } from './projectCriticalPathService.js'
 import { getStatusLabel, getVisualTone, normalizeStatus } from './statusDictionaryService.js'
 import { deriveTaskUnifiedStatus } from './taskStatusDerivationService.js'
+import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
 
 type TransactionClientLike = {
   query: (sql: string, params?: unknown[]) => Promise<{ rows?: unknown[]; rowCount?: number }>
@@ -250,6 +251,7 @@ export interface NormalizedTaskDependencyWrite {
 
 export const TASK_DEPENDENCY_SOURCE_PRIORITY = {
   manual: 100,
+  target_end_compression: 95,
   current_task_fact: 90,
   template_internal_flow: 60,
   template_cross_item_workflow: 55,
@@ -303,6 +305,15 @@ function taskDependencyError(code: string, message: string, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode })
 }
 
+function assertFormalTaskDependencyInput(dependency: unknown) {
+  if (isUnconfirmedHeuristicDependency(dependency)) {
+    throw taskDependencyError(
+      'TASK_DEPENDENCY_CANDIDATE_ONLY',
+      'Unpublished heuristic dependency evidence cannot be written to task_dependencies',
+    )
+  }
+}
+
 export async function validateTaskDependencies(
   taskId: string,
   dependencies: TaskDependencyWriteInput[],
@@ -313,6 +324,7 @@ export async function validateTaskDependencies(
   if (!scopedProjectId) {
     throw taskDependencyError('TASK_DEPENDENCY_PROJECT_REQUIRED', 'Expected project id is required')
   }
+  dependencies.forEach(assertFormalTaskDependencyInput)
   let task: { project_id?: string | null } | null = null
   if (transactionClient) {
     const taskResult = await transactionClient.query(
@@ -449,13 +461,16 @@ export async function replaceTaskDependencies(
   const transactionClient = isDatabaseTransactionActive() ? await getClient() : null
   const validation = await validateTaskDependencies(taskId, dependencies, projectId, transactionClient)
   const client = transactionClient ?? await getClient()
+  const ownsTransaction = !transactionClient
   const hasExplicitUserWrites = validation.dependencies.some((dependency) => (
     isExplicitUserDependencySource(dependency.source_type)
   ))
   const preserveCurrentTaskFacts = options.preserveCurrentTaskFacts ?? !hasExplicitUserWrites
 
   try {
-    await client.query('BEGIN')
+    if (ownsTransaction) {
+      await client.query('BEGIN')
+    }
 
     const { rows: activeDependencies } = await client.query(
       `SELECT id, dependency_task_id, source_type
@@ -573,7 +588,9 @@ export async function replaceTaskDependencies(
       })
     }
 
-    await client.query('COMMIT')
+    if (ownsTransaction) {
+      await client.query('COMMIT')
+    }
     await registerDatabasePostCommitEffect('task_dependencies_replaced', async () => {
       clearCriticalPathCache(validation.projectId)
       clearProjectCriticalPathSnapshotCache(validation.projectId)
@@ -581,10 +598,14 @@ export async function replaceTaskDependencies(
     })
     return insertedRows
   } catch (error: any) {
-    await client.query('ROLLBACK').catch(() => {})
+    if (ownsTransaction) {
+      await client.query('ROLLBACK').catch(() => {})
+    }
     throw taskDependencyError('TASK_DEPENDENCY_WRITE_FAILED', `Failed to write task dependencies: ${error?.message ?? String(error)}`, 500)
   } finally {
-    client.release()
+    if (ownsTransaction) {
+      client.release()
+    }
   }
 }
 
@@ -599,7 +620,6 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
   if (!projectId) {
     throw taskDependencyError('TASK_DEPENDENCY_PROJECT_REQUIRED', 'Project id is required')
   }
-
   const dependencyBySignature = new Map<string, {
     task_id: string
     dependency_task_id: string
@@ -610,6 +630,7 @@ export async function replaceWizardGeneratedTaskDependenciesBatch(params: {
     metadata: Record<string, unknown>
   }>()
   for (const dependency of params.dependencies) {
+    if (isUnconfirmedHeuristicDependency(dependency)) continue
     const taskId = String(dependency.taskId ?? '').trim()
     const dependencyTaskId = String(dependency.dependencyTaskId ?? '').trim()
     if (!taskId || !dependencyTaskId) {

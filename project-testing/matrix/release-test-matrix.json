@@ -151,6 +151,17 @@
       "mutationBoundary": "guard scripts only"
     },
     {
+      "id": "duration-assets-admin-local-browser",
+      "tier": "local_browser",
+      "status": "ready",
+      "purpose": "Deterministic local Vite and Playwright verification for the duration asset queue, published, monitoring, accuracy, read-only shared scope, company approval dialog, responsive width, and visible-control overlap behavior.",
+      "commands": [
+        "node project-testing/tools/verify-duration-assets-admin-ui.mjs"
+      ],
+      "artifactRoot": "project-testing/artifacts/browser-checks/duration-assets",
+      "mutationBoundary": "intercepted local fixtures only; opens the approval dialog but submits no command, performs no database or external-environment access, and cannot establish live readiness"
+    },
+    {
       "id": "browser-suite-shell-and-collab",
       "tier": "local_browser",
       "status": "ready",

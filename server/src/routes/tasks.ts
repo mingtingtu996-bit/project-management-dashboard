@@ -19,6 +19,7 @@ import type { Task } from '../types/db.js'
 import { executeSQL, supabase as db } from '../services/dbService.js'
 import {
   getClient,
+  isDatabaseTransactionActive,
   query as rawQuery,
   registerDatabasePostCommitEffect,
   withDatabaseTransaction,
@@ -26,6 +27,7 @@ import {
 import { buildStandardDTO } from '../services/taskStandardModelService.js'
 import { sanitizeTaskForClient } from '../services/taskDtoService.js'
 import { rejectTaskCodeFields } from '../services/taskCodeTransactionService.js'
+import { recordAcceptancePlanExecutionFacts } from '../services/acceptancePlanExecutionFactService.js'
 import {
   replaceTaskDependencies,
   replaceWizardGeneratedTaskDependenciesBatch,
@@ -80,6 +82,7 @@ import {
   buildSpecialWorkDurationCandidateNodes,
 } from '../services/wbsTemplateCandidateEventService.js'
 import { persistDurationLearningRuntimeConsumptions } from '../services/durationLearningRuntimeConsumptionService.js'
+import { isUnconfirmedHeuristicDependency } from '../services/dependencyAuthorityService.js'
 import {
   buildGeneratedDurationPredictionOutboxEvents,
   buildWbsCandidateOutboxEvent,
@@ -117,11 +120,13 @@ import {
 } from '../services/taskBatchUpdateService.js'
 import {
   buildTaskCommitReplaySummary,
+  buildTaskCommitOperationsHash,
   buildTaskCommitRequestHash,
   completeTaskCommitRequest,
   reserveTaskCommitRequest,
   type TaskCommitReplaySummary,
 } from '../services/taskCommitIdempotencyService.js'
+import { authorizeScheduleAccelerationRecommendationCommit } from '../services/scheduleAccelerationRecommendationService.js'
 
 const router = Router()
 const supabase = new SupabaseService()
@@ -1103,7 +1108,18 @@ function manualDependencyCorrectionMetadata() {
   }
 }
 
-function readOperationDependencySpecs(operation: PlanningTableOperation) {
+function acceptedAccelerationDependencyMetadata(sourceType: string) {
+  return {
+    source: sourceType,
+    learningSignal: 'accepted_schedule_acceleration_recommendation',
+    recommendationPolicy: 'server_issued_hash_bound_task_commit',
+  }
+}
+
+function readOperationDependencySpecs(
+  operation: PlanningTableOperation,
+  preserveRecommendationSource = false,
+) {
   const raw = Array.isArray(operation.predecessorDependencies)
     ? operation.predecessorDependencies
     : []
@@ -1120,12 +1136,28 @@ function readOperationDependencySpecs(operation: PlanningTableOperation) {
       ?? '',
     ).trim()
     if (!dependencyTaskId) return null
+    const sourceType = preserveRecommendationSource
+      ? String(record.sourceType ?? record.source_type ?? '').trim() || 'target_end_compression'
+      : 'manual'
+    const rawDependencyType = String(record.dependencyType ?? record.dependency_type ?? 'FS').trim().toUpperCase()
+    const rawLagDays = Number(record.lagDays ?? record.lag_days ?? 0)
+    if (
+      preserveRecommendationSource
+      && (
+        !['FS', 'SS', 'FF', 'SF'].includes(rawDependencyType)
+        || !Number.isFinite(rawLagDays)
+      )
+    ) {
+      return null
+    }
     return {
       dependencyTaskId,
-      dependencyType: normalizeDependencyType(record.dependencyType ?? record.dependency_type),
-      lagDays: Number(record.lagDays ?? record.lag_days ?? 0) || 0,
-      sourceType: 'manual',
-      metadata: manualDependencyCorrectionMetadata(),
+      dependencyType: normalizeDependencyType(rawDependencyType),
+      lagDays: rawLagDays || 0,
+      sourceType,
+      metadata: preserveRecommendationSource
+        ? acceptedAccelerationDependencyMetadata(sourceType)
+        : manualDependencyCorrectionMetadata(),
     }
   }).filter((item): item is {
     dependencyTaskId: string
@@ -1134,6 +1166,20 @@ function readOperationDependencySpecs(operation: PlanningTableOperation) {
     sourceType: string
     metadata: ReturnType<typeof manualDependencyCorrectionMetadata>
   } => Boolean(item))
+}
+
+function accelerationRecommendationOperationError(
+  operationType: string,
+  rowId: string,
+  reason: 'target_missing' | 'normalized_operation_empty',
+) {
+  const code = reason === 'target_missing'
+    ? 'ACCELERATION_RECOMMENDATION_OPERATION_TARGET_MISSING'
+    : 'ACCELERATION_RECOMMENDATION_OPERATION_INVALID'
+  return Object.assign(
+    new Error(`The issued ${operationType} operation cannot be applied to task ${rowId || '<missing>'}.`),
+    { code, statusCode: 409 },
+  )
 }
 
 function mapGeneratedDependencySourceType(source: GeneratedTemplateDependency['source'] | string | null | undefined) {
@@ -1174,6 +1220,7 @@ function buildGeneratedTemplateDependencyWrites(
   tempIdMap: Map<string, string>,
 ) {
   return row.predecessorDependencies
+    .filter((dependency) => !isUnconfirmedHeuristicDependency(dependency))
     .map((dependency) => {
       const dependencyTaskId = generatedIdByClientRowId.get(dependency.clientRowId) ?? tempIdMap.get(dependency.clientRowId)
       if (!dependencyTaskId) return null
@@ -1355,39 +1402,57 @@ async function insertGeneratedTemplateTaskCondition(row: GeneratedTemplateTaskCo
 }
 
 async function insertGeneratedTemplateAcceptancePlan(row: GeneratedTemplateAcceptancePlanInsert) {
-  await executeSQL(
-    `INSERT INTO acceptance_plans (
-       id, project_id, plan_name, acceptance_name, acceptance_type,
-       building_object_id, scope_level, participant_unit_id, description,
-       planned_date, status, is_custom, created_by, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      row.id,
-      row.projectId,
-      row.planName,
-      row.acceptanceName,
-      row.acceptanceType,
-      row.buildingObjectId ?? null,
-      row.scopeLevel ?? null,
-      row.participantUnitId ?? null,
-      row.description,
-      row.plannedDate ?? null,
-      row.status,
-      row.isCustom,
-      row.createdBy,
-      row.createdAt,
-      row.updatedAt,
-    ],
-  )
+  const write = async () => {
+    await executeSQL(
+      `INSERT INTO acceptance_plans (
+         id, project_id, plan_name, acceptance_name, acceptance_type,
+         building_object_id, scope_level, participant_unit_id, description,
+         planned_date, status, is_custom, created_by, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.id,
+        row.projectId,
+        row.planName,
+        row.acceptanceName,
+        row.acceptanceType,
+        row.buildingObjectId ?? null,
+        row.scopeLevel ?? null,
+        row.participantUnitId ?? null,
+        row.description,
+        row.plannedDate ?? null,
+        row.status,
+        row.isCustom,
+        row.createdBy,
+        row.createdAt,
+        row.updatedAt,
+      ],
+    )
 
-  await executeSQL(
-    `INSERT INTO project_entity_links (
-       project_id, source_entity_type, source_entity_id, target_entity_type,
-       target_entity_id, relation_type, relation_strength, status, created_at, updated_at
-     ) VALUES (?, 'acceptance_plan', ?, 'task', ?, 'covers_task', 'explicit', 'active', ?, ?)`,
-    [row.projectId, row.id, row.taskId, row.createdAt, row.updatedAt],
-  )
-  return true
+    await executeSQL(
+      `INSERT INTO project_entity_links (
+         project_id, source_entity_type, source_entity_id, target_entity_type,
+         target_entity_id, relation_type, relation_strength, status, created_at, updated_at
+       ) VALUES (?, 'acceptance_plan', ?, 'task', ?, 'covers_task', 'explicit', 'active', ?, ?)`,
+      [row.projectId, row.id, row.taskId, row.createdAt, row.updatedAt],
+    )
+    await recordAcceptancePlanExecutionFacts({
+      projectId: row.projectId,
+      planId: row.id,
+      previous: null,
+      next: {
+        status: row.status,
+        actual_date: null,
+      },
+      sourceModule: 'tasks',
+      sourceMutationId: `tasks:template-acceptance-plan:${row.id}:create`,
+      observedAt: row.createdAt,
+      actorUserId: row.createdBy,
+      forceInitial: true,
+    })
+    return true
+  }
+  if (isDatabaseTransactionActive()) return write()
+  return withDatabaseTransaction(write)
 }
 
 function readGeneratedTemplateMetadata(row: GeneratedTemplateRow) {
@@ -2171,6 +2236,34 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
     } satisfies ApiResponse)
   }
   const requestId = headerRequestId || bodyRequestId || randomUUID()
+  const rawAccelerationRecommendation = body.clientContext?.accelerationRecommendation
+    ?? body.clientContext?.acceleration_recommendation
+    ?? null
+  const accelerationRecommendation = rawAccelerationRecommendation
+    && typeof rawAccelerationRecommendation === 'object'
+    && !Array.isArray(rawAccelerationRecommendation)
+    ? {
+        id: String((rawAccelerationRecommendation as Record<string, unknown>).id ?? '').trim(),
+        recommendationHash: String(
+          (rawAccelerationRecommendation as Record<string, unknown>).recommendationHash
+            ?? (rawAccelerationRecommendation as Record<string, unknown>).recommendation_hash
+            ?? '',
+        ).trim(),
+      }
+    : null
+  if (rawAccelerationRecommendation && (!accelerationRecommendation?.id || !accelerationRecommendation.recommendationHash)) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'ACCELERATION_RECOMMENDATION_BINDING_INVALID',
+        message: 'Acceleration recommendation identity and hash are required together.',
+      },
+      timestamp: new Date().toISOString(),
+    } satisfies ApiResponse)
+  }
+  const operationsHash = accelerationRecommendation
+    ? buildTaskCommitOperationsHash(body.operations)
+    : null
   const requestHash = buildTaskCommitRequestHash({
     projectId,
     actorId,
@@ -2178,6 +2271,9 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
     resourceId: body.resourceId ?? body.surfaceId ?? null,
     fieldRegistryVersion: body.fieldRegistryVersion,
     operations: body.operations,
+    accelerationRecommendation: accelerationRecommendation
+      ? { ...accelerationRecommendation, operationsHash }
+      : null,
   })
 
   if (!isPlanningFieldRegistryVersionCurrent(body.fieldRegistryVersion)) {
@@ -2220,11 +2316,22 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
 
   try {
     await withDatabaseTransaction(async () => {
+      if (accelerationRecommendation && operationsHash) {
+        await authorizeScheduleAccelerationRecommendationCommit({
+          projectId,
+          recommendationId: accelerationRecommendation.id,
+          recommendationHash: accelerationRecommendation.recommendationHash,
+          operationsHash,
+        })
+      }
       const reservation = await reserveTaskCommitRequest({
         projectId,
         requestId,
         requestHash,
         requestedBy: actorId,
+        recommendationId: accelerationRecommendation?.id ?? null,
+        recommendationHash: accelerationRecommendation?.recommendationHash ?? null,
+        operationsHash,
       })
       if (reservation.kind === 'replay') {
         replaySummary = reservation.summary
@@ -2543,11 +2650,26 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
 
       if (operationType === 'update_row') {
         const taskId = resolveCommitRowId(readOperationRowId(operation))
-        if (!taskId) continue
+        if (!taskId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
         const current = await loadCommitTask(taskId)
-        if (!current || String(current.project_id) !== projectId) continue
+        if (!current || String(current.project_id) !== projectId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
         const patch = normalizePlanningFieldPatch(readOperationValues(operation))
-        if (Object.keys(patch).length === 0) continue
+        if (Object.keys(patch).length === 0) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'normalized_operation_empty')
+          }
+          continue
+        }
         const result = await updateTaskInMainChain(taskId, { ...patch, updated_by: actorId } as Partial<Task>, current.version ?? undefined)
         rememberCommitTask(result?.task)
         markChanged(taskId, Object.keys(patch))
@@ -2638,10 +2760,26 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
 
       if (operationType === 'set_predecessors') {
         const taskId = resolveCommitRowId(readOperationRowId(operation))
-        if (!taskId) continue
+        if (!taskId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
         const current = await loadCommitTask(taskId)
-        if (!current || String(current.project_id) !== projectId) continue
-        const dependencySpecs = readOperationDependencySpecs(operation)
+        if (!current || String(current.project_id) !== projectId) {
+          if (accelerationRecommendation) {
+            throw accelerationRecommendationOperationError(operationType, taskId, 'target_missing')
+          }
+          continue
+        }
+        const dependencySpecs = readOperationDependencySpecs(operation, Boolean(accelerationRecommendation))
+        const rawDependencySpecs = Array.isArray(operation.predecessorDependencies)
+          ? operation.predecessorDependencies
+          : []
+        if (accelerationRecommendation && rawDependencySpecs.length !== dependencySpecs.length) {
+          throw accelerationRecommendationOperationError(operationType, taskId, 'normalized_operation_empty')
+        }
         const dependencyWrites = dependencySpecs.length > 0
           ? dependencySpecs
             .map((dependency) => ({
@@ -2656,8 +2794,10 @@ router.post('/commit', requireProjectEditor(req => req.body.projectId), asyncHan
               dependencyTaskId,
               dependencyType: 'FS' as const,
               lagDays: 0,
-              sourceType: 'manual',
-              metadata: manualDependencyCorrectionMetadata(),
+              sourceType: accelerationRecommendation ? 'target_end_compression' : 'manual',
+              metadata: accelerationRecommendation
+                ? acceptedAccelerationDependencyMetadata('target_end_compression')
+                : manualDependencyCorrectionMetadata(),
             }))
         await replaceTaskDependencies(taskId, dependencyWrites, {
           projectId,
@@ -3006,6 +3146,7 @@ router.post('/:id/actual-time-correction', validateIdParam, requireProjectEditor
   const result = await updateTaskInMainChain(id, patch as Partial<Task>, body.version, {
     executionFactIntent: ExecutionFactIntent.SystemBackfill,
     executionFactEventDate: eventDate,
+    executionFactCorrectionReason: body.reason ?? null,
     allowManualActualDates: true,
   })
   const task = result?.task ?? null

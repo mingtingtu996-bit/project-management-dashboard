@@ -96,6 +96,7 @@ export const PERSISTENT_SCHEDULED_JOB_NAMES = Object.freeze([
   'responsibilityAlertJob',
   'riskStatisticsJob',
   'standardWorkDurationSeedReplayJob',
+  'taskWriteFinalizationOutboxJob',
   'templateDurationGovernanceJob',
   'warningImpactSignalGovernanceJob',
   'weeklyDigestJob',

@@ -88,6 +88,7 @@ import dataQualityRouter, { warmDataQualityProjectSummaryCache } from './routes/
 import taskConditionsRouter from './routes/task-conditions.js'
 import taskObstaclesRouter from './routes/task-obstacles.js'
 import taskSummariesRouter from './routes/task-summaries.js'
+import projectStartReadinessRouter from './routes/project-start-readiness.js'
 import causeAttributionsRouter from './routes/cause-attributions.js'
 import changeLogsRouter from './routes/change-logs.js'
 import deletionRetentionRouter from './routes/deletion-retention.js'
@@ -137,6 +138,7 @@ import wbsTemplateGovernanceRouter from './routes/wbs-template-governance.js'
 import algorithmSeedsRouter from './routes/algorithm-seeds.js'
 import durationContextGovernanceRouter from './routes/duration-context-governance.js'
 import durationAccuracyRouter from './routes/duration-accuracy.js'
+import durationAssetsRouter from './routes/duration-assets.js'
 import workspaceRouter from './routes/workspace.js'
 import commercialRouter from './routes/commercial.js'
 import demoProjectsRouter from './routes/demo-projects.js'
@@ -483,6 +485,7 @@ app.use('/api/client-errors', clientErrorsRouter)
 app.use('/api/projects/:projectId/materials', projectMaterialsRouter)
 app.use('/api/performance-reports', performanceReportsRouter)
 app.use('/api', metricsRouter)
+app.use('/api/projects', projectStartReadinessRouter)
 app.use('/api/projects', projectsRouter)
 app.use('/api/projects', projectClimateRouter)
 // v1.4.22.1: Wizard, templates, reconcile, milestone presets
@@ -539,6 +542,7 @@ app.use('/api/admin/certificate-template-governance', certificateTemplateGoverna
 app.use('/api/admin/drawing-package-template-governance', drawingPackageTemplateGovernanceRouter)
 app.use('/api/admin/duration-context-governance', durationContextGovernanceRouter)
 app.use('/api/admin/duration-accuracy', durationAccuracyRouter)
+app.use('/api/admin/duration-assets', durationAssetsRouter)
 app.use('/api/workspace', workspaceRouter)
 app.use('/api/commercial', commercialRouter)
 app.use('/api/demo-projects', demoProjectsRouter)

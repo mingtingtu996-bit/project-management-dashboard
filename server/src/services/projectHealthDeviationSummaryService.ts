@@ -3,8 +3,11 @@
 
 import { supabase } from './dbService.js'
 import { logger } from '../middleware/logger.js'
-import { resolveProgressDeviationCauseRule } from '../seeds/progressDeviationCauseRegistry.js'
-import { normalizeDurationContributionMode } from '../seeds/durationContributionMode.js'
+import { translateLegacyProgressFactor } from '../domain/structuredCauseTaxonomy.js'
+import {
+  normalizeDurationContributionMode,
+  type DurationContributionMode,
+} from '../seeds/durationContributionMode.js'
 
 export interface HealthDeviationSummary {
   projectId: string
@@ -39,6 +42,70 @@ function readForecastFactorSummary(value: unknown) {
   }
 }
 
+function resolveCanonicalFactorPresentation(factorKey: string, mode: DurationContributionMode) {
+  const translation = translateLegacyProgressFactor(factorKey)
+  if (!translation) return null
+  if (
+    mode !== 'duration_bearing'
+    && (
+      (factorKey !== 'process_constraint' && factorKey !== 'external_readiness')
+      || !(['quality_gate', 'external_wait', 'handover_marker'] as DurationContributionMode[]).includes(mode)
+    )
+  ) return null
+
+  if (factorKey === 'resource_conflict' || factorKey === 'progress_velocity') {
+    return {
+      ...translation,
+      reason: '\u73b0\u573a\u627f\u8f7d\u538b\u529b',
+      reasonType: 'site_capacity_pressure',
+      responsibilityBasis: 'site_capacity',
+      confidenceWeight: 0.82,
+    }
+  }
+  if (factorKey === 'workflow_sequence') {
+    return {
+      ...translation,
+      reason: '\u6d41\u6c34\u8282\u594f\u504f\u5dee',
+      reasonType: 'workflow_sequence',
+      responsibilityBasis: 'workflow',
+      confidenceWeight: 0.76,
+    }
+  }
+  if (
+    factorKey === 'seasonal_productivity'
+    || factorKey === 'process_seasonal_sensitivity'
+    || factorKey === 'weather_forecast_impact'
+    || factorKey === 'productivity_compensation'
+  ) {
+    return {
+      ...translation,
+      reason: '\u5b63\u8282/\u65e5\u5386\u4ea7\u80fd\u5f71\u54cd',
+      reasonType: 'calendar_productivity',
+      responsibilityBasis: 'calendar_productivity',
+      confidenceWeight: 0.7,
+    }
+  }
+  if (factorKey === 'process_constraint') {
+    return {
+      ...translation,
+      reason: '\u5de5\u5e8f\u786c\u7ea6\u675f\u672a\u6ee1\u8db3',
+      reasonType: 'process_constraint',
+      responsibilityBasis: 'quality_gate',
+      confidenceWeight: 0.74,
+    }
+  }
+  if (factorKey === 'external_readiness') {
+    return {
+      ...translation,
+      reason: '\u5916\u90e8\u6761\u4ef6\u672a\u6ee1\u8db3',
+      reasonType: 'external_readiness',
+      responsibilityBasis: 'external_wait',
+      confidenceWeight: 0.78,
+    }
+  }
+  return null
+}
+
 async function buildRecentDurationDeviationCauses(projectId: string) {
   const { data, error } = await (supabase as any)
     .from('task_duration_forecasts')
@@ -57,7 +124,11 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
     maxDelayDays: number
     reasons: string[]
     factorKeys: string[]
-    responsibilityBasis: string
+    sourceReasonTypes: string[]
+    canonicalCauseAvailability: 'available' | 'unavailable'
+    canonicalCauseCode: string | null
+    canonicalCauseTaxonomyVersion: string | null
+    responsibilityBasis: string | null
     confidenceWeight: number
   }>()
 
@@ -74,26 +145,62 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
           ?? metadata.durationContributionMode
           ?? metadata.duration_contribution_mode,
       ) ?? 'duration_bearing'
-      const rule = resolveProgressDeviationCauseRule(key, contributionMode)
-      if (!rule) continue
+      const translation = translateLegacyProgressFactor(key)
+      const rule = resolveCanonicalFactorPresentation(key, contributionMode)
+      if (!rule) {
+        if (translation) continue
+        const unavailableKey = `unavailable:${key || 'unknown_factor'}`
+        const unavailableReason = normalizeText(factor.reason)
+          || summary.businessReasons[0]
+          || 'Forecast factor has no canonical cause mapping.'
+        const existing = causes.get(unavailableKey) ?? {
+          code: unavailableKey,
+          label: 'Canonical cause unavailable',
+          count: 0,
+          maxDelayDays: 0,
+          reasons: [],
+          factorKeys: [],
+          sourceReasonTypes: [],
+          canonicalCauseAvailability: 'unavailable' as const,
+          canonicalCauseCode: null,
+          canonicalCauseTaxonomyVersion: null,
+          responsibilityBasis: null,
+          confidenceWeight: 0,
+        }
+        if (!countedReasonTypes.has(unavailableKey)) {
+          existing.count += 1
+          countedReasonTypes.add(unavailableKey)
+        }
+        existing.maxDelayDays = Math.max(existing.maxDelayDays, delayDays)
+        existing.factorKeys = Array.from(new Set([...existing.factorKeys, key].filter(Boolean)))
+        existing.reasons = Array.from(new Set([...existing.reasons, unavailableReason])).slice(0, 5)
+        causes.set(unavailableKey, existing)
+        continue
+      }
       const reason = normalizeText(factor.reason) || summary.businessReasons[0] || '现场承载压力影响当前工期预测。'
-      const existing = causes.get(rule.reasonType) ?? {
-        code: rule.reasonType,
+      const canonicalKey = `${rule.causeCode}:${rule.taxonomyVersion}`
+      const existing = causes.get(canonicalKey) ?? {
+        code: rule.causeCode,
         label: '现场承载压力',
         count: 0,
         maxDelayDays: 0,
         reasons: [],
         factorKeys: [],
+        sourceReasonTypes: [],
+        canonicalCauseAvailability: 'available' as const,
+        canonicalCauseCode: rule.causeCode,
+        canonicalCauseTaxonomyVersion: rule.taxonomyVersion,
         responsibilityBasis: rule.responsibilityBasis,
         confidenceWeight: rule.confidenceWeight,
       }
       existing.label = rule.reason
-      if (!countedReasonTypes.has(rule.reasonType)) {
+      if (!countedReasonTypes.has(canonicalKey)) {
         existing.count += 1
-        countedReasonTypes.add(rule.reasonType)
+        countedReasonTypes.add(canonicalKey)
       }
       existing.maxDelayDays = Math.max(existing.maxDelayDays, delayDays)
       existing.factorKeys = Array.from(new Set([...existing.factorKeys, key]))
+      existing.sourceReasonTypes = Array.from(new Set([...existing.sourceReasonTypes, rule.reasonType]))
       existing.reasons = Array.from(new Set([
         ...existing.reasons,
         reason,
@@ -101,7 +208,7 @@ async function buildRecentDurationDeviationCauses(projectId: string) {
         Number(metadata.overdueMaterialCount ?? 0) > 0 ? '关联材料到货逾期' : '',
         Number(metadata.sameResponsibleUnitCount ?? 0) > 0 ? '同责任单位任务集中' : '',
       ].filter(Boolean))).slice(0, 5)
-      causes.set(rule.reasonType, existing)
+      causes.set(canonicalKey, existing)
     }
   }
 

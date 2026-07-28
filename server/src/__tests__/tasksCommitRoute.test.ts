@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   replaceTaskDependencies: vi.fn(),
   replaceWizardGeneratedTaskDependenciesBatch: vi.fn(),
   transactionEvents: [] as string[],
+  transactionActive: false,
   transactionClient: {
     query: vi.fn(async (sql: string) => {
       const normalized = String(sql).trim().toUpperCase()
@@ -66,8 +67,11 @@ const mocks = vi.hoisted(() => ({
     deletionResults: input.deletionResults,
   })),
   buildTaskCommitRequestHash: vi.fn(() => 'commit-request-hash'),
+  buildTaskCommitOperationsHash: vi.fn(() => 'commit-operations-hash'),
+  authorizeScheduleAccelerationRecommendationCommit: vi.fn(),
   reserveTaskCommitRequest: vi.fn(),
   completeTaskCommitRequest: vi.fn(),
+  recordAcceptancePlanExecutionFacts: vi.fn(),
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
@@ -124,6 +128,10 @@ vi.mock('../services/taskWriteChainService.js', () => ({
   updateTaskInMainChain: mocks.updateTaskInMainChain,
 }))
 
+vi.mock('../services/acceptancePlanExecutionFactService.js', () => ({
+  recordAcceptancePlanExecutionFacts: mocks.recordAcceptancePlanExecutionFacts,
+}))
+
 vi.mock('../services/taskStandardModelService.js', () => ({
   buildStandardDTO: vi.fn(async (task: Record<string, unknown>) => task),
   replaceTaskDependencies: mocks.replaceTaskDependencies,
@@ -135,7 +143,7 @@ vi.mock('../database.js', () => ({
   query: mocks.rawQuery,
   withDatabaseTransaction: mocks.withDatabaseTransaction,
   registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => effect()),
-  isDatabaseTransactionActive: vi.fn(() => false),
+  isDatabaseTransactionActive: vi.fn(() => mocks.transactionActive),
 }))
 
 vi.mock('../services/taskDtoService.js', () => ({
@@ -190,8 +198,13 @@ vi.mock('../services/durationLearningRuntimeEvidenceOutboxService.js', () => ({
 vi.mock('../services/taskCommitIdempotencyService.js', () => ({
   buildTaskCommitReplaySummary: mocks.buildTaskCommitReplaySummary,
   buildTaskCommitRequestHash: mocks.buildTaskCommitRequestHash,
+  buildTaskCommitOperationsHash: mocks.buildTaskCommitOperationsHash,
   reserveTaskCommitRequest: mocks.reserveTaskCommitRequest,
   completeTaskCommitRequest: mocks.completeTaskCommitRequest,
+}))
+
+vi.mock('../services/scheduleAccelerationRecommendationService.js', () => ({
+  authorizeScheduleAccelerationRecommendationCommit: mocks.authorizeScheduleAccelerationRecommendationCommit,
 }))
 
 vi.mock('../services/projectCriticalPathService.js', () => ({
@@ -267,9 +280,11 @@ describe('tasks commit route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.transactionEvents.length = 0
+    mocks.transactionActive = false
     mocks.getClient.mockResolvedValue(mocks.transactionClient)
     mocks.withDatabaseTransaction.mockImplementation(async (work: () => Promise<unknown>) => {
       await mocks.transactionClient.query('BEGIN')
+      mocks.transactionActive = true
       try {
         const result = await work()
         await mocks.transactionClient.query('COMMIT')
@@ -277,6 +292,8 @@ describe('tasks commit route', () => {
       } catch (error) {
         await mocks.transactionClient.query('ROLLBACK')
         throw error
+      } finally {
+        mocks.transactionActive = false
       }
     })
     mocks.rawQuery.mockResolvedValue({ rows: [], rowCount: 0 })
@@ -290,6 +307,7 @@ describe('tasks commit route', () => {
       kind: 'reserved',
       id: 'commit-request-1',
     })
+    mocks.authorizeScheduleAccelerationRecommendationCommit.mockResolvedValue(undefined)
     mocks.completeTaskCommitRequest.mockResolvedValue(undefined)
     mocks.supabaseService.getTask.mockResolvedValue(buildTask())
     mocks.supabaseService.getTasks.mockResolvedValue([buildTask()])
@@ -556,6 +574,260 @@ describe('tasks commit route', () => {
     }))
   })
 
+  it('binds a server-issued acceleration recommendation and the canonical operation hash to the commit ledger', async () => {
+    const operations = [{
+      type: 'update_row',
+      rowId: 'task-1',
+      values: { planned_end_date: '2026-06-18' },
+    }]
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'acceleration-commit-1')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations,
+        clientContext: {
+          requestId: 'acceleration-commit-1',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.buildTaskCommitOperationsHash).toHaveBeenCalledWith(operations)
+    expect(mocks.buildTaskCommitRequestHash).toHaveBeenCalledWith(expect.objectContaining({
+      accelerationRecommendation: {
+        id: 'recommendation-1',
+        recommendationHash: 'recommendation-hash-1',
+        operationsHash: 'commit-operations-hash',
+      },
+    }))
+    expect(mocks.reserveTaskCommitRequest).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ID,
+      requestId: 'acceleration-commit-1',
+      recommendationId: 'recommendation-1',
+      recommendationHash: 'recommendation-hash-1',
+      operationsHash: 'commit-operations-hash',
+    }))
+  })
+
+  it('rejects an expired acceleration recommendation before reserving or mutating a task commit', async () => {
+    mocks.authorizeScheduleAccelerationRecommendationCommit.mockRejectedValueOnce(Object.assign(
+      new Error('The acceleration recommendation has expired.'),
+      { code: 'ACCELERATION_RECOMMENDATION_EXPIRED', statusCode: 409 },
+    ))
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'expired-acceleration-commit')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_row',
+          rowId: 'task-1',
+          values: { planned_end_date: '2026-06-18' },
+        }],
+        clientContext: {
+          requestId: 'expired-acceleration-commit',
+          accelerationRecommendation: {
+            id: 'recommendation-expired',
+            recommendationHash: 'recommendation-hash-expired',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_EXPIRED' })
+    expect(mocks.reserveTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.updateTaskInMainChain).not.toHaveBeenCalled()
+    expect(mocks.writeChangeLog).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a recommendation-bound commit when a hashed task target no longer exists', async () => {
+    mocks.supabaseService.getTask.mockResolvedValueOnce(null)
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'missing-acceleration-target')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_row',
+          rowId: 'deleted-task-1',
+          values: { planned_end_date: '2026-06-18' },
+        }],
+        clientContext: {
+          requestId: 'missing-acceleration-target',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_TARGET_MISSING' })
+    expect(mocks.updateTaskInMainChain).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('rolls back when a recommendation-bound predecessor operation target no longer exists', async () => {
+    mocks.supabaseService.getTask.mockResolvedValueOnce(null)
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'missing-acceleration-dependency-target')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'set_predecessors',
+          rowId: 'deleted-task-1',
+          predecessorTaskIds: ['task-2'],
+          predecessorDependencies: [{
+            dependencyTaskId: 'task-2',
+            dependencyType: 'FS',
+            lagDays: 0,
+            sourceType: 'target_end_compression',
+          }],
+        }],
+        clientContext: {
+          requestId: 'missing-acceleration-dependency-target',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_TARGET_MISSING' })
+    expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('rolls back when a recommendation-bound update normalizes to an empty patch', async () => {
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'empty-acceleration-operation')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'update_row',
+          rowId: 'task-1',
+          values: { duration: 12 },
+        }],
+        clientContext: {
+          requestId: 'empty-acceleration-operation',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_INVALID' })
+    expect(mocks.updateTaskInMainChain).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('rolls back rather than partially applying filtered recommendation dependency specs', async () => {
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'invalid-acceleration-dependency-spec')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'set_predecessors',
+          rowId: 'task-1',
+          predecessorTaskIds: ['task-2'],
+          predecessorDependencies: [{
+            dependencyType: 'SS',
+            lagDays: 1,
+            sourceType: 'target_end_compression',
+          }],
+        }],
+        clientContext: {
+          requestId: 'invalid-acceleration-dependency-spec',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(409)
+    expect(response.body.error).toMatchObject({ code: 'ACCELERATION_RECOMMENDATION_OPERATION_INVALID' })
+    expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()
+    expect(mocks.completeTaskCommitRequest).not.toHaveBeenCalled()
+    expect(mocks.transactionEvents).toEqual(['BEGIN', 'ROLLBACK'])
+  })
+
+  it('preserves server-issued dependency provenance for recommendation-bound operations', async () => {
+    const operations = [{
+      type: 'set_predecessors',
+      rowId: 'task-1',
+      predecessorTaskIds: ['task-2'],
+      predecessorDependencies: [{
+        dependencyTaskId: 'task-2',
+        dependencyType: 'SS',
+        lagDays: 1,
+        sourceType: 'target_end_compression',
+      }],
+    }]
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .set('Idempotency-Key', 'acceleration-dependency-source')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations,
+        clientContext: {
+          requestId: 'acceleration-dependency-source',
+          accelerationRecommendation: {
+            id: 'recommendation-1',
+            recommendationHash: 'recommendation-hash-1',
+          },
+        },
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.replaceTaskDependencies).toHaveBeenCalledWith('task-1', [{
+      dependencyTaskId: 'task-2',
+      dependencyType: 'SS',
+      lagDays: 1,
+      sourceType: 'target_end_compression',
+      metadata: expect.objectContaining({
+        source: 'target_end_compression',
+        learningSignal: 'accepted_schedule_acceleration_recommendation',
+      }),
+    }], {
+      projectId: PROJECT_ID,
+      preserveCurrentTaskFacts: false,
+    })
+  })
+
   it('replays an already completed commit without repeating writes, audit, or realtime effects', async () => {
     mocks.reserveTaskCommitRequest.mockResolvedValueOnce({
       kind: 'replay',
@@ -814,6 +1086,44 @@ describe('tasks commit route', () => {
     })
   })
 
+  it('does not promote heuristic sequencing fallbacks to task dependencies', async () => {
+    const generated = structuredClone(await mocks.generateWbsTemplateRows())
+    generated.rows[2].predecessorDependencies = [{
+      clientRowId: 'batch-1:02-01-01-P01:1',
+      dependencyType: 'SS',
+      lagDays: 3,
+      intentCode: 'sequencing_fallback:heuristic_stagger',
+      source: 'heuristic_stagger',
+      sequencingBasis: 'heuristic_stagger',
+      governanceGapCode: 'master_plan_dependency_rule_gap',
+      dependencyRuleEvidence: {
+        source: 'heuristic_stagger',
+        evidenceLevel: 'heuristic_fallback_l0',
+        publicationStatus: 'fallback_not_published_dependency_rule',
+      },
+    }]
+    mocks.generateWbsTemplateRows.mockClear()
+    mocks.generateWbsTemplateRows.mockResolvedValueOnce(generated)
+
+    const response = await supertest(buildApp())
+      .post('/api/tasks/commit')
+      .send({
+        projectId: PROJECT_ID,
+        surface: 'task_list',
+        fieldRegistryVersion: 'v1.4.7.6',
+        operations: [{
+          type: 'template_generate',
+          generationBatchId: 'batch-1',
+          templateId: 'china-gb55032-2022',
+          selectedNodeIds: ['02-01-01'],
+          scope: { building_object_id: 'building-1' },
+        }],
+      })
+
+    expect(response.status).toBe(200)
+    expect(mocks.replaceTaskDependencies).not.toHaveBeenCalled()
+  })
+
   it('commits selected-task drilldown tasks and dependencies in one transaction', async () => {
     const parentTaskId = '00000000-0000-4000-8000-000000000101'
     const parentTask = buildTask({
@@ -863,6 +1173,19 @@ describe('tasks commit route', () => {
             dependencyType: 'FS',
             lagDays: 0,
             source: 'dependency_intent_template',
+          }, {
+            clientRowId: 'drilldown-process-1',
+            dependencyType: 'SS',
+            lagDays: 3,
+            intentCode: 'sequencing_fallback:heuristic_stagger',
+            source: 'heuristic_stagger',
+            sequencingBasis: 'heuristic_stagger',
+            governanceGapCode: 'master_plan_dependency_rule_gap',
+            dependencyRuleEvidence: {
+              source: 'heuristic_stagger',
+              evidenceLevel: 'heuristic_fallback_l0',
+              publicationStatus: 'fallback_not_published_dependency_rule',
+            },
           }],
           values: {
             title: '墙柱模板安装',
@@ -1312,6 +1635,13 @@ describe('tasks commit route', () => {
       acceptancePlanInserts[0]?.[1]?.[0],
       'major-acceptance-task',
     ]))
+    expect(mocks.recordAcceptancePlanExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: PROJECT_ID,
+      planId: acceptancePlanInserts[0]?.[1]?.[0],
+      sourceModule: 'tasks',
+      next: { status: 'draft', actual_date: null },
+      forceInitial: true,
+    }))
   })
 
   it('resolves draft-created task ids before saving predecessor links in the same commit', async () => {
@@ -1790,6 +2120,7 @@ describe('tasks commit route', () => {
         executionFactIntent: 'system_backfill',
         executionFactEventDate: '2026-05-04',
         allowManualActualDates: true,
+        executionFactCorrectionReason: 'Backfill verified site record',
       }),
     )
   })

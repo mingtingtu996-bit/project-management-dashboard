@@ -178,6 +178,11 @@ describe('wbs plan rollup contract', () => {
           endDate: '2026-05-03',
           counts_as_construction_shutdown: true,
         }],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
       },
     })
 
@@ -189,6 +194,40 @@ describe('wbs plan rollup contract', () => {
       diagnostics: expect.objectContaining({
         durationBasis: 'production_day',
         calendarApplied: true,
+      }),
+    }))
+  })
+
+  it('fails closed to calendar-day rollup when an official-basis calendar lacks identity', () => {
+    const rollup = calculateWbsParentPlanRollup('item_work', [{
+      plannedStartDate: '2026-05-01',
+      plannedEndDate: '2026-05-05',
+      referenceDuration: 5,
+      durationContributionMode: 'duration_bearing',
+      wbsNodeType: 'process',
+    }], {
+      workCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [{
+          holidayCode: 'unidentified_shutdown',
+          startDate: '2026-05-02',
+          endDate: '2026-05-03',
+          countsAsConstructionShutdown: true,
+        }],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'construction_calendar_identity_missing',
+      },
+    })
+
+    expect(rollup).toEqual(expect.objectContaining({
+      plannedDurationDays: 5,
+      referenceDurationDays: 5,
+      diagnostics: expect.objectContaining({
+        durationBasis: 'calendar_day',
+        calendarApplied: false,
       }),
     }))
   })

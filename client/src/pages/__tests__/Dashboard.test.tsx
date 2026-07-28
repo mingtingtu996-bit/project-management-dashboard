@@ -1610,6 +1610,20 @@ describe('Dashboard contract', () => {
     expect(source).not.toContain('DashboardMetricCards')
   })
 
+  it('mounts the authoritative start-readiness consumer in a lazy dashboard tab', () => {
+    const source = readDashboardSource()
+    expect(source).toContain("import { ProjectStartReadinessPanel }")
+    expect(source).toContain("value=\"readiness\"")
+    expect(source).toContain('<ProjectStartReadinessPanel projectId={projectId}')
+  })
+
+  it('honors the readiness notification target tab instead of reverting to forecast', () => {
+    const source = readDashboardSource()
+    expect(source).toContain('useLocation')
+    expect(source).toContain("new URLSearchParams(location.search).get('tab')")
+    expect(source).toContain("requestedSupportTab === 'readiness'")
+  })
+
   it('fixes dashboard summary scope to post-access without exposing a range switch', async () => {
     act(() => {
       root?.render(

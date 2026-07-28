@@ -232,7 +232,11 @@ vi.mock('../services/constructionCalendar.js', async (importOriginal) => {
   return {
     ...actual,
     resolveConstructionCalendarContext: vi.fn(async () => ({
-      basis: 'calendar_day',
+      basis: 'official_construction_calendar_seed',
+      availability: 'available',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      timezone: 'Asia/Shanghai',
       windows: [],
     })),
   }

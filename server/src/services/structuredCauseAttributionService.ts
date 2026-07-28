@@ -1,9 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto'
 
-import { query as rawQuery, withDatabaseTransaction } from '../database.js'
+import {
+  query as rawQuery,
+  registerDatabasePostCommitEffect,
+  withDatabaseTransaction,
+} from '../database.js'
+import {
+  CANONICAL_STRUCTURED_CAUSE_CODES,
+  isStructuredCauseCode,
+  STRUCTURED_CAUSE_TAXONOMY_VERSION,
+  translateLegacyProgressFactor,
+  type StructuredCauseCode,
+} from '../domain/structuredCauseTaxonomy.js'
 import { delayDayDelta } from '../utils/durationDays.js'
 
-export const STRUCTURED_CAUSE_TAXONOMY_VERSION = 'v1.0.0'
+export { STRUCTURED_CAUSE_TAXONOMY_VERSION, type StructuredCauseCode }
 export const STRUCTURED_CAUSE_RULE_VERSION = 'structured-cause-rules-v1'
 export const STRUCTURED_CAUSE_QUALITY_POLICY = Object.freeze({
   minimumSampleCount: 20,
@@ -11,24 +22,15 @@ export const STRUCTURED_CAUSE_QUALITY_POLICY = Object.freeze({
   prefillModificationRateRevisionThresholdPercent: 30,
 })
 
-export type StructuredCauseCode =
-  | 'predecessor_delay'
-  | 'material_shortage'
-  | 'labor_shortage'
-  | 'equipment_unavailable'
-  | 'design_change'
-  | 'drawing_delay'
-  | 'quality_rework'
-  | 'weather_impact'
-  | 'owner_decision'
-  | 'government_inspection'
-  | 'site_capacity_pressure'
-  | 'workflow_sequence'
-  | 'external_readiness'
-  | 'other'
-
 export type CauseRole = 'primary' | 'contributing' | 'transmitted'
 export type CauseStatus = 'candidate' | 'confirmed' | 'rejected' | 'superseded'
+export type StructuredCauseAvailability = 'available' | 'review_required' | 'unavailable'
+export type CanonicalCauseResolution = {
+  availability: StructuredCauseAvailability
+  causeCode: StructuredCauseCode | null
+  taxonomyVersion: typeof STRUCTURED_CAUSE_TAXONOMY_VERSION
+  reviewReasonCodes: string[]
+}
 export type ContractualResponsibilityClass =
   | 'owner_attributable'
   | 'contractor_attributable'
@@ -45,9 +47,21 @@ export type StructuredCauseEvidenceSource =
   | 'weather_signal'
   | 'change_log'
   | 'forecast_factor'
-  | 'offline_label'
   | 'manual_text'
   | 'user_confirmation'
+
+const STRUCTURED_CAUSE_EVIDENCE_SOURCES = new Set<StructuredCauseEvidenceSource>([
+  'task_obstacle',
+  'task_condition',
+  'task_dependency',
+  'material_arrival',
+  'drawing_package',
+  'weather_signal',
+  'change_log',
+  'forecast_factor',
+  'manual_text',
+  'user_confirmation',
+])
 
 export type StructuredCauseTaxonomyEntry = {
   code: StructuredCauseCode
@@ -57,22 +71,27 @@ export type StructuredCauseTaxonomyEntry = {
   priority: number
 }
 
-export const STRUCTURED_CAUSE_TAXONOMY: StructuredCauseTaxonomyEntry[] = [
-  { code: 'predecessor_delay', label: 'Predecessor transmission delay', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 92 },
-  { code: 'material_shortage', label: 'Material shortage or late arrival', category: 'resource', linkedDeviationReasonTypes: ['external_readiness', 'site_capacity_pressure'], priority: 90 },
-  { code: 'labor_shortage', label: 'Labor shortage', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 86 },
-  { code: 'equipment_unavailable', label: 'Equipment unavailable', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 84 },
-  { code: 'design_change', label: 'Design change', category: 'design', linkedDeviationReasonTypes: ['external_readiness', 'process_constraint'], priority: 88 },
-  { code: 'drawing_delay', label: 'Drawing or approval delay', category: 'design', linkedDeviationReasonTypes: ['external_readiness'], priority: 89 },
-  { code: 'quality_rework', label: 'Quality rework', category: 'quality', linkedDeviationReasonTypes: ['process_constraint'], priority: 87 },
-  { code: 'weather_impact', label: 'Weather impact', category: 'external', linkedDeviationReasonTypes: ['calendar_productivity'], priority: 82 },
-  { code: 'owner_decision', label: 'Owner decision delay', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 83 },
-  { code: 'government_inspection', label: 'Government inspection or approval', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 81 },
-  { code: 'site_capacity_pressure', label: 'Site capacity pressure', category: 'site', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 80 },
-  { code: 'workflow_sequence', label: 'Workflow sequence deviation', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 78 },
-  { code: 'external_readiness', label: 'External readiness not met', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 76 },
-  { code: 'other', label: 'Other or unclassified', category: 'fallback', linkedDeviationReasonTypes: [], priority: 1 },
-]
+const STRUCTURED_CAUSE_TAXONOMY_DETAILS: Record<StructuredCauseCode, Omit<StructuredCauseTaxonomyEntry, 'code'>> = {
+  predecessor_delay: { label: 'Predecessor transmission delay', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 92 },
+  material_shortage: { label: 'Material shortage or late arrival', category: 'resource', linkedDeviationReasonTypes: ['external_readiness', 'site_capacity_pressure'], priority: 90 },
+  labor_shortage: { label: 'Labor shortage', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 86 },
+  equipment_unavailable: { label: 'Equipment unavailable', category: 'resource', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 84 },
+  design_change: { label: 'Design change', category: 'design', linkedDeviationReasonTypes: ['external_readiness', 'process_constraint'], priority: 88 },
+  drawing_delay: { label: 'Drawing or approval delay', category: 'design', linkedDeviationReasonTypes: ['external_readiness'], priority: 89 },
+  quality_rework: { label: 'Quality rework', category: 'quality', linkedDeviationReasonTypes: ['process_constraint'], priority: 87 },
+  weather_impact: { label: 'Weather impact', category: 'external', linkedDeviationReasonTypes: ['calendar_productivity'], priority: 82 },
+  owner_decision: { label: 'Owner decision delay', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 83 },
+  government_inspection: { label: 'Government inspection or approval', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 81 },
+  site_capacity_pressure: { label: 'Site capacity pressure', category: 'site', linkedDeviationReasonTypes: ['site_capacity_pressure'], priority: 80 },
+  workflow_sequence: { label: 'Workflow sequence deviation', category: 'sequence', linkedDeviationReasonTypes: ['workflow_sequence'], priority: 78 },
+  external_readiness: { label: 'External readiness not met', category: 'external', linkedDeviationReasonTypes: ['external_readiness'], priority: 76 },
+  other: { label: 'Other or unclassified', category: 'fallback', linkedDeviationReasonTypes: [], priority: 1 },
+}
+
+export const STRUCTURED_CAUSE_TAXONOMY: StructuredCauseTaxonomyEntry[] = CANONICAL_STRUCTURED_CAUSE_CODES.map((code) => ({
+  code,
+  ...STRUCTURED_CAUSE_TAXONOMY_DETAILS[code],
+}))
 
 const TAXONOMY_BY_CODE = new Map(STRUCTURED_CAUSE_TAXONOMY.map((entry) => [entry.code, entry]))
 const AUTO_CONFIRM_MIN_CONFIDENCE = 0.94
@@ -124,6 +143,7 @@ export type StructuredCauseCandidate = {
   subjectType: StructuredCauseCandidateInput['subjectType']
   subjectId: string
   eventType: StructuredCauseCandidateInput['eventType']
+  availability: Exclude<StructuredCauseAvailability, 'unavailable'>
   causeCode: StructuredCauseCode
   causeRole: CauseRole
   taxonomyVersion: string
@@ -159,13 +179,29 @@ function normalized(value: unknown) {
   return text(value).toLowerCase().replace(/[\s_-]+/g, '')
 }
 
+function normalizedManualTextIdentity(value: unknown) {
+  return text(value).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ')
+}
+
+function resolveManualRawText(input: StructuredCauseCandidateInput) {
+  const directText = text(input.rawText)
+  if (directText) return directText
+
+  for (const evidence of input.evidence) {
+    if (evidence.sourceType !== 'manual_text') continue
+    const evidenceText = text(evidence.attributes?.text)
+    if (evidenceText) return evidenceText
+  }
+  return null
+}
+
 function asFiniteNumber(value: unknown, fallback = 0) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
 }
 
 function isCauseCode(value: unknown): value is StructuredCauseCode {
-  return TAXONOMY_BY_CODE.has(text(value) as StructuredCauseCode)
+  return isStructuredCauseCode(text(value))
 }
 
 function resolveObstacleCause(attributes: Record<string, unknown>): CauseRuleMatch {
@@ -194,11 +230,13 @@ function resolveConditionCause(attributes: Record<string, unknown>): CauseRuleMa
 
 function resolveForecastFactorCause(attributes: Record<string, unknown>): CauseRuleMatch | null {
   const key = text(attributes.factorKey ?? attributes.factor_key ?? attributes.key)
-  if (key === 'resource_conflict' || key === 'progress_velocity') return { causeCode: 'site_capacity_pressure', confidence: 0.78, responsibilityBasis: 'site_capacity' }
-  if (key === 'external_readiness') return { causeCode: 'external_readiness', confidence: 0.76, responsibilityBasis: 'external_wait' }
-  if (key === 'weather_forecast_impact' || key === 'seasonal_productivity') return { causeCode: 'weather_impact', confidence: 0.74, responsibilityBasis: 'calendar_productivity' }
-  if (key === 'workflow_sequence') return { causeCode: 'workflow_sequence', confidence: 0.74, responsibilityBasis: 'workflow' }
-  return null
+  const translation = translateLegacyProgressFactor(key)
+  if (!translation) return null
+
+  if (key === 'resource_conflict' || key === 'progress_velocity') return { causeCode: translation.causeCode, confidence: 0.78, responsibilityBasis: 'site_capacity' }
+  if (key === 'external_readiness') return { causeCode: translation.causeCode, confidence: 0.76, responsibilityBasis: 'external_wait' }
+  if (key === 'seasonal_productivity' || key === 'process_seasonal_sensitivity' || key === 'weather_forecast_impact' || key === 'productivity_compensation') return { causeCode: translation.causeCode, confidence: 0.74, responsibilityBasis: 'calendar_productivity' }
+  return { causeCode: translation.causeCode, confidence: 0.74, responsibilityBasis: 'workflow' }
 }
 
 function resolveEvidenceCause(evidence: StructuredCauseEvidence): CauseRuleMatch | null {
@@ -222,12 +260,6 @@ function resolveEvidenceCause(evidence: StructuredCauseEvidence): CauseRuleMatch
       return { causeCode: 'design_change', confidence: 0.9, responsibilityBasis: 'change_log' }
     case 'forecast_factor':
       return resolveForecastFactorCause(attributes)
-    case 'offline_label': {
-      const code = attributes.suggestedCauseCode ?? attributes.suggested_cause_code
-      return isCauseCode(code)
-        ? { causeCode: code, confidence: Math.min(0.99, Math.max(0, asFiniteNumber(attributes.confidence, 0.5))), responsibilityBasis: 'offline_label' }
-        : { causeCode: 'other', confidence: 0.35, responsibilityBasis: 'offline_label' }
-    }
     case 'manual_text':
       return { causeCode: 'other', confidence: 0.3, responsibilityBasis: 'manual_text' }
     default:
@@ -235,8 +267,13 @@ function resolveEvidenceCause(evidence: StructuredCauseEvidence): CauseRuleMatch
   }
 }
 
-function buildDedupeKey(input: StructuredCauseCandidateInput, causeCode: StructuredCauseCode, role: CauseRole) {
-  return createHash('sha256').update([
+function buildDedupeKey(
+  input: StructuredCauseCandidateInput,
+  causeCode: StructuredCauseCode,
+  role: CauseRole,
+  sourceIdentity = '',
+) {
+  const identityParts = [
     input.projectId,
     input.subjectType,
     input.subjectId,
@@ -245,7 +282,9 @@ function buildDedupeKey(input: StructuredCauseCandidateInput, causeCode: Structu
     role,
     input.windowStart ?? '',
     input.windowEnd ?? '',
-  ].join('|')).digest('hex')
+  ]
+  if (sourceIdentity) identityParts.push(sourceIdentity)
+  return createHash('sha256').update(identityParts.join('|')).digest('hex')
 }
 
 export function buildStructuredCauseCandidates(input: StructuredCauseCandidateInput): StructuredCauseCandidate[] {
@@ -257,6 +296,24 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
   }>()
 
   for (const evidence of input.evidence) {
+    if (!STRUCTURED_CAUSE_EVIDENCE_SOURCES.has(evidence.sourceType)) {
+      throw new Error(`CAUSE_EVIDENCE_SOURCE_UNSUPPORTED:${String(evidence.sourceType)}`)
+    }
+  }
+
+  const resolvedManualRawText = resolveManualRawText(input)
+  const evidenceItems = input.evidence.filter((item) => (
+    item.sourceType !== 'manual_text' || resolvedManualRawText !== null
+  ))
+  if (resolvedManualRawText && !evidenceItems.some((item) => item.sourceType === 'manual_text')) {
+    evidenceItems.push({
+      sourceType: 'manual_text',
+      sourceId: `manual:${input.subjectType}:${input.subjectId}:${input.eventType}`,
+      attributes: { text: resolvedManualRawText },
+    })
+  }
+
+  for (const evidence of evidenceItems) {
     const match = resolveEvidenceCause(evidence)
     if (!match) continue
     const existing = grouped.get(match.causeCode) ?? {
@@ -291,15 +348,22 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       : causeCode === firstDirectCause
         ? 'primary'
         : 'contributing'
-    const hasOfflineOrManualSource = sourceTypes.some((source) => source === 'offline_label' || source === 'manual_text')
-    const reviewReasonCodes = [
-      confidence < AUTO_CONFIRM_MIN_CONFIDENCE ? 'confidence_below_auto_confirm_threshold' : '',
-      sourceTypes.length < AUTO_CONFIRM_MIN_SOURCE_TYPES ? 'insufficient_independent_evidence_sources' : '',
-      asFiniteNumber(input.impactDays) > AUTO_CONFIRM_MAX_IMPACT_DAYS ? 'high_impact_requires_review' : '',
-      ALWAYS_REVIEW_CODES.has(causeCode) ? 'cause_code_requires_review' : '',
-      hasOfflineOrManualSource ? 'offline_or_manual_label_requires_confirmation' : '',
-      causeRole === 'transmitted' ? 'transmitted_cause_requires_chain_confirmation' : '',
-    ].filter(Boolean)
+    const hasManualTextSource = sourceTypes.includes('manual_text')
+    const manualTextIdentity = hasManualTextSource
+      ? normalizedManualTextIdentity(resolvedManualRawText)
+      : ''
+    const dedupeSourceIdentity = hasManualTextSource
+      ? `manual_text/v1:${createHash('sha256').update(manualTextIdentity).digest('hex')}`
+      : ''
+    const reviewReasonCodes = hasManualTextSource
+      ? ['manual_text_requires_user_confirmation']
+      : [
+          confidence < AUTO_CONFIRM_MIN_CONFIDENCE ? 'confidence_below_auto_confirm_threshold' : '',
+          sourceTypes.length < AUTO_CONFIRM_MIN_SOURCE_TYPES ? 'insufficient_independent_evidence_sources' : '',
+          asFiniteNumber(input.impactDays) > AUTO_CONFIRM_MAX_IMPACT_DAYS ? 'high_impact_requires_review' : '',
+          ALWAYS_REVIEW_CODES.has(causeCode) ? 'cause_code_requires_review' : '',
+          causeRole === 'transmitted' ? 'transmitted_cause_requires_chain_confirmation' : '',
+        ].filter(Boolean)
     const autoConfirmed = reviewReasonCodes.length === 0
 
     return {
@@ -308,10 +372,11 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       subjectType: input.subjectType,
       subjectId: input.subjectId,
       eventType: input.eventType,
+      availability: autoConfirmed ? 'available' : 'review_required',
       causeCode,
       causeRole,
       taxonomyVersion: STRUCTURED_CAUSE_TAXONOMY_VERSION,
-      rawText: text(input.rawText) || null,
+      rawText: hasManualTextSource ? resolvedManualRawText : text(input.rawText) || null,
       evidenceRefs,
       evidenceSourceTypes: sourceTypes,
       windowStart: text(input.windowStart) || null,
@@ -322,10 +387,12 @@ export function buildStructuredCauseCandidates(input: StructuredCauseCandidateIn
       autoConfirmed,
       confirmationSource: autoConfirmed ? 'deterministic_policy' : 'candidate',
       responsibilityClass: null,
-      responsibilityBasis: [...new Set(value.responsibilityBases)].join('+') || null,
+      responsibilityBasis: hasManualTextSource
+        ? null
+        : [...new Set(value.responsibilityBases)].join('+') || null,
       requiresManualReview: !autoConfirmed,
       reviewReasonCodes,
-      dedupeKey: buildDedupeKey(input, causeCode, causeRole),
+      dedupeKey: buildDedupeKey(input, causeCode, causeRole, dedupeSourceIdentity),
     }
   })
 }
@@ -344,16 +411,80 @@ export class StructuredCauseAttributionError extends Error {
 type QueryResult = { rows: any[]; rowCount?: number | null }
 type QueryExec = (sql: string, params?: unknown[]) => Promise<QueryResult>
 type WithTransaction = <T>(work: () => Promise<T>) => Promise<T>
+type TaskDurationExperienceRebuildInput = {
+  companyId: string
+  projectId: string
+  taskId: string
+  actorId: string
+  trigger: 'structured_cause_user_confirmation'
+}
+type DurationExperienceRebuildGeneration = {
+  id: string
+  generationToken: string
+}
 type StructuredCauseDependencies = {
   queryExec?: QueryExec
   withTransaction?: WithTransaction
+  registerPostCommitEffect?: typeof registerDatabasePostCommitEffect
+  enqueueDurationExperienceRebuild?: (input: TaskDurationExperienceRebuildInput) => Promise<DurationExperienceRebuildGeneration>
+  completeDurationExperienceRebuild?: (generation: DurationExperienceRebuildGeneration) => Promise<unknown>
+  rebuildTaskDurationExperienceSample?: (input: TaskDurationExperienceRebuildInput) => Promise<unknown>
+}
+
+async function enqueueDurationExperienceRebuild(input: TaskDurationExperienceRebuildInput, queryExec: QueryExec) {
+  const service = await import('./durationExperienceReconciliationService.js')
+  return service.enqueueDurationExperienceRebuild(input, { queryExec })
+}
+
+async function completeDurationExperienceRebuild(
+  generation: DurationExperienceRebuildGeneration,
+  queryExec: QueryExec,
+) {
+  const service = await import('./durationExperienceReconciliationService.js')
+  return service.completeDurationExperienceRebuild(generation, { queryExec })
+}
+
+async function rebuildTaskDurationExperienceSample(input: TaskDurationExperienceRebuildInput) {
+  const { rebuildDurationExperienceSampleForTask } = await import('./durationExperienceReconciliationService.js')
+  return rebuildDurationExperienceSampleForTask(input)
 }
 
 function dependencies(input?: StructuredCauseDependencies) {
+  const queryExec = input?.queryExec ?? (rawQuery as QueryExec)
   return {
-    queryExec: input?.queryExec ?? (rawQuery as QueryExec),
+    queryExec,
     withTransaction: input?.withTransaction ?? withDatabaseTransaction,
+    registerPostCommitEffect: input?.registerPostCommitEffect ?? registerDatabasePostCommitEffect,
+    enqueueDurationExperienceRebuild: input?.enqueueDurationExperienceRebuild
+      ?? ((rebuildInput: TaskDurationExperienceRebuildInput) => enqueueDurationExperienceRebuild(rebuildInput, queryExec)),
+    completeDurationExperienceRebuild: input?.completeDurationExperienceRebuild
+      ?? ((generation: DurationExperienceRebuildGeneration) => completeDurationExperienceRebuild(generation, queryExec)),
+    rebuildTaskDurationExperienceSample:
+      input?.rebuildTaskDurationExperienceSample ?? rebuildTaskDurationExperienceSample,
   }
+}
+
+async function registerDurableDurationExperienceRebuild(
+  input: TaskDurationExperienceRebuildInput,
+  services: Pick<ReturnType<typeof dependencies>,
+    | 'enqueueDurationExperienceRebuild'
+    | 'completeDurationExperienceRebuild'
+    | 'registerPostCommitEffect'
+    | 'rebuildTaskDurationExperienceSample'>,
+) {
+  const queued = await services.enqueueDurationExperienceRebuild(input)
+  const queueId = text(queued.id)
+  const generationToken = text(queued.generationToken)
+  if (!queueId || !generationToken) throw new Error('Structured cause duration rebuild queue generation is required.')
+  const generation = { id: queueId, generationToken }
+  await services.registerPostCommitEffect(
+    `rebuild-duration-experience-sample:${input.projectId}:${input.taskId}`,
+    async () => {
+      const rebuilt = await services.rebuildTaskDurationExperienceSample(input)
+      if (rebuilt !== true) throw new Error('Structured cause duration experience sample rebuild was not completed.')
+      await services.completeDurationExperienceRebuild(generation)
+    },
+  )
 }
 
 async function assertProjectTenant(queryExec: QueryExec, companyId: string, projectId: string) {
@@ -612,8 +743,34 @@ export async function persistStructuredCauseCandidates(
   return withTransaction(async () => {
     await assertProjectTenant(queryExec, input.companyId, input.projectId)
     const candidates = buildStructuredCauseCandidates(input)
+    if (candidates.some((candidate) => (
+      candidate.subjectType === 'task'
+      && candidate.causeRole === 'primary'
+      && ['delay', 'completion'].includes(candidate.eventType)
+    ))) {
+      await lockTaskPrimaryAuthority(queryExec, input.subjectId, input.projectId)
+    }
     const rows: Record<string, unknown>[] = []
     for (const candidate of candidates) {
+      if (
+        candidate.subjectType === 'task'
+        && candidate.causeRole === 'primary'
+        && ['delay', 'completion'].includes(candidate.eventType)
+      ) {
+        await queryExec(
+          `UPDATE public.structured_cause_attributions
+              SET status = 'superseded', updated_at = NOW()
+            WHERE company_id = $1
+              AND project_id = $2
+              AND subject_type = 'task'
+              AND subject_id = $3
+              AND event_type IN ('delay', 'completion')
+              AND cause_role = 'primary'
+              AND status IN ('candidate', 'confirmed')
+              AND dedupe_key <> $4`,
+          [candidate.companyId, candidate.projectId, candidate.subjectId, candidate.dedupeKey],
+        )
+      }
       const result = await queryExec(
          `INSERT INTO public.structured_cause_attributions (
            company_id, project_id, subject_type, subject_id, event_type,
@@ -631,14 +788,74 @@ export async function persistStructuredCauseCandidates(
            $21, NULL
          )
          ON CONFLICT (company_id, dedupe_key) DO UPDATE SET
+           cause_code = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.cause_code
+             ELSE structured_cause_attributions.cause_code
+           END,
+           prefilled_cause_code = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.prefilled_cause_code
+             ELSE structured_cause_attributions.prefilled_cause_code
+           END,
+           prefill_modified = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.prefill_modified
+             ELSE structured_cause_attributions.prefill_modified
+           END,
            evidence_refs = EXCLUDED.evidence_refs,
            evidence_source_types = EXCLUDED.evidence_source_types,
-           confidence = GREATEST(structured_cause_attributions.confidence, EXCLUDED.confidence),
+           confidence = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confidence
+             ELSE GREATEST(structured_cause_attributions.confidence, EXCLUDED.confidence)
+           END,
            status = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.status
              WHEN structured_cause_attributions.status IN ('confirmed', 'rejected') THEN structured_cause_attributions.status
              ELSE EXCLUDED.status
            END,
-           auto_confirmed = structured_cause_attributions.auto_confirmed OR EXCLUDED.auto_confirmed,
+           auto_confirmed = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.auto_confirmed
+             ELSE structured_cause_attributions.auto_confirmed OR EXCLUDED.auto_confirmed
+           END,
+           confirmation_source = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confirmation_source
+             ELSE structured_cause_attributions.confirmation_source
+           END,
+           raw_text = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.raw_text
+             ELSE structured_cause_attributions.raw_text
+           END,
+           review_reason_codes = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb
+               THEN EXCLUDED.review_reason_codes
+             ELSE structured_cause_attributions.review_reason_codes
+           END,
+           responsibility_class = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.responsibility_class
+             ELSE structured_cause_attributions.responsibility_class
+           END,
+           responsibility_basis = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.responsibility_basis
+             ELSE structured_cause_attributions.responsibility_basis
+           END,
+           confirmed_by = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confirmed_by
+             ELSE structured_cause_attributions.confirmed_by
+           END,
+           confirmed_at = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.confirmed_at
+             ELSE structured_cause_attributions.confirmed_at
+           END,
+           rejected_by = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.rejected_by
+             ELSE structured_cause_attributions.rejected_by
+           END,
+           rejected_at = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.rejected_at
+             ELSE structured_cause_attributions.rejected_at
+           END,
+           rejection_reason = CASE
+             WHEN EXCLUDED.evidence_source_types @> '["manual_text"]'::jsonb THEN EXCLUDED.rejection_reason
+             ELSE structured_cause_attributions.rejection_reason
+           END,
            updated_at = NOW()
          RETURNING *`,
         [
@@ -708,11 +925,40 @@ async function assertCauseSubjectProject(
   }
 }
 
+async function lockTaskPrimaryAuthority(
+  queryExec: QueryExec,
+  taskId: string,
+  projectId: string,
+) {
+  const result = await queryExec(
+    `SELECT id
+       FROM public.tasks
+      WHERE id = $1
+        AND project_id = $2
+      FOR UPDATE`,
+    [taskId, projectId],
+  )
+  if (!result.rows[0]) {
+    throw new StructuredCauseAttributionError(
+      'CAUSE_ATTRIBUTION_SUBJECT_NOT_FOUND',
+      'The cause attribution subject was not found in the requested project.',
+      404,
+    )
+  }
+}
+
 export async function recordUserConfirmedStructuredCauseAttribution(
   input: UserConfirmedStructuredCauseInput,
   dependencyOverrides?: StructuredCauseDependencies,
 ) {
-  const { queryExec, withTransaction } = dependencies(dependencyOverrides)
+  const {
+    queryExec,
+    withTransaction,
+    registerPostCommitEffect,
+    enqueueDurationExperienceRebuild,
+    completeDurationExperienceRebuild,
+    rebuildTaskDurationExperienceSample,
+  } = dependencies(dependencyOverrides)
   const causeRole = input.causeRole ?? 'primary'
   const rawText = text(input.rawText)
   const actorId = text(input.actorId)
@@ -730,11 +976,39 @@ export async function recordUserConfirmedStructuredCauseAttribution(
     )
   }
 
+  const dedupeKey = buildDedupeKey({
+    companyId: input.companyId,
+    projectId: input.projectId,
+    subjectType: input.subjectType,
+    subjectId: input.subjectId,
+    eventType: input.eventType,
+    rawText,
+    evidence: [],
+  }, input.causeCode, causeRole)
+
   return withTransaction(async () => {
     await assertProjectTenant(queryExec, input.companyId, input.projectId)
-    await assertCauseSubjectProject(queryExec, input.subjectType, input.subjectId, input.projectId)
+    if (causeRole === 'primary' && input.subjectType === 'task') {
+      await lockTaskPrimaryAuthority(queryExec, input.subjectId, input.projectId)
+    } else {
+      await assertCauseSubjectProject(queryExec, input.subjectType, input.subjectId, input.projectId)
+    }
 
-    if (causeRole === 'primary') {
+    if (causeRole === 'primary' && input.subjectType === 'task') {
+      await queryExec(
+        `UPDATE public.structured_cause_attributions
+            SET status = 'superseded', updated_at = NOW()
+          WHERE company_id = $1
+            AND project_id = $2
+            AND subject_type = 'task'
+            AND subject_id = $3
+            AND event_type IN ('delay', 'completion')
+            AND cause_role = 'primary'
+            AND status IN ('candidate', 'confirmed')
+            AND dedupe_key <> $4`,
+        [input.companyId, input.projectId, input.subjectId, dedupeKey],
+      )
+    } else if (causeRole === 'primary') {
       await queryExec(
         `UPDATE public.structured_cause_attributions
             SET status = 'superseded', updated_at = NOW()
@@ -748,16 +1022,6 @@ export async function recordUserConfirmedStructuredCauseAttribution(
         [input.companyId, input.projectId, input.subjectType, input.subjectId, input.eventType],
       )
     }
-
-    const dedupeKey = buildDedupeKey({
-      companyId: input.companyId,
-      projectId: input.projectId,
-      subjectType: input.subjectType,
-      subjectId: input.subjectId,
-      eventType: input.eventType,
-      rawText,
-      evidence: [],
-    }, input.causeCode, causeRole)
     const result = await queryExec(
        `INSERT INTO public.structured_cause_attributions (
          company_id, project_id, subject_type, subject_id, event_type,
@@ -817,6 +1081,21 @@ export async function recordUserConfirmedStructuredCauseAttribution(
         dedupeKey,
       ],
     )
+
+    if (causeRole === 'primary' && input.subjectType === 'task') {
+      await registerDurableDurationExperienceRebuild({
+        companyId: input.companyId,
+        projectId: input.projectId,
+        taskId: input.subjectId,
+        actorId,
+        trigger: 'structured_cause_user_confirmation',
+      }, {
+        enqueueDurationExperienceRebuild,
+        completeDurationExperienceRebuild,
+        registerPostCommitEffect,
+        rebuildTaskDurationExperienceSample,
+      })
+    }
     return result.rows[0]
   })
 }
@@ -908,8 +1187,32 @@ export async function confirmStructuredCauseAttribution(input: {
   responsibilityBasis?: string | null
   rawText?: string | null
 }, dependencyOverrides?: StructuredCauseDependencies) {
-  const { queryExec, withTransaction } = dependencies(dependencyOverrides)
+  const {
+    queryExec,
+    withTransaction,
+    registerPostCommitEffect,
+    enqueueDurationExperienceRebuild,
+    completeDurationExperienceRebuild,
+    rebuildTaskDurationExperienceSample,
+  } = dependencies(dependencyOverrides)
   return withTransaction(async () => {
+    const identityResult = await queryExec(
+      `SELECT subject_type, subject_id, cause_role, event_type
+         FROM public.structured_cause_attributions
+        WHERE id = $1 AND company_id = $2 AND project_id = $3`,
+      [input.attributionId, input.companyId, input.projectId],
+    )
+    const identity = identityResult.rows[0]
+    if (!identity) {
+      throw new StructuredCauseAttributionError('CAUSE_ATTRIBUTION_NOT_FOUND', 'Cause attribution was not found.', 404)
+    }
+    const identityIsSupportedTaskPrimary = text(identity.subject_type) === 'task'
+      && text(identity.cause_role) === 'primary'
+      && ['delay', 'completion'].includes(text(identity.event_type))
+    if (identityIsSupportedTaskPrimary) {
+      await lockTaskPrimaryAuthority(queryExec, text(identity.subject_id), input.projectId)
+    }
+
     const currentResult = await queryExec(
       `SELECT *
          FROM public.structured_cause_attributions
@@ -920,6 +1223,18 @@ export async function confirmStructuredCauseAttribution(input: {
     const current = currentResult.rows[0]
     if (!current) {
       throw new StructuredCauseAttributionError('CAUSE_ATTRIBUTION_NOT_FOUND', 'Cause attribution was not found.', 404)
+    }
+    if (
+      text(current.subject_type) !== text(identity.subject_type)
+      || text(current.subject_id) !== text(identity.subject_id)
+      || text(current.cause_role) !== text(identity.cause_role)
+      || text(current.event_type) !== text(identity.event_type)
+    ) {
+      throw new StructuredCauseAttributionError(
+        'CAUSE_ATTRIBUTION_IDENTITY_CHANGED',
+        'Cause attribution identity changed while confirmation was being serialized.',
+        409,
+      )
     }
     if (text(current.status) === 'rejected' || text(current.status) === 'superseded') {
       throw new StructuredCauseAttributionError('CAUSE_ATTRIBUTION_NOT_CONFIRMABLE', 'Rejected or superseded attribution cannot be confirmed.', 409)
@@ -932,7 +1247,24 @@ export async function confirmStructuredCauseAttribution(input: {
       )
     }
 
-    if (text(current.cause_role) === 'primary') {
+    const isSupportedTaskPrimary = text(current.subject_type) === 'task'
+      && text(current.cause_role) === 'primary'
+      && ['delay', 'completion'].includes(text(current.event_type))
+    if (isSupportedTaskPrimary) {
+      await queryExec(
+        `UPDATE public.structured_cause_attributions
+            SET status = 'superseded', updated_at = NOW()
+          WHERE company_id = $1
+            AND project_id = $2
+            AND subject_type = 'task'
+            AND subject_id = $3
+            AND event_type IN ('delay', 'completion')
+            AND cause_role = 'primary'
+            AND status IN ('candidate', 'confirmed')
+            AND id <> $4`,
+        [input.companyId, input.projectId, current.subject_id, input.attributionId],
+      )
+    } else if (text(current.cause_role) === 'primary') {
       await queryExec(
         `UPDATE public.structured_cause_attributions
             SET status = 'superseded', updated_at = NOW()
@@ -984,6 +1316,21 @@ export async function confirmStructuredCauseAttribution(input: {
         confirmedCauseCode,
       ],
     )
+    if (isSupportedTaskPrimary) {
+      const taskId = text(current.subject_id)
+      await registerDurableDurationExperienceRebuild({
+        companyId: input.companyId,
+        projectId: input.projectId,
+        taskId,
+        actorId: input.actorId,
+        trigger: 'structured_cause_user_confirmation',
+      }, {
+        enqueueDurationExperienceRebuild,
+        completeDurationExperienceRebuild,
+        registerPostCommitEffect,
+        rebuildTaskDurationExperienceSample,
+      })
+    }
     return updated.rows[0]
   })
 }
@@ -1141,6 +1488,8 @@ export async function listStructuredCauseAttributions(input: {
   subjectType?: StructuredCauseCandidateInput['subjectType'] | null
   subjectId?: string | null
   status?: CauseStatus | null
+  eventType?: StructuredCauseCandidateInput['eventType'] | null
+  causeRole?: CauseRole | null
 }, dependencyOverrides?: Pick<StructuredCauseDependencies, 'queryExec'>) {
   const { queryExec } = dependencies(dependencyOverrides)
   await assertProjectTenant(queryExec, input.companyId, input.projectId)
@@ -1152,8 +1501,18 @@ export async function listStructuredCauseAttributions(input: {
         AND ($3::text IS NULL OR subject_type = $3)
         AND ($4::text IS NULL OR subject_id = $4)
         AND ($5::text IS NULL OR status = $5)
+        AND ($6::text IS NULL OR event_type = $6)
+        AND ($7::text IS NULL OR cause_role = $7)
       ORDER BY created_at DESC, id DESC`,
-    [input.companyId, input.projectId, input.subjectType ?? null, text(input.subjectId) || null, input.status ?? null],
+    [
+      input.companyId,
+      input.projectId,
+      input.subjectType ?? null,
+      text(input.subjectId) || null,
+      input.status ?? null,
+      input.eventType ?? null,
+      input.causeRole ?? null,
+    ],
   )
   return result.rows
 }

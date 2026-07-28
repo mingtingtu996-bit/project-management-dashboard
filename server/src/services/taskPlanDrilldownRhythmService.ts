@@ -9,6 +9,8 @@ import {
 } from './algorithmSeedResolver.js'
 import {
   addConstructionProductionDays,
+  effectiveConstructionCalendarBasis,
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -182,7 +184,11 @@ function inclusiveDays(
   const parsedStart = parseConstructionCalendarDate(start)
   const parsedEnd = parseConstructionCalendarDate(end)
   if (!parsedStart || !parsedEnd) return 0
-  return productionDaysBetweenInclusive(parsedStart, parsedEnd, constructionCalendar)
+  return productionDaysBetweenInclusive(
+    parsedStart,
+    parsedEnd,
+    isAuthoritativeConstructionCalendar(constructionCalendar) ? constructionCalendar : null,
+  )
 }
 
 function addDays(
@@ -192,7 +198,11 @@ function addDays(
 ) {
   const parsedStart = parseConstructionCalendarDate(start)
   if (!parsedStart) return start
-  return addConstructionProductionDays(parsedStart, Math.max(0, offsetDays) + 1, constructionCalendar)
+  return addConstructionProductionDays(
+    parsedStart,
+    Math.max(0, offsetDays) + 1,
+    isAuthoritativeConstructionCalendar(constructionCalendar) ? constructionCalendar : null,
+  )
 }
 
 function readMetadata(task: Record<string, unknown>) {
@@ -373,7 +383,7 @@ function buildParentWindowFit(params: {
   if (params.nextLevel === 'activity_step') {
     return {
       decision: 'activity_window_fit',
-      calendarBasis: params.constructionCalendar.basis,
+      calendarBasis: effectiveConstructionCalendarBasis(params.constructionCalendar),
       availableProductionDays,
       cycleCount: params.parentContext.cycleCount,
       minimumRequiredProductionDays: null,
@@ -399,7 +409,7 @@ function buildParentWindowFit(params: {
   if (availableProductionDays < minimumRequiredProductionDays) {
     return {
       decision: 'blocked_by_minimum_rhythm_conflict',
-      calendarBasis: params.constructionCalendar.basis,
+      calendarBasis: effectiveConstructionCalendarBasis(params.constructionCalendar),
       availableProductionDays,
       cycleCount,
       minimumRequiredProductionDays,
@@ -417,7 +427,7 @@ function buildParentWindowFit(params: {
     const bufferProductionDays = availableProductionDays - p80RequiredProductionDays
     return {
       decision: bufferProductionDays > 0 ? 'p80_with_boundary_buffer' : 'p80_boundary_fit',
-      calendarBasis: params.constructionCalendar.basis,
+      calendarBasis: effectiveConstructionCalendarBasis(params.constructionCalendar),
       availableProductionDays,
       cycleCount,
       minimumRequiredProductionDays,
@@ -433,7 +443,7 @@ function buildParentWindowFit(params: {
 
   return {
     decision: 'controlled_compression_to_parent_boundary',
-    calendarBasis: params.constructionCalendar.basis,
+    calendarBasis: effectiveConstructionCalendarBasis(params.constructionCalendar),
     availableProductionDays,
     cycleCount,
     minimumRequiredProductionDays,

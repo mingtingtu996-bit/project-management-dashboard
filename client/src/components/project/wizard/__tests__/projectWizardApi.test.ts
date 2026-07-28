@@ -100,6 +100,72 @@ describe('projectWizardApi', () => {
     }))
   })
 
+  it('preserves only validated typed duration distributions in profile preview items', async () => {
+    const metric = (value: number) => ({
+      value,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-06-30',
+      availability: 'available',
+      unavailableReason: null,
+    })
+    vi.mocked(apiPost).mockResolvedValueOnce({
+      profile: {
+        generation: {
+          candidateDurationAssetPreview: {
+            items: [
+              {
+                clientRowId: 'valid-row',
+                title: 'Valid row',
+                durationRiskDistribution: {
+                  p20Duration: metric(8),
+                  p50Duration: metric(10),
+                  p80Duration: metric(14),
+                  reserveDuration: metric(4),
+                  source: 'accepted_real_project_outcome',
+                  scope: 'company',
+                  sampleCount: 3,
+                  generatedAt: '2026-07-01T08:00:00.000Z',
+                  sourceAsOf: '2026-06-30T23:59:59.000Z',
+                  availability: 'available',
+                  unavailableReason: null,
+                },
+              },
+              {
+                clientRowId: 'raw-row',
+                title: 'Raw row',
+                riskP50DurationDays: 99,
+                riskP80DurationDays: 120,
+                runtimeReferenceDaysConsumed: true,
+                runtimeReferenceDaysDurationRiskDistribution: {
+                  availability: 'available',
+                  p50Duration: { value: 99 },
+                },
+                durationRiskDistribution: {
+                  availability: 'available',
+                  p50Duration: { value: 99 },
+                  p80Duration: { value: 120 },
+                },
+              },
+            ],
+          },
+        },
+      },
+    } as any)
+
+    const result = await previewWizardProfile({ step: 6 } as any)
+    const items = result.profile.generation.candidateDurationAssetPreview?.items ?? []
+
+    expect(items[0]?.durationRiskDistribution).toEqual(expect.objectContaining({
+      availability: 'available',
+      sourceAsOf: '2026-06-30T23:59:59.000Z',
+    }))
+    expect(items[1]?.durationRiskDistribution).toBeNull()
+    expect((items[1] as any)?.runtimeReferenceDaysDurationRiskDistribution).toBeNull()
+  })
+
   it('submits final wizard generation as an async job and reads generation status', async () => {
     vi.mocked(apiPost).mockResolvedValueOnce({ projectId: 'project-1', generation: { state: 'queued', attemptId: 'attempt-1' } })
     vi.mocked(apiGet).mockResolvedValueOnce({ projectId: 'project-1', state: 'completed', attemptId: 'attempt-1' })

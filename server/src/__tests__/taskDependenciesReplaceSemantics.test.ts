@@ -173,5 +173,89 @@ describe('task dependency replacement semantics', () => {
       && entry.sql.includes('project_id = $2')
       && entry.params?.[1] === 'project-1'
     ))).toBe(true)
+    const transactionControlStatements = queries
+      .map((entry) => entry.sql.trim())
+      .filter((sql) => ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql))
+    expect(transactionControlStatements).toEqual([])
+    expect(client.release).not.toHaveBeenCalled()
+  })
+
+  it('owns the transaction lifecycle when no outer database transaction is active', async () => {
+    const { client, queries } = makeClient([])
+    mocks.getClient.mockResolvedValue(client)
+    const { replaceTaskDependencies } = await import('../services/taskStandardModelService.js')
+
+    await replaceTaskDependencies('task-1', [], {
+      projectId: 'project-1',
+      preserveCurrentTaskFacts: false,
+    })
+
+    expect(queries.map((entry) => entry.sql.trim())).toEqual(expect.arrayContaining([
+      'BEGIN',
+      'COMMIT',
+    ]))
+    expect(queries.map((entry) => entry.sql.trim())).not.toContain('ROLLBACK')
+    expect(client.release).toHaveBeenCalledTimes(1)
+  })
+
+  it('propagates an outer transaction write failure without rolling back or releasing its client', async () => {
+    mocks.isDatabaseTransactionActive.mockReturnValue(true)
+    const { client, queries } = makeClient([])
+    client.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params })
+      if (sql.includes('SELECT project_id FROM tasks WHERE id = $1')) {
+        return { rows: [{ project_id: 'project-1' }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT id, dependency_task_id, source_type')) {
+        throw new Error('outer transaction write failed')
+      }
+      return { rows: [], rowCount: 1 }
+    })
+    mocks.getClient.mockResolvedValue(client)
+    const { replaceTaskDependencies } = await import('../services/taskStandardModelService.js')
+
+    await expect(replaceTaskDependencies('task-1', [], {
+      projectId: 'project-1',
+      preserveCurrentTaskFacts: false,
+    })).rejects.toMatchObject({ code: 'TASK_DEPENDENCY_WRITE_FAILED' })
+
+    expect(queries.map((entry) => entry.sql.trim()).filter((sql) => (
+      ['BEGIN', 'COMMIT', 'ROLLBACK'].includes(sql)
+    ))).toEqual([])
+    expect(client.release).not.toHaveBeenCalled()
+  })
+
+  it('persists accepted target-compression provenance without normalizing it to manual', async () => {
+    mocks.isDatabaseTransactionActive.mockReturnValue(true)
+    const { client, queries } = makeClient([])
+    client.query.mockImplementation(async (sql: string, params?: unknown[]) => {
+      queries.push({ sql, params })
+      if (sql.includes('SELECT project_id FROM tasks WHERE id = $1')) {
+        return { rows: [{ project_id: 'project-1' }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT id, project_id FROM tasks WHERE project_id = $1 AND id = ANY')) {
+        return { rows: [{ id: 'predecessor-1', project_id: 'project-1' }], rowCount: 1 }
+      }
+      if (sql.includes('SELECT dependency_task_id FROM task_dependencies')) return { rows: [], rowCount: 0 }
+      if (sql.includes('SELECT id, dependency_task_id, source_type')) return { rows: [], rowCount: 0 }
+      if (sql.includes('SELECT * FROM task_dependencies')) {
+        return { rows: [{ id: 'dependency-1', dependency_task_id: 'predecessor-1' }], rowCount: 1 }
+      }
+      return { rows: [], rowCount: 1 }
+    })
+    mocks.getClient.mockResolvedValue(client)
+    const { replaceTaskDependencies } = await import('../services/taskStandardModelService.js')
+
+    await replaceTaskDependencies('task-1', [{
+      dependencyTaskId: 'predecessor-1',
+      dependencyType: 'SS',
+      lagDays: 1,
+      sourceType: 'target_end_compression',
+      metadata: { source: 'target_end_compression' },
+    }], { projectId: 'project-1', preserveCurrentTaskFacts: false })
+
+    const insert = queries.find((entry) => entry.sql.includes('INSERT INTO task_dependencies'))
+    expect(insert?.params?.[7]).toBe('target_end_compression')
+    expect(insert?.params?.[8]).toEqual(expect.objectContaining({ source: 'target_end_compression' }))
   })
 })

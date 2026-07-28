@@ -360,7 +360,7 @@ const state = vi.hoisted(() => {
 
 vi.mock('../middleware/auth.js', () => ({
   authenticate: vi.fn((req: any, _res: any, next: () => void) => {
-    req.user = { id: 'user-1' }
+    req.user = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }
     next()
   }),
   optionalAuthenticate: vi.fn((_req: any, _res: any, next: () => void) => next()),
@@ -405,6 +405,10 @@ vi.mock('../database.js', () => ({
   isDatabaseTransactionActive: vi.fn(() => false),
   withDatabaseTransaction: vi.fn(async (work: () => Promise<unknown>) => await work()),
   registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => await effect()),
+}))
+
+vi.mock('../services/acceptancePlanExecutionFactService.js', () => ({
+  recordAcceptancePlanExecutionFacts: vi.fn(async () => undefined),
 }))
 
 vi.mock('../services/dbService.js', () => ({

@@ -183,6 +183,13 @@ export type ScheduleTargetFeasibility = {
     explanation: string
   }>
   accelerationProposal?: ScheduleAccelerationProposal
+  accelerationRecommendation?: {
+    id: string
+    recommendationHash: string
+    operationsHash: string
+    issuedAt: string
+    expiresAt: string
+  }
   durationOutputCode?: DurationOutputCode
   durationOutputSemanticFieldName?: string | null
   durationOutputContract?: Record<string, unknown> | null
@@ -351,11 +358,26 @@ export type ScheduleAccelerationRescheduleDraft = {
   }>
   dependencyAdjustments: Extract<ScheduleAccelerationProposalAction, { type: 'fast_track' }>['dependencyAdjustments']
   resourceAdjustments: Extract<ScheduleAccelerationProposalAction, { type: 'crashing' }>['durationAdjustments']
-  operations: Array<{
-    type: 'update'
-    clientRowId: string
-    values: Record<string, unknown>
-  }>
+  operations: Array<
+    | {
+        type: 'update_row'
+        rowId: string
+        clientRowId?: string
+        values: Record<string, unknown>
+      }
+    | {
+        type: 'set_predecessors'
+        rowId: string
+        clientRowId?: string
+        predecessorTaskIds: string[]
+        predecessorDependencies: Array<{
+          dependencyTaskId: string
+          dependencyType: ScheduleAccelerationDependencyType
+          lagDays: number
+          sourceType: string
+        }>
+      }
+  >
 }
 
 export type ScheduleAccelerationProposalAction =
@@ -2524,16 +2546,10 @@ function buildTargetRescheduleDraft(params: {
   const allTaskDateAdjustments = [...taskDateAdjustments, ...dependencyPropagationAdjustments]
   if (allTaskDateAdjustments.length === 0 && dependencyAdjustments.length === 0) return undefined
 
-  return {
-    mode: 'proposal_review',
-    source: 'target_end_compression',
-    writePolicy: 'requires_user_acceptance',
-    taskDateAdjustments: allTaskDateAdjustments,
-    dependencyAdjustments,
-    resourceAdjustments,
-    operations: allTaskDateAdjustments.map((adjustment) => ({
-      type: 'update',
-      clientRowId: adjustment.clientRowId,
+  const dateOperations: ScheduleAccelerationRescheduleDraft['operations'] = allTaskDateAdjustments
+    .map((adjustment) => ({
+      type: 'update_row' as const,
+      rowId: adjustment.clientRowId,
       values: {
         ...(adjustment.proposedStartDate && adjustment.proposedStartDate !== adjustment.currentStartDate
           ? { planned_start_date: adjustment.proposedStartDate }
@@ -2541,13 +2557,61 @@ function buildTargetRescheduleDraft(params: {
         ...(adjustment.proposedEndDate && adjustment.proposedEndDate !== adjustment.currentEndDate
           ? { planned_end_date: adjustment.proposedEndDate }
           : {}),
-        duration_reschedule_source: 'target_end_compression',
-        duration_reschedule_policy: adjustment.reschedulePolicy,
-        duration_reschedule_recover_days: adjustment.recoverDays,
-        duration_reschedule_current_duration_days: adjustment.currentDurationDays,
-        duration_reschedule_proposed_duration_days: adjustment.proposedDurationDays,
       },
-    })),
+    }))
+    .filter((operation) => Object.keys(operation.values).length > 0)
+
+  const dependencyAdjustmentsBySuccessor = new Map<string, typeof dependencyAdjustments>()
+  for (const adjustment of dependencyAdjustments) {
+    dependencyAdjustmentsBySuccessor.set(adjustment.successorClientRowId, [
+      ...(dependencyAdjustmentsBySuccessor.get(adjustment.successorClientRowId) ?? []),
+      adjustment,
+    ])
+  }
+  const dependencyOperations: ScheduleAccelerationRescheduleDraft['operations'] = []
+  for (const [successorClientRowId, successorAdjustments] of dependencyAdjustmentsBySuccessor) {
+    const successorRow = rowById.get(successorClientRowId)
+    if (!successorRow) continue
+    const dependencies = new Map<string, {
+      dependencyTaskId: string
+      dependencyType: ScheduleAccelerationDependencyType
+      lagDays: number
+      sourceType: string
+    }>()
+    for (const dependency of successorRow.predecessorDependencies ?? []) {
+      if (!dependency.clientRowId) continue
+      dependencies.set(dependency.clientRowId, {
+        dependencyTaskId: dependency.clientRowId,
+        dependencyType: dependency.dependencyType,
+        lagDays: Number(dependency.lagDays ?? 0) || 0,
+        sourceType: dependency.source || 'manual',
+      })
+    }
+    for (const adjustment of successorAdjustments) {
+      dependencies.set(adjustment.predecessorClientRowId, {
+        dependencyTaskId: adjustment.predecessorClientRowId,
+        dependencyType: adjustment.toDependencyType,
+        lagDays: Number(adjustment.lagDaysAfter ?? 0) || 0,
+        sourceType: 'target_end_compression',
+      })
+    }
+    const predecessorDependencies = [...dependencies.values()]
+    dependencyOperations.push({
+      type: 'set_predecessors',
+      rowId: successorClientRowId,
+      predecessorTaskIds: predecessorDependencies.map((dependency) => dependency.dependencyTaskId),
+      predecessorDependencies,
+    })
+  }
+
+  return {
+    mode: 'proposal_review',
+    source: 'target_end_compression',
+    writePolicy: 'requires_user_acceptance',
+    taskDateAdjustments: allTaskDateAdjustments,
+    dependencyAdjustments,
+    resourceAdjustments,
+    operations: [...dateOperations, ...dependencyOperations],
   }
 }
 
@@ -2706,8 +2770,9 @@ function estimateTerminalRecoverDaysFromDraft(params: {
 
   const proposedEndByRowId = new Map<string, string>()
   for (const operation of params.draft.operations) {
+    if (operation.type !== 'update_row') continue
     const proposedEndDate = normalizeDate(operation.values.planned_end_date)
-    if (proposedEndDate) proposedEndByRowId.set(operation.clientRowId, proposedEndDate)
+    if (proposedEndDate) proposedEndByRowId.set(operation.rowId, proposedEndDate)
   }
   if (proposedEndByRowId.size === 0) {
     return {

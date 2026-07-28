@@ -35,6 +35,10 @@ function readyProductionCapacityEvidence(candidatePackage: ReturnType<typeof bui
     },
     constructionCalendar: {
       basis: 'official_construction_calendar_seed',
+      availability: 'available',
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.07',
+      timezone: 'Asia/Shanghai',
       windows: [],
     },
   })

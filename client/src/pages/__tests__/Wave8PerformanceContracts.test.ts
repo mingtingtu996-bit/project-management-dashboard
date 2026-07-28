@@ -1,23 +1,13 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+const workspaceRoot = resolve(__dirname, '../../../..')
+const clientRoot = resolve(workspaceRoot, 'client')
+
 function readWorkspaceSource(relativePath: string) {
-  const candidates = [
-    join(process.cwd(), relativePath),
-    join(process.cwd(), 'client', relativePath),
-  ]
-
-  for (const candidate of candidates) {
-    try {
-      return normalizeSource(readFileSync(candidate, 'utf8'))
-    } catch {
-      // Try the next workspace root.
-    }
-  }
-
-  throw new Error(`Unable to locate source file: ${relativePath}`)
+  return normalizeSource(readFileSync(resolve(clientRoot, relativePath), 'utf8'))
 }
 
 function normalizeSource(source: string) {

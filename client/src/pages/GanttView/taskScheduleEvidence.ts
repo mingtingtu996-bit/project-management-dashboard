@@ -1,7 +1,7 @@
 import type { Task } from '../GanttViewTypes'
 import type { DurationSuggestion } from '@/services/durationSuggestionsApi'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
-import { formatDurationMetric } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, normalizeDurationRiskDistribution } from '@/lib/durationMetric'
 
 function readRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -58,6 +58,12 @@ export function getTaskDurationRiskRangeLabel(task: Pick<
   const metadata = readRecord(task.standard_task_metadata)
   const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
   const suggestionRange = readRecord(suggestion.durationRiskRange ?? suggestion.duration_risk_range)
+  const distribution = suggestion.durationRiskDistribution
+    ?? suggestion.duration_risk_distribution
+    ?? range.durationRiskDistribution
+    ?? range.duration_risk_distribution
+    ?? suggestionRange.durationRiskDistribution
+    ?? suggestionRange.duration_risk_distribution
   const p20 = readRoundedFiniteNumber(
     task.duration_risk_p20_days
       ?? range.p20_days
@@ -85,11 +91,9 @@ export function getTaskDurationRiskRangeLabel(task: Pick<
       ?? suggestionRange.p80Days
       ?? suggestionRange.p80_days,
   )
-  const baselineDays = p50 ?? p20
-  if (baselineDays !== null && p80 !== null && p80 > baselineDays) {
-    return `建议预留 ${p80 - baselineDays} 天`
-  }
-  return p20 !== null || p50 !== null || p80 !== null ? '工期风险已评估' : ''
+  return distribution || p20 !== null || p50 !== null || p80 !== null
+    ? formatDurationRiskReserve(distribution)
+    : ''
 }
 
 export function getTaskCriticalFloatLabel(
@@ -117,8 +121,14 @@ export function getTaskDurationAssetEvidenceLabel(task: Pick<Task, 'standard_tas
   }
 
   if (readTruthyFlag(calculation.runtimeReferenceDaysConsumed ?? calculation.runtime_reference_days_consumed)) {
-    const runtimeP50 = readRoundedFiniteNumber(calculation.runtimeReferenceDaysP50Days ?? calculation.runtime_reference_days_p50_days)
-    evidence.push(runtimeP50 !== null ? `运行样本 ${runtimeP50} 天` : '运行样本 已应用')
+    const distribution = normalizeDurationRiskDistribution(
+      calculation.runtimeReferenceDaysDurationRiskDistribution
+        ?? calculation.runtime_reference_days_duration_risk_distribution,
+    )
+    evidence.push(`运行样本 ${formatDurationMetric(distribution?.p50Duration, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    })}`)
   }
 
   if (readTruthyFlag(calculation.processSeasonalDurationAssetConsumed ?? calculation.process_seasonal_duration_asset_consumed)) {

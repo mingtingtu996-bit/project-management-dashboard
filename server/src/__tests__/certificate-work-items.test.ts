@@ -9,17 +9,24 @@ process.env.NODE_ENV = 'test'
 process.env.JWT_SECRET = 'test-jwt-secret'
 
 const state = vi.hoisted(() => {
+  let transactionActive = false
+  let createFailure: Error | null = null
   const rpc = vi.fn()
   const workItems: Array<Record<string, any>> = []
   const dependencies: Array<Record<string, any>> = []
   const preMilestones: Array<Record<string, any>> = []
+  const factTransactionStates: boolean[] = []
+  const recordChangedExecutionFacts = vi.fn(async () => {
+    factTransactionStates.push(transactionActive)
+    return []
+  })
 
   const normalizeSql = (sql: string) => sql.replace(/\s+/g, ' ').trim().toLowerCase()
 
   const executeSQLOne = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
 
-    if (normalized === 'select * from certificate_work_items where id = ? and project_id = ? limit 1') {
+    if (normalized.includes('select * from certificate_work_items where id = ? and project_id = ? limit 1')) {
       return workItems.find((item) => item.id === params[0] && item.project_id === params[1]) ?? null
     }
 
@@ -32,6 +39,49 @@ const state = vi.hoisted(() => {
 
   const executeSQL = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = normalizeSql(sql)
+
+    if (normalized.startsWith('select * from create_certificate_work_item_atomic')) {
+      if (createFailure) throw createFailure
+      const [id, projectId, itemCode, itemName, itemStage, status, plannedFinishDate, actualFinishDate,
+        approvingAuthority, isShared, nextAction, nextActionDueDate, isBlocked, blockReason,
+        sortOrder, notes, latestRecordAt, certificateIds] = params
+      const row = {
+        id,
+        project_id: projectId,
+        item_code: itemCode,
+        item_name: itemName,
+        item_stage: itemStage,
+        status,
+        planned_finish_date: plannedFinishDate,
+        actual_finish_date: actualFinishDate,
+        approving_authority: approvingAuthority,
+        is_shared: isShared,
+        next_action: nextAction,
+        next_action_due_date: nextActionDueDate,
+        is_blocked: isBlocked,
+        block_reason: blockReason,
+        sort_order: sortOrder,
+        notes,
+        latest_record_at: latestRecordAt,
+        certificate_ids: Array.isArray(certificateIds) ? certificateIds : [],
+        created_at: '2026-04-15T00:00:00.000Z',
+        updated_at: '2026-04-15T00:00:00.000Z',
+      }
+      workItems.push(row)
+      for (const certificateId of row.certificate_ids) {
+        dependencies.push({
+          id: `dep-${String(certificateId)}-${String(id)}`,
+          project_id: projectId,
+          predecessor_type: 'certificate',
+          predecessor_id: certificateId,
+          successor_type: 'work_item',
+          successor_id: id,
+          dependency_kind: 'hard',
+          created_at: '2026-04-15T00:00:00.000Z',
+        })
+      }
+      return [row]
+    }
 
     if (normalized === 'select * from certificate_dependencies where project_id = ? and predecessor_type = ? and successor_type = ?') {
       return dependencies.filter(
@@ -133,6 +183,22 @@ const state = vi.hoisted(() => {
     return []
   })
 
+  const withDatabaseTransaction = vi.fn(async (work: () => Promise<unknown>) => {
+    const workItemsSnapshot = workItems.map((item) => ({ ...item }))
+    const dependenciesSnapshot = dependencies.map((dependency) => ({ ...dependency }))
+    const parentActive = transactionActive
+    transactionActive = true
+    try {
+      return await work()
+    } catch (error) {
+      workItems.splice(0, workItems.length, ...workItemsSnapshot)
+      dependencies.splice(0, dependencies.length, ...dependenciesSnapshot)
+      throw error
+    } finally {
+      transactionActive = parentActive
+    }
+  })
+
   return {
     rpc,
     executeSQL,
@@ -140,6 +206,12 @@ const state = vi.hoisted(() => {
     workItems,
     dependencies,
     preMilestones,
+    withDatabaseTransaction,
+    recordChangedExecutionFacts,
+    factTransactionStates,
+    setCreateFailure(error: Error | null) {
+      createFailure = error
+    },
     supabase: {
       rpc,
     },
@@ -169,6 +241,14 @@ vi.mock('../services/dbService.js', () => ({
   executeSQL: state.executeSQL,
   executeSQLOne: state.executeSQLOne,
   supabase: state.supabase,
+}))
+
+vi.mock('../database.js', () => ({
+  withDatabaseTransaction: state.withDatabaseTransaction,
+}))
+
+vi.mock('../services/executionFactGovernanceService.js', () => ({
+  recordChangedExecutionFacts: state.recordChangedExecutionFacts,
 }))
 
 vi.mock('../auth/access.js', () => ({
@@ -212,8 +292,10 @@ function buildApp() {
 describe('certificate work items route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    state.setCreateFailure(null)
     state.workItems.splice(0, state.workItems.length)
     state.dependencies.splice(0, state.dependencies.length)
+    state.factTransactionStates.splice(0, state.factTransactionStates.length)
     state.preMilestones.splice(0, state.preMilestones.length)
     state.preMilestones.push(
       { id: 'cert-a', project_id: 'project-1' },
@@ -231,7 +313,7 @@ describe('certificate work items route', () => {
     expect(migration).toContain('certificate_approvals')
   })
 
-  it('creates a work item by delegating the full write to the atomic RPC', async () => {
+  it('creates a work item through the atomic transaction function and records initial facts', async () => {
     state.rpc.mockImplementation(async (_fnName: string, payload: Record<string, any>) => ({
       data: {
         id: payload.p_id,
@@ -274,20 +356,20 @@ describe('certificate work items route', () => {
       status: 'internal_review',
       is_shared: true,
     })
-    expect(state.rpc).toHaveBeenCalledTimes(1)
-    expect(state.rpc).toHaveBeenCalledWith(
-      'create_certificate_work_item_atomic',
-      expect.objectContaining({
-        p_project_id: 'project-1',
-        p_item_name: '共享资料收集',
-        p_item_stage: '资料准备',
-        p_status: 'internal_review',
-        p_certificate_ids: ['cert-a', 'cert-b'],
-      })
-    )
+    expect(state.withDatabaseTransaction).toHaveBeenCalledTimes(1)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(1)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledWith(expect.objectContaining({
+      entityType: 'certificate_work_item',
+      entityId: response.body.data.id,
+      changes: expect.arrayContaining([
+        expect.objectContaining({ factType: 'certificate_work_item.status', force: true }),
+        expect.objectContaining({ factType: 'certificate_work_item.actual_finish_date', force: true }),
+      ]),
+    }))
+    expect(state.factTransactionStates).toEqual([true])
   })
 
-  it('supports bulk import through the same atomic RPC contract', async () => {
+  it('supports bulk import through the same atomic transaction contract', async () => {
     state.rpc.mockImplementation(async (_fnName: string, payload: Record<string, any>) => ({
       data: {
         id: payload.p_id,
@@ -344,7 +426,9 @@ describe('certificate work items route', () => {
       item_name: '会签盖章',
       is_shared: false,
     })
-    expect(state.rpc).toHaveBeenCalledTimes(2)
+    expect(state.withDatabaseTransaction).toHaveBeenCalledTimes(2)
+    expect(state.recordChangedExecutionFacts).toHaveBeenCalledTimes(2)
+    expect(state.factTransactionStates).toEqual([true, true])
   })
 
   it('rejects certificate links outside the current project', async () => {
@@ -382,11 +466,8 @@ describe('certificate work items route', () => {
     expect(state.rpc).not.toHaveBeenCalled()
   })
 
-  it('fails fast when the atomic RPC returns an error', async () => {
-    state.rpc.mockResolvedValueOnce({
-      data: null,
-      error: { message: 'rpc failed' },
-    })
+  it('fails fast when the atomic transaction function returns an error', async () => {
+    state.setCreateFailure(new Error('rpc failed'))
 
     const request = supertest(buildApp())
     const response = await request.post('/api/projects/project-1/certificate-work-items').send({

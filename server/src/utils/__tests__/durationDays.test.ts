@@ -74,6 +74,10 @@ describe('durationDays utilities', () => {
   it('uses one signed delay helper for calendar-day and shutdown-aware delay semantics', () => {
     const calendar = {
       basis: 'official_construction_calendar_seed' as const,
+      availability: 'available' as const,
+      calendarRef: 'cn-work-calendar',
+      calendarVersion: '2026.05',
+      timezone: 'Asia/Shanghai',
       windows: [{
         holidayCode: 'project_shutdown_2026',
         holidayName: 'Project shutdown',

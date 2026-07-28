@@ -111,6 +111,23 @@ describe('getDashboardProjectExecutionSummary', () => {
       progressGap: 8,
       summaryAsOf: '2026-04-15T00:00:00.000Z',
       plannedEndDate: '2026-05-10',
+      futureDueWindow: {
+        value: 25,
+        unit: 'calendar_day',
+        calendarRef: 'gregorian',
+        calendarVersion: 'ISO-8601',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-04-15',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      actualOverdue: expect.objectContaining({
+        value: null,
+        unit: 'construction_production_day',
+        availability: 'unavailable',
+      }),
+      delayDays: null,
+      scheduleVarianceDays: null,
       riskCount: 1,
     })
   })

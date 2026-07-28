@@ -10,7 +10,7 @@ import type {
   WizardProfilePreview,
 } from './projectWizardApi'
 import { getWizardScopeIcon, wizardIconTestId } from './wizardScopeIcons'
-import { formatDurationMetric, readAvailableDurationValue } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, normalizeDurationRiskDistribution, readAvailableDurationValue, type DurationRiskDistributionDto } from '@/lib/durationMetric'
 
 interface Props {
   preview: WizardProfilePreview | null
@@ -112,14 +112,11 @@ function formatCandidateDurationRisk(item: {
   riskP20DurationDays?: number | null
   riskP50DurationDays?: number | null
   riskP80DurationDays?: number | null
+  durationRiskDistribution?: DurationRiskDistributionDto | null
 }) {
   const { riskP20DurationDays, riskP50DurationDays, riskP80DurationDays } = item
-  if (riskP20DurationDays == null && riskP50DurationDays == null && riskP80DurationDays == null) return null
-  const baselineDays = riskP50DurationDays ?? riskP20DurationDays
-  if (baselineDays != null && riskP80DurationDays != null && riskP80DurationDays > baselineDays) {
-    return `工期风险建议预留 ${riskP80DurationDays - baselineDays} 天`
-  }
-  return '工期风险已评估'
+  if (!item.durationRiskDistribution && riskP20DurationDays == null && riskP50DurationDays == null && riskP80DurationDays == null) return null
+  return `工期风险${formatDurationRiskReserve(item.durationRiskDistribution)}`
 }
 
 function formatCandidateSeasonalEvidence(item: {
@@ -176,12 +173,17 @@ function formatCandidateRuntimeReferenceDays(item: {
   runtimeReferenceDaysP50Days?: number | null
   runtimeReferenceDaysP80Days?: number | null
   runtimeReferenceDaysSampleCount?: number | null
+  runtimeReferenceDaysDurationRiskDistribution?: DurationRiskDistributionDto | null
 }) {
   if (!item.runtimeReferenceDaysConsumed && !item.runtimeReferenceDaysStableCode) return null
   const stableCode = item.runtimeReferenceDaysStableCode || '已消费'
-  const referenceDays = item.runtimeReferenceDaysP50Days ?? item.runtimeReferenceDaysP80Days ?? '-'
+  const distribution = normalizeDurationRiskDistribution(item.runtimeReferenceDaysDurationRiskDistribution)
+  const referenceDays = formatDurationMetric(distribution?.p50Duration, {
+    expectedUnit: 'construction_production_day',
+    unavailableLabel: '生产日口径不可用',
+  })
   const sampleCount = item.runtimeReferenceDaysSampleCount ?? '-'
-  return `参考天数 ${stableCode}：${referenceDays} 天 / 样本 ${sampleCount}`
+  return `参考天数 ${stableCode}：${referenceDays} / 样本 ${sampleCount}`
 }
 
 function formatCandidateProjectScaleQuantityProxy(item: {
@@ -818,6 +820,27 @@ export function Step6ProjectProfileConfirmation({
                   <p className="mt-1 text-xs text-slate-500">{businessTypeProfileCodes}</p>
                 </>
               ) : null}
+            </div>
+          ) : null}
+          {candidateDurationAssetFirstItem ? (
+            <div className="rounded-lg bg-slate-50 p-3">
+              <p className="text-xs text-slate-500">候选工期资产</p>
+              <p className="mt-1 text-sm font-semibold text-slate-950">{candidateDurationAssetFirstItem.title}</p>
+              {[
+                candidateDurationRiskText,
+                candidateSeasonalText,
+                candidateDurationAdjustmentText,
+                candidateDurationSeedLineageText,
+                candidateDurationT2LineageText,
+                candidateDurationRuntimeReferenceText,
+                candidateDurationProjectScaleQuantityProxyText,
+                candidateDurationBusinessTypeLineageText,
+                candidateDurationDependencyLineageText,
+                candidateDurationCriticalPathText,
+                candidateDurationSelectionBasisText,
+              ].filter((value): value is string => Boolean(value)).map((value) => (
+                <p key={value} className="mt-1 text-xs leading-5 text-slate-600 tabular-nums">{value}</p>
+              ))}
             </div>
           ) : null}
           {candidateNetworkEvaluation ? (

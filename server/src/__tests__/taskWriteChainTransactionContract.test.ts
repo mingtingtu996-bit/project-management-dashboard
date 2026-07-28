@@ -29,4 +29,16 @@ describe('task write chain transaction contract', () => {
     expect(deleteChain).not.toContain("supabase\n    .from('project_entity_links')")
     expect(deleteChain).toContain("runPostCommitTaskSideEffect('finalize_task_delete'")
   })
+
+  it('delegates canonical task update and reopen finalization to the durable outbox', () => {
+    const source = readFileSync(resolve(serverRoot, 'src/services/taskWriteChainService.ts'), 'utf8')
+    const updateChain = source.slice(
+      source.indexOf('export async function updateTaskInMainChain'),
+      source.indexOf('export async function deleteTaskInMainChain'),
+    )
+    const reopenChain = source.slice(source.indexOf('export async function reopenTaskInMainChain'))
+
+    expect(updateChain).not.toContain("runPostCommitTaskSideEffect('finalize_task_write'")
+    expect(reopenChain).not.toContain("runPostCommitTaskSideEffect('finalize_reopen_task_write'")
+  })
 })

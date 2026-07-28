@@ -33,6 +33,14 @@ export const V14231_READINESS_ROUTE_METADATA = [
     readinessBinding: 'domain-data-status',
   },
   {
+    routePath: '/admin/duration-assets',
+    componentName: 'DurationAssetsAdmin',
+    importPath: '@/pages/DurationAssetsAdmin',
+    sourcePath: 'src/pages/DurationAssetsAdmin.tsx',
+    pageKey: 'DurationAssetsAdmin / \u5de5\u671f\u8d44\u4ea7\u6cbb\u7406',
+    readinessBinding: 'action-level-readiness',
+  },
+  {
     routePath: '/admin/rule-assets/governance-workbench',
     componentName: 'RuleAssetGovernanceWorkbenchAdmin',
     importPath: '@/pages/RuleAssetGovernanceWorkbenchAdmin',

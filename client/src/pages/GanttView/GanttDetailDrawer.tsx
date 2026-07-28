@@ -25,7 +25,7 @@ import {
 } from '@/services/durationSuggestionsApi'
 import { useDurationForecastRefreshKey } from '@/hooks/useDurationForecastRefreshKey'
 import { inclusiveDurationDays } from '@/lib/durationDays'
-import { formatDurationMetric } from '@/lib/durationMetric'
+import { formatDurationMetric, formatDurationRiskReserve, normalizeDurationRiskDistribution, readAvailableDurationValue } from '@/lib/durationMetric'
 import type { CriticalTaskNetworkSchedule } from '@/lib/criticalPath'
 
 import type { Task, TaskCondition, TaskObstacle } from '../GanttViewTypes'
@@ -96,10 +96,16 @@ function formatForecastConfidence(value?: string | null) {
   return value || '-'
 }
 
-function formatForecastDelay(days?: number | null) {
-  const value = Number(days ?? 0)
-  if (!Number.isFinite(value) || value <= 0) return '无明显偏差'
-  return `较计划偏晚 ${Math.round(value)} 天`
+function formatForecastDelay(metric: TaskDurationForecast['forecastDelay']) {
+  const value = readAvailableDurationValue(metric, 'construction_production_day')
+  if (value === null) {
+    return formatDurationMetric(metric, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    })
+  }
+  if (value <= 0) return '无明显偏差'
+  return `较计划偏晚 ${Math.round(value)} 个生产日`
 }
 
 function getForecastBadgeClass(severity?: string | null) {
@@ -152,8 +158,14 @@ function buildDurationAssetEvidence(task?: Task | null) {
   }
 
   if (readTruthFlag(calculation.runtimeReferenceDaysConsumed ?? calculation.runtime_reference_days_consumed)) {
-    const runtimeP50 = readFloatDays(calculation.runtimeReferenceDaysP50Days ?? calculation.runtime_reference_days_p50_days)
-    evidence.push(runtimeP50 !== null ? `运行样本 ${runtimeP50} 天` : '运行样本 已应用')
+    const distribution = normalizeDurationRiskDistribution(
+      calculation.runtimeReferenceDaysDurationRiskDistribution
+        ?? calculation.runtime_reference_days_duration_risk_distribution,
+    )
+    evidence.push(`运行样本 ${formatDurationMetric(distribution?.p50Duration, {
+      expectedUnit: 'construction_production_day',
+      unavailableLabel: '生产日口径不可用',
+    })}`)
   }
 
   if (readTruthFlag(calculation.processSeasonalDurationAssetConsumed ?? calculation.process_seasonal_duration_asset_consumed)) {
@@ -166,8 +178,14 @@ function buildDurationAssetEvidence(task?: Task | null) {
 function readDurationRiskRange(task?: Task | null) {
   const metadata = readRecord(task?.standard_task_metadata)
   const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
-  const range = task?.duration_risk_range ?? {}
+  const range = readRecord(task?.duration_risk_range)
   const suggestionRange = readRecord(suggestion.durationRiskRange ?? suggestion.duration_risk_range)
+  const distribution = suggestion.durationRiskDistribution
+    ?? suggestion.duration_risk_distribution
+    ?? range.durationRiskDistribution
+    ?? range.duration_risk_distribution
+    ?? suggestionRange.durationRiskDistribution
+    ?? suggestionRange.duration_risk_distribution
   const p20 = readDurationRiskDays(
     task?.duration_risk_p20_days
       ?? range.p20_days
@@ -195,17 +213,13 @@ function readDurationRiskRange(task?: Task | null) {
       ?? suggestionRange.p80Days
       ?? suggestionRange.p80_days,
   )
-  if (p20 == null && p50 == null && p80 == null) return null
-  return { p20, p50, p80 }
+  if (!distribution && p20 == null && p50 == null && p80 == null) return null
+  return { distribution }
 }
 
 function durationRiskSummary(range: ReturnType<typeof readDurationRiskRange>) {
   if (!range) return null
-  const baselineDays = range.p50 ?? range.p20
-  if (baselineDays !== null && range.p80 !== null && range.p80 > baselineDays) {
-    return `建议预留 ${range.p80 - baselineDays} 天`
-  }
-  return '工期风险已评估'
+  return formatDurationRiskReserve(range.distribution)
 }
 
 export function GanttDetailDrawer({
@@ -358,10 +372,12 @@ export function GanttDetailDrawer({
                   <DurationBasisBadge basis="remaining" compact variant="outline" className="bg-white/70" />
                   执行中剩余工期预测
                 </span>
-                <span>{formatForecastDelay(durationForecast.forecastDelayDays)}</span>
+                <span>{formatForecastDelay(durationForecast.forecastDelay)}</span>
               </div>
               <div className="mt-2 flex flex-wrap gap-2 text-blue-700">
-                {durationForecast.remainingForecastDays != null ? <span>预计还需 {durationForecast.remainingForecastDays} 天</span> : null}
+                <span>{formatDurationMetric(durationForecast.remainingDuration, {
+                  expectedUnit: 'construction_production_day',
+                })}</span>
                 <span>预计完成 {durationForecast.forecastFinishDate || '-'}</span>
                 <span>可信度 {formatForecastConfidence(durationForecast.confidenceLevel)}</span>
               </div>

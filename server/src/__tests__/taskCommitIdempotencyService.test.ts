@@ -11,6 +11,7 @@ vi.mock('../database.js', () => ({
 }))
 
 import {
+  buildTaskCommitOperationsHash,
   buildTaskCommitReplaySummary,
   completeTaskCommitRequest,
   reserveTaskCommitRequest,
@@ -35,6 +36,18 @@ describe('task commit idempotency service', () => {
       tempIdMap: { 'tmp-1': 'created-task-1' },
       deletionResults: [{ rowId: 'deleted-task-1', action: 'deleted' }],
     })
+  })
+
+  it('hashes task commit operations canonically regardless of object key order', () => {
+    expect(buildTaskCommitOperationsHash([{
+      type: 'update_row',
+      rowId: 'task-1',
+      values: { planned_end_date: '2027-04-18', planned_start_date: '2027-04-01' },
+    }])).toBe(buildTaskCommitOperationsHash([{
+      values: { planned_start_date: '2027-04-01', planned_end_date: '2027-04-18' },
+      rowId: 'task-1',
+      type: 'update_row',
+    }]))
   })
 
   it('returns a stored successful summary without reserving duplicate work', async () => {

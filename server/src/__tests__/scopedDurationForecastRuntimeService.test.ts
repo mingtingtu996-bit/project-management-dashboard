@@ -9,6 +9,10 @@ import {
 } from '../services/scopedDurationForecastRuntimeService.js'
 import type { TaskDurationForecast } from '../services/taskDurationForecastService.js'
 
+const serverRoot = process.cwd().endsWith('server')
+  ? process.cwd()
+  : resolve(process.cwd(), 'server')
+
 function runtimeRow(id: string, values: Record<string, unknown> = {}): ScheduleAccelerationRow {
   return {
     clientRowId: id,
@@ -38,7 +42,27 @@ function currentForecast(taskId: string): TaskDurationForecast {
     recommendedDurationDays: 8,
     conservativeDurationDays: 12,
     remainingDurationDays: 8,
+    remainingDuration: {
+      value: 8,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-13',
+      availability: 'available',
+      unavailableReason: null,
+    },
     forecastFinishDate: '2026-07-20',
+    forecastDelay: {
+      value: 0,
+      unit: 'construction_production_day',
+      calendarRef: 'work_calendar',
+      calendarVersion: 'calendar-v1',
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-07-13',
+      availability: 'available',
+      unavailableReason: null,
+    },
     forecastDelayDays: 0,
     confidenceLevel: 'high',
     confidenceScore: 90,
@@ -54,6 +78,38 @@ function currentForecast(taskId: string): TaskDurationForecast {
       variance: null,
       standardDeviationDays: null,
       confidenceBandWidthDays: 7,
+    },
+    probabilityDurationMetrics: {
+      p20RemainingDuration: {
+        value: 5,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-07-13',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      p50RemainingDuration: {
+        value: 8,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-07-13',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      p80RemainingDuration: {
+        value: 12,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-07-13',
+        availability: 'available',
+        unavailableReason: null,
+      },
     },
   }
 }
@@ -165,8 +221,49 @@ describe('scopedDurationForecastRuntimeService', () => {
     }
   })
 
+  it('validates and forwards an arbitrary target date into the scoped forecast response', async () => {
+    const result = await buildRuntimeScopedDurationForecast(
+      'project-1',
+      {
+        asOfDate: '2026-07-13',
+        targetDate: '2026-08-31',
+        simulationSeed: 'runtime-target-seed',
+      } as any,
+      dependencies(),
+    ) as any
+
+    expect(result.targetDate).toBe('2026-08-31')
+    expect(result.dimensions.division[0].targetDateCompletion).toEqual(expect.objectContaining({
+      targetDate: '2026-08-31',
+    }))
+
+    await expect(buildRuntimeScopedDurationForecast(
+      'project-1',
+      { targetDate: '08/31/2026' } as any,
+      dependencies(),
+    )).rejects.toThrow('targetDate must be a valid YYYY-MM-DD date')
+  })
+
+  it('rejects missing or invalid target-date simulation seeds before loading project data', async () => {
+    const missingSeedDependencies = dependencies()
+    await expect(buildRuntimeScopedDurationForecast(
+      'project-1',
+      { targetDate: '2026-08-31' } as any,
+      missingSeedDependencies,
+    )).rejects.toThrow(/simulationSeed.*required/)
+    expect(missingSeedDependencies.buildRuntimeScheduleAccelerationRowsWithDiagnostics).not.toHaveBeenCalled()
+
+    const invalidSeedDependencies = dependencies()
+    await expect(buildRuntimeScopedDurationForecast(
+      'project-1',
+      { targetDate: '2026-08-31', simulationSeed: 'contains spaces' } as any,
+      invalidSeedDependencies,
+    )).rejects.toThrow(/simulationSeed.*valid/)
+    expect(invalidSeedDependencies.buildRuntimeScheduleAccelerationRowsWithDiagnostics).not.toHaveBeenCalled()
+  })
+
   it('does not import forecast refresh or mutation APIs', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/services/scopedDurationForecastRuntimeService.ts'), 'utf8')
+    const source = readFileSync(resolve(serverRoot, 'src/services/scopedDurationForecastRuntimeService.ts'), 'utf8')
     expect(source).toContain('listCurrentTaskDurationForecasts')
     expect(source).not.toContain('forecastTaskDuration')
     expect(source).not.toMatch(/\.(insert|update|delete|upsert)\s*\(/)

@@ -88,7 +88,26 @@ vi.mock('../services/projectCriticalPathService.js', () => ({
 }))
 
 vi.mock('../services/taskDurationForecastService.js', () => ({
-  forecastBatchTasks: mocks.forecastBatchTasks,
+  forecastBatchTasks: vi.fn(async (...args: any[]) => {
+    const forecasts = await (mocks.forecastBatchTasks as (...values: any[]) => Promise<any[]>)(...args)
+    return forecasts.map((forecast: any) => {
+      const availableMetric = (value: unknown) => ({
+        value: Number.isFinite(Number(value)) ? Number(value) : null,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-01',
+        availability: Number.isFinite(Number(value)) ? 'available' : 'unavailable',
+        unavailableReason: Number.isFinite(Number(value)) ? null : 'duration_value_missing',
+      })
+      return {
+        ...forecast,
+        remainingDuration: forecast.remainingDuration ?? availableMetric(forecast.remainingDurationDays),
+        forecastDelay: forecast.forecastDelay ?? availableMetric(forecast.forecastDelayDays),
+      }
+    })
+  }),
 }))
 
 vi.mock('../services/projectProductivityCompensationService.js', () => ({
@@ -817,6 +836,60 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     }))
   })
 
+  it('does not use naked E2 values when typed production-day facts are unavailable', async () => {
+    const unavailableMetric = {
+      value: null,
+      unit: 'construction_production_day',
+      calendarRef: null,
+      calendarVersion: null,
+      timezone: 'Asia/Shanghai',
+      asOf: '2026-05-01',
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+    mocks.forecastBatchTasks.mockResolvedValue([{
+      taskId: 'unavailable-task',
+      remainingDurationDays: 45,
+      remainingDuration: unavailableMetric,
+      forecastFinishDate: '2026-06-14',
+      forecastDelayDays: 14,
+      forecastDelay: unavailableMetric,
+      confidenceLevel: 'unavailable',
+    }])
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'baseline-item-unavailable',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'unavailable-task',
+        title: 'Unavailable forecast work',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-20',
+        target_progress: 100,
+        sort_order: 1,
+        is_critical: false,
+        is_milestone: false,
+        manual_override_fields: {},
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'unavailable-task')
+
+    expect(source.generationSummary).toMatchObject({
+      forecastDelayedCount: 0,
+      maxForecastDelayDays: 0,
+    })
+    expect(item?.target_progress).toBe(21)
+    expect(item?.target_progress).not.toBe(47)
+    expect(item?.generation_metadata?.algorithm_context?.e2_remaining_forecast_days).toBeNull()
+    expect(item?.generation_metadata?.algorithm_context?.e2_forecast_delay_days).toBeNull()
+  })
+
   it('deducts construction calendar shutdown windows from monthly capacity workdays', async () => {
     mocks.resolveAlgorithmSeedRecords.mockImplementation(async (assetType: string) => {
       if (assetType !== 'work_calendar') return []
@@ -826,6 +899,7 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
         startDate: '2026-05-06',
         endDate: '2026-05-08',
         counts_as_construction_shutdown: true,
+        __resolverVersionId: 'calendar-v1',
       }]
     })
     mocks.forecastBatchTasks.mockResolvedValue([
@@ -1174,8 +1248,8 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
   it('uses fresh near-critical float tier in capacity allocation priority instead of metadata only', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       tasks: [
-        { taskId: 'pseudo-task', floatDays: 8, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Pseudo critical' },
-        { taskId: 'near-task', floatDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
+        { taskId: 'pseudo-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Pseudo critical' },
+        { taskId: 'near-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
       ],
       displayTaskIds: [],
       autoTaskIds: [],
@@ -1240,11 +1314,67 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     }))
   })
 
+  it('does not derive a critical tier from a legacy raw float when typed float is unavailable', async () => {
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      tasks: [{
+        taskId: 'unavailable-float-task',
+        floatDays: 0,
+        float: {
+          value: null,
+          unit: 'construction_production_day',
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        isAutoCritical: false,
+        isManualAttention: false,
+        isManualInserted: false,
+        durationDays: 21,
+        title: 'Unavailable float',
+      }],
+      displayTaskIds: [],
+      autoTaskIds: [],
+    })
+    mocks.forecastBatchTasks.mockResolvedValue([
+      { taskId: 'unavailable-float-task', remainingDurationDays: 21, forecastFinishDate: '2026-05-31', forecastDelayDays: 0, confidenceLevel: 'medium' },
+    ])
+
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'unavailable-float-item',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'unavailable-float-task',
+        title: 'Unavailable float',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        sort_order: 1,
+        is_critical: false,
+        generation_metadata: {
+          resource_class: 'civil_crew',
+          scope_keys: { building: 'A', floor: '1F', zone: 'east', workface: 'wf-1' },
+        },
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'unavailable-float-task')
+
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      fresh_float_days: null,
+      monthly_capacity_priority: 'new_work',
+    }))
+    expect(item?.generation_metadata.algorithm_context?.critical_float_tier).toBeUndefined()
+  })
+
   it('uses fresh pseudo-critical float tier over stale baseline critical flags when allocating capacity', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       tasks: [
-        { taskId: 'stale-critical-task', floatDays: 8, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Stale critical' },
-        { taskId: 'near-task', floatDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
+        { taskId: 'stale-critical-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Stale critical' },
+        { taskId: 'near-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 21, title: 'Near critical' },
       ],
       displayTaskIds: [],
       autoTaskIds: [],
@@ -1479,9 +1609,9 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
   it('splits capacity pools by readiness state, scope, resource class, and fresh float tiers', async () => {
     mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
       tasks: [
-        { taskId: 'ready-task', floatDays: 0, isAutoCritical: true, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Ready critical' },
-        { taskId: 'conditional-task', floatDays: 2, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Conditional near critical' },
-        { taskId: 'backup-task', floatDays: 8, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Backup pseudo critical' },
+        { taskId: 'ready-task', floatDays: 0, float: { value: 0, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: true, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Ready critical' },
+        { taskId: 'conditional-task', floatDays: 2, float: { value: 2, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Conditional near critical' },
+        { taskId: 'backup-task', floatDays: 8, float: { value: 8, unit: 'construction_production_day', availability: 'available' }, isAutoCritical: false, isManualAttention: false, isManualInserted: false, durationDays: 10, title: 'Backup pseudo critical' },
       ],
       displayTaskIds: ['ready-task'],
       autoTaskIds: ['ready-task'],

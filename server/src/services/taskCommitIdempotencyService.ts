@@ -1,6 +1,5 @@
-import { createHash } from 'node:crypto'
-
 import { isDatabaseTransactionActive, query } from '../database.js'
+import { buildCanonicalJsonHash } from '../utils/canonicalJsonHash.js'
 
 export interface TaskCommitReplaySummary {
   createdRowCount: number
@@ -17,6 +16,9 @@ type TaskCommitRequestRow = {
   request_hash: string
   status: 'running' | 'succeeded'
   result_summary?: unknown
+  recommendation_id?: string | null
+  recommendation_hash?: string | null
+  operations_hash?: string | null
 }
 
 export type TaskCommitReservation =
@@ -51,26 +53,12 @@ function requireTransaction(): void {
   )
 }
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize)
-  if (value instanceof Date) return value.toISOString()
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .filter(([, item]) => item !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, item]) => [key, canonicalize(item)]),
-    )
-  }
-  if (typeof value === 'number' && !Number.isFinite(value)) return null
-  if (typeof value === 'bigint') return value.toString()
-  return value
+export function buildTaskCommitRequestHash(input: unknown): string {
+  return buildCanonicalJsonHash(input)
 }
 
-export function buildTaskCommitRequestHash(input: unknown): string {
-  return createHash('sha256')
-    .update(JSON.stringify(canonicalize(input)))
-    .digest('hex')
+export function buildTaskCommitOperationsHash(operations: unknown): string {
+  return buildCanonicalJsonHash(operations)
 }
 
 function normalizeCount(value: unknown): number {
@@ -108,27 +96,69 @@ export async function reserveTaskCommitRequest(input: {
   requestId: string
   requestHash: string
   requestedBy?: string | null
+  recommendationId?: string | null
+  recommendationHash?: string | null
+  operationsHash?: string | null
 }): Promise<TaskCommitReservation> {
   requireTransaction()
 
-  const inserted = await query(`
-    INSERT INTO public.task_commit_requests (
-      project_id,
-      request_id,
-      request_hash,
-      requested_by,
-      status
+  const recommendationId = String(input.recommendationId ?? '').trim() || null
+  const recommendationHash = String(input.recommendationHash ?? '').trim() || null
+  const operationsHash = String(input.operationsHash ?? '').trim() || null
+  const bindingParts = [recommendationId, recommendationHash, operationsHash].filter(Boolean)
+  if (bindingParts.length > 0 && bindingParts.length !== 3) {
+    throw createHttpError(
+      'Acceleration recommendation commit binding must include identity, proposal hash, and operations hash.',
+      'ACCELERATION_RECOMMENDATION_BINDING_INVALID',
+      400,
     )
-    VALUES ($1, $2, $3, $4, 'running')
-    ON CONFLICT (project_id, request_id) DO NOTHING
-    RETURNING id, project_id, request_id, request_hash, status, result_summary
-  `, [input.projectId, input.requestId, input.requestHash, input.requestedBy ?? null])
+  }
+
+  let inserted
+  try {
+    inserted = await query(`
+      INSERT INTO public.task_commit_requests (
+        project_id,
+        request_id,
+        request_hash,
+        requested_by,
+        status,
+        recommendation_id,
+        recommendation_hash,
+        operations_hash
+      )
+      VALUES ($1, $2, $3, $4, 'running', $5, $6, $7)
+      ON CONFLICT (project_id, request_id) DO NOTHING
+      RETURNING id, project_id, request_id, request_hash, status, result_summary,
+                recommendation_id, recommendation_hash, operations_hash
+    `, [
+      input.projectId,
+      input.requestId,
+      input.requestHash,
+      input.requestedBy ?? null,
+      recommendationId,
+      recommendationHash,
+      operationsHash,
+    ])
+  } catch (error) {
+    const errorRecord = error && typeof error === 'object' ? error as Record<string, unknown> : {}
+    const message = error instanceof Error ? error.message : String(error ?? '')
+    if (String(errorRecord.code ?? '') === '23503' || /foreign key|recommendation/i.test(message)) {
+      throw createHttpError(
+        'The acceleration recommendation does not match the submitted task operations.',
+        'ACCELERATION_RECOMMENDATION_BINDING_INVALID',
+        409,
+      )
+    }
+    throw error
+  }
 
   const insertedRow = inserted.rows[0] as TaskCommitRequestRow | undefined
   if (insertedRow) return { kind: 'reserved', id: String(insertedRow.id) }
 
   const existing = await query(`
-    SELECT id, project_id, request_id, request_hash, status, result_summary
+    SELECT id, project_id, request_id, request_hash, status, result_summary,
+           recommendation_id, recommendation_hash, operations_hash
       FROM public.task_commit_requests
      WHERE project_id = $1
        AND request_id = $2
@@ -146,6 +176,17 @@ export async function reserveTaskCommitRequest(input: {
     throw createHttpError(
       'The idempotency key has already been used for a different task commit.',
       'IDEMPOTENCY_KEY_REUSED',
+      409,
+    )
+  }
+  if (
+    String(row.recommendation_id ?? '').trim() !== (recommendationId ?? '')
+    || String(row.recommendation_hash ?? '').trim() !== (recommendationHash ?? '')
+    || String(row.operations_hash ?? '').trim() !== (operationsHash ?? '')
+  ) {
+    throw createHttpError(
+      'The idempotency key has already been used with a different acceleration recommendation binding.',
+      'ACCELERATION_RECOMMENDATION_BINDING_MISMATCH',
       409,
     )
   }

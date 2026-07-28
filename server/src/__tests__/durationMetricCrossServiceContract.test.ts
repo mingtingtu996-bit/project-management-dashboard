@@ -121,7 +121,7 @@ describe('duration metric cross-service contract', () => {
         asOf: '2026-07-20',
         availability: 'available',
       }),
-      targetGap: expect.objectContaining({ unit: 'construction_production_day' }),
+      targetGap: expect.objectContaining({ unit: 'calendar_day' }),
       delay: expect.objectContaining({ unit: 'construction_production_day' }),
     }))
   })

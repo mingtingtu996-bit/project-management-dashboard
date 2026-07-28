@@ -180,4 +180,24 @@ describe('metric registry', () => {
       }))
     }
   })
+
+  it('registers the 14-day start-readiness summary metrics with their authoritative source', () => {
+    const requiredMetrics = [
+      'start_readiness_task_count_14d',
+      'start_readiness_ready_task_count_14d',
+      'start_readiness_blocked_task_count_14d',
+      'start_readiness_attention_task_count_14d',
+      'start_readiness_ready_rate_14d',
+      'start_readiness_production_date_count_14d',
+    ]
+
+    for (const metricKey of requiredMetrics) {
+      expect(getMetricDefinition(metricKey)).toEqual(expect.objectContaining({
+        metricKey,
+        source: 'projectStartReadinessService',
+        defaultGranularity: 'daily',
+        supportedGroupBy: ['project'],
+      }))
+    }
+  })
 })

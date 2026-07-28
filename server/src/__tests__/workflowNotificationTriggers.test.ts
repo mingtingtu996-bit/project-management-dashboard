@@ -88,6 +88,9 @@ const state = vi.hoisted(() => {
 
   const persistNotification = vi.fn(async (payload: any) => payload)
   const closeDelaySourceRisksForCompletedTask = vi.fn(async () => [])
+  const recordAcceptancePlanExecutionFacts = vi.fn(async () => undefined)
+  const syncCanonicalTaskFromAcceptancePlan = vi.fn(async () => null)
+  const syncAcceptancePlansFromCanonicalTask = vi.fn(async () => ({ updated: false }))
   const databaseQuery = vi.fn(async (sql: string, params: unknown[] = []) => {
     const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
 
@@ -316,6 +319,9 @@ const state = vi.hoisted(() => {
     obstacle,
     persistNotification,
     closeDelaySourceRisksForCompletedTask,
+    recordAcceptancePlanExecutionFacts,
+    syncCanonicalTaskFromAcceptancePlan,
+    syncAcceptancePlansFromCanonicalTask,
     executeSQLOne,
     executeSQL,
     getMembers,
@@ -402,6 +408,15 @@ vi.mock('../services/taskCodeTransactionService.js', () => ({
     task: await state.updateTask(taskId, updates),
     taskCode: 'TASK-001',
   })),
+}))
+
+vi.mock('../services/acceptancePlanExecutionFactService.js', () => ({
+  recordAcceptancePlanExecutionFacts: state.recordAcceptancePlanExecutionFacts,
+}))
+
+vi.mock('../services/acceptanceTaskSyncService.js', () => ({
+  syncCanonicalTaskFromAcceptancePlan: state.syncCanonicalTaskFromAcceptancePlan,
+  syncAcceptancePlansFromCanonicalTask: state.syncAcceptancePlansFromCanonicalTask,
 }))
 
 vi.mock('../services/warningChainService.js', () => ({
@@ -501,7 +516,7 @@ describe('workflow notification triggers', () => {
       .patch(`/api/acceptance-plans/${state.ids.planId}/status`)
       .send({ status: 'passed', actual_date: '2026-04-16' })
 
-    expect(response.status).toBe(200)
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(state.persistNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'acceptance_status_changed',
@@ -510,19 +525,11 @@ describe('workflow notification triggers', () => {
         source_entity_id: state.ids.planId,
       }),
     )
-    expect(state.updateTask).toHaveBeenCalledWith(
-      state.ids.taskId,
-      expect.objectContaining({
-        status: 'completed',
-        progress: 100,
-        updated_by: 'user-1',
-      }),
-      undefined,
-      expect.objectContaining({
-        executionFactIntent: 'acceptance_pass',
-        executionFactEventDate: '2026-04-16',
-      }),
-    )
+    expect(state.syncCanonicalTaskFromAcceptancePlan).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'user-1',
+      previousPlan: expect.objectContaining({ id: state.ids.planId }),
+      nextPlan: expect.objectContaining({ id: state.ids.planId, status: 'passed', actual_date: '2026-04-16' }),
+    }))
   })
 
   it('syncs the linked task when acceptance status is updated through PUT', async () => {
@@ -532,26 +539,18 @@ describe('workflow notification triggers', () => {
       .put(`/api/acceptance-plans/${state.ids.planId}`)
       .send({ status: 'passed', actual_date: '2026-04-16' })
 
-    expect(response.status).toBe(200)
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(state.persistNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'acceptance_status_changed',
         source_entity_id: state.ids.planId,
       }),
     )
-    expect(state.updateTask).toHaveBeenCalledWith(
-      state.ids.taskId,
-      expect.objectContaining({
-        status: 'completed',
-        progress: 100,
-        updated_by: 'user-1',
-      }),
-      undefined,
-      expect.objectContaining({
-        executionFactIntent: 'acceptance_pass',
-        executionFactEventDate: '2026-04-16',
-      }),
-    )
+    expect(state.syncCanonicalTaskFromAcceptancePlan).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: 'user-1',
+      previousPlan: expect.objectContaining({ id: state.ids.planId }),
+      nextPlan: expect.objectContaining({ id: state.ids.planId, status: 'passed', actual_date: '2026-04-16' }),
+    }))
   })
 
   it('notifies when preceding conditions are auto-satisfied by task completion', async () => {
@@ -571,7 +570,7 @@ describe('workflow notification triggers', () => {
         task_id: state.ids.dependentTaskId,
       }),
     )
-    expect(state.closeDelaySourceRisksForCompletedTask).toHaveBeenCalledWith(state.ids.taskId, state.ids.projectId)
+    expect(state.closeDelaySourceRisksForCompletedTask).not.toHaveBeenCalled()
   }, 30_000)
 
   it('notifies the new assignee when task responsibility changes', async () => {
