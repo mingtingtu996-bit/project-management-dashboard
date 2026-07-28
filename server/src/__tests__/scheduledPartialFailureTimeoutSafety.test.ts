@@ -151,6 +151,8 @@ describe('scheduled partial-failure timeout safety', () => {
   })
 
   it('keeps planning overlap blocked and rolls back when a timed-out sweep settles late', async () => {
+    const lockState = { held: false, generation: 0 }
+    mocks.getClient.mockImplementation(async () => createLeaseClient(lockState) as never)
     const transactionEvents: string[] = []
     const transactionClient = createTransactionClient(transactionEvents)
     const deferredSweep = createDeferred<ReturnType<typeof completePlanningResult>>()

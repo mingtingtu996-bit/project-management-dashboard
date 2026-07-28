@@ -37,6 +37,28 @@ const mocks = vi.hoisted(() => ({
     }
     throw lastError
   }),
+  runWithJobLease: vi.fn(async (
+    _options: unknown,
+    runner: (context: {
+      jobName: string
+      fenceToken: string
+      generation: number
+      signal: AbortSignal
+      assertActive: () => void
+    }) => Promise<unknown>,
+  ) => {
+    const controller = new AbortController()
+    return {
+      acquired: true as const,
+      value: await runner({
+        jobName: 'planningReplayCalibrationJob',
+        fenceToken: 'test-fence',
+        generation: 1,
+        signal: controller.signal,
+        assertActive: () => undefined,
+      }),
+    }
+  }),
 }))
 
 vi.mock('../services/activeProjectService.js', () => ({
@@ -49,6 +71,7 @@ vi.mock('../services/dbService.js', () => ({
 
 vi.mock('../services/jobRuntime.js', () => ({
   runJobWithRetry: mocks.runJobWithRetry,
+  runWithJobLease: mocks.runWithJobLease,
 }))
 
 vi.mock('../services/planningReplayCalibrationService.js', async (importOriginal) => {
@@ -86,6 +109,19 @@ describe('planningReplayCalibrationJob', () => {
         }
       }
       throw lastError
+    })
+    mocks.runWithJobLease.mockImplementation(async (_options, runner) => {
+      const controller = new AbortController()
+      return {
+        acquired: true as const,
+        value: await runner({
+          jobName: 'planningReplayCalibrationJob',
+          fenceToken: 'test-fence',
+          generation: 1,
+          signal: controller.signal,
+          assertActive: () => undefined,
+        }),
+      }
     })
     mocks.executeSQL.mockImplementation(async (sql: string, params: unknown[] = []) => {
       if (/\bJOIN\b|\bCOALESCE\s*\(/i.test(sql)) {
@@ -278,6 +314,65 @@ describe('planningReplayCalibrationJob', () => {
 
     expect(jobSource).toContain('getStatus()')
     expect(jobSource).toContain('executeNow(projectIds?: string[] | null)')
+  })
+
+  it('prevents a second job instance from entering the sweep while the distributed lease is held', async () => {
+    const completeResult = {
+      scannedProjects: 1,
+      completedReports: 1,
+      failedReports: 0,
+      sampleCount: 2,
+      readyGroupCount: 1,
+      blockedGroupCount: 0,
+      rejectedSampleCount: 0,
+      persistedGroupCount: 1,
+      persistedReplayResultCount: 2,
+      persistenceFailedGroupCount: 0,
+      factWritesBlocked: 1,
+      seedWritesBlocked: 1,
+    }
+    let releaseFirstSweep = () => undefined
+    const firstSweepGate = new Promise<void>((resolve) => {
+      releaseFirstSweep = resolve
+    })
+    let sweepCallCount = 0
+    const sweep = vi.fn(async () => {
+      sweepCallCount += 1
+      if (sweepCallCount === 1) await firstSweepGate
+      return completeResult
+    })
+    let leaseHeld = false
+    const leaseRunner = vi.fn(async (_options, runner) => {
+      if (leaseHeld) return { acquired: false as const, reason: 'lease_not_acquired' as const }
+      leaseHeld = true
+      const controller = new AbortController()
+      try {
+        return {
+          acquired: true as const,
+          value: await runner({
+            jobName: 'planningReplayCalibrationJob',
+            fenceToken: 'shared-fence',
+            generation: 1,
+            signal: controller.signal,
+            assertActive: () => undefined,
+          }),
+        }
+      } finally {
+        leaseHeld = false
+      }
+    })
+    const withTransaction = async <T>(work: () => Promise<T>) => await work()
+    const firstJob = new PlanningReplayCalibrationJob({ sweep, withTransaction, leaseRunner })
+    const secondJob = new PlanningReplayCalibrationJob({ sweep, withTransaction, leaseRunner })
+
+    const firstRun = firstJob.executeNow(['project-1'])
+    await vi.waitFor(() => expect(sweep).toHaveBeenCalledTimes(1))
+    const secondResult = await secondJob.executeNow(['project-1'])
+    releaseFirstSweep()
+    await expect(firstRun).resolves.toEqual(completeResult)
+
+    expect(secondResult).toEqual({ skipped: true, reason: 'lease_not_acquired' })
+    expect(sweep).toHaveBeenCalledTimes(1)
   })
 
   it('does not collect planning replay samples through JOIN or COALESCE executeSQL literals', () => {
