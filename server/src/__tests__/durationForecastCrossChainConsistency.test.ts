@@ -17,6 +17,110 @@ const calendar: ConstructionCalendarContext = {
   unavailableReason: null,
 }
 
+const unavailableCalendar: ConstructionCalendarContext = {
+  basis: 'calendar_day',
+  windows: [],
+  calendarRef: null,
+  calendarVersion: null,
+  timezone: 'Asia/Shanghai',
+  availability: 'unavailable',
+  unavailableReason: 'construction_calendar_identity_missing',
+}
+
+function buildScheduleRow(): ScheduleAccelerationRow {
+  return {
+    clientRowId: 'task-1',
+    rowProjectionMode: 'schedule_row',
+    predecessorDependencies: [],
+    values: {
+      project_id: 'project-1',
+      title: 'Single critical task',
+      status: 'in_progress',
+      progress: 20,
+      planned_end_date: '2026-07-19',
+      duration_contribution_mode: 'duration_bearing',
+      row_projection_mode: 'schedule_row',
+      is_milestone: false,
+      is_critical: true,
+      total_float_days: 0,
+      remaining_duration_days: 999,
+      forecast_finish_date: '2026-07-20',
+      forecast_p20_finish_date: '2026-07-17',
+      forecast_p80_finish_date: '2026-07-24',
+    },
+  }
+}
+
+type DurationMetricPatch = Partial<TaskDurationForecast['remainingDuration']>
+
+function buildProductionDurationMetric(value: number | null, patch: DurationMetricPatch = {}) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-07-13',
+    availability: 'available' as const,
+    unavailableReason: null,
+    ...patch,
+  }
+}
+
+function buildTaskForecast(metricPatch: DurationMetricPatch = {}): TaskDurationForecast {
+  const metricValue = metricPatch.availability === 'unavailable' ? null : 8
+  return {
+    taskId: 'task-1',
+    recommendedDurationDays: 999,
+    conservativeDurationDays: 999,
+    remainingDurationDays: 999,
+    remainingDuration: buildProductionDurationMetric(metricValue, metricPatch),
+    forecastFinishDate: '2026-07-20',
+    forecastDelay: buildProductionDurationMetric(1, metricPatch),
+    forecastDelayDays: 999,
+    confidenceLevel: 'high',
+    confidenceScore: 90,
+    forecastSource: 'test',
+    businessReason: null,
+    probabilityDuration: {
+      method: 'pert_from_existing_percentiles',
+      source: 'test',
+      p20RemainingDays: 999,
+      p50RemainingDays: 999,
+      p80RemainingDays: 999,
+      expectedRemainingDays: 999,
+      variance: null,
+      standardDeviationDays: null,
+      confidenceBandWidthDays: 999,
+    },
+    probabilityDurationMetrics: {
+      p20RemainingDuration: buildProductionDurationMetric(
+        metricPatch.availability === 'unavailable' ? null : 5,
+        metricPatch,
+      ),
+      p50RemainingDuration: buildProductionDurationMetric(metricValue, metricPatch),
+      p80RemainingDuration: buildProductionDurationMetric(
+        metricPatch.availability === 'unavailable' ? null : 12,
+        metricPatch,
+      ),
+    },
+  }
+}
+
+const taskAttribution: ProjectTaskAttribution = {
+  divisionId: 'division-1',
+  divisionName: 'Structure',
+  divisionSortOrder: 1,
+  subdivisionId: 'subdivision-1',
+  subdivisionName: 'Concrete',
+  subdivisionSortOrder: 1,
+  specialtyId: 'specialty-1',
+  specialtyName: 'Civil',
+  specialtySortOrder: 1,
+  specialtySource: 'engineering_category',
+  degradationReasons: [],
+}
+
 describe('duration forecast cross-chain consistency', () => {
   it('keeps a single-division P50 aligned with project deterministic P50 and explains the risk-band adjustment', () => {
     const scheduleRow: ScheduleAccelerationRow = {
@@ -155,5 +259,78 @@ describe('duration forecast cross-chain consistency', () => {
     }))
     expect(project.forecastFinishDate).toBe(division.p80FinishDate)
     expect(project.projectRemainingForecastDays).toBeGreaterThan(division.remainingDurationDays ?? 0)
+  })
+
+  it.each([
+    ['typed metric unavailable', { availability: 'unavailable', unavailableReason: 'duration_value_missing' }],
+    ['as-of mismatch', { asOf: '2026-07-12' }],
+    ['calendar ref mismatch', { calendarRef: 'other_calendar' }],
+    ['calendar version mismatch', { calendarVersion: 'calendar-v0' }],
+    ['timezone mismatch', { timezone: 'UTC' }],
+  ] satisfies Array<[string, DurationMetricPatch]>)('fails closed when the task forecast has %s', (_label, metricPatch) => {
+    const scoped = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [buildScheduleRow()],
+      forecasts: [buildTaskForecast(metricPatch)],
+      attributions: new Map([['task-1', taskAttribution]]),
+      criticalTaskIds: new Set(['task-1']),
+      constructionCalendar: calendar,
+    })
+
+    const division = scoped.dimensions.division[0]
+    expect(division.forecastCoverageRate).toBe(0)
+    expect(division.probabilityCoverageRate).toBe(0)
+    expect(division.p20FinishDate).toBe('2026-07-19')
+    expect(division.p50FinishDate).toBe('2026-07-19')
+    expect(division.p80FinishDate).toBe('2026-07-19')
+    expect(division.remainingDurationDays).not.toBe(999)
+    expect(division.networkProbability?.p50RemainingDays).toBeNull()
+    expect(division.dataStatus).toBe('degraded')
+    expect(division.degradationReasons).toEqual(expect.arrayContaining([
+      'planned_finish_fallback',
+      'missing_probability_window',
+    ]))
+  })
+
+  it('keeps scoped and project production-day facts unavailable without an authoritative calendar', () => {
+    const scheduleRow = buildScheduleRow()
+    const scoped = buildScopedDurationForecasts({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [scheduleRow],
+      forecasts: [buildTaskForecast()],
+      attributions: new Map([['task-1', taskAttribution]]),
+      criticalTaskIds: new Set(['task-1']),
+      constructionCalendar: unavailableCalendar,
+    })
+    const project = buildProjectRemainingDurationForecast({
+      projectId: 'project-1',
+      asOfDate: '2026-07-13',
+      rows: [scheduleRow],
+      constructionCalendar: unavailableCalendar,
+    })
+
+    const division = scoped.dimensions.division[0]
+    expect(division.forecastCoverageRate).toBe(0)
+    expect(division.probabilityCoverageRate).toBe(0)
+    expect(division.remainingDuration).toEqual(expect.objectContaining({
+      value: null,
+      availability: 'unavailable',
+      unit: 'construction_production_day',
+    }))
+    expect(division.remainingDurationDays).toBeNull()
+    expect(division.delayDays).toBeNull()
+    expect(division.networkProbability?.p20RemainingDays).toBeNull()
+    expect(division.networkProbability?.p50RemainingDays).toBeNull()
+    expect(division.networkProbability?.p80RemainingDays).toBeNull()
+    expect(project.projectRemainingForecast).toEqual(expect.objectContaining({
+      value: null,
+      availability: 'unavailable',
+      unit: 'construction_production_day',
+    }))
+    expect(project.projectRemainingForecastDays).toBeNull()
+    expect(project.targetGapDays).toBeNull()
+    expect(project.forecastFinishDate).toBeNull()
   })
 })

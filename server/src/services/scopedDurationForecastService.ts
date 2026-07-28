@@ -308,17 +308,46 @@ function shiftProductionDays(
   return calendarDateText(cursor)
 }
 
+function isMatchingProductionDurationMetric(
+  metric: DurationMetricDto | null | undefined,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return false
+  return metric?.availability === 'available'
+    && metric.unit === 'construction_production_day'
+    && readFiniteNumber(metric.value) !== null
+    && normalizeText(metric.calendarRef) === calendar.calendarRef
+    && normalizeText(metric.calendarVersion) === calendar.calendarVersion
+    && normalizeText(metric.timezone) === calendar.timezone
+    && normalizeText(metric.asOf) === asOfDate
+    && normalizeDate(metric.asOf) === asOfDate
+}
+
 function buildTaskFinishBand(
   task: EligibleTask,
   forecast: TaskDurationForecast | undefined,
   asOfDate: string,
   calendar?: ConstructionCalendarContext | null,
 ): TaskFinishBand {
-  const forecastFinish = normalizeDate(forecast?.forecastFinishDate)
+  const suppliedForecastFinish = normalizeDate(forecast?.forecastFinishDate)
+  const forecastDurationMatches = isMatchingProductionDurationMetric(
+    forecast?.remainingDuration,
+    asOfDate,
+    calendar,
+  )
+  const forecastFinish = forecastDurationMatches ? suppliedForecastFinish : null
+  const calendarDayForecastFallback = !isAuthoritativeConstructionCalendar(calendar)
+    ? suppliedForecastFinish
+    : null
   const plannedFinish = normalizeDate(task.row.values.planned_end_date ?? task.row.values.end_date)
   const degradationReasons: string[] = []
 
-  if (!forecastFinish) degradationReasons.push('missing_current_forecast')
+  if (suppliedForecastFinish && !forecastDurationMatches) {
+    degradationReasons.push('forecast_duration_contract_unavailable')
+  } else if (!forecastFinish) {
+    degradationReasons.push('missing_current_forecast')
+  }
   const forecastOverdueDays = forecastFinish
     ? delayDayDelta(forecastFinish, asOfDate, calendar)
     : null
@@ -353,8 +382,12 @@ function buildTaskFinishBand(
     }
   }
 
-  const p50 = forecastFinish ?? plannedFinish
-  if (!forecastFinish && plannedFinish) degradationReasons.push('planned_finish_fallback')
+  const p50 = forecastFinish ?? calendarDayForecastFallback ?? plannedFinish
+  if (calendarDayForecastFallback) {
+    degradationReasons.push('calendar_day_forecast_finish_fallback')
+  } else if (!forecastFinish && plannedFinish) {
+    degradationReasons.push('planned_finish_fallback')
+  }
   if (!p50) {
     degradationReasons.push('missing_usable_finish')
     return {
@@ -369,9 +402,15 @@ function buildTaskFinishBand(
     }
   }
 
-  const p20Remaining = forecastFinish ? forecastProbabilityRemainingDays(forecast, 'p20') : null
-  const p50Remaining = forecastFinish ? forecastProbabilityRemainingDays(forecast, 'p50') : null
-  const p80Remaining = forecastFinish ? forecastProbabilityRemainingDays(forecast, 'p80') : null
+  const p20Remaining = forecastFinish
+    ? forecastProbabilityRemainingDays(forecast, 'p20', asOfDate, calendar)
+    : null
+  const p50Remaining = forecastFinish
+    ? forecastProbabilityRemainingDays(forecast, 'p50', asOfDate, calendar)
+    : null
+  const p80Remaining = forecastFinish
+    ? forecastProbabilityRemainingDays(forecast, 'p80', asOfDate, calendar)
+    : null
   const probabilityCovered = p20Remaining !== null && p50Remaining !== null && p80Remaining !== null
   if (!probabilityCovered) {
     degradationReasons.push('missing_probability_window')
@@ -675,6 +714,8 @@ function activeTargetDateCompletion(input: {
 function forecastProbabilityRemainingDays(
   forecast: TaskDurationForecast | undefined,
   percentile: 'p20' | 'p50' | 'p80',
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
 ) {
   const metrics = forecast?.probabilityDurationMetrics
   const metric = percentile === 'p20'
@@ -682,14 +723,7 @@ function forecastProbabilityRemainingDays(
     : percentile === 'p50'
       ? metrics?.p50RemainingDuration
       : metrics?.p80RemainingDuration
-  if (
-    metric?.availability !== 'available'
-    || metric.unit !== 'construction_production_day'
-    || !normalizeText(metric.calendarRef)
-    || !normalizeText(metric.calendarVersion)
-    || !normalizeText(metric.timezone)
-    || !normalizeDate(metric.asOf)
-  ) return null
+  if (!isMatchingProductionDurationMetric(metric, asOfDate, calendar)) return null
   const normalized = readFiniteNumber(metric.value)
   return normalized !== null && normalized > 0 ? normalized : null
 }
@@ -933,9 +967,9 @@ function buildGroupForecast(input: {
         : null
       return {
         id: task.id,
-        p20Days: forecastProbabilityRemainingDays(forecast, 'p20'),
-        p50Days: forecastProbabilityRemainingDays(forecast, 'p50'),
-        p80Days: forecastProbabilityRemainingDays(forecast, 'p80'),
+        p20Days: forecastProbabilityRemainingDays(forecast, 'p20', asOfDate, calendar),
+        p50Days: forecastProbabilityRemainingDays(forecast, 'p50', asOfDate, calendar),
+        p80Days: forecastProbabilityRemainingDays(forecast, 'p80', asOfDate, calendar),
         releaseOffsetDays: plannedReleaseDays === null ? 0 : Math.max(0, plannedReleaseDays - 1),
       }
     }),

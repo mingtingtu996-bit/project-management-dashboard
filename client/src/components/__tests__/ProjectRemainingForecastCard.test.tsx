@@ -117,4 +117,53 @@ describe('ProjectRemainingForecastCard', () => {
     expect(container.textContent).toContain('超目标 30 个日历天')
     expect(container.textContent).not.toContain('999')
   })
+
+  it('shows typed unavailability and never falls back to legacy numerics', async () => {
+    apiState.response = {
+      projectId: 'project-1',
+      status: 'degraded',
+      degraded: true,
+      degradationReason: 'construction_calendar_identity_missing',
+      message: null,
+      rowsEvaluated: 3,
+      projectRemainingForecast: {
+        durationOutputCode: 'project_remaining_forecast',
+        projectRemainingForecastDays: 999,
+        projectRemainingForecast: {
+          value: null,
+          unit: 'construction_production_day',
+          calendarRef: null,
+          calendarVersion: null,
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'unavailable',
+          unavailableReason: 'construction_calendar_identity_missing',
+        },
+        targetGapDays: 999,
+        targetGap: {
+          value: null,
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+          timezone: 'Asia/Shanghai',
+          asOf: '2027-02-15',
+          availability: 'unavailable',
+          unavailableReason: 'forecast_finish_unavailable',
+        },
+        forecastFinishDate: null,
+        targetEndDate: '2027-03-31',
+      },
+    }
+
+    await act(async () => {
+      root?.render(<ProjectRemainingForecastCard projectId="project-1" />)
+      await flush()
+    })
+    await act(async () => { await flush() })
+
+    expect(container.textContent).toContain('\u751f\u4ea7\u65e5\u53e3\u5f84\u4e0d\u53ef\u7528')
+    expect(container.textContent).toContain('\u65e5\u5386\u5929\u53e3\u5f84\u4e0d\u53ef\u7528')
+    expect(container.textContent).not.toContain('999')
+    expect(container.textContent).not.toContain('\u65e0\u660e\u663e\u504f\u5dee')
+  })
 })

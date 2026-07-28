@@ -287,6 +287,20 @@ describe('duration surface contract', () => {
     expect(reportsSource).toContain("value: 'schedule_deviation_days'")
   })
 
+  it('keeps representative forecast surfaces from consuming legacy duration numerics', () => {
+    const representativeSources = {
+      'components/ProjectRemainingForecastCard.tsx': readSource('components/ProjectRemainingForecastCard.tsx'),
+      'components/CriticalPathGraph.tsx': readSource('components/CriticalPathGraph.tsx'),
+      'pages/GanttView/GanttDetailDrawer.tsx': readSource('pages/GanttView/GanttDetailDrawer.tsx'),
+      'pages/GanttView/TargetAccelerationReviewPanel.tsx': readSource('pages/GanttView/TargetAccelerationReviewPanel.tsx'),
+    }
+    const legacyDurationAlias = /\b(?:projectRemainingForecastDays|remainingForecastDays|remainingDurationDays|forecastDelayDays|duration_risk_p(?:20|50|80)_days|riskP(?:20|50|80)DurationDays|p(?:20|50|80)RemainingDays|total_float_days|free_float_days|floatDays|freeFloatDays)\b/
+
+    for (const [file, source] of Object.entries(representativeSources)) {
+      expect(source, file).not.toMatch(legacyDurationAlias)
+    }
+  })
+
   it('locks Reports progress-deviation display to the backend SSOT payload', () => {
     const reportsSource = readSource('pages/Reports.tsx')
     const progressDeviationApiSource = readSource('services/progressDeviationApi.ts')
