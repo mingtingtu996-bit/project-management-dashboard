@@ -45,6 +45,7 @@ import { recordProjectCriticalPathConsumedArtifacts } from './durationRuntimeCon
 import {
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import { isUnconfirmedHeuristicDependency } from './dependencyAuthorityService.js'
@@ -1852,10 +1853,30 @@ function isCriticalPathExternalWaitRow(row?: CriticalPathTaskRow | null) {
   return row ? readCriticalPathDurationContributionMode(row) === 'external_wait' : false
 }
 
+function readMatchingForecastRemainingDays(
+  forecast: TaskDurationForecast | undefined,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return null
+  const metric = normalizeDurationMetricDto(forecast?.remainingDuration)
+  if (
+    !metric
+    || metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || metric.calendarRef !== calendar.calendarRef
+    || metric.calendarVersion !== calendar.calendarVersion
+    || metric.timezone !== calendar.timezone
+    || metric.asOf !== asOfDate
+  ) return null
+  return readPositiveInt(metric.value)
+}
+
 function buildTaskNodes(
   rows: CriticalPathTaskRow[],
   currentForecasts = new Map<string, TaskDurationForecast>(),
   calendar?: ConstructionCalendarContext | null,
+  asOfDate = '',
   projectResourceFacts: CriticalPathProjectResourceFacts = {},
 ): TaskNode[] {
   const eligibleTasks = rows.filter((row) => {
@@ -1871,7 +1892,7 @@ function buildTaskNodes(
     const currentForecast = currentForecasts.get(task.id)
     const probabilityDuration = currentForecast?.probabilityDuration ?? null
     const forecastRemainingDays = isRuntimeInProgressRow(task)
-      ? readPositiveInt(currentForecast?.remainingDurationDays)
+      ? readMatchingForecastRemainingDays(currentForecast, asOfDate, calendar)
       : null
     const rawDuration = forecastRemainingDays ?? cpmSpanDays(startDate, endDate, calendar) ?? 1
     const durationGuard = evaluateDurationPlausibility({
@@ -3138,13 +3159,15 @@ async function buildProjectCriticalPathSnapshotWithContext(
   constructionOrganizationLineage: ConstructionOrganizationPlanNetworkRuntimeLineage | null
 }> {
   const constructionCalendar = await resolveCriticalPathConstructionCalendar(projectId)
+  const calculatedAt = new Date().toISOString()
+  const durationAsOf = businessDateKey(new Date(calculatedAt), constructionCalendar?.timezone)
   const dependencyRows = await loadCriticalPathDependencyRows(projectId, rows)
   const constructionOrganizationLineage = readConstructionOrganizationLineageFromDependencyRows(dependencyRows)
   const currentForecasts = await loadCurrentForecastMapForCriticalPath(rows)
   const projectGenerationFacts = await loadCriticalPathProjectGenerationFacts(projectId)
   const projectResourceFacts = buildCriticalPathProjectResourceFacts(projectGenerationFacts)
   const t2RhythmScheduleCandidateNetworkEvidence = buildCriticalPathT2RhythmNetworkEvidence(projectGenerationFacts)
-  const taskNodes = buildTaskNodes(rows, currentForecasts, constructionCalendar, projectResourceFacts)
+  const taskNodes = buildTaskNodes(rows, currentForecasts, constructionCalendar, durationAsOf, projectResourceFacts)
   const semanticDependencyRows = buildSemanticDependencyRowsForCriticalPath(rows, dependencyRows, constructionCalendar)
   let analysis: CPMResult
   let hasCycleDetected = false
@@ -3288,8 +3311,6 @@ async function buildProjectCriticalPathSnapshotWithContext(
   }
     // CP14: displayTaskIds 仅包含客观关键路径（CPM 自动计算 + manual_insert），不混入 manual_attention
   const primaryChainIndex = new Map((primaryChain?.taskIds ?? []).map((taskId, index) => [taskId, index]))
-  const calculatedAt = new Date().toISOString()
-  const durationAsOf = businessDateKey(new Date(calculatedAt), constructionCalendar?.timezone)
   const productionDuration = (value: number | null | undefined) => (
     buildConstructionProductionDayDurationMetric(value, {
       asOf: durationAsOf,

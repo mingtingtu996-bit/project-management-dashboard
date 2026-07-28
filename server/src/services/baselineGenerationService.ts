@@ -302,6 +302,7 @@ type BaselineGenerationDateOptions = {
   forecastByTaskId?: Map<string, CachedDurationForecastRow>
   durationSuggestionByTaskId?: Map<string, BaselineDurationSuggestion>
   constructionCalendar?: ConstructionCalendarContext | null
+  durationAsOfDate?: string | null
   planningReplayReadbackByTaskId?: Map<string, PlanningReplayCalibrationReadback>
 }
 
@@ -467,9 +468,10 @@ function isInProgressBaselineTask(task: Pick<TaskBaselineTaskRow, 'status' | 'pr
 function readDurationSuggestionDaysForGeneration(
   suggestion: BaselineDurationSuggestion | undefined,
   calendar: ConstructionCalendarContext | null | undefined,
+  asOfDate: string | null | undefined,
 ) {
   if (!suggestion || !isAuthoritativeConstructionCalendar(calendar)) return null
-  return readGovernedDurationSuggestionDays(suggestion, calendar)
+  return readGovernedDurationSuggestionDays(suggestion, calendar, asOfDate)
 }
 
 type ResolvedBaselineDraftDates = {
@@ -545,7 +547,11 @@ function resolveBaselineDraftDates(
 
   if (!plannedStartDate || !plannedEndDate) {
     const suggestion = options.durationSuggestionByTaskId?.get(task.id)
-    const suggestedDays = readDurationSuggestionDaysForGeneration(suggestion, options.constructionCalendar)
+    const suggestedDays = readDurationSuggestionDaysForGeneration(
+      suggestion,
+      options.constructionCalendar,
+      options.durationAsOfDate,
+    )
     if (suggestedDays != null) {
       if (plannedStartDate && !plannedEndDate) {
         plannedEndDate = addConstructionProductionDaysFromText(plannedStartDate, suggestedDays, options.constructionCalendar)
@@ -2031,6 +2037,7 @@ function readStringArray(value: unknown): string[] {
 function readGovernedDurationSuggestionDays(
   suggestion: unknown,
   calendar?: ConstructionCalendarContext | null,
+  expectedAsOfDate?: string | null,
 ) {
   const record = readRecord(suggestion)
   const outputCode = normalizeText(record.durationOutputCode)
@@ -2045,12 +2052,11 @@ function readGovernedDurationSuggestionDays(
       !metric
       || metric.availability !== 'available'
       || metric.unit !== 'construction_production_day'
-      || (calendar && (
-        !isAuthoritativeConstructionCalendar(calendar)
-        || metric.calendarRef !== calendar.calendarRef
-        || metric.calendarVersion !== calendar.calendarVersion
-        || metric.timezone !== calendar.timezone
-      ))
+      || !isAuthoritativeConstructionCalendar(calendar)
+      || metric.calendarRef !== calendar.calendarRef
+      || metric.calendarVersion !== calendar.calendarVersion
+      || metric.timezone !== calendar.timezone
+      || metric.asOf !== normalizeDateOnlyText(expectedAsOfDate)
     ) return null
     value = metric.value
   }
@@ -2060,7 +2066,11 @@ function readGovernedDurationSuggestionDays(
 
 async function loadMissingDateDurationSuggestions(
   taskRows: TaskBaselineTaskRow[],
-  options?: { runtimeEvidenceMode?: 'record' | 'no_write' },
+  options?: {
+    runtimeEvidenceMode?: 'record' | 'no_write'
+    constructionCalendar?: ConstructionCalendarContext | null
+    durationAsOfDate?: string | null
+  },
 ) {
   const missingDateTasks = taskRows
     .filter((task) => task.is_executable !== false && task.is_wbs_summary !== true && !isClosedExecutionTask(task))
@@ -2100,7 +2110,11 @@ async function loadMissingDateDurationSuggestions(
   const durationSuggestionByTaskId = new Map<string, BaselineDurationSuggestion>()
   const metrics = results.reduce((summary, result, index) => {
     const task = missingDateTasks[index]
-    if (result.status === 'fulfilled' && readGovernedDurationSuggestionDays(result.value) != null) {
+    if (result.status === 'fulfilled' && readGovernedDurationSuggestionDays(
+      result.value,
+      options?.constructionCalendar,
+      options?.durationAsOfDate,
+    ) != null) {
       summary.suggestedDurationCount += 1
       durationSuggestionByTaskId.set(task.id, result.value as BaselineDurationSuggestion)
       if (['low', 'unavailable'].includes(result.value.confidenceLevel)) {
@@ -2737,15 +2751,20 @@ async function loadBaselineGenerationDateOptions(
   options?: { runtimeEvidenceMode?: 'record' | 'no_write' },
 ): Promise<BaselineGenerationDateOptions> {
   const projectId = taskRows.map((task) => String(task.project_id ?? '').trim()).find(Boolean) ?? null
-  const [forecastByTaskId, durationSuggestions, constructionCalendar] = await Promise.all([
-    loadLatestForecastsByTaskId(taskRows),
-    loadMissingDateDurationSuggestions(taskRows, options),
-    resolveConstructionCalendarContext({
+  const constructionCalendar = await resolveConstructionCalendarContext({
+    projectId,
+    onError: (error) => logger.warn('[baselineGenerationService] failed to resolve construction calendar context', {
       projectId,
-      onError: (error) => logger.warn('[baselineGenerationService] failed to resolve construction calendar context', {
-        projectId,
-        error: error instanceof Error ? error.message : String(error),
-      }),
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  })
+  const durationAsOfDate = businessDateKey(new Date(), constructionCalendar?.timezone ?? DEFAULT_DURATION_TIMEZONE)
+  const [forecastByTaskId, durationSuggestions] = await Promise.all([
+    loadLatestForecastsByTaskId(taskRows),
+    loadMissingDateDurationSuggestions(taskRows, {
+      ...options,
+      constructionCalendar,
+      durationAsOfDate,
     }),
   ])
   const planningReplayReadbackByTaskId = new Map<string, PlanningReplayCalibrationReadback>()
@@ -2772,6 +2791,7 @@ async function loadBaselineGenerationDateOptions(
     forecastByTaskId,
     durationSuggestionByTaskId: durationSuggestions.durationSuggestionByTaskId,
     constructionCalendar,
+    durationAsOfDate,
     planningReplayReadbackByTaskId,
   }
 }

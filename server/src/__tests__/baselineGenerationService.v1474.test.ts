@@ -637,6 +637,19 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
         unavailableReason: null,
       },
     },
+    {
+      label: 'stale asOf',
+      remainingDuration: {
+        value: 3,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-31',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
   ])('does not fall back to raw remaining duration when the typed fact is $label', ({ remainingDuration }) => {
     const [item] = buildGeneratedBaselineItemsFromTasksV1474([
       {
@@ -666,6 +679,7 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
         availability: 'available',
         unavailableReason: null,
       },
+      durationAsOfDate: '2026-06-01',
     } as any)
 
     expect(item.planned_end_date).toBeNull()
@@ -709,6 +723,7 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
         availability: 'available',
         unavailableReason: null,
       },
+      durationAsOfDate: '2026-06-01',
     } as any)
 
     expect(item.planned_start_date).toBe('2026-06-01')

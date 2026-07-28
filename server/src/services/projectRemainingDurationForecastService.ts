@@ -34,6 +34,7 @@ import {
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
   hasIdentifiedConstructionCalendar,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import {
@@ -376,15 +377,32 @@ function orderCriticalBandFinishDates(
   }
 }
 
-function readRowRemainingDurationDays(row: ScheduleAccelerationRow) {
-  return readNumber(
-    row.values.remaining_duration_days
-      ?? row.values.remainingDurationDays
-      ?? row.values.forecast_remaining_days
-      ?? row.values.duration_forecast_remaining_days
-      ?? readRecord(row.values.durationForecast).remainingDurationDays
-      ?? readRecord(row.values.duration_forecast).remaining_duration_days,
+function readRowRemainingDurationDays(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  if (!isAuthoritativeConstructionCalendar(calendar)) return null
+  const durationForecast = readRecord(row.values.durationForecast)
+  const snakeDurationForecast = readRecord(row.values.duration_forecast)
+  const metric = normalizeDurationMetricDto(
+    row.values.remaining_duration
+      ?? row.values.remainingDuration
+      ?? durationForecast.remainingDuration
+      ?? durationForecast.remaining_duration
+      ?? snakeDurationForecast.remainingDuration
+      ?? snakeDurationForecast.remaining_duration,
   )
+  if (
+    !metric
+    || metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || metric.calendarRef !== calendar.calendarRef
+    || metric.calendarVersion !== calendar.calendarVersion
+    || metric.timezone !== calendar.timezone
+    || metric.asOf !== asOfDate
+  ) return null
+  return readNumber(metric.value)
 }
 
 function readRowCriticalPathSpanDays(row: ScheduleAccelerationRow) {
@@ -401,10 +419,9 @@ function readRowGoverningFinish(
   asOfDate?: string | null,
   calendar?: ConstructionCalendarContext | null,
 ) {
-  const forecastFinish = readRowForecastFinish(row)
+  const remainingDays = readRowRemainingDurationDays(row, asOfDate ?? '', calendar)
+  const forecastFinish = remainingDays !== null ? readRowForecastFinish(row) : null
   if (forecastFinish) return forecastFinish
-
-  const remainingDays = readRowRemainingDurationDays(row)
   if (remainingDays !== null && remainingDays > 0 && normalizeDate(asOfDate)) {
     return addProductionDays(asOfDate, remainingDays, calendar)
   }
@@ -533,7 +550,7 @@ function readExternalGateFinishDate(
       ?? row.values.planned_end_date
       ?? row.values.end_date,
   )
-  const remainingDays = readRowRemainingDurationDays(row)
+  const remainingDays = readRowRemainingDurationDays(row, asOfDate, calendar)
   const remainingFinishDate = remainingDays !== null && remainingDays > 0
     ? addProductionDays(asOfDate, remainingDays, calendar)
     : null
@@ -545,7 +562,7 @@ function readExternalGateRemainingDays(
   asOfDate: string,
   calendar?: ConstructionCalendarContext | null,
 ) {
-  const explicitRemainingDays = readRowRemainingDurationDays(row)
+  const explicitRemainingDays = readRowRemainingDurationDays(row, asOfDate, calendar)
   if (explicitRemainingDays !== null && explicitRemainingDays > 0) return Math.ceil(explicitRemainingDays)
 
   const finishDate = readRowGoverningFinish(row, asOfDate, calendar)
@@ -623,6 +640,8 @@ function readRowProbabilityDuration(row: ScheduleAccelerationRow) {
 function readRowProbabilityRemainingDays(
   row: ScheduleAccelerationRow,
   percentile: 'p20' | 'p50' | 'p80',
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
 ) {
   const probability = readRowProbabilityDuration(row)
   const keys = percentile === 'p20'
@@ -634,7 +653,7 @@ function readRowProbabilityRemainingDays(
     const value = readNumber(probability[key])
     if (value !== null && value > 0) return value
   }
-  return percentile === 'p50' ? readRowRemainingDurationDays(row) : null
+  return percentile === 'p50' ? readRowRemainingDurationDays(row, asOfDate, calendar) : null
 }
 
 function releaseOffsetDays(
@@ -656,9 +675,9 @@ function buildNetworkProbability(params: {
   const rowIds = new Set(params.rows.map((row) => row.clientRowId))
   const tasks = params.rows.map((row) => ({
     id: row.clientRowId,
-    p20Days: readRowProbabilityRemainingDays(row, 'p20'),
-    p50Days: readRowProbabilityRemainingDays(row, 'p50'),
-    p80Days: readRowProbabilityRemainingDays(row, 'p80'),
+    p20Days: readRowProbabilityRemainingDays(row, 'p20', params.asOfDate, params.calendar),
+    p50Days: readRowProbabilityRemainingDays(row, 'p50', params.asOfDate, params.calendar),
+    p80Days: readRowProbabilityRemainingDays(row, 'p80', params.asOfDate, params.calendar),
     releaseOffsetDays: releaseOffsetDays(row, params.asOfDate, params.calendar),
   }))
   const dependencies = params.rows.flatMap((row) => row.predecessorDependencies

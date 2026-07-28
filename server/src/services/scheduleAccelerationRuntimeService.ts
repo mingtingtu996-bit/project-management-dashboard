@@ -1549,6 +1549,7 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
       ...row.values,
       ...(forecast?.forecastFinishDate ? { forecast_finish_date: forecast.forecastFinishDate } : {}),
       ...(forecast?.remainingDurationDays != null ? { remaining_duration_days: forecast.remainingDurationDays } : {}),
+      ...(forecast?.remainingDuration ? { remaining_duration: forecast.remainingDuration } : {}),
       ...(p20RemainingDays != null ? { forecast_p20_finish_date: addInclusiveRemainingDays(asOfDate, p20RemainingDays) } : {}),
       ...(p80RemainingDays != null ? { forecast_p80_finish_date: addInclusiveRemainingDays(asOfDate, p80RemainingDays) } : {}),
       ...(primaryChainTaskIds.has(taskId) && primaryChainSpanDays != null && primaryChainSpanDays > 0

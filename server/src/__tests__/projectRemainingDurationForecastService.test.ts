@@ -18,6 +18,27 @@ function productionDayMetric(value: number | null) {
   }
 }
 
+function availableProductionDayMetric(
+  value: number,
+  options: {
+    asOf?: string
+    calendarRef?: string
+    calendarVersion?: string
+    timezone?: string
+  } = {},
+) {
+  return {
+    value,
+    unit: 'construction_production_day' as const,
+    calendarRef: options.calendarRef ?? 'work_calendar',
+    calendarVersion: options.calendarVersion ?? 'calendar-v1',
+    timezone: options.timezone ?? 'Asia/Shanghai',
+    asOf: options.asOf ?? '2026-06-10',
+    availability: 'available' as const,
+    unavailableReason: null,
+  }
+}
+
 function createRecordingQueryExec() {
   const calls: Array<{ sql: string, params: unknown[] }> = []
   const queryExec = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> => {
@@ -189,6 +210,37 @@ describe('projectRemainingDurationForecastService', () => {
         hardGateCount: 1,
         latestGateFinishDate: '2026-06-28',
       }),
+    }))
+  })
+
+  it('ignores a raw remaining-duration alias when the typed fact is unavailable', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [row({
+        values: {
+          ...row().values,
+          planned_end_date: '2026-06-20',
+          remaining_duration_days: 2,
+          remaining_duration: {
+            value: null,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-10',
+            availability: 'unavailable',
+            unavailableReason: 'duration_value_missing',
+          },
+        },
+      })],
+      asOfDate: '2026-06-10',
+      targetEndDate: '2026-06-25',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-20')
+    expect(forecast.projectRemainingForecast).toEqual(expect.objectContaining({
+      value: 11,
+      unit: 'construction_production_day',
+      availability: 'available',
     }))
   })
 
@@ -411,6 +463,7 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-06-20',
             forecast_finish_date: '2026-06-26',
+            remaining_duration: availableProductionDayMetric(17),
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -651,6 +704,7 @@ describe('projectRemainingDurationForecastService', () => {
           title: `Parallel critical chain ${clientRowId}`,
           forecast_finish_date: '2026-06-30',
           forecast_p80_finish_date: '2026-07-04',
+          remaining_duration: availableProductionDayMetric(21),
           is_critical: true,
           total_float_days: 0,
           free_float_days: 0,
@@ -699,6 +753,7 @@ describe('projectRemainingDurationForecastService', () => {
         total_float_days: 0,
         durationForecast: {
           remainingDurationDays: 10,
+          remainingDuration: availableProductionDayMetric(10, { asOf: '2026-06-01' }),
           probabilityDuration,
         },
       },
@@ -742,6 +797,7 @@ describe('projectRemainingDurationForecastService', () => {
           title: `Parallel critical chain ${clientRowId}`,
           forecast_finish_date: '2026-06-30',
           forecast_p80_finish_date: '2026-07-04',
+          remaining_duration: availableProductionDayMetric(21),
           is_critical: true,
           total_float_days: 0,
           free_float_days: 0,
@@ -772,6 +828,7 @@ describe('projectRemainingDurationForecastService', () => {
           ...row().values,
           title: `Parallel critical chain ${clientRowId}`,
           forecast_finish_date: '2026-06-30',
+          remaining_duration: availableProductionDayMetric(21),
           is_critical: true,
           total_float_days: 0,
           free_float_days: 0,
@@ -801,6 +858,7 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-06-05',
             remaining_duration_days: 4,
+            remaining_duration: availableProductionDayMetric(4),
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -826,6 +884,7 @@ describe('projectRemainingDurationForecastService', () => {
             ...row().values,
             planned_end_date: '2026-02-15',
             remaining_duration_days: 2,
+            remaining_duration: availableProductionDayMetric(2, { asOf: '2026-02-14' }),
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -1165,6 +1224,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 5,
+            remaining_duration: availableProductionDayMetric(5),
             duration_contribution_mode: 'external_wait',
             standard_task_metadata: {
               constraintType: 'external_interface_wait',
@@ -1181,6 +1241,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 7,
+            remaining_duration: availableProductionDayMetric(7),
             duration_contribution_mode: 'external_wait',
             standard_task_metadata: {
               constraintType: 'external_interface_wait',
@@ -1262,6 +1323,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 3,
+            remaining_duration: availableProductionDayMetric(3),
             duration_contribution_mode: 'quality_gate',
             standard_task_metadata: {
               gateRelation: 'acceptance_gate',
@@ -1277,6 +1339,7 @@ describe('projectRemainingDurationForecastService', () => {
             progress: 0,
             status: 'todo',
             remaining_duration_days: 2,
+            remaining_duration: availableProductionDayMetric(2),
             duration_contribution_mode: 'handover_marker',
             standard_task_metadata: {
               documentEvidenceRole: 'handover_document',
@@ -1344,6 +1407,7 @@ describe('projectRemainingDurationForecastService', () => {
             project_id: 'project-1',
             planned_end_date: '2026-06-20',
             forecast_finish_date: '2026-06-22',
+            remaining_duration: availableProductionDayMetric(13),
             total_float_days: 0,
           },
         }),

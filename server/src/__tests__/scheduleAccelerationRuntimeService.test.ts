@@ -79,6 +79,7 @@ const { buildTaskCommitRequestHash } = await import('../services/taskCommitIdemp
 function buildAvailableDurationMetric(
   value: number,
   unit: 'calendar_day' | 'construction_production_day',
+  asOf = '2027-02-15',
 ) {
   return {
     value,
@@ -86,7 +87,7 @@ function buildAvailableDurationMetric(
     calendarRef: unit === 'calendar_day' ? 'gregorian' : 'work_calendar',
     calendarVersion: unit === 'calendar_day' ? 'ISO-8601' : 'calendar-v1',
     timezone: 'Asia/Shanghai',
-    asOf: '2027-02-15',
+    asOf,
     availability: 'available' as const,
     unavailableReason: null,
   }
@@ -998,6 +999,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'shutdown-sensitive',
         remainingDurationDays: 2,
+        remainingDuration: buildAvailableDurationMetric(2, 'construction_production_day', '2026-02-14'),
       },
     ])
     mocks.executeSQL.mockImplementation(async (sql: string) => {
@@ -1079,6 +1081,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'shutdown-sensitive',
         remainingDurationDays: 2,
+        remainingDuration: buildAvailableDurationMetric(2, 'construction_production_day', '2026-02-14'),
       },
     ])
     mocks.executeSQL.mockImplementation(async (sql: string) => {
@@ -2258,6 +2261,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-from-e3',
         remainingDurationDays: 4,
+        remainingDuration: buildAvailableDurationMetric(4, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-26',
       },
     ])
@@ -2324,6 +2328,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-primary-chain',
         remainingDurationDays: 3,
+        remainingDuration: buildAvailableDurationMetric(3, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-12',
       },
     ])
@@ -2367,6 +2372,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-with-probability',
         remainingDurationDays: 4,
+        remainingDuration: buildAvailableDurationMetric(4, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-13',
         probabilityDuration: {
           method: 'pert_from_existing_percentiles',
@@ -2426,6 +2432,7 @@ describe('scheduleAccelerationRuntimeService', () => {
       {
         taskId: 'task-crash-floor',
         remainingDurationDays: 20,
+        remainingDuration: buildAvailableDurationMetric(20, 'construction_production_day', '2026-06-10'),
         forecastFinishDate: '2026-06-20',
       },
     ])
