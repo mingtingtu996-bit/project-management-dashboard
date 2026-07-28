@@ -5860,6 +5860,10 @@ async function refreshTaskDurationForecast(
   await backfillForecastErrorIfCompleted(task, currentForecast, workCalendar)
   const durationOutputContract = remainingForecastOutputContractSummary()
   const executionReferenceDays = suggestion.recommendedDurationDays
+  const executionReferenceDuration = buildConstructionProductionDayDurationMetric(executionReferenceDays, {
+    asOf: forecastDates.remainingDuration.asOf,
+    calendar: workCalendar,
+  })
   const forecastCalculationContext = {
     ...(forecastDates.calculationContext ?? {}),
     execution_reference_days: executionReferenceDays,
@@ -5900,6 +5904,7 @@ async function refreshTaskDurationForecast(
       durationOutputCode: durationOutputContract?.code ?? 'remaining_forecast',
       durationOutputSemanticFieldName: durationOutputContract?.semanticFieldName ?? 'remainingForecastDays',
       executionReferenceDays,
+      executionReferenceDuration,
       remainingDuration: forecastDates.remainingDuration,
       forecastDelay: forecastDates.forecastDelay,
       probabilityDurationMetrics: forecastDates.probabilityDurationMetrics,

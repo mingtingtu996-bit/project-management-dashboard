@@ -1761,6 +1761,18 @@ describe('taskDurationForecastService', () => {
       }),
     })
     expect(state.insertedForecasts[0]?.execution_reference_days).toBe(10)
+    expect(state.insertedForecasts[0]?.metadata).toEqual(expect.objectContaining({
+      executionReferenceDuration: {
+        value: 10,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-test-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-18',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    }))
     expect(state.insertedForecasts[0]).not.toHaveProperty('recommended_duration_days')
     expect(forecast.executionReferenceDays).toBe(10)
     expect(forecast.confidenceScore).not.toBe(62)
