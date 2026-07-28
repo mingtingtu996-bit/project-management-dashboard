@@ -4,10 +4,10 @@ import type { Notification } from '../types/db.js'
 import { registerDatabasePostCommitEffect } from '../database.js'
 import { supabase } from './dbService.js'
 import {
+  compareAndSetNotificationById,
   findNotification,
   insertNotification,
   type NotificationInput,
-  updateNotificationById,
 } from './notificationStore.js'
 import { clearAttentionSummaryCache } from './todoTouchpointService.js'
 import { applyNotificationProducerContract } from './notificationProducerContract.js'
@@ -43,7 +43,35 @@ export type NotificationTouchpointInput = NotificationInput & {
   target_route?: string | null
   target_label?: string | null
   source?: string | null
+  occurred_at?: string | null
 }
+
+export type NotificationTouchpointResolveInput = Pick<
+  NotificationTouchpointInput,
+  | 'company_id'
+  | 'project_id'
+  | 'user_id'
+  | 'touchpoint_type'
+  | 'scope_type'
+  | 'dedupe_key'
+  | 'source_entity_type'
+  | 'source_entity_id'
+  | 'type'
+  | 'resolved_source'
+  | 'occurred_at'
+  | 'metadata'
+  | 'created_at'
+  | 'updated_at'
+>
+
+type NotificationMutationResult = {
+  notification: Notification
+  mutated: boolean
+}
+
+const TOUCHPOINT_EVENT_OCCURRED_AT_KEY = 'touchpoint_event_occurred_at'
+const TOUCHPOINT_LIFECYCLE_EVENT_KEY = 'touchpoint_lifecycle_event'
+const MAX_LIFECYCLE_CAS_ATTEMPTS = 5
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
@@ -130,6 +158,67 @@ function normalizeIsoDate(value: unknown) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
+function readMetadata(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function resolveEventOccurredAt(input: NotificationTouchpointInput, fallback: string) {
+  const metadata = readMetadata(input.metadata)
+  return normalizeIsoDate(input.occurred_at)
+    ?? normalizeIsoDate((input as Record<string, unknown>).occurredAt)
+    ?? normalizeIsoDate(metadata[TOUCHPOINT_EVENT_OCCURRED_AT_KEY])
+    ?? normalizeIsoDate(metadata.occurred_at)
+    ?? normalizeIsoDate(metadata.occurredAt)
+    ?? normalizeIsoDate(input.updated_at)
+    ?? normalizeIsoDate(input.created_at)
+    ?? fallback
+}
+
+function readNotificationEventOccurredAt(notification: Notification) {
+  const metadata = readMetadata(notification.metadata)
+  return normalizeIsoDate(metadata[TOUCHPOINT_EVENT_OCCURRED_AT_KEY])
+    ?? normalizeIsoDate(metadata.occurred_at)
+    ?? normalizeIsoDate(metadata.occurredAt)
+    ?? normalizeIsoDate(notification.updated_at)
+    ?? normalizeIsoDate(notification.created_at)
+}
+
+function shouldApplyLifecycleEvent(
+  existing: Notification,
+  eventOccurredAt: string,
+  lifecycleStatus: LifecycleStatus,
+) {
+  const existingOccurredAt = readNotificationEventOccurredAt(existing)
+  if (!existingOccurredAt) return true
+  const incomingTime = new Date(eventOccurredAt).getTime()
+  const existingTime = new Date(existingOccurredAt).getTime()
+  if (incomingTime > existingTime) return true
+  if (incomingTime < existingTime) return false
+  return lifecycleStatus === 'resolved' && normalizeLifecycleStatus(existing.lifecycle_status) === 'active'
+}
+
+function buildLifecycleEventMetadata(
+  existing: Notification | null,
+  input: NotificationTouchpointInput,
+  eventOccurredAt: string,
+  lifecycleEvent: 'emit' | 'resolve',
+) {
+  return {
+    ...readMetadata(existing?.metadata),
+    ...readMetadata(input.metadata),
+    [TOUCHPOINT_EVENT_OCCURRED_AT_KEY]: eventOccurredAt,
+    [TOUCHPOINT_LIFECYCLE_EVENT_KEY]: lifecycleEvent,
+  }
+}
+
+function nextLifecycleVersion(existing: Notification, now: string) {
+  const nowTime = new Date(now).getTime()
+  const currentTime = new Date(existing.updated_at ?? existing.created_at).getTime()
+  return new Date(Math.max(nowTime, currentTime + 1)).toISOString()
+}
+
 function resolveActionDueAt(input: NotificationTouchpointInput) {
   const metadata = (input.metadata ?? {}) as Record<string, unknown>
   return normalizeIsoDate(input.action_due_at)
@@ -156,7 +245,11 @@ function buildTouchpointMetadata(input: NotificationTouchpointInput, touchpointT
   }
 }
 
-function buildFindOptions(input: NotificationTouchpointInput, dedupeKey: string) {
+function buildFindOptions(
+  input: NotificationTouchpointInput,
+  dedupeKey: string,
+  lifecycleStatus: LifecycleStatus | null = 'active',
+) {
   return {
     companyId: normalizeNullableText(input.company_id),
     projectId: normalizeNullableText(input.project_id) ?? undefined,
@@ -167,7 +260,7 @@ function buildFindOptions(input: NotificationTouchpointInput, dedupeKey: string)
     touchpointType: normalizeTouchpointType(input.touchpoint_type),
     scopeType: normalizeScopeType(input.scope_type, input),
     dedupeKey,
-    lifecycleStatus: 'active',
+    lifecycleStatus: lifecycleStatus ?? undefined,
   }
 }
 
@@ -226,6 +319,7 @@ async function initializeUserStates(input: NotificationTouchpointInput, notifica
 
 export class NotificationTouchpointService {
   async emit(input: NotificationTouchpointInput): Promise<Notification> {
+    const eventOccurredAt = resolveEventOccurredAt(input, new Date().toISOString())
     const contractInput = applyNotificationProducerContract(input)
     const projectedFields = resolveEmitFields(contractInput)
     const governedInput = applyNotificationDeliveryGovernance({
@@ -235,76 +329,113 @@ export class NotificationTouchpointService {
     })
     const emitFields = resolveEmitFields(governedInput)
     const dedupeKey = buildDedupeKey(governedInput)
-    const notification = await this.upsert({
+    const result = await this.upsertWithMutation({
       ...governedInput,
+      occurred_at: eventOccurredAt,
       notification_type: emitFields.notification_type,
       touchpoint_type: emitFields.touchpoint_type,
       dedupe_key: dedupeKey,
       action_due_at: resolveActionDueAt(governedInput),
       metadata: buildTouchpointMetadata(governedInput, emitFields.touchpoint_type, dedupeKey),
     })
-    await registerDatabasePostCommitEffect(
-      `notification-touchpoint:${notification.id}`,
-      async () => {
-        await initializeUserStates(governedInput, notification)
-        clearAttentionSummaryCache()
-      },
-    )
-    return notification
+    if (result.mutated) {
+      await registerDatabasePostCommitEffect(
+        `notification-touchpoint:${result.notification.id}`,
+        async () => {
+          await initializeUserStates(governedInput, result.notification)
+          clearAttentionSummaryCache()
+        },
+      )
+    }
+    return result.notification
   }
 
   async upsert(input: NotificationTouchpointInput): Promise<Notification> {
+    return (await this.upsertWithMutation(input)).notification
+  }
+
+  private async upsertWithMutation(input: NotificationTouchpointInput): Promise<NotificationMutationResult> {
     const now = new Date().toISOString()
+    const eventOccurredAt = resolveEventOccurredAt(input, now)
     const touchpointType = normalizeTouchpointType(input.touchpoint_type)
     const scopeType = normalizeScopeType(input.scope_type, input)
     const lifecycleStatus = normalizeLifecycleStatus(input.lifecycle_status)
     const dedupeKey = buildDedupeKey(input)
     const actionDueAt = resolveActionDueAt(input)
 
-    const patchExisting = async (existing: Notification) => {
-      const patch = stripUndefined({
-        company_id: input.company_id ?? undefined,
-        project_id: input.project_id ?? undefined,
-        user_id: input.user_id ?? undefined,
-        task_id: input.task_id ?? undefined,
-        risk_id: input.risk_id ?? undefined,
-        type: input.type,
-        notification_type: input.notification_type ?? input.type,
-        severity: input.severity ?? input.level ?? undefined,
-        level: input.level ?? input.severity ?? undefined,
-        title: input.title,
-        content: input.content,
-        is_broadcast: input.is_broadcast ?? undefined,
-        source_entity_type: input.source_entity_type ?? undefined,
-        source_entity_id: input.source_entity_id ?? undefined,
-        category: input.category ?? undefined,
-        recipients: input.recipients ?? undefined,
-        channel: input.channel ?? undefined,
-        status: existing.status === 'muted' ? 'muted' : input.status ?? 'unread',
-        metadata: input.metadata ?? undefined,
-        chain_id: input.chain_id ?? undefined,
-        lifecycle_status: lifecycleStatus,
-        touchpoint_type: touchpointType,
-        scope_type: scopeType,
-        dedupe_key: dedupeKey,
-        target_route: input.target_route ?? undefined,
-        target_label: input.target_label ?? undefined,
-        expires_at: input.expires_at ?? undefined,
-        action_due_at: actionDueAt ?? undefined,
-        resolved_at: lifecycleStatus === 'resolved' ? now : null,
-        resolved_source: lifecycleStatus === 'resolved' ? input.resolved_source ?? 'source_resolved' : null,
-        updated_at: now,
-      })
-      await updateNotificationById(existing.id, patch, existing)
-      return {
-        ...existing,
-        ...patch,
-        updated_at: now,
-      } as Notification
+    const patchExisting = async (initial: Notification): Promise<NotificationMutationResult> => {
+      let existing = initial
+      for (let attempt = 0; attempt < MAX_LIFECYCLE_CAS_ATTEMPTS; attempt += 1) {
+        if (!shouldApplyLifecycleEvent(existing, eventOccurredAt, lifecycleStatus)) {
+          return { notification: existing, mutated: false }
+        }
+        const updatedAt = nextLifecycleVersion(existing, now)
+        const reopeningResolved = lifecycleStatus === 'active'
+          && normalizeLifecycleStatus(existing.lifecycle_status) === 'resolved'
+        const patch = stripUndefined({
+          company_id: input.company_id ?? undefined,
+          project_id: input.project_id ?? undefined,
+          user_id: input.user_id ?? undefined,
+          task_id: input.task_id ?? undefined,
+          risk_id: input.risk_id ?? undefined,
+          type: input.type,
+          notification_type: input.notification_type ?? input.type,
+          severity: input.severity ?? input.level ?? undefined,
+          level: input.level ?? input.severity ?? undefined,
+          title: input.title,
+          content: input.content,
+          is_read: reopeningResolved ? false : undefined,
+          is_broadcast: input.is_broadcast ?? undefined,
+          source_entity_type: input.source_entity_type ?? undefined,
+          source_entity_id: input.source_entity_id ?? undefined,
+          category: input.category ?? undefined,
+          recipients: input.recipients ?? undefined,
+          channel: input.channel ?? undefined,
+          status: existing.status === 'muted' ? 'muted' : input.status ?? 'unread',
+          metadata: buildLifecycleEventMetadata(existing, input, eventOccurredAt, lifecycleStatus === 'resolved' ? 'resolve' : 'emit'),
+          chain_id: input.chain_id ?? undefined,
+          lifecycle_status: lifecycleStatus,
+          touchpoint_type: touchpointType,
+          scope_type: scopeType,
+          dedupe_key: dedupeKey,
+          target_route: input.target_route ?? undefined,
+          target_label: input.target_label ?? undefined,
+          expires_at: input.expires_at ?? undefined,
+          action_due_at: actionDueAt ?? undefined,
+          resolved_at: lifecycleStatus === 'resolved' ? eventOccurredAt : null,
+          resolved_source: lifecycleStatus === 'resolved' ? input.resolved_source ?? 'source_resolved' : null,
+          updated_at: updatedAt,
+        })
+        let updated = false
+        try {
+          updated = await compareAndSetNotificationById(existing.id, patch, existing)
+        } catch (error) {
+          if (!dedupeKey || !isUniqueViolation(error)) throw error
+          const active = await findNotification(buildFindOptions(input, dedupeKey))
+          if (!active) throw error
+          existing = active
+          continue
+        }
+        if (updated) {
+          return {
+            notification: {
+              ...existing,
+              ...patch,
+              updated_at: updatedAt,
+            } as Notification,
+            mutated: true,
+          }
+        }
+        if (!dedupeKey) break
+        const authoritative = await findNotification(buildFindOptions(input, dedupeKey, null))
+        if (!authoritative) break
+        existing = authoritative
+      }
+      throw new Error('notification lifecycle changed repeatedly during emit')
     }
 
     if (dedupeKey) {
-      const existing = await findNotification(buildFindOptions(input, dedupeKey))
+      const existing = await findNotification(buildFindOptions(input, dedupeKey, null))
       if (existing) {
         return patchExisting(existing)
       }
@@ -320,11 +451,12 @@ export class NotificationTouchpointService {
         scope_type: scopeType,
         dedupe_key: dedupeKey,
         action_due_at: actionDueAt,
+        metadata: buildLifecycleEventMetadata(null, input, eventOccurredAt, lifecycleStatus === 'resolved' ? 'resolve' : 'emit'),
         status: input.status ?? 'unread',
         created_at: input.created_at ?? now,
         updated_at: input.updated_at ?? now,
       })
-      return notification
+      return { notification, mutated: true }
     } catch (error) {
       if (!dedupeKey || !isUniqueViolation(error)) throw error
       const existing = await findNotification(buildFindOptions(input, dedupeKey))
@@ -333,27 +465,42 @@ export class NotificationTouchpointService {
     }
   }
 
-  async resolve(input: Pick<NotificationTouchpointInput, 'company_id' | 'project_id' | 'user_id' | 'touchpoint_type' | 'scope_type' | 'dedupe_key' | 'source_entity_type' | 'source_entity_id' | 'type' | 'resolved_source'>): Promise<boolean> {
+  async resolve(input: NotificationTouchpointResolveInput): Promise<boolean> {
     const dedupeKey = buildDedupeKey(input as NotificationTouchpointInput)
     if (!dedupeKey) return false
 
-    const existing = await findNotification(buildFindOptions(input as NotificationTouchpointInput, dedupeKey))
+    const now = new Date().toISOString()
+    const eventOccurredAt = resolveEventOccurredAt(input as NotificationTouchpointInput, now)
+    let existing = await findNotification(buildFindOptions(input as NotificationTouchpointInput, dedupeKey))
     if (!existing) return false
 
-    const now = new Date().toISOString()
-    await updateNotificationById(existing.id, {
-      lifecycle_status: 'resolved',
-      status: 'read',
-      is_read: true,
-      resolved_at: now,
-      resolved_source: input.resolved_source ?? 'source_resolved',
-      updated_at: now,
-    }, existing)
-    await registerDatabasePostCommitEffect(
-      `notification-touchpoint-resolve:${existing.id}`,
-      async () => clearAttentionSummaryCache(),
-    )
-    return true
+    for (let attempt = 0; attempt < MAX_LIFECYCLE_CAS_ATTEMPTS; attempt += 1) {
+      if (!shouldApplyLifecycleEvent(existing, eventOccurredAt, 'resolved')) {
+        return normalizeLifecycleStatus(existing.lifecycle_status) === 'resolved'
+      }
+      const updatedAt = nextLifecycleVersion(existing, now)
+      const patch = {
+        lifecycle_status: 'resolved' as const,
+        status: 'read',
+        is_read: true,
+        metadata: buildLifecycleEventMetadata(existing, input as NotificationTouchpointInput, eventOccurredAt, 'resolve'),
+        resolved_at: eventOccurredAt,
+        resolved_source: input.resolved_source ?? 'source_resolved',
+        updated_at: updatedAt,
+      }
+      const updated = await compareAndSetNotificationById(existing.id, patch, existing)
+      if (updated) {
+        await registerDatabasePostCommitEffect(
+          `notification-touchpoint-resolve:${existing.id}`,
+          async () => clearAttentionSummaryCache(),
+        )
+        return true
+      }
+      const authoritative = await findNotification(buildFindOptions(input as NotificationTouchpointInput, dedupeKey, null))
+      if (!authoritative) return false
+      existing = authoritative
+    }
+    throw new Error('notification lifecycle changed repeatedly during resolve')
   }
 }
 

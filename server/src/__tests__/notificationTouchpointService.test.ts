@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   findNotification: vi.fn(),
   insertNotification: vi.fn(),
   updateNotificationById: vi.fn(),
+  compareAndSetNotificationById: vi.fn(),
   from: vi.fn(),
   clearAttentionSummaryCache: vi.fn(),
   registerDatabasePostCommitEffect: vi.fn(async (_label: string, effect: () => Promise<void>) => effect()),
@@ -13,6 +14,7 @@ vi.mock('../services/notificationStore.js', () => ({
   findNotification: mocks.findNotification,
   insertNotification: mocks.insertNotification,
   updateNotificationById: mocks.updateNotificationById,
+  compareAndSetNotificationById: mocks.compareAndSetNotificationById,
 }))
 
 vi.mock('../services/dbService.js', () => ({
@@ -37,12 +39,34 @@ const {
   buildNotificationDedupeKey,
 } = await import('../services/notificationTouchpointRules.js')
 
+function createBarrier() {
+  let markReached!: () => void
+  let release!: () => void
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve
+  })
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+
+  return {
+    reached,
+    release,
+    wait: async () => {
+      markReached()
+      await released
+    },
+  }
+}
+
 describe('notificationTouchpointService governance metadata', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     clearNotificationDeliveryGovernanceStateForTests()
-    mocks.findNotification.mockResolvedValue(null)
-    mocks.insertNotification.mockImplementation(async (row) => row)
+    mocks.findNotification.mockReset().mockResolvedValue(null)
+    mocks.insertNotification.mockReset().mockImplementation(async (row) => row)
+    mocks.updateNotificationById.mockReset()
+    mocks.compareAndSetNotificationById.mockReset().mockResolvedValue(true)
     mocks.from.mockReturnValue({
       upsert: vi.fn(async () => ({ error: null })),
     })
@@ -268,12 +292,221 @@ describe('notificationTouchpointService governance metadata', () => {
     })
 
     expect(result.id).toBe('notification-1')
-    expect(mocks.updateNotificationById).toHaveBeenCalledWith('notification-1', expect.objectContaining({
+    expect(mocks.compareAndSetNotificationById).toHaveBeenCalledWith('notification-1', expect.objectContaining({
       title: 'New risk',
       content: 'New content',
       dedupe_key: 'company-1:project-1:risk:risk-1:risk_warning',
       lifecycle_status: 'active',
     }), expect.objectContaining({ id: 'notification-1', project_id: 'project-1' }))
+  })
+
+  it('retries a unique conflict while reactivating a resolved dedupe row', async () => {
+    const resolved = {
+      id: 'notification-resolved',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      user_id: null,
+      type: 'risk_warning',
+      notification_type: 'business-warning',
+      title: 'Resolved risk',
+      content: 'Resolved content',
+      status: 'read',
+      touchpoint_type: 'dashboard_todo',
+      scope_type: 'project',
+      dedupe_key: 'risk:reactivate',
+      lifecycle_status: 'resolved',
+      metadata: { touchpoint_event_occurred_at: '2026-07-29T08:00:00.000Z' },
+      created_at: '2026-07-29T08:00:00.000Z',
+      updated_at: '2026-07-29T08:00:00.000Z',
+    }
+    const active = {
+      ...resolved,
+      id: 'notification-active',
+      title: 'Concurrent active risk',
+      lifecycle_status: 'active',
+      metadata: { touchpoint_event_occurred_at: '2026-07-29T09:00:00.000Z' },
+      updated_at: '2026-07-29T09:00:00.000Z',
+    }
+    const duplicateError = new Error('duplicate key value violates unique constraint "uq_notifications_active_touchpoint_dedupe"') as Error & { code?: string }
+    duplicateError.code = '23505'
+
+    mocks.findNotification
+      .mockResolvedValueOnce(resolved)
+      .mockResolvedValueOnce(active)
+    mocks.compareAndSetNotificationById
+      .mockRejectedValueOnce(duplicateError)
+      .mockResolvedValueOnce(true)
+
+    await expect(notificationTouchpointService.emit({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      type: 'risk_warning',
+      notification_type: 'business-warning',
+      touchpoint_type: 'dashboard_todo',
+      dedupe_key: 'risk:reactivate',
+      title: 'Newest risk',
+      content: 'Newest content',
+      occurred_at: '2026-07-29T10:00:00.000Z',
+    })).resolves.toMatchObject({
+      id: 'notification-active',
+      title: 'Newest risk',
+      lifecycle_status: 'active',
+    })
+
+    expect(mocks.compareAndSetNotificationById).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let an older emit overwrite a newer authoritative emit', async () => {
+    const olderWrite = createBarrier()
+    let persisted = {
+      id: 'notification-concurrent',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      user_id: null,
+      type: 'condition_due',
+      notification_type: 'flow-reminder',
+      title: 'Initial notification',
+      content: 'Initial content',
+      is_read: false,
+      status: 'unread',
+      touchpoint_type: 'dashboard_todo',
+      scope_type: 'project',
+      dedupe_key: 'condition:concurrent',
+      lifecycle_status: 'active',
+      metadata: {
+        touchpoint_event_occurred_at: '2026-07-29T08:00:00.000Z',
+      },
+      created_at: '2026-07-29T08:00:00.000Z',
+      updated_at: '2026-07-29T08:00:00.000Z',
+    } as any
+
+    mocks.findNotification.mockImplementation(async (options) => {
+      if (options.lifecycleStatus && options.lifecycleStatus !== persisted.lifecycle_status) return null
+      return { ...persisted, metadata: { ...persisted.metadata } }
+    })
+    mocks.updateNotificationById.mockImplementation(async (_id, patch) => {
+      if (patch.title === 'Older emit') await olderWrite.wait()
+      persisted = { ...persisted, ...patch }
+    })
+    mocks.compareAndSetNotificationById.mockImplementation(async (_id, patch, current) => {
+      if (patch.title === 'Older emit') await olderWrite.wait()
+      if (persisted.updated_at !== current.updated_at) return false
+      if ((persisted.lifecycle_status ?? 'active') !== (current.lifecycle_status ?? 'active')) return false
+      persisted = { ...persisted, ...patch }
+      return true
+    })
+
+    const olderEmit = notificationTouchpointService.emit({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      type: 'condition_due',
+      notification_type: 'flow-reminder',
+      touchpoint_type: 'dashboard_todo',
+      dedupe_key: 'condition:concurrent',
+      title: 'Older emit',
+      content: 'Older content',
+      occurred_at: '2026-07-29T09:00:00.000Z',
+    })
+
+    await olderWrite.reached
+    const newerResult = await notificationTouchpointService.emit({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      type: 'condition_due',
+      notification_type: 'flow-reminder',
+      touchpoint_type: 'dashboard_todo',
+      dedupe_key: 'condition:concurrent',
+      title: 'Newer authoritative emit',
+      content: 'Newer authoritative content',
+      occurred_at: '2026-07-29T10:00:00.000Z',
+    })
+    olderWrite.release()
+    const olderResult = await olderEmit
+
+    expect(newerResult.title).toBe('Newer authoritative emit')
+    expect(olderResult.title).toBe('Newer authoritative emit')
+    expect(persisted).toMatchObject({
+      title: 'Newer authoritative emit',
+      content: 'Newer authoritative content',
+      lifecycle_status: 'active',
+    })
+  })
+
+  it('does not let a stale emit reopen a notification resolved by a newer lifecycle event', async () => {
+    const staleWrite = createBarrier()
+    let persisted = {
+      id: 'notification-resolve-race',
+      company_id: 'company-1',
+      project_id: 'project-1',
+      user_id: 'user-1',
+      type: 'condition_due',
+      notification_type: 'flow-reminder',
+      title: 'Initial notification',
+      content: 'Initial content',
+      is_read: false,
+      status: 'unread',
+      touchpoint_type: 'dashboard_todo',
+      scope_type: 'project',
+      dedupe_key: 'condition:resolve-race',
+      lifecycle_status: 'active',
+      metadata: {
+        touchpoint_event_occurred_at: '2026-07-29T08:00:00.000Z',
+      },
+      created_at: '2026-07-29T08:00:00.000Z',
+      updated_at: '2026-07-29T08:00:00.000Z',
+    } as any
+
+    mocks.findNotification.mockImplementation(async (options) => {
+      if (options.lifecycleStatus && options.lifecycleStatus !== persisted.lifecycle_status) return null
+      return { ...persisted, metadata: { ...persisted.metadata } }
+    })
+    mocks.updateNotificationById.mockImplementation(async (_id, patch) => {
+      if (patch.title === 'Stale emit') await staleWrite.wait()
+      persisted = { ...persisted, ...patch }
+    })
+    mocks.compareAndSetNotificationById.mockImplementation(async (_id, patch, current) => {
+      if (patch.title === 'Stale emit') await staleWrite.wait()
+      if (persisted.updated_at !== current.updated_at) return false
+      if ((persisted.lifecycle_status ?? 'active') !== (current.lifecycle_status ?? 'active')) return false
+      persisted = { ...persisted, ...patch }
+      return true
+    })
+
+    const staleEmit = notificationTouchpointService.emit({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      user_id: 'user-1',
+      type: 'condition_due',
+      notification_type: 'flow-reminder',
+      touchpoint_type: 'dashboard_todo',
+      dedupe_key: 'condition:resolve-race',
+      title: 'Stale emit',
+      content: 'Stale content',
+      occurred_at: '2026-07-29T09:00:00.000Z',
+    })
+
+    await staleWrite.reached
+    await expect(notificationTouchpointService.resolve({
+      company_id: 'company-1',
+      project_id: 'project-1',
+      type: 'condition_due',
+      touchpoint_type: 'dashboard_todo',
+      scope_type: 'project',
+      dedupe_key: 'condition:resolve-race',
+      resolved_source: 'condition_cleared',
+      occurred_at: '2026-07-29T10:00:00.000Z',
+    })).resolves.toBe(true)
+    staleWrite.release()
+    const staleResult = await staleEmit
+
+    expect(staleResult.lifecycle_status).toBe('resolved')
+    expect(persisted).toMatchObject({
+      lifecycle_status: 'resolved',
+      status: 'read',
+      is_read: true,
+      resolved_source: 'condition_cleared',
+    })
+    expect(mocks.from).not.toHaveBeenCalled()
   })
 
   it('exports a canonical touchpoint rule registry used by dedupe and analytics', () => {

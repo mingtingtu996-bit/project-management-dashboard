@@ -72,9 +72,10 @@ async function executeScopedNotificationUpdate(
   id: string,
   updates: Record<string, unknown>,
   current: Pick<Notification, 'project_id' | 'company_id' | 'user_id'>,
+  expectedVersion?: Pick<Notification, 'updated_at' | 'lifecycle_status'>,
 ) {
   const entries = notificationUpdateEntries(updates)
-  if (entries.length === 0) return
+  if (entries.length === 0) return false
 
   const assignments = entries.map(([column]) => `${column} = ${notificationPlaceholder(column)}`)
   const params = entries.map(([column, value]) => notificationSqlValue(column, value))
@@ -95,7 +96,18 @@ async function executeScopedNotificationUpdate(
     }
   }
 
-  await executeSQL(`UPDATE notifications SET ${assignments.join(', ')} WHERE ${where.join(' AND ')}`, params)
+  if (expectedVersion) {
+    where.push('updated_at IS NOT DISTINCT FROM ?')
+    params.push(expectedVersion.updated_at ?? null)
+    where.push("COALESCE(lifecycle_status, 'active') = ?")
+    params.push(expectedVersion.lifecycle_status ?? 'active')
+  }
+
+  const rows = await executeSQL<{ id: string }>(
+    `UPDATE notifications SET ${assignments.join(', ')} WHERE ${where.join(' AND ')}${expectedVersion ? ' RETURNING id' : ''}`,
+    params,
+  )
+  return expectedVersion ? rows.some((row) => String(row.id) === String(id)) : true
 }
 
 function normalizeIdList(values?: string[] | null) {
@@ -391,6 +403,45 @@ export async function updateNotificationById(
   if (current) {
     await broadcastNotificationMutation('update', [{ id: current.id, project_id: current.project_id ?? null, company_id: current.company_id ?? null }])
   }
+}
+
+export async function compareAndSetNotificationById(
+  id: string,
+  patch: Partial<Notification>,
+  current: Notification,
+): Promise<boolean> {
+  if (String(current?.id ?? '') !== String(id ?? '')) {
+    throw new Error('notification update scope record does not match id')
+  }
+  const projectId = String(current.project_id ?? '').trim() || null
+  const companyId = String(current.company_id ?? '').trim() || null
+  const userId = String(current.user_id ?? '').trim() || null
+  if (!projectId && !companyId && !userId) {
+    throw new Error('notification update requires project, company, or user scope')
+  }
+  const touchpointFields = buildNotificationTouchpointFields({ ...current, ...patch })
+  const updates = stripUndefined({
+    ...patch,
+    lifecycle_status: patch.lifecycle_status ?? current.lifecycle_status ?? touchpointFields.lifecycle_status,
+    touchpoint_type: patch.touchpoint_type ?? current.touchpoint_type ?? touchpointFields.touchpoint_type,
+    scope_type: patch.scope_type ?? current.scope_type ?? touchpointFields.scope_type,
+    dedupe_key: patch.dedupe_key ?? current.dedupe_key ?? touchpointFields.dedupe_key,
+    target_route: patch.target_route ?? current.target_route ?? touchpointFields.target_route,
+    target_label: patch.target_label ?? current.target_label ?? touchpointFields.target_label,
+    is_read: patch.is_read === undefined ? undefined : toBoolean(patch.is_read),
+    is_broadcast: patch.is_broadcast === undefined ? undefined : toBoolean(patch.is_broadcast),
+    updated_at: patch.updated_at ?? new Date().toISOString(),
+  })
+
+  const updated = await executeScopedNotificationUpdate(id, updates, current, current)
+  if (updated) {
+    await broadcastNotificationMutation('update', [{
+      id: current.id,
+      project_id: current.project_id ?? null,
+      company_id: current.company_id ?? null,
+    }])
+  }
+  return updated
 }
 
 export async function updateNotificationsByIds(
