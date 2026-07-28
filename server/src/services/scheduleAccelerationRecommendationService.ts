@@ -258,9 +258,10 @@ async function loadAuthorizedScheduleAccelerationRecommendation(input: {
            issued_by, issued_at, expires_at
       FROM public.schedule_acceleration_recommendations
      WHERE id = $1
+       AND project_id = $2
      LIMIT 1
      FOR SHARE
-  `, [recommendationId])
+  `, [recommendationId, projectId])
   const recommendation = recommendationResult.rows[0] as RecommendationRow | undefined
   if (!recommendation) {
     throw createHttpError('The acceleration recommendation was not found.', 'ACCELERATION_RECOMMENDATION_NOT_FOUND', 404)
