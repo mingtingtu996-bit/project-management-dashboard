@@ -4964,6 +4964,10 @@ function buildCandidateDurationAssetPreview(rows: GeneratedTemplateRow[], idByCl
         calculation.runtimeReferenceDaysSampleCount
           ?? calculation.runtime_reference_days_sample_count,
       )
+      const runtimeReferenceDaysDurationRiskDistribution = normalizeDurationRiskDistributionDto(
+        calculation.runtimeReferenceDaysDurationRiskDistribution
+          ?? calculation.runtime_reference_days_duration_risk_distribution,
+      )
       const runtimeReferenceDaysMutationBoundary = firstText(
         calculation.runtimeReferenceDaysMutationBoundary,
         calculation.runtime_reference_days_mutation_boundary,
@@ -5204,6 +5208,7 @@ function buildCandidateDurationAssetPreview(rows: GeneratedTemplateRow[], idByCl
         runtimeReferenceDaysP50Days,
         runtimeReferenceDaysP80Days,
         runtimeReferenceDaysSampleCount,
+        runtimeReferenceDaysDurationRiskDistribution,
         runtimeReferenceDaysMutationBoundary,
         dependencyAssetConsumed,
         dependencyAssetType,

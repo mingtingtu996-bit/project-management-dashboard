@@ -111,7 +111,7 @@ type WizardDurationAssetPreviewItem = {
   runtimeReferenceDaysP80Days?: number | null
   runtimeReferenceDaysSampleCount?: number | null
   runtimeReferenceDaysMutationBoundary?: string | null
-  durationRiskDistribution?: DurationRiskDistributionDto | null
+  runtimeReferenceDaysDurationRiskDistribution?: DurationRiskDistributionDto | null
   dependencyAssetConsumed?: boolean
   dependencyAssetType?: string | null
   dependencyAssetStableCode?: string | null
@@ -275,7 +275,7 @@ function formatWizardDurationAssetPreviewT2Lineage(item: WizardDurationAssetPrev
 function formatWizardDurationAssetPreviewRuntimeReferenceDays(item: WizardDurationAssetPreviewItem | null | undefined) {
   if (!item?.runtimeReferenceDaysConsumed && !item?.runtimeReferenceDaysStableCode) return null
   const stableCode = item.runtimeReferenceDaysStableCode || '已消费'
-  const distribution = normalizeDurationRiskDistribution(item.durationRiskDistribution)
+  const distribution = normalizeDurationRiskDistribution(item.runtimeReferenceDaysDurationRiskDistribution)
   const referenceDays = formatDurationMetric(distribution?.p50Duration, {
     expectedUnit: 'construction_production_day',
     unavailableLabel: '生产日口径不可用',

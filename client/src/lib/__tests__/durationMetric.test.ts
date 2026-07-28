@@ -138,4 +138,29 @@ describe('durationMetric', () => {
       p20Duration: { ...metric, value: 20 },
     })).toBeNull()
   })
+
+  it('rejects unavailable distributions that leak an available percentile', () => {
+    const unavailableMetric = {
+      ...productionMetric,
+      value: null,
+      calendarRef: null,
+      calendarVersion: null,
+      availability: 'unavailable' as const,
+      unavailableReason: 'construction_calendar_identity_missing',
+    }
+
+    expect(normalizeDurationRiskDistribution({
+      p20Duration: unavailableMetric,
+      p50Duration: { ...productionMetric, value: 18 },
+      p80Duration: unavailableMetric,
+      reserveDuration: unavailableMetric,
+      source: null,
+      scope: null,
+      sampleCount: null,
+      generatedAt: null,
+      sourceAsOf: null,
+      availability: 'unavailable',
+      unavailableReason: 'construction_calendar_identity_missing',
+    })).toBeNull()
+  })
 })

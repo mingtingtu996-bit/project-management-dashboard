@@ -173,11 +173,11 @@ function formatCandidateRuntimeReferenceDays(item: {
   runtimeReferenceDaysP50Days?: number | null
   runtimeReferenceDaysP80Days?: number | null
   runtimeReferenceDaysSampleCount?: number | null
-  durationRiskDistribution?: DurationRiskDistributionDto | null
+  runtimeReferenceDaysDurationRiskDistribution?: DurationRiskDistributionDto | null
 }) {
   if (!item.runtimeReferenceDaysConsumed && !item.runtimeReferenceDaysStableCode) return null
   const stableCode = item.runtimeReferenceDaysStableCode || '已消费'
-  const distribution = normalizeDurationRiskDistribution(item.durationRiskDistribution)
+  const distribution = normalizeDurationRiskDistribution(item.runtimeReferenceDaysDurationRiskDistribution)
   const referenceDays = formatDurationMetric(distribution?.p50Duration, {
     expectedUnit: 'construction_production_day',
     unavailableLabel: '生产日口径不可用',

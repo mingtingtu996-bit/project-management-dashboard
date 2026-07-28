@@ -227,6 +227,21 @@ describe('GanttDetailDrawer duration risk range', () => {
       standard_task_metadata: {
         calendarBasis: 'official_construction_calendar_seed',
         constructionCalendarWindowCount: 2,
+        durationSuggestion: {
+          durationRiskDistribution: {
+            p20Duration: productionMetric(150),
+            p50Duration: productionMetric(160),
+            p80Duration: productionMetric(176),
+            reserveDuration: productionMetric(16),
+            source: 'system_standard_duration_asset',
+            scope: 'system',
+            sampleCount: null,
+            generatedAt: '2026-07-01T08:00:00.000Z',
+            sourceAsOf: '2026-06-30T23:59:59.000Z',
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
         durationAssetCalculation: {
           selectedDurationDays: 176,
           runtimeReferenceDaysConsumed: true,

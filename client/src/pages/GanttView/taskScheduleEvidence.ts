@@ -112,7 +112,6 @@ export function getTaskCriticalFloatLabel(
 export function getTaskDurationAssetEvidenceLabel(task: Pick<Task, 'standard_task_metadata'>) {
   const metadata = readRecord(task.standard_task_metadata)
   const calculation = readRecord(metadata.durationAssetCalculation ?? metadata.duration_asset_calculation)
-  const suggestion = readRecord(metadata.durationSuggestion ?? metadata.duration_suggestion)
   const evidence: string[] = []
   const calendarBasis = String(metadata.calendarBasis ?? metadata.calendar_basis ?? '').trim()
   const calendarWindowCount = readRoundedFiniteNumber(metadata.constructionCalendarWindowCount ?? metadata.construction_calendar_window_count)
@@ -124,9 +123,7 @@ export function getTaskDurationAssetEvidenceLabel(task: Pick<Task, 'standard_tas
   if (readTruthyFlag(calculation.runtimeReferenceDaysConsumed ?? calculation.runtime_reference_days_consumed)) {
     const distribution = normalizeDurationRiskDistribution(
       calculation.runtimeReferenceDaysDurationRiskDistribution
-        ?? calculation.runtime_reference_days_duration_risk_distribution
-        ?? suggestion.durationRiskDistribution
-        ?? suggestion.duration_risk_distribution,
+        ?? calculation.runtime_reference_days_duration_risk_distribution,
     )
     evidence.push(`运行样本 ${formatDurationMetric(distribution?.p50Duration, {
       expectedUnit: 'construction_production_day',

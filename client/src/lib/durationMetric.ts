@@ -127,6 +127,8 @@ export function normalizeDurationRiskDistribution(value: unknown): DurationRiskD
     ? raw.unavailableReason.trim()
     : null
   if (availability === 'unavailable') {
+    if (!p20Duration || !p50Duration || !p80Duration || !reserveDuration) return null
+    if ([p20Duration, p50Duration, p80Duration, reserveDuration].some((metric) => metric.availability !== 'unavailable')) return null
     return {
       p20Duration,
       p50Duration,

@@ -305,6 +305,7 @@ export interface CandidateDurationAssetPreviewItem {
   runtimeReferenceDaysP50Days?: number | null
   runtimeReferenceDaysP80Days?: number | null
   runtimeReferenceDaysSampleCount?: number | null
+  runtimeReferenceDaysDurationRiskDistribution?: DurationRiskDistributionDto | null
   runtimeReferenceDaysMutationBoundary?: string | null
   dependencyAssetConsumed?: boolean
   dependencyAssetType?: string | null
@@ -598,6 +599,9 @@ function normalizeCandidateDurationAssetPreview(
     items: preview.items?.map((item) => ({
       ...item,
       durationRiskDistribution: normalizeDurationRiskDistribution(item.durationRiskDistribution),
+      runtimeReferenceDaysDurationRiskDistribution: normalizeDurationRiskDistribution(
+        item.runtimeReferenceDaysDurationRiskDistribution,
+      ),
     })),
   }
 }

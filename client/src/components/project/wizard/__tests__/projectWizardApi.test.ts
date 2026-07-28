@@ -138,6 +138,11 @@ describe('projectWizardApi', () => {
                 title: 'Raw row',
                 riskP50DurationDays: 99,
                 riskP80DurationDays: 120,
+                runtimeReferenceDaysConsumed: true,
+                runtimeReferenceDaysDurationRiskDistribution: {
+                  availability: 'available',
+                  p50Duration: { value: 99 },
+                },
                 durationRiskDistribution: {
                   availability: 'available',
                   p50Duration: { value: 99 },
@@ -158,6 +163,7 @@ describe('projectWizardApi', () => {
       sourceAsOf: '2026-06-30T23:59:59.000Z',
     }))
     expect(items[1]?.durationRiskDistribution).toBeNull()
+    expect((items[1] as any)?.runtimeReferenceDaysDurationRiskDistribution).toBeNull()
   })
 
   it('submits final wizard generation as an async job and reads generation status', async () => {
