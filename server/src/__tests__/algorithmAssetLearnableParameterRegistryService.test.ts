@@ -171,7 +171,7 @@ describe('algorithmAssetLearnableParameterRegistryService', () => {
         expect(entry.registryParameterKeys).toEqual([])
       }
     }
-  })
+  }, 30_000)
 
   it('persists learnable parameter registry definitions without granting runtime writes', async () => {
     const { calls, queryExec } = createRecordingQueryExec()

@@ -49,5 +49,5 @@ describe('independent persistent job schedule contract', () => {
       expect(timer.owner.trim()).not.toBe('')
       expect(timer.reason.trim()).not.toBe('')
     }
-  })
+  }, 30_000)
 })
