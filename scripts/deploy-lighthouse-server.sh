@@ -14,6 +14,7 @@ PUBLIC_INGRESS_MODE="${PUBLIC_INGRESS_MODE:-}"
 EXPECTED_PUBLIC_HOST="${EXPECTED_PUBLIC_HOST:-}"
 PERFORMANCE_SUMMARY_URL="${PERFORMANCE_SUMMARY_URL:-}"
 INITIAL_RUNTIME_BOOTSTRAP="${INITIAL_RUNTIME_BOOTSTRAP:-false}"
+ORIGIN_INGRESS_IP="${ORIGIN_INGRESS_IP:-}"
 EXPECTED_JWT_SECRET_SHA256="${EXPECTED_JWT_SECRET_SHA256:-}"
 PEER_JWT_SECRET_SHA256="${PEER_JWT_SECRET_SHA256:-}"
 PEER_RUNTIME_ENV_FILE="${PEER_RUNTIME_ENV_FILE:-}"
@@ -35,6 +36,11 @@ case "$HEALTH_URL" in https://*) ;; *) echo "External deployment health URL must
 case "$HTTP_REDIRECT_URL" in http://*) ;; *) echo "External deployment redirect URL must use http://." >&2; exit 1 ;; esac
 case "$PUBLIC_INGRESS_MODE" in domain_hsts|temporary_ip_tls) ;; *) echo "Unsupported PUBLIC_INGRESS_MODE." >&2; exit 1 ;; esac
 case "$INITIAL_RUNTIME_BOOTSTRAP" in true|false) ;; *) echo "INITIAL_RUNTIME_BOOTSTRAP must be true or false." >&2; exit 1 ;; esac
+if [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ]; then
+  [ "$DEPLOY_TARGET" = staging ] || { echo "Origin-direct bootstrap is restricted to staging." >&2; exit 1; }
+  [ "$PUBLIC_INGRESS_MODE" = domain_hsts ] || { echo "Origin-direct bootstrap requires domain_hsts ingress." >&2; exit 1; }
+  : "${ORIGIN_INGRESS_IP:?ORIGIN_INGRESS_IP is required for origin-direct bootstrap}"
+fi
 case "$APP_DIR" in "~") APP_DIR="$HOME" ;; "~/"*) APP_DIR="$HOME/${APP_DIR#"~/"}" ;; esac
 [ -d "$APP_DIR" ] || { echo "Application root does not exist: $APP_DIR" >&2; exit 1; }
 APP_DIR="$(cd "$APP_DIR" && pwd -P)"
@@ -401,6 +407,59 @@ if build.get('releaseSha') != os.environ['RELEASE_SHA_TO_VERIFY']:
 PY
 }
 
+curl_ingress_route() {
+  local route="$1" url="$2"
+  shift 2
+  if [ "$route" != origin ]; then
+    curl "$@" "$url"
+    return
+  fi
+  : "${ORIGIN_INGRESS_IP:?ORIGIN_INGRESS_IP is required for an origin probe}"
+  case "$url" in
+    "http://$EXPECTED_PUBLIC_HOST"*)
+      curl --resolve "$EXPECTED_PUBLIC_HOST:80:$ORIGIN_INGRESS_IP" "$@" "$url"
+      ;;
+    "https://$EXPECTED_PUBLIC_HOST"*)
+      curl --resolve "$EXPECTED_PUBLIC_HOST:443:$ORIGIN_INGRESS_IP" "$@" "$url"
+      ;;
+    *)
+      echo "Origin probe URL does not match EXPECTED_PUBLIC_HOST." >&2
+      return 1
+      ;;
+  esac
+}
+
+verify_external_ingress_route() {
+  local route="$1" expected_sha="$2" public_file="$3"
+  local headers_file="${public_file}.headers"
+  local redirect_result redirect_status redirect_url performance_url
+  curl_ingress_route "$route" "$HEALTH_URL" --fail --silent --show-error \
+    --dump-header "$headers_file" -o "$public_file" || return 1
+  verify_readyz_identity "$public_file" "$expected_sha" || return 1
+  if ! tr -d '\r' < "$headers_file" | grep -qi '^strict-transport-security:'; then
+    if [ "$PUBLIC_INGRESS_MODE" = domain_hsts ]; then
+      echo "$route HTTPS response is missing Strict-Transport-Security." >&2
+      return 1
+    fi
+  fi
+  redirect_result="$(curl_ingress_route "$route" "$HTTP_REDIRECT_URL" \
+    --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null \
+    --write-out '%{http_code} %{redirect_url}')" || return 1
+  redirect_status="${redirect_result%% *}"
+  redirect_url="${redirect_result#* }"
+  [ "$redirect_status" = 308 ] || {
+    echo "$route HTTP endpoint did not return the required exact 308 redirect." >&2
+    return 1
+  }
+  [ "$redirect_url" = "$HEALTH_URL" ] || {
+    echo "$route HTTP endpoint did not redirect to the HTTPS health authority." >&2
+    return 1
+  }
+  performance_url="${PERFORMANCE_SUMMARY_URL:-$(derive_performance_summary_url "$HEALTH_URL")}"
+  curl_ingress_route "$route" "$performance_url" --fail --silent --show-error \
+    -o /tmp/project-management-performance-summary.json || return 1
+}
+
 validate_public_ingress_contract() {
   python3 - "$HEALTH_URL" "$HTTP_REDIRECT_URL" "$DEPLOY_TARGET" "$EXPECTED_PUBLIC_HOST" "$PUBLIC_INGRESS_MODE" <<'PY'
 import ipaddress
@@ -491,10 +550,11 @@ PY
 }
 
 verify_release_health() {
-  local expected_sha="$1" internal_file public_file web_build_file hsts_header_present=false
-  local redirect_result redirect_status redirect_url performance_url
+  local expected_sha="$1" internal_file public_file origin_file web_build_file
+  local origin_ingress_ready=false public_domain_ready=false
   internal_file="/tmp/project-management-health-${expected_sha}.json"
   public_file="/tmp/project-management-public-health-${expected_sha}.json"
+  origin_file="/tmp/project-management-origin-health-${expected_sha}.json"
   web_build_file="/tmp/project-management-web-build-${expected_sha}.json"
   retry 12 5 verify_runtime_container_identities "$expected_sha" || return 1
   validate_public_ingress_contract || return 1
@@ -502,27 +562,26 @@ verify_release_health() {
   verify_readyz_identity "$internal_file" "$expected_sha" || return 1
   curl --fail --silent --show-error "http://127.0.0.1:${WEB_PORT_VALUE}/workbuddy-build.json" -o "$web_build_file" || return 1
   verify_web_build_identity "$web_build_file" "$expected_sha" || return 1
-  curl --fail --silent --show-error "$HEALTH_URL" -o "$public_file" || return 1
-  verify_readyz_identity "$public_file" "$expected_sha" || return 1
-  if curl --silent --show-error --head "$HEALTH_URL" | tr -d '\r' | grep -qi '^strict-transport-security:'; then
-    hsts_header_present=true
-  elif [ "$PUBLIC_INGRESS_MODE" = domain_hsts ]; then
-    echo "Public HTTPS response is missing Strict-Transport-Security." >&2
+  if [ "$PUBLIC_INGRESS_MODE" = domain_hsts ]; then
+    verify_external_ingress_route origin "$expected_sha" "$origin_file" || return 1
+    origin_ingress_ready=true
+  fi
+  if verify_external_ingress_route public "$expected_sha" "$public_file"; then
+    public_domain_ready=true
+  elif [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ] \
+    && [ "$DEPLOY_TARGET" = staging ] \
+    && [ "$origin_ingress_ready" = true ]; then
+    public_domain_ready=false
+  else
+    echo "Public-domain postdeploy verification failed and origin fallback is not authorized." >&2
     return 1
   fi
-  redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$HTTP_REDIRECT_URL")" || return 1
-  redirect_status="${redirect_result%% *}"
-  redirect_url="${redirect_result#* }"
-  case "$redirect_status" in 301|302|307|308) ;; *) echo "Public HTTP endpoint did not redirect to HTTPS." >&2 ;; esac
-  case "$redirect_status" in 301|302|307|308) ;; *) return 1 ;; esac
-  [ "$redirect_url" = "$HEALTH_URL" ] || echo "Public HTTP endpoint did not redirect to HTTPS health authority." >&2
-  [ "$redirect_url" = "$HEALTH_URL" ] || return 1
-  performance_url="${PERFORMANCE_SUMMARY_URL:-$(derive_performance_summary_url "$HEALTH_URL")}"
-  curl --fail --silent --show-error "$performance_url" -o /tmp/project-management-performance-summary.json || return 1
   if [ "$PUBLIC_INGRESS_MODE" = temporary_ip_tls ]; then
-    printf '{"transportTlsReady":true,"temporaryIngressReady":true,"hstsHeaderPresent":%s,"hstsUserAgentPolicyApplicable":false,"domainHstsReady":false}\n' "$hsts_header_present"
+    printf '{"transportTlsReady":true,"temporaryIngressReady":true,"hstsUserAgentPolicyApplicable":false,"domainHstsReady":false,"originIngressReady":%s,"publicDomainReady":%s}\n' \
+      "$origin_ingress_ready" "$public_domain_ready"
   else
-    printf '%s\n' '{"transportTlsReady":true,"temporaryIngressReady":false,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":true,"domainHstsReady":true}'
+    printf '{"transportTlsReady":true,"temporaryIngressReady":false,"hstsHeaderPresent":true,"hstsUserAgentPolicyApplicable":%s,"domainHstsReady":%s,"originIngressReady":true,"publicDomainReady":%s}\n' \
+      "$public_domain_ready" "$public_domain_ready" "$public_domain_ready"
   fi
 }
 

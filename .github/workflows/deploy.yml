@@ -430,6 +430,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Check target deployment and runtime secrets
+        id: ingress-preflight
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets[format('{0}_DEPLOY_HOST', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
@@ -506,17 +507,32 @@ jobs:
               echo "Initial runtime bootstrap requires domain_hsts ingress." >&2
               exit 1
             }
+            [ "$DEPLOY_TARGET" = staging ] || {
+              echo "Origin-direct runtime bootstrap is restricted to staging; production requires public-domain readiness." >&2
+              exit 1
+            }
             [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ] || {
               echo "Initial runtime bootstrap confirmation is missing or invalid." >&2
               exit 1
             }
           fi
 
-          public_readyz_file="$RUNNER_TEMP/predeploy-public-readyz.json"
-          public_readyz_status="$(curl --silent --show-error --max-time 15 --output "$public_readyz_file" --write-out '%{http_code}' "$DEPLOY_HEALTH_URL")"
-          predeploy_runtime_classification="runtime_ready"
-          if [ "$public_readyz_status" = "200" ]; then
-            node --input-type=module - "$public_readyz_file" <<'NODE'
+          resolve_origin_ipv4() {
+            local candidate="$DEPLOY_HOST"
+            local octet
+            if [[ ! "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+              candidate="$(getent ahostsv4 "$DEPLOY_HOST" | awk '$2 == "STREAM" { print $1; exit }')"
+            fi
+            [[ "$candidate" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+            IFS=. read -r -a octets <<< "$candidate"
+            [ "${#octets[@]}" -eq 4 ] || return 1
+            for octet in "${octets[@]}"; do
+              ((10#$octet >= 0 && 10#$octet <= 255)) || return 1
+            done
+            printf '%s' "$candidate"
+          }
+          verify_readyz_identity() {
+            node --input-type=module - "$1" <<'NODE'
           import { readFileSync } from 'node:fs';
 
           const readiness = JSON.parse(readFileSync(process.argv[2], 'utf8'));
@@ -538,43 +554,69 @@ jobs:
             process.exit(1);
           }
           NODE
-          elif [ "$public_readyz_status" = "502" ] \
-            && [ "$INITIAL_RUNTIME_BOOTSTRAP" = "true" ] \
-            && [ "$INITIAL_RUNTIME_BOOTSTRAP_CONFIRMATION" = "INGRESS_READY_UPSTREAM_UNAVAILABLE" ]; then
-            predeploy_runtime_classification="ingress_ready_upstream_unavailable"
-          else
-            echo "Public predeploy readyz is unavailable or returned an unsupported status: $public_readyz_status" >&2
-            exit 1
-          fi
+          }
+          probe_ingress_route() {
+            local route="$1" origin_ip="${2:-}"
+            local readyz_file="$RUNNER_TEMP/predeploy-$route-readyz.json"
+            local headers="$RUNNER_TEMP/predeploy-$route.headers"
+            local readyz_status redirect_result redirect_status redirect_url
+            local https_args=() http_args=()
+            if [ "$route" = origin ]; then
+              https_args=(--resolve "$EXPECTED_PUBLIC_HOST:443:$origin_ip")
+              http_args=(--resolve "$EXPECTED_PUBLIC_HOST:80:$origin_ip")
+            fi
+            readyz_status="$(curl --silent --show-error --connect-timeout 5 --max-time 15 \
+              "${https_args[@]}" --dump-header "$headers" --output "$readyz_file" \
+              --write-out '%{http_code}' "$DEPLOY_HEALTH_URL" 2>/dev/null)" || readyz_status=000
+            if [ "$readyz_status" = 200 ]; then
+              verify_readyz_identity "$readyz_file" || return 1
+            elif [ "$readyz_status" = 502 ] && [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ]; then
+              :
+            else
+              return 1
+            fi
+            if ! tr -d '\r' < "$headers" | grep -qi '^Strict-Transport-Security:'; then
+              [ "$PUBLIC_INGRESS_MODE" != domain_hsts ] || return 1
+            fi
+            redirect_result="$(curl --silent --show-error --connect-timeout 5 --max-time 15 --max-redirs 0 \
+              "${http_args[@]}" --output /dev/null --write-out '%{http_code} %{redirect_url}' \
+              "$DEPLOY_HTTP_REDIRECT_URL" 2>/dev/null)" || return 1
+            redirect_status="${redirect_result%% *}"
+            redirect_url="${redirect_result#* }"
+            [ "$redirect_status" = 308 ] || return 1
+            [ "$redirect_url" = "$DEPLOY_HEALTH_URL" ] || return 1
+            printf '%s' "$readyz_status"
+          }
 
-          redirect_result="$(curl --silent --show-error --max-time 15 --max-redirs 0 --output /dev/null --write-out '%{http_code} %{redirect_url}' "$DEPLOY_HTTP_REDIRECT_URL")"
-          redirect_status="${redirect_result%% *}"
-          redirect_url="${redirect_result#* }"
-          case "$redirect_status" in
-            301|302|307|308) ;;
-            *)
-              echo "Public predeploy redirect source did not return a redirect." >&2
+          origin_ingress_ready=false
+          public_domain_ready=false
+          predeploy_runtime_classification=runtime_ready
+          if [ "$PUBLIC_INGRESS_MODE" = domain_hsts ]; then
+            origin_ip="$(resolve_origin_ipv4)"
+            origin_readyz_status="$(probe_ingress_route origin "$origin_ip")" || {
+              echo "Origin-direct ingress preflight failed." >&2
               exit 1
-              ;;
-          esac
-          if [ "$redirect_url" != "$DEPLOY_HEALTH_URL" ]; then
-            echo "Public predeploy redirect target mismatch." >&2
+            }
+            origin_ingress_ready=true
+          fi
+          if public_readyz_status="$(probe_ingress_route public)"; then
+            public_domain_ready=true
+          elif [ "$INITIAL_RUNTIME_BOOTSTRAP" = true ] \
+            && [ "$DEPLOY_TARGET" = staging ] \
+            && [ "$origin_ingress_ready" = true ]; then
+            public_domain_ready=false
+            fallback_state_note="originIngressReady=true publicDomainReady=false"
+          else
+            echo "Public-domain preflight failed and origin fallback is not authorized." >&2
             exit 1
           fi
-
-          hsts_header_present=false
-          hsts_headers="$RUNNER_TEMP/predeploy-hsts.headers"
-          curl --silent --show-error --head --max-time 15 --output "$hsts_headers" "$DEPLOY_HEALTH_URL"
-          if tr -d '\r' < "$hsts_headers" | grep -qi '^strict-transport-security:'; then
-            hsts_header_present=true
-          elif [ "$PUBLIC_INGRESS_MODE" = "domain_hsts" ]; then
-            echo "Domain HSTS mode requires a Strict-Transport-Security header." >&2
-            exit 1
+          if [ "${origin_readyz_status:-$public_readyz_status}" = 502 ]; then
+            predeploy_runtime_classification=ingress_ready_upstream_unavailable
           fi
           if [ "$PUBLIC_INGRESS_MODE" = "temporary_ip_tls" ]; then
-            ingress_readiness="transportTlsReady=true temporaryIngressReady=true hstsHeaderPresent=$hsts_header_present hstsUserAgentPolicyApplicable=false domainHstsReady=false"
+            ingress_readiness="transportTlsReady=true temporaryIngressReady=true hstsHeaderPresent=false hstsUserAgentPolicyApplicable=false domainHstsReady=false originIngressReady=$origin_ingress_ready publicDomainReady=$public_domain_ready"
           else
-            ingress_readiness="transportTlsReady=true temporaryIngressReady=false hstsHeaderPresent=true hstsUserAgentPolicyApplicable=true domainHstsReady=true"
+            ingress_readiness="transportTlsReady=true temporaryIngressReady=false hstsHeaderPresent=true hstsUserAgentPolicyApplicable=true domainHstsReady=$public_domain_ready originIngressReady=$origin_ingress_ready publicDomainReady=$public_domain_ready"
           fi
           {
             echo "### Public ingress policy accepted"
@@ -582,6 +624,7 @@ jobs:
             echo "- $ingress_readiness"
             echo "- Classification: $ingress_classification"
             echo "- Runtime preflight: $predeploy_runtime_classification"
+            if [ -n "${fallback_state_note:-}" ]; then echo "- $fallback_state_note"; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify deployment host Python runtime
@@ -1261,9 +1304,18 @@ jobs:
           PEER_JWT_SECRET_SHA256: ${{ secrets[format('{0}_PEER_JWT_SECRET_SHA256', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
           PEER_DEPLOY_PATH: ${{ vars[format('{0}_PEER_DEPLOY_PATH', github.event.inputs.environment == 'staging' && 'STAGING' || 'PRODUCTION')] }}
         run: |
+          set -euo pipefail
           RELEASE_ARCHIVE="/tmp/project-management-${RELEASE_SHA}.tar.gz"
           RELEASE_DIR="$(mktemp -d)"
           trap 'rm -rf "$RELEASE_DIR"' EXIT
+          ORIGIN_INGRESS_IP="$DEPLOY_HOST"
+          if [[ ! "$ORIGIN_INGRESS_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            ORIGIN_INGRESS_IP="$(getent ahostsv4 "$DEPLOY_HOST" | awk '$2 == "STREAM" { print $1; exit }')"
+          fi
+          [[ "$ORIGIN_INGRESS_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || {
+            echo "Deployment origin did not resolve to IPv4." >&2
+            exit 1
+          }
           git archive --format=tar "$RELEASE_SHA" | tar -xf - -C "$RELEASE_DIR"
           mkdir -p "$RELEASE_DIR/client/dist"
           cp -a client/dist/. "$RELEASE_DIR/client/dist/"
@@ -1280,7 +1332,7 @@ jobs:
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" INITIAL_RUNTIME_BOOTSTRAP=\"$INITIAL_RUNTIME_BOOTSTRAP\" EXPECTED_JWT_SECRET_SHA256=\"$EXPECTED_JWT_SECRET_SHA256\" PEER_JWT_SECRET_SHA256=\"$PEER_JWT_SECRET_SHA256\" PEER_RUNTIME_ENV_FILE=\"$PEER_DEPLOY_PATH/deploy/env/server.production.env\" bash -s" < scripts/deploy-lighthouse-server.sh
+            "APP_DIR=\"$DEPLOY_PATH\" RELEASE_SHA=\"$RELEASE_SHA\" DEPLOY_TARGET=\"$DEPLOY_TARGET\" RELEASE_ARCHIVE=\"$RELEASE_ARCHIVE\" PUBLIC_INGRESS_MODE=\"$PUBLIC_INGRESS_MODE\" EXPECTED_PUBLIC_HOST=\"$EXPECTED_PUBLIC_HOST\" HEALTH_URL=\"${DEPLOY_HEALTH_URL:-}\" HTTP_REDIRECT_URL=\"${DEPLOY_HTTP_REDIRECT_URL:-}\" INITIAL_RUNTIME_BOOTSTRAP=\"$INITIAL_RUNTIME_BOOTSTRAP\" ORIGIN_INGRESS_IP=\"$ORIGIN_INGRESS_IP\" EXPECTED_JWT_SECRET_SHA256=\"$EXPECTED_JWT_SECRET_SHA256\" PEER_JWT_SECRET_SHA256=\"$PEER_JWT_SECRET_SHA256\" PEER_RUNTIME_ENV_FILE=\"$PEER_DEPLOY_PATH/deploy/env/server.production.env\" bash -s" < scripts/deploy-lighthouse-server.sh
 
       - name: Verify API port is not externally reachable
         if: ${{ steps.deployment-eligibility.outputs.can_deploy == 'true' }}
