@@ -1690,7 +1690,7 @@ describe('project critical path service', () => {
 
   it.each([
     ['P20 exceeds P50', 16, 9, 30],
-    ['P50 exceeds P80', 7, 16, 9],
+    ['P50 exceeds P80', 7, 16, 15],
   ])('does not publish or arbitrate inverted typed probability percentiles when %s', async (_label, p20, p50, p80) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))

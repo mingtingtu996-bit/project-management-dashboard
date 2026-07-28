@@ -607,7 +607,7 @@ describe('projectRemainingDurationForecastService', () => {
     expect(forecast.projectRemainingForecastDays).toBeGreaterThanOrEqual(20)
   })
 
-  it('widens the project remaining finish with E2 confidence bands, CP span and runtime pressure', () => {
+  it('ignores raw CP span while applying typed E2 confidence bands and runtime pressure', () => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
@@ -669,16 +669,16 @@ describe('projectRemainingDurationForecastService', () => {
       },
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-06-28')
-    expect(forecast.projectRemainingForecastDays).toBe(19)
+    expect(forecast.forecastFinishDate).toBe('2026-06-25')
+    expect(forecast.projectRemainingForecastDays).toBe(16)
     expect(forecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
       latestCriticalFinishDate: '2026-06-20',
       confidenceBandFinishDate: '2026-06-24',
-      criticalPathSpanFinishDate: '2026-06-27',
+      criticalPathSpanFinishDate: null,
     }))
     expect(forecast.calculationContext.runtimeAdjustment).toEqual(expect.objectContaining({
       pressureProgressExtraDays: 1,
-      adjustedInternalFinishDate: '2026-06-28',
+      adjustedInternalFinishDate: '2026-06-25',
       evidenceObjects: expect.arrayContaining([
         expect.objectContaining({
           code: 'resource_pressure_high',

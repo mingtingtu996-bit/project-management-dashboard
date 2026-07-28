@@ -382,15 +382,6 @@ function readMatchingProductionDurationMetric(
   return readNumber(metric.value)
 }
 
-function readRowCriticalPathSpanDays(row: ScheduleAccelerationRow) {
-  return readNumber(
-    row.values.critical_path_span_days
-      ?? row.values.criticalPathSpanDays
-      ?? readRecord(row.values.durationForecast).criticalPathSpanDays
-      ?? readRecord(row.values.duration_forecast).critical_path_span_days,
-  )
-}
-
 function readRowGoverningFinish(
   row: ScheduleAccelerationRow,
   asOfDate?: string | null,
@@ -1127,12 +1118,7 @@ export function buildProjectRemainingDurationForecast(params: {
   const latestCriticalFinishDate = latestDate(internalCriticalRows.map((row) => readRowGoverningFinish(row, asOfDate, constructionCalendar)))
   const optimisticBandFinishDate = latestDate(criticalBandOrders.map((item) => item.optimisticBandFinishDate))
   const confidenceBandFinishDate = latestDate(criticalBandOrders.map((item) => item.confidenceBandFinishDate))
-  const criticalPathSpanDays = internalCriticalRows
-    .map(readRowCriticalPathSpanDays)
-    .filter((days): days is number => days !== null && days > 0)
-  const criticalPathSpanFinishDate = criticalPathSpanDays.length > 0
-    ? addProductionDays(asOfDate, Math.max(...criticalPathSpanDays), constructionCalendar)
-    : null
+  const criticalPathSpanFinishDate: string | null = null
   const latestAbsoluteGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestParallelGateFinishDate = latestDate(parallelGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestStartGateFinishDate = latestDate(startGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
