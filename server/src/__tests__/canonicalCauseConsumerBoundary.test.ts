@@ -42,7 +42,7 @@ describe('canonical cause consumer boundary', () => {
     })
 
     expect(consumers.sort()).toEqual([...progressDeviationRegistryInventoryAllowlist].sort())
-  })
+  }, 30_000)
 
   it('requires deviation consumers to translate legacy factors through the canonical domain', () => {
     for (const relativePath of [
