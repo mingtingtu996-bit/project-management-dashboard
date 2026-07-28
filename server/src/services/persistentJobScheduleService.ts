@@ -31,6 +31,7 @@ type SlotIdentity = {
 export interface ScheduledJobSlotStore {
   assertReady(): Promise<void>
   claim(input: SlotIdentity & { ownerId: string; staleAfterMs: number }): Promise<ScheduledJobSlotClaim>
+  heartbeat(input: SlotIdentity): Promise<boolean>
   succeed(input: SlotIdentity): Promise<boolean>
   fail(input: SlotIdentity & { error: unknown }): Promise<boolean>
 }
@@ -500,6 +501,20 @@ export class DatabaseScheduledJobSlotStore implements ScheduledJobSlotStore {
     return result.rowCount === 1
   }
 
+  async heartbeat(input: SlotIdentity) {
+    const result = await query(
+      `UPDATE public.scheduled_job_slots
+          SET claimed_at = NOW(),
+              updated_at = NOW()
+        WHERE job_name = $1
+          AND scheduled_for = $2
+          AND claim_token = $3
+          AND status = 'running'`,
+      [input.jobName, input.scheduledFor.toISOString(), input.claimToken],
+    )
+    return result.rowCount === 1
+  }
+
   async fail(input: SlotIdentity & { error: unknown }) {
     const result = await query(
       `UPDATE public.scheduled_job_slots
@@ -524,6 +539,75 @@ export class DatabaseScheduledJobSlotStore implements ScheduledJobSlotStore {
 
 const databaseSlotStore = new DatabaseScheduledJobSlotStore()
 
+type ScheduledJobSlotHeartbeat = {
+  assertActive: () => void
+  stop: () => Promise<void>
+}
+
+function startScheduledJobSlotHeartbeat(
+  input: SlotIdentity & { staleAfterMs: number; signal?: AbortSignal },
+  store: ScheduledJobSlotStore,
+): ScheduledJobSlotHeartbeat {
+  const intervalMs = Math.max(1, Math.floor(input.staleAfterMs / 3))
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let renewal: Promise<void> | null = null
+  let stopped = false
+  let failure: Error | null = null
+
+  const scheduleNext = () => {
+    if (stopped || failure || timer) return
+    timer = setTimeout(() => {
+      timer = null
+      renewal = (async () => {
+        try {
+          const renewed = await store.heartbeat(input)
+          if (!renewed) {
+            failure = new Error(`Scheduled job slot heartbeat fence rejected: ${input.jobName}`)
+          }
+        } catch (error) {
+          failure = error instanceof Error
+            ? error
+            : new Error(`Scheduled job slot heartbeat failed: ${input.jobName}`)
+        }
+      })().finally(() => {
+        renewal = null
+        scheduleNext()
+      })
+    }, intervalMs)
+    timer.unref?.()
+  }
+
+  const stop = async () => {
+    if (!stopped) {
+      stopped = true
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      input.signal?.removeEventListener('abort', abortHeartbeat)
+    }
+    await renewal
+  }
+
+  const abortHeartbeat = () => {
+    void stop()
+  }
+
+  scheduleNext()
+  if (input.signal?.aborted) {
+    void stop()
+  } else {
+    input.signal?.addEventListener('abort', abortHeartbeat, { once: true })
+  }
+
+  return {
+    assertActive: () => {
+      if (failure) throw failure
+    },
+    stop,
+  }
+}
+
 export async function assertPersistentJobScheduleReady(
   store: ScheduledJobSlotStore = databaseSlotStore,
 ) {
@@ -537,26 +621,45 @@ export async function runPersistentScheduledSlot(
     ownerId: string
     staleAfterMs: number
     isCatchUp: boolean
+    heartbeatSignal?: AbortSignal
   },
   execute: (details: { scheduledFor: Date; isCatchUp: boolean }) => Promise<unknown>,
   store: ScheduledJobSlotStore = databaseSlotStore,
 ) {
   const claimToken = randomUUID()
-  const claim = await store.claim({ ...input, claimToken })
+  const slotIdentity = {
+    jobName: input.jobName,
+    scheduledFor: input.scheduledFor,
+    claimToken,
+  }
+  const claim = await store.claim({
+    ...slotIdentity,
+    ownerId: input.ownerId,
+    staleAfterMs: input.staleAfterMs,
+  })
   if (claim.claimed === false) return { executed: false as const, reason: claim.reason }
+
+  const heartbeat = startScheduledJobSlotHeartbeat({
+    ...slotIdentity,
+    staleAfterMs: input.staleAfterMs,
+    signal: input.heartbeatSignal,
+  }, store)
 
   try {
     const value = await execute({
       scheduledFor: input.scheduledFor,
       isCatchUp: input.isCatchUp,
     })
-    const completed = await store.succeed({ ...input, claimToken })
+    await heartbeat.stop()
+    heartbeat.assertActive()
+    const completed = await store.succeed(slotIdentity)
     if (!completed) {
       throw new Error(`Scheduled job slot completion fence rejected: ${input.jobName}`)
     }
     return { executed: true as const, value }
   } catch (error) {
-    const failed = await store.fail({ ...input, claimToken, error })
+    await heartbeat.stop()
+    const failed = await store.fail({ ...slotIdentity, error })
     if (!failed) {
       throw new AggregateError(
         [error],
@@ -564,6 +667,8 @@ export async function runPersistentScheduledSlot(
       )
     }
     throw error
+  } finally {
+    await heartbeat.stop()
   }
 }
 
@@ -574,6 +679,7 @@ export class PersistentWallClockJobTimer {
   private readonly staleAfterMs: number
   private readonly catchUp: CatchUpOptions
   private readonly timer: WallClockJobTimer
+  private heartbeatAbortController: AbortController | null = null
   private executionQueue: Promise<void> = Promise.resolve()
   private nextScheduledSlot: Date | null = null
   private isScheduled = false
@@ -604,6 +710,7 @@ export class PersistentWallClockJobTimer {
 
   start() {
     if (!this.timer.start()) return false
+    this.heartbeatAbortController = new AbortController()
     this.isScheduled = true
     registeredPersistentJobNames.add(this.options.jobName)
 
@@ -617,6 +724,8 @@ export class PersistentWallClockJobTimer {
   stop() {
     const stopped = this.timer.stop()
     if (stopped) {
+      this.heartbeatAbortController?.abort()
+      this.heartbeatAbortController = null
       this.isScheduled = false
       this.nextScheduledSlot = null
       registeredPersistentJobNames.delete(this.options.jobName)
@@ -632,6 +741,7 @@ export class PersistentWallClockJobTimer {
   }
 
   private enqueue(scheduledFor: Date, isCatchUp: boolean) {
+    const heartbeatSignal = this.heartbeatAbortController?.signal
     const operation = this.executionQueue.then(async () => {
       const runSlot = async () => {
         if (isCatchUp && !this.isScheduled) return
@@ -643,6 +753,7 @@ export class PersistentWallClockJobTimer {
             ownerId: this.ownerId,
             staleAfterMs: this.staleAfterMs,
             isCatchUp,
+            heartbeatSignal,
           },
           this.options.execute,
           this.store,
