@@ -464,13 +464,22 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     ], [], new Set(), {
       durationSuggestionByTaskId: new Map([
         ['task-e1', {
-          recommendedDurationDays: 6,
+          contextualReferenceDays: 6,
           durationOutputCode: 'contextual_reference',
           confidenceLevel: 'medium',
           durationCalibrationSource: 'standard_work_duration_seed',
           durationProvenance: 'standard_work_duration_seed',
         }],
       ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
     } as any)
 
     expect(item.planned_start_date).toBe('2026-06-01')
@@ -481,6 +490,230 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
     expect(item.seed_versions?.[0]).toEqual(expect.objectContaining({
       dateSource: 'duration_suggestion_e1',
     }))
+  })
+
+  it('does not fill missing draft dates from a production-day suggestion without an authoritative calendar', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-calendar-unavailable',
+        project_id: 'project-1',
+        title: 'Missing end date without calendar identity',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-calendar-unavailable', {
+          contextualReferenceDays: 6,
+          durationOutputCode: 'contextual_reference',
+          confidenceLevel: 'medium',
+          durationCalibrationSource: 'standard_work_duration_seed',
+          durationProvenance: 'standard_work_duration_seed',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'calendar_day',
+        windows: [],
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        availability: 'unavailable',
+        unavailableReason: 'calendar_identity_missing',
+      },
+    } as any)
+
+    expect(item.planned_start_date).toBe('2026-06-01')
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it('does not fill missing draft dates from naked recommended duration under an authoritative calendar', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-naked-recommended',
+        project_id: 'project-1',
+        title: 'Missing end date with naked recommendation',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-naked-recommended', {
+          recommendedDurationDays: 6,
+          durationOutputCode: 'contextual_reference',
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    } as any)
+
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it('does not fill missing draft dates from a raw remaining forecast alias', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-raw-remaining',
+        project_id: 'project-1',
+        title: 'Missing end date with raw remaining forecast',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-raw-remaining', {
+          remainingForecastDays: 999,
+          durationOutputCode: 'remaining_forecast',
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    } as any)
+
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it.each([
+    {
+      label: 'unavailable',
+      remainingDuration: {
+        value: null,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-01',
+        availability: 'unavailable',
+        unavailableReason: 'duration_value_missing',
+      },
+    },
+    {
+      label: 'calendar identity mismatch',
+      remainingDuration: {
+        value: 3,
+        unit: 'construction_production_day',
+        calendarRef: 'other_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-06-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+    {
+      label: 'invalid asOf',
+      remainingDuration: {
+        value: 3,
+        unit: 'construction_production_day',
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        asOf: '',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+  ])('does not fall back to raw remaining duration when the typed fact is $label', ({ remainingDuration }) => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-invalid-typed-remaining',
+        project_id: 'project-1',
+        title: 'Missing end date with invalid governed remaining duration',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-invalid-typed-remaining', {
+          durationOutputCode: 'remaining_forecast',
+          remainingForecastDays: 999,
+          remainingDuration,
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    } as any)
+
+    expect(item.planned_end_date).toBeNull()
+    expect(item.source_reason).not.toContain('E1 duration suggestion')
+  })
+
+  it('fills missing draft dates from a typed remaining duration with matching calendar identity', () => {
+    const [item] = buildGeneratedBaselineItemsFromTasksV1474([
+      {
+        id: 'task-e1-typed-remaining',
+        project_id: 'project-1',
+        title: 'Missing end date with governed remaining duration',
+        status: 'todo',
+        progress: 0,
+        planned_start_date: '2026-06-01',
+        planned_end_date: null,
+      } as any,
+    ], [], new Set(), {
+      durationSuggestionByTaskId: new Map([
+        ['task-e1-typed-remaining', {
+          durationOutputCode: 'remaining_forecast',
+          remainingDuration: {
+            value: 3,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: 'calendar-v1',
+            timezone: 'Asia/Shanghai',
+            asOf: '2026-06-01',
+            availability: 'available',
+            unavailableReason: null,
+          },
+          confidenceLevel: 'medium',
+        }],
+      ]),
+      constructionCalendar: {
+        basis: 'official_construction_calendar_seed',
+        windows: [],
+        calendarRef: 'work_calendar',
+        calendarVersion: 'calendar-v1',
+        timezone: 'Asia/Shanghai',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    } as any)
+
+    expect(item.planned_start_date).toBe('2026-06-01')
+    expect(item.planned_end_date).toBe('2026-06-03')
+    expect(item.source_reason).toContain('E1 duration suggestion')
   })
 
   it('fills E1 missing draft dates with construction production days instead of raw calendar days', () => {
@@ -514,7 +747,7 @@ describe('baselineGenerationService v1.4.7.4 seed consumption', () => {
       },
       durationSuggestionByTaskId: new Map([
         ['task-e1-calendar', {
-          recommendedDurationDays: 3,
+          contextualReferenceDays: 3,
           durationOutputCode: 'contextual_reference',
           confidenceLevel: 'medium',
           durationCalibrationSource: 'standard_work_duration_seed',

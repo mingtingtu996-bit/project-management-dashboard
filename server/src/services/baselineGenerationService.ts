@@ -62,6 +62,7 @@ import {
   addConstructionProductionDays,
   effectiveConstructionCalendarBasis,
   effectiveConstructionCalendarWindowCount,
+  isAuthoritativeConstructionCalendar,
   isConstructionProductionDay,
   productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
@@ -77,6 +78,7 @@ import {
   buildCalendarDayDurationMetric,
   businessDateKey,
   DEFAULT_DURATION_TIMEZONE,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
@@ -289,6 +291,7 @@ type BaselineDurationSuggestion = {
   contextualReferenceDays?: number | string | null
   planReferenceDays?: number | string | null
   remainingForecastDays?: number | string | null
+  remainingDuration?: DurationMetricDto | null
   durationOutputCode?: string | null
   confidenceLevel?: string | null
   durationCalibrationSource?: string | null
@@ -439,11 +442,6 @@ function subtractConstructionProductionDaysFromText(
   return cursor.toISOString().slice(0, 10)
 }
 
-function readPositiveCeil(value: unknown) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : null
-}
-
 function isCompletedBaselineTask(task: Pick<TaskBaselineTaskRow, 'status' | 'progress'> & {
   actual_end_date?: string | null
 }) {
@@ -466,9 +464,12 @@ function isInProgressBaselineTask(task: Pick<TaskBaselineTaskRow, 'status' | 'pr
     || (Number.isFinite(progress) && progress > 0 && progress < 100)
 }
 
-function readDurationSuggestionDaysForGeneration(suggestion: BaselineDurationSuggestion | undefined) {
-  if (!suggestion) return null
-  return readGovernedDurationSuggestionDays(suggestion) ?? readPositiveCeil(suggestion.recommendedDurationDays)
+function readDurationSuggestionDaysForGeneration(
+  suggestion: BaselineDurationSuggestion | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+) {
+  if (!suggestion || !isAuthoritativeConstructionCalendar(calendar)) return null
+  return readGovernedDurationSuggestionDays(suggestion, calendar)
 }
 
 type ResolvedBaselineDraftDates = {
@@ -544,7 +545,7 @@ function resolveBaselineDraftDates(
 
   if (!plannedStartDate || !plannedEndDate) {
     const suggestion = options.durationSuggestionByTaskId?.get(task.id)
-    const suggestedDays = readDurationSuggestionDaysForGeneration(suggestion)
+    const suggestedDays = readDurationSuggestionDaysForGeneration(suggestion, options.constructionCalendar)
     if (suggestedDays != null) {
       if (plannedStartDate && !plannedEndDate) {
         plannedEndDate = addConstructionProductionDaysFromText(plannedStartDate, suggestedDays, options.constructionCalendar)
@@ -2027,16 +2028,32 @@ function readStringArray(value: unknown): string[] {
   }
 }
 
-function readGovernedDurationSuggestionDays(suggestion: unknown) {
+function readGovernedDurationSuggestionDays(
+  suggestion: unknown,
+  calendar?: ConstructionCalendarContext | null,
+) {
   const record = readRecord(suggestion)
   const outputCode = normalizeText(record.durationOutputCode)
-  const value = outputCode === 'contextual_reference'
-    ? record.contextualReferenceDays
-    : outputCode === 'plan_reference'
-      ? record.planReferenceDays
-      : outputCode === 'remaining_forecast'
-        ? record.remainingForecastDays
-        : null
+  let value: unknown = null
+  if (outputCode === 'contextual_reference') {
+    value = record.contextualReferenceDays
+  } else if (outputCode === 'plan_reference') {
+    value = record.planReferenceDays
+  } else if (outputCode === 'remaining_forecast') {
+    const metric = normalizeDurationMetricDto(record.remainingDuration)
+    if (
+      !metric
+      || metric.availability !== 'available'
+      || metric.unit !== 'construction_production_day'
+      || (calendar && (
+        !isAuthoritativeConstructionCalendar(calendar)
+        || metric.calendarRef !== calendar.calendarRef
+        || metric.calendarVersion !== calendar.calendarVersion
+        || metric.timezone !== calendar.timezone
+      ))
+    ) return null
+    value = metric.value
+  }
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : null
 }
