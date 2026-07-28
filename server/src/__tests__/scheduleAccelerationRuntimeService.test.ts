@@ -2324,7 +2324,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-13')
   })
 
-  it('clears stale float signals for tasks omitted by a sparse E3 snapshot before acceleration selection', async () => {
+  it('reuses one E3 snapshot for both E4 context and acceleration selection', async () => {
     mocks.getTasks.mockResolvedValue([
       {
         id: 'snapshot-critical',
@@ -2384,9 +2384,36 @@ describe('scheduleAccelerationRuntimeService', () => {
           isManualAttention: false,
           isManualInserted: false,
         }],
+        networkSchedule: [
+          {
+            taskId: 'snapshot-critical', earliestStartOffsetDays: 0, earliestFinishOffsetDays: 20, latestStartOffsetDays: 0, latestFinishOffsetDays: 20,
+            floatDays: 0, float: buildAvailableDurationMetric(0, 'construction_production_day', '2026-01-01'),
+            freeFloatDays: 0, freeFloat: buildAvailableDurationMetric(0, 'construction_production_day', '2026-01-01'),
+            durationDays: 20, duration: buildAvailableDurationMetric(20, 'construction_production_day', '2026-01-01'), isAutoCritical: true,
+          },
+          {
+            taskId: 'snapshot-omitted-stale-float', earliestStartOffsetDays: 0, earliestFinishOffsetDays: 30, latestStartOffsetDays: 20, latestFinishOffsetDays: 50,
+            floatDays: 20, float: buildAvailableDurationMetric(20, 'construction_production_day', '2026-01-01'),
+            freeFloatDays: 10, freeFloat: buildAvailableDurationMetric(10, 'construction_production_day', '2026-01-01'),
+            durationDays: 30, duration: buildAvailableDurationMetric(30, 'construction_production_day', '2026-01-01'), isAutoCritical: false,
+          },
+        ],
         projectDurationDays: 20,
       })
-      .mockRejectedValueOnce(new Error('second E3 read unavailable'))
+      .mockResolvedValueOnce({
+        projectId: 'project-1',
+        autoTaskIds: ['snapshot-omitted-stale-float'],
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        primaryChain: null,
+        alternateChains: [],
+        displayTaskIds: ['snapshot-omitted-stale-float'],
+        watchedTaskIds: [],
+        edges: [],
+        tasks: [{ taskId: 'snapshot-omitted-stale-float', title: 'Second snapshot critical task', floatDays: 0, durationDays: 30, isAutoCritical: true, isManualAttention: false, isManualInserted: false }],
+        networkSchedule: [],
+        projectDurationDays: 30,
+      })
     mocks.executeSQL.mockImplementation(async (sql: string) => {
       if (sql.includes('task_dependencies')) return []
       if (sql.includes('monthly_plan_items')) return []
@@ -2400,7 +2427,8 @@ describe('scheduleAccelerationRuntimeService', () => {
     })
 
     const crashing = result.targetFeasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing')
-    expect(mocks.getProjectCriticalPathSnapshot).toHaveBeenCalledTimes(2)
+    expect(mocks.getProjectCriticalPathSnapshot).toHaveBeenCalledTimes(1)
+    expect(result.projectRemainingForecast.calculationContext.criticalPath.latestCriticalFinishDate).toBe('2026-01-20')
     expect(crashing?.networkSlackFacts.criticalOrNearCriticalTaskCount).toBe(1)
     expect(crashing?.affectedRowIds).toContain('snapshot-critical')
     expect(crashing?.affectedRowIds).not.toContain('snapshot-omitted-stale-float')

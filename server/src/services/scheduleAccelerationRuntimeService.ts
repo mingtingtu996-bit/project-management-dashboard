@@ -1365,7 +1365,7 @@ async function buildRuntimeForecastInputs(projectId: string, context?: ScheduleA
     ?? businessDateKey(new Date(), constructionCalendar?.timezone)
   const hydrated = await withRuntimeOptionalRead(
     'runtime_engine_signals',
-    hydrateRuntimeRowsWithEngineSignals(projectId, rows, constructionCalendar),
+    hydrateRuntimeRowsWithEngineSignals(projectId, rows, constructionCalendar, durationAsOfDate),
     {
       rows,
       criticalPathSnapshot: null as Awaited<ReturnType<typeof getProjectCriticalPathSnapshot>> | null,
@@ -1536,6 +1536,7 @@ async function hydrateRuntimeRowsWithEngineSignals(
   projectId: string,
   rows: ScheduleAccelerationRow[],
   workCalendar?: ConstructionCalendarContext | null,
+  asOfDate?: string | null,
 ) {
   const taskIds = rows.map((row) => normalizeText(row.clientRowId)).filter(Boolean)
   if (taskIds.length === 0) {
@@ -1585,7 +1586,10 @@ async function hydrateRuntimeRowsWithEngineSignals(
       values,
     }
   })
-  const hydratedRows = applyCriticalPathSnapshotToAccelerationRows(rowsWithForecastSignals, criticalPath)
+  const hydratedRows = applyCriticalPathSnapshotToAccelerationRows(rowsWithForecastSignals, criticalPath, {
+    constructionCalendar: workCalendar,
+    asOfDate,
+  })
 
   return {
     rows: hydratedRows,
@@ -1966,6 +1970,7 @@ export async function evaluateRuntimeScheduleAcceleration(params: {
         runtimeArtifactPublications: params.runtimeArtifactPublications,
         runtimeConsumerObservedAt: params.runtimeConsumerObservedAt,
         runtimeConsumerErrorHandler: params.runtimeConsumerErrorHandler,
+        criticalPathSnapshot,
       })
     : undefined
   if (targetFeasibility?.accelerationProposal && normalizeText(params.issuedBy)) {

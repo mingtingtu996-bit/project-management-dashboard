@@ -25,6 +25,7 @@ import type {
 } from './durationRuntimeConsumerObservationService.js'
 import { delayDayDelta, inclusiveDurationDays, normalizeDurationDateUtc, signedDurationDayDelta } from '../utils/durationDays.js'
 import {
+  isAuthoritativeConstructionCalendar,
   parseConstructionCalendarDate,
   productionDaysBetweenInclusive,
   type ConstructionCalendarContext,
@@ -57,6 +58,7 @@ import {
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
   hasIdentifiedConstructionCalendar,
+  normalizeDurationMetricDto,
   type DurationMetricDto,
 } from './durationMetricService.js'
 
@@ -1809,27 +1811,59 @@ function getCriticalTargetRows(
 export function applyCriticalPathSnapshotToAccelerationRows(
   rows: ScheduleAccelerationRow[],
   snapshot: CriticalPathSnapshot | null | undefined,
+  context?: {
+    constructionCalendar?: ConstructionCalendarContext | null
+    asOfDate?: string | null
+  },
 ) {
   if (!snapshot) return rows
   const criticalTaskIds = new Set([
-    ...(snapshot.displayTaskIds ?? []),
     ...(snapshot.autoTaskIds ?? []),
+    ...(snapshot.manualInsertedTaskIds ?? []),
   ].map(normalizeText).filter(Boolean))
   const criticalTaskById = new Map((snapshot.tasks ?? []).map((task) => [normalizeText(task.taskId), task]))
-  const hasCriticalPathProjection = criticalTaskIds.size > 0 || criticalTaskById.size > 0
+  const networkScheduleById = new Map((snapshot.networkSchedule ?? []).map((task) => [normalizeText(task.taskId), task]))
+  const hasFullNetworkProjection = networkScheduleById.size > 0
+  const hasCriticalPathProjection = criticalTaskIds.size > 0 || criticalTaskById.size > 0 || hasFullNetworkProjection
   if (!hasCriticalPathProjection) return rows
+
+  const calendar = context?.constructionCalendar
+  const asOfDate = normalizeDate(context?.asOfDate)
+  const readNetworkFloat = (value: unknown) => {
+    if (!asOfDate || !isAuthoritativeConstructionCalendar(calendar)) return null
+    const metric = normalizeDurationMetricDto(value)
+    const metricValue = Number(metric?.value)
+    return metric
+      && metric.availability === 'available'
+      && metric.unit === 'construction_production_day'
+      && metric.calendarRef === calendar.calendarRef
+      && metric.calendarVersion === calendar.calendarVersion
+      && metric.timezone === calendar.timezone
+      && metric.asOf === asOfDate
+      && Number.isFinite(metricValue)
+      && metricValue >= 0
+      ? metricValue
+      : null
+  }
 
   return rows.map((row) => {
     const taskId = normalizeText(row.clientRowId)
     const criticalTask = criticalTaskById.get(taskId)
-    const isCritical = criticalTaskIds.has(taskId)
+    const networkTask = networkScheduleById.get(taskId)
+    const isCritical = criticalTaskIds.has(taskId) || networkTask?.isAutoCritical === true
+    const totalFloatDays = hasFullNetworkProjection
+      ? readNetworkFloat(networkTask?.float)
+      : readOptionalNumber(criticalTask?.floatDays)
+    const freeFloatDays = hasFullNetworkProjection
+      ? readNetworkFloat(networkTask?.freeFloat)
+      : readOptionalNumber(criticalTask?.freeFloatDays) ?? (isCritical ? 0 : null)
     return {
       ...row,
       values: {
         ...row.values,
         is_critical: isCritical,
-        total_float_days: criticalTask?.floatDays ?? undefined,
-        free_float_days: isCritical ? 0 : undefined,
+        total_float_days: totalFloatDays ?? undefined,
+        free_float_days: freeFloatDays ?? undefined,
       },
     }
   })
@@ -1838,12 +1872,17 @@ export function applyCriticalPathSnapshotToAccelerationRows(
 export async function hydrateScheduleAccelerationRowsWithCriticalPath(params: {
   projectId: string
   rows: ScheduleAccelerationRow[]
+  constructionCalendar?: ConstructionCalendarContext | null
+  asOfDate?: string | null
 }) {
   const projectId = normalizeText(params.projectId)
   if (!projectId || params.rows.length === 0) return params.rows
   try {
     const snapshot = await getProjectCriticalPathSnapshot(projectId)
-    return applyCriticalPathSnapshotToAccelerationRows(params.rows, snapshot)
+    return applyCriticalPathSnapshotToAccelerationRows(params.rows, snapshot, {
+      constructionCalendar: params.constructionCalendar,
+      asOfDate: params.asOfDate,
+    })
   } catch {
     return params.rows
   }
@@ -3252,11 +3291,20 @@ export async function evaluateRuntimeDelayRecoveryWithCriticalPath(params: {
   runtimeArtifactPublications?: readonly ScheduleAccelerationRuntimeArtifactPublication[] | null
   runtimeConsumerObservedAt?: string | null
   runtimeConsumerErrorHandler?: (error: unknown) => void
+  criticalPathSnapshot?: CriticalPathSnapshot | null
 }): Promise<ScheduleTargetFeasibility | undefined> {
-  const rows = await hydrateScheduleAccelerationRowsWithCriticalPath({
-    projectId: params.projectId,
-    rows: params.rows,
-  })
+  const constructionCalendar = params.context?.constructionCalendar ?? params.context?.workCalendar ?? null
+  const rows = params.criticalPathSnapshot !== undefined
+    ? applyCriticalPathSnapshotToAccelerationRows(params.rows, params.criticalPathSnapshot, {
+        constructionCalendar,
+        asOfDate: params.context?.asOfDate,
+      })
+    : await hydrateScheduleAccelerationRowsWithCriticalPath({
+        projectId: params.projectId,
+        rows: params.rows,
+        constructionCalendar,
+        asOfDate: params.context?.asOfDate,
+      })
   const feasibility = evaluateRuntimeDelayRecovery({
     rows,
     targetEndDate: params.targetEndDate,
