@@ -2324,7 +2324,7 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-13')
   })
 
-  it('hydrates E3 primary chain span into E4 critical-path span finish', async () => {
+  it('does not let an untyped E3 primary chain span extend the E4 finish', async () => {
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-primary-chain',
@@ -2379,9 +2379,9 @@ describe('scheduleAccelerationRuntimeService', () => {
     })
 
     expect(result.projectRemainingForecast.calculationContext.criticalPath).toEqual(expect.objectContaining({
-      criticalPathSpanFinishDate: '2026-06-27',
+      criticalPathSpanFinishDate: null,
     }))
-    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-27')
+    expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-12')
   })
 
   it('freezes the business asOf before hydrating typed E2 probability duration into E4 finishes', async () => {
@@ -2460,6 +2460,8 @@ describe('scheduleAccelerationRuntimeService', () => {
   })
 
   it('hydrates E1 execution-reference duration suggestions so runtime crashing respects the governed P80 floor', async () => {
+    const frozenCalendar = identifiedConstructionCalendar()
+    mocks.resolveConstructionCalendarContext.mockResolvedValue(frozenCalendar)
     mocks.getTasks.mockResolvedValue([
       {
         id: 'task-crash-floor',
@@ -2517,7 +2519,9 @@ describe('scheduleAccelerationRuntimeService', () => {
       taskId: 'task-crash-floor',
       standardWorkCode: 'structure_standard_floor',
       suggestionPurpose: 'execution_reference',
+      workCalendar: frozenCalendar,
     }))
+    expect(mocks.resolveConstructionCalendarContext).toHaveBeenCalledTimes(1)
     expect(adjustment).toEqual(expect.objectContaining({
       minDurationDays: 18,
       proposedDurationDays: 18,

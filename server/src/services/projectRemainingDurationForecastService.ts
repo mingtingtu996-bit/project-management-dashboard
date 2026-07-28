@@ -545,6 +545,15 @@ function readExternalGateRemainingDays(
   return projectRemainingDurationDays(startDate, finishDate, calendar)
 }
 
+function readTypedExternalGateRemainingDays(
+  row: ScheduleAccelerationRow,
+  asOfDate: string,
+  calendar?: ConstructionCalendarContext | null,
+) {
+  const remainingDays = readRowRemainingDurationDays(row, asOfDate, calendar)
+  return remainingDays !== null && remainingDays > 0 ? Math.ceil(remainingDays) : 0
+}
+
 function readExplicitExternalGateFinishDate(
   row: ScheduleAccelerationRow,
 ) {
@@ -1124,7 +1133,7 @@ export function buildProjectRemainingDurationForecast(params: {
   const criticalPathSpanFinishDate = criticalPathSpanDays.length > 0
     ? addProductionDays(asOfDate, Math.max(...criticalPathSpanDays), constructionCalendar)
     : null
-  const latestGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
+  const latestAbsoluteGateFinishDate = latestDate(externalGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestParallelGateFinishDate = latestDate(parallelGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestStartGateFinishDate = latestDate(startGateRows.map((row) => readExternalGateFinishDate(row, asOfDate, constructionCalendar)))
   const latestFinishGateFinishDate = latestDate(finishGateRows.map((row) => (
@@ -1190,12 +1199,18 @@ export function buildProjectRemainingDurationForecast(params: {
     .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
     .filter((days) => days > 0)
   const finishGateRemainingDays = finishGateRows
-    .filter((row) => !readExplicitExternalGateFinishDate(row))
-    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .map((row) => (
+      readExplicitExternalGateFinishDate(row)
+        ? readTypedExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+        : readExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+    ))
     .filter((days) => days > 0)
   const handoverGateRemainingDays = handoverGateRows
-    .filter((row) => !readExplicitExternalGateFinishDate(row))
-    .map((row) => readExternalGateRemainingDays(row, asOfDate, constructionCalendar))
+    .map((row) => (
+      readExplicitExternalGateFinishDate(row)
+        ? readTypedExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+        : readExternalGateRemainingDays(row, asOfDate, constructionCalendar)
+    ))
     .filter((days) => days > 0)
   const overlappedRemainingDays = parallelGateRemainingDays.length > 0
     ? Math.max(...parallelGateRemainingDays)
@@ -1225,6 +1240,13 @@ export function buildProjectRemainingDurationForecast(params: {
     handoverBaseFinishDate && handoverGateRemainingDays.length > 0
       ? addProductionDays(handoverBaseFinishDate, Math.max(...handoverGateRemainingDays), constructionCalendar)
       : null,
+  ])
+  const latestGateFinishDate = latestDate([
+    latestAbsoluteGateFinishDate,
+    parallelGateFinishDate,
+    startGateFinishDate,
+    finishGateFinishDate,
+    handoverGateFinishDate,
   ])
   const serializedGateFinishCandidate = latestDate([finishGateFinishDate, handoverGateFinishDate])
   const gateTailDaysAfterInternal = internalWorkFinishDate && serializedGateFinishCandidate

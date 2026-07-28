@@ -1364,7 +1364,7 @@ async function buildRuntimeForecastInputs(projectId: string, context?: ScheduleA
     ?? businessDateKey(new Date(), constructionCalendar?.timezone)
   const hydrated = await withRuntimeOptionalRead(
     'runtime_engine_signals',
-    hydrateRuntimeRowsWithEngineSignals(projectId, rows, durationAsOfDate),
+    hydrateRuntimeRowsWithEngineSignals(projectId, rows, constructionCalendar),
     {
       rows,
       criticalPathSnapshot: null as Awaited<ReturnType<typeof getProjectCriticalPathSnapshot>> | null,
@@ -1490,7 +1490,11 @@ function assertRuntimeRemainingForecastEvidence(
   )
 }
 
-async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAccelerationRow) {
+async function loadRuntimeDurationSuggestion(
+  projectId: string,
+  row: ScheduleAccelerationRow,
+  workCalendar?: ConstructionCalendarContext | null,
+) {
   if (!isRuntimeDurationBearingRow(row)) return null
   const taskId = normalizeText(row.clientRowId)
   if (!taskId) return null
@@ -1510,6 +1514,7 @@ async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAcc
         actualEndDate: normalizeDate(row.values.actual_end_date),
         progress: readOptionalNumber(row.values.progress),
         suggestionPurpose: 'execution_reference',
+        workCalendar,
       }),
       readPositiveIntegerEnv(
         'SCHEDULE_ACCELERATION_RUNTIME_SUGGESTION_TIMEOUT_MS',
@@ -1526,7 +1531,11 @@ async function loadRuntimeDurationSuggestion(projectId: string, row: ScheduleAcc
   }
 }
 
-async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: ScheduleAccelerationRow[], asOfDate?: string | null) {
+async function hydrateRuntimeRowsWithEngineSignals(
+  projectId: string,
+  rows: ScheduleAccelerationRow[],
+  workCalendar?: ConstructionCalendarContext | null,
+) {
   const taskIds = rows.map((row) => normalizeText(row.clientRowId)).filter(Boolean)
   if (taskIds.length === 0) {
     return {
@@ -1550,7 +1559,7 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
   const forecastByTaskId = new Map(forecasts.map((forecast) => [normalizeText(forecast.taskId), forecast]))
   const suggestionResults = await Promise.allSettled(rows.map(async (row) => ({
     taskId: normalizeText(row.clientRowId),
-    suggestion: await loadRuntimeDurationSuggestion(projectId, row),
+    suggestion: await loadRuntimeDurationSuggestion(projectId, row, workCalendar),
   })))
   const suggestionByTaskId = new Map<string, unknown>()
   for (const result of suggestionResults) {
@@ -1563,8 +1572,6 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
     ...(criticalPath?.autoTaskIds ?? []),
   ].map(normalizeText).filter(Boolean))
   const criticalTaskById = new Map((criticalPath?.tasks ?? []).map((task) => [normalizeText(task.taskId), task]))
-  const primaryChainTaskIds = new Set((criticalPath?.primaryChain?.taskIds ?? []).map(normalizeText).filter(Boolean))
-  const primaryChainSpanDays = readOptionalNumber(criticalPath?.primaryChain?.totalDurationDays)
   const hasCriticalPathProjection = criticalTaskIds.size > 0 || criticalTaskById.size > 0
 
   const hydratedRows = rows.map((row) => {
@@ -1577,9 +1584,6 @@ async function hydrateRuntimeRowsWithEngineSignals(projectId: string, rows: Sche
       ...(forecast?.remainingDuration ? { remaining_duration: forecast.remainingDuration } : {}),
       ...(forecast?.probabilityDurationMetrics
         ? { probability_duration_metrics: forecast.probabilityDurationMetrics }
-        : {}),
-      ...(primaryChainTaskIds.has(taskId) && primaryChainSpanDays != null && primaryChainSpanDays > 0
-        ? { critical_path_span_days: primaryChainSpanDays }
         : {}),
       ...(suggestion ? { duration_suggestion: suggestion } : {}),
     }

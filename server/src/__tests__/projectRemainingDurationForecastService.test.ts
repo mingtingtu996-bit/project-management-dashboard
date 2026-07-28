@@ -698,7 +698,10 @@ describe('projectRemainingDurationForecastService', () => {
     }))
   })
 
-  it('rejects inverted typed E2 percentiles instead of relabeling them as a usable confidence band', () => {
+  it.each([
+    ['P20 exceeds P50', 16, 9, 30],
+    ['P50 exceeds P80', 7, 16, 9],
+  ])('rejects inverted typed E2 percentiles when %s', (_label, p20, p50, p80) => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
@@ -708,7 +711,7 @@ describe('projectRemainingDurationForecastService', () => {
             planned_end_date: '2026-06-20',
             total_float_days: 0,
             remaining_duration: availableProductionDayMetric(11),
-            probability_duration_metrics: availableProbabilityMetrics(26, 11, 9),
+            probability_duration_metrics: availableProbabilityMetrics(p20, p50, p80),
           },
         }),
       ],
@@ -1225,15 +1228,14 @@ describe('projectRemainingDurationForecastService', () => {
     }))
   })
 
-  it('keeps governed typed remaining finish aligned across serial gate context and the final forecast', () => {
+  it('serializes governed finish-gate remaining after the internal work finishes', () => {
     const forecast = buildAvailableProjectRemainingDurationForecast({
       rows: [
         row({
           clientRowId: 'internal-work',
           values: {
             ...row().values,
-            planned_end_date: '2026-06-11',
-            remaining_duration: availableProductionDayMetric(2),
+            planned_end_date: '2026-06-20',
             is_critical: true,
             total_float_days: 0,
             free_float_days: 0,
@@ -1245,7 +1247,7 @@ describe('projectRemainingDurationForecastService', () => {
             title: 'Completion acceptance gate',
             planned_start_date: '2026-06-11',
             planned_end_date: '2026-06-12',
-            remaining_duration: availableProductionDayMetric(5),
+            remaining_duration: availableProductionDayMetric(3),
             progress: 0,
             status: 'todo',
             duration_contribution_mode: 'quality_gate',
@@ -1259,11 +1261,67 @@ describe('projectRemainingDurationForecastService', () => {
       asOfDate: '2026-06-10',
     })
 
-    expect(forecast.forecastFinishDate).toBe('2026-06-14')
+    expect(forecast.forecastFinishDate).toBe('2026-06-22')
     expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
-      latestGateFinishDate: '2026-06-14',
-      finishGateFinishDate: '2026-06-14',
-      serializedGateFinishDate: '2026-06-14',
+      latestGateFinishDate: '2026-06-22',
+      finishGateFinishDate: '2026-06-22',
+      serializedGateFinishDate: '2026-06-22',
+    }))
+  })
+
+  it('serializes governed handover remaining after the finish-gate base', () => {
+    const forecast = buildAvailableProjectRemainingDurationForecast({
+      rows: [
+        row({
+          clientRowId: 'internal-work',
+          values: {
+            ...row().values,
+            planned_end_date: '2026-06-20',
+            is_critical: true,
+            total_float_days: 0,
+            free_float_days: 0,
+          },
+        }),
+        row({
+          clientRowId: 'finish-gate',
+          values: {
+            title: 'Completion acceptance gate',
+            planned_end_date: '2026-06-12',
+            remaining_duration: availableProductionDayMetric(3),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'finish_gate',
+              acceptanceRequired: true,
+            },
+          },
+        }),
+        row({
+          clientRowId: 'handover-gate',
+          values: {
+            title: 'Owner handover gate',
+            planned_end_date: '2026-06-12',
+            remaining_duration: availableProductionDayMetric(2),
+            progress: 0,
+            status: 'todo',
+            duration_contribution_mode: 'quality_gate',
+            standard_task_metadata: {
+              gateRelation: 'handover_gate',
+              acceptanceRequired: true,
+            },
+          },
+        }),
+      ],
+      asOfDate: '2026-06-10',
+    })
+
+    expect(forecast.forecastFinishDate).toBe('2026-06-23')
+    expect(forecast.calculationContext.externalInterfaces).toEqual(expect.objectContaining({
+      latestGateFinishDate: '2026-06-23',
+      finishGateFinishDate: '2026-06-22',
+      handoverGateFinishDate: '2026-06-23',
+      serializedGateFinishDate: '2026-06-23',
     }))
   })
 

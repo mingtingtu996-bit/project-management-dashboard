@@ -1688,7 +1688,10 @@ describe('project critical path service', () => {
     }
   })
 
-  it('does not publish or arbitrate inverted typed probability percentiles', async () => {
+  it.each([
+    ['P20 exceeds P50', 16, 9, 30],
+    ['P50 exceeds P80', 7, 16, 9],
+  ])('does not publish or arbitrate inverted typed probability percentiles when %s', async (_label, p20, p50, p80) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-06-14T00:00:00.000Z'))
     useAuthoritativeConstructionCalendar()
@@ -1731,9 +1734,9 @@ describe('project critical path service', () => {
           confidenceBandWidthDays: 21,
         },
         probabilityDurationMetrics: {
-          p20RemainingDuration: availableProductionDayMetric(16),
-          p50RemainingDuration: availableProductionDayMetric(9),
-          p80RemainingDuration: availableProductionDayMetric(30),
+          p20RemainingDuration: availableProductionDayMetric(p20),
+          p50RemainingDuration: availableProductionDayMetric(p50),
+          p80RemainingDuration: availableProductionDayMetric(p80),
         },
       },
     ] as any)
