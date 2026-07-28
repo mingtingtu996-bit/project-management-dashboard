@@ -3022,6 +3022,26 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(second).not.toBe(first)
   })
 
+  it('binds the recommendation authority read to recommendation and project identities', async () => {
+    const authority = mockAuthoritativeAccelerationAdoption()
+    mockSuccessfulAdoptionPersistence()
+
+    await recordScheduleAccelerationRecommendationAdoption({
+      projectId: 'project-1',
+      adoptedBy: 'user-1',
+      adoptedAt: '2027-02-15T00:20:00.000Z',
+      recommendationId: 'recommendation-1',
+      recommendationHash: authority.recommendationHash,
+      taskCommitRequestId: 'task-commit-request-1',
+    })
+
+    const recommendationRead = mocks.query.mock.calls
+      .map(([sql, params]) => ({ sql: String(sql), params: params as unknown[] }))
+      .find((call) => call.sql.includes('FROM public.schedule_acceleration_recommendations'))
+    expect(recommendationRead?.sql).toMatch(/WHERE id = \$1\s+AND project_id = \$2/i)
+    expect(recommendationRead?.params).toEqual(['recommendation-1', 'project-1'])
+  })
+
   it('persists authoritative recommendation and commit binding in append-only adoption context', async () => {
     const authority = mockAuthoritativeAccelerationAdoption()
     mockSuccessfulAdoptionPersistence()
