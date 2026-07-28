@@ -545,7 +545,7 @@ type ScheduledJobSlotHeartbeat = {
 }
 
 function startScheduledJobSlotHeartbeat(
-  input: SlotIdentity & { staleAfterMs: number; signal?: AbortSignal },
+  input: SlotIdentity & { staleAfterMs: number },
   store: ScheduledJobSlotStore,
 ): ScheduledJobSlotHeartbeat {
   const intervalMs = Math.max(1, Math.floor(input.staleAfterMs / 3))
@@ -584,21 +584,11 @@ function startScheduledJobSlotHeartbeat(
         clearTimeout(timer)
         timer = null
       }
-      input.signal?.removeEventListener('abort', abortHeartbeat)
     }
     await renewal
   }
 
-  const abortHeartbeat = () => {
-    void stop()
-  }
-
   scheduleNext()
-  if (input.signal?.aborted) {
-    void stop()
-  } else {
-    input.signal?.addEventListener('abort', abortHeartbeat, { once: true })
-  }
 
   return {
     assertActive: () => {
@@ -621,7 +611,6 @@ export async function runPersistentScheduledSlot(
     ownerId: string
     staleAfterMs: number
     isCatchUp: boolean
-    heartbeatSignal?: AbortSignal
   },
   execute: (details: { scheduledFor: Date; isCatchUp: boolean }) => Promise<unknown>,
   store: ScheduledJobSlotStore = databaseSlotStore,
@@ -642,7 +631,6 @@ export async function runPersistentScheduledSlot(
   const heartbeat = startScheduledJobSlotHeartbeat({
     ...slotIdentity,
     staleAfterMs: input.staleAfterMs,
-    signal: input.heartbeatSignal,
   }, store)
 
   try {
@@ -679,7 +667,6 @@ export class PersistentWallClockJobTimer {
   private readonly staleAfterMs: number
   private readonly catchUp: CatchUpOptions
   private readonly timer: WallClockJobTimer
-  private heartbeatAbortController: AbortController | null = null
   private executionQueue: Promise<void> = Promise.resolve()
   private nextScheduledSlot: Date | null = null
   private isScheduled = false
@@ -710,7 +697,6 @@ export class PersistentWallClockJobTimer {
 
   start() {
     if (!this.timer.start()) return false
-    this.heartbeatAbortController = new AbortController()
     this.isScheduled = true
     registeredPersistentJobNames.add(this.options.jobName)
 
@@ -724,8 +710,6 @@ export class PersistentWallClockJobTimer {
   stop() {
     const stopped = this.timer.stop()
     if (stopped) {
-      this.heartbeatAbortController?.abort()
-      this.heartbeatAbortController = null
       this.isScheduled = false
       this.nextScheduledSlot = null
       registeredPersistentJobNames.delete(this.options.jobName)
@@ -741,7 +725,6 @@ export class PersistentWallClockJobTimer {
   }
 
   private enqueue(scheduledFor: Date, isCatchUp: boolean) {
-    const heartbeatSignal = this.heartbeatAbortController?.signal
     const operation = this.executionQueue.then(async () => {
       const runSlot = async () => {
         if (isCatchUp && !this.isScheduled) return
@@ -753,7 +736,6 @@ export class PersistentWallClockJobTimer {
             ownerId: this.ownerId,
             staleAfterMs: this.staleAfterMs,
             isCatchUp,
-            heartbeatSignal,
           },
           this.options.execute,
           this.store,

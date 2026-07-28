@@ -421,7 +421,7 @@ describe('persistent job schedule service', () => {
     expect(store.heartbeatCalls).toBe(heartbeatCallsAfterFailure)
   })
 
-  it('stops renewing an active slot when its wall-clock timer is stopped', async () => {
+  it('keeps renewing an active slot after stop until execution settles', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 6, 13, 10, 5, 0, 0))
     const store = new MemorySlotStore()
@@ -430,33 +430,56 @@ describe('persistent job schedule service', () => {
     const executionStarted = new Promise<void>((resolve) => {
       markStarted = resolve
     })
-    const timer = new PersistentWallClockJobTimer({
-      jobName: 'stoppedHeartbeatJob',
-      schedule: { kind: 'hourly', minute: 0 },
-      execute: async () => {
+    const execute = vi.fn()
+      .mockImplementationOnce(async () => {
         markStarted?.()
         await new Promise<void>((resolve) => {
           releaseExecution = resolve
         })
-      },
+      })
+      .mockResolvedValue(undefined)
+    const onError = vi.fn()
+    const scheduledFor = new Date(2026, 6, 13, 10, 0, 0, 0)
+    const timer = new PersistentWallClockJobTimer({
+      jobName: 'stoppedHeartbeatJob',
+      schedule: { kind: 'hourly', minute: 0 },
+      execute,
       store,
       staleAfterMs: 90,
       catchUp: { limit: 1, maxAgeMs: 2 * 60 * 60 * 1_000 },
+      onError,
     })
 
     timer.start()
     await vi.advanceTimersByTimeAsync(0)
     await executionStarted
-    await vi.advanceTimersByTimeAsync(60)
 
     timer.stop()
     const heartbeatCallsAtStop = store.heartbeatCalls
-    await vi.advanceTimersByTimeAsync(180)
+    await vi.advanceTimersByTimeAsync(120)
+    const duplicate = await runPersistentScheduledSlot(
+      {
+        jobName: 'stoppedHeartbeatJob',
+        scheduledFor,
+        ownerId: 'worker-b',
+        staleAfterMs: 90,
+        isCatchUp: true,
+      },
+      execute,
+      store,
+    )
+    const heartbeatCallsBeforeSettle = store.heartbeatCalls
+
     releaseExecution?.()
     await vi.advanceTimersByTimeAsync(0)
+    const heartbeatCallsAfterSettle = store.heartbeatCalls
+    await vi.advanceTimersByTimeAsync(180)
 
-    expect(heartbeatCallsAtStop).toBeGreaterThan(0)
-    expect(store.heartbeatCalls).toBe(heartbeatCallsAtStop)
+    expect(duplicate).toEqual({ executed: false, reason: 'running' })
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(heartbeatCallsBeforeSettle).toBeGreaterThan(heartbeatCallsAtStop)
+    expect(onError).not.toHaveBeenCalled()
+    expect(store.heartbeatCalls).toBe(heartbeatCallsAfterSettle)
   })
 
   it('bounds catch-up concurrency across different jobs', async () => {
