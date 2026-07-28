@@ -190,6 +190,7 @@ const {
   refreshDailyActiveTaskDurationForecasts,
   recordTaskDurationForecastRuntimeConsumption,
 } = await import('../services/taskDurationForecastService.js')
+const { businessDateKey } = await import('../services/durationMetricService.js')
 
 function projectIdForTask(taskId: string) {
   return String(state.tasks.find((task) => task.id === taskId)?.project_id ?? 'project-1')
@@ -1777,6 +1778,46 @@ describe('taskDurationForecastService', () => {
     expect(forecast.executionReferenceDays).toBe(10)
     expect(forecast.confidenceScore).not.toBe(62)
     expect(state.insertedForecasts[0]?.confidence_score).toBe(forecast.confidenceScore)
+  })
+
+  it('freezes one instant for execution reference asOf and generated_at across a business-day boundary', async () => {
+    vi.setSystemTime(new Date('2026-05-18T15:59:59.900Z'))
+    state.tasks = [{
+      id: 'task-cross-midnight-forecast',
+      project_id: 'project-1',
+      title: 'Cross-midnight forecast task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-20',
+      actual_start_date: '2026-05-01',
+      progress: 20,
+      status: 'in_progress',
+    }]
+    mocks.loadAlgorithmAssetLearnableParameterRuntimeValue.mockImplementation(async (input: Record<string, unknown>) => {
+      vi.setSystemTime(new Date('2026-05-18T16:00:00.100Z'))
+      return {
+        status: 'runtime_parameter_not_found',
+        runtimeConsumable: false,
+        parameterKey: String(input.parameterKey ?? ''),
+        runtimeValue: null,
+        consumptionMode: 'stable',
+        publicationKey: null,
+        publicationStatus: null,
+        scopeLevel: null,
+        companyId: null,
+        projectId: null,
+        rollbackTarget: null,
+        reasons: ['runtime_parameter_publication_not_found'],
+        writesSeedRuntimeDirectly: false,
+      }
+    })
+
+    await forecastTaskDuration('task-cross-midnight-forecast')
+
+    const inserted = state.insertedForecasts.at(-1)
+    const metric = (inserted?.metadata as Record<string, any>)?.executionReferenceDuration
+    const generatedAt = String(inserted?.generated_at ?? '')
+    expect(metric?.asOf).toBe('2026-05-18')
+    expect(businessDateKey(new Date(generatedAt), metric?.timezone)).toBe(metric?.asOf)
   })
 
   it('routes gate-style acceptance and handover tasks away from SPI/EAC extrapolation', async () => {

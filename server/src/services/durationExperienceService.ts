@@ -32,7 +32,11 @@ import {
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
 import { normalizeDurationDateUtc, orderedInclusiveDurationDays } from '../utils/durationDays.js'
-import { businessDateKey, normalizeDurationMetricDto } from './durationMetricService.js'
+import {
+  businessDateKey,
+  normalizeDurationMetricDto,
+  normalizeRfc3339Timestamp,
+} from './durationMetricService.js'
 import { readTrustedDurationLearningRuntimeConsumptionsForTask } from './durationLearningRuntimeConsumptionService.js'
 import { readTaskStructuredCauseAuthority } from './taskStructuredCauseAuthorityService.js'
 import {
@@ -199,9 +203,9 @@ async function buildForecastLearningObservation(params: {
     const forecast = result?.data
     if (!forecast) return null
 
-    const generatedAt = normalizeText(forecast.generated_at)
-    const generatedAtDate = generatedAt ? new Date(generatedAt) : null
-    if (!generatedAtDate || Number.isNaN(generatedAtDate.getTime())) return null
+    const generatedAt = normalizeRfc3339Timestamp(forecast.generated_at)
+    if (!generatedAt) return null
+    const generatedAtDate = new Date(generatedAt)
     const expectedAsOf = businessDateKey(generatedAtDate, params.constructionCalendar.timezone)
     const metadata = readRecord(forecast.metadata)
     const executionReferenceDuration = normalizeDurationMetricDto(

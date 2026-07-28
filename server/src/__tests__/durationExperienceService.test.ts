@@ -1038,6 +1038,50 @@ describe('durationExperienceService', () => {
     }))
   })
 
+  it.each([
+    ['impossible February 30', '2026-02-30T08:00:00.000Z', '2026-03-02'],
+    ['invalid non-leap February 29', '2026-02-29T08:00:00.000Z', '2026-03-01'],
+  ])('rejects %s forecast generated_at timestamps instead of accepting Date normalization', async (_name, generatedAt, normalizedAsOf) => {
+    mocks.forecastQuery.maybeSingle.mockResolvedValue({
+      data: {
+        id: 'forecast-invalid-generated-at',
+        generated_at: generatedAt,
+        forecast_finish_date: '2026-05-04',
+        remaining_duration_days: 4,
+        execution_reference_days: 4,
+        metadata: {
+          executionReferenceDuration: {
+            value: 4,
+            unit: 'construction_production_day',
+            calendarRef: 'work_calendar',
+            calendarVersion: '2026|work-calendar-version-1',
+            timezone: 'Asia/Shanghai',
+            asOf: normalizedAsOf,
+            availability: 'available',
+            unavailableReason: null,
+          },
+        },
+        forecast_error_days: 1,
+        model_version: 'remaining_duration_forecast_v1.1',
+        forecast_source: 'remaining_duration_forecast',
+        duration_calibration_source: 'runtime_forecast',
+      },
+      error: null,
+    })
+
+    const collected = await collectDurationExperienceSampleFromTask(completedTask({
+      id: 'task-invalid-forecast-generated-at',
+    }), { actorId: 'user-1' } as any)
+
+    expect(collected).toBe(true)
+    expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({
+      task_id: 'task-invalid-forecast-generated-at',
+      metadata: expect.objectContaining({
+        forecast_learning_observation: null,
+      }),
+    }))
+  })
+
   it('backtests the matching task remaining forecast prediction when completion outcome is accepted', async () => {
     const collected = await collectDurationExperienceSampleFromTask({
       id: 'task-backtest',

@@ -614,6 +614,7 @@ describe('progressVelocityLearningService', () => {
           actual_start_source: 'actual_start_date',
           actual_end_source: 'actual_end_date',
           actual_duration_source: 'actual_start_date_to_actual_end_date',
+          forecast_duration_source: 'execution_reference_duration',
           forecast_ratio: 1,
           plan_ratio: 1.5,
           forecast_duration_days: 15,
@@ -677,7 +678,7 @@ describe('progressVelocityLearningService', () => {
           actual_start_source: 'actual_start_date',
           actual_end_source: 'actual_end_date',
           actual_duration_source: 'actual_start_date_to_actual_end_date',
-          forecast_duration_source: 'remaining_duration_days',
+          forecast_duration_source: 'execution_reference_duration',
           forecast_duration_days: 15,
           actual_duration_days: 15,
           planned_duration_days: 10,
@@ -710,6 +711,72 @@ describe('progressVelocityLearningService', () => {
       learningTarget: 'actual_to_forecast',
       sampleRatios: [1, 1, 1, 1, 1],
       samplePlanRatios: [1.5, 1.5, 1.5, 1.5, 1.5],
+    }))
+  })
+
+  it.each([
+    'execution_reference_days',
+    'remaining_duration_days',
+    'actual_start_to_forecast_finish',
+  ])('ignores legacy %s forecast sidecars for active velocity learning', async (forecastDurationSource) => {
+    state.tasks = []
+    state.snapshots = []
+    state.durationExperienceSamples = Array.from({ length: 5 }, (_, index) => ({
+      id: `legacy-forecast-sample-${index + 1}`,
+      project_id: 'project-1',
+      task_id: `legacy-forecast-task-${index + 1}`,
+      template_node_id: 'template-1',
+      standard_work_code: 'work-1',
+      engineering_category_id: 'cat-1',
+      planned_duration: 10,
+      actual_duration: 15,
+      completed_at: `2026-04-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+      sample_status: 'active',
+      included_in_benchmark: true,
+      sample_strength: 'strong',
+      confidence_level: 'high',
+      metadata: {
+        company_id: 'company-1',
+        participant_unit_id: 'unit-1',
+        structure_type_code: 'frame',
+        state_bucket: progressVelocityT1Bucket(),
+        forecast_learning_observation: {
+          learning_target: 'forecast_ratio_velocity_multiplier',
+          production_consumption_policy: 'active_velocity_multiplier_input',
+          actual_start_source: 'actual_start_date',
+          actual_end_source: 'actual_end_date',
+          actual_duration_source: 'actual_start_date_to_actual_end_date',
+          forecast_duration_source: forecastDurationSource,
+          forecast_duration_days: 15,
+          actual_duration_days: 15,
+          planned_duration_days: 10,
+          forecast_ratio: 1,
+          plan_ratio: 1.5,
+        },
+      },
+    }))
+
+    const result = await buildProjectProgressVelocityLearning({
+      projectId: 'project-1',
+      companyId: 'company-1',
+      taskId: 'current-task',
+      templateNodeId: 'template-1',
+      standardWorkCode: 'work-1',
+      engineeringCategoryId: 'cat-1',
+      responsibleUnitId: 'unit-1',
+      structureTypeCode: 'frame',
+      baseDurationDays: 10,
+      now: new Date('2026-05-16T00:00:00.000Z'),
+    })
+
+    expect(result).toMatchObject({
+      sampleCount: 5,
+      durationRatio: 1.5,
+      multiplier: 1.35,
+    })
+    expect(result?.metadata).toEqual(expect.objectContaining({
+      learningTarget: 'actual_to_planned',
+      sampleRatioBases: Array(5).fill('actual_to_planned'),
     }))
   })
 

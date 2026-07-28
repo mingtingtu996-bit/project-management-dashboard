@@ -367,6 +367,10 @@ function readActiveForecastLearningObservation(row: DurationExperienceSampleRow)
   const policy = normalizeText(observation.production_consumption_policy ?? observation.productionConsumptionPolicy)
   if (target !== 'forecast_ratio_velocity_multiplier') return null
   if (policy !== 'active_velocity_multiplier_input') return null
+  const forecastDurationSource = normalizeText(
+    observation.forecast_duration_source ?? observation.forecastDurationSource,
+  )
+  if (forecastDurationSource !== 'execution_reference_duration') return null
   const actualStartSource = normalizeText(
     observation.actual_start_source
       ?? observation.actualStartSource

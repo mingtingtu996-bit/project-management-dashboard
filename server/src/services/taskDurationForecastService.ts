@@ -5738,6 +5738,7 @@ async function refreshTaskDurationForecast(
   task: ForecastTaskRow | null,
   options: NormalizedForecastOptions,
 ): Promise<TaskDurationForecast> {
+  const forecastInstant = new Date()
   const projectId = normalizeId(task?.project_id)
   if (!projectId) throw new Error('TASK_DURATION_FORECAST_PROJECT_SCOPE_REQUIRED')
   const factInput = await buildForecastProjectGenerationFactInput(task)
@@ -5829,6 +5830,7 @@ async function refreshTaskDurationForecast(
     modelProfile,
     earliestStartRule,
     forecastOptions: options,
+    now: forecastInstant,
   })
   const residualOverlays = await loadForecastResidualOverlays(task)
   forecastDates = applyForecastResidualOverlay({
@@ -5926,7 +5928,7 @@ async function refreshTaskDurationForecast(
       forecastOptions: options,
     },
     is_current: true,
-    generated_at: new Date().toISOString(),
+    generated_at: forecastInstant.toISOString(),
   }
 
   await recordTaskRemainingForecastPredictionEvent({

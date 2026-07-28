@@ -82,8 +82,8 @@ export function normalizeDurationRiskDistributionDto(value: unknown): DurationRi
   const scope = normalizeText(raw.scope) || null
   const rawSampleCount = Number(raw.sampleCount)
   const sampleCount = Number.isInteger(rawSampleCount) && rawSampleCount > 0 ? rawSampleCount : null
-  const generatedAt = normalizeTimestamp(raw.generatedAt) || null
-  const sourceAsOf = normalizeTimestamp(raw.sourceAsOf) || null
+  const generatedAt = normalizeRfc3339Timestamp(raw.generatedAt) || null
+  const sourceAsOf = normalizeRfc3339Timestamp(raw.sourceAsOf) || null
   const unavailableReason = normalizeText(raw.unavailableReason) || null
 
   if (availability === 'unavailable') {
@@ -187,7 +187,7 @@ function normalizeAsOf(value: unknown) {
 
 const STRICT_RFC3339_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,6}))?(Z|[+-](?:0\d|1[0-4]):[0-5]\d)$/
 
-function normalizeTimestamp(value: unknown) {
+export function normalizeRfc3339Timestamp(value: unknown) {
   const text = typeof value === 'string' ? value : ''
   const match = STRICT_RFC3339_TIMESTAMP_PATTERN.exec(text)
   if (!match) return ''
@@ -308,8 +308,8 @@ export function buildConstructionProductionDayDurationMetric(
 export function buildConstructionProductionDayRiskDistribution(
   options: ProductionDurationRiskDistributionOptions,
 ): DurationRiskDistributionDto {
-  const generatedAt = normalizeTimestamp(options.generatedAt) || null
-  const sourceAsOf = normalizeTimestamp(options.sourceAsOf) || null
+  const generatedAt = normalizeRfc3339Timestamp(options.generatedAt) || null
+  const sourceAsOf = normalizeRfc3339Timestamp(options.sourceAsOf) || null
   const metricAsOf = (sourceAsOf ?? generatedAt)?.slice(0, 10) ?? ''
   const source = normalizeText(options.source) || null
   const scope = normalizeText(options.scope) || null
