@@ -1806,7 +1806,7 @@ function getCriticalTargetRows(
   return compressibleRows.filter((row) => isHeuristicCriticalCandidate(row, profileCode))
 }
 
-function applyCriticalPathSnapshotToAccelerationRows(
+export function applyCriticalPathSnapshotToAccelerationRows(
   rows: ScheduleAccelerationRow[],
   snapshot: CriticalPathSnapshot | null | undefined,
 ) {
@@ -1828,8 +1828,8 @@ function applyCriticalPathSnapshotToAccelerationRows(
       values: {
         ...row.values,
         is_critical: isCritical,
-        ...(criticalTask?.floatDays != null ? { total_float_days: criticalTask.floatDays } : {}),
-        ...(isCritical ? { free_float_days: 0 } : {}),
+        total_float_days: criticalTask?.floatDays ?? undefined,
+        free_float_days: isCritical ? 0 : undefined,
       },
     }
   })

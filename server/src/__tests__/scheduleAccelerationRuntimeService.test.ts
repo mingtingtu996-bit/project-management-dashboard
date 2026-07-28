@@ -2324,6 +2324,88 @@ describe('scheduleAccelerationRuntimeService', () => {
     expect(result.projectRemainingForecast.forecastFinishDate).toBe('2026-06-13')
   })
 
+  it('clears stale float signals for tasks omitted by a sparse E3 snapshot before acceleration selection', async () => {
+    mocks.getTasks.mockResolvedValue([
+      {
+        id: 'snapshot-critical',
+        project_id: 'project-1',
+        title: 'Current E3 critical work',
+        planned_start_date: '2026-01-01',
+        planned_end_date: '2026-01-20',
+        status: 'todo',
+        progress: 0,
+        is_critical: false,
+        total_float_days: 25,
+        free_float_days: 12,
+        standard_task_metadata: {
+          durationContributionMode: 'duration_bearing',
+          rowProjectionMode: 'schedule_row',
+          resourceProfile: { resourceClass: 'rebar' },
+          executionPhase: 'superstructure',
+        },
+      },
+      {
+        id: 'snapshot-omitted-stale-float',
+        project_id: 'project-1',
+        title: 'Task omitted by current E3 snapshot',
+        planned_start_date: '2026-01-01',
+        planned_end_date: '2026-03-31',
+        status: 'todo',
+        progress: 0,
+        is_critical: false,
+        total_float_days: 2,
+        free_float_days: 1,
+        standard_task_metadata: {
+          durationContributionMode: 'duration_bearing',
+          rowProjectionMode: 'schedule_row',
+          criticalPathEligible: true,
+          resourceProfile: { resourceClass: 'electrical' },
+          executionPhase: 'superstructure',
+        },
+      },
+    ])
+    mocks.getProjectCriticalPathSnapshot
+      .mockResolvedValueOnce({
+        projectId: 'project-1',
+        autoTaskIds: ['snapshot-critical'],
+        manualAttentionTaskIds: [],
+        manualInsertedTaskIds: [],
+        primaryChain: null,
+        alternateChains: [],
+        displayTaskIds: ['snapshot-critical'],
+        watchedTaskIds: [],
+        edges: [],
+        tasks: [{
+          taskId: 'snapshot-critical',
+          title: 'Current E3 critical work',
+          floatDays: 0,
+          durationDays: 20,
+          isAutoCritical: true,
+          isManualAttention: false,
+          isManualInserted: false,
+        }],
+        projectDurationDays: 20,
+      })
+      .mockRejectedValueOnce(new Error('second E3 read unavailable'))
+    mocks.executeSQL.mockImplementation(async (sql: string) => {
+      if (sql.includes('task_dependencies')) return []
+      if (sql.includes('monthly_plan_items')) return []
+      return []
+    })
+
+    const result = await evaluateRuntimeScheduleAcceleration({
+      projectId: 'project-1',
+      targetEndDate: '2026-02-28',
+      asOfDate: '2026-01-01',
+    })
+
+    const crashing = result.targetFeasibility?.accelerationProposal?.actions.find((action) => action.type === 'crashing')
+    expect(mocks.getProjectCriticalPathSnapshot).toHaveBeenCalledTimes(2)
+    expect(crashing?.networkSlackFacts.criticalOrNearCriticalTaskCount).toBe(1)
+    expect(crashing?.affectedRowIds).toContain('snapshot-critical')
+    expect(crashing?.affectedRowIds).not.toContain('snapshot-omitted-stale-float')
+  })
+
   it('does not let an untyped E3 primary chain span extend the E4 finish', async () => {
     mocks.getTasks.mockResolvedValue([
       {

@@ -1,5 +1,6 @@
 import { executeSQL, getTasks } from './dbService.js'
 import {
+  applyCriticalPathSnapshotToAccelerationRows,
   evaluateRuntimeDelayRecoveryWithCriticalPath,
   type ScheduleAccelerationContext,
   type ScheduleAccelerationDependency,
@@ -1567,18 +1568,10 @@ async function hydrateRuntimeRowsWithEngineSignals(
     if (!result.value.taskId || !result.value.suggestion) continue
     suggestionByTaskId.set(result.value.taskId, result.value.suggestion)
   }
-  const criticalTaskIds = new Set([
-    ...(criticalPath?.displayTaskIds ?? []),
-    ...(criticalPath?.autoTaskIds ?? []),
-  ].map(normalizeText).filter(Boolean))
-  const criticalTaskById = new Map((criticalPath?.tasks ?? []).map((task) => [normalizeText(task.taskId), task]))
-  const hasCriticalPathProjection = criticalTaskIds.size > 0 || criticalTaskById.size > 0
-
-  const hydratedRows = rows.map((row) => {
+  const rowsWithForecastSignals = rows.map((row) => {
     const taskId = normalizeText(row.clientRowId)
     const forecast = forecastByTaskId.get(taskId)
     const suggestion = suggestionByTaskId.get(taskId)
-    const criticalTask = criticalTaskById.get(taskId)
     const values: ScheduleAccelerationRow['values'] = {
       ...row.values,
       ...(forecast?.remainingDuration ? { remaining_duration: forecast.remainingDuration } : {}),
@@ -1587,18 +1580,12 @@ async function hydrateRuntimeRowsWithEngineSignals(
         : {}),
       ...(suggestion ? { duration_suggestion: suggestion } : {}),
     }
-    if (hasCriticalPathProjection) {
-      values.is_critical = criticalTaskIds.has(taskId)
-      if (criticalTask?.floatDays != null) {
-        values.total_float_days = criticalTask.floatDays
-        if (criticalTaskIds.has(taskId)) values.free_float_days = 0
-      }
-    }
     return {
       ...row,
       values,
     }
   })
+  const hydratedRows = applyCriticalPathSnapshotToAccelerationRows(rowsWithForecastSignals, criticalPath)
 
   return {
     rows: hydratedRows,

@@ -399,8 +399,8 @@ describe('scheduleAccelerationService', () => {
             planned_start_date: '2026-01-01',
             planned_end_date: '2026-03-31',
             is_critical: false,
-            total_float_days: 30,
-            free_float_days: 15,
+            total_float_days: 2,
+            free_float_days: 1,
             standard_task_metadata: {
               criticalPathEligible: true,
               resourceProfile: { resourceClass: 'electrical' },
