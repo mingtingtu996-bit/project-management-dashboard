@@ -6415,8 +6415,8 @@ function normalizeDailyRefreshOptions(options?: DailyTaskDurationForecastRefresh
 }
 
 function readForecastTimestampMs(forecast: Record<string, unknown> | null | undefined) {
-  const timestampValue = forecast?.generated_at
-  const timestamp = timestampValue ? new Date(String(timestampValue)).getTime() : NaN
+  const normalizedTimestamp = normalizeRfc3339Timestamp(forecast?.generated_at)
+  const timestamp = normalizedTimestamp ? new Date(normalizedTimestamp).getTime() : NaN
   return Number.isFinite(timestamp) ? timestamp : null
 }
 

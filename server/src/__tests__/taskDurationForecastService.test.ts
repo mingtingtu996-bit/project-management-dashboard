@@ -4065,6 +4065,46 @@ describe('taskDurationForecastService', () => {
     expect(state.updatedForecasts).toHaveLength(0)
   })
 
+  it('treats a nonexistent generated_at date as stale in daily freshness metrics', async () => {
+    vi.setSystemTime(new Date('2026-03-02T08:05:00.000Z'))
+    state.tasks = [{
+      id: 'task-invalid-generated-at',
+      project_id: 'project-1',
+      title: 'Invalid generated-at task',
+      planned_start_date: '2026-03-01',
+      planned_end_date: '2026-03-10',
+      actual_start_date: '2026-03-01',
+      progress: 20,
+      status: 'in_progress',
+      updated_at: '2026-03-02T07:00:00.000Z',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-invalid-generated-at',
+      task_id: 'task-invalid-generated-at',
+      project_id: 'project-1',
+      is_current: true,
+      generated_at: '2026-02-30T08:00:00.000Z',
+      metadata: {},
+    }]
+
+    const result = await refreshDailyActiveTaskDurationForecasts({
+      limit: 10,
+      batchSize: 1,
+      maxRuntimeMs: 0,
+      freshnessSloMs: 36 * 60 * 60 * 1000,
+    })
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      refreshed: 0,
+      skippedByTimeBudget: 1,
+      staleCurrentForecastsBefore: 1,
+      staleCurrentForecastsAfter: 1,
+      freshCurrentForecastsAfter: 0,
+      freshnessSloMet: false,
+    })
+  })
+
   it('reads execution_reference_days before legacy recommended_duration_days from current forecast cache', async () => {
     state.dependencyForecasts = [{
       id: 'forecast-current-reference',
