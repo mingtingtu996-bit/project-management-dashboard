@@ -7,6 +7,7 @@ import {
   getRegisteredPersistentJobNames,
   PersistentJobCatchUpCoordinator,
   runPersistentScheduledSlot,
+  type PersistentScheduledSlotExecutionContext,
   type ScheduledJobSlotClaim,
   type ScheduledJobSlotStore,
   PersistentWallClockJobTimer,
@@ -64,6 +65,8 @@ class MemorySlotStore implements ScheduledJobSlotStore {
   }>()
   claims: Array<{ jobName: string; scheduledFor: string }> = []
   heartbeatCalls = 0
+  rejectHeartbeats = false
+  executionFenceCalls = 0
 
   async assertReady() {}
 
@@ -93,6 +96,7 @@ class MemorySlotStore implements ScheduledJobSlotStore {
 
   async heartbeat(input: { jobName: string; scheduledFor: Date; claimToken: string }) {
     this.heartbeatCalls += 1
+    if (this.rejectHeartbeats) return false
     const key = `${input.jobName}:${input.scheduledFor.toISOString()}`
     const current = this.rows.get(key)
     if (!current || current.token !== input.claimToken || current.status !== 'running') return false
@@ -114,6 +118,21 @@ class MemorySlotStore implements ScheduledJobSlotStore {
     if (!current || current.token !== input.claimToken || current.status !== 'running') return false
     this.rows.set(key, { ...current, status: 'failed' })
     return true
+  }
+
+  async runWithExecutionFence<T>(
+    _input: { jobName: string; scheduledFor: Date; claimToken: string },
+    runner: (context: { signal: AbortSignal; assertActive: () => void }) => Promise<T>,
+  ) {
+    this.executionFenceCalls += 1
+    const controller = new AbortController()
+    return {
+      acquired: true as const,
+      value: await runner({
+        signal: controller.signal,
+        assertActive: () => undefined,
+      }),
+    }
   }
 }
 
@@ -390,6 +409,77 @@ describe('persistent job schedule service', () => {
     const heartbeatCallsAfterSuccess = store.heartbeatCalls
     await vi.advanceTimersByTimeAsync(180)
     expect(store.heartbeatCalls).toBe(heartbeatCallsAfterSuccess)
+  })
+
+  it('aborts the stale worker before a reclaimed slot enters its mutation boundary', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 6, 13, 10, 0, 0, 0))
+    const store = new MemorySlotStore()
+    let markStarted: (() => void) | null = null
+    let releaseUnsignaledExecution: (() => void) | null = null
+    let firstWorkerActive = true
+    let firstSignal: AbortSignal | null = null
+    let secondWorkerObservedFirstActive: boolean | null = null
+    let executionCount = 0
+    const executionStarted = new Promise<void>((resolve) => {
+      markStarted = resolve
+    })
+    const execute = vi.fn(async (details: PersistentScheduledSlotExecutionContext) => {
+      executionCount += 1
+      if (executionCount === 1) {
+        firstSignal = details.signal ?? null
+        markStarted?.()
+        try {
+          if (firstSignal) {
+            await new Promise<void>((_resolve, reject) => {
+              firstSignal?.addEventListener('abort', () => reject(firstSignal?.reason), { once: true })
+            })
+          } else {
+            await new Promise<void>((resolve) => {
+              releaseUnsignaledExecution = resolve
+            })
+          }
+        } finally {
+          firstWorkerActive = false
+        }
+        return
+      }
+      secondWorkerObservedFirstActive = firstWorkerActive
+    })
+    const scheduledFor = new Date(2026, 6, 13, 10, 0, 0, 0)
+    const input = {
+      jobName: 'leaseLossJob',
+      scheduledFor,
+      staleAfterMs: 90,
+      isCatchUp: true,
+    }
+
+    const first = runPersistentScheduledSlot(
+      { ...input, ownerId: 'worker-a' },
+      execute,
+      store,
+    )
+    const firstOutcome = first.then(
+      (value) => ({ value, error: null }),
+      (error: unknown) => ({ value: null, error }),
+    )
+    await executionStarted
+    store.rejectHeartbeats = true
+
+    await vi.advanceTimersByTimeAsync(120)
+    const second = await runPersistentScheduledSlot(
+      { ...input, ownerId: 'worker-b' },
+      execute,
+      store,
+    )
+    releaseUnsignaledExecution?.()
+    await firstOutcome
+
+    expect(second).toMatchObject({ executed: true })
+    expect(firstSignal).toBeInstanceOf(AbortSignal)
+    expect(firstSignal?.aborted).toBe(true)
+    expect(secondWorkerObservedFirstActive).toBe(false)
+    expect(store.executionFenceCalls).toBe(2)
   })
 
   it('stops renewing a slot after the execution fails', async () => {

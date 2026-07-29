@@ -9,6 +9,11 @@ import {
   calculateNextWeeklyRun,
   WallClockJobTimer,
 } from './wallClockScheduleService.js'
+import {
+  runWithJobLease,
+  type JobLeaseContext,
+  type JobLeaseResult,
+} from './jobRuntime.js'
 
 export type WallClockSchedule =
   | { kind: 'daily'; hour: number; minute: number }
@@ -34,6 +39,17 @@ export interface ScheduledJobSlotStore {
   heartbeat(input: SlotIdentity): Promise<boolean>
   succeed(input: SlotIdentity): Promise<boolean>
   fail(input: SlotIdentity & { error: unknown }): Promise<boolean>
+  runWithExecutionFence?<T>(
+    input: SlotIdentity,
+    runner: (context: Pick<JobLeaseContext, 'signal' | 'assertActive'>) => Promise<T>,
+  ): Promise<JobLeaseResult<T>>
+}
+
+export type PersistentScheduledSlotExecutionContext = {
+  scheduledFor: Date
+  isCatchUp: boolean
+  signal: AbortSignal
+  assertActive: () => void
 }
 
 type CatchUpOptions = {
@@ -44,7 +60,7 @@ type CatchUpOptions = {
 type PersistentWallClockJobTimerOptions = {
   jobName: string
   schedule: WallClockSchedule
-  execute: (details: { scheduledFor: Date; isCatchUp: boolean }) => Promise<unknown>
+  execute: (details: PersistentScheduledSlotExecutionContext) => Promise<unknown>
   store?: ScheduledJobSlotStore
   catchUpCoordinator?: PersistentJobCatchUpCoordinator
   ownerId?: string
@@ -515,6 +531,19 @@ export class DatabaseScheduledJobSlotStore implements ScheduledJobSlotStore {
     return result.rowCount === 1
   }
 
+  async runWithExecutionFence<T>(
+    input: SlotIdentity,
+    runner: (context: Pick<JobLeaseContext, 'signal' | 'assertActive'>) => Promise<T>,
+  ) {
+    return runWithJobLease(
+      {
+        jobName: `persistent_schedule:${input.jobName}`,
+        jobId: `${input.jobName}:${input.scheduledFor.toISOString()}`,
+      },
+      runner,
+    )
+  }
+
   async fail(input: SlotIdentity & { error: unknown }) {
     const result = await query(
       `UPDATE public.scheduled_job_slots
@@ -541,6 +570,7 @@ const databaseSlotStore = new DatabaseScheduledJobSlotStore()
 
 type ScheduledJobSlotHeartbeat = {
   assertActive: () => void
+  signal: AbortSignal
   stop: () => Promise<void>
 }
 
@@ -553,6 +583,13 @@ function startScheduledJobSlotHeartbeat(
   let renewal: Promise<void> | null = null
   let stopped = false
   let failure: Error | null = null
+  const controller = new AbortController()
+
+  const reportFailure = (error: Error) => {
+    if (failure) return
+    failure = error
+    controller.abort(error)
+  }
 
   const scheduleNext = () => {
     if (stopped || failure || timer) return
@@ -562,12 +599,12 @@ function startScheduledJobSlotHeartbeat(
         try {
           const renewed = await store.heartbeat(input)
           if (!renewed) {
-            failure = new Error(`Scheduled job slot heartbeat fence rejected: ${input.jobName}`)
+            reportFailure(new Error(`Scheduled job slot heartbeat fence rejected: ${input.jobName}`))
           }
         } catch (error) {
-          failure = error instanceof Error
+          reportFailure(error instanceof Error
             ? error
-            : new Error(`Scheduled job slot heartbeat failed: ${input.jobName}`)
+            : new Error(`Scheduled job slot heartbeat failed: ${input.jobName}`))
         }
       })().finally(() => {
         renewal = null
@@ -594,8 +631,16 @@ function startScheduledJobSlotHeartbeat(
     assertActive: () => {
       if (failure) throw failure
     },
+    signal: controller.signal,
     stop,
   }
+}
+
+function throwIfScheduledSlotExecutionAborted(signal: AbortSignal, jobName: string) {
+  if (!signal.aborted) return
+  throw signal.reason instanceof Error
+    ? signal.reason
+    : new Error(`Scheduled job slot execution aborted: ${jobName}`)
 }
 
 export async function assertPersistentJobScheduleReady(
@@ -612,7 +657,7 @@ export async function runPersistentScheduledSlot(
     staleAfterMs: number
     isCatchUp: boolean
   },
-  execute: (details: { scheduledFor: Date; isCatchUp: boolean }) => Promise<unknown>,
+  execute: (details: PersistentScheduledSlotExecutionContext) => Promise<unknown>,
   store: ScheduledJobSlotStore = databaseSlotStore,
 ) {
   const claimToken = randomUUID()
@@ -634,10 +679,34 @@ export async function runPersistentScheduledSlot(
   }, store)
 
   try {
-    const value = await execute({
-      scheduledFor: input.scheduledFor,
-      isCatchUp: input.isCatchUp,
-    })
+    const runExecution = async (
+      fenceContext?: Pick<JobLeaseContext, 'signal' | 'assertActive'>,
+    ) => {
+      const signal = fenceContext
+        ? AbortSignal.any([heartbeat.signal, fenceContext.signal])
+        : heartbeat.signal
+      const assertActive = () => {
+        heartbeat.assertActive()
+        throwIfScheduledSlotExecutionAborted(signal, input.jobName)
+        fenceContext?.assertActive()
+      }
+      assertActive()
+      const value = await execute({
+        scheduledFor: input.scheduledFor,
+        isCatchUp: input.isCatchUp,
+        signal,
+        assertActive,
+      })
+      assertActive()
+      return value
+    }
+    const execution = store.runWithExecutionFence
+      ? await store.runWithExecutionFence(slotIdentity, runExecution)
+      : { acquired: true as const, value: await runExecution() }
+    if (!execution.acquired) {
+      throw new Error(`Scheduled job execution fence was not acquired: ${input.jobName}`)
+    }
+    const value = execution.value
     await heartbeat.stop()
     heartbeat.assertActive()
     const completed = await store.succeed(slotIdentity)
