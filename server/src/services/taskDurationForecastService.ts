@@ -76,6 +76,7 @@ import {
   buildConstructionProductionDayDurationMetric,
   businessDateKey,
   normalizeDurationMetricDto,
+  normalizeRfc3339Timestamp,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import {
@@ -854,6 +855,12 @@ type CachedDurationMetricTuple = {
   probabilityDurationMetrics: DurationProbabilityMetricWindow
 }
 
+type CachedDurationMetricAuthority = {
+  calendar?: WorkCalendarContext | null
+  currentAsOf: string
+  generatedAt: unknown
+}
+
 function sameCachedDurationMetricIdentity(left: DurationMetricDto, right: DurationMetricDto) {
   return left.unit === right.unit
     && left.calendarRef === right.calendarRef
@@ -864,7 +871,7 @@ function sameCachedDurationMetricIdentity(left: DurationMetricDto, right: Durati
 
 function normalizeCachedDurationMetricTuple(
   metadata: Record<string, unknown>,
-  generatedAsOf: string,
+  authority: CachedDurationMetricAuthority,
 ): CachedDurationMetricTuple {
   const hasCachedMetricMetadata = metadata.remainingDuration !== undefined
     || metadata.forecastDelay !== undefined
@@ -873,7 +880,7 @@ function normalizeCachedDurationMetricTuple(
   const forecastDelay = normalizeDurationMetricDto(metadata.forecastDelay)
   const probabilityDurationMetrics = normalizeProbabilityDurationMetrics(
     metadata.probabilityDurationMetrics,
-    generatedAsOf,
+    authority.currentAsOf,
   )
   const probabilityMetrics = [
     probabilityDurationMetrics.p20RemainingDuration,
@@ -891,6 +898,17 @@ function normalizeCachedDurationMetricTuple(
       && metric.value >= 0
     ))
     && metrics.slice(1).every((metric) => sameCachedDurationMetricIdentity(metrics[0], metric))
+  const normalizedGeneratedAt = normalizeRfc3339Timestamp(authority.generatedAt)
+  const generatedAt = normalizedGeneratedAt ? new Date(normalizedGeneratedAt) : null
+  const calendar = authority.calendar
+  const matchesCurrentAuthority = metrics.length === 5
+    && isAuthoritativeConstructionCalendar(calendar)
+    && metrics[0].calendarRef === calendar.calendarRef
+    && metrics[0].calendarVersion === calendar.calendarVersion
+    && metrics[0].timezone === calendar.timezone
+    && metrics[0].asOf === authority.currentAsOf
+    && generatedAt !== null
+    && metrics[0].asOf === businessDateKey(generatedAt, metrics[0].timezone)
   const [p20, p50, p80] = probabilityMetrics.map((metric) => metric.value)
   const hasOrderedProbabilityTuple = p20 !== null
     && p50 !== null
@@ -898,7 +916,7 @@ function normalizeCachedDurationMetricTuple(
     && p20 <= p50
     && p50 <= p80
 
-  if (hasAvailableProductionTuple && hasOrderedProbabilityTuple) {
+  if (hasAvailableProductionTuple && hasOrderedProbabilityTuple && matchesCurrentAuthority) {
     return {
       isAvailable: true,
       remainingDuration: remainingDuration!,
@@ -909,8 +927,8 @@ function normalizeCachedDurationMetricTuple(
 
   const unavailableMetric = (): DurationMetricDto => {
     const metric = buildConstructionProductionDayDurationMetric(null, {
-      asOf: generatedAsOf,
-      calendar: null,
+      asOf: authority.currentAsOf,
+      calendar: authority.calendar,
     })
     return {
       ...metric,
@@ -1736,7 +1754,7 @@ async function loadCurrentDependencyForecasts(
   try {
     const { data, error } = await (supabase as any)
       .from('task_duration_forecasts')
-      .select('task_id, forecast_finish_date, remaining_duration_days, forecast_delay_days, created_at')
+      .select('task_id, forecast_finish_date, remaining_duration_days, forecast_delay_days, generated_at, created_at, metadata')
       .in('task_id', taskIds)
       .eq('project_id', projectId)
       .eq('is_current', true)
@@ -1843,9 +1861,9 @@ function readNullableNumber(value: unknown): number | null {
 function isFreshCurrentForecast(forecast: ForecastDependencyForecastRow | null | undefined) {
   if (!forecast) return false
   const timestampValue = forecast.generated_at ?? forecast.created_at
-  if (!timestampValue) return false
-  const timestamp = new Date(String(timestampValue))
-  if (Number.isNaN(timestamp.getTime())) return false
+  const normalizedTimestamp = normalizeRfc3339Timestamp(timestampValue)
+  if (!normalizedTimestamp) return false
+  const timestamp = new Date(normalizedTimestamp)
   return Date.now() - timestamp.getTime() <= CURRENT_FORECAST_CACHE_TTL_MS
 }
 
@@ -2013,7 +2031,33 @@ async function recordTaskRemainingForecastPredictionEvent(params: {
   }
 }
 
-function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: ForecastDependencyForecastRow): TaskDurationForecast {
+function projectCachedProbabilityDurationWindow(
+  value: unknown,
+  metrics: DurationProbabilityMetricWindow,
+): DurationProbabilityWindow | null {
+  const normalized = normalizeProbabilityDurationWindow(value)
+  const p20 = metrics.p20RemainingDuration.value
+  const p50 = metrics.p50RemainingDuration.value
+  const p80 = metrics.p80RemainingDuration.value
+  if (!normalized || p20 === null || p50 === null || p80 === null) return null
+  return {
+    ...normalized,
+    p20RemainingDays: p20,
+    p50RemainingDays: p50,
+    p80RemainingDays: p80,
+    expectedRemainingDays: p50,
+    variance: null,
+    standardDeviationDays: null,
+    confidenceBandWidthDays: Math.max(0, p80 - p20),
+  }
+}
+
+function mapCurrentForecastToTaskDurationForecast(
+  taskId: string,
+  forecast: ForecastDependencyForecastRow,
+  calendar: WorkCalendarContext | null | undefined,
+  now: Date,
+): TaskDurationForecast {
   const metadata = normalizeForecastRecord(forecast.metadata) ?? {}
   const factorSummary = normalizeForecastRecord(forecast.factor_summary) as unknown as DurationContextSummary | null
   const calculationContext = normalizeForecastRecord(forecast.calculation_context) as DurationContextSummary['calculationContext'] | null
@@ -2027,25 +2071,34 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     : undefined
   const executionReferenceDays = readNullableNumber(forecast.execution_reference_days)
     ?? readNullableNumber(forecast.recommended_duration_days)
-  const generatedAsOf = normalizeDate(forecast.generated_at ?? forecast.created_at)
-    ?? businessDateKey(new Date())
-  const durationMetricTuple = normalizeCachedDurationMetricTuple(metadata, generatedAsOf)
+  const currentAsOf = businessDateKey(now, calendar?.timezone ?? 'Asia/Shanghai')
+  const durationMetricTuple = normalizeCachedDurationMetricTuple(metadata, {
+    calendar,
+    currentAsOf,
+    generatedAt: forecast.generated_at ?? forecast.created_at,
+  })
   const {
     remainingDuration,
     forecastDelay,
     probabilityDurationMetrics,
   } = durationMetricTuple
   const remainingDurationAvailable = durationMetricTuple.isAvailable
+  const optimisticRemainingDays = remainingDurationAvailable
+    ? probabilityDurationMetrics.p20RemainingDuration.value
+    : null
+  const conservativeRemainingDays = remainingDurationAvailable
+    ? probabilityDurationMetrics.p80RemainingDuration.value
+    : null
 
   return withRemainingForecastOutputContract({
     taskId: normalizeId(forecast.task_id) ?? taskId,
     recommendedDurationDays: executionReferenceDays,
     executionReferenceDays,
     conservativeDurationDays: readNullableNumber(forecast.conservative_duration_days),
-    optimisticRemainingDays: remainingDurationAvailable ? readNullableNumber(metadata.optimisticRemainingDays) : null,
+    optimisticRemainingDays,
     remainingDurationDays: remainingDurationAvailable ? remainingDuration.value : null,
     remainingDuration,
-    conservativeRemainingDays: remainingDurationAvailable ? readNullableNumber(metadata.conservativeRemainingDays) : null,
+    conservativeRemainingDays,
     forecastFinishDate: remainingDurationAvailable ? normalizeDate(forecast.forecast_finish_date) : null,
     forecastDelay,
     forecastDelayDays: remainingDurationAvailable ? forecastDelay.value : null,
@@ -2065,7 +2118,7 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     businessFactorBadges: badges,
     forecastSources,
     probabilityDuration: remainingDurationAvailable
-      ? normalizeProbabilityDurationWindow(metadata.probabilityDuration)
+      ? projectCachedProbabilityDurationWindow(metadata.probabilityDuration, probabilityDurationMetrics)
       : null,
     probabilityDurationMetrics,
   })
@@ -2345,6 +2398,31 @@ async function loadWorkCalendar(task: ForecastTaskRow | null): Promise<WorkCalen
     templateNodeId: task?.template_node_id ?? null,
     onError: (error) => logger.warn('[taskDurationForecastService] failed to load work calendar seed', { taskId: task?.id, error }),
   }) as Promise<WorkCalendarContext>
+}
+
+async function loadTaskWorkCalendars(
+  taskIds: string[],
+  workspaceScope: TaskForecastWorkspaceScope,
+): Promise<Map<string, WorkCalendarContext>> {
+  const uniqueTaskIds = [...new Set(taskIds.map(normalizeId).filter((id): id is string => Boolean(id)))]
+  if (uniqueTaskIds.length === 0) return new Map()
+  try {
+    const query = (supabase as any)
+      .from('tasks')
+      .select('id, project_id, template_node_id, standard_work_code')
+      .in('id', uniqueTaskIds)
+    const { data, error } = await applyTaskForecastWorkspaceScope(query, workspaceScope)
+    if (error) throw error
+    const tasks = Array.isArray(data) ? data as ForecastTaskRow[] : []
+    const entries = await Promise.all(tasks.map(async (task) => {
+      const taskId = normalizeId(task.id)
+      return taskId ? [taskId, await loadWorkCalendar(task)] as const : null
+    }))
+    return new Map(entries.filter((entry): entry is readonly [string, WorkCalendarContext] => Boolean(entry)))
+  } catch (error) {
+    logger.warn('[taskDurationForecastService] failed to resolve cached forecast calendars', { taskIds: uniqueTaskIds, error })
+    return new Map()
+  }
 }
 
 function parseEarliestStartRulePolicy(
@@ -3778,9 +3856,23 @@ function dependencyExpectedFinishDate(
     return { finishDate, source: 'dependency_actual_finish', isStale: false, forecastAgeDays: null as number | null }
   }
 
-  const forecastFinish = parseDate(dependencyForecast?.forecast_finish_date)
+  const currentAsOf = businessDateKey(now, calendar?.timezone ?? 'Asia/Shanghai')
+  const cachedTuple = normalizeCachedDurationMetricTuple(
+    normalizeForecastRecord(dependencyForecast?.metadata) ?? {},
+    {
+      calendar,
+      currentAsOf,
+      generatedAt: dependencyForecast?.generated_at ?? dependencyForecast?.created_at,
+    },
+  )
+  const forecastFinish = cachedTuple.isAvailable
+    ? parseDate(dependencyForecast?.forecast_finish_date)
+    : null
   if (forecastFinish) {
-    const createdAt = parseDate(dependencyForecast?.created_at)
+    const normalizedGeneratedAt = normalizeRfc3339Timestamp(
+      dependencyForecast?.generated_at ?? dependencyForecast?.created_at,
+    )
+    const createdAt = normalizedGeneratedAt ? new Date(normalizedGeneratedAt) : null
     const forecastAgeDays = createdAt ? calendarDeltaDays(startOfUtcDay(createdAt), startOfUtcDay(now)) : null
     const isStale = forecastAgeDays != null && forecastAgeDays > 1
     return {
@@ -6076,9 +6168,16 @@ async function refreshTaskDurationForecast(
 export async function forecastTaskDuration(taskId: string, options?: ForecastTaskDurationOptions): Promise<TaskDurationForecast> {
   const normalizedOptions = normalizeForecastOptions(options)
   if (normalizedOptions.useCache) {
+    const now = new Date()
     const currentForecast = await loadCurrentForecast(taskId, normalizedOptions)
     if (isFreshCurrentForecast(currentForecast)) {
-      return mapCurrentForecastToTaskDurationForecast(taskId, currentForecast)
+      const calendars = await loadTaskWorkCalendars([taskId], normalizedOptions)
+      return mapCurrentForecastToTaskDurationForecast(
+        taskId,
+        currentForecast,
+        calendars.get(taskId) ?? null,
+        now,
+      )
     }
   }
 
@@ -6249,7 +6348,11 @@ export async function listCurrentTaskDurationForecasts(
   options: { maxAgeMs?: number | null } & TaskForecastWorkspaceScope,
 ): Promise<TaskDurationForecast[]> {
   const uniqueTaskIds = [...new Set(taskIds.map(normalizeId).filter((id): id is string => Boolean(id)))]
-  const forecastMap = await loadCurrentForecasts(uniqueTaskIds, options)
+  const now = new Date()
+  const [forecastMap, calendars] = await Promise.all([
+    loadCurrentForecasts(uniqueTaskIds, options),
+    loadTaskWorkCalendars(uniqueTaskIds, options),
+  ])
   const maxAgeMs = options?.maxAgeMs ?? null
   return uniqueTaskIds
     .map((taskId) => {
@@ -6257,10 +6360,16 @@ export async function listCurrentTaskDurationForecasts(
       if (!forecast) return null
       if (typeof maxAgeMs === 'number') {
         const timestampValue = forecast.generated_at ?? forecast.created_at
-        const timestamp = timestampValue ? new Date(String(timestampValue)) : null
-        if (!timestamp || Number.isNaN(timestamp.getTime()) || Date.now() - timestamp.getTime() > maxAgeMs) return null
+        const normalizedTimestamp = normalizeRfc3339Timestamp(timestampValue)
+        const timestamp = normalizedTimestamp ? new Date(normalizedTimestamp) : null
+        if (!timestamp || now.getTime() - timestamp.getTime() > maxAgeMs) return null
       }
-      return mapCurrentForecastToTaskDurationForecast(taskId, forecast)
+      return mapCurrentForecastToTaskDurationForecast(
+        taskId,
+        forecast,
+        calendars.get(taskId) ?? null,
+        now,
+      )
     })
     .filter((forecast): forecast is TaskDurationForecast => Boolean(forecast))
 }
