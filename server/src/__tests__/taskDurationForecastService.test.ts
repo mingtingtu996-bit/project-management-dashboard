@@ -22,6 +22,7 @@ const state = vi.hoisted(() => ({
   projectOverlays: [] as Array<Record<string, unknown>>,
   residualOverlays: [] as Array<Record<string, unknown>>,
   seedRecords: [] as Array<Record<string, unknown>>,
+  seedRecordsByStandardWorkCode: {} as Record<string, Array<Record<string, unknown>>>,
   insertedForecasts: [] as Array<Record<string, unknown>>,
   updatedForecasts: [] as Array<Record<string, unknown>>,
 }))
@@ -166,8 +167,11 @@ vi.mock('../services/executionFactGovernanceService.js', () => ({
 }))
 
 vi.mock('../services/algorithmSeedResolver.js', () => ({
-  resolveAlgorithmSeedRecords: vi.fn(async (seedType: string) => {
-    if (seedType === 'work_calendar') return state.seedRecords
+  resolveAlgorithmSeedRecords: vi.fn(async (seedType: string, context?: Record<string, unknown>) => {
+    if (seedType === 'work_calendar') {
+      const standardWorkCode = String(context?.standardWorkCode ?? '')
+      return state.seedRecordsByStandardWorkCode[standardWorkCode] ?? state.seedRecords
+    }
     if (seedType === 'earliest_start_rule') {
       return [{ __stableCode: 'unstarted_overdue_default', scenario: 'unstarted_overdue' }]
     }
@@ -291,6 +295,7 @@ describe('taskDurationForecastService', () => {
       counts_as_construction_shutdown: false,
       __resolverVersionId: 'calendar-test-v1',
     }]
+    state.seedRecordsByStandardWorkCode = {}
     state.insertedForecasts = []
     state.updatedForecasts = []
     mocks.from.mockImplementation((table: string) => createBuilder(table))
@@ -2624,6 +2629,93 @@ describe('taskDurationForecastService', () => {
     ]))
   })
 
+  it.each([
+    { tupleCalendarVersion: 'calendar-B', expectedSource: 'current_dependency_forecast', expectedFinishDate: '2026-05-29' },
+    { tupleCalendarVersion: 'calendar-A', expectedSource: 'dependency_planned_finish', expectedFinishDate: '2026-05-22' },
+  ])('validates a predecessor forecast against its own calendar when tuple version is $tupleCalendarVersion', async ({
+    tupleCalendarVersion,
+    expectedSource,
+    expectedFinishDate,
+  }) => {
+    state.seedRecordsByStandardWorkCode = {
+      'WORK-A': [{
+        holidayCode: 'calendar_a',
+        holidayName: 'Calendar A',
+        calendarKind: 'forecast_calendar_window',
+        startDate: '2099-01-01',
+        endDate: '2099-01-01',
+        counts_as_construction_shutdown: false,
+        __resolverVersionId: 'calendar-A',
+      }],
+      'WORK-B': [{
+        holidayCode: 'calendar_b',
+        holidayName: 'Calendar B',
+        calendarKind: 'forecast_calendar_window',
+        startDate: '2099-01-01',
+        endDate: '2099-01-01',
+        counts_as_construction_shutdown: false,
+        __resolverVersionId: 'calendar-B',
+      }],
+    }
+    state.tasks = [
+      {
+        id: 'task-calendar-child',
+        project_id: 'project-1',
+        standard_work_code: 'WORK-A',
+        title: 'Calendar A child',
+        planned_start_date: '2026-05-18',
+        planned_end_date: '2026-05-22',
+        progress: 0,
+      },
+      {
+        id: 'task-calendar-parent',
+        project_id: 'project-1',
+        standard_work_code: 'WORK-B',
+        title: 'Calendar B predecessor',
+        planned_start_date: '2026-05-11',
+        planned_end_date: '2026-05-22',
+        progress: 50,
+      },
+    ]
+    state.dependencies = [{
+      task_id: 'task-calendar-child',
+      project_id: 'project-1',
+      dependency_task_id: 'task-calendar-parent',
+      dependency_type: 'FS',
+      lag_days: 0,
+      required_for_start: true,
+      status: 'active',
+    }]
+    state.dependencyForecasts = [{
+      task_id: 'task-calendar-parent',
+      project_id: 'project-1',
+      forecast_finish_date: '2026-05-29',
+      generated_at: '2026-05-18T08:00:00.000Z',
+      is_current: true,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(9, { calendarVersion: tupleCalendarVersion }),
+        forecastDelay: cachedProductionDurationMetric(4, { calendarVersion: tupleCalendarVersion }),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(7, { calendarVersion: tupleCalendarVersion }),
+          p50RemainingDuration: cachedProductionDurationMetric(9, { calendarVersion: tupleCalendarVersion }),
+          p80RemainingDuration: cachedProductionDurationMetric(11, { calendarVersion: tupleCalendarVersion }),
+        },
+      },
+    }]
+
+    const forecast = await forecastTaskDuration('task-calendar-child')
+
+    expect(forecast.forecastSources?.dependencyPropagation).toMatchObject({
+      blockingDependencies: expect.arrayContaining([
+        expect.objectContaining({
+          dependencyTaskId: 'task-calendar-parent',
+          source: expectedSource,
+          expectedFinishDate,
+        }),
+      ]),
+    })
+  })
+
   it('uses current execution facts when deciding whether a predecessor still blocks the forecast', async () => {
     state.tasks = [
       {
@@ -3988,6 +4080,7 @@ describe('taskDurationForecastService', () => {
       confidence_score: 66,
       forecast_source: 'cached_current',
       is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
       created_at: '2026-05-18T08:00:00.000Z',
       metadata: {},
     }]
@@ -4027,6 +4120,7 @@ describe('taskDurationForecastService', () => {
       confidence_score: 90,
       forecast_source: 'cached_current',
       is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
       created_at: '2026-05-18T08:00:00.000Z',
       metadata: {
         remainingDuration: cachedProductionDurationMetric(8),
@@ -4045,6 +4139,62 @@ describe('taskDurationForecastService', () => {
     })
 
     expect(forecast?.forecastFinishDate).toBe('2026-04-20')
+  })
+
+  it('requires generated_at instead of authorizing a cached tuple from created_at', async () => {
+    state.tasks = [{
+      id: 'task-cached-created-at-only',
+      project_id: 'project-1',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-current-created-at-only',
+      task_id: 'task-cached-created-at-only',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: null,
+      created_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 6,
+        conservativeRemainingDays: 10,
+        remainingDuration: cachedProductionDurationMetric(8),
+        forecastDelay: cachedProductionDurationMetric(2),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 8,
+          p80RemainingDays: 10,
+          expectedRemainingDays: 8,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 4,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
+        },
+      },
+    }]
+
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-created-at-only'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
+
+    expect(forecast?.remainingDuration.availability).toBe('unavailable')
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.optimisticRemainingDays).toBeNull()
+    expect(forecast?.conservativeRemainingDays).toBeNull()
+    expect(forecast?.probabilityDuration).toBeNull()
+    expect(Object.values(forecast?.probabilityDurationMetrics ?? {}).every((metric) => (
+      metric.availability === 'unavailable'
+    ))).toBe(true)
   })
 
   it('fails closed when a cached tuple uses an obsolete resolved calendar identity', async () => {

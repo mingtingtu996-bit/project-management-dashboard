@@ -323,6 +323,7 @@ type ForecastDependencyContext = {
   dependencies: ForecastDependencyRow[]
   dependencyTasks: Map<string, ForecastTaskRow>
   dependencyForecasts: Map<string, ForecastDependencyForecastRow>
+  dependencyCalendars: Map<string, WorkCalendarContext>
   diagnostics: {
     maxDepth: number
     depthLimitReached: boolean
@@ -1732,7 +1733,7 @@ async function loadDependencyTasks(
   if (taskIds.length === 0) return new Map()
   const { data, error } = await (supabase as any)
     .from('tasks')
-    .select('id, project_id, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, status, progress, ready_for_start, dependency_status, condition_status, obstacle_status, progress_impact_level, blocked_for_progress, readiness_summary')
+    .select('id, project_id, template_node_id, standard_work_code, title, planned_start_date, planned_end_date, start_date, end_date, actual_start_date, actual_end_date, status, progress, ready_for_start, dependency_status, condition_status, obstacle_status, progress_impact_level, blocked_for_progress, readiness_summary')
     .in('id', taskIds)
     .eq('project_id', projectId)
 
@@ -1860,7 +1861,7 @@ function readNullableNumber(value: unknown): number | null {
 
 function isFreshCurrentForecast(forecast: ForecastDependencyForecastRow | null | undefined) {
   if (!forecast) return false
-  const timestampValue = forecast.generated_at ?? forecast.created_at
+  const timestampValue = forecast.generated_at
   const normalizedTimestamp = normalizeRfc3339Timestamp(timestampValue)
   if (!normalizedTimestamp) return false
   const timestamp = new Date(normalizedTimestamp)
@@ -2075,7 +2076,7 @@ function mapCurrentForecastToTaskDurationForecast(
   const durationMetricTuple = normalizeCachedDurationMetricTuple(metadata, {
     calendar,
     currentAsOf,
-    generatedAt: forecast.generated_at ?? forecast.created_at,
+    generatedAt: forecast.generated_at,
   })
   const {
     remainingDuration,
@@ -2323,11 +2324,17 @@ async function loadDependencyContext(
     loadDependencyTasks(dependencyTaskIds, normalizedProjectId),
     loadCurrentDependencyForecasts(dependencyTaskIds, normalizedProjectId),
   ])
+  const dependencyCalendars = new Map(await Promise.all(
+    Array.from(dependencyTasks.entries()).map(async ([dependencyTaskId, dependencyTask]) => (
+      [dependencyTaskId, await loadWorkCalendar(dependencyTask)] as const
+    )),
+  ))
 
   return {
     dependencies,
     dependencyTasks,
     dependencyForecasts,
+    dependencyCalendars,
     diagnostics: {
       maxDepth: dependencyDepth,
       depthLimitReached,
@@ -3862,7 +3869,7 @@ function dependencyExpectedFinishDate(
     {
       calendar,
       currentAsOf,
-      generatedAt: dependencyForecast?.generated_at ?? dependencyForecast?.created_at,
+      generatedAt: dependencyForecast?.generated_at,
     },
   )
   const forecastFinish = cachedTuple.isAvailable
@@ -3870,7 +3877,7 @@ function dependencyExpectedFinishDate(
     : null
   if (forecastFinish) {
     const normalizedGeneratedAt = normalizeRfc3339Timestamp(
-      dependencyForecast?.generated_at ?? dependencyForecast?.created_at,
+      dependencyForecast?.generated_at,
     )
     const createdAt = normalizedGeneratedAt ? new Date(normalizedGeneratedAt) : null
     const forecastAgeDays = createdAt ? calendarDeltaDays(startOfUtcDay(createdAt), startOfUtcDay(now)) : null
@@ -4037,7 +4044,7 @@ function dependencyPropagationImpactDays(params: {
       dependencyTask,
       params.context.dependencyForecasts.get(dependencyTaskId),
       params.now,
-      params.calendar,
+      params.context.dependencyCalendars.get(dependencyTaskId) ?? null,
     )
     const finishDate = expected.finishDate
     if (!finishDate) continue
@@ -6359,7 +6366,7 @@ export async function listCurrentTaskDurationForecasts(
       const forecast = forecastMap.get(taskId)
       if (!forecast) return null
       if (typeof maxAgeMs === 'number') {
-        const timestampValue = forecast.generated_at ?? forecast.created_at
+        const timestampValue = forecast.generated_at
         const normalizedTimestamp = normalizeRfc3339Timestamp(timestampValue)
         const timestamp = normalizedTimestamp ? new Date(normalizedTimestamp) : null
         if (!timestamp || now.getTime() - timestamp.getTime() > maxAgeMs) return null
@@ -6408,7 +6415,7 @@ function normalizeDailyRefreshOptions(options?: DailyTaskDurationForecastRefresh
 }
 
 function readForecastTimestampMs(forecast: Record<string, unknown> | null | undefined) {
-  const timestampValue = forecast?.generated_at ?? forecast?.created_at
+  const timestampValue = forecast?.generated_at
   const timestamp = timestampValue ? new Date(String(timestampValue)).getTime() : NaN
   return Number.isFinite(timestamp) ? timestamp : null
 }
