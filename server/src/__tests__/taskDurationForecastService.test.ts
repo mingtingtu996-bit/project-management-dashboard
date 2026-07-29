@@ -243,6 +243,23 @@ function baseSuggestion() {
   }
 }
 
+function cachedProductionDurationMetric(
+  value: number,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    value,
+    unit: 'construction_production_day',
+    calendarRef: 'work_calendar',
+    calendarVersion: 'calendar-v1',
+    timezone: 'Asia/Shanghai',
+    asOf: '2026-05-18',
+    availability: 'available',
+    unavailableReason: null,
+    ...overrides,
+  }
+}
+
 describe('taskDurationForecastService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -3926,6 +3943,12 @@ describe('taskDurationForecastService', () => {
           availability: 'available',
           unavailableReason: null,
         },
+        forecastDelay: cachedProductionDurationMetric(0),
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
+        },
       },
     }]
 
@@ -3935,6 +3958,130 @@ describe('taskDurationForecastService', () => {
     })
 
     expect(forecast?.forecastFinishDate).toBe('2026-04-20')
+  })
+
+  it('fails closed for the entire cached forecast tuple when remaining duration uses calendar days', async () => {
+    state.dependencyForecasts = [{
+      id: 'forecast-current-calendar-day',
+      task_id: 'task-cached-calendar-day',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      delay_risk_index: 0.4,
+      confidence_level: 'high',
+      confidence_score: 88,
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 6,
+        conservativeRemainingDays: 10,
+        remainingDuration: cachedProductionDurationMetric(8, {
+          unit: 'calendar_day',
+          calendarRef: 'gregorian',
+          calendarVersion: 'ISO-8601',
+        }),
+        forecastDelay: cachedProductionDurationMetric(2),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 8,
+          p80RemainingDays: 10,
+          expectedRemainingDays: 8,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 4,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10),
+        },
+      },
+    }]
+
+    const forecast = await forecastTaskDuration('task-cached-calendar-day', { useCache: true })
+
+    expect(forecast.remainingDuration).toEqual(expect.objectContaining({
+      value: null,
+      unit: 'construction_production_day',
+      availability: 'unavailable',
+    }))
+    expect(forecast.remainingDurationDays).toBeNull()
+    expect(forecast.remainingForecastDays).toBeNull()
+    expect(forecast.forecastFinishDate).toBeNull()
+    expect(forecast.forecastDelayDays).toBeNull()
+    expect(forecast.delayRiskIndex).toBeNull()
+    expect(forecast.optimisticRemainingDays).toBeNull()
+    expect(forecast.conservativeRemainingDays).toBeNull()
+    expect(forecast.probabilityDuration).toBeNull()
+    expect(Object.values(forecast.probabilityDurationMetrics).every((metric) => (
+      metric.value === null && metric.availability === 'unavailable'
+    ))).toBe(true)
+  })
+
+  it.each([
+    {
+      label: 'calendar identity',
+      delayOverrides: {},
+      p80Overrides: { calendarRef: 'other_calendar' },
+    },
+    {
+      label: 'asOf',
+      delayOverrides: { asOf: '2026-05-17' },
+      p80Overrides: {},
+    },
+  ])('fails closed for the entire cached forecast tuple when $label drifts', async ({ delayOverrides, p80Overrides }) => {
+    state.dependencyForecasts = [{
+      id: `forecast-current-mismatched-${String(Object.keys(delayOverrides)[0] ?? 'calendar')}`,
+      task_id: 'task-cached-mismatched-tuple',
+      project_id: 'project-1',
+      execution_reference_days: 12,
+      conservative_duration_days: 16,
+      forecast_finish_date: '2026-05-28',
+      delay_risk_index: 0.4,
+      confidence_level: 'high',
+      confidence_score: 88,
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: '2026-05-18T08:00:00.000Z',
+      metadata: {
+        optimisticRemainingDays: 6,
+        conservativeRemainingDays: 10,
+        remainingDuration: cachedProductionDurationMetric(8),
+        forecastDelay: cachedProductionDurationMetric(2, delayOverrides),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 8,
+          p80RemainingDays: 10,
+          expectedRemainingDays: 8,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 4,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(8),
+          p80RemainingDuration: cachedProductionDurationMetric(10, p80Overrides),
+        },
+      },
+    }]
+
+    const forecast = await forecastTaskDuration('task-cached-mismatched-tuple', { useCache: true })
+
+    expect(forecast.remainingDurationDays).toBeNull()
+    expect(forecast.remainingForecastDays).toBeNull()
+    expect(forecast.forecastFinishDate).toBeNull()
+    expect(forecast.forecastDelayDays).toBeNull()
+    expect(forecast.delayRiskIndex).toBeNull()
+    expect(forecast.probabilityDuration).toBeNull()
+    expect(forecast.remainingDuration.availability).toBe('unavailable')
+    expect(forecast.forecastDelay.availability).toBe('unavailable')
+    expect(Object.values(forecast.probabilityDurationMetrics).every((metric) => metric.availability === 'unavailable')).toBe(true)
   })
 
   it('applies duration context factors to remaining forecast and lowers forecast confidence', async () => {

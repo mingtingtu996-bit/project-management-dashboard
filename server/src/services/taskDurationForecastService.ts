@@ -847,6 +847,90 @@ function normalizeProbabilityDurationMetrics(
   }
 }
 
+type CachedDurationMetricTuple = {
+  isAvailable: boolean
+  remainingDuration: DurationMetricDto
+  forecastDelay: DurationMetricDto
+  probabilityDurationMetrics: DurationProbabilityMetricWindow
+}
+
+function sameCachedDurationMetricIdentity(left: DurationMetricDto, right: DurationMetricDto) {
+  return left.unit === right.unit
+    && left.calendarRef === right.calendarRef
+    && left.calendarVersion === right.calendarVersion
+    && left.timezone === right.timezone
+    && left.asOf === right.asOf
+}
+
+function normalizeCachedDurationMetricTuple(
+  metadata: Record<string, unknown>,
+  generatedAsOf: string,
+): CachedDurationMetricTuple {
+  const hasCachedMetricMetadata = metadata.remainingDuration !== undefined
+    || metadata.forecastDelay !== undefined
+    || metadata.probabilityDurationMetrics !== undefined
+  const remainingDuration = normalizeDurationMetricDto(metadata.remainingDuration)
+  const forecastDelay = normalizeDurationMetricDto(metadata.forecastDelay)
+  const probabilityDurationMetrics = normalizeProbabilityDurationMetrics(
+    metadata.probabilityDurationMetrics,
+    generatedAsOf,
+  )
+  const probabilityMetrics = [
+    probabilityDurationMetrics.p20RemainingDuration,
+    probabilityDurationMetrics.p50RemainingDuration,
+    probabilityDurationMetrics.p80RemainingDuration,
+  ]
+  const metrics = remainingDuration && forecastDelay
+    ? [remainingDuration, forecastDelay, ...probabilityMetrics]
+    : []
+  const hasAvailableProductionTuple = metrics.length === 5
+    && metrics.every((metric) => (
+      metric.availability === 'available'
+      && metric.unit === 'construction_production_day'
+      && metric.value !== null
+      && metric.value >= 0
+    ))
+    && metrics.slice(1).every((metric) => sameCachedDurationMetricIdentity(metrics[0], metric))
+  const [p20, p50, p80] = probabilityMetrics.map((metric) => metric.value)
+  const hasOrderedProbabilityTuple = p20 !== null
+    && p50 !== null
+    && p80 !== null
+    && p20 <= p50
+    && p50 <= p80
+
+  if (hasAvailableProductionTuple && hasOrderedProbabilityTuple) {
+    return {
+      isAvailable: true,
+      remainingDuration: remainingDuration!,
+      forecastDelay: forecastDelay!,
+      probabilityDurationMetrics,
+    }
+  }
+
+  const unavailableMetric = (): DurationMetricDto => {
+    const metric = buildConstructionProductionDayDurationMetric(null, {
+      asOf: generatedAsOf,
+      calendar: null,
+    })
+    return {
+      ...metric,
+      unavailableReason: hasCachedMetricMetadata
+        ? 'cached_duration_metric_tuple_invalid'
+        : metric.unavailableReason,
+    }
+  }
+  return {
+    isAvailable: false,
+    remainingDuration: unavailableMetric(),
+    forecastDelay: unavailableMetric(),
+    probabilityDurationMetrics: {
+      p20RemainingDuration: unavailableMetric(),
+      p50RemainingDuration: unavailableMetric(),
+      p80RemainingDuration: unavailableMetric(),
+    },
+  }
+}
+
 function normalizeForecastOptions(options?: ForecastTaskDurationOptions): NormalizedForecastOptions {
   const rawTrigger = String(options?.triggerContext ?? '').trim() as ForecastTriggerContext
   const triggerContext = FORECAST_TRIGGER_CONTEXTS.has(rawTrigger) ? rawTrigger : DEFAULT_FORECAST_OPTIONS.triggerContext
@@ -1945,21 +2029,13 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     ?? readNullableNumber(forecast.recommended_duration_days)
   const generatedAsOf = normalizeDate(forecast.generated_at ?? forecast.created_at)
     ?? businessDateKey(new Date())
-  const remainingDuration = normalizeDurationMetricDto(metadata.remainingDuration)
-    ?? buildConstructionProductionDayDurationMetric(null, {
-      asOf: generatedAsOf,
-      calendar: null,
-    })
-  const remainingDurationAvailable = remainingDuration.availability === 'available'
-  const forecastDelay = normalizeDurationMetricDto(metadata.forecastDelay)
-    ?? buildConstructionProductionDayDurationMetric(null, {
-      asOf: generatedAsOf,
-      calendar: null,
-    })
-  const probabilityDurationMetrics = normalizeProbabilityDurationMetrics(
-    metadata.probabilityDurationMetrics,
-    generatedAsOf,
-  )
+  const durationMetricTuple = normalizeCachedDurationMetricTuple(metadata, generatedAsOf)
+  const {
+    remainingDuration,
+    forecastDelay,
+    probabilityDurationMetrics,
+  } = durationMetricTuple
+  const remainingDurationAvailable = durationMetricTuple.isAvailable
 
   return withRemainingForecastOutputContract({
     taskId: normalizeId(forecast.task_id) ?? taskId,
@@ -1972,8 +2048,8 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     conservativeRemainingDays: remainingDurationAvailable ? readNullableNumber(metadata.conservativeRemainingDays) : null,
     forecastFinishDate: remainingDurationAvailable ? normalizeDate(forecast.forecast_finish_date) : null,
     forecastDelay,
-    forecastDelayDays: forecastDelay.availability === 'available' ? forecastDelay.value : null,
-    delayRiskIndex: forecastDelay.availability === 'available'
+    forecastDelayDays: remainingDurationAvailable ? forecastDelay.value : null,
+    delayRiskIndex: remainingDurationAvailable
       ? readNullableNumber(forecast.delay_risk_index) ?? readNullableNumber(metadata.delayRiskIndex)
       : null,
     confidenceLevel: remainingDurationAvailable ? normalizeId(forecast.confidence_level) ?? 'medium' : 'unavailable',
@@ -1988,7 +2064,9 @@ function mapCurrentForecastToTaskDurationForecast(taskId: string, forecast: Fore
     topFactors,
     businessFactorBadges: badges,
     forecastSources,
-    probabilityDuration: normalizeProbabilityDurationWindow(metadata.probabilityDuration),
+    probabilityDuration: remainingDurationAvailable
+      ? normalizeProbabilityDurationWindow(metadata.probabilityDuration)
+      : null,
     probabilityDurationMetrics,
   })
 }
