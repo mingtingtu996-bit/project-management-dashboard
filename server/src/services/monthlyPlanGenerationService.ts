@@ -67,6 +67,11 @@ import {
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
+import {
+  businessDateKey,
+  normalizeDurationMetricDto,
+  type DurationMetricDto,
+} from './durationMetricService.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
 import type { MonthlyPlan, MonthlyPlanItem, Task, TaskBaseline, TaskBaselineItem } from '../types/db.js'
 
@@ -235,6 +240,38 @@ function readAvailableProductionDuration(
   if (metric?.availability !== 'available' || metric.unit !== 'construction_production_day') return null
   const value = Number(metric.value)
   return Number.isFinite(value) ? value : null
+}
+
+function sameDurationMetricIdentity(left: DurationMetricDto, right: DurationMetricDto) {
+  return left.unit === right.unit
+    && left.calendarRef === right.calendarRef
+    && left.calendarVersion === right.calendarVersion
+    && left.timezone === right.timezone
+    && left.asOf === right.asOf
+}
+
+function readFreshSnapshotFloatDuration(
+  metricValue: unknown,
+  projectDurationValue: unknown,
+  calculatedAtValue: unknown,
+) {
+  const metric = normalizeDurationMetricDto(metricValue)
+  const projectDuration = normalizeDurationMetricDto(projectDurationValue)
+  const calculatedAt = new Date(String(calculatedAtValue ?? ''))
+  if (
+    !metric
+    || !projectDuration
+    || metric.availability !== 'available'
+    || projectDuration.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || projectDuration.unit !== 'construction_production_day'
+    || metric.value === null
+    || metric.value < 0
+    || !sameDurationMetricIdentity(metric, projectDuration)
+    || !Number.isFinite(calculatedAt.getTime())
+    || metric.asOf !== businessDateKey(calculatedAt, metric.timezone)
+  ) return null
+  return metric.value
 }
 
 function toMonthlyE2ForecastSummary(forecast: Awaited<ReturnType<typeof forecastBatchTasks>>[number]): MonthlyE2ForecastSummary {
@@ -1542,6 +1579,7 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
         fresh_float_authority_checked: true,
         fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
         fresh_float_snapshot_status: snapshotStatus,
+        critical_float_tier: null,
       }]))
     }
     const scheduleRows = Array.isArray((snapshot as any).networkSchedule) && (snapshot as any).networkSchedule.length > 0
@@ -1553,13 +1591,17 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
     return new Map(items.map((item) => {
       const taskId = normalizeText(item.source_task_id)
       const task = taskId ? byTaskId.get(taskId) : null
-      const floatDays = readAvailableProductionDuration(task?.float)
+      const floatDays = readFreshSnapshotFloatDuration(
+        task?.float,
+        snapshot.projectDuration,
+        snapshot.calculatedAt,
+      )
       return [getStableCandidateKey(item), {
         fresh_float_days: floatDays,
         fresh_float_authority_checked: true,
         fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
         fresh_float_snapshot_status: snapshotStatus,
-        ...(floatDays === null ? {} : { critical_float_tier: criticalFloatTier(floatDays) }),
+        critical_float_tier: floatDays === null ? null : criticalFloatTier(floatDays),
       }]
     }))
   } catch (error) {
@@ -1569,6 +1611,7 @@ async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedI
       fresh_float_authority_checked: true,
       fresh_float_snapshot_source: 'projectCriticalPathService.getProjectCriticalPathSnapshot',
       fresh_float_snapshot_status: 'unavailable',
+      critical_float_tier: null,
     }]))
   }
 }
@@ -1586,10 +1629,11 @@ function monthlyCapacityPriority(item: MonthlyPlanSeedItem): MonthlyCapacityPrio
   if (item.carryover_from_item_id || item.commitment_status === 'carried_over') return 'carryover'
   const context = readAlgorithmContext(item)
   const floatTier = context.critical_float_tier
-  if (floatTier === 'true_critical') return 'critical'
-  if (floatTier === 'near_critical') return 'near_critical'
-  if (floatTier === 'pseudo_critical') return 'new_work'
-  if (context.fresh_float_authority_checked === true) return 'new_work'
+  if (context.fresh_float_authority_checked === true) {
+    if (floatTier === 'true_critical') return 'critical'
+    if (floatTier === 'near_critical') return 'near_critical'
+    return 'new_work'
+  }
   if (item.is_critical) return 'critical'
   return 'new_work'
 }
