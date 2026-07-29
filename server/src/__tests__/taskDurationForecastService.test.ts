@@ -4106,6 +4106,10 @@ describe('taskDurationForecastService', () => {
   })
 
   it('reads execution_reference_days before legacy recommended_duration_days from current forecast cache', async () => {
+    state.tasks = [{
+      id: 'task-cached-reference',
+      project_id: 'project-1',
+    }]
     state.dependencyForecasts = [{
       id: 'forecast-current-reference',
       task_id: 'task-cached-reference',
@@ -4122,7 +4126,26 @@ describe('taskDurationForecastService', () => {
       is_current: true,
       generated_at: '2026-05-18T08:00:00.000Z',
       created_at: '2026-05-18T08:00:00.000Z',
-      metadata: {},
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(7),
+        forecastDelay: cachedProductionDurationMetric(0),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 6,
+          p50RemainingDays: 7,
+          p80RemainingDays: 9,
+          expectedRemainingDays: 7,
+          variance: 1,
+          standardDeviationDays: 1,
+          confidenceBandWidthDays: 3,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(6),
+          p50RemainingDuration: cachedProductionDurationMetric(7),
+          p80RemainingDuration: cachedProductionDurationMetric(9),
+        },
+      },
     }]
 
     const forecast = await forecastTaskDuration('task-cached-reference', { useCache: true })
@@ -4130,15 +4153,84 @@ describe('taskDurationForecastService', () => {
     expect(forecast.executionReferenceDays).toBe(14)
     expect(forecast.recommendedDurationDays).toBe(14)
     expect(forecast.remainingDuration).toMatchObject({
-      value: null,
-      availability: 'unavailable',
-      unavailableReason: 'construction_calendar_identity_missing',
+      value: 7,
+      availability: 'available',
     })
-    expect(forecast.remainingDurationDays).toBeNull()
-    expect(forecast.remainingForecastDays).toBeNull()
-    expect(forecast.forecastFinishDate).toBeNull()
+    expect(forecast.remainingDurationDays).toBe(7)
+    expect(forecast.remainingForecastDays).toBe(7)
+    expect(forecast.forecastFinishDate).toBe('2026-05-25')
     expect(state.insertedForecasts).toHaveLength(0)
     expect(state.updatedForecasts).toHaveLength(0)
+  })
+
+  it.each([
+    {
+      label: 'previous business-day authority',
+      generatedAt: '2026-05-18T08:00:00.000Z',
+      metricAsOf: '2026-05-18',
+    },
+    {
+      label: 'generated_at beyond the allowed future clock skew',
+      generatedAt: '2026-05-19T10:00:00.000Z',
+      metricAsOf: '2026-05-19',
+    },
+  ])('refreshes instead of returning a cache entry with $label', async ({ generatedAt, metricAsOf }) => {
+    vi.setSystemTime(new Date('2026-05-19T08:00:00.000Z'))
+    state.tasks = [{
+      id: 'task-cache-authority-refresh',
+      project_id: 'project-1',
+      title: 'Cache authority refresh task',
+      planned_start_date: '2026-05-01',
+      planned_end_date: '2026-05-31',
+      actual_start_date: '2026-05-02',
+      progress: 20,
+      status: 'in_progress',
+    }]
+    state.dependencyForecasts = [{
+      id: 'forecast-cache-authority-refresh',
+      task_id: 'task-cache-authority-refresh',
+      project_id: 'project-1',
+      execution_reference_days: 99,
+      conservative_duration_days: 120,
+      remaining_duration_days: 88,
+      forecast_finish_date: '2026-09-30',
+      forecast_delay_days: 70,
+      confidence_level: 'high',
+      confidence_score: 99,
+      forecast_source: 'cached_current',
+      is_current: true,
+      generated_at: generatedAt,
+      metadata: {
+        remainingDuration: cachedProductionDurationMetric(88, { asOf: metricAsOf }),
+        forecastDelay: cachedProductionDurationMetric(70, { asOf: metricAsOf }),
+        probabilityDuration: {
+          method: 'pert_from_existing_percentiles',
+          source: 'cached_probability',
+          p20RemainingDays: 80,
+          p50RemainingDays: 88,
+          p80RemainingDays: 96,
+          expectedRemainingDays: 88,
+          variance: 16,
+          standardDeviationDays: 4,
+          confidenceBandWidthDays: 16,
+        },
+        probabilityDurationMetrics: {
+          p20RemainingDuration: cachedProductionDurationMetric(80, { asOf: metricAsOf }),
+          p50RemainingDuration: cachedProductionDurationMetric(88, { asOf: metricAsOf }),
+          p80RemainingDuration: cachedProductionDurationMetric(96, { asOf: metricAsOf }),
+        },
+      },
+    }]
+
+    const forecast = await forecastTaskDuration('task-cache-authority-refresh', { useCache: true })
+
+    expect(mocks.getTaskDurationSuggestion).toHaveBeenCalledOnce()
+    expect(state.insertedForecasts).toHaveLength(1)
+    expect(forecast.remainingDuration).toMatchObject({
+      availability: 'available',
+      asOf: '2026-05-19',
+    })
+    expect(forecast.remainingDurationDays).not.toBe(88)
   })
 
   it('maps PostgreSQL DATE objects from current forecasts without losing the calendar date', async () => {
@@ -4422,22 +4514,25 @@ describe('taskDurationForecastService', () => {
       },
     }]
 
-    const forecast = await forecastTaskDuration('task-cached-calendar-day', { useCache: true })
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-calendar-day'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
 
-    expect(forecast.remainingDuration).toEqual(expect.objectContaining({
+    expect(forecast?.remainingDuration).toEqual(expect.objectContaining({
       value: null,
       unit: 'construction_production_day',
       availability: 'unavailable',
     }))
-    expect(forecast.remainingDurationDays).toBeNull()
-    expect(forecast.remainingForecastDays).toBeNull()
-    expect(forecast.forecastFinishDate).toBeNull()
-    expect(forecast.forecastDelayDays).toBeNull()
-    expect(forecast.delayRiskIndex).toBeNull()
-    expect(forecast.optimisticRemainingDays).toBeNull()
-    expect(forecast.conservativeRemainingDays).toBeNull()
-    expect(forecast.probabilityDuration).toBeNull()
-    expect(Object.values(forecast.probabilityDurationMetrics).every((metric) => (
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.remainingForecastDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.forecastDelayDays).toBeNull()
+    expect(forecast?.delayRiskIndex).toBeNull()
+    expect(forecast?.optimisticRemainingDays).toBeNull()
+    expect(forecast?.conservativeRemainingDays).toBeNull()
+    expect(forecast?.probabilityDuration).toBeNull()
+    expect(Object.values(forecast?.probabilityDurationMetrics ?? {}).every((metric) => (
       metric.value === null && metric.availability === 'unavailable'
     ))).toBe(true)
   })
@@ -4491,17 +4586,20 @@ describe('taskDurationForecastService', () => {
       },
     }]
 
-    const forecast = await forecastTaskDuration('task-cached-mismatched-tuple', { useCache: true })
+    const [forecast] = await listCurrentTaskDurationForecasts(['task-cached-mismatched-tuple'], {
+      projectId: 'project-1',
+      maxAgeMs: null,
+    })
 
-    expect(forecast.remainingDurationDays).toBeNull()
-    expect(forecast.remainingForecastDays).toBeNull()
-    expect(forecast.forecastFinishDate).toBeNull()
-    expect(forecast.forecastDelayDays).toBeNull()
-    expect(forecast.delayRiskIndex).toBeNull()
-    expect(forecast.probabilityDuration).toBeNull()
-    expect(forecast.remainingDuration.availability).toBe('unavailable')
-    expect(forecast.forecastDelay.availability).toBe('unavailable')
-    expect(Object.values(forecast.probabilityDurationMetrics).every((metric) => metric.availability === 'unavailable')).toBe(true)
+    expect(forecast?.remainingDurationDays).toBeNull()
+    expect(forecast?.remainingForecastDays).toBeNull()
+    expect(forecast?.forecastFinishDate).toBeNull()
+    expect(forecast?.forecastDelayDays).toBeNull()
+    expect(forecast?.delayRiskIndex).toBeNull()
+    expect(forecast?.probabilityDuration).toBeNull()
+    expect(forecast?.remainingDuration.availability).toBe('unavailable')
+    expect(forecast?.forecastDelay.availability).toBe('unavailable')
+    expect(Object.values(forecast?.probabilityDurationMetrics ?? {}).every((metric) => metric.availability === 'unavailable')).toBe(true)
   })
 
   it('applies duration context factors to remaining forecast and lowers forecast confidence', async () => {

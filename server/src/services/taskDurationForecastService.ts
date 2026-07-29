@@ -690,6 +690,7 @@ const PASSED_ACCEPTANCE_STATUSES = ['passed', 'completed', 'closed', 'archived',
 const CLOSED_MATERIAL_STATUSES = ['archived', 'voided', 'deleted', 'inactive']
 const DAY_MS = 86_400_000
 const CURRENT_FORECAST_CACHE_TTL_MS = 7 * DAY_MS
+const CURRENT_FORECAST_CACHE_FUTURE_SKEW_MS = 5 * 60 * 1000
 const FORECAST_BATCH_CONCURRENCY = 3
 const DEFAULT_DAILY_FORECAST_REFRESH_LIMIT = 500
 const DEFAULT_DAILY_FORECAST_REFRESH_BATCH_SIZE = 50
@@ -1859,13 +1860,18 @@ function readNullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-function isFreshCurrentForecast(forecast: ForecastDependencyForecastRow | null | undefined) {
+function isFreshCurrentForecast(
+  forecast: ForecastDependencyForecastRow | null | undefined,
+  now: Date,
+) {
   if (!forecast) return false
   const timestampValue = forecast.generated_at
   const normalizedTimestamp = normalizeRfc3339Timestamp(timestampValue)
   if (!normalizedTimestamp) return false
   const timestamp = new Date(normalizedTimestamp)
-  return Date.now() - timestamp.getTime() <= CURRENT_FORECAST_CACHE_TTL_MS
+  const ageMs = now.getTime() - timestamp.getTime()
+  return ageMs >= -CURRENT_FORECAST_CACHE_FUTURE_SKEW_MS
+    && ageMs <= CURRENT_FORECAST_CACHE_TTL_MS
 }
 
 function normalizeForecastRecord(value: unknown): Record<string, unknown> | null {
@@ -6177,14 +6183,17 @@ export async function forecastTaskDuration(taskId: string, options?: ForecastTas
   if (normalizedOptions.useCache) {
     const now = new Date()
     const currentForecast = await loadCurrentForecast(taskId, normalizedOptions)
-    if (isFreshCurrentForecast(currentForecast)) {
+    if (isFreshCurrentForecast(currentForecast, now)) {
       const calendars = await loadTaskWorkCalendars([taskId], normalizedOptions)
-      return mapCurrentForecastToTaskDurationForecast(
+      const cachedForecast = mapCurrentForecastToTaskDurationForecast(
         taskId,
         currentForecast,
         calendars.get(taskId) ?? null,
         now,
       )
+      if (cachedForecast.remainingDuration.availability === 'available') {
+        return cachedForecast
+      }
     }
   }
 
