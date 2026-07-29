@@ -63,7 +63,9 @@ import {
 } from './planningReplayCalibrationService.js'
 import {
   effectiveConstructionCalendarBasis,
+  isAuthoritativeConstructionCalendar,
   isConstructionProductionDay,
+  productionDaysBetweenInclusive,
   resolveConstructionCalendarContext,
   type ConstructionCalendarContext,
 } from './constructionCalendar.js'
@@ -230,6 +232,7 @@ export type MonthWindow = {
 
 type MonthlyE2ForecastSummary = {
   remainingDurationDays: number | null
+  remainingDuration: DurationMetricDto | null
   forecastFinishDate: string | null
   forecastDelayDays: number | null
   confidenceLevel: string
@@ -294,6 +297,7 @@ function toMonthlyE2ForecastSummary(forecast: Awaited<ReturnType<typeof forecast
     && sameDurationMetricIdentity(remainingDuration, forecastDelay)
   return {
     remainingDurationDays: tupleAvailable ? remainingDuration.value : null,
+    remainingDuration: tupleAvailable ? remainingDuration : null,
     forecastFinishDate: tupleAvailable ? forecast.forecastFinishDate : null,
     forecastDelayDays: tupleAvailable ? forecastDelay.value : null,
     confidenceLevel: tupleAvailable ? normalizeText(forecast.confidenceLevel) || 'unknown' : 'unavailable',
@@ -1310,12 +1314,7 @@ async function getForecastMetrics(
       forecastDelayedCount: 0,
       maxForecastDelayDays: 0,
       lowConfidenceReasonCount: 0,
-      forecastsByTaskId: new Map<string, {
-        remainingDurationDays: number | null
-        forecastFinishDate: string | null
-        forecastDelayDays: number | null
-        confidenceLevel: string
-      }>(),
+      forecastsByTaskId: new Map<string, MonthlyE2ForecastSummary>(),
     }
   }
 
@@ -1336,23 +1335,13 @@ async function getForecastMetrics(
         summary.maxForecastDelayDays = Math.max(summary.maxForecastDelayDays, delay)
       }
       if (forecast.confidenceLevel === 'low') summary.lowConfidenceReasonCount += 1
-      summary.forecastsByTaskId.set(taskId, {
-        remainingDurationDays: forecast.remainingDurationDays,
-        forecastFinishDate: forecast.forecastFinishDate,
-        forecastDelayDays: delay,
-        confidenceLevel: forecast.confidenceLevel,
-      })
+      summary.forecastsByTaskId.set(taskId, forecast)
       return summary
     }, {
       forecastDelayedCount: 0,
       maxForecastDelayDays: 0,
       lowConfidenceReasonCount: 0,
-      forecastsByTaskId: new Map<string, {
-        remainingDurationDays: number | null
-        forecastFinishDate: string | null
-        forecastDelayDays: number | null
-        confidenceLevel: string
-      }>(),
+      forecastsByTaskId: new Map<string, MonthlyE2ForecastSummary>(),
     })
   } catch (error) {
     logger.warn('[monthlyPlanGenerationService] duration forecast unavailable for monthly plan generation', { error })
@@ -1360,12 +1349,7 @@ async function getForecastMetrics(
       forecastDelayedCount: 0,
       maxForecastDelayDays: 0,
       lowConfidenceReasonCount: 1,
-      forecastsByTaskId: new Map<string, {
-        remainingDurationDays: number | null
-        forecastFinishDate: string | null
-        forecastDelayDays: number | null
-        confidenceLevel: string
-      }>(),
+      forecastsByTaskId: new Map<string, MonthlyE2ForecastSummary>(),
     }
   }
 }
@@ -1437,6 +1421,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
       calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
       calendarSource: 'resolveConstructionCalendarContext',
       calendarShutdownDeductedDays,
+      constructionCalendar,
     }
   }
   const calendarProductivityFactor = await getMonthProductivity(projectId, monthWindow)
@@ -1454,6 +1439,7 @@ async function monthCapacityBudgetContext(projectId: string, monthWindow: MonthW
     calendarBasis: effectiveConstructionCalendarBasis(constructionCalendar),
     calendarSource: 'resolveConstructionCalendarContext',
     calendarShutdownDeductedDays,
+    constructionCalendar,
   }
 }
 
@@ -1659,17 +1645,16 @@ function monthlyReadinessTargetFactor(readiness: ReturnType<typeof readinessPool
   return 1
 }
 
-function workdaysBetweenInclusive(start: Date, end: Date) {
-  const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()))
-  const stop = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate()))
-  if (stop < cursor) return 0
-  let count = 0
-  while (cursor <= stop) {
-    const day = cursor.getUTCDay()
-    if (day !== 0 && day !== 6) count += 1
-    cursor.setUTCDate(cursor.getUTCDate() + 1)
-  }
-  return count
+function matchesConstructionCalendarIdentity(
+  metric: DurationMetricDto | null | undefined,
+  calendar: ConstructionCalendarContext | null | undefined,
+) {
+  return metric !== null
+    && metric !== undefined
+    && isAuthoritativeConstructionCalendar(calendar)
+    && metric.calendarRef === calendar.calendarRef
+    && metric.calendarVersion === calendar.calendarVersion
+    && metric.timezone === calendar.timezone
 }
 
 function calculateE2CompletableTarget(params: {
@@ -1678,11 +1663,13 @@ function calculateE2CompletableTarget(params: {
   plannedDelta: number
   forecast?: {
     remainingDurationDays: number | null
+    remainingDuration: DurationMetricDto | null
     forecastFinishDate: string | null
   } | null
   budgetDays: number
   monthStartDate?: string | null
   monthEndDate?: string | null
+  constructionCalendar?: ConstructionCalendarContext | null
 }) {
   const e2Days = Number(params.forecast?.remainingDurationDays ?? 0)
   const byRemainingDays = e2Days > 0
@@ -1695,13 +1682,16 @@ function calculateE2CompletableTarget(params: {
   if (!forecastFinish || !monthStart || !monthEnd || forecastFinish <= monthEnd) {
     return byRemainingDays
   }
+  if (!matchesConstructionCalendarIdentity(params.forecast?.remainingDuration, params.constructionCalendar)) {
+    return byRemainingDays
+  }
 
-  const monthWorkdays = workdaysBetweenInclusive(monthStart, monthEnd)
-  const forecastWindowWorkdays = workdaysBetweenInclusive(monthStart, forecastFinish)
-  if (forecastWindowWorkdays <= 0) return byRemainingDays
+  const monthProductionDays = productionDaysBetweenInclusive(monthStart, monthEnd, params.constructionCalendar)
+  const forecastWindowProductionDays = productionDaysBetweenInclusive(monthStart, forecastFinish, params.constructionCalendar)
+  if (forecastWindowProductionDays <= 0) return byRemainingDays
   const finishWindowTarget = Math.max(
     params.current,
-    Math.min(params.target, Math.round(params.current + (params.plannedDelta * Math.min(1, monthWorkdays / forecastWindowWorkdays)))),
+    Math.min(params.target, Math.round(params.current + (params.plannedDelta * Math.min(1, monthProductionDays / forecastWindowProductionDays)))),
   )
   return Math.min(byRemainingDays, finishWindowTarget)
 }
@@ -1867,6 +1857,7 @@ function applyMonthlyCapacityGovernance(
       budgetDays,
       monthStartDate: capacityBudget.monthStartDate,
       monthEndDate: capacityBudget.monthEndDate,
+      constructionCalendar: capacityBudget.constructionCalendar,
     })
     const calibratedE2Target = Math.max(
       current,

@@ -1036,51 +1036,88 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     }))
   })
 
-  it('keeps E2-first target below linear when the E2 finish date is outside the month even in a light month', async () => {
-    mocks.forecastBatchTasks.mockResolvedValue([
-      {
-        taskId: 'light-but-late-task',
-        remainingDurationDays: 10,
-        forecastFinishDate: '2026-06-10',
-        forecastDelayDays: 10,
-        confidenceLevel: 'medium',
-      },
-    ])
-
+  function arrangeE2FinishWindowForecast() {
+    mocks.forecastBatchTasks.mockResolvedValue([{
+      taskId: 'light-but-late-task',
+      remainingDurationDays: 10,
+      forecastFinishDate: '2026-06-10',
+      forecastDelayDays: 10,
+      confidenceLevel: 'medium',
+    }])
     mockSupabaseRows({
       task_baselines: [
         { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
       ],
-      task_baseline_items: [
-        {
-          id: 'baseline-item-light-late',
-          baseline_version_id: 'baseline-1',
-          source_task_id: 'light-but-late-task',
-          title: 'Light but late work',
-          planned_start_date: '2026-05-01',
-          planned_end_date: '2026-05-31',
-          target_progress: 100,
-          sort_order: 1,
-          is_critical: false,
-          is_milestone: false,
-          manual_override_fields: {},
-        },
-      ],
+      task_baseline_items: [{
+        id: 'baseline-item-light-late',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'light-but-late-task',
+        title: 'Light but late work',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        target_progress: 100,
+        sort_order: 1,
+        is_critical: false,
+        is_milestone: false,
+        manual_override_fields: {},
+      }],
       monthly_plans: [],
       monthly_plan_items: [],
     })
+  }
+
+  it('uses the frozen construction calendar blackout for the E2 finish-window target ratio', async () => {
+    mocks.resolveAlgorithmSeedRecords.mockImplementation(async (assetType: string) => {
+      if (assetType !== 'work_calendar') return []
+      return [{
+        holidayCode: 'project_shutdown_2026_06',
+        holidayName: 'Project shutdown after month end',
+        startDate: '2026-06-01',
+        endDate: '2026-06-05',
+        counts_as_construction_shutdown: true,
+        __resolverVersionId: 'calendar-v1',
+      }]
+    })
+    arrangeE2FinishWindowForecast()
 
     const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
     const item = source.items.find((candidate) => candidate.source_task_id === 'light-but-late-task')
 
-    expect(item?.target_progress).toBeLessThan(100)
-    expect(item?.generation_metadata).toEqual(expect.objectContaining({
-      target_progress_method: 'e2_capacity_min',
-      algorithm_context: expect.objectContaining({
-        e2_remaining_forecast_days: 10,
-        e2_forecast_finish_date: '2026-06-10',
-        target_progress_formula: 'min(linear_target,e2_completable_target,capacity_allocatable_target)',
-      }),
+    expect(item?.target_progress).toBe(86)
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      target_progress_e2_raw_completable_target: 86,
+      monthly_capacity_calendar_basis: 'official_construction_calendar_seed',
+    }))
+  })
+
+  it.each([
+    {
+      label: 'the authoritative construction calendar is missing',
+      calendarRecords: [],
+    },
+    {
+      label: 'the forecast calendar version differs from the frozen calendar',
+      calendarRecords: [{
+        holidayCode: 'project_shutdown_2026_06',
+        holidayName: 'Project shutdown after month end',
+        startDate: '2026-06-01',
+        endDate: '2026-06-05',
+        counts_as_construction_shutdown: true,
+        __resolverVersionId: 'calendar-v2',
+      }],
+    },
+  ])('fails the E2 finish-window derivation closed when $label', async ({ calendarRecords }) => {
+    mocks.resolveAlgorithmSeedRecords.mockImplementation(async (assetType: string) => (
+      assetType === 'work_calendar' ? calendarRecords : []
+    ))
+    arrangeE2FinishWindowForecast()
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'light-but-late-task')
+
+    expect(item?.target_progress).toBe(100)
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      target_progress_e2_raw_completable_target: 100,
     }))
   })
 
