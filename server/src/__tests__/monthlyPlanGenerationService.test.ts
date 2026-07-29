@@ -906,6 +906,80 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
     expect(item?.generation_metadata?.algorithm_context?.e2_forecast_delay_days).toBeNull()
   })
 
+  it.each([
+    {
+      label: 'missing calendar identity',
+      remainingDuration: {
+        value: 45,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+      forecastDelay: {
+        value: 14,
+        unit: 'construction_production_day',
+        calendarRef: null,
+        calendarVersion: null,
+        timezone: 'Asia/Shanghai',
+        asOf: '2026-05-01',
+        availability: 'available',
+        unavailableReason: null,
+      },
+    },
+    {
+      label: 'negative production-day values',
+      remainingDuration: freshCpmMetric(-5),
+      forecastDelay: freshCpmMetric(-2),
+    },
+  ])('fails closed for E2 metrics with $label despite raw aliases and finish date', async ({ remainingDuration, forecastDelay }) => {
+    mocks.forecastBatchTasks.mockResolvedValue([{
+      taskId: 'invalid-e2-task',
+      remainingDurationDays: 45,
+      remainingDuration,
+      forecastFinishDate: '2026-06-14',
+      forecastDelayDays: 14,
+      forecastDelay,
+      confidenceLevel: 'medium',
+    }])
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'baseline-item-invalid-e2',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'invalid-e2-task',
+        title: 'Invalid E2 task',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-20',
+        target_progress: 100,
+        sort_order: 1,
+        is_critical: false,
+        is_milestone: false,
+        manual_override_fields: {},
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'invalid-e2-task')
+
+    expect(source.generationSummary).toMatchObject({
+      forecastDelayedCount: 0,
+      maxForecastDelayDays: 0,
+    })
+    expect(item?.generation_metadata?.algorithm_context).toEqual(expect.objectContaining({
+      e2_remaining_forecast_days: null,
+      e2_forecast_delay_days: null,
+      e2_forecast_finish_date: null,
+    }))
+  })
+
   it('deducts construction calendar shutdown windows from monthly capacity workdays', async () => {
     mocks.resolveAlgorithmSeedRecords.mockImplementation(async (assetType: string) => {
       if (assetType !== 'work_calendar') return []
@@ -1443,6 +1517,151 @@ describe('monthlyPlanGenerationService v1.4.7 manual overrides and metadata', ()
       monthly_capacity_priority: 'new_work',
     }))
     expect(item?.generation_metadata.algorithm_context?.critical_float_tier).toBeNull()
+  })
+
+  it('clears stale critical metadata when every monthly item lacks a source task id', async () => {
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'cached_after_failure',
+      tasks: [],
+      displayTaskIds: [],
+      autoTaskIds: [],
+    })
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'orphan-critical-item',
+        baseline_version_id: 'baseline-1',
+        source_task_id: null,
+        title: 'Orphan critical item',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        sort_order: 1,
+        is_critical: true,
+        generation_metadata: {
+          algorithm_context: { critical_float_tier: 'true_critical' },
+        },
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.title === 'Orphan critical item')
+
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      fresh_float_days: null,
+      fresh_float_authority_checked: true,
+      fresh_float_snapshot_status: 'cached_after_failure',
+      critical_float_tier: null,
+      monthly_capacity_priority: 'new_work',
+    }))
+  })
+
+  it.each([
+    { calculatedAt: '2026-02-30T08:00:00.000Z', asOf: '2026-03-02' },
+    { calculatedAt: '2025-02-29T08:00:00.000Z', asOf: '2025-03-01' },
+  ])('rejects a fresh CPM float with nonexistent Gregorian calculatedAt $calculatedAt', async ({ calculatedAt, asOf }) => {
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
+      calculatedAt,
+      projectDuration: freshCpmMetric(30, { asOf }),
+      tasks: [{
+        taskId: 'invalid-calculated-at-task',
+        floatDays: 0,
+        float: freshCpmMetric(0, { asOf }),
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+        durationDays: 21,
+        title: 'Invalid calculatedAt task',
+      }],
+      displayTaskIds: ['invalid-calculated-at-task'],
+      autoTaskIds: ['invalid-calculated-at-task'],
+    })
+    mocks.forecastBatchTasks.mockResolvedValue([
+      { taskId: 'invalid-calculated-at-task', remainingDurationDays: 21, forecastFinishDate: '2026-05-31', forecastDelayDays: 0, confidenceLevel: 'medium' },
+    ])
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'invalid-calculated-at-item',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'invalid-calculated-at-task',
+        title: 'Invalid calculatedAt task',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        sort_order: 1,
+        is_critical: true,
+        generation_metadata: {
+          algorithm_context: { critical_float_tier: 'true_critical' },
+        },
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'invalid-calculated-at-task')
+
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      fresh_float_days: null,
+      critical_float_tier: null,
+      monthly_capacity_priority: 'new_work',
+    }))
+  })
+
+  it('accepts a valid cross-timezone CPM calculatedAt when its business date matches the metric asOf', async () => {
+    mocks.getProjectCriticalPathSnapshot.mockResolvedValue({
+      calculationStatus: 'fresh',
+      calculatedAt: '2026-04-30T16:30:00.000Z',
+      projectDuration: freshCpmMetric(30),
+      tasks: [{
+        taskId: 'valid-cross-timezone-task',
+        floatDays: 0,
+        float: freshCpmMetric(0),
+        isAutoCritical: true,
+        isManualAttention: false,
+        isManualInserted: false,
+        durationDays: 21,
+        title: 'Valid cross-timezone task',
+      }],
+      displayTaskIds: ['valid-cross-timezone-task'],
+      autoTaskIds: ['valid-cross-timezone-task'],
+    })
+    mocks.forecastBatchTasks.mockResolvedValue([
+      { taskId: 'valid-cross-timezone-task', remainingDurationDays: 21, forecastFinishDate: '2026-05-31', forecastDelayDays: 0, confidenceLevel: 'medium' },
+    ])
+    mockSupabaseRows({
+      task_baselines: [
+        { id: 'baseline-1', project_id: 'project-1', version: 1, status: 'confirmed', confirmed_at: '2026-05-01T00:00:00.000Z' },
+      ],
+      task_baseline_items: [{
+        id: 'valid-cross-timezone-item',
+        baseline_version_id: 'baseline-1',
+        source_task_id: 'valid-cross-timezone-task',
+        title: 'Valid cross-timezone task',
+        planned_start_date: '2026-05-01',
+        planned_end_date: '2026-05-31',
+        sort_order: 1,
+        is_critical: false,
+        generation_metadata: {},
+      }],
+      monthly_plans: [],
+      monthly_plan_items: [],
+    })
+
+    const source = await resolveMonthlyPlanGenerationSourceV1474('project-1', '2026-05')
+    const item = source.items.find((candidate) => candidate.source_task_id === 'valid-cross-timezone-task')
+
+    expect(item?.generation_metadata.algorithm_context).toEqual(expect.objectContaining({
+      fresh_float_days: 0,
+      critical_float_tier: 'true_critical',
+      monthly_capacity_priority: 'critical',
+    }))
   })
 
   it('rejects a fresh CPM float whose calendar identity differs from the project snapshot', async () => {

@@ -70,6 +70,7 @@ import {
 import {
   businessDateKey,
   normalizeDurationMetricDto,
+  normalizeRfc3339Timestamp,
   type DurationMetricDto,
 } from './durationMetricService.js'
 import { isActiveWarning } from '../utils/warningStatus.js'
@@ -235,11 +236,21 @@ type MonthlyE2ForecastSummary = {
 }
 
 function readAvailableProductionDuration(
-  metric: { value?: unknown; unit?: unknown; availability?: unknown } | null | undefined,
+  metricValue: unknown,
 ) {
-  if (metric?.availability !== 'available' || metric.unit !== 'construction_production_day') return null
-  const value = Number(metric.value)
-  return Number.isFinite(value) ? value : null
+  const metric = normalizeDurationMetricDto(metricValue)
+  if (
+    !metric
+    || metric.availability !== 'available'
+    || metric.unit !== 'construction_production_day'
+    || metric.value === null
+    || metric.value < 0
+    || !normalizeText(metric.calendarRef)
+    || !normalizeText(metric.calendarVersion)
+    || !normalizeText(metric.timezone)
+    || !normalizeText(metric.asOf)
+  ) return null
+  return metric
 }
 
 function sameDurationMetricIdentity(left: DurationMetricDto, right: DurationMetricDto) {
@@ -257,7 +268,8 @@ function readFreshSnapshotFloatDuration(
 ) {
   const metric = normalizeDurationMetricDto(metricValue)
   const projectDuration = normalizeDurationMetricDto(projectDurationValue)
-  const calculatedAt = new Date(String(calculatedAtValue ?? ''))
+  const normalizedCalculatedAt = normalizeRfc3339Timestamp(calculatedAtValue)
+  const calculatedAt = normalizedCalculatedAt ? new Date(normalizedCalculatedAt) : null
   if (
     !metric
     || !projectDuration
@@ -268,20 +280,23 @@ function readFreshSnapshotFloatDuration(
     || metric.value === null
     || metric.value < 0
     || !sameDurationMetricIdentity(metric, projectDuration)
-    || !Number.isFinite(calculatedAt.getTime())
+    || calculatedAt === null
     || metric.asOf !== businessDateKey(calculatedAt, metric.timezone)
   ) return null
   return metric.value
 }
 
 function toMonthlyE2ForecastSummary(forecast: Awaited<ReturnType<typeof forecastBatchTasks>>[number]): MonthlyE2ForecastSummary {
-  const remainingDurationDays = readAvailableProductionDuration(forecast.remainingDuration)
-  const forecastDelayDays = readAvailableProductionDuration(forecast.forecastDelay)
+  const remainingDuration = readAvailableProductionDuration(forecast.remainingDuration)
+  const forecastDelay = readAvailableProductionDuration(forecast.forecastDelay)
+  const tupleAvailable = remainingDuration !== null
+    && forecastDelay !== null
+    && sameDurationMetricIdentity(remainingDuration, forecastDelay)
   return {
-    remainingDurationDays,
-    forecastFinishDate: remainingDurationDays === null ? null : forecast.forecastFinishDate,
-    forecastDelayDays,
-    confidenceLevel: normalizeText(forecast.confidenceLevel) || 'unknown',
+    remainingDurationDays: tupleAvailable ? remainingDuration.value : null,
+    forecastFinishDate: tupleAvailable ? forecast.forecastFinishDate : null,
+    forecastDelayDays: tupleAvailable ? forecastDelay.value : null,
+    confidenceLevel: tupleAvailable ? normalizeText(forecast.confidenceLevel) || 'unknown' : 'unavailable',
   }
 }
 
@@ -1569,7 +1584,7 @@ function criticalFloatTier(floatDays: number | null | undefined): 'true_critical
 }
 
 async function buildFreshFloatContext(projectId: string, items: MonthlyPlanSeedItem[]) {
-  if (!items.some((item) => item.source_task_id)) return new Map<string, Record<string, unknown>>()
+  if (items.length === 0) return new Map<string, Record<string, unknown>>()
   try {
     const snapshot = await getProjectCriticalPathSnapshot(projectId)
     const snapshotStatus = normalizeText(snapshot.calculationStatus) || 'unknown'
